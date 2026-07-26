@@ -6,8 +6,28 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+async-trait.workspace = true
+ciborium.workspace = true
+libloading.workspace = true
+rustix.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = [
+    "fs",
+    "io-util",
+    "macros",
+    "net",
+    "process",
+    "rt",
+    "sync",
+    "time",
+] }
+tracing.workspace = true
 vm-trait.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true, features = ["rt-multi-thread"] }
 
 [lints]
 workspace = true
-

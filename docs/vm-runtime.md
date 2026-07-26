@@ -37,7 +37,7 @@ Every approved root filesystem contains `heph-init`. The provider boots
 `heph-init`; it does not execute `GuestCommand` directly.
 
 For the local microVM provider, `heph-init` and the provider worker communicate
-over AF_VSOCK. The guest listens on port 19,000. The protocol uses a
+over AF_VSOCK. The guest connects to host port 19,000. The protocol uses a
 big-endian `u32` length followed by a CBOR payload. Every payload includes
 protocol version `1`, and peers reject unsupported versions. Frames are
 limited to 16 MiB and individual log chunks to 64 KiB.
@@ -73,7 +73,7 @@ the VM is running and includes resolved ingress assignments. `Ready` means
 `heph-init` accepted the command. Event order is:
 
 ```text
-Started -> optional Ready -> zero or more Log -> exactly one Exited
+Started -> optional Ready -> zero or more Log/Metric -> exactly one Exited
 ```
 
 The broadcast event stream is live telemetry and may lose logs under
@@ -87,8 +87,8 @@ resolved to a nonzero value.
 
 ## Parent and worker
 
-The Hephaestus parent starts one worker process per local VM. A private Unix
-`SOCK_SEQPACKET` socket pair, created before the worker is restricted, carries
+The Hephaestus parent starts one worker process per local VM. A private,
+length-framed Unix stream socket in the mode-0700 runtime directory carries
 versioned CBOR messages with request identifiers.
 
 Parent-to-worker requests are `Configure`, `Start`, `Stop`, and `Destroy`.

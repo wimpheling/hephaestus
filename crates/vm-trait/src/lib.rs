@@ -170,8 +170,21 @@ pub enum VmEvent {
         /// Uninterpreted bytes emitted by the guest.
         bytes: Vec<u8>,
     },
+    /// The guest reported a structured runtime metric.
+    Metric(VmMetric),
     /// The guest exited.
     Exited(VmExit),
+}
+
+/// A structured metric emitted by the guest runtime.
+#[derive(Debug, Clone)]
+pub struct VmMetric {
+    /// Stable metric name.
+    pub name: String,
+    /// Numeric metric value.
+    pub value: f64,
+    /// Dimensions attached to the sample.
+    pub labels: BTreeMap<String, String>,
 }
 
 /// A guest process output channel.

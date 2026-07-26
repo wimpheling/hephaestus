@@ -23,6 +23,8 @@ implementations:
 
 - [VM runtime contract](docs/vm-runtime.md): lifecycle, guest bootstrap,
   parent/worker IPC, networking, image, disk, and mount contracts.
+- [libkrun backend](docs/vm-libkrun.md): Fedora host contract, configuration,
+  process isolation, cleanup, and integration-test requirements.
 - [Contributor instructions](AGENTS.md): repository-wide Rust quality and
   validation requirements.
 
