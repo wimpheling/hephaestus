@@ -8,6 +8,9 @@ edition = "2024"
 rust-version = "1.85"
 
 [workspace.dependencies]
+async-trait = "0.1"
+thiserror = "2"
+tokio = { version = "1", features = ["sync"] }
 vm-trait = { path = "crates/vm-trait" }
 
 [workspace.lints.rust]
@@ -22,6 +25,8 @@ nursery = { level = "deny", priority = -1 }
 pedantic = { level = "deny", priority = -1 }
 # Publishing metadata will be enforced once the project license is selected.
 cargo_common_metadata = { level = "allow", priority = 1 }
+# Tokio's macros use syn 2 while async-trait uses syn 3.
+multiple_crate_versions = { level = "allow", priority = 1 }
 
 [workspace.lints.rustdoc]
 all = "deny"

@@ -16,7 +16,15 @@ implementations:
 | Crate | Purpose |
 | --- | --- |
 | [`vm-trait`](crates/vm-trait) | Shared abstractions for VM providers |
+| [`vm-fake`](crates/vm-fake) | Deterministic provider for lifecycle and orchestration tests |
 | [`vm-libkrun`](crates/vm-libkrun) | Local microVM provider backed by libkrun |
+
+## Documentation
+
+- [VM runtime contract](docs/vm-runtime.md): lifecycle, guest bootstrap,
+  parent/worker IPC, networking, image, disk, and mount contracts.
+- [Contributor instructions](AGENTS.md): repository-wide Rust quality and
+  validation requirements.
 
 ## Development
 
