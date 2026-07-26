@@ -4,7 +4,7 @@ use crate::{
     network::{PasstProcess, WorkerNetworkError},
     protocol::{
         GuestCommandMessage, GuestLogStream, GuestMessage, GuestMount, HostMessage,
-        MAX_LOG_CHUNK_SIZE, PROTOCOL_VERSION,
+        MAX_LOG_CHUNK_SIZE, MAX_METRIC_LABELS, MAX_METRIC_TEXT_SIZE, PROTOCOL_VERSION,
     },
     validation::{PreparedForward, PreparedSpec},
 };
@@ -433,10 +433,40 @@ fn handle_guest(
 
 fn validate_guest_message(message: &GuestMessage) -> io::Result<()> {
     match message {
+        GuestMessage::Hello { .. } => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "guest sent a duplicate readiness handshake",
+        )),
         GuestMessage::Log { bytes, .. } if bytes.len() > MAX_LOG_CHUNK_SIZE => Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "guest log chunk exceeds protocol limit",
         )),
+        GuestMessage::Metric { name, .. }
+            if name.is_empty() || name.len() > MAX_METRIC_TEXT_SIZE =>
+        {
+            Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "guest metric name is empty or exceeds protocol limit",
+            ))
+        }
+        GuestMessage::Metric { labels, .. } if labels.len() > MAX_METRIC_LABELS => {
+            Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "guest metric label count exceeds protocol limit",
+            ))
+        }
+        GuestMessage::Metric { labels, .. }
+            if labels.iter().any(|(key, value)| {
+                key.is_empty()
+                    || key.len() > MAX_METRIC_TEXT_SIZE
+                    || value.len() > MAX_METRIC_TEXT_SIZE
+            }) =>
+        {
+            Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "guest metric label is empty or exceeds protocol limit",
+            ))
+        }
         GuestMessage::Exited {
             code: Some(_),
             signal: Some(_),
@@ -566,7 +596,11 @@ impl From<GuestLogStream> for WireLogStream {
 
 #[cfg(test)]
 mod tests {
-    use super::{GuestMessage, validate_guest_message};
+    use super::{
+        GuestLogStream, GuestMessage, MAX_LOG_CHUNK_SIZE, MAX_METRIC_LABELS, MAX_METRIC_TEXT_SIZE,
+        PROTOCOL_VERSION, validate_guest_message,
+    };
+    use std::collections::BTreeMap;
 
     #[test]
     fn exit_with_code_and_signal_is_rejected() {
@@ -577,5 +611,55 @@ mod tests {
             })
             .is_err()
         );
+    }
+
+    #[test]
+    fn duplicate_hello_is_rejected_after_handshake() {
+        assert!(
+            validate_guest_message(&GuestMessage::Hello {
+                version: PROTOCOL_VERSION,
+            })
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn oversized_log_is_rejected() {
+        assert!(
+            validate_guest_message(&GuestMessage::Log {
+                stream: GuestLogStream::Stdout,
+                bytes: vec![0; MAX_LOG_CHUNK_SIZE + 1],
+            })
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn metric_bounds_are_enforced() {
+        let oversized_name = GuestMessage::Metric {
+            name: "x".repeat(MAX_METRIC_TEXT_SIZE + 1),
+            value: 1.0,
+            labels: BTreeMap::new(),
+        };
+        assert!(validate_guest_message(&oversized_name).is_err());
+
+        let labels = (0..=MAX_METRIC_LABELS)
+            .map(|index| (format!("key-{index}"), String::from("value")))
+            .collect();
+        assert!(
+            validate_guest_message(&GuestMessage::Metric {
+                name: String::from("metric"),
+                value: 1.0,
+                labels,
+            })
+            .is_err()
+        );
+
+        let invalid_label = GuestMessage::Metric {
+            name: String::from("metric"),
+            value: 1.0,
+            labels: BTreeMap::from([(String::new(), String::from("value"))]),
+        };
+        assert!(validate_guest_message(&invalid_label).is_err());
     }
 }

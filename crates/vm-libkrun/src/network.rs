@@ -3,6 +3,7 @@ use crate::{
     worker::WorkerConfiguration,
 };
 use std::{
+    ffi::OsString,
     fs, io,
     net::{IpAddr, SocketAddr, TcpListener},
     path::{Path, PathBuf},
@@ -34,30 +35,13 @@ impl PasstProcess {
         let log_path = runtime_dir.join("passt.log");
 
         let mut command = Command::new(&config.passt_binary);
-        command
-            .arg("--foreground")
-            .arg("--one-off")
-            .arg("--quiet")
-            .arg("--socket")
-            .arg(&socket_path)
-            .arg("--pid")
-            .arg(&pid_path)
-            .arg("--log-file")
-            .arg(&log_path)
-            .arg("--log-size")
-            .arg("1048576")
-            .arg("--runas")
-            .arg(format!("{}:{}", config.service_uid, config.service_gid))
-            .arg("--udp-ports")
-            .arg("none");
-
-        if resolved.is_empty() {
-            command.arg("--tcp-ports").arg("none");
-        } else {
-            for forward in &resolved {
-                command.arg("--tcp-ports").arg(format_forward(forward));
-            }
-        }
+        command.args(passt_arguments(
+            config,
+            &socket_path,
+            &pid_path,
+            &log_path,
+            &resolved,
+        ));
         command
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -99,6 +83,43 @@ impl PasstProcess {
     pub fn pid(&self) -> u32 {
         self.child.id()
     }
+}
+
+fn passt_arguments(
+    config: &WorkerConfiguration,
+    socket_path: &Path,
+    pid_path: &Path,
+    log_path: &Path,
+    forwards: &[PreparedForward],
+) -> Vec<OsString> {
+    let mut arguments = vec![
+        OsString::from("--foreground"),
+        OsString::from("--one-off"),
+        OsString::from("--quiet"),
+        OsString::from("--socket"),
+        socket_path.as_os_str().to_owned(),
+        OsString::from("--pid"),
+        pid_path.as_os_str().to_owned(),
+        OsString::from("--log-file"),
+        log_path.as_os_str().to_owned(),
+        OsString::from("--log-size"),
+        OsString::from("1048576"),
+        OsString::from("--runas"),
+        OsString::from(format!("{}:{}", config.service_uid, config.service_gid)),
+        OsString::from("--udp-ports"),
+        OsString::from("none"),
+    ];
+    if forwards.is_empty() {
+        arguments.extend([OsString::from("--tcp-ports"), OsString::from("none")]);
+    } else {
+        for forward in forwards {
+            arguments.extend([
+                OsString::from("--tcp-ports"),
+                OsString::from(format_forward(forward)),
+            ]);
+        }
+    }
+    arguments
 }
 
 impl Drop for PasstProcess {
@@ -159,9 +180,15 @@ pub enum WorkerNetworkError {
 
 #[cfg(test)]
 mod tests {
-    use super::{format_forward, reserve_ports};
+    use super::{format_forward, passt_arguments, reserve_ports};
     use crate::validation::PreparedForward;
-    use std::net::{IpAddr, Ipv4Addr};
+    use crate::worker::WorkerConfiguration;
+    use std::{
+        ffi::{OsStr, OsString},
+        net::{IpAddr, Ipv4Addr, TcpListener},
+        path::Path,
+        time::Duration,
+    };
 
     #[test]
     fn zero_port_is_resolved_and_reserved() {
@@ -177,5 +204,67 @@ mod tests {
             format_forward(&resolved[0]),
             format!("127.0.0.1/{}:22", resolved[0].host_port)
         );
+    }
+
+    #[test]
+    fn passt_arguments_are_unprivileged_and_include_forwards() {
+        let config = WorkerConfiguration {
+            passt_binary: Path::new("/usr/bin/passt").to_path_buf(),
+            libkrun_library: OsString::from("libkrun.so.1"),
+            service_uid: 1000,
+            service_gid: 1001,
+            startup_timeout: Duration::from_secs(1),
+        };
+        let arguments = passt_arguments(
+            &config,
+            Path::new("/run/vm/passt.sock"),
+            Path::new("/run/vm/passt.pid"),
+            Path::new("/run/vm/passt.log"),
+            &[PreparedForward {
+                bind_addr: IpAddr::V4(Ipv4Addr::LOCALHOST),
+                host_port: 12345,
+                guest_port: 8080,
+            }],
+        );
+        assert!(
+            arguments
+                .windows(2)
+                .any(|pair| { pair == [OsStr::new("--runas"), OsStr::new("1000:1001"),] })
+        );
+        assert!(arguments.windows(2).any(|pair| {
+            pair == [
+                OsStr::new("--tcp-ports"),
+                OsStr::new("127.0.0.1/12345:8080"),
+            ]
+        }));
+        for forbidden in ["sudo", "tap", "iptables", "nft", "ip"] {
+            assert!(!arguments.iter().any(|argument| argument == forbidden));
+        }
+    }
+
+    #[test]
+    fn failed_multi_port_reservation_releases_earlier_ports() {
+        let occupied = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let occupied_port = occupied.local_addr().unwrap().port();
+        let first_port = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let requested = [
+            PreparedForward {
+                bind_addr: IpAddr::V4(Ipv4Addr::LOCALHOST),
+                host_port: first_port,
+                guest_port: 80,
+            },
+            PreparedForward {
+                bind_addr: IpAddr::V4(Ipv4Addr::LOCALHOST),
+                host_port: occupied_port,
+                guest_port: 81,
+            },
+        ];
+        assert!(reserve_ports(&requested).is_err());
+        TcpListener::bind((Ipv4Addr::LOCALHOST, first_port))
+            .expect("earlier reservation leaked after a later failure");
     }
 }

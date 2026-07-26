@@ -46,6 +46,7 @@ pub struct LibkrunProvider {
 struct ProviderInner {
     config: Arc<LibkrunConfig>,
     ids: Mutex<HashSet<VmId>>,
+    worker_spawner: Arc<dyn WorkerSpawner>,
 }
 
 impl LibkrunProvider {
@@ -60,11 +61,19 @@ impl LibkrunProvider {
     /// Returns [`VmError::InvalidSpec`] for invalid configuration and
     /// [`VmError::Unavailable`] when a required host resource is unavailable.
     pub fn new(config: LibkrunConfig) -> Result<Self, VmError> {
+        Self::new_with_spawner(config, Arc::new(ProcessWorkerSpawner))
+    }
+
+    fn new_with_spawner(
+        config: LibkrunConfig,
+        worker_spawner: Arc<dyn WorkerSpawner>,
+    ) -> Result<Self, VmError> {
         validate_config(&config)?;
         Ok(Self {
             inner: Arc::new(ProviderInner {
                 config: Arc::new(config),
                 ids: Mutex::new(HashSet::new()),
+                worker_spawner,
             }),
         })
     }
@@ -120,17 +129,19 @@ impl LibkrunProvider {
             wall_clock_seconds = self.inner.config.limits.wall_clock_timeout.as_secs(),
             "provisioning VM resources"
         );
-        let worker =
-            match WorkerClient::launch(Arc::clone(&self.inner.config), spec, &runtime_dir, &cgroup)
-                .await
-            {
-                Ok(worker) => worker,
-                Err(error) => {
-                    let _cgroup_result = cgroup.cleanup();
-                    let _runtime_result = fs::remove_dir_all(&runtime_dir);
-                    return Err(error);
-                }
-            };
+        let worker = match self
+            .inner
+            .worker_spawner
+            .spawn(Arc::clone(&self.inner.config), spec, &runtime_dir, &cgroup)
+            .await
+        {
+            Ok(worker) => worker,
+            Err(error) => {
+                let _cgroup_result = cgroup.cleanup();
+                let _runtime_result = fs::remove_dir_all(&runtime_dir);
+                return Err(error);
+            }
+        };
 
         let (events, _) = broadcast::channel(EVENT_CAPACITY);
         let (terminal, _) = watch::channel(None);
@@ -225,18 +236,26 @@ impl VmInstance for LibkrunInstance {
         }
 
         info!(vm_id = %self.id.0, "starting libkrun worker");
-        let outcome = self.start_leader().await;
-        let snapshot = outcome.as_ref().err().map(ErrorSnapshot::from_vm_error);
-        {
+        let mut outcome = self.start_leader().await;
+        let destroyed_during_start = {
             let mut state = self.state.lock().await;
-            match &snapshot {
-                None => *state = Lifecycle::Running,
-                Some(error) => *state = Lifecycle::StartFailed(error.clone()),
+            if matches!(*state, Lifecycle::Destroyed) {
+                outcome = Err(VmError::Destroyed);
+                true
+            } else {
+                match &outcome {
+                    Ok(()) => *state = Lifecycle::Running,
+                    Err(error) => {
+                        *state = Lifecycle::StartFailed(ErrorSnapshot::from_vm_error(error));
+                    }
+                }
+                false
             }
-        }
+        };
+        let snapshot = outcome.as_ref().err().map(ErrorSnapshot::from_vm_error);
         self.start_result
             .send_replace(Some(snapshot.map_or(Ok(()), Err)));
-        if outcome.is_err() {
+        if outcome.is_err() && !destroyed_during_start {
             let _cleanup_result = self.force_cleanup(true).await;
         }
         outcome
@@ -642,6 +661,34 @@ trait WorkerBackend: Send + Sync {
 }
 
 #[async_trait]
+trait WorkerSpawner: Send + Sync {
+    async fn spawn(
+        &self,
+        config: Arc<LibkrunConfig>,
+        spec: PreparedSpec,
+        runtime_dir: &Path,
+        cgroup: &Cgroup,
+    ) -> Result<Arc<dyn WorkerBackend>, VmError>;
+}
+
+struct ProcessWorkerSpawner;
+
+#[async_trait]
+impl WorkerSpawner for ProcessWorkerSpawner {
+    async fn spawn(
+        &self,
+        config: Arc<LibkrunConfig>,
+        spec: PreparedSpec,
+        runtime_dir: &Path,
+        cgroup: &Cgroup,
+    ) -> Result<Arc<dyn WorkerBackend>, VmError> {
+        WorkerClient::launch(config, spec, runtime_dir, cgroup)
+            .await
+            .map(|worker| worker as Arc<dyn WorkerBackend>)
+    }
+}
+
+#[async_trait]
 impl WorkerBackend for WorkerClient {
     async fn request(&self, command: WorkerCommand) -> Result<(), VmError> {
         Self::request(self, command).await
@@ -970,8 +1017,9 @@ impl Error for MessageError {}
 #[cfg(test)]
 mod tests {
     use super::{
-        ErrorSnapshot, LibkrunInstance, Lifecycle, ProcessStatus, ProviderInner, Terminal,
-        WorkerBackend, create_runtime_dir, wire_to_vm_error,
+        ErrorSnapshot, LibkrunInstance, Lifecycle, ProcessStatus, ProcessWorkerSpawner,
+        ProviderInner, Terminal, WorkerBackend, WorkerSpawner, create_runtime_dir,
+        wire_to_vm_error,
     };
     use crate::{
         config::LibkrunConfig,
@@ -990,7 +1038,7 @@ mod tests {
         time::Duration,
     };
     use tempfile::TempDir;
-    use tokio::sync::{Mutex, broadcast, watch};
+    use tokio::sync::{Mutex, Notify, broadcast, watch};
     use vm_trait::{
         GuestCommand, NetworkMode, RootFilesystem, StopMode, VmError, VmEvent, VmId, VmInstance,
         VmProvider, VmResources, VmSpec,
@@ -1063,6 +1111,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn injected_spawner_failure_cleans_every_allocated_resource() {
+        let temp = TempDir::new().unwrap();
+        let (config, root, runtime, cgroups) = emulated_config(&temp);
+        let provider =
+            super::LibkrunProvider::new_with_spawner(config, Arc::new(FailingSpawner)).unwrap();
+        let error = provider
+            .provision(spec("spawner-failure", root))
+            .await
+            .err()
+            .expect("injected worker spawn must fail");
+        assert!(matches!(
+            error,
+            VmError::Unavailable { resource, .. } if resource == "worker spawn"
+        ));
+        assert!(!runtime.join("spawner-failure").exists());
+        assert!(!cgroups.join("spawner-failure").exists());
+    }
+
+    #[tokio::test]
     async fn concurrent_start_is_shared_and_events_are_ordered() {
         let temp = TempDir::new().unwrap();
         let worker = Arc::new(MockWorker::new());
@@ -1113,7 +1180,132 @@ mod tests {
         assert!(matches!(instance.wait().await, Err(VmError::Destroyed)));
     }
 
+    #[tokio::test]
+    async fn concurrent_start_callers_share_a_typed_failure() {
+        let temp = TempDir::new().unwrap();
+        let worker = Arc::new(MockWorker::failing_start());
+        let instance = instance(&temp, worker.clone());
+        let first = Arc::clone(&instance);
+        let second = Arc::clone(&instance);
+        let (first, second) = tokio::join!(first.start(), second.start());
+        assert!(matches!(first, Err(VmError::Unavailable { .. })));
+        assert!(matches!(second, Err(VmError::Unavailable { .. })));
+        assert_eq!(worker.start_calls.load(Ordering::Relaxed), 1);
+        assert!(matches!(
+            instance.start().await,
+            Err(VmError::Unavailable { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn destroy_during_startup_does_not_resurrect_instance() {
+        let temp = TempDir::new().unwrap();
+        let worker = Arc::new(MockWorker::blocking_start());
+        let instance = instance(&temp, worker.clone());
+        let start_instance = Arc::clone(&instance);
+        let started = tokio::spawn(async move { start_instance.start().await });
+        worker.start_entered.notified().await;
+
+        instance.destroy().await.unwrap();
+        worker.release_start.notify_one();
+
+        let start_result = started.await.unwrap();
+        assert!(
+            matches!(start_result, Err(VmError::Destroyed)),
+            "start completed with {start_result:?}"
+        );
+        assert!(matches!(instance.start().await, Err(VmError::Destroyed)));
+        instance.destroy().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn worker_crash_without_exit_event_is_cached_and_forwarded_once() {
+        let temp = TempDir::new().unwrap();
+        let worker = Arc::new(MockWorker::new());
+        let instance = instance(&temp, worker.clone());
+        let mut events = instance.subscribe_events();
+        instance.start().await.unwrap();
+        assert!(matches!(
+            events.recv().await.unwrap(),
+            VmEvent::Started { .. }
+        ));
+        assert!(matches!(events.recv().await.unwrap(), VmEvent::Ready));
+
+        worker.crash(11);
+        let exit = instance.wait().await.unwrap();
+        assert_eq!(exit.signal, Some(11));
+        match events.recv().await.unwrap() {
+            VmEvent::Exited(event_exit) => assert_eq!(event_exit, exit),
+            event => panic!("expected terminal event, received {event:?}"),
+        }
+        assert_eq!(instance.wait().await.unwrap(), exit);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(25), events.recv())
+                .await
+                .is_err()
+        );
+        instance.destroy().await.unwrap();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn readiness_timeout_is_typed_and_force_cleans_worker() {
+        let temp = TempDir::new().unwrap();
+        let worker = Arc::new(MockWorker::without_ready());
+        let instance = instance(&temp, worker);
+        let starting_instance = Arc::clone(&instance);
+        let starting = tokio::spawn(async move { starting_instance.start().await });
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_millis(21)).await;
+        assert!(matches!(
+            starting.await.unwrap(),
+            Err(VmError::Unavailable { resource, .. }) if resource == "guest readiness"
+        ));
+        assert!(instance.wait().await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn cached_exit_survives_lagged_log_subscriber() {
+        let temp = TempDir::new().unwrap();
+        let worker = Arc::new(MockWorker::new());
+        let instance = instance(&temp, worker.clone());
+        let mut slow_events = instance.subscribe_events();
+        instance.start().await.unwrap();
+        for index in 0..64 {
+            drop(worker.events.send(WorkerEvent::Log {
+                stream: crate::worker::WireLogStream::Stdout,
+                bytes: index.to_string().into_bytes(),
+            }));
+            tokio::task::yield_now().await;
+        }
+        worker.exit(Some(23), None);
+        assert_eq!(instance.wait().await.unwrap().code, Some(23));
+        assert!(matches!(
+            slow_events.recv().await,
+            Err(broadcast::error::RecvError::Lagged(_))
+        ));
+        assert_eq!(instance.wait().await.unwrap().code, Some(23));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn wall_clock_limit_terminates_running_worker() {
+        let temp = TempDir::new().unwrap();
+        let worker = Arc::new(MockWorker::new());
+        let instance = instance_with_wall_clock(&temp, worker, Duration::from_millis(20));
+        instance.start().await.unwrap();
+        tokio::time::advance(Duration::from_millis(21)).await;
+        let exit = instance.wait().await.unwrap();
+        assert_eq!(exit.signal, Some(9));
+    }
+
     fn instance(temp: &TempDir, worker: Arc<MockWorker>) -> Arc<LibkrunInstance> {
+        instance_with_wall_clock(temp, worker, Duration::from_secs(60))
+    }
+
+    fn instance_with_wall_clock(
+        temp: &TempDir,
+        worker: Arc<MockWorker>,
+        wall_clock_timeout: Duration,
+    ) -> Arc<LibkrunInstance> {
         let mut config = LibkrunConfig::new(
             temp.path(),
             vec![temp.path().to_path_buf()],
@@ -1122,11 +1314,14 @@ mod tests {
             "/bin/true",
             temp.path(),
         );
-        config.limits.wall_clock_timeout = Duration::from_secs(60);
+        config.startup_timeout = Duration::from_millis(50);
+        config.readiness_timeout = Duration::from_millis(20);
+        config.limits.wall_clock_timeout = wall_clock_timeout;
         let config = Arc::new(config);
         let provider_ids = Arc::new(ProviderInner {
             config: Arc::clone(&config),
             ids: Mutex::new(HashSet::from([VmId("test".to_owned())])),
+            worker_spawner: Arc::new(ProcessWorkerSpawner),
         });
         let (events, _) = broadcast::channel(32);
         let (terminal, _) = watch::channel(None::<Terminal>);
@@ -1171,10 +1366,59 @@ mod tests {
         }
     }
 
+    fn emulated_config(temp: &TempDir) -> (LibkrunConfig, PathBuf, PathBuf, PathBuf) {
+        let runtime = temp.path().join("runtime");
+        let images = temp.path().join("images");
+        let disks = temp.path().join("disks");
+        let mounts = temp.path().join("mounts");
+        let cgroups = temp.path().join("cgroups");
+        for directory in [&runtime, &images, &disks, &mounts, &cgroups] {
+            fs::create_dir(directory).unwrap();
+        }
+        let root = images.join("root");
+        fs::create_dir(&root).unwrap();
+        let kvm = temp.path().join("kvm");
+        fs::write(&kvm, "").unwrap();
+        let mut config = LibkrunConfig::new(
+            &runtime,
+            vec![images],
+            vec![disks],
+            vec![mounts],
+            "/bin/true",
+            &cgroups,
+        );
+        config.kvm_device = kvm;
+        config.enforce_cgroup_v2 = false;
+        (config, root, runtime, cgroups)
+    }
+
+    struct FailingSpawner;
+
+    #[async_trait]
+    impl WorkerSpawner for FailingSpawner {
+        async fn spawn(
+            &self,
+            _config: Arc<LibkrunConfig>,
+            _spec: crate::validation::PreparedSpec,
+            _runtime_dir: &std::path::Path,
+            _cgroup: &crate::cgroup::Cgroup,
+        ) -> Result<Arc<dyn WorkerBackend>, VmError> {
+            Err(VmError::Unavailable {
+                resource: String::from("worker spawn"),
+                reason: String::from("deliberate test failure"),
+            })
+        }
+    }
+
     struct MockWorker {
         events: broadcast::Sender<WorkerEvent>,
         process_exit: watch::Sender<Option<ProcessStatus>>,
         start_calls: AtomicUsize,
+        send_ready: bool,
+        fail_start: bool,
+        block_start: bool,
+        start_entered: Notify,
+        release_start: Notify,
     }
 
     impl MockWorker {
@@ -1185,6 +1429,32 @@ mod tests {
                 events,
                 process_exit,
                 start_calls: AtomicUsize::new(0),
+                send_ready: true,
+                fail_start: false,
+                block_start: false,
+                start_entered: Notify::new(),
+                release_start: Notify::new(),
+            }
+        }
+
+        fn without_ready() -> Self {
+            Self {
+                send_ready: false,
+                ..Self::new()
+            }
+        }
+
+        fn failing_start() -> Self {
+            Self {
+                fail_start: true,
+                ..Self::new()
+            }
+        }
+
+        fn blocking_start() -> Self {
+            Self {
+                block_start: true,
+                ..Self::new()
             }
         }
 
@@ -1192,6 +1462,13 @@ mod tests {
             drop(self.events.send(WorkerEvent::Exited { code, signal }));
             self.process_exit
                 .send_replace(Some(ProcessStatus { code, signal }));
+        }
+
+        fn crash(&self, signal: i32) {
+            self.process_exit.send_replace(Some(ProcessStatus {
+                code: None,
+                signal: Some(signal),
+            }));
         }
     }
 
@@ -1201,12 +1478,24 @@ mod tests {
             match command {
                 WorkerCommand::Start => {
                     self.start_calls.fetch_add(1, Ordering::Relaxed);
+                    if self.block_start {
+                        self.start_entered.notify_one();
+                        self.release_start.notified().await;
+                    }
+                    if self.fail_start {
+                        return Err(VmError::Unavailable {
+                            resource: String::from("mock start"),
+                            reason: String::from("deliberate failure"),
+                        });
+                    }
                     drop(self.events.send(WorkerEvent::Started {
                         ingress: Vec::new(),
                         vmm_pid: 1,
                         passt_pid: None,
                     }));
-                    drop(self.events.send(WorkerEvent::Ready));
+                    if self.send_ready {
+                        drop(self.events.send(WorkerEvent::Ready));
+                    }
                 }
                 WorkerCommand::Cancel { .. } => self.exit(Some(0), None),
                 WorkerCommand::Destroy => {

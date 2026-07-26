@@ -13,6 +13,8 @@ modify firewall rules.
 One-time host provisioning must:
 
 - install stable libkrun 1.x, matching libkrunfw, and `passt`;
+- install `podman`, `musl-gcc`, `musl-devel`, and `e2fsprogs` to run the
+  self-contained hardware smoke test;
 - grant `forge` read/write access to `/dev/kvm`;
 - create image, disk, mount, and runtime roots owned or readable as appropriate
   by `forge`;
@@ -64,11 +66,20 @@ tags and disk IDs must be unique.
 
 ## Guest image
 
-Approved images provide `/usr/libexec/hephaestus/heph-init`. It connects to the
-host over virtio-vsock port 19,000 and speaks the versioned protocol exported
-by `vm_libkrun::protocol`. The host sends start, cancellation, and health
-messages; the guest sends readiness, logs, metrics, health responses, and one
-final exit report.
+Approved images provide `/usr/libexec/hephaestus/heph-init`, built by the
+`heph-init` binary target. It connects to the host over virtio-vsock port
+19,000 and speaks the versioned protocol exported by
+`vm_libkrun::protocol`. The host sends start, cancellation, and health
+messages; the guest mounts declared virtio-fs devices, starts the command, and
+sends readiness, logs, metrics, health responses, and one final exit report.
+
+For a portable x86-64 guest binary, build with:
+
+```sh
+rustup target add x86_64-unknown-linux-musl
+cargo build --release -p vm-libkrun --bin heph-init \
+  --target x86_64-unknown-linux-musl
+```
 
 ## Validation
 
@@ -78,8 +89,26 @@ Run the hardware-independent suite with:
 cargo test -p vm-libkrun
 ```
 
-Real boot tests are disabled unless
-`HEPHAESTUS_LIBKRUN_INTEGRATION=1`. The integration environment must also
+Run the reproducible real-boot smoke test with:
+
+```sh
+scripts/run-libkrun-integration.sh
+```
+
+The runner refuses root, builds static guest binaries, pulls a digest-pinned
+Fedora 44 image, creates the raw ext4 disk and mount fixtures, discovers a
+writable delegated cgroup, enables its controllers, runs the gated Rust test,
+checks for leaked runtime files and cgroups, verifies host interfaces and
+routes are unchanged, and cleans its container and temporary files through an
+exit trap.
+
+Set `HEPHAESTUS_LIBKRUN_CGROUP_PARENT` when the runner cannot discover the
+service's delegated subtree. The parent must already delegate `cpu`, `io`,
+`memory`, and `pids`. `HEPHAESTUS_LIBKRUN_FEDORA_IMAGE` can override the pinned
+image for deliberate image-update testing.
+
+For direct invocation, real boot tests remain disabled unless
+`HEPHAESTUS_LIBKRUN_INTEGRATION=1`. The integration environment must then also
 provide:
 
 - `HEPHAESTUS_LIBKRUN_RUNTIME_ROOT`
@@ -93,5 +122,8 @@ provide:
 - `HEPHAESTUS_LIBKRUN_CGROUP_ROOT`
 
 The approved integration image must contain
-`/usr/libexec/hephaestus/integration-check`, which reports `sqlite=ok`,
-`dns=ok`, `tcp=ok`, and `udp=ok` after exercising those facilities.
+`/usr/libexec/hephaestus/integration-check`. The probe exercises persistent
+SQLite storage, read-only and writable mounts, working-directory selection,
+stdout and stderr, structured metrics, disabled networking, DNS/TCP/UDP
+egress, an HTTP ingress forward, and cooperative and ignored cancellation.
+The `heph-integration-check` binary target provides that probe.

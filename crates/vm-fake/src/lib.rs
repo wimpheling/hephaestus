@@ -372,6 +372,9 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+// Keeping fake validation aligned with the public contract is clearer than
+// splitting its small, sequential validation pipeline.
+#[allow(clippy::too_many_lines)]
 fn validate_spec(spec: &VmSpec) -> Result<(), VmError> {
     validate_nonempty("id", &spec.id.0)?;
     if spec.resources.vcpus == 0 {
@@ -381,8 +384,19 @@ fn validate_spec(spec: &VmSpec) -> Result<(), VmError> {
         return invalid_spec("resources.memory_mib", "must be greater than zero");
     }
     validate_absolute("command.program", Path::new(&spec.command.program))?;
+    validate_no_nul("command.program", &spec.command.program)?;
     if let Some(working_dir) = &spec.command.working_dir {
         validate_absolute("command.working_dir", working_dir)?;
+    }
+    for (index, argument) in spec.command.args.iter().enumerate() {
+        validate_no_nul(&format!("command.args[{index}]"), argument)?;
+    }
+    for (key, value) in &spec.command.env {
+        validate_no_nul("command.env", key)?;
+        validate_no_nul("command.env", value)?;
+        if key.contains('=') {
+            return invalid_spec("command.env", "keys must not contain '='");
+        }
     }
 
     match &spec.root {
@@ -425,6 +439,7 @@ fn validate_spec(spec: &VmSpec) -> Result<(), VmError> {
     match &spec.network {
         NetworkMode::Disabled => {}
         NetworkMode::UserMode { ingress } => {
+            let mut fixed_bindings = HashSet::new();
             for (index, forward) in ingress.iter().enumerate() {
                 if !forward.bind_addr.is_loopback() {
                     return invalid_spec(
@@ -443,6 +458,18 @@ fn validate_spec(spec: &VmSpec) -> Result<(), VmError> {
                         feature: "port-forward protocol".to_owned(),
                         provider: "fake".to_owned(),
                     });
+                }
+                if forward.host_port != 0
+                    && !fixed_bindings.insert((
+                        forward.protocol,
+                        forward.bind_addr,
+                        forward.host_port,
+                    ))
+                {
+                    return invalid_spec(
+                        &format!("network.ingress[{index}]"),
+                        "duplicates an earlier fixed host binding",
+                    );
                 }
             }
         }
@@ -471,6 +498,13 @@ fn validate_absolute(field: &str, path: &Path) -> Result<(), VmError> {
     Ok(())
 }
 
+fn validate_no_nul(field: &str, value: &str) -> Result<(), VmError> {
+    if value.as_bytes().contains(&0) {
+        return invalid_spec(field, "must not contain NUL");
+    }
+    Ok(())
+}
+
 fn invalid_spec<T>(field: &str, reason: &str) -> Result<T, VmError> {
     Err(VmError::InvalidSpec {
         field: field.to_owned(),
@@ -486,12 +520,38 @@ mod tests {
         net::{IpAddr, Ipv4Addr},
         path::PathBuf,
         sync::Arc,
-        time::Duration,
     };
+    use vm_conformance::ProviderHarness;
     use vm_trait::{
-        GuestCommand, NetworkMode, PortForward, PortProtocol, RootFilesystem, StopMode, VmError,
-        VmEvent, VmExit, VmId, VmProvider, VmResources, VmSpec,
+        GuestCommand, NetworkMode, PortForward, PortProtocol, RootFilesystem, VmError, VmId,
+        VmProvider, VmResources, VmSpec,
     };
+
+    struct FakeHarness {
+        provider: Arc<FakeProvider>,
+    }
+
+    impl ProviderHarness for FakeHarness {
+        fn provider(&self) -> Arc<dyn VmProvider> {
+            self.provider.clone()
+        }
+
+        fn long_running_spec(&self, id: &str) -> VmSpec {
+            spec(id)
+        }
+
+        fn ephemeral_ingress_spec(&self, id: &str) -> Option<VmSpec> {
+            Some(spec(id))
+        }
+    }
+
+    fn harness() -> FakeHarness {
+        FakeHarness {
+            provider: Arc::new(FakeProvider::new()),
+        }
+    }
+
+    vm_conformance::provider_conformance_tests!(harness);
 
     fn spec(id: &str) -> VmSpec {
         VmSpec {
@@ -521,103 +581,6 @@ mod tests {
             },
             labels: BTreeMap::new(),
         }
-    }
-
-    #[tokio::test]
-    async fn concurrent_start_is_idempotent_and_resolves_ingress() {
-        let provider = FakeProvider::new();
-        let vm = provider.provision(spec("start")).await.unwrap();
-        let mut events = vm.subscribe_events();
-
-        let (first, second) = tokio::join!(vm.start(), vm.start());
-        first.unwrap();
-        second.unwrap();
-
-        let VmEvent::Started { ingress } = events.recv().await.unwrap() else {
-            panic!("first event must be Started");
-        };
-        assert_eq!(ingress.len(), 1);
-        assert_ne!(ingress[0].host_port, 0);
-        assert!(matches!(events.recv().await.unwrap(), VmEvent::Ready));
-    }
-
-    #[tokio::test]
-    async fn wait_supports_many_callers_and_caches_exit() {
-        let provider = FakeProvider::new();
-        let vm = provider.provision(spec("wait")).await.unwrap();
-        vm.start().await.unwrap();
-
-        let first_vm = Arc::clone(&vm);
-        let second_vm = Arc::clone(&vm);
-        let first = first_vm.wait();
-        let second = second_vm.wait();
-        let stop = vm.stop(StopMode::Graceful {
-            timeout: Duration::from_secs(1),
-        });
-        let (first, second, stopped) = tokio::join!(first, second, stop);
-
-        stopped.unwrap();
-        let expected = VmExit {
-            code: Some(0),
-            signal: None,
-        };
-        assert_eq!(first.unwrap(), expected);
-        assert_eq!(second.unwrap(), expected);
-        assert_eq!(vm.wait().await.unwrap(), expected);
-    }
-
-    #[tokio::test]
-    async fn destroying_before_start_wakes_waiters_with_destroyed() {
-        let provider = FakeProvider::new();
-        let vm = provider.provision(spec("destroyed")).await.unwrap();
-
-        let waiting_vm = Arc::clone(&vm);
-        let waiting = waiting_vm.wait();
-        let destroying = vm.destroy();
-        let (result, destroyed) = tokio::join!(waiting, destroying);
-
-        destroyed.unwrap();
-        assert!(matches!(result, Err(VmError::Destroyed)));
-        assert!(matches!(vm.wait().await, Err(VmError::Destroyed)));
-        vm.destroy().await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn destroy_force_stops_running_vm_and_preserves_exit() {
-        let provider = FakeProvider::new();
-        let vm = provider.provision(spec("force")).await.unwrap();
-        let mut events = vm.subscribe_events();
-        vm.start().await.unwrap();
-        vm.destroy().await.unwrap();
-
-        let expected = VmExit {
-            code: None,
-            signal: Some(9),
-        };
-        assert_eq!(vm.wait().await.unwrap(), expected);
-
-        assert!(matches!(
-            events.recv().await.unwrap(),
-            VmEvent::Started { .. }
-        ));
-        assert!(matches!(events.recv().await.unwrap(), VmEvent::Ready));
-        assert!(matches!(
-            events.recv().await.unwrap(),
-            VmEvent::Exited(exit) if exit == expected
-        ));
-    }
-
-    #[tokio::test]
-    async fn identifiers_can_be_reused_after_destroy() {
-        let provider = FakeProvider::new();
-        let vm = provider.provision(spec("reusable")).await.unwrap();
-        assert!(matches!(
-            provider.provision(spec("reusable")).await,
-            Err(VmError::AlreadyExists(_))
-        ));
-
-        vm.destroy().await.unwrap();
-        provider.provision(spec("reusable")).await.unwrap();
     }
 
     #[tokio::test]

@@ -12,7 +12,7 @@ vm-trait.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt"] }
+vm-conformance = { path = "../vm-conformance" }
 
 [lints]
 workspace = true
-

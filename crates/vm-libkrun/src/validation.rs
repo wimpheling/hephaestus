@@ -71,7 +71,9 @@ pub fn validate_config(config: &LibkrunConfig) -> Result<(), VmError> {
         return invalid("service_uid", "the libkrun runtime must not run as root");
     }
     validate_service_identity(config)?;
+    validate_absolute("runtime_root", &config.runtime_root)?;
     validate_directory("runtime_root", &config.runtime_root)?;
+    validate_absolute("cgroup_root", &config.cgroup_root)?;
     validate_directory("cgroup_root", &config.cgroup_root)?;
     if config.enforce_cgroup_v2 && !config.cgroup_root.join("cgroup.controllers").is_file() {
         return invalid(
@@ -126,6 +128,9 @@ pub fn prepare_spec(config: &LibkrunConfig, spec: &VmSpec) -> Result<PreparedSpe
     validate_no_nul("command.program", &spec.command.program)?;
     if let Some(path) = &spec.command.working_dir {
         validate_absolute("command.working_dir", path)?;
+    }
+    for (index, argument) in spec.command.args.iter().enumerate() {
+        validate_no_nul(&format!("command.args[{index}]"), argument)?;
     }
     for (key, value) in &spec.command.env {
         validate_no_nul("command.env key", key)?;
@@ -243,6 +248,7 @@ pub fn prepare_spec(config: &LibkrunConfig, spec: &VmSpec) -> Result<PreparedSpe
         NetworkMode::Disabled => PreparedNetwork::Disabled,
         NetworkMode::UserMode { ingress } => {
             let mut forwards = Vec::with_capacity(ingress.len());
+            let mut fixed_bindings = HashSet::new();
             for (index, forward) in ingress.iter().enumerate() {
                 if !matches!(forward.protocol, PortProtocol::Tcp) {
                     return unsupported("non-TCP ingress forwarding");
@@ -257,6 +263,18 @@ pub fn prepare_spec(config: &LibkrunConfig, spec: &VmSpec) -> Result<PreparedSpe
                     return invalid(
                         format!("network.ingress[{index}].guest_port"),
                         "must be greater than zero",
+                    );
+                }
+                if forward.host_port != 0
+                    && !fixed_bindings.insert((
+                        forward.protocol,
+                        forward.bind_addr,
+                        forward.host_port,
+                    ))
+                {
+                    return invalid(
+                        format!("network.ingress[{index}]"),
+                        "duplicates an earlier fixed host binding",
                     );
                 }
                 forwards.push(PreparedForward {
@@ -308,6 +326,7 @@ fn validate_allowed_roots(field: &str, roots: &[PathBuf]) -> Result<(), VmError>
         return invalid(field, "must contain at least one allowed root");
     }
     for root in roots {
+        validate_absolute(field, root)?;
         validate_directory(field, root)?;
     }
     Ok(())
@@ -323,6 +342,7 @@ fn validate_directory(field: &str, path: &Path) -> Result<(), VmError> {
 }
 
 fn validate_executable(field: &str, path: &Path) -> Result<(), VmError> {
+    validate_absolute(field, path)?;
     let metadata =
         fs::metadata(path).map_err(|error| unavailable_error(field, error.to_string()))?;
     if !metadata.is_file() || metadata.permissions().mode() & 0o111 == 0 {
@@ -441,18 +461,19 @@ impl PathKind {
 
 #[cfg(test)]
 mod tests {
-    use super::prepare_spec;
+    use super::{prepare_spec, validate_config};
     use crate::config::LibkrunConfig;
     use std::{
         collections::BTreeMap,
         fs,
         net::{IpAddr, Ipv4Addr},
+        os::unix::fs::{PermissionsExt, symlink},
         path::PathBuf,
     };
     use tempfile::TempDir;
     use vm_trait::{
-        DiskFormat, GuestCommand, NetworkMode, PortForward, PortProtocol, RootFilesystem, VmError,
-        VmId, VmMount, VmResources, VmSpec,
+        DiskFormat, GuestCommand, NetworkMode, PortForward, PortProtocol, RootFilesystem, VmDisk,
+        VmError, VmId, VmMount, VmResources, VmSpec,
     };
 
     #[test]
@@ -512,9 +533,229 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn valid_disk_and_mount_paths_are_preserved() {
+        let fixture = Fixture::new();
+        let disk = fixture.disks.join("sqlite.raw");
+        fs::write(&disk, [0_u8; 16]).unwrap();
+        let repository = fixture.mounts.join("repository");
+        fs::create_dir(&repository).unwrap();
+        let mut spec = fixture.spec();
+        spec.disks.push(VmDisk {
+            id: String::from("sqlite"),
+            host_path: disk.clone(),
+            format: DiskFormat::Raw,
+            read_only: false,
+        });
+        spec.mounts.push(VmMount {
+            tag: String::from("repository"),
+            host_path: repository.clone(),
+            guest_path: PathBuf::from("/repository"),
+            read_only: true,
+        });
+
+        let prepared = prepare_spec(&fixture.config, &spec).unwrap();
+        assert_eq!(prepared.disks[0].path, disk);
+        assert_eq!(prepared.mounts[0].host_path, repository);
+    }
+
+    #[test]
+    fn symlink_and_parent_traversal_escapes_are_rejected() {
+        let fixture = Fixture::new();
+        let outside = fixture.temp.path().join("outside.raw");
+        fs::write(&outside, [0_u8; 1]).unwrap();
+        let link = fixture.disks.join("escape.raw");
+        symlink(&outside, &link).unwrap();
+        let mut linked = fixture.spec();
+        linked.disks.push(VmDisk {
+            id: String::from("linked"),
+            host_path: link,
+            format: DiskFormat::Raw,
+            read_only: true,
+        });
+        assert_invalid_field(prepare_spec(&fixture.config, &linked), "disks[0].host_path");
+
+        let mut traversed = fixture.spec();
+        traversed.disks.push(VmDisk {
+            id: String::from("traversed"),
+            host_path: fixture.disks.join("..").join("outside.raw"),
+            format: DiskFormat::Raw,
+            read_only: true,
+        });
+        assert_invalid_field(
+            prepare_spec(&fixture.config, &traversed),
+            "disks[0].host_path",
+        );
+    }
+
+    #[test]
+    fn missing_paths_and_wrong_file_types_are_rejected() {
+        let fixture = Fixture::new();
+        let mut missing = fixture.spec();
+        missing.root = RootFilesystem::Directory {
+            host_path: fixture.images.join("missing"),
+        };
+        assert_invalid_field(prepare_spec(&fixture.config, &missing), "root.host_path");
+
+        let directory = fixture.disks.join("not-a-disk");
+        fs::create_dir(&directory).unwrap();
+        let mut wrong_disk = fixture.spec();
+        wrong_disk.disks.push(VmDisk {
+            id: String::from("wrong"),
+            host_path: directory,
+            format: DiskFormat::Raw,
+            read_only: true,
+        });
+        assert_invalid_field(
+            prepare_spec(&fixture.config, &wrong_disk),
+            "disks[0].host_path",
+        );
+
+        let file = fixture.mounts.join("not-a-mount");
+        fs::write(&file, []).unwrap();
+        let mut wrong_mount = fixture.spec();
+        wrong_mount.mounts.push(VmMount {
+            tag: String::from("wrong"),
+            host_path: file,
+            guest_path: PathBuf::from("/wrong"),
+            read_only: true,
+        });
+        assert_invalid_field(
+            prepare_spec(&fixture.config, &wrong_mount),
+            "mounts[0].host_path",
+        );
+    }
+
+    #[test]
+    fn duplicates_and_nul_arguments_are_rejected() {
+        let fixture = Fixture::new();
+        let mut argument = fixture.spec();
+        argument.command.args.push(String::from("bad\0argument"));
+        assert_invalid_field(prepare_spec(&fixture.config, &argument), "command.args[0]");
+
+        let mut forwarding = fixture.spec();
+        let duplicate = PortForward {
+            protocol: PortProtocol::Tcp,
+            bind_addr: IpAddr::V4(Ipv4Addr::LOCALHOST),
+            host_port: 18080,
+            guest_port: 80,
+        };
+        forwarding.network = NetworkMode::UserMode {
+            ingress: vec![duplicate.clone(), duplicate],
+        };
+        assert_invalid_field(
+            prepare_spec(&fixture.config, &forwarding),
+            "network.ingress[1]",
+        );
+    }
+
+    #[test]
+    fn resource_and_writable_disk_limits_are_rejected() {
+        let fixture = Fixture::new();
+        let mut cpu = fixture.spec();
+        cpu.resources.vcpus = 9;
+        assert_invalid_field(prepare_spec(&fixture.config, &cpu), "resources.vcpus");
+
+        let mut memory = fixture.spec();
+        memory.resources.memory_mib = 4096;
+        assert_invalid_field(
+            prepare_spec(&fixture.config, &memory),
+            "resources.memory_mib",
+        );
+
+        let disk = fixture.disks.join("oversized.raw");
+        fs::write(&disk, [0_u8; 32]).unwrap();
+        let mut config = fixture.config.clone();
+        config.limits.writable_disk_max_bytes = 16;
+        let mut storage = fixture.spec();
+        storage.disks.push(VmDisk {
+            id: String::from("oversized"),
+            host_path: disk,
+            format: DiskFormat::Raw,
+            read_only: false,
+        });
+        assert_invalid_field(prepare_spec(&config, &storage), "disks");
+    }
+
+    #[test]
+    fn host_preflight_returns_typed_configuration_errors() {
+        let fixture = Fixture::new();
+        let mut root_service = fixture.valid_config();
+        root_service.service_uid = 0;
+        assert!(matches!(
+            validate_config(&root_service),
+            Err(VmError::InvalidSpec { field, .. }) if field == "service_uid"
+        ));
+
+        let mut missing_kvm = fixture.valid_config();
+        missing_kvm.kvm_device = fixture.temp.path().join("missing-kvm");
+        assert!(matches!(
+            validate_config(&missing_kvm),
+            Err(VmError::Unavailable { resource, .. }) if resource == "KVM"
+        ));
+
+        let non_executable = fixture.temp.path().join("not-executable");
+        fs::write(&non_executable, []).unwrap();
+        fs::set_permissions(&non_executable, fs::Permissions::from_mode(0o600)).unwrap();
+        let mut invalid_passt = fixture.valid_config();
+        invalid_passt.passt_binary = non_executable;
+        assert!(matches!(
+            validate_config(&invalid_passt),
+            Err(VmError::InvalidSpec { field, .. }) if field == "passt_binary"
+        ));
+
+        let mut missing_delegation = fixture.valid_config();
+        missing_delegation.enforce_cgroup_v2 = true;
+        assert!(matches!(
+            validate_config(&missing_delegation),
+            Err(VmError::InvalidSpec { field, .. }) if field == "cgroup_root"
+        ));
+    }
+
+    #[test]
+    fn host_preflight_rejects_relative_roots_and_zero_limits() {
+        let fixture = Fixture::new();
+        let mut relative = fixture.valid_config();
+        relative.image_roots = vec![PathBuf::from("images")];
+        assert!(matches!(
+            validate_config(&relative),
+            Err(VmError::InvalidSpec { field, .. }) if field == "image_roots"
+        ));
+
+        let mut zero_period = fixture.valid_config();
+        zero_period.limits.cpu_period_micros = 0;
+        assert!(matches!(
+            validate_config(&zero_period),
+            Err(VmError::InvalidSpec { field, .. }) if field == "limits.cpu_period_micros"
+        ));
+
+        let mut zero_memory = fixture.valid_config();
+        zero_memory.limits.memory_max_bytes = 0;
+        assert!(matches!(
+            validate_config(&zero_memory),
+            Err(VmError::InvalidSpec { field, .. }) if field == "limits.memory_max_bytes"
+        ));
+
+        let mut zero_pids = fixture.valid_config();
+        zero_pids.limits.pids_max = 0;
+        assert!(matches!(
+            validate_config(&zero_pids),
+            Err(VmError::InvalidSpec { field, .. }) if field == "limits.pids_max"
+        ));
+    }
+
+    fn assert_invalid_field(result: Result<super::PreparedSpec, VmError>, expected: &str) {
+        assert!(matches!(
+            result,
+            Err(VmError::InvalidSpec { field, .. }) if field.starts_with(expected)
+        ));
+    }
+
     struct Fixture {
         temp: TempDir,
         images: PathBuf,
+        disks: PathBuf,
+        mounts: PathBuf,
         config: LibkrunConfig,
     }
 
@@ -532,14 +773,16 @@ mod tests {
             let config = LibkrunConfig::new(
                 temp.path(),
                 vec![images.clone()],
-                vec![disks],
-                vec![mounts],
+                vec![disks.clone()],
+                vec![mounts.clone()],
                 "/bin/true",
                 temp.path(),
             );
             Self {
                 temp,
                 images,
+                disks,
+                mounts,
                 config,
             }
         }
@@ -565,6 +808,16 @@ mod tests {
                 },
                 labels: BTreeMap::new(),
             }
+        }
+
+        fn valid_config(&self) -> LibkrunConfig {
+            let kvm = self.temp.path().join("kvm");
+            fs::write(&kvm, []).unwrap();
+            let mut config = self.config.clone();
+            config.passt_binary = PathBuf::from("/bin/true");
+            config.kvm_device = kvm;
+            config.enforce_cgroup_v2 = false;
+            config
         }
     }
 }

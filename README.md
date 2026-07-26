@@ -17,6 +17,7 @@ implementations:
 | --- | --- |
 | [`vm-trait`](crates/vm-trait) | Shared abstractions for VM providers |
 | [`vm-fake`](crates/vm-fake) | Deterministic provider for lifecycle and orchestration tests |
+| [`vm-conformance`](crates/vm-conformance) | Reusable behavioral contract tests for every VM provider |
 | [`vm-libkrun`](crates/vm-libkrun) | Local microVM provider backed by libkrun |
 
 ## Documentation
@@ -25,8 +26,12 @@ implementations:
   parent/worker IPC, networking, image, disk, and mount contracts.
 - [libkrun backend](docs/vm-libkrun.md): Fedora host contract, configuration,
   process isolation, cleanup, and integration-test requirements.
+- [VM testing](docs/vm-testing.md): reusable provider conformance tests,
+  backend component tests, and Fedora/KVM validation tiers.
 - [Contributor instructions](AGENTS.md): repository-wide Rust quality and
   validation requirements.
+- [Project TODO](TODO.md): deferred architectural decisions and completed
+  runtime milestones.
 
 ## Development
 
@@ -36,4 +41,10 @@ The Rust workspace requires Rust 1.85 or newer.
 cargo check --workspace
 cargo clippy --workspace --all-targets --all-features
 cargo test --workspace
+```
+
+On a prepared Fedora host, run the real KVM/libkrun smoke test without root:
+
+```sh
+scripts/run-libkrun-integration.sh
 ```

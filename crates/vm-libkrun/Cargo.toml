@@ -5,11 +5,16 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 
+[features]
+integration-guest = ["dep:rusqlite"]
+
 [dependencies]
 async-trait.workspace = true
 ciborium.workspace = true
 libloading.workspace = true
+libc.workspace = true
 rustix.workspace = true
+rusqlite = { workspace = true, optional = true }
 serde.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = [
@@ -25,9 +30,15 @@ tokio = { workspace = true, features = [
 tracing.workspace = true
 vm-trait.workspace = true
 
+[[bin]]
+name = "heph-integration-check"
+path = "src/bin/heph-integration-check.rs"
+required-features = ["integration-guest"]
+
 [dev-dependencies]
 tempfile = "3"
-tokio = { workspace = true, features = ["rt-multi-thread"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "test-util"] }
+vm-conformance = { path = "../vm-conformance" }
 
 [lints]
 workspace = true

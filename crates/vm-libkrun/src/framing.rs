@@ -90,8 +90,12 @@ fn validate_length(length: usize) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{read_sync, write_sync};
-    use crate::protocol::{GuestMessage, PROTOCOL_VERSION};
-    use std::io::Cursor;
+    use crate::protocol::{
+        GuestCommandMessage, GuestLogStream, GuestMessage, GuestMount, HostMessage, MAX_FRAME_SIZE,
+        PROTOCOL_VERSION,
+    };
+    use serde::Serialize;
+    use std::{collections::BTreeMap, io::Cursor, path::PathBuf};
 
     #[test]
     fn sync_frame_round_trip() {
@@ -108,5 +112,95 @@ mod tests {
                 version: PROTOCOL_VERSION
             }
         ));
+    }
+
+    #[test]
+    fn every_host_message_round_trips() {
+        let command = GuestCommandMessage {
+            program: String::from("/bin/echo"),
+            args: vec![String::from("hello")],
+            env: BTreeMap::from([(String::from("LANG"), String::from("C"))]),
+            working_dir: Some(PathBuf::from("/workspace")),
+        };
+        let messages = [
+            HostMessage::Start {
+                version: PROTOCOL_VERSION,
+                command,
+                mounts: vec![GuestMount {
+                    tag: String::from("workspace"),
+                    guest_path: PathBuf::from("/workspace"),
+                    read_only: false,
+                }],
+            },
+            HostMessage::Cancel { timeout_ms: 500 },
+            HostMessage::HealthPing { nonce: 42 },
+        ];
+        for message in messages {
+            round_trip(&message);
+        }
+    }
+
+    #[test]
+    fn every_guest_message_round_trips() {
+        let messages = [
+            GuestMessage::Hello {
+                version: PROTOCOL_VERSION,
+            },
+            GuestMessage::Ready,
+            GuestMessage::Log {
+                stream: GuestLogStream::Stderr,
+                bytes: vec![0, 0xff, b'\n'],
+            },
+            GuestMessage::Metric {
+                name: String::from("cpu.seconds"),
+                value: 1.5,
+                labels: BTreeMap::from([(String::from("scope"), String::from("guest"))]),
+            },
+            GuestMessage::Health { nonce: 42 },
+            GuestMessage::Exited {
+                code: Some(0),
+                signal: None,
+            },
+            GuestMessage::Error {
+                code: String::from("guest-test"),
+                message: String::from("deliberate error"),
+            },
+        ];
+        for message in messages {
+            round_trip(&message);
+        }
+    }
+
+    #[test]
+    fn malformed_truncated_and_oversized_frames_are_rejected() {
+        assert!(read_sync::<GuestMessage>(&mut Cursor::new([0_u8; 2])).is_err());
+        let truncated = [0, 0, 0, 4, 0xa1];
+        assert!(read_sync::<GuestMessage>(&mut Cursor::new(truncated)).is_err());
+        let oversized = u32::try_from(MAX_FRAME_SIZE + 1).unwrap().to_be_bytes();
+        assert!(read_sync::<GuestMessage>(&mut Cursor::new(oversized)).is_err());
+        let malformed = [0, 0, 0, 1, 0xff];
+        assert!(read_sync::<GuestMessage>(&mut Cursor::new(malformed)).is_err());
+    }
+
+    #[test]
+    fn unknown_wire_variant_is_rejected_explicitly() {
+        #[derive(Serialize)]
+        enum FutureMessage {
+            FutureVariant,
+        }
+
+        let mut bytes = Vec::new();
+        write_sync(&mut bytes, &FutureMessage::FutureVariant).unwrap();
+        assert!(read_sync::<GuestMessage>(&mut Cursor::new(bytes)).is_err());
+    }
+
+    fn round_trip<T>(message: &T)
+    where
+        T: Serialize + serde::de::DeserializeOwned + std::fmt::Debug,
+    {
+        let mut bytes = Vec::new();
+        write_sync(&mut bytes, message).unwrap();
+        let decoded: T = read_sync(&mut Cursor::new(bytes)).unwrap();
+        assert_eq!(format!("{decoded:?}"), format!("{message:?}"));
     }
 }

@@ -38,21 +38,24 @@ Every approved root filesystem contains `heph-init`. The provider boots
 
 For the local microVM provider, `heph-init` and the provider worker communicate
 over AF_VSOCK. The guest connects to host port 19,000. The protocol uses a
-big-endian `u32` length followed by a CBOR payload. Every payload includes
-protocol version `1`, and peers reject unsupported versions. Frames are
-limited to 16 MiB and individual log chunks to 64 KiB.
+big-endian `u32` length followed by a CBOR payload. The initial handshake and
+start command carry protocol version `1`, and peers reject unsupported
+versions. Frames are limited to 16 MiB, individual log chunks to 64 KiB,
+metric names and label components to 256 bytes, and metrics to 64 labels.
+Unknown wire variants are rejected for protocol version 1; Rust's
+`#[non_exhaustive]` API marker does not provide wire compatibility.
 
 The bootstrap exchange is:
 
 1. The guest sends `Hello { version }`.
-2. The worker sends `Run { command }`.
+2. The worker sends `Start { command, mounts }`.
 3. The guest validates the command and sends `Ready`.
 4. The guest sends zero or more ordered `Log { stream, bytes }` messages.
 5. The guest sends exactly one `Exited { code, signal }` message.
 
-`Run.command.program` is an absolute guest path and is executed directly,
+`Start.command.program` is an absolute guest path and is executed directly,
 without a shell. Its arguments do not include `argv[0]`. The command does not
-inherit the host environment; `Run.command.env` supplies its environment.
+inherit the host environment; `Start.command.env` supplies its environment.
 `working_dir`, when present, must be absolute and accessible to the guest
 account.
 
@@ -80,10 +83,10 @@ The broadcast event stream is live telemetry and may lose logs under
 backpressure. It is never the source of truth for completion. `wait` and its
 cached final exit status provide the reliable completion path.
 
-Ingress forwarding initially supports TCP bound to an IPv4 or IPv6 loopback
-address. A requested host port of zero asks the provider to allocate a port.
-The `Started` event contains the effective rules with every allocated host port
-resolved to a nonzero value.
+Ingress forwarding in `vm-libkrun` initially supports TCP bound to the IPv4
+loopback address. A requested host port of zero asks the provider to allocate
+a port. The `Started` event contains the effective rules with every allocated
+host port resolved to a nonzero value.
 
 ## Parent and worker
 
@@ -91,7 +94,8 @@ The Hephaestus parent starts one worker process per local VM. A private,
 length-framed Unix stream socket in the mode-0700 runtime directory carries
 versioned CBOR messages with request identifiers.
 
-Parent-to-worker requests are `Configure`, `Start`, `Stop`, and `Destroy`.
+Parent-to-worker requests are `Configure`, `Start`, `Cancel`, `Health`, and
+`Destroy`.
 Worker-to-parent messages are acknowledgements, typed failures, lifecycle
 events, and `CleanupComplete`. Each request carries a monotonically increasing
 `u64` request identifier; its acknowledgement or failure echoes that
@@ -134,11 +138,12 @@ Before provisioning, the core canonicalizes root, disk, and mount paths,
 rejects symlink escapes, and validates mounts against its configured allowlist.
 Providers repeat the containment and file-type checks as defense in depth.
 
-Approved images contain a `hephaestus` account with UID and GID 1000.
-`heph-init` performs privileged bootstrap operations and runs `GuestCommand`
-as that account. Mount contents must be staged with ownership and permissions
-appropriate for UID/GID 1000. Configurable guest identities are intentionally
-outside the initial trait.
+`heph-init` performs the privileged bootstrap operations needed to mount guest
+filesystems. The initial implementation executes `GuestCommand` with the
+bootstrap process's image-defined identity; guest identity selection is not
+yet part of the provider-neutral trait. Mount contents must be staged with
+ownership and permissions appropriate for the approved image's command
+identity.
 
 `GuestCommand::working_dir`, when present, is an absolute path inside the guest.
 It must exist after mounts are attached and be accessible to the guest account.

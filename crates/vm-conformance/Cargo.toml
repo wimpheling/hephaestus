@@ -1,0 +1,13 @@
+[package]
+name = "vm-conformance"
+description = "Reusable provider conformance tests for the Hephaestus VM contract"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
+vm-trait.workspace = true
+
+[lints]
+workspace = true

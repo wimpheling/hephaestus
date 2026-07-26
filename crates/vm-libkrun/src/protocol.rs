@@ -15,6 +15,12 @@ pub const MAX_FRAME_SIZE: usize = 16 * 1024 * 1024;
 /// Maximum bytes carried by one log message.
 pub const MAX_LOG_CHUNK_SIZE: usize = 64 * 1024;
 
+/// Maximum UTF-8 bytes in a metric name or label component.
+pub const MAX_METRIC_TEXT_SIZE: usize = 256;
+
+/// Maximum labels carried by one metric.
+pub const MAX_METRIC_LABELS: usize = 64;
+
 /// A command sent from the host worker to `heph-init`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[non_exhaustive]
