@@ -1,0 +1,15 @@
+[workspace]
+members = ["crates/*"]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+
+[workspace.dependencies]
+vm-trait = { path = "crates/vm-trait" }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+

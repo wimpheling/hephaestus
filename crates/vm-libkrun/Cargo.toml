@@ -1,0 +1,13 @@
+[package]
+name = "vm-libkrun"
+description = "A libkrun-backed virtual machine provider for Hephaestus"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+vm-trait.workspace = true
+
+[lints]
+workspace = true
+
