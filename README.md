@@ -24,6 +24,6 @@ The Rust workspace requires Rust 1.85 or newer.
 
 ```sh
 cargo check --workspace
+cargo clippy --workspace --all-targets --all-features
 cargo test --workspace
 ```
-

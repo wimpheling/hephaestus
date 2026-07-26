@@ -11,5 +11,17 @@ rust-version = "1.85"
 vm-trait = { path = "crates/vm-trait" }
 
 [workspace.lints.rust]
+missing_docs = "deny"
 unsafe_code = "forbid"
+warnings = "deny"
 
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+cargo = { level = "deny", priority = -1 }
+nursery = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+# Publishing metadata will be enforced once the project license is selected.
+cargo_common_metadata = { level = "allow", priority = 1 }
+
+[workspace.lints.rustdoc]
+all = "deny"
