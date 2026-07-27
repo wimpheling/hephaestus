@@ -9,6 +9,8 @@ const ACK_PROGRESS_INTERVAL: std::time::Duration = std::time::Duration::from_sec
 const MAX_CONCURRENT_COMMANDS: usize = 64;
 /// Durable subject carrying `StartRun` commands.
 pub const START_RUN_SUBJECT: &str = "heph.run.command.start.v1";
+/// Forge-originated durable subject carrying `StartRun` commands.
+pub const FORGE_START_RUN_SUBJECT: &str = "hephaestus.run.start";
 /// Durable subject carrying `CancelRun` commands.
 pub const CANCEL_RUN_SUBJECT: &str = "heph.run.command.cancel.v1";
 /// Durable subject carrying run lifecycle events.
@@ -31,7 +33,11 @@ pub async fn ensure_jetstream_topology(
     let commands = context
         .get_or_create_stream(Config {
             name: COMMAND_STREAM.to_owned(),
-            subjects: vec![START_RUN_SUBJECT.to_owned(), CANCEL_RUN_SUBJECT.to_owned()],
+            subjects: vec![
+                START_RUN_SUBJECT.to_owned(),
+                FORGE_START_RUN_SUBJECT.to_owned(),
+                CANCEL_RUN_SUBJECT.to_owned(),
+            ],
             retention: RetentionPolicy::WorkQueue,
             storage: StorageType::File,
             ..Default::default()
@@ -53,7 +59,10 @@ pub async fn ensure_jetstream_topology(
             COMMAND_CONSUMER,
             jetstream::consumer::pull::Config {
                 durable_name: Some(COMMAND_CONSUMER.to_owned()),
-                filter_subject: String::from("heph.run.command.>"),
+                filter_subjects: vec![
+                    String::from("heph.run.command.>"),
+                    FORGE_START_RUN_SUBJECT.to_owned(),
+                ],
                 ack_wait: std::time::Duration::from_secs(30),
                 ..Default::default()
             },
@@ -126,7 +135,7 @@ impl NatsCommandHandler {
     /// failure.
     pub async fn handle(&self, message: &jetstream::Message) -> Result<(), CommandHandlingError> {
         match message.message.subject.as_str() {
-            START_RUN_SUBJECT => self.handle_start(message).await,
+            START_RUN_SUBJECT | FORGE_START_RUN_SUBJECT => self.handle_start(message).await,
             CANCEL_RUN_SUBJECT => self.handle_cancel(message).await,
             subject => Err(CommandHandlingError::UnknownSubject(subject.to_owned())),
         }

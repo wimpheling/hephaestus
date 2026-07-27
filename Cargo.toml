@@ -10,8 +10,12 @@ rust-version = "1.85"
 [workspace.dependencies]
 async-trait = "0.1"
 async-nats = "0.42"
+axum = "0.8"
+bytes = "1"
 ciborium = "0.2"
 futures-util = "0.3"
+gix = { version = "0.72", default-features = false, features = ["revision"] }
+http = "1"
 libloading = "0.8"
 libc = "0.2"
 rustix = { version = "1", features = ["fs", "process"] }
@@ -20,6 +24,7 @@ rustix = { version = "1", features = ["fs", "process"] }
 rusqlite = { version = "0.32.1", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
 sqlx = { version = "0.8.6", default-features = false, features = [
     "json",
     "macros",
@@ -32,6 +37,8 @@ sqlx = { version = "0.8.6", default-features = false, features = [
 thiserror = "2"
 time = { version = "0.3", features = ["serde"] }
 tokio = { version = "1", features = ["sync"] }
+tokio-stream = "0.1"
+toml = "0.9"
 tracing = "0.1"
 uuid = { version = "1", features = ["serde", "v4"] }
 vm-trait = { path = "crates/vm-trait" }

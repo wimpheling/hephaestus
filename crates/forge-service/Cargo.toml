@@ -1,0 +1,34 @@
+[package]
+name = "forge-service"
+description = "PostgreSQL and bare-Git services for the Hephaestus forge"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+agent-config = { path = "../agent-config" }
+async-nats.workspace = true
+forge-domain = { path = "../forge-domain" }
+gix.workspace = true
+run-domain = { path = "../run-domain" }
+runtime-types = { path = "../runtime-types" }
+serde_json.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+time.workspace = true
+tokio = { workspace = true, features = ["fs", "process", "rt"] }
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+futures-util.workspace = true
+run-orchestrator = { path = "../run-orchestrator" }
+serial_test = "3"
+tempfile = "3"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+vm-fake = { path = "../vm-fake" }
+vm-trait.workspace = true
+volume-local = { path = "../volume-local" }
+
+[lints]
+workspace = true

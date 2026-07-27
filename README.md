@@ -24,6 +24,10 @@ implementations:
 | [`volume-local`](crates/volume-local) | Single-host raw volumes with PostgreSQL metadata |
 | [`run-domain`](crates/run-domain) | Durable run states and commands |
 | [`run-orchestrator`](crates/run-orchestrator) | PostgreSQL, VM, volume, and JetStream coordination |
+| [`forge-domain`](crates/forge-domain) | Project, repository, receive, and run-request domain values |
+| [`agent-config`](crates/agent-config) | Versioned `agent.toml` parsing and validation |
+| [`forge-service`](crates/forge-service) | Bare Git storage, PostgreSQL receive processing, and forge outbox |
+| [`git-http`](crates/git-http) | Authorized streaming Git smart-HTTP transport |
 
 ## Documentation
 
@@ -35,6 +39,8 @@ implementations:
   backend component tests, and Fedora/KVM validation tiers.
 - [Durable run orchestration](docs/run-orchestration.md): volume ownership,
   stale-lease recovery, database boundaries, and NATS subjects.
+- [Minimal Git forge core](docs/git-forge.md): canonical repository storage,
+  smart HTTP, agent configuration, receive transactions, and run publication.
 - [Contributor instructions](AGENTS.md): repository-wide Rust quality and
   validation requirements.
 - [Project TODO](TODO.md): deferred architectural decisions and completed

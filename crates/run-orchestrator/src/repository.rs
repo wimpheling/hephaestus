@@ -425,7 +425,8 @@ impl RunRepository for PgRunRepository {
     async fn unpublished_outbox(&self, limit: i64) -> Result<Vec<OutboxRecord>, RepositoryError> {
         let rows = sqlx::query(
             "SELECT id, subject, payload FROM outbox
-             WHERE published_at IS NULL ORDER BY occurred_at, id LIMIT $1",
+             WHERE published_at IS NULL AND aggregate_type = 'run'
+             ORDER BY occurred_at, id LIMIT $1",
         )
         .bind(limit)
         .fetch_all(&self.pool)

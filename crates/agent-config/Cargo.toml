@@ -1,0 +1,15 @@
+[package]
+name = "agent-config"
+description = "Versioned parser and validator for repository agent.toml files"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+forge-domain = { path = "../forge-domain" }
+serde.workspace = true
+sha2.workspace = true
+toml.workspace = true
+
+[lints]
+workspace = true

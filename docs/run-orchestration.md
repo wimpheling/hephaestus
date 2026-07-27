@@ -37,6 +37,7 @@ property of `volume-trait`.
 Commands:
 
 - `heph.run.command.start.v1`
+- `hephaestus.run.start` (forge-originated start command)
 - `heph.run.command.cancel.v1`
 
 Lifecycle distribution:
