@@ -6,7 +6,7 @@ edition.workspace = true
 rust-version.workspace = true
 
 [features]
-integration-guest = ["dep:rusqlite"]
+integration-guest = []
 
 [dependencies]
 async-trait.workspace = true
@@ -14,7 +14,7 @@ ciborium.workspace = true
 libloading.workspace = true
 libc.workspace = true
 rustix.workspace = true
-rusqlite = { workspace = true, optional = true }
+rusqlite.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = [
@@ -28,6 +28,7 @@ tokio = { workspace = true, features = [
     "time",
 ] }
 tracing.workspace = true
+uuid.workspace = true
 vm-trait.workspace = true
 
 [[bin]]

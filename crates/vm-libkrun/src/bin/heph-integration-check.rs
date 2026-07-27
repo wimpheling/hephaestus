@@ -2,11 +2,9 @@
 
 use rusqlite::Connection;
 use std::{
-    ffi::CString,
     fs,
     io::{self, Read, Write},
     net::{Shutdown, SocketAddr, TcpListener, TcpStream, ToSocketAddrs, UdpSocket},
-    os::unix::ffi::OsStrExt,
     path::Path,
     time::Duration,
 };
@@ -23,6 +21,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         Some("--serve-http") => return serve_http().map_err(Into::into),
         Some("--expect-network-disabled") => return expect_network_disabled(),
         Some("--ignore-cancellation") => return ignore_cancellation(),
+        Some("--state-only") => {
+            verify_disk()?;
+            println!("sqlite=ok");
+            if let Ok(milliseconds) = std::env::var("HEPH_STATE_HOLD_MS") {
+                std::thread::sleep(Duration::from_millis(milliseconds.parse()?));
+            }
+            return Ok(());
+        }
         Some(argument) => {
             return Err(format!("unknown integration-check argument: {argument}").into());
         }
@@ -47,10 +53,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn verify_disk() -> Result<(), Box<dyn std::error::Error>> {
-    fs::create_dir_all("/sqlite")?;
-    mount_disk(Path::new("/dev/vda"), Path::new("/sqlite"))?;
-    let database = Path::new("/sqlite/agent.db");
+    let database = Path::new("/var/lib/hephaestus/state.db");
     let connection = Connection::open(database)?;
+    let journal_mode: String = connection.query_row("PRAGMA journal_mode", [], |row| row.get(0))?;
+    if !journal_mode.eq_ignore_ascii_case("wal") {
+        return Err("SQLite state database is not in WAL mode".into());
+    }
     let table_count: i64 = connection.query_row(
         "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'probe'",
         [],
@@ -75,50 +83,7 @@ fn verify_disk() -> Result<(), Box<dyn std::error::Error>> {
         return Err("SQLite readback failed".into());
     }
     drop(connection);
-    unmount_disk(Path::new("/sqlite"))?;
     Ok(())
-}
-
-// The integration probe is PID 2 inside an isolated guest and must mount the
-// prepared block device without depending on a distribution mount helper.
-#[allow(unsafe_code)]
-fn mount_disk(source: &Path, target: &Path) -> io::Result<()> {
-    let source = CString::new(source.as_os_str().as_bytes())
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "disk path contains NUL"))?;
-    let target = CString::new(target.as_os_str().as_bytes())
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "mount path contains NUL"))?;
-    // SAFETY: all pointers refer to live NUL-terminated strings, the optional
-    // data pointer is null, and mount flags contain only Linux constants.
-    let result = unsafe {
-        libc::mount(
-            source.as_ptr(),
-            target.as_ptr(),
-            c"ext4".as_ptr(),
-            libc::MS_NOSUID | libc::MS_NODEV,
-            std::ptr::null(),
-        )
-    };
-    if result == 0 {
-        Ok(())
-    } else {
-        Err(io::Error::last_os_error())
-    }
-}
-
-// libkrun exits when the guest command finishes rather than performing a full
-// guest shutdown. Explicitly unmounting makes the persistence assertion test
-// completed block I/O instead of Linux's in-guest page cache.
-#[allow(unsafe_code)]
-fn unmount_disk(target: &Path) -> io::Result<()> {
-    let target = CString::new(target.as_os_str().as_bytes())
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "mount path contains NUL"))?;
-    // SAFETY: `target` is a live NUL-terminated string and no flags are used.
-    let result = unsafe { libc::umount2(target.as_ptr(), 0) };
-    if result == 0 {
-        Ok(())
-    } else {
-        Err(io::Error::last_os_error())
-    }
 }
 
 fn verify_mounts() -> Result<(), Box<dyn std::error::Error>> {

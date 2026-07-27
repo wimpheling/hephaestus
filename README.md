@@ -19,6 +19,11 @@ implementations:
 | [`vm-fake`](crates/vm-fake) | Deterministic provider for lifecycle and orchestration tests |
 | [`vm-conformance`](crates/vm-conformance) | Reusable behavioral contract tests for every VM provider |
 | [`vm-libkrun`](crates/vm-libkrun) | Local microVM provider backed by libkrun |
+| [`runtime-types`](crates/runtime-types) | Stable identifiers shared by runtime domains |
+| [`volume-trait`](crates/volume-trait) | Provider-neutral persistent-volume and lease contracts |
+| [`volume-local`](crates/volume-local) | Single-host raw volumes with PostgreSQL metadata |
+| [`run-domain`](crates/run-domain) | Durable run states and commands |
+| [`run-orchestrator`](crates/run-orchestrator) | PostgreSQL, VM, volume, and JetStream coordination |
 
 ## Documentation
 
@@ -28,6 +33,8 @@ implementations:
   process isolation, cleanup, and integration-test requirements.
 - [VM testing](docs/vm-testing.md): reusable provider conformance tests,
   backend component tests, and Fedora/KVM validation tiers.
+- [Durable run orchestration](docs/run-orchestration.md): volume ownership,
+  stale-lease recovery, database boundaries, and NATS subjects.
 - [Contributor instructions](AGENTS.md): repository-wide Rust quality and
   validation requirements.
 - [Project TODO](TODO.md): deferred architectural decisions and completed

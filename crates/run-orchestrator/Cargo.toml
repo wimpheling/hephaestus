@@ -1,0 +1,34 @@
+[package]
+name = "run-orchestrator"
+description = "Durable VM run orchestration for Hephaestus"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+async-nats.workspace = true
+async-trait.workspace = true
+futures-util.workspace = true
+run-domain = { path = "../run-domain" }
+runtime-types = { path = "../runtime-types" }
+serde.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+time.workspace = true
+tokio = { workspace = true, features = ["rt", "sync", "time"] }
+tracing.workspace = true
+uuid.workspace = true
+vm-trait.workspace = true
+volume-trait = { path = "../volume-trait" }
+
+[dev-dependencies]
+serial_test = "3"
+tempfile = "3"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
+vm-fake = { path = "../vm-fake" }
+vm-libkrun = { path = "../vm-libkrun", features = ["integration-guest"] }
+volume-local = { path = "../volume-local" }
+
+[lints]
+workspace = true

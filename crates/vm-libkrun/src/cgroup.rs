@@ -30,12 +30,22 @@ impl Cgroup {
         Ok(cgroup)
     }
 
+    pub fn existing(config: &LibkrunConfig, id: &str) -> Self {
+        Self {
+            path: config.cgroup_root.join(id),
+            emulated: !config.enforce_cgroup_v2,
+        }
+    }
+
     pub fn add_process(&self, pid: u32) -> Result<(), VmError> {
         write(self.path.join("cgroup.procs"), pid.to_string())
             .map_err(|error| provider("cgroup-place-worker", error))
     }
 
     pub fn cleanup(&self) -> Result<(), VmError> {
+        if !self.path.exists() {
+            return Ok(());
+        }
         if self.emulated {
             return remove_directory_tree(&self.path);
         }

@@ -5,8 +5,9 @@
 //! backend implementation details belong in provider-local suites.
 
 use std::{
+    fs,
     net::{IpAddr, Ipv4Addr},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
 };
@@ -49,6 +50,12 @@ pub trait ProviderHarness: Send + Sync {
     /// Describes optional observable behavior available to conformance tests.
     fn capabilities(&self) -> TestCapabilities {
         TestCapabilities::default()
+    }
+
+    /// Creates an optional specification whose caller-owned paths can be
+    /// snapshotted before lifecycle cleanup.
+    fn caller_owned_spec(&self, _id: &str) -> Option<VmSpec> {
+        None
     }
 
     /// Confirms provider-specific resources were released after destruction.
@@ -170,6 +177,27 @@ pub async fn destroy_running_is_idempotent(harness: &impl ProviderHarness) {
     assert_one_exit(&mut events, &exit).await;
     assert_eq!(vm.wait().await.expect("cached destroyed exit"), exit);
     harness.assert_clean(&id);
+}
+
+/// Verifies that destruction preserves every caller-owned host path.
+///
+/// # Panics
+///
+/// Panics when a provider deletes or modifies a supplied file backing path.
+pub async fn caller_owned_paths_survive_destroy(harness: &impl ProviderHarness) {
+    let Some(spec) = harness.caller_owned_spec("conformance-caller-owned") else {
+        return;
+    };
+    let snapshots = snapshots(&spec);
+    let vm = harness
+        .provider()
+        .provision(spec)
+        .await
+        .expect("provision caller-owned VM");
+    vm.destroy().await.expect("destroy caller-owned VM");
+    for snapshot in snapshots {
+        snapshot.assert_unchanged();
+    }
 }
 
 /// Verifies repeated stop calls and stop-before-start behavior.
@@ -374,6 +402,7 @@ pub async fn lifecycle_suite(harness: &impl ProviderHarness) {
     wait_is_shared_and_cached(harness).await;
     destroy_before_start_is_typed(harness).await;
     destroy_running_is_idempotent(harness).await;
+    caller_owned_paths_survive_destroy(harness).await;
     stop_is_idempotent(harness).await;
     identifiers_are_unique_and_reusable(harness).await;
     ephemeral_ingress_is_resolved(harness).await;
@@ -470,6 +499,11 @@ macro_rules! provider_conformance_tests {
         }
 
         #[tokio::test]
+        async fn conformance_caller_owned_paths_survive_destroy() {
+            $crate::caller_owned_paths_survive_destroy(&$factory()).await;
+        }
+
+        #[tokio::test]
         async fn conformance_stop_is_idempotent() {
             $crate::stop_is_idempotent(&$factory()).await;
         }
@@ -489,4 +523,63 @@ macro_rules! provider_conformance_tests {
             $crate::invalid_core_specs_are_typed(&$factory()).await;
         }
     };
+}
+
+enum PathSnapshot {
+    File { path: PathBuf, bytes: Vec<u8> },
+    Directory(PathBuf),
+}
+
+impl PathSnapshot {
+    fn capture(path: &Path) -> Self {
+        if path.is_dir() {
+            Self::Directory(path.to_path_buf())
+        } else {
+            Self::File {
+                path: path.to_path_buf(),
+                bytes: fs::read(path).expect("read caller-owned fixture"),
+            }
+        }
+    }
+
+    fn assert_unchanged(self) {
+        match self {
+            Self::File { path, bytes } => {
+                assert_eq!(
+                    fs::read(&path).expect("caller-owned file survives"),
+                    bytes,
+                    "provider modified caller-owned file {}",
+                    path.display()
+                );
+            }
+            Self::Directory(path) => {
+                assert!(
+                    path.is_dir(),
+                    "provider removed caller-owned directory {}",
+                    path.display()
+                );
+            }
+        }
+    }
+}
+
+fn snapshots(spec: &VmSpec) -> Vec<PathSnapshot> {
+    let mut snapshots = Vec::with_capacity(1 + spec.disks.len() + spec.mounts.len());
+    match &spec.root {
+        RootFilesystem::Directory { host_path } | RootFilesystem::Disk { host_path, .. } => {
+            snapshots.push(PathSnapshot::capture(host_path));
+        }
+        _ => {}
+    }
+    snapshots.extend(
+        spec.disks
+            .iter()
+            .map(|disk| PathSnapshot::capture(&disk.host_path)),
+    );
+    snapshots.extend(
+        spec.mounts
+            .iter()
+            .map(|mount| PathSnapshot::capture(&mount.host_path)),
+    );
+    snapshots
 }

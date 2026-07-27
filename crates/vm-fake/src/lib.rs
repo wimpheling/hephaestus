@@ -76,6 +76,15 @@ impl VmProvider for FakeProvider {
 
         Ok(Arc::new(instance))
     }
+
+    async fn cleanup_orphan(&self, id: &VmId) -> Result<(), VmError> {
+        if lock(&self.inner.ids).contains(id) {
+            return Err(VmError::InvalidState(
+                "cannot clean an orphan while a live instance handle is registered",
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Default)]
@@ -517,18 +526,21 @@ mod tests {
     use super::FakeProvider;
     use std::{
         collections::BTreeMap,
+        fs,
         net::{IpAddr, Ipv4Addr},
         path::PathBuf,
         sync::Arc,
     };
+    use tempfile::TempDir;
     use vm_conformance::ProviderHarness;
     use vm_trait::{
-        GuestCommand, NetworkMode, PortForward, PortProtocol, RootFilesystem, VmError, VmId,
-        VmProvider, VmResources, VmSpec,
+        DiskFormat, GuestCommand, NetworkMode, PortForward, PortProtocol, RootFilesystem, VmDisk,
+        VmError, VmId, VmMount, VmProvider, VmResources, VmSpec,
     };
 
     struct FakeHarness {
         provider: Arc<FakeProvider>,
+        temp: TempDir,
     }
 
     impl ProviderHarness for FakeHarness {
@@ -543,11 +555,36 @@ mod tests {
         fn ephemeral_ingress_spec(&self, id: &str) -> Option<VmSpec> {
             Some(spec(id))
         }
+
+        fn caller_owned_spec(&self, id: &str) -> Option<VmSpec> {
+            let root = self.temp.path().join("root");
+            let disk = self.temp.path().join("agent-state.raw");
+            let mount = self.temp.path().join("workspace");
+            fs::create_dir_all(&root).unwrap();
+            fs::create_dir_all(&mount).unwrap();
+            fs::write(&disk, b"persistent-state").unwrap();
+            let mut requested = spec(id);
+            requested.root = RootFilesystem::Directory { host_path: root };
+            requested.disks.push(VmDisk {
+                id: String::from("agent-state"),
+                host_path: disk,
+                format: DiskFormat::Raw,
+                read_only: false,
+            });
+            requested.mounts.push(VmMount {
+                tag: String::from("workspace"),
+                host_path: mount,
+                guest_path: PathBuf::from("/workspace"),
+                read_only: false,
+            });
+            Some(requested)
+        }
     }
 
     fn harness() -> FakeHarness {
         FakeHarness {
             provider: Arc::new(FakeProvider::new()),
+            temp: TempDir::new().unwrap(),
         }
     }
 
