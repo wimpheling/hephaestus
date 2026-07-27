@@ -131,6 +131,7 @@ mod tests {
                     guest_path: PathBuf::from("/workspace"),
                     read_only: false,
                 }],
+                state_volume: None,
             },
             HostMessage::Cancel { timeout_ms: 500 },
             HostMessage::HealthPing { nonce: 42 },

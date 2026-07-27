@@ -30,6 +30,10 @@ provisioned -> running -> stopping -> exited -> destroyed
 - Destroying an exited VM does not discard its cached `VmExit`.
 - Dropping the last `VmInstance` handle is not a cleanup operation. Callers
   must invoke `destroy`.
+- `cleanup_orphan` is the supervisor-restart recovery boundary. It terminates
+  and reaps provider resources for an abandoned VM identifier and succeeds
+  only after disk detachment is confirmed. It never removes caller-owned
+  backing paths.
 
 ## Guest bootstrap and control
 
@@ -39,17 +43,18 @@ Every approved root filesystem contains `heph-init`. The provider boots
 For the local microVM provider, `heph-init` and the provider worker communicate
 over AF_VSOCK. The guest connects to host port 19,000. The protocol uses a
 big-endian `u32` length followed by a CBOR payload. The initial handshake and
-start command carry protocol version `1`, and peers reject unsupported
+start command carry protocol version `2`, and peers reject unsupported
 versions. Frames are limited to 16 MiB, individual log chunks to 64 KiB,
 metric names and label components to 256 bytes, and metrics to 64 labels.
-Unknown wire variants are rejected for protocol version 1; Rust's
+Unknown wire variants are rejected for protocol version 2; Rust's
 `#[non_exhaustive]` API marker does not provide wire compatibility.
 
 The bootstrap exchange is:
 
 1. The guest sends `Hello { version }`.
-2. The worker sends `Start { command, mounts }`.
-3. The guest validates the command and sends `Ready`.
+2. The worker sends `Start { command, mounts, state_volume }`.
+3. The guest mounts declared filesystems, initializes agent-state SQLite,
+   drops to the workload identity, and sends `Ready`.
 4. The guest sends zero or more ordered `Log { stream, bytes }` messages.
 5. The guest sends exactly one `Exited { code, signal }` message.
 
@@ -139,11 +144,12 @@ rejects symlink escapes, and validates mounts against its configured allowlist.
 Providers repeat the containment and file-type checks as defense in depth.
 
 `heph-init` performs the privileged bootstrap operations needed to mount guest
-filesystems. The initial implementation executes `GuestCommand` with the
-bootstrap process's image-defined identity; guest identity selection is not
-yet part of the provider-neutral trait. Mount contents must be staged with
-ownership and permissions appropriate for the approved image's command
-identity.
+filesystems. Agent-state disks are located by their ext4 filesystem UUID,
+mounted at `/var/lib/hephaestus`, and initialized with `state.db` in WAL mode.
+Approved images reserve the `heph-agent` identity at UID/GID `10001:10001`.
+`heph-init` assigns the state filesystem to that identity and executes
+`GuestCommand` with those credentials. Guest and host service identities are
+independent.
 
 `GuestCommand::working_dir`, when present, is an absolute path inside the guest.
 It must exist after mounts are attached and be accessible to the guest account.
@@ -151,5 +157,6 @@ It must exist after mounts are attached and be accessible to the guest account.
 ## Deferred APIs
 
 Snapshots, pause/resume, secrets, authorization policy, network policy,
-provider capability discovery, and recovery of instances after a parent
-restart remain outside the initial contract.
+provider capability discovery, and reconnecting to live instances after a
+parent restart remain outside the initial contract. Phase 1B supports only
+destructive orphan reconciliation through `VmProvider::cleanup_orphan`.

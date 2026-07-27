@@ -29,6 +29,14 @@ require_command() {
     command -v "$1" >/dev/null 2>&1 || die "required command is missing: $1"
 }
 
+run_as_guest_owner() {
+    if [[ "$(id -u)" -eq 10001 && "$(id -g)" -eq 10001 ]]; then
+        "$@"
+    else
+        unshare --map-user 10001 --map-group 10001 "$@"
+    fi
+}
+
 contains_word() {
     local words="$1"
     local expected="$2"
@@ -127,9 +135,13 @@ trap cleanup EXIT INT TERM
 [[ "$(uname -m)" == "x86_64" ]] ||
     die "the pinned fixture currently supports x86_64 only"
 
-for command in awk cargo cat find grep head id install ldconfig mkfs.ext4 mktemp musl-gcc podman rustup sha256sum sort tar truncate; do
+for command in awk blkid cargo cat find grep head id install ldconfig mkfs.ext4 mktemp musl-gcc podman rustup sha256sum sort tar truncate unshare; do
     require_command "${command}"
 done
+if [[ "$(id -u)" -ne 10001 || "$(id -g)" -ne 10001 ]]; then
+    unshare --map-user 10001 --map-group 10001 true ||
+        die "cannot map the integration process to guest UID/GID 10001"
+fi
 [[ -r /dev/kvm && -w /dev/kvm ]] || die "/dev/kvm is not readable and writable"
 [[ -x /usr/bin/passt ]] || die "/usr/bin/passt is unavailable"
 loader_cache="$(ldconfig -p)"
@@ -175,9 +187,19 @@ install -D -m 0755 \
 install -D -m 0755 \
     "${repo_root}/target/${GUEST_TARGET}/release/heph-integration-check" \
     "${fixture_root}/rootfs/usr/libexec/hephaestus/integration-check"
+grep -qE '(^|:)10001:' "${fixture_root}/rootfs/etc/passwd" &&
+    die "integration image already assigns guest UID 10001"
+grep -qE '(^|:)10001:' "${fixture_root}/rootfs/etc/group" &&
+    die "integration image already assigns guest GID 10001"
+printf 'heph-agent:x:10001:10001:Hephaestus agent:/nonexistent:/sbin/nologin\n' \
+    >>"${fixture_root}/rootfs/etc/passwd"
+printf 'heph-agent:x:10001:\n' >>"${fixture_root}/rootfs/etc/group"
 printf 'repository\n' >"${fixture_root}/mounts/repository/integration-marker"
+chmod 0777 "${fixture_root}/mounts/workspace"
 truncate -s 128M "${fixture_root}/disks/sqlite.raw"
 mkfs.ext4 -q -F "${fixture_root}/disks/sqlite.raw"
+filesystem_uuid="$(blkid -s UUID -o value "${fixture_root}/disks/sqlite.raw")"
+readonly filesystem_uuid
 
 cgroup_root="${cgroup_parent}/hephaestus-integration-$$"
 mkdir "${cgroup_root}"
@@ -190,22 +212,47 @@ printf 'passt: %s\n' "$(/usr/bin/passt --version | head -n 1)"
 if command -v rpm >/dev/null 2>&1; then
     rpm -q libkrun libkrunfw
 fi
-printf 'Running libkrun smoke test with pinned image %s\n' "${fedora_image}"
-HEPHAESTUS_LIBKRUN_INTEGRATION=1 \
-HEPHAESTUS_LIBKRUN_RUNTIME_ROOT="${fixture_root}/runtime" \
-HEPHAESTUS_LIBKRUN_IMAGE_ROOT="${fixture_root}" \
-HEPHAESTUS_LIBKRUN_ROOTFS="${fixture_root}/rootfs" \
-HEPHAESTUS_LIBKRUN_DISK_ROOT="${fixture_root}/disks" \
-HEPHAESTUS_LIBKRUN_SQLITE_DISK="${fixture_root}/disks/sqlite.raw" \
-HEPHAESTUS_LIBKRUN_MOUNT_ROOT="${fixture_root}/mounts" \
-HEPHAESTUS_LIBKRUN_REPOSITORY="${fixture_root}/mounts/repository" \
-HEPHAESTUS_LIBKRUN_WORKSPACE="${fixture_root}/mounts/workspace" \
-HEPHAESTUS_LIBKRUN_CGROUP_ROOT="${cgroup_root}" \
-cargo test \
-    --manifest-path "${repo_root}/Cargo.toml" \
-    --package vm-libkrun \
-    --test libkrun_integration \
-    -- --nocapture
+if [[ "${HEPHAESTUS_PHASE1B_INTEGRATION:-0}" == "1" ]]; then
+    printf 'Running Phase 1B persistence test with pinned image %s\n' "${fedora_image}"
+    [[ -n "${HEPHAESTUS_POSTGRES_TEST_URL:-}" ]] ||
+        die "HEPHAESTUS_POSTGRES_TEST_URL is required for the Phase 1B scenario"
+    cargo build \
+        --manifest-path "${repo_root}/Cargo.toml" \
+        --package vm-libkrun \
+        --bin hephaestus-vm-libkrun-worker
+    run_as_guest_owner env \
+        HEPHAESTUS_LIBKRUN_RUNTIME_ROOT="${fixture_root}/runtime" \
+        HEPHAESTUS_LIBKRUN_IMAGE_ROOT="${fixture_root}" \
+        HEPHAESTUS_LIBKRUN_ROOTFS="${fixture_root}/rootfs" \
+        HEPHAESTUS_LIBKRUN_DISK_ROOT="${fixture_root}/disks" \
+        HEPHAESTUS_LIBKRUN_MOUNT_ROOT="${fixture_root}/mounts" \
+        HEPHAESTUS_LIBKRUN_CGROUP_ROOT="${cgroup_root}" \
+        HEPHAESTUS_LIBKRUN_WORKER="${repo_root}/target/debug/hephaestus-vm-libkrun-worker" \
+        cargo test \
+        --manifest-path "${repo_root}/Cargo.toml" \
+        --package run-orchestrator \
+        --test phase1b_libkrun \
+        -- --nocapture
+else
+    printf 'Running libkrun smoke test with pinned image %s\n' "${fedora_image}"
+    run_as_guest_owner env \
+        HEPHAESTUS_LIBKRUN_INTEGRATION=1 \
+        HEPHAESTUS_LIBKRUN_RUNTIME_ROOT="${fixture_root}/runtime" \
+        HEPHAESTUS_LIBKRUN_IMAGE_ROOT="${fixture_root}" \
+        HEPHAESTUS_LIBKRUN_ROOTFS="${fixture_root}/rootfs" \
+        HEPHAESTUS_LIBKRUN_DISK_ROOT="${fixture_root}/disks" \
+        HEPHAESTUS_LIBKRUN_SQLITE_DISK="${fixture_root}/disks/sqlite.raw" \
+        HEPHAESTUS_LIBKRUN_SQLITE_UUID="${filesystem_uuid}" \
+        HEPHAESTUS_LIBKRUN_MOUNT_ROOT="${fixture_root}/mounts" \
+        HEPHAESTUS_LIBKRUN_REPOSITORY="${fixture_root}/mounts/repository" \
+        HEPHAESTUS_LIBKRUN_WORKSPACE="${fixture_root}/mounts/workspace" \
+        HEPHAESTUS_LIBKRUN_CGROUP_ROOT="${cgroup_root}" \
+        cargo test \
+        --manifest-path "${repo_root}/Cargo.toml" \
+        --package vm-libkrun \
+        --test libkrun_integration \
+        -- --nocapture
+fi
 
 if find "${fixture_root}/runtime" -mindepth 1 -print -quit | grep -q .; then
     die "runtime files leaked after the integration test"
@@ -218,4 +265,8 @@ grep -q '^populated 0$' "${cgroup_root}/cgroup.events" ||
 [[ "$(network_snapshot)" == "${network_before}" ]] ||
     die "host network interfaces or routes changed during the integration test"
 
-printf 'libkrun integration smoke test passed; runtime and cgroup cleanup verified\n'
+if [[ "${HEPHAESTUS_PHASE1B_INTEGRATION:-0}" == "1" ]]; then
+    printf 'Phase 1B persistence test passed; runtime and cgroup cleanup verified\n'
+else
+    printf 'libkrun integration smoke test passed; runtime and cgroup cleanup verified\n'
+fi

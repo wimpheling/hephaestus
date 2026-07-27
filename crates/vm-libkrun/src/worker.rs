@@ -3,8 +3,8 @@ use crate::{
     framing::{read_sync, write_sync},
     network::{PasstProcess, WorkerNetworkError},
     protocol::{
-        GuestCommandMessage, GuestLogStream, GuestMessage, GuestMount, HostMessage,
-        MAX_LOG_CHUNK_SIZE, MAX_METRIC_LABELS, MAX_METRIC_TEXT_SIZE, PROTOCOL_VERSION,
+        GuestCommandMessage, GuestLogStream, GuestMessage, GuestMount, GuestStateVolume,
+        HostMessage, MAX_LOG_CHUNK_SIZE, MAX_METRIC_LABELS, MAX_METRIC_TEXT_SIZE, PROTOCOL_VERSION,
     },
     validation::{PreparedForward, PreparedSpec},
 };
@@ -386,12 +386,23 @@ fn handle_guest(
             read_only: mount.read_only,
         })
         .collect();
+    let state_volume = match (
+        spec.labels.get("hephaestus.agent-state.filesystem-uuid"),
+        spec.labels.get("hephaestus.agent-state.mount-path"),
+    ) {
+        (Some(filesystem_uuid), Some(guest_path)) => Some(GuestStateVolume {
+            filesystem_uuid: filesystem_uuid.clone(),
+            guest_path: PathBuf::from(guest_path),
+        }),
+        _ => None,
+    };
     write_sync(
         &mut stream,
         &HostMessage::Start {
             version: PROTOCOL_VERSION,
             command,
             mounts,
+            state_volume,
         },
     )?;
 

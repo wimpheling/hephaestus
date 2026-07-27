@@ -37,6 +37,8 @@ async fn boots_and_exercises_guest_runtime_without_privilege_escalation() {
     let rootfs = required_path("HEPHAESTUS_LIBKRUN_ROOTFS");
     let disk_root = required_path("HEPHAESTUS_LIBKRUN_DISK_ROOT");
     let sqlite_disk = required_path("HEPHAESTUS_LIBKRUN_SQLITE_DISK");
+    let sqlite_disk_for_assertion = sqlite_disk.clone();
+    let sqlite_uuid = required_text("HEPHAESTUS_LIBKRUN_SQLITE_UUID");
     let mount_root = required_path("HEPHAESTUS_LIBKRUN_MOUNT_ROOT");
     let repository = required_path("HEPHAESTUS_LIBKRUN_REPOSITORY");
     let workspace = required_path("HEPHAESTUS_LIBKRUN_WORKSPACE");
@@ -65,6 +67,7 @@ async fn boots_and_exercises_guest_runtime_without_privilege_escalation() {
         "integration-primary",
         rootfs.clone(),
         sqlite_disk.clone(),
+        &sqlite_uuid,
         repository.clone(),
         workspace.clone(),
     );
@@ -107,7 +110,7 @@ async fn boots_and_exercises_guest_runtime_without_privilege_escalation() {
     .await
     .expect("guest completion timeout");
 
-    assert_eq!(exit.code, Some(0));
+    assert_eq!(exit.code, Some(0), "guest output:\n{markers}");
     for marker in [
         "sqlite=ok",
         "mounts=ok",
@@ -138,6 +141,7 @@ async fn boots_and_exercises_guest_runtime_without_privilege_escalation() {
             "integration-persistence",
             rootfs.clone(),
             sqlite_disk,
+            &sqlite_uuid,
             repository,
             workspace,
         ))
@@ -153,6 +157,10 @@ async fn boots_and_exercises_guest_runtime_without_privilege_escalation() {
         "SQLite contents did not persist across VM boots"
     );
     persisted.destroy().await.expect("destroy persistence VM");
+    assert!(
+        sqlite_disk_for_assertion.is_file(),
+        "destroy removed caller-owned state disk"
+    );
     assert!(!runtime_root.join(&persisted_id).exists());
     assert!(!cgroup_root_for_assertion.join(&persisted_id).exists());
 
@@ -366,6 +374,7 @@ fn integration_spec(
     id: &str,
     rootfs: PathBuf,
     sqlite_disk: PathBuf,
+    sqlite_uuid: &str,
     repository: PathBuf,
     workspace: PathBuf,
 ) -> VmSpec {
@@ -373,7 +382,7 @@ fn integration_spec(
         id: VmId(id.to_owned()),
         root: RootFilesystem::Directory { host_path: rootfs },
         disks: vec![VmDisk {
-            id: "sqlite".to_owned(),
+            id: "agent-state".to_owned(),
             host_path: sqlite_disk,
             format: DiskFormat::Raw,
             read_only: false,
@@ -410,7 +419,17 @@ fn integration_spec(
             env: BTreeMap::new(),
             working_dir: Some(PathBuf::from("/workspace")),
         },
-        labels: BTreeMap::from([("test".to_owned(), "hardware".to_owned())]),
+        labels: BTreeMap::from([
+            ("test".to_owned(), "hardware".to_owned()),
+            (
+                "hephaestus.agent-state.filesystem-uuid".to_owned(),
+                sqlite_uuid.to_owned(),
+            ),
+            (
+                "hephaestus.agent-state.mount-path".to_owned(),
+                "/var/lib/hephaestus".to_owned(),
+            ),
+        ]),
     }
 }
 
@@ -509,6 +528,10 @@ fn required_path(name: &str) -> PathBuf {
         || panic!("{name} must be set when {ENABLE_FLAG}=1"),
         PathBuf::from,
     )
+}
+
+fn required_text(name: &str) -> String {
+    env::var(name).unwrap_or_else(|_| panic!("{name} must be set when {ENABLE_FLAG}=1"))
 }
 
 fn assert_cgroup_limits(path: &std::path::Path, limits: &vm_libkrun::CgroupLimits) {

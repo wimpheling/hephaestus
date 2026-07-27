@@ -7,6 +7,7 @@ use std::{
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
 };
+use uuid::Uuid;
 use vm_trait::{DiskFormat, NetworkMode, PortProtocol, RootFilesystem, VmError, VmId, VmSpec};
 
 pub const PROVIDER_NAME: &str = "libkrun";
@@ -211,6 +212,7 @@ pub fn prepare_spec(config: &LibkrunConfig, spec: &VmSpec) -> Result<PreparedSpe
             "aggregate writable disk size exceeds configured limit",
         );
     }
+    validate_state_volume_labels(spec, &disks)?;
 
     let mut mount_tags = HashSet::new();
     let mut mounts = Vec::with_capacity(spec.mounts.len());
@@ -306,6 +308,42 @@ pub fn prepare_spec(config: &LibkrunConfig, spec: &VmSpec) -> Result<PreparedSpe
     })
 }
 
+fn validate_state_volume_labels(spec: &VmSpec, disks: &[PreparedDisk]) -> Result<(), VmError> {
+    let filesystem_uuid = spec.labels.get("hephaestus.agent-state.filesystem-uuid");
+    let mount_path = spec.labels.get("hephaestus.agent-state.mount-path");
+    match (filesystem_uuid, mount_path) {
+        (None, None) => Ok(()),
+        (Some(filesystem_uuid), Some(mount_path)) => {
+            if Uuid::parse_str(filesystem_uuid).is_err() {
+                return invalid(
+                    "labels.hephaestus.agent-state.filesystem-uuid",
+                    "must be a valid UUID",
+                );
+            }
+            if mount_path != "/var/lib/hephaestus" {
+                return invalid(
+                    "labels.hephaestus.agent-state.mount-path",
+                    "must be /var/lib/hephaestus",
+                );
+            }
+            if !disks
+                .iter()
+                .any(|disk| disk.id == "agent-state" && !disk.read_only)
+            {
+                return invalid(
+                    "disks",
+                    "state-volume labels require a writable agent-state disk",
+                );
+            }
+            Ok(())
+        }
+        _ => invalid(
+            "labels",
+            "agent-state filesystem UUID and mount path must be supplied together",
+        ),
+    }
+}
+
 fn validate_service_identity(config: &LibkrunConfig) -> Result<(), VmError> {
     let uid = rustix::process::geteuid().as_raw();
     let gid = rustix::process::getegid().as_raw();
@@ -351,7 +389,7 @@ fn validate_executable(field: &str, path: &Path) -> Result<(), VmError> {
     Ok(())
 }
 
-fn validate_id(id: &VmId) -> Result<(), VmError> {
+pub fn validate_id(id: &VmId) -> Result<(), VmError> {
     if id.0.is_empty()
         || id.0.len() > 64
         || !id
@@ -646,6 +684,41 @@ mod tests {
         assert_invalid_field(
             prepare_spec(&fixture.config, &forwarding),
             "network.ingress[1]",
+        );
+    }
+
+    #[test]
+    fn state_volume_labels_require_uuid_mount_and_writable_disk() {
+        let fixture = Fixture::new();
+        let mut missing_disk = fixture.spec();
+        missing_disk.labels.insert(
+            String::from("hephaestus.agent-state.filesystem-uuid"),
+            uuid::Uuid::new_v4().to_string(),
+        );
+        missing_disk.labels.insert(
+            String::from("hephaestus.agent-state.mount-path"),
+            String::from("/var/lib/hephaestus"),
+        );
+        assert_invalid_field(
+            prepare_spec(&fixture.valid_config(), &missing_disk),
+            "disks",
+        );
+
+        let mut invalid_uuid = missing_disk;
+        fs::write(fixture.disks.join("data.raw"), []).unwrap();
+        invalid_uuid.disks.push(VmDisk {
+            id: String::from("agent-state"),
+            host_path: fixture.disks.join("data.raw"),
+            format: DiskFormat::Raw,
+            read_only: false,
+        });
+        invalid_uuid.labels.insert(
+            String::from("hephaestus.agent-state.filesystem-uuid"),
+            String::from("not-a-uuid"),
+        );
+        assert_invalid_field(
+            prepare_spec(&fixture.valid_config(), &invalid_uuid),
+            "labels.hephaestus.agent-state.filesystem-uuid",
         );
     }
 

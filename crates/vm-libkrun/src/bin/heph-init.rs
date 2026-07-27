@@ -1,23 +1,28 @@
 //! Minimal guest bootstrap for approved Hephaestus libkrun images.
 
+use rusqlite::Connection;
 use serde::{Serialize, de::DeserializeOwned};
 use std::{
     ffi::CString,
-    fs::File,
-    io::{self, Read, Write},
+    fs::{self, File},
+    io::{self, Read, Seek, SeekFrom, Write},
     os::unix::ffi::OsStrExt,
-    os::unix::process::ExitStatusExt,
-    path::Path,
+    os::unix::fs::chown,
+    os::unix::process::{CommandExt, ExitStatusExt},
+    path::{Path, PathBuf},
     process::{Child, Command, ExitStatus, Stdio},
     sync::{Arc, Mutex, MutexGuard},
     thread,
     time::{Duration, Instant},
 };
+use uuid::Uuid;
 use vm_libkrun::protocol::{
-    GuestLogStream, GuestMessage, HostMessage, MAX_FRAME_SIZE, PROTOCOL_VERSION,
+    GuestLogStream, GuestMessage, GuestStateVolume, HostMessage, MAX_FRAME_SIZE, PROTOCOL_VERSION,
 };
 
 const CONTROL_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+const AGENT_UID: u32 = 10_001;
+const AGENT_GID: u32 = 10_001;
 
 fn main() {
     if let Err(error) = run() {
@@ -38,6 +43,7 @@ fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         version,
         command,
         mounts,
+        state_volume,
     } = read_frame(&mut control)?
     else {
         return Err("host did not send the start command".into());
@@ -49,6 +55,7 @@ fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     for mount in mounts {
         mount_virtiofs(&mount.tag, &mount.guest_path, mount.read_only)?;
     }
+    let mounted_state = state_volume.as_ref().map(mount_state_volume).transpose()?;
     if let Some(delay) = command.env.get("HEPH_TEST_READY_DELAY_MS") {
         let milliseconds = delay.parse::<u64>().map_err(|error| {
             io::Error::new(
@@ -66,7 +73,9 @@ fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .envs(&command.env)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stderr(Stdio::piped())
+        .uid(AGENT_UID)
+        .gid(AGENT_GID);
     if let Some(working_dir) = command.working_dir {
         child.current_dir(working_dir);
     }
@@ -101,9 +110,118 @@ fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     join_log_thread(stdout_thread)?;
     join_log_thread(stderr_thread)?;
     let (code, signal) = exit_parts(status);
+    if let Some(path) = mounted_state {
+        unmount(&path)?;
+    }
     write_message(&writer, &GuestMessage::Exited { code, signal })?;
     drop(control_thread);
     Ok(())
+}
+
+fn mount_state_volume(volume: &GuestStateVolume) -> io::Result<PathBuf> {
+    let filesystem_uuid = Uuid::parse_str(&volume.filesystem_uuid)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+    if !volume.guest_path.is_absolute() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "state-volume mount path must be absolute",
+        ));
+    }
+    let device = find_ext4_device(filesystem_uuid)?;
+    fs::create_dir_all(&volume.guest_path)?;
+    mount_ext4(&device, &volume.guest_path)?;
+    initialize_database(&volume.guest_path)?;
+    Ok(volume.guest_path.clone())
+}
+
+fn find_ext4_device(expected: Uuid) -> io::Result<PathBuf> {
+    find_ext4_device_in(expected, Path::new("/sys/class/block"), Path::new("/dev"))
+}
+
+fn find_ext4_device_in(
+    expected: Uuid,
+    block_root: &Path,
+    device_root: &Path,
+) -> io::Result<PathBuf> {
+    for entry in fs::read_dir(block_root)? {
+        let name = entry?.file_name();
+        let device = device_root.join(name);
+        let Ok(mut file) = File::open(&device) else {
+            continue;
+        };
+        let mut superblock = [0_u8; 120];
+        if file.seek(SeekFrom::Start(1024)).is_err()
+            || file.read_exact(&mut superblock).is_err()
+            || superblock[56..58] != [0x53, 0xef]
+        {
+            continue;
+        }
+        let found = Uuid::from_slice(&superblock[104..120])
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        if found == expected {
+            return Ok(device);
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::NotFound,
+        format!("ext4 filesystem UUID {expected} was not found"),
+    ))
+}
+
+fn initialize_database(mount_path: &Path) -> io::Result<()> {
+    chown(mount_path, Some(AGENT_UID), Some(AGENT_GID))?;
+    let database = mount_path.join("state.db");
+    let connection = Connection::open(&database).map_err(io::Error::other)?;
+    let mode: String = connection
+        .query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))
+        .map_err(io::Error::other)?;
+    if !mode.eq_ignore_ascii_case("wal") {
+        return Err(io::Error::other("SQLite refused WAL journal mode"));
+    }
+    connection
+        .execute_batch("PRAGMA synchronous = FULL;")
+        .map_err(io::Error::other)?;
+    drop(connection);
+    chown(&database, Some(AGENT_UID), Some(AGENT_GID))
+}
+
+// Mounting is a privileged operation inside the guest, isolated from the host.
+#[allow(unsafe_code)]
+fn mount_ext4(source: &Path, target: &Path) -> io::Result<()> {
+    let source = CString::new(source.as_os_str().as_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "disk path contains NUL"))?;
+    let target = CString::new(target.as_os_str().as_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "mount path contains NUL"))?;
+    // SAFETY: all pointers refer to live NUL-terminated strings and the data
+    // pointer is null.
+    let result = unsafe {
+        libc::mount(
+            source.as_ptr(),
+            target.as_ptr(),
+            c"ext4".as_ptr(),
+            libc::MS_NOSUID | libc::MS_NODEV,
+            std::ptr::null(),
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+// Unmounting flushes completed SQLite writes before VM teardown.
+#[allow(unsafe_code)]
+fn unmount(target: &Path) -> io::Result<()> {
+    let target = CString::new(target.as_os_str().as_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "mount path contains NUL"))?;
+    // SAFETY: `target` is a live NUL-terminated path and no flags are used.
+    let result = unsafe { libc::umount2(target.as_ptr(), 0) };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
 }
 
 fn connect_control() -> io::Result<File> {
@@ -314,5 +432,41 @@ mod vsock {
         } else {
             Err(io::Error::last_os_error())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::find_ext4_device_in;
+    use std::{
+        fs::{self, File},
+        io::{Seek, SeekFrom, Write},
+    };
+    use tempfile::TempDir;
+    use uuid::Uuid;
+
+    #[test]
+    fn locates_ext4_device_by_filesystem_uuid() {
+        let temp = TempDir::new().unwrap();
+        let blocks = temp.path().join("blocks");
+        let devices = temp.path().join("devices");
+        fs::create_dir(&blocks).unwrap();
+        fs::create_dir(&devices).unwrap();
+        fs::create_dir(blocks.join("vda")).unwrap();
+        fs::create_dir(blocks.join("vdb")).unwrap();
+        fs::write(devices.join("vda"), vec![0_u8; 2048]).unwrap();
+        let expected = Uuid::new_v4();
+        let mut device = File::create(devices.join("vdb")).unwrap();
+        device.set_len(2048).unwrap();
+        device.seek(SeekFrom::Start(1024 + 56)).unwrap();
+        device.write_all(&[0x53, 0xef]).unwrap();
+        device.seek(SeekFrom::Start(1024 + 104)).unwrap();
+        device.write_all(expected.as_bytes()).unwrap();
+        drop(device);
+
+        assert_eq!(
+            find_ext4_device_in(expected, &blocks, &devices).unwrap(),
+            devices.join("vdb")
+        );
     }
 }

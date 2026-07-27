@@ -1,0 +1,23 @@
+[package]
+name = "volume-local"
+description = "Single-host persistent volume store for Hephaestus"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+runtime-types = { path = "../runtime-types" }
+sqlx.workspace = true
+time.workspace = true
+tokio = { workspace = true, features = ["fs", "process", "time"] }
+tracing.workspace = true
+uuid.workspace = true
+volume-trait = { path = "../volume-trait" }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, path::PathBuf};
 
 /// Current host-to-guest protocol version.
-pub const PROTOCOL_VERSION: u16 = 1;
+pub const PROTOCOL_VERSION: u16 = 2;
 
 /// `AF_VSOCK` port used by `heph-init` to connect to the host worker.
 pub const GUEST_VSOCK_PORT: u32 = 19_000;
@@ -33,6 +33,8 @@ pub enum HostMessage {
         command: GuestCommandMessage,
         /// Filesystems `heph-init` must mount before executing the command.
         mounts: Vec<GuestMount>,
+        /// Persistent agent-state volume to locate by filesystem UUID.
+        state_volume: Option<GuestStateVolume>,
     },
     /// Requests graceful cancellation.
     Cancel {
@@ -116,6 +118,15 @@ pub struct GuestMount {
     pub guest_path: PathBuf,
     /// Whether the mount is read-only.
     pub read_only: bool,
+}
+
+/// Persistent state volume mounted by `heph-init`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GuestStateVolume {
+    /// Stable ext4 filesystem UUID.
+    pub filesystem_uuid: String,
+    /// Absolute guest mount point.
+    pub guest_path: PathBuf,
 }
 
 /// Guest output stream identifier.

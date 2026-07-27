@@ -2,7 +2,9 @@ use crate::{
     cgroup::Cgroup,
     config::LibkrunConfig,
     framing::{read_async, write_async},
-    validation::{PROVIDER_NAME, PreparedForward, PreparedSpec, prepare_spec, validate_config},
+    validation::{
+        PROVIDER_NAME, PreparedForward, PreparedSpec, prepare_spec, validate_config, validate_id,
+    },
     worker::{
         WireError, WireErrorKind, WireLogStream, WorkerCommand, WorkerConfiguration, WorkerEvent,
         WorkerMessage, WorkerRequest,
@@ -101,6 +103,18 @@ impl VmProvider for LibkrunProvider {
                 Err(error)
             }
         }
+    }
+
+    async fn cleanup_orphan(&self, id: &VmId) -> Result<(), VmError> {
+        validate_id(id)?;
+        if self.inner.ids.lock().await.contains(id) {
+            return Err(VmError::InvalidState(
+                "cannot clean an orphan while a live instance handle is registered",
+            ));
+        }
+
+        Cgroup::existing(&self.inner.config, &id.0).cleanup()?;
+        cleanup_runtime(&self.inner.config.runtime_root.join(&id.0))
     }
 }
 
@@ -1040,8 +1054,8 @@ mod tests {
     use tempfile::TempDir;
     use tokio::sync::{Mutex, Notify, broadcast, watch};
     use vm_trait::{
-        GuestCommand, NetworkMode, RootFilesystem, StopMode, VmError, VmEvent, VmId, VmInstance,
-        VmProvider, VmResources, VmSpec,
+        DiskFormat, GuestCommand, NetworkMode, RootFilesystem, StopMode, VmDisk, VmError, VmEvent,
+        VmId, VmInstance, VmProvider, VmResources, VmSpec,
     };
 
     #[test]
@@ -1084,6 +1098,8 @@ mod tests {
         }
         let root = images.join("root");
         fs::create_dir(&root).unwrap();
+        let caller_disk = disks.join("agent-state.raw");
+        fs::write(&caller_disk, b"caller-owned-state").unwrap();
         let kvm = temp.path().join("kvm");
         fs::write(&kvm, "").unwrap();
         let mut config = LibkrunConfig::new(
@@ -1100,14 +1116,48 @@ mod tests {
         config.startup_timeout = Duration::from_millis(50);
         let provider = super::LibkrunProvider::new(config).unwrap();
 
+        let mut requested = spec("worker-failure", root);
+        requested.disks.push(VmDisk {
+            id: String::from("agent-state"),
+            host_path: caller_disk.clone(),
+            format: DiskFormat::Raw,
+            read_only: false,
+        });
         let error = provider
-            .provision(spec("worker-failure", root))
+            .provision(requested)
             .await
             .err()
             .expect("provision must fail");
         assert!(matches!(error, VmError::Unavailable { .. }));
         assert!(!runtime.join("worker-failure").exists());
         assert!(!cgroups.join("worker-failure").exists());
+        assert_eq!(
+            fs::read(&caller_disk).unwrap(),
+            b"caller-owned-state",
+            "failed provisioning modified caller-owned disk"
+        );
+    }
+
+    #[tokio::test]
+    async fn orphan_cleanup_preserves_caller_owned_backing() {
+        let temp = TempDir::new().unwrap();
+        let (config, _root, runtime, cgroups) = emulated_config(&temp);
+        let disk = temp.path().join("disks").join("agent-state.raw");
+        fs::write(&disk, b"persistent").unwrap();
+        fs::create_dir(runtime.join("orphan")).unwrap();
+        fs::write(runtime.join("orphan").join("socket"), []).unwrap();
+        fs::create_dir(cgroups.join("orphan")).unwrap();
+        let provider =
+            super::LibkrunProvider::new_with_spawner(config, Arc::new(FailingSpawner)).unwrap();
+
+        provider
+            .cleanup_orphan(&VmId(String::from("orphan")))
+            .await
+            .unwrap();
+
+        assert!(!runtime.join("orphan").exists());
+        assert!(!cgroups.join("orphan").exists());
+        assert_eq!(fs::read(disk).unwrap(), b"persistent");
     }
 
     #[tokio::test]

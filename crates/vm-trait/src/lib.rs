@@ -14,6 +14,12 @@ pub struct VmId(
 );
 
 /// The complete, provider-neutral configuration used to provision a VM.
+///
+/// Every host path reachable from this specification is caller-owned. A
+/// provider may open, attach, mount, stage, and detach these resources, but it
+/// must never delete, reformat, truncate, or otherwise remove the supplied
+/// root, disk, or mount backing paths. Provider-created overlays, uploads, and
+/// runtime files remain provider-owned.
 #[derive(Debug, Clone)]
 pub struct VmSpec {
     /// The identifier to assign to the VM.
@@ -286,11 +292,30 @@ pub trait VmProvider: Send + Sync + 'static {
 
     /// Allocates a stopped VM from `spec`.
     ///
+    /// A failed provisioning attempt must detach all caller-owned resources
+    /// and clean up provider-owned resources before returning. It must preserve
+    /// every caller-owned path in `spec`.
+    ///
     /// # Errors
     ///
     /// Returns [`VmError::AlreadyExists`] when the identifier is already in
     /// use, or another [`VmError`] when resource allocation fails.
     async fn provision(&self, spec: VmSpec) -> Result<Arc<dyn VmInstance>, VmError>;
+
+    /// Confirms that resources belonging to an abandoned VM identifier are
+    /// destroyed after a supervisor restart.
+    ///
+    /// This operation is idempotent. It may terminate orphaned workers and
+    /// remove provider-owned runtime resources, but it must preserve every
+    /// caller-owned path previously supplied through a [`VmSpec`]. Successful
+    /// completion confirms that disks are detached and the identifier can be
+    /// safely reused.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when complete cleanup and disk detachment cannot be
+    /// confirmed.
+    async fn cleanup_orphan(&self, id: &VmId) -> Result<(), VmError>;
 }
 
 /// A provisioned VM with an explicit lifecycle.
@@ -349,6 +374,9 @@ pub trait VmInstance: Send + Sync + 'static {
     ///
     /// This operation is idempotent and force-terminates a running VM. If an
     /// exit status was already cached, destroying the VM does not discard it.
+    /// Successful completion confirms that all disks and mounts are detached.
+    /// Caller-owned root, disk, and mount backing paths are always preserved;
+    /// only provider-owned runtime resources are removed.
     ///
     /// # Errors
     ///

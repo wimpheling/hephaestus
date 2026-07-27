@@ -72,6 +72,16 @@ Approved images provide `/usr/libexec/hephaestus/heph-init`, built by the
 `vm_libkrun::protocol`. The host sends start, cancellation, and health
 messages; the guest mounts declared virtio-fs devices, starts the command, and
 sends readiness, logs, metrics, health responses, and one final exit report.
+It also locates the optional agent-state ext4 disk by filesystem UUID, mounts
+it at `/var/lib/hephaestus`, enables SQLite WAL mode, and runs the workload as
+the image-defined `heph-agent` user (`10001:10001`). Approved images reserve
+that numeric identity. Until idmapped virtio-fs is introduced, production
+hosts also reserve
+UID/GID `10001:10001` for the `forge` service account so writable host mounts
+have the same numeric ownership on both sides. The integration fixture may use
+an unprivileged user namespace to map the invoking developer account to those
+numeric IDs; this requires user namespaces and `newuidmap`/`newgidmap`, but
+does not require creating a permanent host account.
 
 For a portable x86-64 guest binary, build with:
 
@@ -116,6 +126,7 @@ provide:
 - `HEPHAESTUS_LIBKRUN_ROOTFS`
 - `HEPHAESTUS_LIBKRUN_DISK_ROOT`
 - `HEPHAESTUS_LIBKRUN_SQLITE_DISK`
+- `HEPHAESTUS_LIBKRUN_SQLITE_UUID`
 - `HEPHAESTUS_LIBKRUN_MOUNT_ROOT`
 - `HEPHAESTUS_LIBKRUN_REPOSITORY`
 - `HEPHAESTUS_LIBKRUN_WORKSPACE`

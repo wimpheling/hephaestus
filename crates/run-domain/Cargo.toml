@@ -1,0 +1,15 @@
+[package]
+name = "run-domain"
+description = "Durable run state machine and commands for Hephaestus"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+runtime-types = { path = "../runtime-types" }
+serde.workspace = true
+time.workspace = true
+vm-trait.workspace = true
+
+[lints]
+workspace = true
