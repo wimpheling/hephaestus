@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 #
-# Build a pinned Fedora guest fixture and run the real, non-root libkrun smoke
-# test. All generated files and cgroups are removed on exit.
+# Build a pinned Fedora guest fixture and run a real, non-root libkrun
+# integration scenario. All generated files, containers, and cgroups are
+# removed on exit.
 
 set -Eeuo pipefail
 
 readonly DEFAULT_FEDORA_IMAGE="registry.fedoraproject.org/fedora-minimal@sha256:8f42d200f04990b41081322d1c260ddf23b124b3b92538665ef4cc3064537249"
+readonly DEFAULT_POSTGRES_IMAGE="docker.io/library/postgres:17-alpine"
+readonly DEFAULT_NATS_IMAGE="docker.io/library/nats:2.11-alpine"
 readonly GUEST_TARGET="x86_64-unknown-linux-musl"
 readonly REQUIRED_CONTROLLERS=(cpu io memory pids)
 
@@ -15,10 +18,18 @@ repo_root="$(cd -- "${script_dir}/.." && pwd -P)"
 readonly repo_root
 fedora_image="${HEPHAESTUS_LIBKRUN_FEDORA_IMAGE:-${DEFAULT_FEDORA_IMAGE}}"
 readonly fedora_image
+postgres_image="${HEPHAESTUS_POSTGRES_TEST_IMAGE:-${DEFAULT_POSTGRES_IMAGE}}"
+readonly postgres_image
+nats_image="${HEPHAESTUS_NATS_TEST_IMAGE:-${DEFAULT_NATS_IMAGE}}"
+readonly nats_image
 
 fixture_root=""
 container_name=""
+postgres_container_name=""
+nats_container_name=""
 cgroup_root=""
+postgres_url="${HEPHAESTUS_POSTGRES_TEST_URL:-}"
+nats_url="${HEPHAESTUS_NATS_TEST_URL:-}"
 
 die() {
     printf 'libkrun integration: %s\n' "$*" >&2
@@ -49,6 +60,72 @@ network_snapshot() {
         cat /proc/net/route
         cat /proc/net/ipv6_route
     } | sha256sum | awk '{ print $1 }'
+}
+
+published_port() {
+    local container="$1"
+    local container_port="$2"
+    local mapping
+
+    mapping="$(podman port "${container}" "${container_port}/tcp")"
+    [[ "${mapping}" == 127.0.0.1:* ]] ||
+        die "unexpected port mapping for ${container}: ${mapping}"
+    printf '%s\n' "${mapping##*:}"
+}
+
+wait_for_postgres() {
+    local container="$1"
+
+    for _attempt in {1..300}; do
+        if podman exec "${container}" \
+            pg_isready --quiet --username postgres --dbname hephaestus; then
+            return
+        fi
+        sleep 0.1
+    done
+    podman logs "${container}" >&2 || true
+    die "PostgreSQL did not become ready"
+}
+
+wait_for_nats() {
+    local container="$1"
+
+    for _attempt in {1..300}; do
+        if podman logs "${container}" 2>&1 | grep -q 'Server is ready'; then
+            return
+        fi
+        sleep 0.1
+    done
+    podman logs "${container}" >&2 || true
+    die "NATS did not become ready"
+}
+
+start_golden_services() {
+    local port
+
+    if [[ -z "${postgres_url}" ]]; then
+        postgres_container_name="hephaestus-golden-postgres-$$"
+        podman run --detach --rm \
+            --name "${postgres_container_name}" \
+            --env POSTGRES_PASSWORD=postgres \
+            --env POSTGRES_DB=hephaestus \
+            --publish 127.0.0.1::5432 \
+            "${postgres_image}" >/dev/null
+        wait_for_postgres "${postgres_container_name}"
+        port="$(published_port "${postgres_container_name}" 5432)"
+        postgres_url="postgres://postgres:postgres@127.0.0.1:${port}/hephaestus?sslmode=disable"
+    fi
+
+    if [[ -z "${nats_url}" ]]; then
+        nats_container_name="hephaestus-golden-nats-$$"
+        podman run --detach --rm \
+            --name "${nats_container_name}" \
+            --publish 127.0.0.1::4222 \
+            "${nats_image}" -js >/dev/null
+        wait_for_nats "${nats_container_name}"
+        port="$(published_port "${nats_container_name}" 4222)"
+        nats_url="nats://127.0.0.1:${port}"
+    fi
 }
 
 usable_cgroup_parent() {
@@ -122,6 +199,12 @@ cleanup() {
     cleanup_cgroup
     if [[ -n "${container_name}" ]]; then
         podman rm --force "${container_name}" >/dev/null 2>&1
+    fi
+    if [[ -n "${nats_container_name}" ]]; then
+        podman rm --force "${nats_container_name}" >/dev/null 2>&1
+    fi
+    if [[ -n "${postgres_container_name}" ]]; then
+        podman rm --force "${postgres_container_name}" >/dev/null 2>&1
     fi
     if [[ -n "${fixture_root}" && -f "${fixture_root}/.hephaestus-integration-fixture" ]]; then
         chmod -R u+w "${fixture_root}"
@@ -212,7 +295,30 @@ printf 'passt: %s\n' "$(/usr/bin/passt --version | head -n 1)"
 if command -v rpm >/dev/null 2>&1; then
     rpm -q libkrun libkrunfw
 fi
-if [[ "${HEPHAESTUS_PHASE1B_INTEGRATION:-0}" == "1" ]]; then
+if [[ "${HEPHAESTUS_APP_LIBKRUN_E2E:-0}" == "1" ]]; then
+    printf 'Running daemon golden E2E with pinned image %s\n' "${fedora_image}"
+    start_golden_services
+    cargo build \
+        --manifest-path "${repo_root}/Cargo.toml" \
+        --package vm-libkrun \
+        --bin hephaestus-vm-libkrun-worker
+    run_as_guest_owner env \
+        HEPHAESTUS_APP_LIBKRUN_E2E=1 \
+        HEPHAESTUS_POSTGRES_TEST_URL="${postgres_url}" \
+        HEPHAESTUS_NATS_TEST_URL="${nats_url}" \
+        HEPHAESTUS_LIBKRUN_RUNTIME_ROOT="${fixture_root}/runtime" \
+        HEPHAESTUS_LIBKRUN_IMAGE_ROOT="${fixture_root}" \
+        HEPHAESTUS_LIBKRUN_ROOTFS="${fixture_root}/rootfs" \
+        HEPHAESTUS_LIBKRUN_DISK_ROOT="${fixture_root}/disks" \
+        HEPHAESTUS_LIBKRUN_MOUNT_ROOT="${fixture_root}/mounts" \
+        HEPHAESTUS_LIBKRUN_CGROUP_ROOT="${cgroup_root}" \
+        HEPHAESTUS_LIBKRUN_WORKER="${repo_root}/target/debug/hephaestus-vm-libkrun-worker" \
+        cargo test \
+        --manifest-path "${repo_root}/Cargo.toml" \
+        --package hephaestus-app \
+        --test golden \
+        -- --nocapture
+elif [[ "${HEPHAESTUS_PHASE1B_INTEGRATION:-0}" == "1" ]]; then
     printf 'Running Phase 1B persistence test with pinned image %s\n' "${fedora_image}"
     [[ -n "${HEPHAESTUS_POSTGRES_TEST_URL:-}" ]] ||
         die "HEPHAESTUS_POSTGRES_TEST_URL is required for the Phase 1B scenario"
@@ -265,7 +371,9 @@ grep -q '^populated 0$' "${cgroup_root}/cgroup.events" ||
 [[ "$(network_snapshot)" == "${network_before}" ]] ||
     die "host network interfaces or routes changed during the integration test"
 
-if [[ "${HEPHAESTUS_PHASE1B_INTEGRATION:-0}" == "1" ]]; then
+if [[ "${HEPHAESTUS_APP_LIBKRUN_E2E:-0}" == "1" ]]; then
+    printf 'daemon golden E2E passed; runtime and cgroup cleanup verified\n'
+elif [[ "${HEPHAESTUS_PHASE1B_INTEGRATION:-0}" == "1" ]]; then
     printf 'Phase 1B persistence test passed; runtime and cgroup cleanup verified\n'
 else
     printf 'libkrun integration smoke test passed; runtime and cgroup cleanup verified\n'

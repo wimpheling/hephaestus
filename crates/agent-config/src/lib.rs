@@ -3,7 +3,7 @@
 use forge_domain::GitRef;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::{fmt::Write as _, path::Path};
+use std::{collections::HashSet, fmt::Write as _, path::Path};
 
 /// The only configuration version supported by this phase.
 pub const SUPPORTED_VERSION: u32 = 1;
@@ -25,6 +25,9 @@ pub struct AgentConfig {
     pub workspace: WorkspaceMount,
     /// Persistent agent-state volume intent.
     pub state_volume: StateVolume,
+    /// Files copied into durable result artifacts after a successful run.
+    #[serde(default)]
+    pub results: ResultConfig,
     /// Guest networking profile.
     pub network: NetworkConfig,
     /// Run trigger policy.
@@ -83,6 +86,15 @@ pub struct WorkspaceMount {
 pub struct StateVolume {
     /// Whether the agent receives its persistent state volume.
     pub enabled: bool,
+}
+
+/// Durable result-artifact requests.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResultConfig {
+    /// Relative regular-file paths to retain in addition to the full result
+    /// manifest and patch.
+    #[serde(default)]
+    pub declared_files: Vec<String>,
 }
 
 /// Guest network selection.
@@ -283,6 +295,39 @@ fn validate(config: &AgentConfig) -> Vec<Diagnostic> {
             "invalid_workspace_path",
         );
     }
+    if config.results.declared_files.len() > 128 {
+        diagnostic(
+            &mut diagnostics,
+            "too_many_declared_files",
+            "results.declared_files",
+            "at most 128 result files may be declared",
+        );
+    }
+    let mut declared_files = HashSet::new();
+    for (index, result_path) in config.results.declared_files.iter().enumerate() {
+        let path = Path::new(result_path);
+        let valid = !path.is_absolute()
+            && path.components().next().is_some()
+            && path.components().all(|component| {
+                matches!(component, std::path::Component::Normal(value)
+                    if !value.eq_ignore_ascii_case(std::ffi::OsStr::new(".git")))
+            });
+        if !valid {
+            diagnostic(
+                &mut diagnostics,
+                "invalid_declared_file",
+                format!("results.declared_files[{index}]"),
+                "declared file paths must be relative, traversal-free, and outside .git",
+            );
+        } else if !declared_files.insert(result_path) {
+            diagnostic(
+                &mut diagnostics,
+                "duplicate_declared_file",
+                format!("results.declared_files[{index}]"),
+                "declared file paths must be unique",
+            );
+        }
+    }
     for (index, pattern) in config.triggers.refs.iter().enumerate() {
         let value = pattern.strip_suffix("/*").unwrap_or(pattern);
         if GitRef::parse(value.to_owned()).is_err() {
@@ -355,11 +400,14 @@ reference = "registry.example/agent@sha256:abc"
 
 [workspace]
 mount = true
-path = "/workspace"
+path = "/workspace/repo"
 read_only = true
 
 [state_volume]
 enabled = true
+
+[results]
+declared_files = ["reports/review.json"]
 
 [network]
 profile = "disabled"
@@ -405,5 +453,17 @@ refs = ["refs/heads/*"]
         let parsed = parse(b"version = [");
         assert!(parsed.config.is_none());
         assert_eq!(parsed.diagnostics[0].code, "invalid_toml");
+    }
+
+    #[test]
+    fn rejects_unsafe_and_duplicate_declared_results() {
+        let invalid = VALID.replace(
+            r#"declared_files = ["reports/review.json"]"#,
+            r#"declared_files = ["../escape", "report.json", "report.json"]"#,
+        );
+        let parsed = parse(invalid.as_bytes());
+        assert!(parsed.config.is_none());
+        assert_eq!(parsed.diagnostics[0].code, "invalid_declared_file");
+        assert_eq!(parsed.diagnostics[1].code, "duplicate_declared_file");
     }
 }

@@ -105,6 +105,12 @@ Run the reproducible real-boot smoke test with:
 scripts/run-libkrun-integration.sh
 ```
 
+Run the daemon-level golden E2E against the same real backend with:
+
+```sh
+scripts/run-hephaestus-e2e.sh
+```
+
 The runner refuses root, builds static guest binaries, pulls a digest-pinned
 Fedora 44 image, creates the raw ext4 disk and mount fixtures, discovers a
 writable delegated cgroup, enables its controllers, runs the gated Rust test,

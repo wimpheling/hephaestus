@@ -88,6 +88,7 @@ async fn two_runs_share_state_and_reject_concurrent_writer() {
     ));
 
     let agent_id = AgentId::new();
+    seed_agent(&pool, agent_id).await;
     let first = command(agent_id);
     let first_run = orchestrator
         .start_run(&first)
@@ -147,12 +148,38 @@ async fn two_runs_share_state_and_reject_concurrent_writer() {
     cleanup_database(&pool, agent_id).await;
 }
 
+async fn seed_agent(pool: &PgPool, agent_id: AgentId) {
+    let organization_id = uuid::Uuid::new_v4();
+    let project_id = uuid::Uuid::new_v4();
+    sqlx::query("INSERT INTO organizations (id, name) VALUES ($1, $2)")
+        .bind(organization_id)
+        .bind(format!("libkrun-{organization_id}"))
+        .execute(pool)
+        .await
+        .expect("libkrun organization");
+    sqlx::query("INSERT INTO projects (id, organization_id, name) VALUES ($1, $2, $3)")
+        .bind(project_id)
+        .bind(organization_id)
+        .bind(format!("libkrun-{project_id}"))
+        .execute(pool)
+        .await
+        .expect("libkrun project");
+    sqlx::query("INSERT INTO agents (id, project_id, name) VALUES ($1, $2, $3)")
+        .bind(agent_id.as_uuid())
+        .bind(project_id)
+        .bind(format!("agent-{agent_id}"))
+        .execute(pool)
+        .await
+        .expect("libkrun agent");
+}
+
 struct StateSpecFactory {
     rootfs: PathBuf,
 }
 
+#[async_trait::async_trait]
 impl VmSpecFactory for StateSpecFactory {
-    fn build(&self, run: &Run) -> Result<VmSpec, VmError> {
+    async fn build(&self, run: &Run) -> Result<VmSpec, VmError> {
         Ok(VmSpec {
             id: VmId(run.id.to_string()),
             root: RootFilesystem::Directory {

@@ -6,6 +6,7 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+identity-domain = { path = "../identity-domain" }
 runtime-types = { path = "../runtime-types" }
 serde.workspace = true
 thiserror.workspace = true

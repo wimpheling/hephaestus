@@ -5,6 +5,8 @@ use std::{fmt, str::FromStr};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+pub use identity_domain::OrganizationId;
+
 macro_rules! identifier {
     ($name:ident, $documentation:literal) => {
         #[doc = $documentation]
@@ -204,6 +206,8 @@ pub enum GitValueError {
 pub struct Project {
     /// Stable project identifier.
     pub id: ProjectId,
+    /// Owning organization.
+    pub organization_id: OrganizationId,
     /// Human-readable project name.
     pub name: String,
     /// Creation time.
@@ -221,6 +225,8 @@ pub struct Repository {
     pub name: String,
     /// Default fully-qualified branch ref.
     pub default_branch: GitRef,
+    /// Whether unaffiliated users may read the repository.
+    pub is_public: bool,
     /// Whether pushes may trigger agent runs.
     pub agent_runs_enabled: bool,
     /// Creation time.

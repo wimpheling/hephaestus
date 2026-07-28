@@ -16,8 +16,8 @@ idempotent run commands through the shared transactional outbox.
 
 The principal, repository ID, operation, receive ID, and accepted refs are
 included in structured tracing. `GitAuthorizer` is called before every
-discovery or transfer. `FixedPrincipalAuthorizer` exists only for local
-development.
+discovery or transfer. Phase 3 uses verified OIDC identities and the
+PostgreSQL/Mélange authorizer; there is no allow-all production adapter.
 
 ## Storage
 
@@ -64,10 +64,14 @@ POST /git-upload-pack
 POST /git-receive-pack
 ```
 
-The adapter clears the backend environment and supplies only required CGI and
-Git protocol values. Request and response pack data is streamed through
-bounded channels. Configurable byte ceilings and a wall-clock timeout apply to
-each transaction. Concurrent receive transactions for one repository are
+Axum middleware consumes and removes the `Authorization` header before the
+request reaches repository authorization or the backend adapter. The backend
+must be configured by absolute path. Its command builder calls `env_clear()`
+and supplies only an explicit CGI/Git allowlist; `HTTP_AUTHORIZATION`, cookies,
+arbitrary `HTTP_*` values, `PATH`, and daemon environment secrets cannot reach
+the subprocess. Request and response pack data is streamed through bounded
+channels. Configurable byte ceilings and a wall-clock timeout apply to each
+transaction. Concurrent receive transactions for one repository are
 serialized so before/after ref snapshots cannot overlap.
 
 The HTTP response body remains open until the native process exits and all
@@ -98,11 +102,14 @@ reference = "registry.example/agent@sha256:digest"
 
 [workspace]
 mount = true
-path = "/workspace"
+path = "/workspace/repo"
 read_only = true
 
 [state_volume]
 enabled = true
+
+[results]
+declared_files = ["reports/review.json"]
 
 [network]
 profile = "disabled" # or "egress"
@@ -112,9 +119,10 @@ push = true
 refs = ["refs/heads/*"]
 ```
 
-Paths must be absolute without parent traversal. CPU and memory values are
-bounded. Trigger refs are fully qualified and may use a terminal `/*`.
-Unsupported versions and syntax or validation failures are stored as
+Guest paths must be absolute without parent traversal. Declared result files
+must be relative, traversal-free regular files outside `.git`. CPU and memory
+values are bounded. Trigger refs are fully qualified and may use a terminal
+`/*`. Unsupported versions and syntax or validation failures are stored as
 structured diagnostics.
 
 ## JetStream
@@ -148,3 +156,14 @@ receive/ref audit, the config revision, and one start-command outbox record.
 The forge-service suite additionally verifies invalid diagnostics, receive and
 JetStream idempotency, durable publication, command consumption, and a
 fake-provider VM reaching the running state.
+
+The daemon-level golden test starts the production composition root and proves
+Bearer OIDC authentication, PostgreSQL/Mélange push authorization, native
+smart HTTP, receive persistence, outbox delivery, command consumption,
+provider-neutral `agent.toml` translation, and a persisted running event:
+
+```sh
+HEPHAESTUS_POSTGRES_TEST_URL=postgres://... \
+HEPHAESTUS_NATS_TEST_URL=nats://... \
+cargo test -p hephaestus-app --test golden
+```

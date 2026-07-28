@@ -214,11 +214,6 @@ impl VolumeStore for LocalVolumeStore {
             })?;
 
         let mut transaction = self.pool.begin().await.map_err(metadata)?;
-        sqlx::query("INSERT INTO agents (id) VALUES ($1) ON CONFLICT (id) DO NOTHING")
-            .bind(agent_id.as_uuid())
-            .execute(&mut *transaction)
-            .await
-            .map_err(metadata)?;
         sqlx::query(
             "INSERT INTO agent_state_volumes
              (id, agent_id, kind, host_id, host_path, capacity_bytes, filesystem_uuid, state)

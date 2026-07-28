@@ -1,0 +1,50 @@
+[package]
+name = "hephaestus-app"
+description = "Internal composition root and daemon lifecycle for Hephaestus"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+agent-config = { path = "../agent-config" }
+async-nats.workspace = true
+async-trait.workspace = true
+authz-postgres = { path = "../authz-postgres" }
+axum.workspace = true
+forge-service = { path = "../forge-service" }
+forge-domain = { path = "../forge-domain" }
+futures-util.workspace = true
+git-http = { path = "../git-http" }
+identity-oidc = { path = "../identity-oidc" }
+identity-domain = { path = "../identity-domain" }
+jsonwebtoken.workspace = true
+review-domain = { path = "../review-domain" }
+review-service = { path = "../review-service" }
+run-domain = { path = "../run-domain" }
+run-orchestrator = { path = "../run-orchestrator" }
+runtime-types = { path = "../runtime-types" }
+serde_json.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-util.workspace = true
+tracing.workspace = true
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid.workspace = true
+vm-fake = { path = "../vm-fake" }
+vm-libkrun = { path = "../vm-libkrun" }
+vm-trait.workspace = true
+volume-local = { path = "../volume-local" }
+workspace-local = { path = "../workspace-local" }
+
+[dev-dependencies]
+serial_test = "3"
+tempfile = "3"
+time.workspace = true
+
+[[bin]]
+name = "hephaestusd"
+path = "src/bin/hephaestusd.rs"
+
+[lints]
+workspace = true

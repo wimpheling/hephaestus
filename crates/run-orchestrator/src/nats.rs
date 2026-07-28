@@ -1,5 +1,6 @@
 use async_nats::{HeaderMap, jetstream};
 use futures_util::StreamExt;
+use review_domain::CONTROL_EXECUTE_SUBJECT;
 use run_domain::{CancelRun, StartRun};
 use std::sync::Arc;
 
@@ -37,6 +38,7 @@ pub async fn ensure_jetstream_topology(
                 START_RUN_SUBJECT.to_owned(),
                 FORGE_START_RUN_SUBJECT.to_owned(),
                 CANCEL_RUN_SUBJECT.to_owned(),
+                CONTROL_EXECUTE_SUBJECT.to_owned(),
             ],
             retention: RetentionPolicy::WorkQueue,
             storage: StorageType::File,
@@ -62,6 +64,7 @@ pub async fn ensure_jetstream_topology(
                 filter_subjects: vec![
                     String::from("heph.run.command.>"),
                     FORGE_START_RUN_SUBJECT.to_owned(),
+                    CONTROL_EXECUTE_SUBJECT.to_owned(),
                 ],
                 ack_wait: std::time::Duration::from_secs(30),
                 ..Default::default()

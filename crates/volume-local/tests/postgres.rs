@@ -34,6 +34,7 @@ async fn creates_formats_leases_rejects_and_recovers() {
     store.initialize().await.expect("runtime migrations");
 
     let agent_id = AgentId::new();
+    seed_agent(&pool, agent_id).await;
     let first = store
         .resolve_agent_state(agent_id, 32 * 1024 * 1024)
         .await
@@ -99,19 +100,48 @@ async fn creates_formats_leases_rejects_and_recovers() {
         .await
         .expect("volume reusable after recovery");
 
+    cleanup(&pool, agent_id, first.id).await;
+}
+
+async fn seed_agent(pool: &sqlx::PgPool, agent_id: AgentId) {
+    let organization_id = uuid::Uuid::new_v4();
+    let project_id = uuid::Uuid::new_v4();
+    sqlx::query("INSERT INTO organizations (id, name) VALUES ($1, $2)")
+        .bind(organization_id)
+        .bind(format!("volume-{organization_id}"))
+        .execute(pool)
+        .await
+        .expect("volume organization");
+    sqlx::query("INSERT INTO projects (id, organization_id, name) VALUES ($1, $2, $3)")
+        .bind(project_id)
+        .bind(organization_id)
+        .bind(format!("volume-{project_id}"))
+        .execute(pool)
+        .await
+        .expect("volume project");
+    sqlx::query("INSERT INTO agents (id, project_id, name) VALUES ($1, $2, $3)")
+        .bind(agent_id.as_uuid())
+        .bind(project_id)
+        .bind(format!("agent-{agent_id}"))
+        .execute(pool)
+        .await
+        .expect("volume agent");
+}
+
+async fn cleanup(pool: &sqlx::PgPool, agent_id: AgentId, volume_id: runtime_types::VolumeId) {
     sqlx::query("DELETE FROM volume_leases WHERE volume_id = $1")
-        .bind(first.id.as_uuid())
-        .execute(&pool)
+        .bind(volume_id.as_uuid())
+        .execute(pool)
         .await
         .expect("clean lease fixtures");
     sqlx::query("DELETE FROM agent_state_volumes WHERE id = $1")
-        .bind(first.id.as_uuid())
-        .execute(&pool)
+        .bind(volume_id.as_uuid())
+        .execute(pool)
         .await
         .expect("clean volume fixture");
     sqlx::query("DELETE FROM agents WHERE id = $1")
         .bind(agent_id.as_uuid())
-        .execute(&pool)
+        .execute(pool)
         .await
         .expect("clean agent fixture");
 }

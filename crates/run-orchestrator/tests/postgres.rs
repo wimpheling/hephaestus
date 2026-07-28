@@ -24,12 +24,17 @@ async fn commands_transitions_and_outbox_are_idempotent() {
         .expect("connect to Postgres integration database");
     let repository = PgRunRepository::new(pool.clone());
     repository.initialize().await.expect("runtime migrations");
+    sqlx::query("DELETE FROM outbox WHERE aggregate_type = 'run'")
+        .execute(&pool)
+        .await
+        .expect("isolate run outbox fixture");
 
     let command = StartRun {
         command_id: CommandId::new(),
         run_id: RunId::new(),
         agent_id: AgentId::new(),
     };
+    seed_agent(&pool, command.agent_id).await;
     let created = repository.create_run(&command).await.expect("create run");
     assert!(created.created);
     assert_eq!(created.run.state, RunState::Queued);
@@ -140,11 +145,16 @@ async fn outbox_retries_are_deduplicated_by_jetstream_message_id() {
         .expect("connect to Postgres integration database");
     let repository = Arc::new(PgRunRepository::new(pool.clone()));
     repository.initialize().await.expect("runtime migrations");
+    sqlx::query("DELETE FROM outbox WHERE aggregate_type = 'run'")
+        .execute(&pool)
+        .await
+        .expect("isolate run outbox fixture");
     let command = StartRun {
         command_id: CommandId::new(),
         run_id: RunId::new(),
         agent_id: AgentId::new(),
     };
+    seed_agent(&pool, command.agent_id).await;
     repository.create_run(&command).await.expect("create run");
     let event_id: uuid::Uuid = sqlx::query_scalar("SELECT id FROM outbox WHERE aggregate_id = $1")
         .bind(command.run_id.as_uuid())
@@ -156,6 +166,10 @@ async fn outbox_retries_are_deduplicated_by_jetstream_message_id() {
         .await
         .expect("connect to NATS integration server");
     let context = async_nats::jetstream::new(client);
+    // Other workspace integration tests exercise the production topology on
+    // the same disposable server. Remove that event stream so this test can
+    // install a stream with an isolated duplicate window.
+    drop(context.delete_stream("HEPH_RUN_EVENTS").await);
     let stream_name = format!("HEPH_PHASE1B_TEST_{}", command.run_id.as_uuid().simple());
     let mut stream = context
         .create_stream(async_nats::jetstream::stream::Config {
@@ -237,4 +251,29 @@ async fn outbox_retries_are_deduplicated_by_jetstream_message_id() {
         .execute(&pool)
         .await
         .expect("clean agent fixture");
+}
+
+async fn seed_agent(pool: &sqlx::PgPool, agent_id: AgentId) {
+    let organization_id = uuid::Uuid::new_v4();
+    let project_id = uuid::Uuid::new_v4();
+    sqlx::query("INSERT INTO organizations (id, name) VALUES ($1, $2)")
+        .bind(organization_id)
+        .bind(format!("runtime-{organization_id}"))
+        .execute(pool)
+        .await
+        .expect("runtime organization");
+    sqlx::query("INSERT INTO projects (id, organization_id, name) VALUES ($1, $2, $3)")
+        .bind(project_id)
+        .bind(organization_id)
+        .bind(format!("runtime-{project_id}"))
+        .execute(pool)
+        .await
+        .expect("runtime project");
+    sqlx::query("INSERT INTO agents (id, project_id, name) VALUES ($1, $2, $3)")
+        .bind(agent_id.as_uuid())
+        .bind(project_id)
+        .bind(format!("agent-{agent_id}"))
+        .execute(pool)
+        .await
+        .expect("runtime agent");
 }

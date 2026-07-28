@@ -503,10 +503,10 @@ async fn ready_http_host_port(events: &mut tokio::sync::broadcast::Receiver<VmEv
 async fn wait_for_log(events: &mut tokio::sync::broadcast::Receiver<VmEvent>, expected: &str) {
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            if let VmEvent::Log { bytes, .. } = events.recv().await.expect("guest log event")
-                && String::from_utf8_lossy(&bytes).contains(expected)
-            {
-                return;
+            if let VmEvent::Log { bytes, .. } = events.recv().await.expect("guest log event") {
+                if String::from_utf8_lossy(&bytes).contains(expected) {
+                    return;
+                }
             }
         }
     })

@@ -158,6 +158,9 @@ mod tests {
                 labels: BTreeMap::from([(String::from("scope"), String::from("guest"))]),
             },
             GuestMessage::Health { nonce: 42 },
+            GuestMessage::FinalizeResult {
+                message: String::from("result"),
+            },
             GuestMessage::Exited {
                 code: Some(0),
                 signal: None,

@@ -1,0 +1,17 @@
+{
+  "name": "hephaestus-browser-e2e",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.62.0",
+    "@types/node": "26.1.1",
+    "@types/pg": "8.20.0",
+    "jose": "6.1.2",
+    "pg": "8.22.0",
+    "typescript": "5.9.3"
+  }
+}

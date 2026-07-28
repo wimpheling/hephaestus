@@ -131,6 +131,19 @@ impl GitStorage {
         }
         Ok(expected)
     }
+
+    /// Removes one validated canonical bare repository.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error unless the target is the expected non-symlink bare
+    /// repository derived from `repository_id`.
+    pub async fn delete_bare(&self, repository_id: RepositoryId) -> Result<(), GitStorageError> {
+        let path = self.validate_existing(repository_id).await?;
+        tokio::fs::remove_dir_all(path)
+            .await
+            .map_err(GitStorageError::Io)
+    }
 }
 
 /// Bare repository storage failure.

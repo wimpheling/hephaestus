@@ -738,9 +738,9 @@ mod tests {
 
         let disk = fixture.disks.join("oversized.raw");
         fs::write(&disk, [0_u8; 32]).unwrap();
-        let mut config = fixture.config.clone();
-        config.limits.writable_disk_max_bytes = 16;
         let mut storage = fixture.spec();
+        let mut config = fixture.config;
+        config.limits.writable_disk_max_bytes = 16;
         storage.disks.push(VmDisk {
             id: String::from("oversized"),
             host_path: disk,

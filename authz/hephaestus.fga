@@ -1,0 +1,53 @@
+model
+  schema 1.1
+
+type user
+
+type organization
+  relations
+    define owner: [user]
+    define admin: [user] or owner
+    define member: [user] or admin
+    define can_read: member
+    define can_manage: owner
+    define can_delete: owner
+    define can_manage_members: admin
+    define can_create_project: admin
+
+type project
+  relations
+    define organization: [organization]
+    define maintainer: [user]
+    define can_read: maintainer or can_read from organization
+    define can_write: maintainer
+    define can_manage: maintainer
+    define can_delete: owner from organization
+
+type repository
+  relations
+    define project: [project]
+    define public: [user:*]
+    define can_read: public or can_read from project
+    define can_write: can_write from project
+    define can_delete: can_delete from project
+
+type agent
+  relations
+    define project: [project]
+    define can_read: can_read from project
+    define can_execute: can_write from project
+    define can_manage: can_manage from project
+
+type run
+  relations
+    define agent: [agent]
+    define can_read: can_read from agent
+    define can_cancel: can_execute from agent or can_manage from agent
+
+type state_volume
+  relations
+    define agent: [agent]
+    define can_read: can_read from agent
+    define can_attach: can_execute from agent
+    define can_restore: can_manage from agent
+    define can_manage: can_manage from agent

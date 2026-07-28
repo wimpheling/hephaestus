@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  rust-and-authorization:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: hephaestus
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d hephaestus"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      HEPHAESTUS_POSTGRES_TEST_URL: postgres://postgres:postgres@127.0.0.1:5432/hephaestus?sslmode=disable
+      HEPHAESTUS_NATS_TEST_URL: nats://127.0.0.1:4222
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.85"
+          components: clippy,rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Install integration dependencies
+        run: sudo apt-get update && sudo apt-get install -y e2fsprogs
+      - name: Start JetStream
+        run: docker run --detach --rm --name hephaestus-nats --publish 4222:4222 nats:2.11-alpine -js
+      - name: Verify Mélange generation
+        run: |
+          scripts/install-melange.sh
+          scripts/generate-authz.sh
+      - name: Verify OpenFGA model locally
+        run: |
+          scripts/install-openfga-cli.sh
+          scripts/check-openfga-model.sh
+      - name: Verify OpenFGA compatibility service
+        env:
+          CONTAINER_ENGINE: docker
+        run: scripts/check-openfga-service.sh
+      - name: Formatting
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --all-features
+      - name: Tests
+        run: cargo test --workspace --all-features -- --test-threads=1
+      - name: Mélange doctor
+        run: scripts/check-authz.sh
+      - name: Documentation
+        run: cargo doc --workspace --all-features --no-deps
+
+  live-review-browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.85"
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: e2e/playwright/package-lock.json
+      - name: Install local runtime dependencies
+        run: sudo apt-get update && sudo apt-get install -y e2fsprogs podman
+      - name: Install browser and operating-system dependencies
+        working-directory: e2e/playwright
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Phoenix and browser golden path
+        env:
+          HEPHAESTUS_PLAYWRIGHT_SKIP_BROWSER_INSTALL: "1"
+        run: scripts/run-ui-e2e.sh

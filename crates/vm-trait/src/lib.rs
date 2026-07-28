@@ -178,6 +178,11 @@ pub enum VmEvent {
     },
     /// The guest reported a structured runtime metric.
     Metric(VmMetric),
+    /// The guest handed its writable workspace back to the trusted host.
+    FinalizeResult {
+        /// Bounded human-readable result commit message.
+        message: String,
+    },
     /// The guest exited.
     Exited(VmExit),
 }
@@ -388,10 +393,10 @@ pub trait VmInstance: Send + Sync + 'static {
 mod tests {
     use super::{VmInstance, VmProvider};
 
-    fn assert_runtime_trait<T: ?Sized + Send + Sync + 'static>() {}
+    const fn assert_runtime_trait<T: ?Sized + Send + Sync + 'static>() {}
 
     #[test]
-    fn provider_traits_are_object_safe() {
+    const fn provider_traits_are_object_safe() {
         assert_runtime_trait::<dyn VmProvider>();
         assert_runtime_trait::<dyn VmInstance>();
     }

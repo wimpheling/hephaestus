@@ -7,14 +7,19 @@ rust-version.workspace = true
 
 [dependencies]
 async-trait.workspace = true
+authz-domain = { path = "../authz-domain" }
+authz-postgres = { path = "../authz-postgres" }
 axum.workspace = true
 bytes.workspace = true
 forge-domain = { path = "../forge-domain" }
 forge-service = { path = "../forge-service" }
 futures-util.workspace = true
 http.workspace = true
+identity-domain = { path = "../identity-domain" }
+identity-oidc = { path = "../identity-oidc" }
 serde.workspace = true
 serde_json.workspace = true
+sqlx.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["io-util", "net", "process", "rt", "sync", "time"] }
 tokio-stream.workspace = true

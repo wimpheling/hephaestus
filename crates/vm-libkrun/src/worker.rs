@@ -4,7 +4,8 @@ use crate::{
     network::{PasstProcess, WorkerNetworkError},
     protocol::{
         GuestCommandMessage, GuestLogStream, GuestMessage, GuestMount, GuestStateVolume,
-        HostMessage, MAX_LOG_CHUNK_SIZE, MAX_METRIC_LABELS, MAX_METRIC_TEXT_SIZE, PROTOCOL_VERSION,
+        HostMessage, MAX_LOG_CHUNK_SIZE, MAX_METRIC_LABELS, MAX_METRIC_TEXT_SIZE,
+        MAX_RESULT_MESSAGE_SIZE, PROTOCOL_VERSION,
     },
     validation::{PreparedForward, PreparedSpec},
 };
@@ -84,6 +85,9 @@ pub enum WorkerEvent {
     },
     Health {
         nonce: u64,
+    },
+    FinalizeResult {
+        message: String,
     },
     Exited {
         code: Option<i32>,
@@ -426,6 +430,7 @@ fn handle_guest(
                 labels,
             },
             GuestMessage::Health { nonce } => WorkerEvent::Health { nonce },
+            GuestMessage::FinalizeResult { message } => WorkerEvent::FinalizeResult { message },
             GuestMessage::Exited { code, signal } => WorkerEvent::Exited { code, signal },
             GuestMessage::Error { code, message } => WorkerEvent::BackendFailure(WireError {
                 kind: WireErrorKind::Backend,
@@ -476,6 +481,14 @@ fn validate_guest_message(message: &GuestMessage) -> io::Result<()> {
             Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "guest metric label is empty or exceeds protocol limit",
+            ))
+        }
+        GuestMessage::FinalizeResult { message }
+            if message.len() > MAX_RESULT_MESSAGE_SIZE || message.contains('\0') =>
+        {
+            Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "guest result message exceeds protocol limit or contains NUL",
             ))
         }
         GuestMessage::Exited {

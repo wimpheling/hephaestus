@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use run_domain::{CancelRun, Run, RunState, StartRun};
 use runtime_types::RunId;
 use serde_json::json;
@@ -8,10 +9,12 @@ use vm_trait::{
     DiskFormat, StopMode, VmDisk, VmError, VmEvent, VmExit, VmId, VmInstance, VmProvider, VmSpec,
 };
 use volume_trait::{AGENT_STATE_DISK_ID, VolumeAttachment, VolumeError, VolumeLease, VolumeStore};
+use workspace_domain::{DisabledWorkspaceManager, RunWorkspaceManager, WorkspaceError};
 
 use crate::{RepositoryError, RunRepository, StoredVmEvent};
 
 /// Builds the non-volume portion of a VM specification for a run.
+#[async_trait]
 pub trait VmSpecFactory: Send + Sync + 'static {
     /// Creates a VM specification. The orchestrator replaces any disk named
     /// `agent-state` with the currently leased attachment.
@@ -19,7 +22,7 @@ pub trait VmSpecFactory: Send + Sync + 'static {
     /// # Errors
     ///
     /// Returns an error when run configuration cannot produce a valid spec.
-    fn build(&self, run: &Run) -> Result<VmSpec, VmError>;
+    async fn build(&self, run: &Run) -> Result<VmSpec, VmError>;
 }
 
 /// Durable coordinator for run, volume, and VM lifecycles.
@@ -28,6 +31,7 @@ pub struct RunOrchestrator {
     volumes: Arc<dyn VolumeStore>,
     provider: Arc<dyn VmProvider>,
     spec_factory: Arc<dyn VmSpecFactory>,
+    workspaces: Arc<dyn RunWorkspaceManager>,
     active: Mutex<HashMap<RunId, Arc<dyn VmInstance>>>,
     agent_state_capacity_bytes: u64,
     cancellation_timeout: Duration,
@@ -49,10 +53,18 @@ impl RunOrchestrator {
             volumes,
             provider,
             spec_factory,
+            workspaces: Arc::new(DisabledWorkspaceManager),
             active: Mutex::new(HashMap::new()),
             agent_state_capacity_bytes,
             cancellation_timeout: Duration::from_secs(10),
         }
+    }
+
+    /// Installs the trusted repository workspace and result lifecycle manager.
+    #[must_use]
+    pub fn with_workspace_manager(mut self, workspaces: Arc<dyn RunWorkspaceManager>) -> Self {
+        self.workspaces = workspaces;
+        self
     }
 
     /// Executes an idempotent start command through complete cleanup.
@@ -111,7 +123,21 @@ impl RunOrchestrator {
         self.repository
             .transition(command.run_id, RunState::Provisioning, None, None)
             .await?;
-        let spec = match self.build_spec(&run, &attachment) {
+        let workspace = match self.workspaces.prepare(&run).await {
+            Ok(workspace) => workspace,
+            Err(error) => {
+                return self
+                    .fail_with_resources(
+                        command.run_id,
+                        &attachment.lease,
+                        None,
+                        &error.to_string(),
+                    )
+                    .await;
+            }
+        };
+        let workspace_enabled = workspace.id.is_some();
+        let spec = match self.build_spec(&run, &attachment, workspace.mounts).await {
             Ok(spec) => spec,
             Err(error) => {
                 return self
@@ -216,7 +242,7 @@ impl RunOrchestrator {
             return Err(error.into());
         }
 
-        let exit = match self
+        let completion = match self
             .wait_and_persist_events(command.run_id, &instance, &mut events, &mut lease)
             .await
         {
@@ -227,18 +253,44 @@ impl RunOrchestrator {
                     .await;
             }
         };
+        instance.destroy().await?;
+        self.active.lock().await.remove(&command.run_id);
         let current = self.repository.get(command.run_id).await?;
+        let mut result_failure = None;
+        if current.cancel_requested_at.is_some() {
+            self.workspaces.abandon(command.run_id).await?;
+        } else if workspace_enabled {
+            if let Some(message) = completion.finalize_message.as_deref() {
+                if let Err(error) = self.workspaces.finalize(&current, message).await {
+                    result_failure = Some(error.to_string());
+                }
+            } else {
+                result_failure = Some(String::from(
+                    "guest exited without finalizing its repository workspace",
+                ));
+                self.workspaces.abandon(command.run_id).await?;
+            }
+        }
         let outcome = if current.cancel_requested_at.is_some() {
             RunState::Cancelled
-        } else if exit.code == Some(0) && exit.signal.is_none() {
+        } else if result_failure.is_some() {
+            RunState::Failed
+        } else if completion.finalize_message.is_some()
+            || (completion.exit.code == Some(0) && completion.exit.signal.is_none())
+        {
             RunState::Succeeded
         } else {
             RunState::Failed
         };
         self.repository
-            .transition(command.run_id, outcome, Some(&exit), None)
+            .transition(
+                command.run_id,
+                outcome,
+                Some(&completion.exit),
+                result_failure.as_deref(),
+            )
             .await?;
-        self.cleanup(command.run_id, &lease, Some(instance)).await
+        self.cleanup(command.run_id, &lease, None).await
     }
 
     /// Records a cancellation command and stops the active VM when present.
@@ -301,7 +353,8 @@ impl RunOrchestrator {
     /// Returns an error without claiming cleanup when provider or durable
     /// reconciliation cannot be confirmed.
     pub async fn recover_after_restart(&self) -> Result<usize, OrchestratorError> {
-        let mut recovered = self.recover_stale_leases().await?;
+        let mut recovered = self.workspaces.recover().await?;
+        recovered += self.recover_stale_leases().await?;
         for run in self.repository.recoverable_runs().await? {
             if matches!(run.state, RunState::Queued | RunState::LeasingVolume) {
                 continue;
@@ -320,8 +373,13 @@ impl RunOrchestrator {
         Ok(recovered)
     }
 
-    fn build_spec(&self, run: &Run, attachment: &VolumeAttachment) -> Result<VmSpec, VmError> {
-        let mut spec = self.spec_factory.build(run)?;
+    async fn build_spec(
+        &self,
+        run: &Run,
+        attachment: &VolumeAttachment,
+        workspace_mounts: Vec<vm_trait::VmMount>,
+    ) -> Result<VmSpec, VmError> {
+        let mut spec = self.spec_factory.build(run).await?;
         spec.id = VmId(run.id.to_string());
         spec.disks.retain(|disk| disk.id != AGENT_STATE_DISK_ID);
         spec.disks.push(VmDisk {
@@ -338,6 +396,7 @@ impl RunOrchestrator {
             String::from("hephaestus.agent-state.mount-path"),
             String::from("/var/lib/hephaestus"),
         );
+        spec.mounts.extend(workspace_mounts);
         Ok(spec)
     }
 
@@ -347,7 +406,7 @@ impl RunOrchestrator {
         instance: &Arc<dyn VmInstance>,
         events: &mut tokio::sync::broadcast::Receiver<VmEvent>,
         lease: &mut VolumeLease,
-    ) -> Result<VmExit, OrchestratorError> {
+    ) -> Result<GuestCompletion, OrchestratorError> {
         let wait = instance.wait();
         tokio::pin!(wait);
         let lease_duration = lease.expires_at - lease.heartbeat_at;
@@ -357,12 +416,18 @@ impl RunOrchestrator {
         let mut heartbeat = tokio::time::interval(heartbeat_period);
         heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut events_open = true;
+        let mut finalize_message = None;
+        let mut finalize_stop_requested = false;
         loop {
             tokio::select! {
                 result = &mut wait => {
                     let exit = result?;
-                    self.drain_vm_events(run_id, events).await?;
-                    return Ok(exit);
+                    self.drain_vm_events(run_id, events, &mut finalize_message)
+                        .await?;
+                    return Ok(GuestCompletion {
+                        exit,
+                        finalize_message,
+                    });
                 },
                 _ = heartbeat.tick() => {
                     *lease = self.volumes.heartbeat(lease).await?;
@@ -370,7 +435,12 @@ impl RunOrchestrator {
                 event = events.recv(), if events_open => {
                     match event {
                         Ok(event) => {
+                            capture_finalize(&event, &mut finalize_message);
                             self.persist_vm_event(run_id, event).await?;
+                            if finalize_message.is_some() && !finalize_stop_requested {
+                                finalize_stop_requested = true;
+                                instance.stop(StopMode::Force).await?;
+                            }
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
                             self.persist_lagged_event(run_id, skipped).await?;
@@ -388,10 +458,14 @@ impl RunOrchestrator {
         &self,
         run_id: RunId,
         events: &mut tokio::sync::broadcast::Receiver<VmEvent>,
+        finalize_message: &mut Option<String>,
     ) -> Result<(), OrchestratorError> {
         loop {
             match events.try_recv() {
-                Ok(event) => self.persist_vm_event(run_id, event).await?,
+                Ok(event) => {
+                    capture_finalize(&event, finalize_message);
+                    self.persist_vm_event(run_id, event).await?;
+                }
                 Err(tokio::sync::broadcast::error::TryRecvError::Lagged(skipped)) => {
                     self.persist_lagged_event(run_id, skipped).await?;
                 }
@@ -493,6 +567,7 @@ impl RunOrchestrator {
             instance.destroy().await?;
         }
         self.active.lock().await.remove(&run_id);
+        self.workspaces.abandon(run_id).await?;
         self.volumes.release_after_detach(lease).await?;
         self.repository
             .transition(run_id, RunState::CleanedUp, None, None)
@@ -508,6 +583,7 @@ impl RunOrchestrator {
     }
 
     async fn finish_recovered_run(&self, run: Run) -> Result<(), OrchestratorError> {
+        self.workspaces.abandon(run.id).await?;
         let run = match run.state {
             RunState::Succeeded | RunState::Failed | RunState::Cancelled | RunState::CleaningUp => {
                 run
@@ -557,6 +633,7 @@ fn stored_event(event: VmEvent) -> StoredVmEvent {
             "vm.metric",
             json!({"name": metric.name, "value": metric.value, "labels": metric.labels}),
         ),
+        VmEvent::FinalizeResult { message } => ("vm.finalize_result", json!({"message": message})),
         VmEvent::Exited(exit) => (
             "vm.exited",
             json!({"code": exit.code, "signal": exit.signal}),
@@ -587,4 +664,18 @@ pub enum OrchestratorError {
     /// VM lifecycle operation failed.
     #[error(transparent)]
     Vm(#[from] VmError),
+    /// Repository workspace or result publication failed.
+    #[error(transparent)]
+    Workspace(#[from] WorkspaceError),
+}
+
+struct GuestCompletion {
+    exit: VmExit,
+    finalize_message: Option<String>,
+}
+
+fn capture_finalize(event: &VmEvent, message: &mut Option<String>) {
+    if let VmEvent::FinalizeResult { message: finalized } = event {
+        *message = Some(finalized.clone());
+    }
 }

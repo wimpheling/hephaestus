@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, path::PathBuf};
 
 /// Current host-to-guest protocol version.
-pub const PROTOCOL_VERSION: u16 = 2;
+pub const PROTOCOL_VERSION: u16 = 3;
 
 /// `AF_VSOCK` port used by `heph-init` to connect to the host worker.
 pub const GUEST_VSOCK_PORT: u32 = 19_000;
@@ -20,6 +20,9 @@ pub const MAX_METRIC_TEXT_SIZE: usize = 256;
 
 /// Maximum labels carried by one metric.
 pub const MAX_METRIC_LABELS: usize = 64;
+
+/// Maximum UTF-8 bytes in a result finalization message.
+pub const MAX_RESULT_MESSAGE_SIZE: usize = 4 * 1024;
 
 /// A command sent from the host worker to `heph-init`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -79,6 +82,11 @@ pub enum GuestMessage {
     Health {
         /// Opaque value from the corresponding ping.
         nonce: u64,
+    },
+    /// Declares that the guest is done modifying its writable workspace.
+    FinalizeResult {
+        /// Human-readable result commit message.
+        message: String,
     },
     /// Reports the final command status.
     Exited {

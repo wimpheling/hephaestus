@@ -1,0 +1,22 @@
+[package]
+name = "authz-postgres"
+description = "PostgreSQL Mélange authorization and actor transaction support"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+authz-domain = { path = "../authz-domain" }
+identity-domain = { path = "../identity-domain" }
+serde_json.workspace = true
+sqlx.workspace = true
+time.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+serial_test = "3"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

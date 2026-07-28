@@ -113,6 +113,14 @@ fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if let Some(path) = mounted_state {
         unmount(&path)?;
     }
+    if code == Some(0) && signal.is_none() {
+        write_message(
+            &writer,
+            &GuestMessage::FinalizeResult {
+                message: String::from("Hephaestus agent result"),
+            },
+        )?;
+    }
     write_message(&writer, &GuestMessage::Exited { code, signal })?;
     drop(control_thread);
     Ok(())

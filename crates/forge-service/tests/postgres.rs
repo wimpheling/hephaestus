@@ -1,6 +1,6 @@
 //! Opt-in `PostgreSQL` and `JetStream` receive-processing coverage.
 
-use forge_domain::{CommitSha, GitRef, ReceiveId, RefUpdate, Repository};
+use forge_domain::{CommitSha, GitRef, OrganizationId, ReceiveId, RefUpdate, Repository};
 use forge_service::{
     CreateRepository, ForgeNatsOutboxPublisher, GitStorage, PgForgeRepository, RUN_START_SUBJECT,
     ensure_forge_jetstream_topology,
@@ -325,8 +325,9 @@ struct TestSpecFactory {
     root: std::path::PathBuf,
 }
 
+#[async_trait::async_trait]
 impl VmSpecFactory for TestSpecFactory {
-    fn build(&self, run: &Run) -> Result<VmSpec, VmError> {
+    async fn build(&self, run: &Run) -> Result<VmSpec, VmError> {
         Ok(VmSpec {
             id: VmId(run.id.to_string()),
             root: RootFilesystem::Directory {
@@ -404,11 +405,6 @@ async fn cleanup_run(pool: &PgPool, command: &StartRun) {
             .await
             .expect("delete volume");
     }
-    sqlx::query("DELETE FROM agents WHERE id = $1")
-        .bind(command.agent_id.as_uuid())
-        .execute(pool)
-        .await
-        .expect("delete agent");
 }
 
 async fn fixture() -> Option<(PgPool, PgForgeRepository, Repository, tempfile::TempDir)> {
@@ -426,15 +422,23 @@ async fn fixture() -> Option<(PgPool, PgForgeRepository, Repository, tempfile::T
     );
     let service = PgForgeRepository::new(pool.clone(), storage);
     service.initialize().await.expect("forge migrations");
+    let organization_id = OrganizationId::new();
+    sqlx::query("INSERT INTO organizations (id, name) VALUES ($1, $2)")
+        .bind(organization_id.as_uuid())
+        .bind("forge-service-integration")
+        .execute(&pool)
+        .await
+        .expect("organization");
     let project = service
-        .create_project("forge-service-integration")
+        .create_project_trusted(organization_id, "forge-service-integration")
         .await
         .expect("project");
     let repository = service
-        .create_repository(&CreateRepository {
+        .create_repository_trusted(&CreateRepository {
             project_id: project.id,
             name: String::from("repository"),
             default_branch: GitRef::parse("refs/heads/main").expect("default branch"),
+            is_public: false,
             agent_runs_enabled: true,
         })
         .await
@@ -587,7 +591,7 @@ memory_mib = 256
 reference = "image@sha256:abc"
 [workspace]
 mount = true
-path = "/workspace"
+path = "/workspace/repo"
 read_only = true
 [state_volume]
 enabled = true

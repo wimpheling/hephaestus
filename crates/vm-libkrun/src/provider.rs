@@ -511,6 +511,9 @@ impl LibkrunInstance {
             WorkerEvent::Health { nonce } => {
                 tracing::debug!(vm_id = %self.id.0, nonce, "guest health response");
             }
+            WorkerEvent::FinalizeResult { message } => {
+                send_event(&self.events, VmEvent::FinalizeResult { message });
+            }
             WorkerEvent::Exited { code, signal } => {
                 self.complete_exit(VmExit { code, signal }).await;
             }
@@ -875,7 +878,13 @@ impl WorkerClient {
                             code: "worker-ipc-closed".to_owned(),
                             message: error.to_string(),
                         };
-                        for (_, sender) in pending.lock().await.drain() {
+                        let senders = pending
+                            .lock()
+                            .await
+                            .drain()
+                            .map(|(_, sender)| sender)
+                            .collect::<Vec<_>>();
+                        for sender in senders {
                             let _send_result = sender.send(Err(failure.clone()));
                         }
                         break;

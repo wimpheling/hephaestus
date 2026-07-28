@@ -16,6 +16,7 @@ ciborium = "0.2"
 futures-util = "0.3"
 gix = { version = "0.72", default-features = false, features = ["revision"] }
 http = "1"
+jsonwebtoken = "9"
 libloading = "0.8"
 libc = "0.2"
 rustix = { version = "1", features = ["fs", "process"] }
@@ -35,9 +36,11 @@ sqlx = { version = "0.8.6", default-features = false, features = [
     "uuid",
 ] }
 thiserror = "2"
-time = { version = "0.3", features = ["serde"] }
+# 0.3.46+ raised MSRV beyond this workspace's Rust 1.85 contract.
+time = { version = "=0.3.45", features = ["serde"] }
 tokio = { version = "1", features = ["sync"] }
 tokio-stream = "0.1"
+tokio-util = { version = "0.7", features = ["rt"] }
 toml = "0.9"
 tracing = "0.1"
 uuid = { version = "1", features = ["serde", "v4"] }

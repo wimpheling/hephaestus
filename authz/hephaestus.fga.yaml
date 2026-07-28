@@ -1,0 +1,150 @@
+name: Hephaestus authorization compatibility fixtures
+model_file: ./hephaestus.fga
+
+tuples:
+  - user: user:owner
+    relation: owner
+    object: organization:acme
+  - user: user:admin
+    relation: admin
+    object: organization:acme
+  - user: user:member
+    relation: member
+    object: organization:acme
+  - user: organization:acme
+    relation: organization
+    object: project:forge
+  - user: user:maintainer
+    relation: maintainer
+    object: project:forge
+  - user: project:forge
+    relation: project
+    object: repository:private
+  - user: project:forge
+    relation: project
+    object: repository:public
+  - user: user:*
+    relation: public
+    object: repository:public
+  - user: project:forge
+    relation: project
+    object: agent:builder
+  - user: agent:builder
+    relation: agent
+    object: run:one
+  - user: agent:builder
+    relation: agent
+    object: state_volume:builder-state
+
+tests:
+  - name: organization hierarchy
+    check:
+      - user: user:owner
+        object: organization:acme
+        assertions:
+          can_read: true
+          can_manage_members: true
+          can_create_project: true
+      - user: user:admin
+        object: organization:acme
+        assertions:
+          can_read: true
+          can_manage_members: true
+          can_create_project: true
+          can_delete: false
+      - user: user:member
+        object: organization:acme
+        assertions:
+          can_read: true
+          can_manage_members: false
+          can_create_project: false
+      - user: user:outsider
+        object: organization:acme
+        assertions:
+          can_read: false
+
+  - name: project and repository inheritance
+    check:
+      - user: user:member
+        object: project:forge
+        assertions:
+          can_read: true
+          can_write: false
+      - user: user:maintainer
+        object: project:forge
+        assertions:
+          can_read: true
+          can_write: true
+          can_manage: true
+          can_delete: false
+      - user: user:maintainer
+        object: repository:private
+        assertions:
+          can_read: true
+          can_write: true
+          can_delete: false
+      - user: user:owner
+        object: repository:private
+        assertions:
+          can_read: true
+          can_write: false
+          can_delete: true
+      - user: user:outsider
+        object: repository:private
+        assertions:
+          can_read: false
+      - user: user:outsider
+        object: repository:public
+        assertions:
+          can_read: true
+          can_write: false
+
+  - name: agent run and state volume inheritance
+    check:
+      - user: user:maintainer
+        object: agent:builder
+        assertions:
+          can_read: true
+          can_execute: true
+          can_manage: true
+      - user: user:member
+        object: agent:builder
+        assertions:
+          can_read: true
+          can_execute: false
+      - user: user:maintainer
+        object: run:one
+        assertions:
+          can_read: true
+          can_cancel: true
+      - user: user:member
+        object: run:one
+        assertions:
+          can_read: true
+          can_cancel: false
+      - user: user:maintainer
+        object: state_volume:builder-state
+        assertions:
+          can_read: true
+          can_attach: true
+          can_restore: true
+          can_manage: true
+      - user: user:member
+        object: state_volume:builder-state
+        assertions:
+          can_read: true
+          can_attach: false
+          can_restore: false
+
+  - name: revoked membership has no residual grant
+    check:
+      - user: user:revoked
+        object: project:forge
+        assertions:
+          can_read: false
+          can_write: false
+      - user: user:revoked
+        object: repository:private
+        assertions:
+          can_read: false
+          can_write: false

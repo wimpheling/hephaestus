@@ -1,0 +1,32 @@
+[package]
+name = "workspace-local"
+description = "Local exact-commit workspaces and trusted Git result publication"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+agent-config = { path = "../agent-config" }
+async-trait.workspace = true
+forge-domain = { path = "../forge-domain" }
+run-domain = { path = "../run-domain" }
+runtime-types = { path = "../runtime-types" }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+time.workspace = true
+tokio = { workspace = true, features = ["fs", "process", "rt"] }
+uuid.workspace = true
+vm-trait.workspace = true
+workspace-domain = { path = "../workspace-domain" }
+
+[dev-dependencies]
+forge-service = { path = "../forge-service" }
+run-orchestrator = { path = "../run-orchestrator" }
+serial_test = "3"
+tempfile = "3"
+
+[lints]
+workspace = true

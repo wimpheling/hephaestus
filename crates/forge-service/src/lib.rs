@@ -1,7 +1,10 @@
-//! Durable forge persistence, bare repository storage, and receive processing.
+//! Forge persistence.
 
 mod nats;
 mod repository;
+// Rust 1.85 Clippy misidentifies thiserror's attribute formatting as an
+// unexpanded formatting literal in this module.
+#[allow(clippy::literal_string_with_formatting_args)]
 mod storage;
 
 pub use nats::{

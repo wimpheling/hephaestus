@@ -8,8 +8,11 @@ rust-version.workspace = true
 [dependencies]
 agent-config = { path = "../agent-config" }
 async-nats.workspace = true
+authz-domain = { path = "../authz-domain" }
+authz-postgres = { path = "../authz-postgres" }
 forge-domain = { path = "../forge-domain" }
 gix.workspace = true
+identity-domain = { path = "../identity-domain" }
 run-domain = { path = "../run-domain" }
 runtime-types = { path = "../runtime-types" }
 serde_json.workspace = true
@@ -21,6 +24,7 @@ tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+async-trait.workspace = true
 futures-util.workspace = true
 run-orchestrator = { path = "../run-orchestrator" }
 serial_test = "3"

@@ -1,0 +1,17 @@
+[package]
+name = "workspace-domain"
+description = "Provider-neutral repository workspace and agent-result contracts"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+run-domain = { path = "../run-domain" }
+runtime-types = { path = "../runtime-types" }
+thiserror.workspace = true
+uuid.workspace = true
+vm-trait.workspace = true
+
+[lints]
+workspace = true

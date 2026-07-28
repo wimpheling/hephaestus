@@ -217,11 +217,6 @@ impl RunRepository for PgRunRepository {
         }
 
         let now = OffsetDateTime::now_utc();
-        sqlx::query("INSERT INTO agents (id) VALUES ($1) ON CONFLICT (id) DO NOTHING")
-            .bind(command.agent_id.as_uuid())
-            .execute(&mut *transaction)
-            .await
-            .map_err(storage)?;
         sqlx::query(
             "INSERT INTO runs
              (id, agent_id, command_id, state, created_at, updated_at)

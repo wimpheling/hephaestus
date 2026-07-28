@@ -1,0 +1,17 @@
+[package]
+name = "review-domain"
+description = "Provider-neutral live-review commands and proposal identifiers"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+forge-domain = { path = "../forge-domain" }
+identity-domain = { path = "../identity-domain" }
+runtime-types = { path = "../runtime-types" }
+serde.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+[lints]
+workspace = true

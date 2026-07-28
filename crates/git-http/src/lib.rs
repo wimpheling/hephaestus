@@ -1,11 +1,14 @@
 //! Authorized, bounded, streaming Git smart-HTTP transport.
 
 use async_trait::async_trait;
+use authz_domain::{AuthorizationDecision, Authorizer, ObjectRef, ObjectType, Permission, Subject};
+use authz_postgres::{PostgresMelangeAuthorizer, audit_decision};
 use axum::{
     Router,
     body::Body,
     extract::{Path as AxumPath, Query, State},
     http::{HeaderMap, HeaderName, HeaderValue, Request, Response, StatusCode},
+    middleware::{self, Next},
     response::IntoResponse,
     routing::{get, post},
 };
@@ -13,10 +16,13 @@ use bytes::{Bytes, BytesMut};
 use forge_domain::{CommitSha, GitRef, ReceiveId, RefUpdate, RepositoryId};
 use forge_service::{ForgeRepositoryError, GitStorage, PgForgeRepository};
 use futures_util::StreamExt;
+use identity_domain::{AuthenticatedIdentity, RequestId};
+use identity_oidc::{OidcVerifier, map_identity};
+use sqlx::PgPool;
 use std::{
     collections::{BTreeMap, HashMap},
     io,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::Stdio,
     sync::Arc,
     time::Duration,
@@ -47,6 +53,8 @@ pub enum GitOperation {
 pub struct Principal {
     /// Stable provider-neutral principal name.
     pub name: String,
+    /// Authenticated request identity.
+    pub identity: AuthenticatedIdentity,
 }
 
 /// Owned authorization input.
@@ -56,8 +64,24 @@ pub struct AuthorizationRequest {
     pub repository_id: RepositoryId,
     /// Requested operation.
     pub operation: GitOperation,
-    /// Opaque HTTP authorization value, when supplied.
-    pub credential: Option<String>,
+    /// Identity established by the HTTP authentication middleware.
+    pub identity: AuthenticatedIdentity,
+}
+
+/// Authentication boundary used by Git HTTP middleware.
+#[async_trait]
+pub trait GitAuthenticator: Send + Sync + 'static {
+    /// Consumes an HTTP credential and returns a verified request principal.
+    ///
+    /// # Errors
+    ///
+    /// Returns a non-sensitive error when the credential cannot be verified or
+    /// mapped to an active internal user.
+    async fn authenticate(
+        &self,
+        credential: Option<&str>,
+        request_id: RequestId,
+    ) -> Result<Principal, AuthenticationError>;
 }
 
 /// Authorization boundary for every Git operation.
@@ -69,35 +93,142 @@ pub trait GitAuthorizer: Send + Sync + 'static {
     ///
     /// Returns an error without invoking Git when access is denied or identity
     /// resolution fails.
-    async fn authorize(
-        &self,
-        request: &AuthorizationRequest,
-    ) -> Result<Principal, AuthorizationError>;
+    async fn authorize(&self, request: &AuthorizationRequest) -> Result<(), AuthorizationError>;
 }
 
-/// Development authorizer that always returns one configured principal.
-#[derive(Debug, Clone)]
-pub struct FixedPrincipalAuthorizer {
-    principal: Principal,
+/// PostgreSQL-mapped OIDC bearer-token authenticator for Git HTTP.
+pub struct PostgresOidcGitAuthenticator {
+    pool: PgPool,
+    verifier: Arc<OidcVerifier>,
 }
 
-impl FixedPrincipalAuthorizer {
-    /// Creates the development authorizer.
+impl PostgresOidcGitAuthenticator {
+    /// Creates an OIDC-backed Git authenticator.
     #[must_use]
-    pub fn new(name: impl Into<String>) -> Self {
+    pub const fn new(pool: PgPool, verifier: Arc<OidcVerifier>) -> Self {
+        Self { pool, verifier }
+    }
+}
+
+#[async_trait]
+impl GitAuthenticator for PostgresOidcGitAuthenticator {
+    async fn authenticate(
+        &self,
+        credential: Option<&str>,
+        request_id: RequestId,
+    ) -> Result<Principal, AuthenticationError> {
+        let token = credential
+            .and_then(|value| value.strip_prefix("Bearer "))
+            .ok_or_else(|| AuthenticationError::denied("a bearer token is required"))?;
+        let verified = self
+            .verifier
+            .verify(token, None)
+            .map_err(|_| AuthenticationError::denied("the bearer token is invalid"))?;
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| AuthenticationError::denied("authentication is unavailable"))?;
+        let identity = map_identity(&mut transaction, &verified, request_id, None)
+            .await
+            .map_err(|_| AuthenticationError::denied("the bearer identity is unavailable"))?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| AuthenticationError::denied("authentication is unavailable"))?;
+        Ok(Principal {
+            name: identity.subject.clone(),
+            identity,
+        })
+    }
+}
+
+/// Database-native Git authorizer backed by the generated Mélange dispatcher.
+pub struct PostgresGitAuthorizer {
+    pool: PgPool,
+    authorizer: PostgresMelangeAuthorizer,
+}
+
+impl PostgresGitAuthorizer {
+    /// Creates a `PostgreSQL` Git authorizer.
+    #[must_use]
+    pub const fn new(pool: PgPool) -> Self {
         Self {
-            principal: Principal { name: name.into() },
+            pool,
+            authorizer: PostgresMelangeAuthorizer,
         }
     }
 }
 
 #[async_trait]
-impl GitAuthorizer for FixedPrincipalAuthorizer {
-    async fn authorize(
-        &self,
-        _request: &AuthorizationRequest,
-    ) -> Result<Principal, AuthorizationError> {
-        Ok(self.principal.clone())
+impl GitAuthorizer for PostgresGitAuthorizer {
+    async fn authorize(&self, request: &AuthorizationRequest) -> Result<(), AuthorizationError> {
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| AuthorizationError::denied("authorization is unavailable"))?;
+        sqlx::query(
+            "SELECT set_config('hephaestus.actor_id', $1, true),
+                    set_config('hephaestus.request_id', $2, true)",
+        )
+        .bind(request.identity.user_id.to_string())
+        .bind(request.identity.request_id.to_string())
+        .execute(&mut *transaction)
+        .await
+        .map_err(|_| AuthorizationError::denied("authorization is unavailable"))?;
+        let permission = match request.operation {
+            GitOperation::Clone | GitOperation::Fetch => Permission::CanRead,
+            GitOperation::Push => Permission::CanWrite,
+        };
+        let object = ObjectRef::new(ObjectType::Repository, request.repository_id.as_uuid());
+        let decision = self
+            .authorizer
+            .check(
+                &mut transaction,
+                Subject::User(request.identity.user_id),
+                permission,
+                object,
+            )
+            .await
+            .map_err(|_| AuthorizationError::denied("authorization is unavailable"))?;
+        audit_decision(
+            &mut transaction,
+            request.identity.user_id,
+            permission,
+            object,
+            decision,
+            request.identity.request_id,
+        )
+        .await
+        .map_err(|_| AuthorizationError::denied("authorization is unavailable"))?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| AuthorizationError::denied("authorization is unavailable"))?;
+        if decision == AuthorizationDecision::Deny {
+            return Err(AuthorizationError::denied(
+                "repository permission was denied",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Authentication failure.
+#[derive(Debug, Clone, thiserror::Error)]
+#[error("Git authentication failed: {message}")]
+pub struct AuthenticationError {
+    message: String,
+}
+
+impl AuthenticationError {
+    /// Creates an authentication failure with a non-sensitive explanation.
+    #[must_use]
+    pub fn denied(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
     }
 }
 
@@ -144,6 +275,7 @@ impl Default for GitHttpLimits {
 pub struct GitHttpService {
     repository: Arc<PgForgeRepository>,
     storage: Arc<GitStorage>,
+    authenticator: Arc<dyn GitAuthenticator>,
     authorizer: Arc<dyn GitAuthorizer>,
     backend: PathBuf,
     limits: GitHttpLimits,
@@ -152,31 +284,39 @@ pub struct GitHttpService {
 
 impl GitHttpService {
     /// Creates a service around a resolved `git-http-backend` executable.
-    #[must_use]
+    ///
+    /// # Errors
+    ///
+    /// Returns an error unless the configured executable path is absolute.
     pub fn new(
         repository: Arc<PgForgeRepository>,
         storage: Arc<GitStorage>,
+        authenticator: Arc<dyn GitAuthenticator>,
         authorizer: Arc<dyn GitAuthorizer>,
         backend: PathBuf,
         limits: GitHttpLimits,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, GitHttpError> {
+        validate_backend_path(&backend)?;
+        Ok(Self {
             repository,
             storage,
+            authenticator,
             authorizer,
             backend,
             limits,
             receive_locks: Arc::new(Mutex::new(HashMap::new())),
-        }
+        })
     }
 
     /// Builds Axum routes rooted at `/{repository_id}`.
     pub fn router(self) -> Router {
+        let service = Arc::new(self);
         Router::new()
             .route("/{repository}/info/refs", get(info_refs))
             .route("/{repository}/git-upload-pack", post(upload_pack))
             .route("/{repository}/git-receive-pack", post(receive_pack))
-            .with_state(Arc::new(self))
+            .with_state(Arc::clone(&service))
+            .layer(middleware::from_fn_with_state(service, authenticate))
     }
 
     async fn lock_receive(&self, repository_id: RepositoryId) -> OwnedMutexGuard<()> {
@@ -189,6 +329,35 @@ impl GitHttpService {
             .clone();
         lock.lock_owned().await
     }
+}
+
+fn validate_backend_path(backend: &Path) -> Result<(), GitHttpError> {
+    if backend.is_absolute() {
+        Ok(())
+    } else {
+        Err(GitHttpError::InvalidBackendPath(backend.to_owned()))
+    }
+}
+
+async fn authenticate(
+    State(service): State<Arc<GitHttpService>>,
+    mut request: Request<Body>,
+    next: Next,
+) -> Response<Body> {
+    let credential = request
+        .headers_mut()
+        .remove(http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok().map(str::to_owned));
+    let principal = match service
+        .authenticator
+        .authenticate(credential.as_deref(), RequestId::new())
+        .await
+    {
+        Ok(principal) => principal,
+        Err(error) => return error_response(StatusCode::UNAUTHORIZED, &error.to_string()),
+    };
+    request.extensions_mut().insert(principal);
+    next.run(request).await
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -267,38 +436,41 @@ async fn execute(
         Ok(id) => id,
         Err(error) => return error_response(StatusCode::BAD_REQUEST, &error.to_string()),
     };
-    let repository = match service.repository.get_repository(repository_id).await {
+    let Some(principal) = request.extensions().get::<Principal>().cloned() else {
+        return error_response(StatusCode::UNAUTHORIZED, "Git authentication is required");
+    };
+    match service
+        .authorizer
+        .authorize(&AuthorizationRequest {
+            repository_id,
+            operation,
+            identity: principal.identity.clone(),
+        })
+        .await
+    {
+        Ok(()) => {}
+        Err(error) => return error_response(StatusCode::FORBIDDEN, &error.to_string()),
+    }
+    let repository = match service
+        .repository
+        .get_repository_as(repository_id, &principal.identity)
+        .await
+    {
         Ok(repository) => repository,
         Err(ForgeRepositoryError::RepositoryNotFound(_)) => {
             return error_response(StatusCode::NOT_FOUND, "repository was not found");
         }
         Err(error) => return service_error(error),
     };
-    let credential = request
-        .headers()
-        .get(http::header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_owned);
-    let principal = match service
-        .authorizer
-        .authorize(&AuthorizationRequest {
-            repository_id,
-            operation,
-            credential,
-        })
-        .await
-    {
-        Ok(principal) => principal,
-        Err(error) => return error_response(StatusCode::FORBIDDEN, &error.to_string()),
-    };
     if let Some(content_length) = request
         .headers()
         .get(http::header::CONTENT_LENGTH)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.parse::<u64>().ok())
-        && content_length > service.limits.max_request_bytes
     {
-        return error_response(StatusCode::PAYLOAD_TOO_LARGE, "Git request exceeds limit");
+        if content_length > service.limits.max_request_bytes {
+            return error_response(StatusCode::PAYLOAD_TOO_LARGE, "Git request exceeds limit");
+        }
     }
 
     let receive_id = receive.then(ReceiveId::new);
@@ -315,34 +487,18 @@ async fn execute(
     } else {
         None
     };
-    let mut command = Command::new(&service.backend);
-    command
-        .env_clear()
-        .env("GIT_PROJECT_ROOT", service.storage.root())
-        .env("GIT_HTTP_EXPORT_ALL", "1")
-        .env("PATH_INFO", format!("/{repository_id}.git/{endpoint}"))
-        .env("REQUEST_METHOD", request.method().as_str())
-        .env("QUERY_STRING", query.as_deref().unwrap_or(""))
-        .env("GATEWAY_INTERFACE", "CGI/1.1")
-        .env("SERVER_PROTOCOL", "HTTP/1.1")
-        .env("REMOTE_USER", &principal.name)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    copy_request_header(
-        &request,
-        &mut command,
-        http::header::CONTENT_TYPE,
-        "CONTENT_TYPE",
-    );
-    copy_request_header(
-        &request,
-        &mut command,
-        http::header::CONTENT_LENGTH,
-        "CONTENT_LENGTH",
-    );
-    copy_request_header_name(&request, &mut command, "git-protocol", "GIT_PROTOCOL");
+    let environment = BackendEnvironment {
+        project_root: service.storage.root(),
+        repository_id,
+        endpoint,
+        method: request.method().as_str(),
+        query: query.as_deref().unwrap_or(""),
+        remote_user: &principal.name,
+        content_type: header_value(&request, http::header::CONTENT_TYPE),
+        content_length: header_value(&request, http::header::CONTENT_LENGTH),
+        git_protocol: header_value_name(&request, "git-protocol"),
+    };
+    let mut command = backend_command(&service.backend, &environment);
 
     let mut child = match command.spawn() {
         Ok(child) => child,
@@ -409,9 +565,10 @@ async fn execute(
     let repository_for_receive = repository.clone();
     let repository_path = service.storage.repository_path(repository_id);
     let principal_name = principal.name.clone();
+    let principal_identity = principal.identity.clone();
     let timeout = service.limits.transaction_timeout;
     tokio::spawn(async move {
-        let _receive_guard = receive_guard;
+        let receive_guard = receive_guard;
         let completion = tokio::time::timeout(timeout, child.wait()).await;
         let status = match completion {
             Ok(Ok(status)) => status,
@@ -459,10 +616,11 @@ async fn execute(
                         return;
                     }
                     if let Err(error) = repository_service
-                        .accept_receive(
+                        .accept_receive_as(
                             &repository_for_receive,
                             receive_id,
                             &principal_name,
+                            Some(&principal_identity),
                             &updates,
                         )
                         .await
@@ -502,6 +660,7 @@ async fn execute(
                 }
             }
         }
+        drop(receive_guard);
     });
 
     let mut builder = Response::builder().status(status);
@@ -520,34 +679,67 @@ async fn send_stream_error(
     let _ = sender.send(Err(io::Error::other(message.into()))).await;
 }
 
-fn copy_request_header(
-    request: &Request<Body>,
-    command: &mut Command,
-    header: HeaderName,
-    environment: &str,
-) {
-    if let Some(value) = request
+fn header_value(request: &Request<Body>, header: HeaderName) -> Option<&str> {
+    request
         .headers()
         .get(header)
         .and_then(|value| value.to_str().ok())
-    {
-        command.env(environment, value);
-    }
 }
 
-fn copy_request_header_name(
-    request: &Request<Body>,
-    command: &mut Command,
+fn header_value_name<'request>(
+    request: &'request Request<Body>,
     header: &str,
-    environment: &str,
-) {
-    if let Some(value) = request
+) -> Option<&'request str> {
+    request
         .headers()
         .get(header)
         .and_then(|value| value.to_str().ok())
-    {
-        command.env(environment, value);
+}
+
+struct BackendEnvironment<'a> {
+    project_root: &'a Path,
+    repository_id: RepositoryId,
+    endpoint: &'a str,
+    method: &'a str,
+    query: &'a str,
+    remote_user: &'a str,
+    content_type: Option<&'a str>,
+    content_length: Option<&'a str>,
+    git_protocol: Option<&'a str>,
+}
+
+fn backend_command(backend: &Path, environment: &BackendEnvironment<'_>) -> Command {
+    let mut command = Command::new(backend);
+    command
+        .env_clear()
+        .env("GIT_PROJECT_ROOT", environment.project_root)
+        .env("GIT_HTTP_EXPORT_ALL", "1")
+        .env(
+            "PATH_INFO",
+            format!(
+                "/{}.git/{}",
+                environment.repository_id, environment.endpoint
+            ),
+        )
+        .env("REQUEST_METHOD", environment.method)
+        .env("QUERY_STRING", environment.query)
+        .env("GATEWAY_INTERFACE", "CGI/1.1")
+        .env("SERVER_PROTOCOL", "HTTP/1.1")
+        .env("REMOTE_USER", environment.remote_user)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    for (name, value) in [
+        ("CONTENT_TYPE", environment.content_type),
+        ("CONTENT_LENGTH", environment.content_length),
+        ("GIT_PROTOCOL", environment.git_protocol),
+    ] {
+        if let Some(value) = value {
+            command.env(name, value);
+        }
     }
+    command
 }
 
 async fn read_cgi_headers(
@@ -742,6 +934,9 @@ fn service_error(error: impl std::fmt::Display) -> Response<Body> {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum GitHttpError {
+    /// Configured backend executable is not an absolute path.
+    #[error("git-http-backend path must be absolute: {0}")]
+    InvalidBackendPath(PathBuf),
     /// Process I/O failed.
     #[error("Git backend I/O failed: {0}")]
     Io(#[source] io::Error),
@@ -755,9 +950,14 @@ pub enum GitHttpError {
 
 #[cfg(test)]
 mod tests {
-    use super::{diff_refs, parse_cgi_headers};
-    use forge_domain::{CommitSha, GitRef};
-    use std::collections::BTreeMap;
+    use super::{
+        BackendEnvironment, backend_command, diff_refs, parse_cgi_headers, validate_backend_path,
+    };
+    use forge_domain::{CommitSha, GitRef, RepositoryId};
+    use std::{
+        collections::{BTreeMap, BTreeSet},
+        path::Path,
+    };
 
     #[test]
     fn parses_native_backend_headers() {
@@ -780,5 +980,57 @@ mod tests {
         assert_eq!(updates.len(), 2);
         assert!(updates.iter().any(|update| update.new_commit.is_none()));
         assert!(updates.iter().any(|update| update.old_commit.is_some()));
+    }
+
+    #[test]
+    fn rejects_relative_backend_executable() {
+        assert!(validate_backend_path(Path::new("git-http-backend")).is_err());
+        assert!(validate_backend_path(Path::new("/usr/libexec/git-core/git-http-backend")).is_ok());
+    }
+
+    #[tokio::test]
+    async fn backend_command_contains_only_allowlisted_cgi_environment() {
+        let repository_id = RepositoryId::new();
+        let environment = BackendEnvironment {
+            project_root: Path::new("/srv/hephaestus/repositories"),
+            repository_id,
+            endpoint: "git-receive-pack",
+            method: "POST",
+            query: "",
+            remote_user: "subject",
+            content_type: Some("application/x-git-receive-pack-request"),
+            content_length: Some("42"),
+            git_protocol: Some("version=2"),
+        };
+        let output = backend_command(Path::new("/usr/bin/env"), &environment)
+            .output()
+            .await
+            .expect("run environment inspection helper");
+        assert!(output.status.success());
+        let actual = String::from_utf8(output.stdout)
+            .expect("UTF-8 environment")
+            .lines()
+            .map(str::to_owned)
+            .collect::<BTreeSet<_>>();
+        let expected = BTreeSet::from([
+            String::from("CONTENT_LENGTH=42"),
+            String::from("CONTENT_TYPE=application/x-git-receive-pack-request"),
+            String::from("GATEWAY_INTERFACE=CGI/1.1"),
+            String::from("GIT_HTTP_EXPORT_ALL=1"),
+            String::from("GIT_PROJECT_ROOT=/srv/hephaestus/repositories"),
+            String::from("GIT_PROTOCOL=version=2"),
+            format!("PATH_INFO=/{repository_id}.git/git-receive-pack"),
+            String::from("QUERY_STRING="),
+            String::from("REMOTE_USER=subject"),
+            String::from("REQUEST_METHOD=POST"),
+            String::from("SERVER_PROTOCOL=HTTP/1.1"),
+        ]);
+        assert_eq!(actual, expected);
+        assert!(!actual.iter().any(|value| {
+            value.starts_with("HTTP_AUTHORIZATION=")
+                || value.starts_with("AUTHORIZATION=")
+                || value.starts_with("HOME=")
+                || value.starts_with("PATH=")
+        }));
     }
 }

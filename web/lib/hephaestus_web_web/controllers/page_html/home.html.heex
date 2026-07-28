@@ -1,0 +1,49 @@
+<Layouts.flash_group flash={@flash} />
+<main class="landing-shell">
+  <nav class="landing-nav">
+    <a href="/" class="brand">
+      <span class="brand-mark">H</span>
+      <span>HEPHAESTUS</span>
+    </a>
+    <span class="poc-pill">Runnable POC</span>
+  </nav>
+
+  <section class="landing-hero">
+    <div class="landing-copy">
+      <p class="eyebrow">Git forge · agent runtime · human control</p>
+      <h1>Code enters.<br /><em>Intent emerges.</em></h1>
+      <p>
+        Push an exact commit. Watch an isolated agent work live. Review its durable result
+        before a controlled fast-forward reaches your branch.
+      </p>
+      <a href={~p"/login"} class="button primary landing-button" data-testid="oidc-login">
+        Sign in with OIDC <span>→</span>
+      </a>
+      <small>Identity and authorization are enforced inside PostgreSQL.</small>
+    </div>
+
+    <div class="landing-console" aria-label="Hephaestus execution flow">
+      <div class="console-top">
+        <span><i></i><i></i><i></i></span>
+        <code>run / 8d71e42a</code>
+        <b>LIVE</b>
+      </div>
+      <div class="console-body">
+        <p><span>01</span><strong>receive.accepted</strong><code>refs/heads/main</code></p>
+        <p><span>02</span><strong>workspace.materialized</strong><code>4fa2c31</code></p>
+        <p><span>03</span><strong>vm.running</strong><code>isolated · 2 vCPU</code></p>
+        <p class="active">
+          <span>04</span><strong>agent.editing</strong><code>+ 47 / − 12</code>
+        </p>
+        <p><span>05</span><strong>result.sealed</strong><code>waiting</code></p>
+      </div>
+      <div class="console-foot">
+        <span>Exact input parent</span><code>4fa2c31 → pending</code>
+      </div>
+    </div>
+  </section>
+
+  <footer class="landing-footer">
+    <span>Immutable source</span><span>Durable events</span><span>CAS publication</span>
+  </footer>
+</main>

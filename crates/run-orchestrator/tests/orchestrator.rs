@@ -17,11 +17,14 @@ use tokio::sync::{Mutex, broadcast, watch};
 use uuid::Uuid;
 use vm_trait::{
     GuestCommand, NetworkMode, RootFilesystem, StopMode, VmError, VmEvent, VmExit, VmId,
-    VmInstance, VmProvider, VmResources, VmSpec,
+    VmInstance, VmMount, VmProvider, VmResources, VmSpec,
 };
 use volume_trait::{
     AGENT_STATE_DISK_ID, Volume, VolumeAttachment, VolumeError, VolumeKind, VolumeLease,
     VolumeState, VolumeStore,
+};
+use workspace_domain::{
+    PreparedWorkspace, PublishedResult, RunWorkspaceManager, WorkspaceError, WorkspaceId,
 };
 
 #[tokio::test]
@@ -87,6 +90,49 @@ async fn destroys_vm_before_releasing_lease_and_deduplicates_start() {
         .expect("duplicate command");
     assert_eq!(duplicate.state, RunState::CleanedUp);
     assert_eq!(lock(&log).len(), before);
+}
+
+#[tokio::test]
+async fn finalizes_workspace_only_after_vm_is_destroyed() {
+    let log = Arc::new(StdMutex::new(Vec::new()));
+    let command = StartRun {
+        command_id: CommandId::new(),
+        run_id: RunId::new(),
+        agent_id: AgentId::new(),
+    };
+    let repository = Arc::new(MemoryRepository::new(&command));
+    let workspaces = Arc::new(RecordingWorkspaceManager {
+        log: Arc::clone(&log),
+    });
+    let orchestrator = RunOrchestrator::new(
+        repository,
+        Arc::new(MemoryVolumeStore::new(command.agent_id, Arc::clone(&log))),
+        Arc::new(AutoExitProvider::new(Arc::clone(&log))),
+        Arc::new(TestSpecFactory),
+        32 * 1024 * 1024,
+    )
+    .with_workspace_manager(workspaces);
+
+    let run = orchestrator
+        .start_run(&command)
+        .await
+        .expect("orchestrated workspace run");
+    assert_eq!(run.outcome, Some(RunOutcome::Succeeded));
+    let entries = lock(&log);
+    let destroy = entries
+        .iter()
+        .position(|entry| *entry == "destroy")
+        .expect("destroy");
+    let finalize = entries
+        .iter()
+        .position(|entry| *entry == "finalize")
+        .expect("finalize");
+    let release = entries
+        .iter()
+        .position(|entry| *entry == "release")
+        .expect("release");
+    drop(entries);
+    assert!(destroy < finalize && finalize < release);
 }
 
 #[tokio::test]
@@ -209,8 +255,9 @@ async fn restart_finishes_cleanup_after_lease_was_already_released() {
 
 struct TestSpecFactory;
 
+#[async_trait]
 impl VmSpecFactory for TestSpecFactory {
-    fn build(&self, run: &Run) -> Result<VmSpec, VmError> {
+    async fn build(&self, run: &Run) -> Result<VmSpec, VmError> {
         Ok(VmSpec {
             id: VmId(run.id.to_string()),
             root: RootFilesystem::Directory {
@@ -231,6 +278,44 @@ impl VmSpecFactory for TestSpecFactory {
             },
             labels: BTreeMap::new(),
         })
+    }
+}
+
+struct RecordingWorkspaceManager {
+    log: Arc<StdMutex<Vec<&'static str>>>,
+}
+
+#[async_trait]
+impl RunWorkspaceManager for RecordingWorkspaceManager {
+    async fn prepare(&self, _run: &Run) -> Result<PreparedWorkspace, WorkspaceError> {
+        lock(&self.log).push("prepare");
+        Ok(PreparedWorkspace {
+            id: Some(WorkspaceId::new()),
+            mounts: vec![VmMount {
+                tag: String::from("repository-work"),
+                host_path: PathBuf::from("/fake/work"),
+                guest_path: PathBuf::from("/workspace/work"),
+                read_only: false,
+            }],
+        })
+    }
+
+    async fn finalize(
+        &self,
+        _run: &Run,
+        _message: &str,
+    ) -> Result<Option<PublishedResult>, WorkspaceError> {
+        lock(&self.log).push("finalize");
+        Ok(None)
+    }
+
+    async fn abandon(&self, _run_id: RunId) -> Result<(), WorkspaceError> {
+        lock(&self.log).push("abandon");
+        Ok(())
+    }
+
+    async fn recover(&self) -> Result<usize, WorkspaceError> {
+        Ok(0)
     }
 }
 
@@ -541,6 +626,9 @@ impl VmInstance for AutoExitInstance {
             ingress: Vec::new(),
         });
         let _ready = self.events.send(VmEvent::Ready);
+        let _finalize = self.events.send(VmEvent::FinalizeResult {
+            message: String::from("test result"),
+        });
         let exit = VmExit {
             code: Some(0),
             signal: None,

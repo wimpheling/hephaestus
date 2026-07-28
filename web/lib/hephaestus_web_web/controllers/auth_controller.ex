@@ -1,0 +1,72 @@
+defmodule HephaestusWebWeb.AuthController do
+  use HephaestusWebWeb, :controller
+
+  alias Assent.Strategy.OIDC
+  alias HephaestusWeb.{Identity, IdentityMapper}
+
+  def login(conn, _params) do
+    config = Keyword.put(oidc_config(), :nonce, nonce())
+
+    case OIDC.authorize_url(config) do
+      {:ok, %{url: url, session_params: session_params}} ->
+        conn
+        |> put_session(:oidc_session_params, session_params)
+        |> redirect(external: url)
+
+      {:error, reason} ->
+        conn
+        |> put_status(:service_unavailable)
+        |> text("OIDC provider is unavailable: #{inspect(reason)}")
+    end
+  end
+
+  def callback(conn, params) do
+    config =
+      Keyword.put(
+        oidc_config(),
+        :session_params,
+        get_session(conn, :oidc_session_params) || %{}
+      )
+
+    with {:ok, %{user: claims}} <- OIDC.callback(config, params),
+         issuer <- Keyword.fetch!(config, :base_url),
+         {:ok, identity} <- IdentityMapper.map_verified(issuer, claims) do
+      conn
+      |> delete_session(:oidc_session_params)
+      |> put_session(:identity, Identity.to_session(identity))
+      |> configure_session(renew: true)
+      |> redirect(to: ~p"/organizations")
+    else
+      {:error, reason} ->
+        conn
+        |> clear_session()
+        |> put_flash(:error, "Sign-in failed: #{inspect(reason)}")
+        |> redirect(to: ~p"/")
+    end
+  end
+
+  def logout(conn, _params) do
+    conn
+    |> clear_session()
+    |> configure_session(renew: true)
+    |> redirect(to: ~p"/")
+  end
+
+  defp oidc_config do
+    configuration = Application.fetch_env!(:hephaestus_web, :oidc)
+
+    [
+      base_url: Keyword.fetch!(configuration, :issuer),
+      client_id: Keyword.fetch!(configuration, :client_id),
+      client_secret: Keyword.fetch!(configuration, :client_secret),
+      redirect_uri: Keyword.fetch!(configuration, :redirect_uri),
+      authorization_params: [scope: "openid profile email"]
+    ]
+  end
+
+  defp nonce do
+    24
+    |> :crypto.strong_rand_bytes()
+    |> Base.url_encode64(padding: false)
+  end
+end

@@ -1,0 +1,32 @@
+[package]
+name = "review-service"
+description = "Authorized durable controls and controlled Git result approval"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+async-nats.workspace = true
+authz-domain = { path = "../authz-domain" }
+authz-postgres = { path = "../authz-postgres" }
+forge-domain = { path = "../forge-domain" }
+forge-service = { path = "../forge-service" }
+identity-domain = { path = "../identity-domain" }
+review-domain = { path = "../review-domain" }
+run-domain = { path = "../run-domain" }
+runtime-types = { path = "../runtime-types" }
+serde_json.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+time.workspace = true
+tokio = { workspace = true, features = ["process"] }
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+serial_test = "3"
+tempfile = "3"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true
