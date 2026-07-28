@@ -1,6 +1,6 @@
 //! Seeds the deterministic browser E2E identity and empty bare repository.
 
-use forge_domain::{GitRef, OrganizationId};
+use forge_domain::{GitRef, OrganizationId, ProjectId, Repository, RepositoryId};
 use forge_service::{CreateRepository, GitStorage, PgForgeRepository};
 use identity_domain::UserId;
 use sqlx::postgres::PgPoolOptions;
@@ -63,37 +63,70 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let storage = Arc::new(GitStorage::initialize(&repository_root).await?);
     let forge = PgForgeRepository::new(pool.clone(), Arc::clone(&storage));
-    let project = forge
-        .create_project_trusted(organization_id, "autonomy-lab")
-        .await?;
-    sqlx::query(
-        "INSERT INTO project_maintainers (project_id, user_id)
-         VALUES ($1, $2) ON CONFLICT DO NOTHING",
-    )
-    .bind(project.id.as_uuid())
-    .bind(user_id.as_uuid())
-    .execute(&pool)
-    .await?;
-    let repository = forge
-        .create_repository_trusted(&CreateRepository {
-            project_id: project.id,
-            name: String::from("agent-workbench"),
-            default_branch: GitRef::parse("refs/heads/main")?,
-            is_public: false,
-            agent_runs_enabled: true,
-        })
-        .await?;
+    let (project_id, repository) = bootstrap_forge(&pool, &forge, organization_id, user_id).await?;
 
     println!(
         "{}",
         serde_json::json!({
             "user_id": user_id,
             "organization_id": organization_id,
-            "project_id": project.id,
+            "project_id": project_id,
             "repository_id": repository.id,
         })
     );
     Ok(())
+}
+
+async fn bootstrap_forge(
+    pool: &sqlx::PgPool,
+    forge: &PgForgeRepository,
+    organization_id: OrganizationId,
+    user_id: UserId,
+) -> Result<(ProjectId, Repository), Box<dyn Error>> {
+    let project_id = match sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM projects WHERE organization_id = $1 AND name = 'autonomy-lab'",
+    )
+    .bind(organization_id.as_uuid())
+    .fetch_optional(pool)
+    .await?
+    {
+        Some(id) => ProjectId::from_uuid(id),
+        None => {
+            forge
+                .create_project_trusted(organization_id, "autonomy-lab")
+                .await?
+                .id
+        }
+    };
+    sqlx::query(
+        "INSERT INTO project_maintainers (project_id, user_id)
+         VALUES ($1, $2) ON CONFLICT DO NOTHING",
+    )
+    .bind(project_id.as_uuid())
+    .bind(user_id.as_uuid())
+    .execute(pool)
+    .await?;
+    let repository = match sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM repositories WHERE project_id = $1 AND name = 'agent-workbench'",
+    )
+    .bind(project_id.as_uuid())
+    .fetch_optional(pool)
+    .await?
+    {
+        Some(id) => forge.get_repository(RepositoryId::from_uuid(id)).await?,
+        None => {
+            forge
+                .create_repository_trusted(&CreateRepository {
+                    project_id,
+                    name: String::from("agent-workbench"),
+                    default_branch: GitRef::parse("refs/heads/main")?,
+                    is_public: false,
+                    agent_runs_enabled: true,
+                })
+                .await?
+        }
+    };
+    Ok((project_id, repository))
 }
 
 async fn configure_browser_role(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
