@@ -34,6 +34,8 @@ end
 
 config :hephaestus_web,
   artifact_root: System.get_env("HEPHAESTUS_ARTIFACT_ROOT", "/var/lib/hephaestus/artifacts"),
+  repository_root:
+    System.get_env("HEPHAESTUS_REPOSITORY_ROOT", "/var/lib/hephaestus/repositories"),
   oidc: [
     issuer: System.get_env("HEPHAESTUS_BROWSER_OIDC_ISSUER", "http://localhost:5556"),
     client_id: System.get_env("HEPHAESTUS_BROWSER_OIDC_CLIENT_ID", "hephaestus-web"),

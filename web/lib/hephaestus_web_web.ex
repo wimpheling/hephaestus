@@ -86,6 +86,7 @@ defmodule HephaestusWebWeb do
       import Phoenix.HTML
       # Core UI components
       import HephaestusWebWeb.CoreComponents
+      import HephaestusWebWeb.DesignSystem
 
       # Common modules used in templates
       alias Phoenix.LiveView.JS

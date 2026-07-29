@@ -45,8 +45,29 @@ defmodule HephaestusWeb.Store do
     end)
   end
 
+  def get_organization(%Identity{} = identity, organization_id) do
+    with_actor(identity, fn ->
+      case query_one(
+             "SELECT id, name FROM organizations WHERE id = $1",
+             [uuid!(organization_id)]
+           ) do
+        nil -> Repo.rollback(:forbidden)
+        organization -> organization
+      end
+    end)
+  end
+
   def get_repository(%Identity{} = identity, repository_id) do
     with_actor(identity, fn ->
+      authorized =
+        Ecto.Adapters.SQL.query!(
+          Repo,
+          "SELECT check_permission('user', $1, 'can_read', 'repository', $2) = 1",
+          [identity.user_id, repository_id]
+        ).rows == [[true]]
+
+      unless authorized, do: Repo.rollback(:forbidden)
+
       repository =
         query_one(
           """
@@ -109,7 +130,9 @@ defmodule HephaestusWeb.Store do
                  run.failure, run.created_at, run.updated_at, run.state_version,
                  agent.id AS agent_id, agent.name AS agent_name,
                  repository.id AS repository_id, repository.name AS repository_name,
-                 project.name AS project_name, organization.name AS organization_name,
+                 project.id AS project_id, project.name AS project_name,
+                 organization.id AS organization_id,
+                 organization.name AS organization_name,
                  request.commit_sha AS input_commit, request.git_ref,
                  request.config_hash, request.attempt,
                  result.id AS result_id, result.result_commit, result.result_ref,

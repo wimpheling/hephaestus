@@ -70,10 +70,16 @@ defmodule HephaestusWebWeb.RunLive do
   def render(assigns) do
     ~H"""
     <Layouts.app flash={@flash} current_identity={@current_identity}>
-      <nav class="crumbs">
-        <.link navigate={~p"/repositories/#{@run["repository_id"]}"}>{@run["repository_name"]}</.link>
-        <span>/</span><span>runs</span><span>/</span><strong>{short_sha(@run["id"])}</strong>
-      </nav>
+      <.breadcrumbs id="run-breadcrumbs">
+        <:item navigate={~p"/organizations"}>Organizations</:item>
+        <:item navigate={~p"/organizations/#{@run["organization_id"]}"}>
+          {@run["organization_name"]}
+        </:item>
+        <:item navigate={~p"/repositories/#{@run["repository_id"]}"}>
+          {@run["repository_name"]}
+        </:item>
+        <:current>Run {short_sha(@run["id"])}</:current>
+      </.breadcrumbs>
 
       <section class="run-hero">
         <div>
@@ -123,7 +129,7 @@ defmodule HephaestusWebWeb.RunLive do
           <div>
             <p class="eyebrow">Guest telemetry</p><h2>Latest samples</h2>
           </div>
-          <span class="status-live"><i></i> persisted</span>
+          <.tag tone="success" dot>persisted</.tag>
         </div>
         <div class="metric-grid">
           <.metric
@@ -140,9 +146,7 @@ defmodule HephaestusWebWeb.RunLive do
             <p class="eyebrow">Controlled result proposal</p>
             <h2>{@run["target_ref"]}</h2>
           </div>
-          <span class={["proposal-badge", proposal_class(@run["proposal_state"])]}>
-            {@run["proposal_state"]}
-          </span>
+          <.tag tone={proposal_tone(@run["proposal_state"])}>{@run["proposal_state"]}</.tag>
         </div>
         <div class="commit-flow">
           <div><small>Input</small><code>{short_sha(@run["input_commit"])}</code></div>
@@ -174,7 +178,7 @@ defmodule HephaestusWebWeb.RunLive do
             <div>
               <p class="eyebrow">Workspace result</p><h2>Patch</h2>
             </div>
-            <span class="count-pill">{artifact_size(@run, "patch")}</span>
+            <.tag>{artifact_size(@run, "patch")}</.tag>
           </div>
           <pre id="result-diff" data-testid="result-diff"><code>{@patch || "No result patch has been published yet."}</code></pre>
         </section>
@@ -184,7 +188,7 @@ defmodule HephaestusWebWeb.RunLive do
             <div>
               <p class="eyebrow">Persisted lifecycle</p><h2>Timeline</h2>
             </div>
-            <span class="status-live"><i></i> live</span>
+            <.tag tone="success" dot>live</.tag>
           </div>
           <ol
             id="run-timeline"
@@ -217,7 +221,7 @@ defmodule HephaestusWebWeb.RunLive do
             id={dom_id}
             class="artifact-row"
           >
-            <span class="artifact-kind">{artifact["kind"]}</span>
+            <.tag tone="accent">{artifact["kind"]}</.tag>
             <span>{artifact["path"] || "run output"}</span>
             <code>{format_bytes(artifact["size_bytes"])}</code>
             <code>{short_sha(artifact["sha256"])}</code>
@@ -300,10 +304,10 @@ defmodule HephaestusWebWeb.RunLive do
   defp state_class(%{"outcome" => "cancelled"}), do: "muted"
   defp state_class(_run), do: "running"
 
-  defp proposal_class("approved"), do: "approved"
-  defp proposal_class("rejected"), do: "rejected"
-  defp proposal_class("conflicted"), do: "conflicted"
-  defp proposal_class(_state), do: "open"
+  defp proposal_tone("approved"), do: "success"
+  defp proposal_tone("rejected"), do: "danger"
+  defp proposal_tone("conflicted"), do: "danger"
+  defp proposal_tone(_state), do: "warning"
 
   defp event_label(value), do: value |> String.replace(".", " · ") |> String.replace("_", " ")
 

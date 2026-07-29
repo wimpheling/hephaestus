@@ -5,18 +5,21 @@ defmodule HephaestusWebWeb.RepositoryIndexLive do
 
   @impl true
   def mount(%{"organization_id" => organization_id}, _session, socket) do
-    case Store.list_repositories(socket.assigns.current_identity, organization_id) do
-      {:ok, repositories} ->
-        {:ok,
-         socket
-         |> stream_configure(:repositories,
-           dom_id: &"repository-stream-#{&1["id"]}"
-         )
-         |> assign(:page_title, "Repositories")
-         |> assign(:organization_id, organization_id)
-         |> assign(:repository_count, length(repositories))
-         |> stream(:repositories, repositories)}
-
+    with {:ok, organization} <-
+           Store.get_organization(socket.assigns.current_identity, organization_id),
+         {:ok, repositories} <-
+           Store.list_repositories(socket.assigns.current_identity, organization_id) do
+      {:ok,
+       socket
+       |> stream_configure(:repositories,
+         dom_id: &"repository-stream-#{&1["id"]}"
+       )
+       |> assign(:page_title, "Repositories")
+       |> assign(:organization, organization)
+       |> assign(:organization_id, organization_id)
+       |> assign(:repository_count, length(repositories))
+       |> stream(:repositories, repositories)}
+    else
       {:error, _reason} ->
         {:ok,
          socket
@@ -29,17 +32,17 @@ defmodule HephaestusWebWeb.RepositoryIndexLive do
   def render(assigns) do
     ~H"""
     <Layouts.app flash={@flash} current_identity={@current_identity}>
-      <nav class="crumbs">
-        <.link navigate={~p"/organizations"}>Organizations</.link>
-        <span>/</span><span>Repositories</span>
-      </nav>
+      <.breadcrumbs id="repository-index-breadcrumbs">
+        <:item navigate={~p"/organizations"}>Organizations</:item>
+        <:current>{@organization["name"]}</:current>
+      </.breadcrumbs>
       <section class="section-heading spacious">
         <div>
           <p class="eyebrow">Organization workspace</p>
           <h1>Repositories</h1>
           <p class="lede">Live execution history from accepted Git pushes.</p>
         </div>
-        <span class="count-pill">{@repository_count} repositories</span>
+        <.tag>{@repository_count} repositories</.tag>
       </section>
 
       <div id="repositories" class="repository-table" phx-update="stream">

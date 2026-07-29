@@ -49,7 +49,7 @@ defmodule HephaestusWebWeb.OrganizationLive do
           <p class="eyebrow">Your perimeter</p>
           <h2>Organizations</h2>
         </div>
-        <span class="count-pill">{@organization_count} visible</span>
+        <.tag>{@organization_count} visible</.tag>
       </section>
 
       <div id="organizations" class="org-grid" phx-update="stream">

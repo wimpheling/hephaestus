@@ -83,21 +83,29 @@ cargo clippy --workspace --all-targets --all-features
 cargo test --workspace
 ```
 
-For a persistent manual-smoke environment using the deterministic local VM
-fixture, run:
+For a persistent manual-smoke environment using real libkrun/KVM microVMs,
+run:
 
 ```sh
 scripts/run-local.sh
 ```
 
 This starts PostgreSQL, NATS JetStream, a local OIDC issuer, the Rust forge
-daemon, and Phoenix LiveView without executing automated tests. It prints the
-seeded repository URL and Git authentication command. Press Ctrl-C to stop the
-services; repository, artifact, volume, PostgreSQL, and NATS data are retained
-for the next launch. From another terminal, `scripts/run-local.sh stop` performs
-the same clean shutdown. Remove `.local/hephaestus` and the
-`hephaestus-local-postgres-data` / `hephaestus-local-nats-data` Podman volumes
-when you intentionally want a completely fresh environment.
+daemon, and Phoenix LiveView without executing automated tests. It builds the
+guest bootstrap, prepares the digest-pinned Fedora 44 root filesystem once,
+discovers a delegated cgroup-v2 subtree, and runs the daemon in an unprivileged
+user namespace with the UID/GID mapping required by writable guest workspaces.
+Ephemeral VM sockets use a short `/tmp/hephaestus-runtime-<uid>` path to stay
+within Unix-domain socket limits. The host must satisfy the
+[libkrun backend contract](docs/vm-libkrun.md).
+
+The launcher prints the seeded repository URL and Git authentication command.
+Press Ctrl-C to stop the services; repository, image, artifact, volume,
+PostgreSQL, and NATS data are retained for the next launch. From another
+terminal, `scripts/run-local.sh stop` performs the same clean shutdown. Remove
+`.local/hephaestus` and the `hephaestus-local-postgres-data` /
+`hephaestus-local-nats-data` Podman volumes when you intentionally want a
+completely fresh environment.
 
 On a prepared Fedora host, run the real KVM/libkrun smoke test without root:
 

@@ -42,7 +42,7 @@ defmodule HephaestusWebWeb.Layouts do
           <span>HEPHAESTUS</span>
         </a>
         <div class="header-actions">
-          <span class="environment-pill"><i></i> local forge</span>
+          <.tag class="environment-tag" tone="success" dot>local forge</.tag>
           <div :if={@current_identity} class="identity-chip">
             <span>{@current_identity.display_name |> String.first() |> String.upcase()}</span>
             <div><strong>{@current_identity.display_name}</strong><small>authenticated</small></div>

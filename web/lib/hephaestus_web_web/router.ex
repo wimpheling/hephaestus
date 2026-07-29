@@ -35,7 +35,11 @@ defmodule HephaestusWebWeb.Router do
       on_mount: [{HephaestusWebWeb.UserAuth, :require_authenticated}] do
       live "/organizations", OrganizationLive
       live "/organizations/:organization_id", RepositoryIndexLive
-      live "/repositories/:repository_id", RepositoryLive
+      live "/repositories/:repository_id", RepositoryLive, :files
+      live "/repositories/:repository_id/files", RepositoryLive, :files
+      live "/repositories/:repository_id/files/*path", RepositoryLive, :files
+      live "/repositories/:repository_id/commits", RepositoryLive, :commits
+      live "/repositories/:repository_id/branches", RepositoryLive, :branches
       live "/runs/:run_id", RunLive
     end
   end
