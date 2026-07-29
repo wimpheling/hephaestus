@@ -7,7 +7,8 @@
   run interaction requests rather than relying on long-lived VM access.
 - [ ] Add controlled guest egress policies before accepting untrusted/public
   workloads.
-- [ ] Add secret brokering with scoped, short-lived delivery and redaction
+- [ ] Complete
+  [`tasks/todo/manage-delegate-and-deliver-secrets.md`](tasks/todo/manage-delegate-and-deliver-secrets.md)
   before accepting untrusted/public workloads.
 - [ ] Add SQLite state-volume backup, restore, and recovery verification before
   treating persistent agent state as production data.
