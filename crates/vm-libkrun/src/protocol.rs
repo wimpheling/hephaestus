@@ -8,6 +8,8 @@ pub const PROTOCOL_VERSION: u16 = 3;
 
 /// `AF_VSOCK` port used by `heph-init` to connect to the host worker.
 pub const GUEST_VSOCK_PORT: u32 = 19_000;
+/// Dedicated guest-to-host secret broker port.
+pub const SECRET_BROKER_VSOCK_PORT: u32 = 19_001;
 
 /// Maximum encoded protocol frame size.
 pub const MAX_FRAME_SIZE: usize = 16 * 1024 * 1024;

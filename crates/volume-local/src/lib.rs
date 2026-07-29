@@ -1,7 +1,7 @@
 //! Single-host raw-file volumes with `PostgreSQL` ownership and lease metadata.
 
 use async_trait::async_trait;
-use runtime_types::{AgentId, LeaseId, RunId, VolumeId};
+use runtime_types::{AgentInstanceId, LeaseId, RunId, VolumeId};
 use sqlx::{FromRow, PgPool, Postgres, Row, Transaction, postgres::PgRow};
 use std::{
     io,
@@ -12,7 +12,7 @@ use time::OffsetDateTime;
 use tokio::{fs, process::Command};
 use uuid::Uuid;
 use volume_trait::{
-    AGENT_STATE_DISK_ID, Volume, VolumeAttachment, VolumeError, VolumeKind, VolumeLease,
+    INSTANCE_STATE_DISK_ID, Volume, VolumeAttachment, VolumeError, VolumeKind, VolumeLease,
     VolumeState, VolumeStore,
 };
 
@@ -105,7 +105,11 @@ impl LocalVolumeStore {
 
     async fn initialize_backing(&self, volume: &VolumeRow) -> Result<(), VolumeError> {
         let capacity = u64::try_from(volume.capacity_bytes).map_err(backing)?;
-        let path = Path::new(&volume.host_path);
+        let host_path = volume
+            .host_path
+            .as_deref()
+            .ok_or(VolumeError::InvalidState("volume has no host path"))?;
+        let path = Path::new(host_path);
         ensure_direct_child(&self.config.volume_root, path)?;
 
         match fs::symlink_metadata(path).await {
@@ -141,7 +145,12 @@ impl LocalVolumeStore {
             .arg("-q")
             .arg("-F")
             .arg("-U")
-            .arg(volume.filesystem_uuid.to_string())
+            .arg(
+                volume
+                    .filesystem_uuid
+                    .ok_or(VolumeError::InvalidState("volume has no filesystem UUID"))?
+                    .to_string(),
+            )
             .arg(path)
             .status()
             .await
@@ -165,12 +174,14 @@ impl LocalVolumeStore {
         transaction: &mut Transaction<'_, Postgres>,
         volume_id: VolumeId,
     ) -> Result<VolumeRow, VolumeError> {
-        sqlx::query_as::<_, VolumeRow>("SELECT * FROM agent_state_volumes WHERE id = $1 FOR UPDATE")
-            .bind(volume_id.as_uuid())
-            .fetch_optional(&mut **transaction)
-            .await
-            .map_err(metadata)?
-            .ok_or(VolumeError::NotFound(volume_id))
+        sqlx::query_as::<_, VolumeRow>(
+            "SELECT * FROM agent_instance_state_volumes WHERE id = $1 FOR UPDATE",
+        )
+        .bind(volume_id.as_uuid())
+        .fetch_optional(&mut **transaction)
+        .await
+        .map_err(metadata)?
+        .ok_or(VolumeError::NotFound(volume_id))
     }
 
     fn expiry(&self, now: OffsetDateTime) -> Result<OffsetDateTime, VolumeError> {
@@ -186,66 +197,70 @@ impl LocalVolumeStore {
 
 #[async_trait]
 impl VolumeStore for LocalVolumeStore {
-    async fn resolve_agent_state(
+    async fn resolve_instance_state(
         &self,
-        agent_id: AgentId,
+        instance_id: AgentInstanceId,
         capacity_bytes: u64,
     ) -> Result<Volume, VolumeError> {
         if capacity_bytes < MINIMUM_CAPACITY_BYTES {
             return Err(VolumeError::Backing(Box::new(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "agent-state capacity must be at least 16 MiB",
+                "instance-state capacity must be at least 16 MiB",
             ))));
         }
-        let capacity = i64::try_from(capacity_bytes).map_err(backing)?;
-        let volume_id = VolumeId::new();
-        let filesystem_uuid = Uuid::new_v4();
-        let host_path = self
-            .config
-            .volume_root
-            .join(format!("{volume_id}.raw"))
-            .into_os_string()
-            .into_string()
-            .map_err(|_| {
-                VolumeError::Backing(Box::new(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "volume path is not UTF-8",
-                )))
-            })?;
-
         let mut transaction = self.pool.begin().await.map_err(metadata)?;
-        sqlx::query(
-            "INSERT INTO agent_state_volumes
-             (id, agent_id, kind, host_id, host_path, capacity_bytes, filesystem_uuid, state)
-             VALUES ($1, $2, 'agent_state', $3, $4, $5, $6, 'uninitialized')
-             ON CONFLICT (agent_id, kind) DO NOTHING",
-        )
-        .bind(volume_id.as_uuid())
-        .bind(agent_id.as_uuid())
-        .bind(&self.config.host_id)
-        .bind(host_path)
-        .bind(capacity)
-        .bind(filesystem_uuid)
-        .execute(&mut *transaction)
-        .await
-        .map_err(metadata)?;
-        transaction.commit().await.map_err(metadata)?;
-
-        let mut transaction = self.pool.begin().await.map_err(metadata)?;
-        let row = sqlx::query_as::<_, VolumeRow>(
-            "SELECT * FROM agent_state_volumes
-             WHERE agent_id = $1 AND kind = 'agent_state'
+        let mut row = sqlx::query_as::<_, VolumeRow>(
+            "SELECT * FROM agent_instance_state_volumes
+             WHERE instance_id = $1
              FOR UPDATE",
         )
-        .bind(agent_id.as_uuid())
-        .fetch_one(&mut *transaction)
+        .bind(instance_id.as_uuid())
+        .fetch_optional(&mut *transaction)
         .await
-        .map_err(metadata)?;
-        assert_host(&row.host_id, &self.config.host_id)?;
+        .map_err(metadata)?
+        .ok_or_else(|| VolumeError::NotFound(VolumeId::from_uuid(Uuid::nil())))?;
+        let volume_id = VolumeId::from_uuid(row.id);
+        if row.state == "uninitialized" {
+            let capacity = i64::try_from(capacity_bytes).map_err(backing)?;
+            let filesystem_uuid = Uuid::new_v4();
+            let host_path = self
+                .config
+                .volume_root
+                .join(format!("{volume_id}.raw"))
+                .into_os_string()
+                .into_string()
+                .map_err(|_| {
+                    VolumeError::Backing(Box::new(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "volume path is not UTF-8",
+                    )))
+                })?;
+            row = sqlx::query_as::<_, VolumeRow>(
+                "UPDATE agent_instance_state_volumes
+                 SET host_id = $2, host_path = $3, capacity_bytes = $4,
+                     filesystem_uuid = $5, updated_at = now()
+                 WHERE id = $1 AND state = 'uninitialized'
+                 RETURNING *",
+            )
+            .bind(row.id)
+            .bind(&self.config.host_id)
+            .bind(host_path)
+            .bind(capacity)
+            .bind(filesystem_uuid)
+            .fetch_one(&mut *transaction)
+            .await
+            .map_err(metadata)?;
+        }
+        assert_host(
+            row.host_id
+                .as_deref()
+                .ok_or(VolumeError::InvalidState("volume has no host owner"))?,
+            &self.config.host_id,
+        )?;
         if row.state == "uninitialized" {
             self.initialize_backing(&row).await?;
             sqlx::query(
-                "UPDATE agent_state_volumes
+                "UPDATE agent_instance_state_volumes
                  SET state = 'ready', updated_at = now()
                  WHERE id = $1 AND state = 'uninitialized'",
             )
@@ -255,7 +270,7 @@ impl VolumeStore for LocalVolumeStore {
             .map_err(metadata)?;
         }
         transaction.commit().await.map_err(metadata)?;
-        self.volume(VolumeId::from_uuid(row.id)).await
+        self.volume(volume_id).await
     }
 
     async fn acquire(
@@ -265,14 +280,20 @@ impl VolumeStore for LocalVolumeStore {
     ) -> Result<VolumeAttachment, VolumeError> {
         let mut transaction = self.pool.begin().await.map_err(metadata)?;
         let volume = Self::locked_volume(&mut transaction, volume_id).await?;
-        assert_host(&volume.host_id, &self.config.host_id)?;
+        assert_host(
+            volume
+                .host_id
+                .as_deref()
+                .ok_or(VolumeError::InvalidState("volume has no host owner"))?,
+            &self.config.host_id,
+        )?;
         if let Some(existing) = active_lease(&mut transaction, volume_id).await? {
             if existing.run_id == run_id.as_uuid() {
                 transaction.commit().await.map_err(metadata)?;
                 return Ok(VolumeAttachment {
                     volume: self.volume(volume_id).await?,
                     lease: existing.try_into()?,
-                    disk_id: AGENT_STATE_DISK_ID,
+                    disk_id: INSTANCE_STATE_DISK_ID,
                 });
             }
             return Err(VolumeError::LeaseConflict {
@@ -293,13 +314,14 @@ impl VolumeStore for LocalVolumeStore {
             .ok_or(VolumeError::InvalidState("lease generation overflow"))?;
         let lease_id = LeaseId::new();
         sqlx::query(
-            "INSERT INTO volume_leases
-             (id, volume_id, run_id, host_id, fencing_token,
+            "INSERT INTO agent_instance_volume_leases
+             (id, volume_id, instance_id, run_id, host_id, fencing_token, state,
               acquired_at, heartbeat_at, expires_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $6, $7)",
+             VALUES ($1, $2, $3, $4, $5, $6, 'active', $7, $7, $8)",
         )
         .bind(lease_id.as_uuid())
         .bind(volume_id.as_uuid())
+        .bind(volume.instance_id)
         .bind(run_id.as_uuid())
         .bind(&self.config.host_id)
         .bind(generation)
@@ -309,7 +331,7 @@ impl VolumeStore for LocalVolumeStore {
         .await
         .map_err(metadata)?;
         sqlx::query(
-            "UPDATE agent_state_volumes
+            "UPDATE agent_instance_state_volumes
              SET lease_generation = $2, updated_at = now()
              WHERE id = $1",
         )
@@ -323,7 +345,7 @@ impl VolumeStore for LocalVolumeStore {
         Ok(VolumeAttachment {
             volume: self.volume(volume_id).await?,
             lease: self.lease(lease_id).await?,
-            disk_id: AGENT_STATE_DISK_ID,
+            disk_id: INSTANCE_STATE_DISK_ID,
         })
     }
 
@@ -331,7 +353,7 @@ impl VolumeStore for LocalVolumeStore {
         let now = OffsetDateTime::now_utc();
         let result = sqlx::query(
             "WITH current_lease AS (
-                 UPDATE volume_leases
+                 UPDATE agent_instance_volume_leases
                  SET attached_at = COALESCE(attached_at, $4),
                      heartbeat_at = $4,
                      expires_at = $5
@@ -339,7 +361,7 @@ impl VolumeStore for LocalVolumeStore {
                    AND released_at IS NULL
                  RETURNING volume_id
              )
-             UPDATE agent_state_volumes
+             UPDATE agent_instance_state_volumes
              SET state = 'attached', updated_at = $4
              WHERE id IN (SELECT volume_id FROM current_lease)
                AND state IN ('ready', 'attached')",
@@ -361,7 +383,7 @@ impl VolumeStore for LocalVolumeStore {
     async fn heartbeat(&self, lease: &VolumeLease) -> Result<VolumeLease, VolumeError> {
         let now = OffsetDateTime::now_utc();
         let result = sqlx::query(
-            "UPDATE volume_leases SET heartbeat_at = $4, expires_at = $5
+            "UPDATE agent_instance_volume_leases SET heartbeat_at = $4, expires_at = $5
              WHERE id = $1 AND volume_id = $2 AND fencing_token = $3
                AND released_at IS NULL AND recovering_at IS NULL",
         )
@@ -384,7 +406,7 @@ impl VolumeStore for LocalVolumeStore {
         run_id: RunId,
     ) -> Result<Option<VolumeLease>, VolumeError> {
         let row = sqlx::query_as::<_, LeaseRow>(
-            "SELECT * FROM volume_leases
+            "SELECT * FROM agent_instance_volume_leases
              WHERE run_id = $1 AND released_at IS NULL",
         )
         .bind(run_id.as_uuid())
@@ -405,7 +427,7 @@ impl VolumeStore for LocalVolumeStore {
 
     async fn stale_leases(&self, now: OffsetDateTime) -> Result<Vec<VolumeLease>, VolumeError> {
         sqlx::query_as::<_, LeaseRow>(
-            "SELECT * FROM volume_leases
+            "SELECT * FROM agent_instance_volume_leases
              WHERE released_at IS NULL AND expires_at <= $1
              ORDER BY expires_at, id",
         )
@@ -421,12 +443,12 @@ impl VolumeStore for LocalVolumeStore {
     async fn begin_recovery(&self, lease: &VolumeLease) -> Result<(), VolumeError> {
         let result = sqlx::query(
             "WITH current_lease AS (
-                 UPDATE volume_leases SET recovering_at = COALESCE(recovering_at, now())
+                 UPDATE agent_instance_volume_leases SET recovering_at = COALESCE(recovering_at, now())
                  WHERE id = $1 AND volume_id = $2 AND fencing_token = $3
                    AND released_at IS NULL AND expires_at <= now()
                  RETURNING volume_id
              )
-             UPDATE agent_state_volumes SET state = 'recovering', updated_at = now()
+             UPDATE agent_instance_state_volumes SET state = 'recovering', updated_at = now()
              WHERE id IN (SELECT volume_id FROM current_lease)",
         )
         .bind(lease.id.as_uuid())
@@ -448,7 +470,7 @@ impl VolumeStore for LocalVolumeStore {
 
 impl LocalVolumeStore {
     async fn volume(&self, id: VolumeId) -> Result<Volume, VolumeError> {
-        sqlx::query_as::<_, VolumeRow>("SELECT * FROM agent_state_volumes WHERE id = $1")
+        sqlx::query_as::<_, VolumeRow>("SELECT * FROM agent_instance_state_volumes WHERE id = $1")
             .bind(id.as_uuid())
             .fetch_optional(&self.pool)
             .await
@@ -458,7 +480,7 @@ impl LocalVolumeStore {
     }
 
     async fn lease(&self, id: LeaseId) -> Result<VolumeLease, VolumeError> {
-        sqlx::query_as::<_, LeaseRow>("SELECT * FROM volume_leases WHERE id = $1")
+        sqlx::query_as::<_, LeaseRow>("SELECT * FROM agent_instance_volume_leases WHERE id = $1")
             .bind(id.as_uuid())
             .fetch_one(&self.pool)
             .await
@@ -472,7 +494,7 @@ async fn active_lease(
     volume_id: VolumeId,
 ) -> Result<Option<LeaseRow>, VolumeError> {
     sqlx::query_as::<_, LeaseRow>(
-        "SELECT * FROM volume_leases
+        "SELECT * FROM agent_instance_volume_leases
          WHERE volume_id = $1 AND released_at IS NULL
          FOR UPDATE",
     )
@@ -490,7 +512,8 @@ async fn release(pool: &PgPool, lease: &VolumeLease, recovering: bool) -> Result
         "recovering_at IS NULL"
     };
     let query = format!(
-        "UPDATE volume_leases SET released_at = now()
+        "UPDATE agent_instance_volume_leases
+         SET released_at = now(), state = 'released'
          WHERE id = $1 AND volume_id = $2 AND fencing_token = $3
            AND released_at IS NULL AND {condition}"
     );
@@ -505,7 +528,7 @@ async fn release(pool: &PgPool, lease: &VolumeLease, recovering: bool) -> Result
         return Err(VolumeError::StaleLease);
     }
     sqlx::query(
-        "UPDATE agent_state_volumes SET state = 'ready', updated_at = now()
+        "UPDATE agent_instance_state_volumes SET state = 'ready', updated_at = now()
          WHERE id = $1 AND lease_generation = $2",
     )
     .bind(lease.volume_id.as_uuid())
@@ -519,12 +542,11 @@ async fn release(pool: &PgPool, lease: &VolumeLease, recovering: bool) -> Result
 #[derive(Debug)]
 struct VolumeRow {
     id: Uuid,
-    agent_id: Uuid,
-    kind: String,
-    host_id: String,
-    host_path: String,
+    instance_id: Uuid,
+    host_id: Option<String>,
+    host_path: Option<String>,
     capacity_bytes: i64,
-    filesystem_uuid: Uuid,
+    filesystem_uuid: Option<Uuid>,
     state: String,
     lease_generation: i64,
     key_reference: Option<String>,
@@ -538,8 +560,7 @@ impl<'row> FromRow<'row, PgRow> for VolumeRow {
     fn from_row(row: &'row PgRow) -> Result<Self, sqlx::Error> {
         Ok(Self {
             id: row.try_get("id")?,
-            agent_id: row.try_get("agent_id")?,
-            kind: row.try_get("kind")?,
+            instance_id: row.try_get("instance_id")?,
             host_id: row.try_get("host_id")?,
             host_path: row.try_get("host_path")?,
             capacity_bytes: row.try_get("capacity_bytes")?,
@@ -559,19 +580,22 @@ impl TryFrom<VolumeRow> for Volume {
     type Error = VolumeError;
 
     fn try_from(row: VolumeRow) -> Result<Self, Self::Error> {
-        let kind = match row.kind.as_str() {
-            "agent_state" => VolumeKind::AgentState,
-            _ => return Err(VolumeError::InvalidState("unknown volume kind")),
-        };
         let state = parse_state(&row.state)?;
         Ok(Self {
             id: VolumeId::from_uuid(row.id),
-            agent_id: AgentId::from_uuid(row.agent_id),
-            kind,
-            host_id: row.host_id,
-            host_path: PathBuf::from(row.host_path),
+            instance_id: AgentInstanceId::from_uuid(row.instance_id),
+            kind: VolumeKind::InstanceState,
+            host_id: row
+                .host_id
+                .ok_or(VolumeError::InvalidState("volume has no host owner"))?,
+            host_path: PathBuf::from(
+                row.host_path
+                    .ok_or(VolumeError::InvalidState("volume has no host path"))?,
+            ),
             capacity_bytes: u64::try_from(row.capacity_bytes).map_err(backing)?,
-            filesystem_uuid: row.filesystem_uuid,
+            filesystem_uuid: row
+                .filesystem_uuid
+                .ok_or(VolumeError::InvalidState("volume has no filesystem UUID"))?,
             state,
             key_reference: row.key_reference,
             encryption_version: row.encryption_version,

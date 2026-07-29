@@ -327,6 +327,20 @@ code, pre, .mono {
 .org-copy h3 { margin: 0 0 .3rem; font-size: .95rem; }
 .org-copy p { margin: 0; color: var(--muted); font-size: .72rem; }
 .arrow { color: var(--muted); }
+.organization-hero {
+  display: flex;
+  align-items: center;
+  gap: 1.2rem;
+  margin-top: 1.5rem;
+  padding: 1.5rem;
+  border: 1px solid var(--line);
+  border-radius: .62rem;
+  background:
+    linear-gradient(120deg, color-mix(in srgb, var(--ember) 6%, transparent), transparent 45%),
+    var(--panel);
+}
+.organization-hero h1 { margin: .15rem 0 .35rem; font-size: clamp(2rem, 4vw, 3rem); }
+.organization-hero .lede { margin: 0; }
 .breadcrumbs { color: var(--muted); font: 650 .68rem/1 monospace; }
 .breadcrumbs ol { display: flex; align-items: center; gap: .55rem; margin: 0; padding: 0; list-style: none; }
 .breadcrumbs li { display: inline-flex; align-items: center; gap: .55rem; min-width: 0; }
@@ -384,6 +398,78 @@ code, pre, .mono {
 .repo-name > span { display: flex; flex-direction: column; gap: .2rem; }
 .repo-name small { color: var(--muted); }
 .repo-icon { color: var(--ember); font-style: normal; font-size: 1.15rem; }
+.workspace-heading { margin: 2.5rem 0 1rem; }
+.list-subheading { margin: 3.5rem 0 1rem; }
+.page-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: .6rem; }
+
+.resource-list {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: .58rem;
+  background: var(--panel);
+}
+.resource-list-heading, .resource-list-row {
+  display: grid;
+  grid-template-columns: var(--resource-list-columns);
+  align-items: center;
+  gap: 1rem;
+  min-width: 52rem;
+  padding: .85rem 1rem;
+}
+.resource-list-heading {
+  color: var(--muted);
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--line) 18%, transparent);
+  font: 700 .62rem/1 monospace;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.resource-list-row {
+  min-height: 4.8rem;
+  border-bottom: 1px solid var(--line);
+  font-size: .76rem;
+}
+.resource-list-row:last-child { border-bottom: 0; }
+a.resource-list-row:hover { background: color-mix(in srgb, var(--ember) 4%, transparent); }
+.resource-list-row-tall { min-height: 6.4rem; }
+.resource-list-empty {
+  padding: 3rem 1rem;
+  color: var(--muted);
+  text-align: center;
+  font-size: .74rem;
+}
+.resource-primary { min-width: 0; display: flex; align-items: center; gap: .8rem; }
+.resource-primary > span, .resource-detail {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: .25rem;
+}
+.resource-primary strong, .resource-primary small, .resource-detail strong,
+.resource-detail small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.resource-primary small, .resource-detail small { color: var(--muted); font-size: .64rem; }
+.resource-controls { display: flex; align-items: center; flex-wrap: wrap; gap: .45rem; }
+.resource-inline-form { display: flex; align-items: center; gap: .4rem; }
+.resource-inline-form input {
+  width: 10rem;
+  min-height: 2rem;
+  padding: .4rem .55rem;
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: .35rem;
+  background: var(--paper);
+  font-size: .65rem;
+}
+.form-page-panel { max-width: 46rem; margin-bottom: 3rem; }
+.form-page-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: .6rem;
+  margin-top: 1.4rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--line);
+}
 .repo-hero, .run-hero {
   display: flex;
   align-items: center;
@@ -643,10 +729,152 @@ code, pre, .mono {
 .artifact-panel details { margin-top: 1rem; }
 .artifact-panel summary { color: var(--muted); cursor: pointer; font-size: .7rem; }
 
+/* Release, instance, and secret control plane */
+.control-card, .secret-record {
+  margin-top: .85rem;
+  padding: 1rem;
+  border: 1px solid var(--line);
+  border-radius: .5rem;
+  background: var(--panel);
+}
+.control-card > header, .secret-record > header, .binding-form > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: .85rem;
+}
+.control-card header > div, .secret-record header > div {
+  display: flex;
+  flex-direction: column;
+  gap: .25rem;
+}
+.control-card small, .secret-record small, .hook-events small {
+  color: var(--muted);
+  font: .64rem/1.5 monospace;
+}
+.command-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: end;
+  gap: .7rem;
+}
+.command-grid > .button { min-height: 2.75rem; }
+.two-column-controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  margin: 1rem 0 2rem;
+}
+.inline-command, .command-row {
+  display: flex;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: .6rem;
+}
+.inline-command { padding-block: .6rem; }
+.inline-command .fieldset { min-width: 13rem; margin: 0; }
+.command-row { margin-top: .75rem; }
+.button.compact { min-height: 2rem; padding: .4rem .65rem; font-size: .62rem; }
+.metadata-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: .7rem;
+  margin: 0;
+}
+.metadata-grid div {
+  min-width: 0;
+  padding: .7rem;
+  border: 1px solid var(--line);
+  border-radius: .35rem;
+}
+.metadata-grid dt {
+  color: var(--muted);
+  font: 700 .56rem/1 monospace;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+}
+.metadata-grid dd { margin: .35rem 0 0; font-size: .7rem; overflow-wrap: anywhere; }
+.secret-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+.secret-write-panel { margin-bottom: 1rem; }
+.instance-overview {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: .75rem;
+  margin: 1rem 0 2rem;
+}
+.binding-form {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--line);
+}
+.danger-confirmation {
+  margin: .75rem 0;
+  padding: .7rem;
+  color: var(--red);
+  border: 1px solid color-mix(in srgb, var(--red) 40%, var(--line));
+  border-radius: .4rem;
+  background: color-mix(in srgb, var(--red) 5%, transparent);
+}
+.hook-events {
+  display: flex;
+  max-height: 10rem;
+  overflow: auto;
+  flex-direction: column;
+  gap: .2rem;
+  margin-top: .5rem;
+  padding: .5rem;
+  border: 1px solid var(--line);
+  border-radius: .3rem;
+}
+.provenance-links { display: flex; flex-wrap: wrap; gap: .45rem; margin-top: .65rem; font-size: .7rem; }
+.provenance-links a { color: var(--ember); text-decoration: underline; text-underline-offset: .18rem; }
+:where(a, button, input, select, textarea, summary):focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--ember) 70%, white);
+  outline-offset: 2px;
+}
+.phx-submit-loading, .phx-click-loading { cursor: wait; opacity: .62; }
+
 /* Generated component compatibility */
 .alert { position: fixed; right: 1rem; top: 5.5rem; z-index: 50; max-width: 28rem; padding: 1rem; border: 1px solid var(--line); border-radius: .45rem; background: var(--panel); box-shadow: var(--shadow); }
 .alert-info { border-left: 3px solid var(--green); }
 .alert-error { border-left: 3px solid var(--red); }
+.fieldset { margin: 0 0 1rem; }
+.fieldset > label { display: block; }
+.fieldset .label {
+  display: inline-flex;
+  align-items: center;
+  gap: .45rem;
+  margin-bottom: .42rem;
+  color: var(--muted);
+  font: 700 .62rem/1.25 "IBM Plex Mono", monospace;
+  letter-spacing: .055em;
+  text-transform: uppercase;
+}
+.input, .select, .textarea {
+  width: 100%;
+  min-height: 2.75rem;
+  padding: .68rem .78rem;
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: .4rem;
+  background: color-mix(in srgb, var(--paper) 72%, white);
+  box-shadow: inset 0 1px 1px color-mix(in srgb, var(--ink) 4%, transparent);
+  font: 650 .72rem/1.35 "IBM Plex Mono", monospace;
+  transition: border-color .15s ease, box-shadow .15s ease, background .15s ease;
+}
+.textarea { min-height: 7rem; resize: vertical; }
+.select[multiple] { min-height: 6.5rem; padding: .35rem; }
+.select[multiple] option { padding: .48rem .55rem; border-radius: .25rem; }
+.input::placeholder, .textarea::placeholder { color: color-mix(in srgb, var(--muted) 68%, transparent); }
+.input:hover, .select:hover, .textarea:hover { border-color: color-mix(in srgb, var(--muted) 65%, var(--line)); }
+.input:focus, .select:focus, .textarea:focus {
+  border-color: var(--ember);
+  background: var(--panel);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ember) 12%, transparent);
+  outline: 0;
+}
+.input-error, .select-error, .textarea-error { border-color: var(--red); }
 .btn { cursor: pointer; }
 .card { border-color: var(--line); }
 
@@ -655,6 +883,8 @@ code, pre, .mono {
   .landing-console { max-width: 38rem; }
   .landing-footer { display: none; }
   .hero-panel, .run-hero { align-items: flex-start; flex-direction: column; }
+  .section-heading.workspace-heading { align-items: flex-start; flex-direction: column; }
+  .page-actions { justify-content: flex-start; }
   .system-health { width: 100%; }
   .review-grid { grid-template-columns: 1fr; }
   .repository-browser { grid-template-columns: 15rem minmax(0, 1fr); }
@@ -664,6 +894,8 @@ code, pre, .mono {
   .run-row { grid-template-columns: 1.2rem 1fr auto; }
   .run-row > :nth-child(3), .run-row > :nth-child(5), .run-row > :nth-child(6) { display: none; }
   .metric-grid { grid-template-columns: repeat(2, 1fr); }
+  .command-grid, .metadata-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .instance-overview { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 600px) {
@@ -674,6 +906,10 @@ code, pre, .mono {
   .identity-chip, .environment-tag, .logout-link { display: none; }
   .hero-panel { padding: 1.5rem; }
   .org-grid { grid-template-columns: 1fr; }
+  .organization-hero { align-items: flex-start; }
+  .organization-hero .org-mark { flex: 0 0 auto; width: 3rem; height: 3rem; }
+  .page-actions { width: 100%; align-items: stretch; flex-direction: column; }
+  .page-actions .button { justify-content: center; }
   .breadcrumbs a { max-width: 8rem; }
   .repo-hero { flex-wrap: wrap; }
   .repo-badges { width: 100%; margin-left: 4.9rem; }
@@ -690,4 +926,8 @@ code, pre, .mono {
   .commit-flow > span { transform: rotate(90deg); justify-self: center; }
   .artifact-row { grid-template-columns: 5.5rem 1fr; }
   .artifact-row > :nth-child(3), .artifact-row > :nth-child(4) { display: none; }
+  .two-column-controls, .secret-grid, .command-grid, .metadata-grid,
+  .instance-overview { grid-template-columns: 1fr; }
+  .inline-command { align-items: stretch; flex-direction: column; }
+  .inline-command .fieldset { width: 100%; min-width: 0; }
 }

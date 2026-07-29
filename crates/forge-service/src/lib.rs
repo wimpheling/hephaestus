@@ -8,8 +8,9 @@ mod repository;
 mod storage;
 
 pub use nats::{
-    AGENT_CONFIG_INVALID_SUBJECT, ForgeNatsOutboxPublisher, ForgeOutboxPublishError,
-    GIT_RECEIVE_ACCEPTED_SUBJECT, RUN_START_SUBJECT, ensure_forge_jetstream_topology,
+    AGENT_CONFIG_INVALID_SUBJECT, BUILD_REQUESTED_SUBJECT, ForgeNatsOutboxPublisher,
+    ForgeOutboxPublishError, GIT_RECEIVE_ACCEPTED_SUBJECT, INSTANCE_RUN_REQUESTED_SUBJECT,
+    RUN_START_SUBJECT, ensure_build_consumer, ensure_forge_jetstream_topology,
 };
 pub use repository::{
     CreateRepository, ForgeRepositoryError, OutboxRecord, PgForgeRepository, ReceiveResult,

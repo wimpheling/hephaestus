@@ -12,6 +12,7 @@ use std::{
     sync::Arc,
 };
 use tokio::process::Command;
+use uuid::Uuid;
 use workspace_domain::RunWorkspaceManager;
 use workspace_local::{LocalWorkspaceConfig, LocalWorkspaceManager, WorkspaceLimits};
 
@@ -87,6 +88,7 @@ async fn exact_commit_becomes_one_controlled_result_with_durable_artifacts() {
     git(&work, &["commit", "-m", "accepted input"]).await;
     let accepted =
         CommitSha::parse(git_output(&work, &["rev-parse", "HEAD"]).await).expect("accepted commit");
+    seed_attached_instance(&pool, project.id, repository.id, accepted.as_str()).await;
     let bare = repository_root.join(format!("{}.git", repository.id));
     git(
         &work,
@@ -359,30 +361,179 @@ async fn exact_commit_becomes_one_controlled_result_with_durable_artifacts() {
         root.join("artifacts").join(run.id.to_string()).is_dir(),
         "cleaning a second workspace removed the first run's durable artifacts"
     );
+}
 
-    cleanup(&pool, organization_id).await;
+// The exact result-provenance contract needs the whole immutable graph; one
+// fixture function keeps every foreign-key edge visible beside its test.
+#[allow(clippy::too_many_lines)]
+async fn seed_attached_instance(
+    pool: &PgPool,
+    project_id: forge_domain::ProjectId,
+    repository_id: forge_domain::RepositoryId,
+    commit: &str,
+) {
+    let release_configuration = agent_config::parse(agent_config().as_bytes())
+        .config
+        .expect("fixture release configuration should parse");
+    let build_id = Uuid::new_v4();
+    let family_id = Uuid::new_v4();
+    let release_id = Uuid::new_v4();
+    let release_agent_id = Uuid::new_v4();
+    let instance_id = Uuid::new_v4();
+    let revision_id = Uuid::new_v4();
+    let mut tx = pool.begin().await.expect("begin exact instance fixture");
+    sqlx::query(
+        "INSERT INTO build_requests
+         (id, repository_id, source_commit, source_ref,
+          build_definition_hash, state, completed_at)
+         VALUES ($1, $2, $3, 'refs/heads/main', $4, 'succeeded', now())",
+    )
+    .bind(build_id)
+    .bind(repository_id.as_uuid())
+    .bind(commit)
+    .bind([1_u8; 32].as_slice())
+    .execute(&mut *tx)
+    .await
+    .expect("seed exact build");
+    sqlx::query(
+        "INSERT INTO agent_families (id, repository_id, agent_key)
+         VALUES ($1, $2, 'workspace-agent')",
+    )
+    .bind(family_id)
+    .bind(repository_id.as_uuid())
+    .execute(&mut *tx)
+    .await
+    .expect("seed exact family");
+    sqlx::query(
+        "INSERT INTO releases
+         (id, repository_id, version, source_commit, source_ref,
+          build_request_id, build_definition_hash, configuration,
+          configuration_hash, manifest_hash, state, published_at)
+         VALUES ($1, $2, 'v1', $3, 'refs/heads/main', $4, $5,
+                 $8, $6, $7, 'published', now())",
+    )
+    .bind(release_id)
+    .bind(repository_id.as_uuid())
+    .bind(commit)
+    .bind(build_id)
+    .bind([1_u8; 32].as_slice())
+    .bind([2_u8; 32].as_slice())
+    .bind([3_u8; 32].as_slice())
+    .bind(serde_json::to_value(release_configuration).expect("serialize release configuration"))
+    .execute(&mut *tx)
+    .await
+    .expect("seed exact release");
+    sqlx::query(
+        "INSERT INTO release_agents
+         (id, release_id, family_id, agent_key, display_name,
+          runtime_contract, runtime_contract_hash, parameter_schema,
+          secret_slot_schema, requires_state)
+         VALUES ($1, $2, $3, 'workspace-agent', 'Workspace Agent',
+                 $4, $5, '[]', '[]', false)",
+    )
+    .bind(release_agent_id)
+    .bind(release_id)
+    .bind(family_id)
+    .bind(serde_json::json!({
+        "command": "bin/agent",
+        "arguments": [],
+        "working_directory": ".",
+        "root_image_digest": "fixture"
+    }))
+    .bind([4_u8; 32].as_slice())
+    .execute(&mut *tx)
+    .await
+    .expect("seed exact release agent");
+    sqlx::query(
+        "INSERT INTO agent_instances
+         (id, project_id, family_id, name, state)
+         VALUES ($1, $2, $3, $4, 'active')",
+    )
+    .bind(instance_id)
+    .bind(project_id.as_uuid())
+    .bind(family_id)
+    .bind(format!("workspace_{}", Uuid::new_v4().simple()))
+    .execute(&mut *tx)
+    .await
+    .expect("seed exact instance");
+    sqlx::query(
+        "INSERT INTO agent_instance_revisions
+         (id, instance_id, release_agent_id, parameters, parameter_hash,
+          resource_selection, network_restriction, effective_runtime_policy,
+          effective_policy_hash, platform_policy_version, runnable, diagnostics)
+         VALUES ($1, $2, $3, '{}', $4, $5, $6, $5, $7,
+                 'platform/test', true, '[]')",
+    )
+    .bind(revision_id)
+    .bind(instance_id)
+    .bind(release_agent_id)
+    .bind([5_u8; 32].as_slice())
+    .bind(serde_json::json!({
+        "vcpus": 1,
+        "memory_mib": 128,
+        "network": "disabled"
+    }))
+    .bind(serde_json::json!({"network": "disabled"}))
+    .bind([6_u8; 32].as_slice())
+    .execute(&mut *tx)
+    .await
+    .expect("seed exact revision");
+    sqlx::query("UPDATE agent_instances SET active_revision_id = $2 WHERE id = $1")
+        .bind(instance_id)
+        .bind(revision_id)
+        .execute(&mut *tx)
+        .await
+        .expect("activate exact revision");
+    sqlx::query(
+        "INSERT INTO agent_attachments
+         (id, instance_id, project_id, repository_id, ref_selector,
+          trigger_policy, enabled)
+         VALUES ($1, $2, $3, $4, 'refs/heads/main', 'push', true)",
+    )
+    .bind(Uuid::new_v4())
+    .bind(instance_id)
+    .bind(project_id.as_uuid())
+    .bind(repository_id.as_uuid())
+    .execute(&mut *tx)
+    .await
+    .expect("seed exact attachment");
+    tx.commit().await.expect("commit exact instance fixture");
 }
 
 const fn agent_config() -> &'static str {
     r#"
-version = 1
+version = 2
 [agent]
 name = "workspace-agent"
+key = "workspace-agent"
+[build]
+command = "/usr/bin/build"
+working_directory = "/workspace/source"
+root_image = "build@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+triggers = ["refs/heads/main"]
+[build.resources]
+vcpus = 1
+memory_mib = 128
+[build.network]
+profile = "disabled"
+[[build.artifacts]]
+path = "bin/agent"
+kind = "executable"
 [guest]
-command = "/bin/true"
+command = "bin/agent"
 arguments = []
-working_directory = "/workspace/work"
+working_directory = "bin"
 [resources]
 vcpus = 1
 memory_mib = 128
 [root_image]
-reference = "image@sha256:workspace"
+reference = "image@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 [workspace]
 mount = true
 path = "/workspace/repo"
 read_only = true
 [state_volume]
-enabled = true
+enabled = false
 [results]
 declared_files = ["reports/result.txt"]
 [network]
@@ -466,25 +617,4 @@ async fn git_ref_exists(repository: &Path, git_ref: &str) -> bool {
         .expect("inspect bare Git ref")
         .status
         .success()
-}
-
-async fn cleanup(pool: &PgPool, organization_id: OrganizationId) {
-    sqlx::query(
-        "DELETE FROM outbox
-         WHERE aggregate_id IN (
-             SELECT request.id FROM run_requests request
-             JOIN repositories repository ON repository.id = request.repository_id
-             JOIN projects project ON project.id = repository.project_id
-             WHERE project.organization_id = $1
-         )",
-    )
-    .bind(organization_id.as_uuid())
-    .execute(pool)
-    .await
-    .expect("delete outbox");
-    sqlx::query("DELETE FROM organizations WHERE id = $1")
-        .bind(organization_id.as_uuid())
-        .execute(pool)
-        .await
-        .expect("delete organization");
 }

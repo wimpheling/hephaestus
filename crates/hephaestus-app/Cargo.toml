@@ -9,8 +9,10 @@ rust-version.workspace = true
 agent-config = { path = "../agent-config" }
 async-nats.workspace = true
 async-trait.workspace = true
+authz-domain = { path = "../authz-domain" }
 authz-postgres = { path = "../authz-postgres" }
 axum.workspace = true
+build-orchestrator = { path = "../build-orchestrator" }
 forge-service = { path = "../forge-service" }
 forge-domain = { path = "../forge-domain" }
 futures-util.workspace = true
@@ -18,14 +20,27 @@ git-http = { path = "../git-http" }
 identity-oidc = { path = "../identity-oidc" }
 identity-domain = { path = "../identity-domain" }
 jsonwebtoken.workspace = true
+release-service = { path = "../release-service" }
+release-artifact-store = { path = "../release-artifact-store" }
+release-domain = { path = "../release-domain" }
 review-domain = { path = "../review-domain" }
 review-service = { path = "../review-service" }
 run-domain = { path = "../run-domain" }
 run-orchestrator = { path = "../run-orchestrator" }
+run-runtime-local = { path = "../run-runtime-local" }
 runtime-types = { path = "../runtime-types" }
+secret-broker = { path = "../secret-broker" }
+secret-domain = { path = "../secret-domain" }
+secret-runtime = { path = "../secret-runtime" }
+secret-service = { path = "../secret-service" }
+secret-store = { path = "../secret-store" }
+zeroize.workspace = true
+serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 sqlx.workspace = true
 thiserror.workspace = true
+time.workspace = true
 tokio = { workspace = true, features = ["macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util.workspace = true
 tracing.workspace = true
@@ -40,7 +55,6 @@ workspace-local = { path = "../workspace-local" }
 [dev-dependencies]
 serial_test = "3"
 tempfile = "3"
-time.workspace = true
 
 [[bin]]
 name = "hephaestusd"

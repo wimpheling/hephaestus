@@ -25,6 +25,9 @@ volume-trait = { path = "../volume-trait" }
 workspace-domain = { path = "../workspace-domain" }
 
 [dev-dependencies]
+authz-postgres = { path = "../authz-postgres" }
+release-domain = { path = "../release-domain" }
+release-service = { path = "../release-service" }
 serial_test = "3"
 tempfile = "3"
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }

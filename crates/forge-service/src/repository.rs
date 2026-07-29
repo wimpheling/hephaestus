@@ -1,4 +1,4 @@
-use agent_config::{ConfigHash, ParsedConfig};
+use agent_config::{ConfigHash, ParsedConfig, REUSABLE_RELEASE_VERSION};
 use authz_domain::{AuthorizationDecision, Authorizer, ObjectRef, ObjectType, Permission, Subject};
 use authz_postgres::{audit_decision, begin_actor_transaction};
 use forge_domain::{
@@ -6,17 +6,22 @@ use forge_domain::{
     RefUpdate, Repository, RepositoryId, RunRequestId,
 };
 use identity_domain::AuthenticatedIdentity;
-use run_domain::StartRun;
-use runtime_types::{AgentId, CommandId, EventId, RunId};
+use release_domain::BuildRequestId;
+use run_domain::{RunKind, StartRun};
+use runtime_types::{
+    AgentAttachmentId, AgentInstanceId, AgentInstanceRevisionId, CommandId, EventId,
+    ReleaseAgentId, ReleaseId, RunId,
+};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use sqlx::{FromRow, PgPool, Postgres, Transaction};
 use std::{path::Path, sync::Arc};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::{
-    AGENT_CONFIG_INVALID_SUBJECT, GIT_RECEIVE_ACCEPTED_SUBJECT, GitStorage, GitStorageError,
-    RUN_START_SUBJECT,
+    AGENT_CONFIG_INVALID_SUBJECT, BUILD_REQUESTED_SUBJECT, GIT_RECEIVE_ACCEPTED_SUBJECT,
+    GitStorage, GitStorageError, INSTANCE_RUN_REQUESTED_SUBJECT, RUN_START_SUBJECT,
 };
 
 /// Input used to create repository metadata and bare storage.
@@ -45,8 +50,6 @@ pub struct RunRequest {
     pub commit_sha: CommitSha,
     /// Exact updated ref.
     pub git_ref: GitRef,
-    /// Hash of exact `agent.toml` bytes.
-    pub config_hash: String,
     /// Receive transaction that accepted the update.
     pub receive_id: ReceiveId,
     /// Command consumed by the run orchestrator.
@@ -60,6 +63,8 @@ pub struct ReceiveResult {
     pub receive_id: ReceiveId,
     /// Idempotently created run requests.
     pub run_requests: Vec<RunRequest>,
+    /// Idempotently created isolated-build requests.
+    pub build_requests: Vec<BuildRequestId>,
     /// Number of invalid configuration revisions observed.
     pub invalid_configurations: usize,
 }
@@ -433,18 +438,12 @@ impl PgForgeRepository {
             return Err(ForgeRepositoryError::AuthorizationUnavailable);
         }
         let repository_path = self.storage.validate_existing(repository.id).await?;
-        let mut transaction = self.pool.begin().await.map_err(storage)?;
-        if let Some(identity) = identity {
-            sqlx::query(
-                "SELECT set_config('hephaestus.actor_id', $1, true),
-                        set_config('hephaestus.request_id', $2, true)",
-            )
-            .bind(identity.user_id.to_string())
-            .bind(identity.request_id.to_string())
-            .execute(&mut *transaction)
-            .await
-            .map_err(storage)?;
-        }
+        let mut transaction = match identity {
+            Some(identity) => begin_actor_transaction(&self.pool, identity)
+                .await
+                .map_err(storage)?,
+            None => self.pool.begin().await.map_err(storage)?,
+        };
         let now = OffsetDateTime::now_utc();
         let inserted = sqlx::query(
             "INSERT INTO git_receives
@@ -473,9 +472,13 @@ impl PgForgeRepository {
                 return Err(ForgeRepositoryError::ReceiveConflict(receive_id));
             }
             let rows = sqlx::query_as::<_, RunRequestRow>(
-                "SELECT id, repository_id, commit_sha, git_ref, config_hash,
-                        receive_id, agent_id, run_id, command_id
-                 FROM run_requests WHERE receive_id = $1 ORDER BY created_at, id",
+                "SELECT id, repository_id, commit_sha, git_ref, receive_id,
+                        instance_id, instance_revision_id, release_id,
+                        release_agent_id, attachment_id, run_id, command_id,
+                        requires_state
+                 FROM run_requests
+                 WHERE receive_id = $1
+                 ORDER BY created_at, id",
             )
             .bind(receive_id.as_uuid())
             .fetch_all(&mut *transaction)
@@ -493,10 +496,24 @@ impl PgForgeRepository {
             .fetch_one(&mut *transaction)
             .await
             .map_err(storage)?;
+            let build_requests = sqlx::query_scalar::<_, Uuid>(
+                "SELECT source.build_request_id
+                 FROM build_request_sources AS source
+                 WHERE source.receive_id = $1
+                 ORDER BY source.created_at, source.build_request_id",
+            )
+            .bind(receive_id.as_uuid())
+            .fetch_all(&mut *transaction)
+            .await
+            .map_err(storage)?
+            .into_iter()
+            .map(BuildRequestId::from_uuid)
+            .collect();
             transaction.commit().await.map_err(storage)?;
             return Ok(ReceiveResult {
                 receive_id,
                 run_requests,
+                build_requests,
                 invalid_configurations: usize::try_from(invalid_configurations).map_err(|_| {
                     ForgeRepositoryError::InvalidStoredData("invalid revision count")
                 })?,
@@ -562,7 +579,7 @@ impl PgForgeRepository {
         )
         .await?;
 
-        let mut run_requests = Vec::new();
+        let mut build_requests = Vec::new();
         let mut invalid_configurations = 0;
         for item in inspected {
             let Some(parsed) = item.parsed else {
@@ -596,10 +613,9 @@ impl PgForgeRepository {
                     }
                 }
             }
-            let (revision_id, agent_id) = persist_revision(
+            let revision_id = persist_revision(
                 &mut transaction,
                 repository.id,
-                repository.project_id,
                 receive_id,
                 &item.commit,
                 &parsed,
@@ -626,51 +642,65 @@ impl PgForgeRepository {
                 .await?;
                 continue;
             };
-            if repository.agent_runs_enabled && config.triggers.matches(&item.git_ref) {
-                let valid_agent_id = agent_id.ok_or(ForgeRepositoryError::InvalidStoredData(
-                    "valid revision agent_id",
+            if config.version != REUSABLE_RELEASE_VERSION {
+                return Err(ForgeRepositoryError::InvalidStoredData(
+                    "unsupported configuration accepted by parser",
+                ));
+            }
+            let build = config
+                .build
+                .as_ref()
+                .ok_or(ForgeRepositoryError::InvalidStoredData(
+                    "valid reusable configuration build definition",
                 ))?;
-                if let (Some(identity), Some(authorizer)) = (identity, &self.authorizer) {
-                    let object = ObjectRef::new(ObjectType::Agent, valid_agent_id.as_uuid());
-                    let decision = authorizer
-                        .check(
-                            &mut transaction,
-                            Subject::User(identity.user_id),
-                            Permission::CanExecute,
-                            object,
-                        )
-                        .await
-                        .map_err(storage)?;
-                    audit_decision(
+            if build_trigger_matches(&build.triggers, &item.git_ref) {
+                build_requests.push(
+                    persist_build_request(
                         &mut transaction,
-                        identity.user_id,
-                        Permission::CanExecute,
-                        object,
-                        decision,
-                        identity.request_id,
+                        repository.id,
+                        receive_id,
+                        identity,
+                        &item.git_ref,
+                        &item.commit,
+                        build,
+                        parsed.normalized_hash.as_ref().ok_or(
+                            ForgeRepositoryError::InvalidStoredData(
+                                "valid reusable configuration normalized hash",
+                            ),
+                        )?,
+                        now,
                     )
-                    .await
-                    .map_err(storage)?;
-                    if decision == AuthorizationDecision::Deny {
-                        return Err(ForgeRepositoryError::AuthorizationDenied);
-                    }
-                }
-                let request = persist_run_request(
-                    &mut transaction,
-                    repository.id,
-                    receive_id,
-                    revision_id,
-                    valid_agent_id,
-                    identity,
-                    &item.git_ref,
-                    &item.commit,
-                    &parsed.hash,
-                    now,
-                )
-                .await?;
-                run_requests.push(request);
+                    .await?,
+                );
             }
         }
+        persist_instance_triggers(
+            &mut transaction,
+            repository,
+            receive_id,
+            identity,
+            updates,
+            self.authorizer.as_deref(),
+            now,
+        )
+        .await?;
+        let rows = sqlx::query_as::<_, RunRequestRow>(
+            "SELECT id, repository_id, commit_sha, git_ref, receive_id,
+                    instance_id, instance_revision_id, release_id,
+                    release_agent_id, attachment_id, run_id, command_id,
+                    requires_state
+             FROM run_requests
+             WHERE receive_id = $1
+             ORDER BY created_at, id",
+        )
+        .bind(receive_id.as_uuid())
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(storage)?;
+        let run_requests = rows
+            .into_iter()
+            .map(RunRequest::try_from)
+            .collect::<Result<Vec<_>, _>>()?;
         transaction.commit().await.map_err(storage)?;
         for update in updates {
             tracing::info!(
@@ -688,6 +718,7 @@ impl PgForgeRepository {
         Ok(ReceiveResult {
             receive_id,
             run_requests,
+            build_requests,
             invalid_configurations,
         })
     }
@@ -845,31 +876,12 @@ fn inspect_updates(
 async fn persist_revision(
     transaction: &mut Transaction<'_, Postgres>,
     repository_id: RepositoryId,
-    project_id: ProjectId,
     receive_id: ReceiveId,
     commit: &CommitSha,
     parsed: &ParsedConfig,
     now: OffsetDateTime,
-) -> Result<(AgentConfigRevisionId, Option<AgentId>), ForgeRepositoryError> {
+) -> Result<AgentConfigRevisionId, ForgeRepositoryError> {
     let revision_id = AgentConfigRevisionId::new();
-    let agent_id = if let Some(config) = parsed.config.as_ref() {
-        let stored: Uuid = sqlx::query_scalar(
-            "INSERT INTO agents (id, project_id, name)
-             VALUES ($1, $2, $3)
-             ON CONFLICT (project_id, name) DO UPDATE
-             SET name = EXCLUDED.name, updated_at = now()
-             RETURNING id",
-        )
-        .bind(AgentId::new().as_uuid())
-        .bind(project_id.as_uuid())
-        .bind(&config.agent.name)
-        .fetch_one(&mut **transaction)
-        .await
-        .map_err(storage)?;
-        Some(AgentId::from_uuid(stored))
-    } else {
-        None
-    };
     let status = if parsed.config.is_some() {
         "valid"
     } else {
@@ -885,11 +897,12 @@ async fn persist_revision(
     let row = sqlx::query_as::<_, RevisionIdentityRow>(
         "INSERT INTO agent_config_revisions
          (id, repository_id, receive_id, commit_sha, config_hash, schema_version,
-          agent_id, status, config, diagnostics, created_at)
+          status, config, diagnostics, created_at,
+          normalized_config_hash)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
          ON CONFLICT (repository_id, commit_sha, config_hash)
          DO UPDATE SET repository_id = EXCLUDED.repository_id
-         RETURNING id, agent_id",
+         RETURNING id",
     )
     .bind(revision_id.as_uuid())
     .bind(repository_id.as_uuid())
@@ -902,76 +915,342 @@ async fn persist_revision(
             .as_ref()
             .map(|config| i32::try_from(config.version).unwrap_or(i32::MAX)),
     )
-    .bind(agent_id.map(AgentId::as_uuid))
     .bind(status)
     .bind(config)
     .bind(diagnostics)
     .bind(now)
+    .bind(parsed.normalized_hash.as_ref().map(ConfigHash::as_str))
     .fetch_one(&mut **transaction)
     .await
     .map_err(storage)?;
-    Ok((
-        AgentConfigRevisionId::from_uuid(row.id),
-        row.agent_id.map(AgentId::from_uuid),
-    ))
+    Ok(AgentConfigRevisionId::from_uuid(row.id))
+}
+
+fn build_trigger_matches(patterns: &[String], git_ref: &GitRef) -> bool {
+    patterns.iter().any(|pattern| {
+        pattern.strip_suffix("/*").map_or_else(
+            || pattern == git_ref.as_str(),
+            |prefix| {
+                git_ref
+                    .as_str()
+                    .strip_prefix(prefix)
+                    .is_some_and(|suffix| suffix.starts_with('/'))
+            },
+        )
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn persist_run_request(
+async fn persist_build_request(
     transaction: &mut Transaction<'_, Postgres>,
     repository_id: RepositoryId,
     receive_id: ReceiveId,
-    revision_id: AgentConfigRevisionId,
-    agent_id: AgentId,
     identity: Option<&AuthenticatedIdentity>,
     git_ref: &GitRef,
     commit: &CommitSha,
-    config_hash: &ConfigHash,
+    build: &agent_config::BuildConfig,
+    normalized_hash: &ConfigHash,
     now: OffsetDateTime,
-) -> Result<RunRequest, ForgeRepositoryError> {
-    let request_id = RunRequestId::new();
-    let run_id = RunId::new();
-    let command_id = CommandId::new();
-    let row = sqlx::query_as::<_, RunRequestRow>(
-        "INSERT INTO run_requests
-         (id, repository_id, commit_sha, git_ref, config_hash, receive_id,
-          config_revision_id, agent_id, run_id, command_id, actor_id, request_id,
-          created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+) -> Result<BuildRequestId, ForgeRepositoryError> {
+    let build_definition =
+        serde_json::to_vec(build).map_err(ForgeRepositoryError::Serialization)?;
+    let build_definition_hash: [u8; 32] = Sha256::digest(&build_definition).into();
+    let requested_id = BuildRequestId::new();
+    let stored_id: Uuid = sqlx::query_scalar(
+        "INSERT INTO build_requests
+         (id, repository_id, source_commit, source_ref, origin_receive_id,
+          build_definition_hash, state, created_by, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, 'queued', $7, $8)
          ON CONFLICT (
-             repository_id, commit_sha, git_ref, config_hash, receive_id, attempt
-         )
-         DO UPDATE SET repository_id = EXCLUDED.repository_id
-         RETURNING id, repository_id, commit_sha, git_ref, config_hash,
-                   receive_id, agent_id, run_id, command_id",
+             repository_id, source_commit, source_ref, build_definition_hash
+         ) DO UPDATE SET repository_id = EXCLUDED.repository_id
+         RETURNING id",
     )
-    .bind(request_id.as_uuid())
+    .bind(requested_id.as_uuid())
     .bind(repository_id.as_uuid())
     .bind(commit.as_str())
     .bind(git_ref.as_str())
-    .bind(config_hash.as_str())
     .bind(receive_id.as_uuid())
-    .bind(revision_id.as_uuid())
-    .bind(agent_id.as_uuid())
-    .bind(run_id.as_uuid())
-    .bind(command_id.as_uuid())
+    .bind(build_definition_hash.as_slice())
     .bind(identity.map(|value| value.user_id.as_uuid()))
-    .bind(identity.map(|value| value.request_id.as_uuid()))
     .bind(now)
     .fetch_one(&mut **transaction)
     .await
     .map_err(storage)?;
-    let request: RunRequest = row.try_into()?;
+    sqlx::query(
+        "INSERT INTO build_request_sources
+         (build_request_id, receive_id, source_ref, source_commit, created_at)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(stored_id)
+    .bind(receive_id.as_uuid())
+    .bind(git_ref.as_str())
+    .bind(commit.as_str())
+    .bind(now)
+    .execute(&mut **transaction)
+    .await
+    .map_err(storage)?;
     append_outbox(
         transaction,
-        request.id.as_uuid(),
-        RUN_START_SUBJECT,
-        "run.start",
-        serde_json::to_value(&request.command).map_err(serialization)?,
+        stored_id,
+        BUILD_REQUESTED_SUBJECT,
+        "build.requested.v1",
+        json!({
+            "schema_version": 1,
+            "build_request_id": stored_id,
+            "repository_id": repository_id,
+            "source_commit": commit,
+            "source_ref": git_ref,
+            "receive_id": receive_id,
+            "normalized_configuration_hash": normalized_hash,
+            "build_definition_hash": hex_digest(&build_definition_hash),
+        }),
         now,
     )
     .await?;
-    Ok(request)
+    Ok(BuildRequestId::from_uuid(stored_id))
+}
+
+fn hex_digest(digest: &[u8; 32]) -> String {
+    use std::fmt::Write as _;
+
+    let mut output = String::with_capacity(64);
+    for byte in digest {
+        write!(&mut output, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    output
+}
+
+#[derive(sqlx::FromRow)]
+struct InstanceTriggerRow {
+    attachment_id: Uuid,
+    instance_id: Uuid,
+    instance_revision_id: Uuid,
+    release_id: Uuid,
+    release_agent_id: Uuid,
+    platform_policy_version: String,
+    run_gate_open: bool,
+    instance_state: String,
+    runnable: bool,
+    requires_state: bool,
+}
+
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+async fn persist_instance_triggers(
+    transaction: &mut Transaction<'_, Postgres>,
+    repository: &Repository,
+    receive_id: ReceiveId,
+    identity: Option<&AuthenticatedIdentity>,
+    updates: &[RefUpdate],
+    authorizer: Option<&dyn Authorizer>,
+    now: OffsetDateTime,
+) -> Result<(), ForgeRepositoryError> {
+    if !repository.agent_runs_enabled {
+        return Ok(());
+    }
+    for update in updates {
+        let Some(commit) = &update.new_commit else {
+            continue;
+        };
+        let candidates: Vec<InstanceTriggerRow> = sqlx::query_as(
+            "SELECT attachment.id AS attachment_id,
+                    instance.id AS instance_id,
+                    revision.id AS instance_revision_id,
+                    release.id AS release_id,
+                    release_agent.id AS release_agent_id,
+                    revision.platform_policy_version,
+                    instance.run_gate_open, instance.state AS instance_state,
+                    revision.runnable
+                    , release_agent.requires_state
+             FROM agent_attachments AS attachment
+             JOIN agent_instances AS instance
+               ON instance.id = attachment.instance_id
+             JOIN agent_instance_revisions AS revision
+               ON revision.id = instance.active_revision_id
+             JOIN release_agents AS release_agent
+               ON release_agent.id = revision.release_agent_id
+             JOIN releases AS release ON release.id = release_agent.release_id
+             WHERE attachment.repository_id = $1
+               AND attachment.enabled AND attachment.removed_at IS NULL
+               AND attachment.trigger_policy IN ('push', 'push_and_manual')
+               AND release.state = 'published'
+               AND (
+                   attachment.ref_selector = $2
+                   OR (
+                       right(attachment.ref_selector, 2) = '/*'
+                       AND $2 LIKE
+                           left(
+                               attachment.ref_selector,
+                               length(attachment.ref_selector) - 1
+                           ) || '%'
+                   )
+               )
+             ORDER BY attachment.id",
+        )
+        .bind(repository.id.as_uuid())
+        .bind(update.git_ref.as_str())
+        .fetch_all(&mut **transaction)
+        .await
+        .map_err(storage)?;
+        for candidate in candidates {
+            let mut permitted = true;
+            if let (Some(identity), Some(authorizer)) = (identity, authorizer) {
+                for (permission, object) in [
+                    (
+                        Permission::CanExecute,
+                        ObjectRef::new(ObjectType::AgentAttachment, candidate.attachment_id),
+                    ),
+                    (
+                        Permission::CanUse,
+                        ObjectRef::new(ObjectType::ReleaseAgent, candidate.release_agent_id),
+                    ),
+                ] {
+                    let decision = authorizer
+                        .check(
+                            transaction,
+                            Subject::User(identity.user_id),
+                            permission,
+                            object,
+                        )
+                        .await
+                        .map_err(storage)?;
+                    audit_decision(
+                        transaction,
+                        identity.user_id,
+                        permission,
+                        object,
+                        decision,
+                        identity.request_id,
+                    )
+                    .await
+                    .map_err(storage)?;
+                    if decision == AuthorizationDecision::Deny {
+                        permitted = false;
+                        break;
+                    }
+                }
+            }
+            if !permitted {
+                continue;
+            }
+            if !candidate.run_gate_open {
+                sqlx::query(
+                    "INSERT INTO deferred_agent_triggers
+                     (id, instance_id, attachment_id, repository_id,
+                      target_ref, target_commit, source_id)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7)
+                     ON CONFLICT (
+                         attachment_id, repository_id, target_ref,
+                         target_commit, source_id
+                     ) DO NOTHING",
+                )
+                .bind(Uuid::new_v4())
+                .bind(candidate.instance_id)
+                .bind(candidate.attachment_id)
+                .bind(repository.id.as_uuid())
+                .bind(update.git_ref.as_str())
+                .bind(commit.as_str())
+                .bind(receive_id.as_uuid())
+                .execute(&mut **transaction)
+                .await
+                .map_err(storage)?;
+                continue;
+            }
+            if !candidate.runnable
+                || !["active", "update_rejected"].contains(&candidate.instance_state.as_str())
+            {
+                continue;
+            }
+            let request_id = RunRequestId::new();
+            let run_id = RunId::new();
+            let command_id = CommandId::new();
+            let stored: (Uuid, Uuid, Uuid) = sqlx::query_as(
+                "INSERT INTO run_requests
+                 (id, repository_id, commit_sha, git_ref, receive_id,
+                  run_id, command_id, actor_id, request_id, created_at,
+                  instance_id, instance_revision_id, release_id,
+                  release_agent_id, attachment_id, request_kind,
+                  platform_policy_version, requires_state)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                         $11, $12, $13, $14, $15, 'instance_normal', $16, $17)
+                 ON CONFLICT (
+                     attachment_id, instance_revision_id, commit_sha, git_ref,
+                     receive_id, attempt
+                 ) WHERE request_kind = 'instance_normal'
+                 DO UPDATE SET repository_id = EXCLUDED.repository_id
+                 RETURNING id, run_id, command_id",
+            )
+            .bind(request_id.as_uuid())
+            .bind(repository.id.as_uuid())
+            .bind(commit.as_str())
+            .bind(update.git_ref.as_str())
+            .bind(receive_id.as_uuid())
+            .bind(run_id.as_uuid())
+            .bind(command_id.as_uuid())
+            .bind(identity.map(|value| value.user_id.as_uuid()))
+            .bind(identity.map(|value| value.request_id.as_uuid()))
+            .bind(now)
+            .bind(candidate.instance_id)
+            .bind(candidate.instance_revision_id)
+            .bind(candidate.release_id)
+            .bind(candidate.release_agent_id)
+            .bind(candidate.attachment_id)
+            .bind(&candidate.platform_policy_version)
+            .bind(candidate.requires_state)
+            .fetch_one(&mut **transaction)
+            .await
+            .map_err(storage)?;
+            append_outbox(
+                transaction,
+                stored.0,
+                INSTANCE_RUN_REQUESTED_SUBJECT,
+                "instance.run.requested.v1",
+                json!({
+                    "schema_version": 1,
+                    "run_request_id": stored.0,
+                    "run_id": stored.1,
+                    "command_id": stored.2,
+                    "receive_id": receive_id,
+                    "instance_id": candidate.instance_id,
+                    "instance_revision_id": candidate.instance_revision_id,
+                    "release_id": candidate.release_id,
+                    "release_agent_id": candidate.release_agent_id,
+                    "attachment_id": candidate.attachment_id,
+                    "target_repository_id": repository.id,
+                    "target_ref": update.git_ref,
+                    "target_commit": commit,
+                    "platform_policy_version": candidate.platform_policy_version,
+                    "requires_state": candidate.requires_state,
+                }),
+                now,
+            )
+            .await?;
+            let command = StartRun {
+                command_id: CommandId::from_uuid(stored.2),
+                run_id: RunId::from_uuid(stored.1),
+                instance_id: AgentInstanceId::from_uuid(candidate.instance_id),
+                instance_revision_id: AgentInstanceRevisionId::from_uuid(
+                    candidate.instance_revision_id,
+                ),
+                release_id: ReleaseId::from_uuid(candidate.release_id),
+                release_agent_id: ReleaseAgentId::from_uuid(candidate.release_agent_id),
+                attachment_id: Some(AgentAttachmentId::from_uuid(candidate.attachment_id)),
+                kind: RunKind::Normal,
+                requires_state: candidate.requires_state,
+            };
+            append_outbox(
+                transaction,
+                stored.1,
+                RUN_START_SUBJECT,
+                "run.start.v1",
+                serde_json::to_value(command).map_err(serialization)?,
+                now,
+            )
+            .await?;
+        }
+    }
+    Ok(())
 }
 
 async fn append_outbox(
@@ -979,15 +1258,33 @@ async fn append_outbox(
     aggregate_id: Uuid,
     subject: &str,
     event_type: &str,
-    payload: Value,
+    mut payload: Value,
     occurred_at: OffsetDateTime,
 ) -> Result<(), ForgeRepositoryError> {
+    let event_id = EventId::new();
+    if let Some(object) = payload.as_object_mut() {
+        object
+            .entry(String::from("schema_version"))
+            .or_insert_with(|| json!(1));
+        object
+            .entry(String::from("message_id"))
+            .or_insert_with(|| json!(event_id));
+        object
+            .entry(String::from("idempotency_key"))
+            .or_insert_with(|| json!(event_id));
+        object
+            .entry(String::from("request_id"))
+            .or_insert(Value::Null);
+        object
+            .entry(String::from("trace_id"))
+            .or_insert(Value::Null);
+    }
     sqlx::query(
         "INSERT INTO outbox
          (id, aggregate_type, aggregate_id, subject, event_type, payload, occurred_at)
          VALUES ($1, 'forge', $2, $3, $4, $5, $6)",
     )
-    .bind(EventId::new().as_uuid())
+    .bind(event_id.as_uuid())
     .bind(aggregate_id)
     .bind(subject)
     .bind(event_type)
@@ -1053,7 +1350,6 @@ impl TryFrom<RepositoryRow> for Repository {
 #[derive(FromRow)]
 struct RevisionIdentityRow {
     id: Uuid,
-    agent_id: Option<Uuid>,
 }
 
 #[derive(FromRow)]
@@ -1062,11 +1358,15 @@ struct RunRequestRow {
     repository_id: Uuid,
     commit_sha: String,
     git_ref: String,
-    config_hash: String,
     receive_id: Uuid,
-    agent_id: Uuid,
+    instance_id: Uuid,
+    instance_revision_id: Uuid,
+    release_id: Uuid,
+    release_agent_id: Uuid,
+    attachment_id: Uuid,
     run_id: Uuid,
     command_id: Uuid,
+    requires_state: bool,
 }
 
 impl TryFrom<RunRequestRow> for RunRequest {
@@ -1080,12 +1380,17 @@ impl TryFrom<RunRequestRow> for RunRequest {
                 .map_err(|_| ForgeRepositoryError::InvalidStoredData("commit_sha"))?,
             git_ref: GitRef::parse(row.git_ref)
                 .map_err(|_| ForgeRepositoryError::InvalidStoredData("git_ref"))?,
-            config_hash: row.config_hash,
             receive_id: ReceiveId::from_uuid(row.receive_id),
             command: StartRun {
                 command_id: CommandId::from_uuid(row.command_id),
                 run_id: RunId::from_uuid(row.run_id),
-                agent_id: AgentId::from_uuid(row.agent_id),
+                instance_id: AgentInstanceId::from_uuid(row.instance_id),
+                instance_revision_id: AgentInstanceRevisionId::from_uuid(row.instance_revision_id),
+                release_id: ReleaseId::from_uuid(row.release_id),
+                release_agent_id: ReleaseAgentId::from_uuid(row.release_agent_id),
+                attachment_id: Some(AgentAttachmentId::from_uuid(row.attachment_id)),
+                kind: RunKind::Normal,
+                requires_state: row.requires_state,
             },
         })
     }

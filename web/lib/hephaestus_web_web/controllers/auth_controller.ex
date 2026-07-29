@@ -21,11 +21,21 @@ defmodule HephaestusWebWeb.AuthController do
   end
 
   def callback(conn, params) do
+    case get_session(conn, :oidc_session_params) do
+      %{state: state} = session_params when is_binary(state) ->
+        complete_callback(conn, params, session_params)
+
+      _missing_or_invalid_session ->
+        reject_expired_callback(conn)
+    end
+  end
+
+  defp complete_callback(conn, params, session_params) do
     config =
       Keyword.put(
         oidc_config(),
         :session_params,
-        get_session(conn, :oidc_session_params) || %{}
+        session_params
       )
 
     with {:ok, %{user: claims}} <- OIDC.callback(config, params),
@@ -43,6 +53,20 @@ defmodule HephaestusWebWeb.AuthController do
         |> put_flash(:error, "Sign-in failed: #{inspect(reason)}")
         |> redirect(to: ~p"/")
     end
+  end
+
+  defp reject_expired_callback(conn) do
+    redirect_path =
+      if conn.assigns.current_identity do
+        ~p"/organizations"
+      else
+        ~p"/"
+      end
+
+    conn
+    |> delete_session(:oidc_session_params)
+    |> put_flash(:error, "The sign-in request expired. Start sign-in again.")
+    |> redirect(to: redirect_path)
   end
 
   def logout(conn, _params) do

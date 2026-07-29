@@ -34,12 +34,31 @@ defmodule HephaestusWebWeb.Router do
     live_session :authenticated,
       on_mount: [{HephaestusWebWeb.UserAuth, :require_authenticated}] do
       live "/organizations", OrganizationLive
-      live "/organizations/:organization_id", RepositoryIndexLive
+      live "/organizations/:organization_id", OrganizationWorkspaceLive, :projects
+      live "/organizations/:organization_id/secrets", OrganizationWorkspaceLive, :secrets
+
+      live "/organizations/:organization_id/secrets/new",
+           OrganizationWorkspaceLive,
+           :new_secret
+
+      live "/organizations/:organization_id/secret-grants/new",
+           OrganizationWorkspaceLive,
+           :new_grant
+
+      live "/projects/:project_id", ProjectLive, :repositories
+      live "/projects/:project_id/repositories", ProjectLive, :repositories
+      live "/projects/:project_id/agents", ProjectLive, :agents
+      live "/projects/:project_id/agents/:instance_id", AgentInstanceLive, :show
+      live "/projects/:project_id/runs", ProjectLive, :runs
+      live "/projects/:project_id/settings", ProjectLive, :settings
       live "/repositories/:repository_id", RepositoryLive, :files
       live "/repositories/:repository_id/files", RepositoryLive, :files
       live "/repositories/:repository_id/files/*path", RepositoryLive, :files
       live "/repositories/:repository_id/commits", RepositoryLive, :commits
       live "/repositories/:repository_id/branches", RepositoryLive, :branches
+      live "/repositories/:repository_id/releases", RepositoryLive, :releases
+      live "/repositories/:repository_id/releases/:release_id", ReleaseLive, :show
+      live "/repositories/:repository_id/agents", RepositoryLive, :agents
       live "/runs/:run_id", RunLive
     end
   end

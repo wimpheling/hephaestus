@@ -2,6 +2,7 @@
 
 use async_trait::async_trait;
 use identity_domain::UserId;
+use runtime_types::RunId;
 use serde::{Deserialize, Serialize};
 use sqlx::{Postgres, Transaction};
 use std::{fmt, str::FromStr};
@@ -12,6 +13,8 @@ use uuid::Uuid;
 pub enum Subject {
     /// One authenticated internal user.
     User(UserId),
+    /// One authenticated exact runtime run.
+    Run(RunId),
 }
 
 impl Subject {
@@ -20,6 +23,7 @@ impl Subject {
     pub const fn object_type(self) -> &'static str {
         match self {
             Self::User(_) => "user",
+            Self::Run(_) => "run",
         }
     }
 
@@ -28,6 +32,7 @@ impl Subject {
     pub fn id(self) -> String {
         match self {
             Self::User(id) => id.to_string(),
+            Self::Run(id) => id.to_string(),
         }
     }
 }
@@ -42,12 +47,32 @@ pub enum ObjectType {
     Project,
     /// Git repository.
     Repository,
-    /// Configured agent.
-    Agent,
     /// Agent execution.
     Run,
     /// Persistent agent-state volume.
     StateVolume,
+    /// Isolated build request.
+    Build,
+    /// Immutable reusable release.
+    Release,
+    /// One exported agent in a release.
+    ReleaseAgent,
+    /// Project-owned reusable agent instance.
+    AgentInstance,
+    /// Repository/ref attachment.
+    AgentAttachment,
+    /// Agent instance update.
+    AgentUpdate,
+    /// Owned secret metadata.
+    Secret,
+    /// Source-side secret grant.
+    SecretGrant,
+    /// Target-side opaque secret import.
+    SecretImport,
+    /// Immutable agent secret binding.
+    AgentSecretBinding,
+    /// Exact runtime secret lease.
+    SecretLease,
 }
 
 impl ObjectType {
@@ -58,9 +83,19 @@ impl ObjectType {
             Self::Organization => "organization",
             Self::Project => "project",
             Self::Repository => "repository",
-            Self::Agent => "agent",
             Self::Run => "run",
             Self::StateVolume => "state_volume",
+            Self::Build => "build",
+            Self::Release => "release",
+            Self::ReleaseAgent => "release_agent",
+            Self::AgentInstance => "agent_instance",
+            Self::AgentAttachment => "agent_attachment",
+            Self::AgentUpdate => "agent_update",
+            Self::Secret => "secret",
+            Self::SecretGrant => "secret_grant",
+            Self::SecretImport => "secret_import",
+            Self::AgentSecretBinding => "agent_secret_binding",
+            Self::SecretLease => "secret_lease",
         }
     }
 }
@@ -73,9 +108,19 @@ impl FromStr for ObjectType {
             "organization" => Ok(Self::Organization),
             "project" => Ok(Self::Project),
             "repository" => Ok(Self::Repository),
-            "agent" => Ok(Self::Agent),
             "run" => Ok(Self::Run),
             "state_volume" => Ok(Self::StateVolume),
+            "build" => Ok(Self::Build),
+            "release" => Ok(Self::Release),
+            "release_agent" => Ok(Self::ReleaseAgent),
+            "agent_instance" => Ok(Self::AgentInstance),
+            "agent_attachment" => Ok(Self::AgentAttachment),
+            "agent_update" => Ok(Self::AgentUpdate),
+            "secret" => Ok(Self::Secret),
+            "secret_grant" => Ok(Self::SecretGrant),
+            "secret_import" => Ok(Self::SecretImport),
+            "agent_secret_binding" => Ok(Self::AgentSecretBinding),
+            "secret_lease" => Ok(Self::SecretLease),
             _ => Err(AuthzError::UnknownObjectType(value.to_owned())),
         }
     }
@@ -128,6 +173,48 @@ pub enum Permission {
     CanAttach,
     /// Restore a state volume.
     CanRestore,
+    /// Publish an immutable release.
+    CanPublish,
+    /// Revoke a published release while retaining its provenance.
+    CanRevoke,
+    /// Use a published release for a new guest.
+    CanUse,
+    /// Start an instance update.
+    CanUpdate,
+    /// Recover a paused instance/update.
+    CanRecover,
+    /// Inspect secret metadata without retrieving plaintext.
+    InspectMetadata,
+    /// Submit a secret value without reading the prior value.
+    WriteValue,
+    /// Rotate a secret to a new immutable version.
+    Rotate,
+    /// Manage exact target grants.
+    ManageGrants,
+    /// Revoke secret authority.
+    Revoke,
+    /// Purge retained encrypted material.
+    Purge,
+    /// Accept an exact source grant as an opaque import.
+    Accept,
+    /// Bind or use broker-only authority.
+    BindBrokered,
+    /// Bind raw guest delivery authority.
+    BindRaw,
+    /// Use an exact brokered runtime lease.
+    UseBrokered,
+    /// Receive raw material for an exact runtime lease.
+    ReceiveRaw,
+    /// Create a secret by submitting its initial value to an owner.
+    CanWriteSecretValue,
+    /// Assign exact source-side secret grants for an owner.
+    CanManageSecretGrants,
+    /// Accept an offered import at a target.
+    CanAcceptSecretImport,
+    /// Bind a brokered import at a target.
+    CanBindBrokeredSecret,
+    /// Bind a raw-delivery import at a target.
+    CanBindRawSecret,
 }
 
 impl Permission {
@@ -145,6 +232,27 @@ impl Permission {
             Self::CanCancel => "can_cancel",
             Self::CanAttach => "can_attach",
             Self::CanRestore => "can_restore",
+            Self::CanPublish => "can_publish",
+            Self::CanRevoke => "can_revoke",
+            Self::CanUse => "can_use",
+            Self::CanUpdate => "can_update",
+            Self::CanRecover => "can_recover",
+            Self::InspectMetadata => "inspect_metadata",
+            Self::WriteValue => "write_value",
+            Self::Rotate => "rotate",
+            Self::ManageGrants => "manage_grants",
+            Self::Revoke => "revoke",
+            Self::Purge => "purge",
+            Self::Accept => "accept",
+            Self::BindBrokered => "bind_brokered",
+            Self::BindRaw => "bind_raw",
+            Self::UseBrokered => "use_brokered",
+            Self::ReceiveRaw => "receive_raw",
+            Self::CanWriteSecretValue => "can_write_secret_value",
+            Self::CanManageSecretGrants => "can_manage_secret_grants",
+            Self::CanAcceptSecretImport => "can_accept_secret_import",
+            Self::CanBindBrokeredSecret => "can_bind_brokered_secret",
+            Self::CanBindRawSecret => "can_bind_raw_secret",
         }
     }
 }
@@ -164,6 +272,27 @@ impl FromStr for Permission {
             "can_cancel" => Ok(Self::CanCancel),
             "can_attach" => Ok(Self::CanAttach),
             "can_restore" => Ok(Self::CanRestore),
+            "can_publish" => Ok(Self::CanPublish),
+            "can_revoke" => Ok(Self::CanRevoke),
+            "can_use" => Ok(Self::CanUse),
+            "can_update" => Ok(Self::CanUpdate),
+            "can_recover" => Ok(Self::CanRecover),
+            "inspect_metadata" => Ok(Self::InspectMetadata),
+            "write_value" => Ok(Self::WriteValue),
+            "rotate" => Ok(Self::Rotate),
+            "manage_grants" => Ok(Self::ManageGrants),
+            "revoke" => Ok(Self::Revoke),
+            "purge" => Ok(Self::Purge),
+            "accept" => Ok(Self::Accept),
+            "bind_brokered" => Ok(Self::BindBrokered),
+            "bind_raw" => Ok(Self::BindRaw),
+            "use_brokered" => Ok(Self::UseBrokered),
+            "receive_raw" => Ok(Self::ReceiveRaw),
+            "can_write_secret_value" => Ok(Self::CanWriteSecretValue),
+            "can_manage_secret_grants" => Ok(Self::CanManageSecretGrants),
+            "can_accept_secret_import" => Ok(Self::CanAcceptSecretImport),
+            "can_bind_brokered_secret" => Ok(Self::CanBindBrokeredSecret),
+            "can_bind_raw_secret" => Ok(Self::CanBindRawSecret),
             _ => Err(AuthzError::UnknownPermission(value.to_owned())),
         }
     }
@@ -240,6 +369,10 @@ mod tests {
         assert_eq!(
             Permission::from_str("can_execute").expect("known permission"),
             Permission::CanExecute
+        );
+        assert_eq!(
+            Permission::from_str("can_revoke").expect("known permission"),
+            Permission::CanRevoke
         );
         assert!(Permission::from_str("owner").is_err());
     }

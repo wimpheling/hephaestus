@@ -1,15 +1,22 @@
 defmodule HephaestusWebWeb.RepositoryRoutesTest do
   use ExUnit.Case, async: true
 
-  alias HephaestusWebWeb.{RepositoryLive, Router}
+  alias HephaestusWebWeb.{ReleaseLive, RepositoryLive, Router}
 
   @repository_id "018f689a-a81d-7c2e-943f-3a41f7981234"
+  @release_id "018f689a-a81d-7c2e-943f-3a41f7985678"
 
-  test "files, commits, and branches resolve to explicit LiveView actions" do
+  test "repository resources resolve to explicit LiveView actions" do
     assert live_action("/repositories/#{@repository_id}") == {RepositoryLive, :files}
     assert live_action("/repositories/#{@repository_id}/files") == {RepositoryLive, :files}
     assert live_action("/repositories/#{@repository_id}/commits") == {RepositoryLive, :commits}
     assert live_action("/repositories/#{@repository_id}/branches") == {RepositoryLive, :branches}
+    assert live_action("/repositories/#{@repository_id}/releases") == {RepositoryLive, :releases}
+
+    assert live_action("/repositories/#{@repository_id}/releases/#{@release_id}") ==
+             {ReleaseLive, :show}
+
+    assert live_action("/repositories/#{@repository_id}/agents") == {RepositoryLive, :agents}
   end
 
   test "file paths remain route data rather than a query-time revision expression" do

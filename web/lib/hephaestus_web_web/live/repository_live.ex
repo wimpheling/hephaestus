@@ -11,12 +11,16 @@ defmodule HephaestusWebWeb.RepositoryLive do
      socket
      |> stream_configure(:commits, dom_id: &"commit-#{&1.id}")
      |> stream_configure(:branches, dom_id: &"branch-#{tree_id(&1.ref)}")
+     |> stream_configure(:releases, dom_id: &"release-#{&1["id"]}")
+     |> stream_configure(:attached_instances, dom_id: &"attachment-#{&1["id"]}")
      |> assign(:repository, nil)
      |> assign(:selected_branch, nil)
      |> assign(:branch_options, [])
      |> assign(:branch_form, to_form(%{"branch" => ""}, as: :browse))
      |> assign(:branches_empty?, true)
      |> assign(:commits_empty?, true)
+     |> assign(:releases_empty?, true)
+     |> assign(:attached_instances_empty?, true)
      |> assign(:tree, empty_tree())
      |> assign(:current_path, nil)
      |> assign(:file, nil)
@@ -31,7 +35,13 @@ defmodule HephaestusWebWeb.RepositoryLive do
          {:ok, branches} <- RepositoryBrowser.branches(repository_root(), repository_id),
          {:ok, selected_branch} <- select_branch(repository, branches, params["ref"]),
          {:ok, browser_assigns} <-
-           load_tab(socket.assigns.live_action, repository_id, selected_branch, params) do
+           load_tab(
+             socket.assigns.live_action,
+             repository_id,
+             selected_branch,
+             params,
+             identity
+           ) do
       socket =
         socket
         |> assign(:current_repository_path, local_path(uri))
@@ -98,6 +108,9 @@ defmodule HephaestusWebWeb.RepositoryLive do
           <:item navigate={~p"/organizations/#{@repository["organization_id"]}"}>
             {@repository["organization_name"]}
           </:item>
+          <:item navigate={~p"/projects/#{@repository["project_id"]}"}>
+            {@repository["project_name"]}
+          </:item>
           <:current>{@repository["name"]}</:current>
         </.breadcrumbs>
 
@@ -161,6 +174,17 @@ defmodule HephaestusWebWeb.RepositoryLive do
           repository={@repository}
           streams={@streams}
           branches_empty?={@branches_empty?}
+        />
+        <.releases_view
+          :if={@live_action == :releases}
+          repository={@repository}
+          streams={@streams}
+          releases_empty?={@releases_empty?}
+        />
+        <.agents_view
+          :if={@live_action == :agents}
+          streams={@streams}
+          attached_instances_empty?={@attached_instances_empty?}
         />
       <% end %>
     </Layouts.app>
@@ -291,7 +315,83 @@ defmodule HephaestusWebWeb.RepositoryLive do
     """
   end
 
-  defp load_tab(_action, _repository_id, nil, _params) do
+  attr :repository, :map, required: true
+  attr :streams, :map, required: true
+  attr :releases_empty?, :boolean, required: true
+
+  defp releases_view(assigns) do
+    ~H"""
+    <section id="repository-releases" class="repository-list">
+      <div class="list-heading">
+        <span>Release</span><span>Source</span><span>Artifacts</span>
+      </div>
+      <div id="releases" phx-update="stream">
+        <div :if={@releases_empty?} id="releases-empty" class="empty-state">
+          No immutable releases have been built from this repository.
+        </div>
+        <article :for={{dom_id, release} <- @streams.releases} id={dom_id} class="commit-row">
+          <div class="commit-primary">
+            <.link navigate={~p"/repositories/#{@repository["id"]}/releases/#{release["id"]}"}>
+              <strong>{release["version"]}</strong>
+            </.link>
+            <.tag tone={release_tone(release["state"])}>{release["state"]}</.tag>
+          </div>
+          <div class="commit-author">
+            <code>{short_sha(release["source_commit"])}</code>
+            <small>{friendly_ref(release["source_ref"])}</small>
+          </div>
+          <div>
+            <strong>{release["artifact_count"]} artifacts</strong>
+            <small>{release["exported_agent_count"]} exported agents</small>
+          </div>
+        </article>
+      </div>
+    </section>
+    """
+  end
+
+  attr :streams, :map, required: true
+  attr :attached_instances_empty?, :boolean, required: true
+
+  defp agents_view(assigns) do
+    ~H"""
+    <section id="repository-agents" class="repository-list">
+      <div class="list-heading">
+        <span>Project instance</span><span>Ref selector</span><span>Release</span>
+      </div>
+      <div id="attached-instances" phx-update="stream">
+        <div :if={@attached_instances_empty?} id="attached-instances-empty" class="empty-state">
+          No project agent instances are attached to this repository.
+        </div>
+        <article
+          :for={{dom_id, attachment} <- @streams.attached_instances}
+          id={dom_id}
+          class="commit-row"
+        >
+          <div class="commit-primary">
+            <.link navigate={
+              ~p"/projects/#{attachment["project_id"]}/agents/#{attachment["instance_id"]}"
+            }>
+              <strong>{attachment["instance_name"]}</strong>
+            </.link>
+            <small>{attachment["project_name"]}</small>
+          </div>
+          <div class="commit-author">
+            <code>{attachment["ref_selector"]}</code>
+            <small>{attachment["trigger_policy"]}</small>
+          </div>
+          <div>
+            <strong>{attachment["release_version"]}</strong>
+            <small>{attachment["instance_state"]}</small>
+          </div>
+        </article>
+      </div>
+    </section>
+    """
+  end
+
+  defp load_tab(action, _repository_id, nil, _params, _identity)
+       when action in [:files, :commits] do
     {:ok,
      %{
        tree: empty_tree(),
@@ -299,11 +399,13 @@ defmodule HephaestusWebWeb.RepositoryLive do
        file: nil,
        file_error: nil,
        commits: [],
-       commits_empty?: true
+       commits_empty?: true,
+       releases: [],
+       attached_instances: []
      }}
   end
 
-  defp load_tab(:files, repository_id, selected_branch, params) do
+  defp load_tab(:files, repository_id, selected_branch, params, _identity) do
     with {:ok, %{entries: entries}} <-
            RepositoryBrowser.tree(repository_root(), repository_id, selected_branch.name) do
       path = path_from_params(params)
@@ -316,12 +418,14 @@ defmodule HephaestusWebWeb.RepositoryLive do
          file: file,
          file_error: file_error,
          commits: [],
-         commits_empty?: true
+         commits_empty?: true,
+         releases: [],
+         attached_instances: []
        }}
     end
   end
 
-  defp load_tab(:commits, repository_id, selected_branch, _params) do
+  defp load_tab(:commits, repository_id, selected_branch, _params, _identity) do
     with {:ok, %{commits: commits}} <-
            RepositoryBrowser.commits(repository_root(), repository_id, selected_branch.name) do
       {:ok,
@@ -331,12 +435,14 @@ defmodule HephaestusWebWeb.RepositoryLive do
          file: nil,
          file_error: nil,
          commits: commits,
-         commits_empty?: commits == []
+         commits_empty?: commits == [],
+         releases: [],
+         attached_instances: []
        }}
     end
   end
 
-  defp load_tab(:branches, _repository_id, _selected_branch, _params) do
+  defp load_tab(:branches, _repository_id, _selected_branch, _params, _identity) do
     {:ok,
      %{
        tree: empty_tree(),
@@ -344,8 +450,22 @@ defmodule HephaestusWebWeb.RepositoryLive do
        file: nil,
        file_error: nil,
        commits: [],
-       commits_empty?: true
+       commits_empty?: true,
+       releases: [],
+       attached_instances: []
      }}
+  end
+
+  defp load_tab(:releases, repository_id, _selected_branch, _params, identity) do
+    with {:ok, releases} <- Store.list_repository_releases(identity, repository_id) do
+      {:ok, empty_browser_assigns() |> Map.put(:releases, releases)}
+    end
+  end
+
+  defp load_tab(:agents, repository_id, _selected_branch, _params, identity) do
+    with {:ok, instances} <- Store.list_repository_instances(identity, repository_id) do
+      {:ok, empty_browser_assigns() |> Map.put(:attached_instances, instances)}
+    end
   end
 
   defp apply_browser_assigns(socket, assigns) do
@@ -355,7 +475,24 @@ defmodule HephaestusWebWeb.RepositoryLive do
     |> assign(:file, assigns.file)
     |> assign(:file_error, assigns.file_error)
     |> assign(:commits_empty?, assigns.commits_empty?)
+    |> assign(:releases_empty?, assigns.releases == [])
+    |> assign(:attached_instances_empty?, assigns.attached_instances == [])
     |> stream(:commits, assigns.commits, reset: true)
+    |> stream(:releases, assigns.releases, reset: true)
+    |> stream(:attached_instances, assigns.attached_instances, reset: true)
+  end
+
+  defp empty_browser_assigns do
+    %{
+      tree: empty_tree(),
+      current_path: nil,
+      file: nil,
+      file_error: nil,
+      commits: [],
+      commits_empty?: true,
+      releases: [],
+      attached_instances: []
+    }
   end
 
   defp select_branch(_repository, [], _requested), do: {:ok, nil}
@@ -456,6 +593,12 @@ defmodule HephaestusWebWeb.RepositoryLive do
   defp page_title(repository, :files), do: "#{repository["name"]} · Files"
   defp page_title(repository, :commits), do: "#{repository["name"]} · Commits"
   defp page_title(repository, :branches), do: "#{repository["name"]} · Branches"
+  defp page_title(repository, :releases), do: "#{repository["name"]} · Releases"
+  defp page_title(repository, :agents), do: "#{repository["name"]} · Agents"
+
+  defp release_tone("published"), do: "success"
+  defp release_tone("revoked"), do: "danger"
+  defp release_tone(_state), do: "neutral"
 
   defp friendly_ref("refs/heads/" <> branch), do: branch
   defp friendly_ref(git_ref), do: git_ref

@@ -7,6 +7,8 @@ Hephaestus is a single-node Git forge and agent runtime proof of concept.
 - [Daemon composition and lifecycle](docs/application.md)
 - [Live review control plane](docs/live-review.md)
 - [Run orchestration](docs/run-orchestration.md)
+- [Reusable releases and project agent instances](docs/releases-and-instances.md)
+- [Secret delegation and runtime delivery](docs/secrets.md)
 - [VM runtime](docs/vm-runtime.md)
 
 Hephaestus is a secure, developer-focused Git forge and autonomous agent
@@ -35,6 +37,15 @@ implementations:
 | [`run-orchestrator`](crates/run-orchestrator) | PostgreSQL, VM, volume, and JetStream coordination |
 | [`forge-domain`](crates/forge-domain) | Project, repository, receive, and run-request domain values |
 | [`agent-config`](crates/agent-config) | Versioned `agent.toml` parsing and validation |
+| [`release-domain`](crates/release-domain) | Immutable releases, project instances, revisions, attachments, updates, and typed policy |
+| [`release-artifact-store`](crates/release-artifact-store) | One-way safe import into opaque immutable artifact storage |
+| [`release-service`](crates/release-service) | Release publication, instance management, attachments, updates, and deferred triggers |
+| [`build-orchestrator`](crates/build-orchestrator) | Exact-commit isolated builds and crash-safe draft release finalization |
+| [`secret-domain`](crates/secret-domain) | Redacted secret ownership, delegation, binding, and lease contracts |
+| [`secret-store`](crates/secret-store) | Authenticated encrypted immutable secret-version storage |
+| [`secret-service`](crates/secret-service) | Grants, imports, bindings, exact dispatch resolution, rotation, revocation, and purge |
+| [`secret-runtime`](crates/secret-runtime) | Ephemeral raw mounts and exact runtime secret authority |
+| [`secret-broker`](crates/secret-broker) | Host-only semantic broker transport and bounded adapters |
 | [`forge-service`](crates/forge-service) | Bare Git storage, PostgreSQL receive processing, and forge outbox |
 | [`git-http`](crates/git-http) | Authorized streaming Git smart-HTTP transport |
 | [`identity-domain`](crates/identity-domain) | Internal authenticated principal and tenant identifiers |
@@ -59,6 +70,12 @@ implementations:
   backend component tests, and Fedora/KVM validation tiers.
 - [Durable run orchestration](docs/run-orchestration.md): volume ownership,
   stale-lease recovery, database boundaries, and NATS subjects.
+- [Reusable releases and instances](docs/releases-and-instances.md): isolated
+  builds, immutable artifacts, project imports, revisions, attachments, exact
+  runs, and stateful update hooks.
+- [Secret delegation and delivery](docs/secrets.md): write-only encrypted
+  values, explicit grants/imports, immutable bindings, raw mounts, brokered
+  use, revocation, and audit.
 - [Minimal Git forge core](docs/git-forge.md): canonical repository storage,
   smart HTTP, agent configuration, receive transactions, and run publication.
 - [Daemon composition](docs/application.md): readiness, supervised tasks,
@@ -127,3 +144,16 @@ LiveView, and Chromium with:
 ```sh
 scripts/run-ui-e2e.sh
 ```
+
+Build the metadata-only inspection and narrowly scoped recovery CLI with:
+
+```sh
+cargo build -p hephaestus-app --bin hephaestus-operator
+target/debug/hephaestus-operator metrics <actor-uuid>
+```
+
+The CLI uses `HEPHAESTUS_DATABASE_URL`, reauthorizes every operation, and
+audits mutating recovery commands. See the
+[release/instance operator runbook](docs/releases-and-instances.md#local-workflow-and-operator-recovery)
+and [secret operator runbook](docs/secrets.md#operator-runbook) before using
+recovery or key-management controls.

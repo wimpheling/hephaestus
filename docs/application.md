@@ -6,17 +6,21 @@
 ## Lifecycle
 
 `HephaestusApp::build` validates static configuration, checks that PostgreSQL
-has migration version 4 and the Mélange dispatcher, resolves storage and VM
+has migration version 8 and the Mélange dispatcher, resolves storage and VM
 dependencies, and connects PostgreSQL and NATS. It does not bind listeners or
 spawn background tasks.
 
-`HephaestusApp::start` binds the HTTP listener, creates the durable JetStream
-topology, and starts supervised HTTP, outbox, and run-command tasks. It returns
-`RunningHephaestus` only after:
+`HephaestusApp::start` first reconciles abandoned isolated builds, run
+resources, secret mounts, and committed update decisions. It then binds the
+HTTP and private broker listeners, creates the durable JetStream topology, and
+starts supervised HTTP, build-command, run-command, broker, and outbox tasks.
+It returns `RunningHephaestus` only after:
 
 - the HTTP socket is bound and its server task has started;
 - the outbox publisher loop is running;
-- the durable run consumer has opened its message stream.
+- the durable run consumer has opened its message stream;
+- the durable isolated-build consumer has opened its message stream;
+- the private semantic secret broker is accepting provider-forwarded streams.
 
 Startup timeout or early task failure cancels and reaps every task already
 started.
@@ -49,6 +53,16 @@ the durable run request. The application translates its root image, guest
 command, resources, state intent, and network profile into one provider-neutral
 `VmSpec`. Selecting `FakeProvider` or `LibkrunProvider` changes the backend, not
 the committed `agent.toml`.
+
+Immediately before constructing that `VmSpec`, the application checks the
+revision's immutable CPU, memory, and network selection against the current
+operator policy. `HEPHAESTUS_RUNTIME_POLICY_VERSION`,
+`HEPHAESTUS_RUNTIME_MAX_VCPUS`, `HEPHAESTUS_RUNTIME_MAX_MEMORY_MIB`,
+`HEPHAESTUS_RUNTIME_ALLOW_BROKER_ONLY`, and
+`HEPHAESTUS_RUNTIME_ALLOW_EGRESS` configure that ceiling. A tightened policy
+denies a launch that is no longer allowed; it never silently substitutes a
+smaller VM or a different network mode. The current policy version is added to
+VM metadata for operational correlation.
 
 When workspace mounting is requested, the trusted workspace manager appends an
 immutable exact-commit source mount at `/workspace/repo` and a separate writable

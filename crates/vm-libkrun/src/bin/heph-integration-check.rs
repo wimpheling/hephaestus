@@ -5,6 +5,7 @@ use std::{
     fs,
     io::{self, Read, Write},
     net::{Shutdown, SocketAddr, TcpListener, TcpStream, ToSocketAddrs, UdpSocket},
+    os::unix::fs::{MetadataExt, PermissionsExt},
     path::Path,
     time::Duration,
 };
@@ -24,10 +25,18 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         Some("--state-only") => {
             verify_disk()?;
             println!("sqlite=ok");
+            if let Ok(marker) = std::env::var("HEPH_RELEASE_MARKER") {
+                println!("release_marker={marker}");
+            }
             if let Ok(milliseconds) = std::env::var("HEPH_STATE_HOLD_MS") {
                 std::thread::sleep(Duration::from_millis(milliseconds.parse()?));
             }
             return Ok(());
+        }
+        Some("--state-rollback") => {
+            verify_sqlite_rollback()?;
+            println!("sqlite-rollback=ok");
+            std::process::exit(23);
         }
         Some(argument) => {
             return Err(format!("unknown integration-check argument: {argument}").into());
@@ -40,6 +49,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     println!("sqlite=ok");
     verify_mounts()?;
     println!("mounts=ok");
+    if std::env::var("HEPH_EXPECT_SECRET_MOUNT").as_deref() == Ok("1") {
+        verify_secrets()?;
+        println!("secrets=ok");
+    }
     let resolved = ("example.com", 80)
         .to_socket_addrs()?
         .next()
@@ -86,6 +99,20 @@ fn verify_disk() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn verify_sqlite_rollback() -> Result<(), Box<dyn std::error::Error>> {
+    let database = Path::new("/var/lib/hephaestus/state.db");
+    let mut connection = Connection::open(database)?;
+    let before: i64 = connection.query_row("SELECT count(*) FROM probe", [], |row| row.get(0))?;
+    let transaction = connection.transaction()?;
+    transaction.execute("INSERT INTO probe VALUES('must-rollback')", [])?;
+    transaction.rollback()?;
+    let after: i64 = connection.query_row("SELECT count(*) FROM probe", [], |row| row.get(0))?;
+    if after != before {
+        return Err("agent-owned SQLite rollback retained a mutation".into());
+    }
+    Ok(())
+}
+
 fn verify_mounts() -> Result<(), Box<dyn std::error::Error>> {
     if std::env::current_dir()? != Path::new("/workspace") {
         return Err("requested working directory was not applied".into());
@@ -106,6 +133,50 @@ fn verify_mounts() -> Result<(), Box<dyn std::error::Error>> {
     fs::write(workspace_marker, "workspace")?;
     if fs::read_to_string(workspace_marker)? != "workspace" {
         return Err("writable workspace readback failed".into());
+    }
+    Ok(())
+}
+
+fn verify_secrets() -> Result<(), Box<dyn std::error::Error>> {
+    const SENTINEL: &str = "libkrun-secret-sentinel-8a4c";
+    let directory = Path::new("/run/hephaestus/secrets");
+    let secret = directory.join("model");
+    let directory_metadata = fs::symlink_metadata(directory)?;
+    let metadata = fs::symlink_metadata(&secret)?;
+    if !directory_metadata.is_dir() || !metadata.is_file() {
+        return Err("raw secret mount contains an unexpected object".into());
+    }
+    if directory_metadata.permissions().mode() & 0o777 != 0o500
+        || metadata.permissions().mode() & 0o777 != 0o400
+    {
+        return Err("raw secret mount permissions are unsafe".into());
+    }
+    if metadata.uid() != 10_001 || metadata.gid() != 10_001 {
+        return Err("raw secret ownership does not match the guest agent".into());
+    }
+    if fs::read_to_string(&secret)? != SENTINEL {
+        return Err("raw secret contents do not match the exact slot".into());
+    }
+    for path in [&secret, &directory.join("write-must-fail")] {
+        match fs::write(path, "invalid") {
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::PermissionDenied | io::ErrorKind::ReadOnlyFilesystem
+                ) => {}
+            Err(error) => {
+                return Err(format!("unexpected secret mount write error: {error}").into());
+            }
+            Ok(()) => return Err("read-only raw secret mount accepted a write".into()),
+        }
+    }
+    for proc_file in ["/proc/self/environ", "/proc/self/cmdline"] {
+        if fs::read(proc_file)?
+            .windows(SENTINEL.len())
+            .any(|window| window == SENTINEL.as_bytes())
+        {
+            return Err("raw secret leaked into process metadata".into());
+        }
     }
     Ok(())
 }

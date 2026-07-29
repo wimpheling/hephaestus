@@ -30,6 +30,7 @@ serial_test = "3"
 sqlx.workspace = true
 tempfile = "3"
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+uuid.workspace = true
 
 [lints]
 workspace = true

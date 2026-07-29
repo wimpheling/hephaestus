@@ -37,6 +37,9 @@ path = "src/bin/heph-integration-check.rs"
 required-features = ["integration-guest"]
 
 [dev-dependencies]
+runtime-types = { path = "../runtime-types" }
+secret-domain = { path = "../secret-domain" }
+secret-runtime = { path = "../secret-runtime" }
 tempfile = "3"
 tokio = { workspace = true, features = ["rt-multi-thread", "test-util"] }
 vm-conformance = { path = "../vm-conformance" }

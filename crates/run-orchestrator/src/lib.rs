@@ -9,7 +9,11 @@ pub use nats::{
     LIFECYCLE_EVENT_SUBJECT, NatsCommandHandler, NatsOutboxPublisher, OutboxPublishError,
     START_RUN_SUBJECT, TopologyError, ensure_jetstream_topology,
 };
-pub use orchestrator::{OrchestratorError, RunOrchestrator, VmSpecFactory};
+pub use orchestrator::{
+    OrchestratorError, PreparedRunRuntime, PreparedRunSecrets, RunAuthorizationError,
+    RunCompletionError, RunCompletionObserver, RunLaunchAuthorizer, RunOrchestrator,
+    RunRuntimeError, RunRuntimeManager, RunSecretError, RunSecretManager, VmSpecFactory,
+};
 pub use repository::{
     CreateRunResult, OutboxRecord, PgRunRepository, RepositoryError, RunRepository, StoredVmEvent,
 };

@@ -1,6 +1,9 @@
 use async_trait::async_trait;
-use run_domain::{CancelRun, InvalidTransition, Run, RunOutcome, RunState, StartRun};
-use runtime_types::{EventId, LeaseId, RunId, VolumeId};
+use run_domain::{CancelRun, InvalidTransition, Run, RunKind, RunOutcome, RunState, StartRun};
+use runtime_types::{
+    AgentAttachmentId, AgentInstanceId, AgentInstanceRevisionId, EventId, LeaseId, ReleaseAgentId,
+    ReleaseId, RunId, VolumeId,
+};
 use serde_json::{Value, json};
 use sqlx::{FromRow, PgPool, Postgres, Row, Transaction, postgres::PgRow};
 use time::OffsetDateTime;
@@ -67,12 +70,12 @@ pub trait RunRepository: Send + Sync + 'static {
     async fn create_run(&self, command: &StartRun) -> Result<CreateRunResult, RepositoryError>;
     /// Loads one run.
     async fn get(&self, run_id: RunId) -> Result<Run, RepositoryError>;
-    /// Binds durable volume and VM identifiers.
+    /// Binds the durable VM identifier and any state-volume resources.
     async fn bind_resources(
         &self,
         run_id: RunId,
-        volume_id: VolumeId,
-        lease_id: LeaseId,
+        volume_id: Option<VolumeId>,
+        lease_id: Option<LeaseId>,
         vm_id: &str,
     ) -> Result<Run, RepositoryError>;
     /// Applies one valid state transition and emits it through the outbox.
@@ -215,17 +218,58 @@ impl RunRepository for PgRunRepository {
                 created: false,
             });
         }
+        if let Some(row) = sqlx::query_as::<_, RunRow>("SELECT * FROM runs WHERE id = $1")
+            .bind(command.run_id.as_uuid())
+            .fetch_optional(&mut *transaction)
+            .await
+            .map_err(storage)?
+        {
+            let run: Run = row.try_into()?;
+            if !matches_start_command(&run, command) || run.state != RunState::Queued {
+                return Err(RepositoryError::InvalidData(
+                    "precreated update run does not match start command",
+                ));
+            }
+            let now = OffsetDateTime::now_utc();
+            sqlx::query("UPDATE command_inbox SET processed_at = $2 WHERE command_id = $1")
+                .bind(command.command_id.as_uuid())
+                .bind(now)
+                .execute(&mut *transaction)
+                .await
+                .map_err(storage)?;
+            transaction.commit().await.map_err(storage)?;
+            return Ok(CreateRunResult { run, created: true });
+        }
 
         let now = OffsetDateTime::now_utc();
         sqlx::query(
             "INSERT INTO runs
-             (id, agent_id, command_id, state, created_at, updated_at)
-             VALUES ($1, $2, $3, 'queued', $4, $4)",
+             (id, instance_id, instance_revision_id, release_id,
+              release_agent_id, attachment_id, run_kind, command_id, state,
+              requires_state, created_at, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'queued', $9, $10, $10)",
         )
         .bind(command.run_id.as_uuid())
-        .bind(command.agent_id.as_uuid())
+        .bind(command.instance_id.as_uuid())
+        .bind(command.instance_revision_id.as_uuid())
+        .bind(command.release_id.as_uuid())
+        .bind(command.release_agent_id.as_uuid())
+        .bind(command.attachment_id.map(AgentAttachmentId::as_uuid))
+        .bind(run_kind_name(command.kind))
         .bind(command.command_id.as_uuid())
+        .bind(command.requires_state)
         .bind(now)
+        .execute(&mut *transaction)
+        .await
+        .map_err(storage)?;
+        sqlx::query(
+            "UPDATE run_requests
+             SET dispatch_state = 'dispatched'
+             WHERE run_id = $1 AND command_id = $2
+               AND dispatch_state = 'pending'",
+        )
+        .bind(command.run_id.as_uuid())
+        .bind(command.command_id.as_uuid())
         .execute(&mut *transaction)
         .await
         .map_err(storage)?;
@@ -264,8 +308,8 @@ impl RunRepository for PgRunRepository {
     async fn bind_resources(
         &self,
         run_id: RunId,
-        volume_id: VolumeId,
-        lease_id: LeaseId,
+        volume_id: Option<VolumeId>,
+        lease_id: Option<LeaseId>,
         vm_id: &str,
     ) -> Result<Run, RepositoryError> {
         sqlx::query(
@@ -273,8 +317,8 @@ impl RunRepository for PgRunRepository {
              WHERE id = $1",
         )
         .bind(run_id.as_uuid())
-        .bind(volume_id.as_uuid())
-        .bind(lease_id.as_uuid())
+        .bind(volume_id.map(VolumeId::as_uuid))
+        .bind(lease_id.map(LeaseId::as_uuid))
         .bind(vm_id)
         .execute(&self.pool)
         .await
@@ -465,10 +509,32 @@ impl RunRepository for PgRunRepository {
     }
 }
 
+fn matches_start_command(run: &Run, command: &StartRun) -> bool {
+    [
+        run.id == command.run_id,
+        run.command_id == command.command_id,
+        run.instance_id == command.instance_id,
+        run.instance_revision_id == command.instance_revision_id,
+        run.release_id == command.release_id,
+        run.release_agent_id == command.release_agent_id,
+        run.attachment_id == command.attachment_id,
+        run.kind == command.kind,
+        run.requires_state == command.requires_state,
+    ]
+    .into_iter()
+    .all(std::convert::identity)
+}
+
 #[derive(Debug)]
 struct RunRow {
     id: Uuid,
-    agent_id: Uuid,
+    instance_id: Uuid,
+    instance_revision_id: Uuid,
+    release_id: Uuid,
+    release_agent_id: Uuid,
+    attachment_id: Option<Uuid>,
+    run_kind: String,
+    requires_state: bool,
     command_id: Uuid,
     volume_id: Option<Uuid>,
     lease_id: Option<Uuid>,
@@ -488,7 +554,13 @@ impl<'row> FromRow<'row, PgRow> for RunRow {
     fn from_row(row: &'row PgRow) -> Result<Self, sqlx::Error> {
         Ok(Self {
             id: row.try_get("id")?,
-            agent_id: row.try_get("agent_id")?,
+            instance_id: row.try_get("instance_id")?,
+            instance_revision_id: row.try_get("instance_revision_id")?,
+            release_id: row.try_get("release_id")?,
+            release_agent_id: row.try_get("release_agent_id")?,
+            attachment_id: row.try_get("attachment_id")?,
+            run_kind: row.try_get("run_kind")?,
+            requires_state: row.try_get("requires_state")?,
             command_id: row.try_get("command_id")?,
             volume_id: row.try_get("volume_id")?,
             lease_id: row.try_get("lease_id")?,
@@ -520,7 +592,13 @@ impl TryFrom<RunRow> for Run {
         };
         Ok(Self {
             id: RunId::from_uuid(row.id),
-            agent_id: row.agent_id.into(),
+            instance_id: AgentInstanceId::from_uuid(row.instance_id),
+            instance_revision_id: AgentInstanceRevisionId::from_uuid(row.instance_revision_id),
+            release_id: ReleaseId::from_uuid(row.release_id),
+            release_agent_id: ReleaseAgentId::from_uuid(row.release_agent_id),
+            attachment_id: row.attachment_id.map(AgentAttachmentId::from_uuid),
+            kind: parse_run_kind(&row.run_kind)?,
+            requires_state: row.requires_state,
             command_id: row.command_id.into(),
             volume_id: row.volume_id.map(Into::into),
             lease_id: row.lease_id.map(Into::into),
@@ -534,6 +612,21 @@ impl TryFrom<RunRow> for Run {
             updated_at: row.updated_at,
             state_version: row.state_version,
         })
+    }
+}
+
+const fn run_kind_name(kind: RunKind) -> &'static str {
+    match kind {
+        RunKind::Normal => "normal",
+        RunKind::Update => "update",
+    }
+}
+
+fn parse_run_kind(value: &str) -> Result<RunKind, RepositoryError> {
+    match value {
+        "normal" => Ok(RunKind::Normal),
+        "update" => Ok(RunKind::Update),
+        _ => Err(RepositoryError::InvalidData("run kind")),
     }
 }
 

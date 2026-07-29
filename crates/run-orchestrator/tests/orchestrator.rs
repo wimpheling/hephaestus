@@ -1,16 +1,24 @@
 //! Hardware-independent orchestration and cleanup-ordering coverage.
 
 use async_trait::async_trait;
-use run_domain::{CancelRun, Run, RunOutcome, RunState, StartRun};
+use run_domain::{CancelRun, Run, RunKind, RunOutcome, RunState, StartRun};
 use run_orchestrator::{
-    CreateRunResult, OrchestratorError, OutboxRecord, RepositoryError, RunOrchestrator,
-    RunRepository, StoredVmEvent, VmSpecFactory,
+    CreateRunResult, OrchestratorError, OutboxRecord, PreparedRunRuntime, PreparedRunSecrets,
+    RepositoryError, RunAuthorizationError, RunCompletionError, RunCompletionObserver,
+    RunLaunchAuthorizer, RunOrchestrator, RunRepository, RunRuntimeError, RunRuntimeManager,
+    RunSecretError, RunSecretManager, StoredVmEvent, VmSpecFactory,
 };
-use runtime_types::{AgentId, CommandId, EventId, LeaseId, RunId, VolumeId};
+use runtime_types::{
+    AgentAttachmentId, AgentInstanceId, AgentInstanceRevisionId, CommandId, EventId, LeaseId,
+    ReleaseAgentId, ReleaseId, RunId, VolumeId,
+};
 use std::{
     collections::BTreeMap,
     path::PathBuf,
-    sync::{Arc, Mutex as StdMutex, MutexGuard},
+    sync::{
+        Arc, Mutex as StdMutex, MutexGuard,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 use time::OffsetDateTime;
 use tokio::sync::{Mutex, broadcast, watch};
@@ -20,7 +28,7 @@ use vm_trait::{
     VmInstance, VmMount, VmProvider, VmResources, VmSpec,
 };
 use volume_trait::{
-    AGENT_STATE_DISK_ID, Volume, VolumeAttachment, VolumeError, VolumeKind, VolumeLease,
+    INSTANCE_STATE_DISK_ID, Volume, VolumeAttachment, VolumeError, VolumeKind, VolumeLease,
     VolumeState, VolumeStore,
 };
 use workspace_domain::{
@@ -33,10 +41,19 @@ async fn destroys_vm_before_releasing_lease_and_deduplicates_start() {
     let command = StartRun {
         command_id: CommandId::new(),
         run_id: RunId::new(),
-        agent_id: AgentId::new(),
+        instance_id: AgentInstanceId::new(),
+        instance_revision_id: AgentInstanceRevisionId::new(),
+        release_id: ReleaseId::new(),
+        release_agent_id: ReleaseAgentId::new(),
+        attachment_id: Some(AgentAttachmentId::new()),
+        kind: RunKind::Normal,
+        requires_state: true,
     };
     let repository = Arc::new(MemoryRepository::new(&command));
-    let volume = Arc::new(MemoryVolumeStore::new(command.agent_id, Arc::clone(&log)));
+    let volume = Arc::new(MemoryVolumeStore::new(
+        command.instance_id,
+        Arc::clone(&log),
+    ));
     let provider = Arc::new(AutoExitProvider::new(Arc::clone(&log)));
     let orchestrator = RunOrchestrator::new(
         repository.clone(),
@@ -44,7 +61,13 @@ async fn destroys_vm_before_releasing_lease_and_deduplicates_start() {
         provider.clone(),
         Arc::new(TestSpecFactory),
         32 * 1024 * 1024,
-    );
+    )
+    .with_launch_authorizer(Arc::new(RecordingLaunchAuthorizer {
+        log: Arc::clone(&log),
+    }))
+    .with_runtime_manager(Arc::new(RecordingRuntimeManager {
+        log: Arc::clone(&log),
+    }));
 
     let run = orchestrator
         .start_run(&command)
@@ -61,26 +84,34 @@ async fn destroys_vm_before_releasing_lease_and_deduplicates_start() {
             .any(|event| event.event_type == "vm.exited"),
         "final VM event was not persisted"
     );
-    let (destroyed, released) = {
+    let (destroyed, runtime_destroyed, released) = {
         let entries = lock(&log);
         let destroyed = entries
             .iter()
             .position(|entry| *entry == "destroy")
             .expect("destroy event");
+        let runtime_destroyed = entries
+            .iter()
+            .position(|entry| *entry == "runtime-destroy")
+            .expect("runtime destroy event");
         let released = entries
             .iter()
             .position(|entry| *entry == "release")
             .expect("release event");
         drop(entries);
-        (destroyed, released)
+        (destroyed, runtime_destroyed, released)
     };
-    assert!(destroyed < released, "lease released before VM destruction");
+    assert!(
+        destroyed < runtime_destroyed && runtime_destroyed < released,
+        "runtime or lease cleanup happened before VM destruction"
+    );
+    assert_launch_order(&log);
     let spec = provider.spec().expect("provisioned spec");
     let disk = spec
         .disks
         .iter()
-        .find(|disk| disk.id == AGENT_STATE_DISK_ID)
-        .expect("agent-state disk");
+        .find(|disk| disk.id == INSTANCE_STATE_DISK_ID)
+        .expect("instance-state disk");
     assert!(!disk.read_only);
 
     let before = lock(&log).len();
@@ -93,12 +124,349 @@ async fn destroys_vm_before_releasing_lease_and_deduplicates_start() {
 }
 
 #[tokio::test]
+async fn denied_live_authority_prevents_artifact_preparation_and_vm_provision() {
+    let log = Arc::new(StdMutex::new(Vec::new()));
+    let command = StartRun {
+        command_id: CommandId::new(),
+        run_id: RunId::new(),
+        instance_id: AgentInstanceId::new(),
+        instance_revision_id: AgentInstanceRevisionId::new(),
+        release_id: ReleaseId::new(),
+        release_agent_id: ReleaseAgentId::new(),
+        attachment_id: Some(AgentAttachmentId::new()),
+        kind: RunKind::Normal,
+        requires_state: false,
+    };
+    let repository = Arc::new(MemoryRepository::new(&command));
+    let provider = Arc::new(AutoExitProvider::new(Arc::clone(&log)));
+    let orchestrator = RunOrchestrator::new(
+        repository,
+        Arc::new(MemoryVolumeStore::new(
+            command.instance_id,
+            Arc::clone(&log),
+        )),
+        provider.clone(),
+        Arc::new(TestSpecFactory),
+        32 * 1024 * 1024,
+    )
+    .with_launch_authorizer(Arc::new(DenyLaunchAuthorizer))
+    .with_runtime_manager(Arc::new(RecordingRuntimeManager {
+        log: Arc::clone(&log),
+    }));
+
+    let run = orchestrator
+        .start_run(&command)
+        .await
+        .expect("denial is a durable failed run");
+
+    assert_eq!(run.state, RunState::CleanedUp);
+    assert_eq!(run.outcome, Some(RunOutcome::Failed));
+    assert!(provider.spec().is_none());
+    assert!(!lock(&log).contains(&"runtime-prepare"));
+}
+
+#[tokio::test]
+async fn revocation_after_start_allows_current_guest_but_blocks_warm_cache_replay() {
+    let log = Arc::new(StdMutex::new(Vec::new()));
+    let revoked = Arc::new(AtomicBool::new(false));
+    let authorizer = Arc::new(RevocableLaunchAuthorizer {
+        revoked: Arc::clone(&revoked),
+        log: Arc::clone(&log),
+    });
+    let provider = Arc::new(RevokeOnProvisionProvider {
+        inner: AutoExitProvider::new(Arc::clone(&log)),
+        revoked: Arc::clone(&revoked),
+    });
+    let first = normal_stateless_command();
+    let first_orchestrator = RunOrchestrator::new(
+        Arc::new(MemoryRepository::new(&first)),
+        Arc::new(MemoryVolumeStore::new(first.instance_id, Arc::clone(&log))),
+        provider.clone(),
+        Arc::new(TestSpecFactory),
+        32 * 1024 * 1024,
+    )
+    .with_launch_authorizer(authorizer.clone())
+    .with_runtime_manager(Arc::new(RecordingRuntimeManager {
+        log: Arc::clone(&log),
+    }));
+    let completed = first_orchestrator
+        .start_run(&first)
+        .await
+        .expect("already provisioned guest may finish");
+    assert_eq!(completed.outcome, Some(RunOutcome::Succeeded));
+    assert!(revoked.load(Ordering::SeqCst));
+
+    let first_prepares = lock(&log)
+        .iter()
+        .filter(|event| **event == "runtime-prepare")
+        .count();
+    let first_provisions = lock(&log)
+        .iter()
+        .filter(|event| **event == "provision")
+        .count();
+    assert_eq!((first_prepares, first_provisions), (1, 1));
+
+    let second = normal_stateless_command();
+    let second_orchestrator = RunOrchestrator::new(
+        Arc::new(MemoryRepository::new(&second)),
+        Arc::new(MemoryVolumeStore::new(second.instance_id, Arc::clone(&log))),
+        provider,
+        Arc::new(TestSpecFactory),
+        32 * 1024 * 1024,
+    )
+    .with_launch_authorizer(authorizer)
+    .with_runtime_manager(Arc::new(RecordingRuntimeManager {
+        log: Arc::clone(&log),
+    }));
+    let denied = second_orchestrator
+        .start_run(&second)
+        .await
+        .expect("revoked replay is durably denied");
+    assert_eq!(denied.outcome, Some(RunOutcome::Failed));
+    assert_eq!(
+        lock(&log)
+            .iter()
+            .filter(|event| **event == "runtime-prepare")
+            .count(),
+        first_prepares,
+        "warm artifact state must not bypass live authorization"
+    );
+    assert_eq!(
+        lock(&log)
+            .iter()
+            .filter(|event| **event == "provision")
+            .count(),
+        first_provisions
+    );
+}
+
+#[tokio::test]
+async fn revoked_secret_after_materialization_prevents_vm_provision_and_cleans() {
+    let log = Arc::new(StdMutex::new(Vec::new()));
+    let command = StartRun {
+        command_id: CommandId::new(),
+        run_id: RunId::new(),
+        instance_id: AgentInstanceId::new(),
+        instance_revision_id: AgentInstanceRevisionId::new(),
+        release_id: ReleaseId::new(),
+        release_agent_id: ReleaseAgentId::new(),
+        attachment_id: Some(AgentAttachmentId::new()),
+        kind: RunKind::Normal,
+        requires_state: false,
+    };
+    let repository = Arc::new(MemoryRepository::new(&command));
+    let provider = Arc::new(AutoExitProvider::new(Arc::clone(&log)));
+    let orchestrator = RunOrchestrator::new(
+        repository,
+        Arc::new(MemoryVolumeStore::new(
+            command.instance_id,
+            Arc::clone(&log),
+        )),
+        provider.clone(),
+        Arc::new(TestSpecFactory),
+        32 * 1024 * 1024,
+    )
+    .with_secret_manager(Arc::new(RevokeBeforeProvisionSecrets {
+        log: Arc::clone(&log),
+    }))
+    .with_runtime_manager(Arc::new(RecordingRuntimeManager {
+        log: Arc::clone(&log),
+    }));
+
+    let run = orchestrator
+        .start_run(&command)
+        .await
+        .expect("secret revocation is a durable failed run");
+
+    assert_eq!(run.state, RunState::CleanedUp);
+    assert_eq!(run.outcome, Some(RunOutcome::Failed));
+    assert!(provider.spec().is_none());
+    let entries = lock(&log);
+    let prepared = entries
+        .iter()
+        .position(|entry| *entry == "secret-prepare")
+        .expect("secret materialized");
+    let denied = entries
+        .iter()
+        .position(|entry| *entry == "secret-reauthorize")
+        .expect("secret reauthorization");
+    let destroyed = entries
+        .iter()
+        .position(|entry| *entry == "secret-destroy")
+        .expect("secret cleanup");
+    drop(entries);
+    assert!(prepared < denied && denied < destroyed);
+}
+
+#[tokio::test]
+async fn stateless_run_never_acquires_or_mounts_instance_state() {
+    let log = Arc::new(StdMutex::new(Vec::new()));
+    let command = StartRun {
+        command_id: CommandId::new(),
+        run_id: RunId::new(),
+        instance_id: AgentInstanceId::new(),
+        instance_revision_id: AgentInstanceRevisionId::new(),
+        release_id: ReleaseId::new(),
+        release_agent_id: ReleaseAgentId::new(),
+        attachment_id: Some(AgentAttachmentId::new()),
+        kind: RunKind::Normal,
+        requires_state: false,
+    };
+    let repository = Arc::new(MemoryRepository::new(&command));
+    let provider = Arc::new(AutoExitProvider::new(Arc::clone(&log)));
+    let orchestrator = RunOrchestrator::new(
+        repository.clone(),
+        Arc::new(MemoryVolumeStore::new(
+            command.instance_id,
+            Arc::clone(&log),
+        )),
+        provider.clone(),
+        Arc::new(TestSpecFactory),
+        32 * 1024 * 1024,
+    );
+
+    let run = orchestrator
+        .start_run(&command)
+        .await
+        .expect("orchestrated stateless run");
+
+    assert_eq!(run.state, RunState::CleanedUp);
+    assert_eq!(run.outcome, Some(RunOutcome::Succeeded));
+    assert!(run.volume_id.is_none());
+    assert!(run.lease_id.is_none());
+    assert!(
+        provider
+            .spec()
+            .expect("provisioned spec")
+            .disks
+            .iter()
+            .all(|disk| disk.id != INSTANCE_STATE_DISK_ID)
+    );
+    assert!(!lock(&log).contains(&"attached"));
+    assert!(!lock(&log).contains(&"release"));
+}
+
+#[tokio::test]
+async fn observes_update_result_only_after_state_lease_release() {
+    let log = Arc::new(StdMutex::new(Vec::new()));
+    let command = StartRun {
+        command_id: CommandId::new(),
+        run_id: RunId::new(),
+        instance_id: AgentInstanceId::new(),
+        instance_revision_id: AgentInstanceRevisionId::new(),
+        release_id: ReleaseId::new(),
+        release_agent_id: ReleaseAgentId::new(),
+        attachment_id: None,
+        kind: RunKind::Update,
+        requires_state: true,
+    };
+    let repository = Arc::new(MemoryRepository::new(&command));
+    let orchestrator = RunOrchestrator::new(
+        repository,
+        Arc::new(MemoryVolumeStore::new(
+            command.instance_id,
+            Arc::clone(&log),
+        )),
+        Arc::new(AutoExitProvider::new(Arc::clone(&log))),
+        Arc::new(TestSpecFactory),
+        32 * 1024 * 1024,
+    )
+    .with_completion_observer(Arc::new(RecordingCompletion {
+        log: Arc::clone(&log),
+    }));
+
+    let run = orchestrator
+        .start_run(&command)
+        .await
+        .expect("orchestrated update run");
+
+    assert_eq!(run.outcome, Some(RunOutcome::Succeeded));
+    let entries = lock(&log);
+    let release = entries
+        .iter()
+        .position(|entry| *entry == "release")
+        .expect("lease release");
+    let completion = entries
+        .iter()
+        .position(|entry| *entry == "completion")
+        .expect("completion observation");
+    drop(entries);
+    assert!(release < completion);
+}
+
+#[tokio::test(start_paused = true)]
+async fn update_wall_clock_timeout_fails_and_cleans_before_observation() {
+    let log = Arc::new(StdMutex::new(Vec::new()));
+    let command = StartRun {
+        command_id: CommandId::new(),
+        run_id: RunId::new(),
+        instance_id: AgentInstanceId::new(),
+        instance_revision_id: AgentInstanceRevisionId::new(),
+        release_id: ReleaseId::new(),
+        release_agent_id: ReleaseAgentId::new(),
+        attachment_id: None,
+        kind: RunKind::Update,
+        requires_state: true,
+    };
+    let repository = Arc::new(MemoryRepository::new(&command));
+    let orchestrator = RunOrchestrator::new(
+        repository,
+        Arc::new(MemoryVolumeStore::new(
+            command.instance_id,
+            Arc::clone(&log),
+        )),
+        Arc::new(HangingProvider {
+            log: Arc::clone(&log),
+        }),
+        Arc::new(TimeoutSpecFactory),
+        32 * 1024 * 1024,
+    )
+    .with_completion_observer(Arc::new(RecordingCompletion {
+        log: Arc::clone(&log),
+    }));
+
+    let run = orchestrator
+        .start_run(&command)
+        .await
+        .expect("timed-out update cleanup");
+
+    assert_eq!(run.outcome, Some(RunOutcome::Failed));
+    assert_eq!(
+        run.failure.as_deref(),
+        Some("guest wall-clock timeout elapsed")
+    );
+    let entries = lock(&log);
+    for expected in ["stop", "destroy", "release", "completion"] {
+        assert!(
+            entries.contains(&expected),
+            "missing {expected}: {entries:?}"
+        );
+    }
+    let release = entries
+        .iter()
+        .position(|entry| *entry == "release")
+        .expect("lease release");
+    let completion = entries
+        .iter()
+        .position(|entry| *entry == "completion")
+        .expect("completion observation");
+    drop(entries);
+    assert!(release < completion);
+}
+
+#[tokio::test]
 async fn finalizes_workspace_only_after_vm_is_destroyed() {
     let log = Arc::new(StdMutex::new(Vec::new()));
     let command = StartRun {
         command_id: CommandId::new(),
         run_id: RunId::new(),
-        agent_id: AgentId::new(),
+        instance_id: AgentInstanceId::new(),
+        instance_revision_id: AgentInstanceRevisionId::new(),
+        release_id: ReleaseId::new(),
+        release_agent_id: ReleaseAgentId::new(),
+        attachment_id: Some(AgentAttachmentId::new()),
+        kind: RunKind::Normal,
+        requires_state: true,
     };
     let repository = Arc::new(MemoryRepository::new(&command));
     let workspaces = Arc::new(RecordingWorkspaceManager {
@@ -106,7 +474,10 @@ async fn finalizes_workspace_only_after_vm_is_destroyed() {
     });
     let orchestrator = RunOrchestrator::new(
         repository,
-        Arc::new(MemoryVolumeStore::new(command.agent_id, Arc::clone(&log))),
+        Arc::new(MemoryVolumeStore::new(
+            command.instance_id,
+            Arc::clone(&log),
+        )),
         Arc::new(AutoExitProvider::new(Arc::clone(&log))),
         Arc::new(TestSpecFactory),
         32 * 1024 * 1024,
@@ -141,7 +512,13 @@ async fn stale_recovery_fences_before_provider_cleanup_and_release() {
     let command = StartRun {
         command_id: CommandId::new(),
         run_id: RunId::new(),
-        agent_id: AgentId::new(),
+        instance_id: AgentInstanceId::new(),
+        instance_revision_id: AgentInstanceRevisionId::new(),
+        release_id: ReleaseId::new(),
+        release_agent_id: ReleaseAgentId::new(),
+        attachment_id: Some(AgentAttachmentId::new()),
+        kind: RunKind::Normal,
+        requires_state: true,
     };
     let repository = Arc::new(MemoryRepository::new(&command));
     {
@@ -149,7 +526,10 @@ async fn stale_recovery_fences_before_provider_cleanup_and_release() {
         run.state = RunState::Running;
         run.vm_id = Some(run.id.to_string());
     }
-    let volume = Arc::new(MemoryVolumeStore::new(command.agent_id, Arc::clone(&log)));
+    let volume = Arc::new(MemoryVolumeStore::new(
+        command.instance_id,
+        Arc::clone(&log),
+    ));
     let mut stale = volume.lease.clone();
     stale.run_id = command.run_id;
     stale.volume_id = volume.volume.id;
@@ -197,14 +577,23 @@ async fn duplicate_in_flight_start_waits_for_reconciliation() {
     let command = StartRun {
         command_id: CommandId::new(),
         run_id: RunId::new(),
-        agent_id: AgentId::new(),
+        instance_id: AgentInstanceId::new(),
+        instance_revision_id: AgentInstanceRevisionId::new(),
+        release_id: ReleaseId::new(),
+        release_agent_id: ReleaseAgentId::new(),
+        attachment_id: Some(AgentAttachmentId::new()),
+        kind: RunKind::Normal,
+        requires_state: true,
     };
     let repository = Arc::new(MemoryRepository::new(&command));
     *repository.created.lock().await = true;
     repository.run.lock().await.state = RunState::Provisioning;
     let orchestrator = RunOrchestrator::new(
         repository,
-        Arc::new(MemoryVolumeStore::new(command.agent_id, Arc::clone(&log))),
+        Arc::new(MemoryVolumeStore::new(
+            command.instance_id,
+            Arc::clone(&log),
+        )),
         Arc::new(AutoExitProvider::new(Arc::clone(&log))),
         Arc::new(TestSpecFactory),
         32 * 1024 * 1024,
@@ -223,7 +612,13 @@ async fn restart_finishes_cleanup_after_lease_was_already_released() {
     let command = StartRun {
         command_id: CommandId::new(),
         run_id: RunId::new(),
-        agent_id: AgentId::new(),
+        instance_id: AgentInstanceId::new(),
+        instance_revision_id: AgentInstanceRevisionId::new(),
+        release_id: ReleaseId::new(),
+        release_agent_id: ReleaseAgentId::new(),
+        attachment_id: Some(AgentAttachmentId::new()),
+        kind: RunKind::Normal,
+        requires_state: true,
     };
     let repository = Arc::new(MemoryRepository::new(&command));
     {
@@ -234,7 +629,10 @@ async fn restart_finishes_cleanup_after_lease_was_already_released() {
     }
     let orchestrator = RunOrchestrator::new(
         repository.clone(),
-        Arc::new(MemoryVolumeStore::new(command.agent_id, Arc::clone(&log))),
+        Arc::new(MemoryVolumeStore::new(
+            command.instance_id,
+            Arc::clone(&log),
+        )),
         Arc::new(AutoExitProvider::new(Arc::clone(&log))),
         Arc::new(TestSpecFactory),
         32 * 1024 * 1024,
@@ -281,8 +679,123 @@ impl VmSpecFactory for TestSpecFactory {
     }
 }
 
+struct TimeoutSpecFactory;
+
+#[async_trait]
+impl VmSpecFactory for TimeoutSpecFactory {
+    async fn build(&self, run: &Run) -> Result<VmSpec, VmError> {
+        let mut spec = TestSpecFactory.build(run).await?;
+        spec.labels.insert(
+            String::from("hephaestus.wall-clock-timeout-seconds"),
+            String::from("1"),
+        );
+        Ok(spec)
+    }
+}
+
 struct RecordingWorkspaceManager {
     log: Arc<StdMutex<Vec<&'static str>>>,
+}
+
+struct RecordingRuntimeManager {
+    log: Arc<StdMutex<Vec<&'static str>>>,
+}
+
+struct RecordingLaunchAuthorizer {
+    log: Arc<StdMutex<Vec<&'static str>>>,
+}
+
+#[async_trait]
+impl RunLaunchAuthorizer for RecordingLaunchAuthorizer {
+    async fn authorize(&self, _run: &Run) -> Result<(), RunAuthorizationError> {
+        lock(&self.log).push("authorize");
+        Ok(())
+    }
+}
+
+struct DenyLaunchAuthorizer;
+
+#[async_trait]
+impl RunLaunchAuthorizer for DenyLaunchAuthorizer {
+    async fn authorize(&self, _run: &Run) -> Result<(), RunAuthorizationError> {
+        Err(RunAuthorizationError::redacted("denied by test policy"))
+    }
+}
+
+struct RevocableLaunchAuthorizer {
+    revoked: Arc<AtomicBool>,
+    log: Arc<StdMutex<Vec<&'static str>>>,
+}
+
+#[async_trait]
+impl RunLaunchAuthorizer for RevocableLaunchAuthorizer {
+    async fn authorize(&self, _run: &Run) -> Result<(), RunAuthorizationError> {
+        lock(&self.log).push("authorize");
+        if self.revoked.load(Ordering::SeqCst) {
+            Err(RunAuthorizationError::redacted("revoked by test policy"))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+struct RevokeBeforeProvisionSecrets {
+    log: Arc<StdMutex<Vec<&'static str>>>,
+}
+
+#[async_trait]
+impl RunSecretManager for RevokeBeforeProvisionSecrets {
+    async fn prepare(&self, _run: &Run) -> Result<PreparedRunSecrets, RunSecretError> {
+        lock(&self.log).push("secret-prepare");
+        Ok(PreparedRunSecrets::default())
+    }
+
+    async fn reauthorize(&self, _run: &Run) -> Result<(), RunSecretError> {
+        lock(&self.log).push("secret-reauthorize");
+        Err(RunSecretError::redacted("revoked by test"))
+    }
+
+    async fn destroy_after_guest(&self, _run_id: RunId) -> Result<(), RunSecretError> {
+        lock(&self.log).push("secret-destroy");
+        Ok(())
+    }
+
+    async fn recover(&self) -> Result<usize, RunSecretError> {
+        Ok(0)
+    }
+}
+
+struct RecordingCompletion {
+    log: Arc<StdMutex<Vec<&'static str>>>,
+}
+
+#[async_trait]
+impl RunCompletionObserver for RecordingCompletion {
+    async fn after_cleanup(&self, _run: &Run) -> Result<(), RunCompletionError> {
+        lock(&self.log).push("completion");
+        Ok(())
+    }
+
+    async fn recover(&self) -> Result<usize, RunCompletionError> {
+        Ok(0)
+    }
+}
+
+#[async_trait]
+impl RunRuntimeManager for RecordingRuntimeManager {
+    async fn prepare(&self, _run: &Run) -> Result<PreparedRunRuntime, RunRuntimeError> {
+        lock(&self.log).push("runtime-prepare");
+        Ok(PreparedRunRuntime::default())
+    }
+
+    async fn destroy(&self, _run_id: RunId) -> Result<(), RunRuntimeError> {
+        lock(&self.log).push("runtime-destroy");
+        Ok(())
+    }
+
+    async fn recover(&self) -> Result<usize, RunRuntimeError> {
+        Ok(0)
+    }
 }
 
 #[async_trait]
@@ -331,8 +844,14 @@ impl MemoryRepository {
         Self {
             run: Mutex::new(Run {
                 id: command.run_id,
-                agent_id: command.agent_id,
+                instance_id: command.instance_id,
+                instance_revision_id: command.instance_revision_id,
+                release_id: command.release_id,
+                release_agent_id: command.release_agent_id,
+                attachment_id: command.attachment_id,
+                kind: command.kind,
                 command_id: command.command_id,
+                requires_state: command.requires_state,
                 volume_id: None,
                 lease_id: None,
                 vm_id: None,
@@ -375,13 +894,13 @@ impl RunRepository for MemoryRepository {
     async fn bind_resources(
         &self,
         _run_id: RunId,
-        volume_id: VolumeId,
-        lease_id: LeaseId,
+        volume_id: Option<VolumeId>,
+        lease_id: Option<LeaseId>,
         vm_id: &str,
     ) -> Result<Run, RepositoryError> {
         let mut run = self.run.lock().await;
-        run.volume_id = Some(volume_id);
-        run.lease_id = Some(lease_id);
+        run.volume_id = volume_id;
+        run.lease_id = lease_id;
         run.vm_id = Some(vm_id.to_owned());
         Ok(run.clone())
     }
@@ -454,13 +973,13 @@ struct MemoryVolumeStore {
 }
 
 impl MemoryVolumeStore {
-    fn new(agent_id: AgentId, log: Arc<StdMutex<Vec<&'static str>>>) -> Self {
+    fn new(instance_id: AgentInstanceId, log: Arc<StdMutex<Vec<&'static str>>>) -> Self {
         let now = OffsetDateTime::now_utc();
         Self {
             volume: Volume {
                 id: VolumeId::new(),
-                agent_id,
-                kind: VolumeKind::AgentState,
+                instance_id,
+                kind: VolumeKind::InstanceState,
                 host_id: String::from("test"),
                 host_path: PathBuf::from("/fake/agent-state.raw"),
                 capacity_bytes: 32 * 1024 * 1024,
@@ -491,9 +1010,9 @@ impl MemoryVolumeStore {
 
 #[async_trait]
 impl VolumeStore for MemoryVolumeStore {
-    async fn resolve_agent_state(
+    async fn resolve_instance_state(
         &self,
-        _agent_id: AgentId,
+        _agent_id: AgentInstanceId,
         _capacity_bytes: u64,
     ) -> Result<Volume, VolumeError> {
         Ok(self.volume.clone())
@@ -510,7 +1029,7 @@ impl VolumeStore for MemoryVolumeStore {
         Ok(VolumeAttachment {
             volume: self.volume.clone(),
             lease,
-            disk_id: AGENT_STATE_DISK_ID,
+            disk_id: INSTANCE_STATE_DISK_ID,
         })
     }
 
@@ -560,6 +1079,28 @@ struct AutoExitProvider {
     spec: StdMutex<Option<VmSpec>>,
 }
 
+struct RevokeOnProvisionProvider {
+    inner: AutoExitProvider,
+    revoked: Arc<AtomicBool>,
+}
+
+#[async_trait]
+impl VmProvider for RevokeOnProvisionProvider {
+    fn name(&self) -> &'static str {
+        "revoke-on-provision"
+    }
+
+    async fn provision(&self, spec: VmSpec) -> Result<Arc<dyn VmInstance>, VmError> {
+        let instance = self.inner.provision(spec).await?;
+        self.revoked.store(true, Ordering::SeqCst);
+        Ok(instance)
+    }
+
+    async fn cleanup_orphan(&self, id: &VmId) -> Result<(), VmError> {
+        self.inner.cleanup_orphan(id).await
+    }
+}
+
 impl AutoExitProvider {
     const fn new(log: Arc<StdMutex<Vec<&'static str>>>) -> Self {
         Self {
@@ -599,6 +1140,64 @@ struct AutoExitInstance {
     events: broadcast::Sender<VmEvent>,
     exit: watch::Sender<Option<VmExit>>,
     log: Arc<StdMutex<Vec<&'static str>>>,
+}
+
+struct HangingProvider {
+    log: Arc<StdMutex<Vec<&'static str>>>,
+}
+
+#[async_trait]
+impl VmProvider for HangingProvider {
+    fn name(&self) -> &'static str {
+        "hanging"
+    }
+
+    async fn provision(&self, spec: VmSpec) -> Result<Arc<dyn VmInstance>, VmError> {
+        Ok(Arc::new(HangingInstance {
+            id: spec.id,
+            log: Arc::clone(&self.log),
+            events: broadcast::channel(8).0,
+        }))
+    }
+
+    async fn cleanup_orphan(&self, _id: &VmId) -> Result<(), VmError> {
+        Ok(())
+    }
+}
+
+struct HangingInstance {
+    id: VmId,
+    log: Arc<StdMutex<Vec<&'static str>>>,
+    events: broadcast::Sender<VmEvent>,
+}
+
+#[async_trait]
+impl VmInstance for HangingInstance {
+    fn id(&self) -> &VmId {
+        &self.id
+    }
+
+    async fn start(&self) -> Result<(), VmError> {
+        Ok(())
+    }
+
+    async fn stop(&self, _mode: StopMode) -> Result<(), VmError> {
+        lock(&self.log).push("stop");
+        Ok(())
+    }
+
+    async fn wait(&self) -> Result<VmExit, VmError> {
+        std::future::pending().await
+    }
+
+    fn subscribe_events(&self) -> broadcast::Receiver<VmEvent> {
+        self.events.subscribe()
+    }
+
+    async fn destroy(&self) -> Result<(), VmError> {
+        lock(&self.log).push("destroy");
+        Ok(())
+    }
 }
 
 impl AutoExitInstance {
@@ -670,4 +1269,39 @@ fn lock<T>(mutex: &StdMutex<T>) -> MutexGuard<'_, T> {
     mutex
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn normal_stateless_command() -> StartRun {
+    StartRun {
+        command_id: CommandId::new(),
+        run_id: RunId::new(),
+        instance_id: AgentInstanceId::new(),
+        instance_revision_id: AgentInstanceRevisionId::new(),
+        release_id: ReleaseId::new(),
+        release_agent_id: ReleaseAgentId::new(),
+        attachment_id: Some(AgentAttachmentId::new()),
+        kind: RunKind::Normal,
+        requires_state: false,
+    }
+}
+
+fn assert_launch_order(log: &StdMutex<Vec<&'static str>>) {
+    let entries = lock(log);
+    let authorization = entries
+        .iter()
+        .enumerate()
+        .filter_map(|(index, entry)| (*entry == "authorize").then_some(index))
+        .collect::<Vec<_>>();
+    let runtime_prepare = entries
+        .iter()
+        .position(|entry| *entry == "runtime-prepare")
+        .expect("runtime preparation");
+    let provision = entries
+        .iter()
+        .position(|entry| *entry == "provision")
+        .expect("VM provision");
+    drop(entries);
+    assert_eq!(authorization.len(), 2);
+    assert!(authorization[0] < runtime_prepare);
+    assert!(runtime_prepare < authorization[1] && authorization[1] < provision);
 }

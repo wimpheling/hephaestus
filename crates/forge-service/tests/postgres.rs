@@ -2,8 +2,8 @@
 
 use forge_domain::{CommitSha, GitRef, OrganizationId, ReceiveId, RefUpdate, Repository};
 use forge_service::{
-    CreateRepository, ForgeNatsOutboxPublisher, GitStorage, PgForgeRepository, RUN_START_SUBJECT,
-    ensure_forge_jetstream_topology,
+    CreateRepository, ForgeNatsOutboxPublisher, GitStorage, INSTANCE_RUN_REQUESTED_SUBJECT,
+    PgForgeRepository, ensure_forge_jetstream_topology,
 };
 use futures_util::StreamExt;
 use run_domain::{CancelRun, Run, RunState, StartRun};
@@ -16,6 +16,7 @@ use serial_test::serial;
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use std::{collections::BTreeMap, path::Path, sync::Arc, time::Duration};
 use tokio::process::Command;
+use uuid::Uuid;
 use vm_fake::FakeProvider;
 use vm_trait::{GuestCommand, NetworkMode, RootFilesystem, VmError, VmId, VmResources, VmSpec};
 use volume_local::{LocalVolumeConfig, LocalVolumeStore};
@@ -26,6 +27,7 @@ async fn persists_exact_config_and_deduplicates_receive() {
     let Some((pool, service, repository, temporary)) = fixture().await else {
         return;
     };
+    seed_reusable_attachment(&pool, &repository).await;
     let (commit, update) = commit_and_update(&temporary, &repository, valid_config()).await;
     let receive_id = ReceiveId::new();
     let first = service
@@ -56,16 +58,35 @@ async fn persists_exact_config_and_deduplicates_receive() {
          WHERE aggregate_type = 'forge' AND subject = $1
            AND aggregate_id = $2",
     )
-    .bind(RUN_START_SUBJECT)
+    .bind(INSTANCE_RUN_REQUESTED_SUBJECT)
     .bind(first.run_requests[0].id.as_uuid())
     .fetch_one(&pool)
     .await
     .expect("start command count");
     assert_eq!(stored_commit, commit.as_str());
     assert_eq!(starts, 1);
+    let reusable_requests: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM run_requests
+         WHERE receive_id = $1 AND request_kind = 'instance_normal'",
+    )
+    .bind(receive_id.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("exact reusable request count");
+    assert_eq!(reusable_requests, 1);
+    let reusable_events: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM outbox
+         WHERE subject = 'hephaestus.instance.run.requested.v1'
+           AND payload->>'receive_id' = $1",
+    )
+    .bind(receive_id.to_string())
+    .fetch_one(&pool)
+    .await
+    .expect("reusable run event count");
+    assert_eq!(reusable_events, 1);
 
     let work = temporary.path().join("work");
-    let invalid = valid_config().replace("version = 1", "version = 99");
+    let invalid = valid_config().replace("version = 2", "version = 99");
     tokio::fs::write(work.join("agent.toml"), invalid)
         .await
         .expect("invalid agent configuration");
@@ -100,7 +121,11 @@ async fn persists_exact_config_and_deduplicates_receive() {
         .await
         .expect("invalid configuration receive");
     assert_eq!(invalid_result.invalid_configurations, 1);
-    assert!(invalid_result.run_requests.is_empty());
+    assert_eq!(
+        invalid_result.run_requests.len(),
+        1,
+        "target agent.toml validity must not control attached instances"
+    );
     let diagnostic_code: String = sqlx::query_scalar(
         "SELECT diagnostics->0->>'code'
          FROM agent_config_revisions
@@ -131,11 +156,21 @@ async fn forge_outbox_retry_is_deduplicated_by_jetstream() {
     .execute(&pool)
     .await
     .expect("isolate forge outbox fixture");
+    seed_reusable_attachment(&pool, &repository).await;
     let (_, update) = commit_and_update(&temporary, &repository, valid_config()).await;
     service
         .accept_receive(&repository, ReceiveId::new(), "integration-user", &[update])
         .await
         .expect("accepted receive");
+    let event_ids: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM outbox
+         WHERE aggregate_type = 'forge' AND published_at IS NULL
+         ORDER BY occurred_at, id",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("exact receive outbox identities");
+    assert_eq!(event_ids.len(), 4);
 
     let client = async_nats::connect(nats_url)
         .await
@@ -157,27 +192,20 @@ async fn forge_outbox_retry_is_deduplicated_by_jetstream() {
             .publish_pending(&service, 10)
             .await
             .expect("first publication"),
-        2
+        4
     );
-    assert_eq!(stream.info().await.expect("stream state").state.messages, 2);
-    sqlx::query(
-        "UPDATE outbox SET published_at = NULL
-         WHERE aggregate_type = 'forge'
-           AND aggregate_id IN (
-             SELECT id FROM run_requests WHERE repository_id = $1
-             UNION SELECT id FROM git_receives WHERE repository_id = $1
-           )",
-    )
-    .bind(repository.id.as_uuid())
-    .execute(&pool)
-    .await
-    .expect("simulate acknowledgement loss");
+    assert_eq!(stream.info().await.expect("stream state").state.messages, 4);
+    sqlx::query("UPDATE outbox SET published_at = NULL WHERE id = ANY($1)")
+        .bind(&event_ids)
+        .execute(&pool)
+        .await
+        .expect("simulate acknowledgement loss");
     assert_eq!(
         publisher
             .publish_pending(&service, 10)
             .await
             .expect("retry publication"),
-        2
+        4
     );
     assert_eq!(
         stream
@@ -186,7 +214,7 @@ async fn forge_outbox_retry_is_deduplicated_by_jetstream() {
             .expect("deduplicated state")
             .state
             .messages,
-        2
+        4
     );
 
     context
@@ -206,6 +234,7 @@ async fn pushed_config_publishes_command_and_starts_vm() {
     else {
         return;
     };
+    seed_reusable_attachment(&pool, &repository).await;
     let (_, update) = commit_and_update(&temporary, &repository, valid_config()).await;
     let receive = service
         .accept_receive(&repository, ReceiveId::new(), "integration-user", &[update])
@@ -262,7 +291,7 @@ async fn pushed_config_publishes_command_and_starts_vm() {
             .publish_pending(&service, 10)
             .await
             .expect("publish receive and run command"),
-        2
+        4
     );
 
     let mut messages = consumer.messages().await.expect("command messages");
@@ -388,23 +417,18 @@ async fn cleanup_run(pool: &PgPool, command: &StartRun) {
         .execute(pool)
         .await
         .expect("delete command inbox");
+    if let Some(volume_id) = volume_id {
+        sqlx::query("DELETE FROM agent_instance_volume_leases WHERE volume_id = $1")
+            .bind(volume_id)
+            .execute(pool)
+            .await
+            .expect("delete volume leases");
+    }
     sqlx::query("DELETE FROM runs WHERE id = $1")
         .bind(command.run_id.as_uuid())
         .execute(pool)
         .await
         .expect("delete run");
-    if let Some(volume_id) = volume_id {
-        sqlx::query("DELETE FROM volume_leases WHERE volume_id = $1")
-            .bind(volume_id)
-            .execute(pool)
-            .await
-            .expect("delete volume leases");
-        sqlx::query("DELETE FROM agent_state_volumes WHERE id = $1")
-            .bind(volume_id)
-            .execute(pool)
-            .await
-            .expect("delete volume");
-    }
 }
 
 async fn fixture() -> Option<(PgPool, PgForgeRepository, Repository, tempfile::TempDir)> {
@@ -444,6 +468,161 @@ async fn fixture() -> Option<(PgPool, PgForgeRepository, Repository, tempfile::T
         .await
         .expect("repository");
     Some((pool, service, repository, temporary))
+}
+
+async fn seed_reusable_attachment(pool: &PgPool, repository: &Repository) {
+    let build_id = Uuid::new_v4();
+    let family_id = Uuid::new_v4();
+    let release_id = Uuid::new_v4();
+    let release_agent_id = Uuid::new_v4();
+    seed_reusable_release(
+        pool,
+        repository,
+        build_id,
+        family_id,
+        release_id,
+        release_agent_id,
+    )
+    .await;
+    let instance_id = Uuid::new_v4();
+    let revision_id = Uuid::new_v4();
+    let attachment_id = Uuid::new_v4();
+    seed_attached_instance(
+        pool,
+        repository,
+        family_id,
+        release_agent_id,
+        instance_id,
+        revision_id,
+        attachment_id,
+    )
+    .await;
+}
+
+async fn seed_reusable_release(
+    pool: &PgPool,
+    repository: &Repository,
+    build_id: Uuid,
+    family_id: Uuid,
+    release_id: Uuid,
+    release_agent_id: Uuid,
+) {
+    sqlx::query(
+        "INSERT INTO build_requests
+         (id, repository_id, source_commit, source_ref,
+          build_definition_hash, state)
+         VALUES ($1, $2, $3, 'refs/heads/main', $4, 'succeeded')",
+    )
+    .bind(build_id)
+    .bind(repository.id.as_uuid())
+    .bind("d".repeat(40))
+    .bind([1_u8; 32].as_slice())
+    .execute(pool)
+    .await
+    .expect("seed reusable build");
+    sqlx::query(
+        "INSERT INTO agent_families (id, repository_id, agent_key)
+         VALUES ($1, $2, 'attached')",
+    )
+    .bind(family_id)
+    .bind(repository.id.as_uuid())
+    .execute(pool)
+    .await
+    .expect("seed family");
+    sqlx::query(
+        "INSERT INTO releases
+         (id, repository_id, version, source_commit, source_ref,
+          build_request_id, build_definition_hash, configuration,
+          configuration_hash, manifest_hash, state, published_at)
+         VALUES ($1, $2, 'v1', $3, 'refs/heads/main', $4, $5,
+                 '{}', $6, $7, 'published', now())",
+    )
+    .bind(release_id)
+    .bind(repository.id.as_uuid())
+    .bind("d".repeat(40))
+    .bind(build_id)
+    .bind([1_u8; 32].as_slice())
+    .bind([2_u8; 32].as_slice())
+    .bind([3_u8; 32].as_slice())
+    .execute(pool)
+    .await
+    .expect("seed release");
+    sqlx::query(
+        "INSERT INTO release_agents
+         (id, release_id, family_id, agent_key, display_name,
+          runtime_contract, runtime_contract_hash, parameter_schema,
+          secret_slot_schema, requires_state)
+         VALUES ($1, $2, $3, 'attached', 'Attached', '{}', $4,
+                 '[]', '[]', false)",
+    )
+    .bind(release_agent_id)
+    .bind(release_id)
+    .bind(family_id)
+    .bind([4_u8; 32].as_slice())
+    .execute(pool)
+    .await
+    .expect("seed release agent");
+}
+
+// Explicit fixture IDs keep every seeded foreign-key edge visible in the test.
+#[allow(clippy::too_many_arguments)]
+async fn seed_attached_instance(
+    pool: &PgPool,
+    repository: &Repository,
+    family_id: Uuid,
+    release_agent_id: Uuid,
+    instance_id: Uuid,
+    revision_id: Uuid,
+    attachment_id: Uuid,
+) {
+    sqlx::query(
+        "INSERT INTO agent_instances
+         (id, project_id, family_id, name, state)
+         VALUES ($1, $2, $3, $4, 'active')",
+    )
+    .bind(instance_id)
+    .bind(repository.project_id.as_uuid())
+    .bind(family_id)
+    .bind(format!("attached-{}", instance_id.simple()))
+    .execute(pool)
+    .await
+    .expect("seed instance");
+    sqlx::query(
+        "INSERT INTO agent_instance_revisions
+         (id, instance_id, release_agent_id, parameters, parameter_hash,
+          resource_selection, network_restriction,
+          effective_runtime_policy, effective_policy_hash,
+          platform_policy_version, runnable)
+         VALUES ($1, $2, $3, '{}', $4, '{}', '{}', '{}', $5,
+                 'platform/v1', true)",
+    )
+    .bind(revision_id)
+    .bind(instance_id)
+    .bind(release_agent_id)
+    .bind([5_u8; 32].as_slice())
+    .bind([6_u8; 32].as_slice())
+    .execute(pool)
+    .await
+    .expect("seed revision");
+    sqlx::query("UPDATE agent_instances SET active_revision_id = $2 WHERE id = $1")
+        .bind(instance_id)
+        .bind(revision_id)
+        .execute(pool)
+        .await
+        .expect("activate revision");
+    sqlx::query(
+        "INSERT INTO agent_attachments
+         (id, instance_id, project_id, repository_id, ref_selector,
+          trigger_policy)
+         VALUES ($1, $2, $3, $4, 'refs/heads/main', 'push')",
+    )
+    .bind(attachment_id)
+    .bind(instance_id)
+    .bind(repository.project_id.as_uuid())
+    .bind(repository.id.as_uuid())
+    .execute(pool)
+    .await
+    .expect("seed attachment");
 }
 
 async fn commit_and_update(
@@ -491,6 +670,20 @@ async fn commit_and_update(
 }
 
 async fn cleanup(pool: &PgPool, repository: Repository) {
+    let retains_instance_history: bool = sqlx::query_scalar(
+        "SELECT EXISTS(
+            SELECT 1 FROM agent_attachments WHERE repository_id = $1
+         )",
+    )
+    .bind(repository.id.as_uuid())
+    .fetch_one(pool)
+    .await
+    .expect("instance provenance retention check");
+    if retains_instance_history {
+        // Reusable attachment/release provenance is deliberately permanent;
+        // this random fixture cannot be deleted without violating that model.
+        return;
+    }
     sqlx::query(
         "DELETE FROM outbox WHERE aggregate_type = 'forge'
          AND (
@@ -577,18 +770,32 @@ async fn git_output(directory: &Path, arguments: &[&str]) -> String {
 
 const fn valid_config() -> &'static str {
     r#"
-version = 1
+version = 2
 [agent]
-name = "reviewer"
+name = "Reviewer"
+key = "reviewer"
+[build]
+command = "/bin/build"
+working_directory = "/source"
+root_image = "build@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+triggers = ["refs/heads/main"]
+[build.resources]
+vcpus = 1
+memory_mib = 512
+[build.network]
+profile = "disabled"
+[[build.artifacts]]
+path = "bin/reviewer"
+kind = "executable"
 [guest]
-command = "/usr/bin/review"
+command = "bin/reviewer"
 arguments = []
-working_directory = "/workspace"
+working_directory = "bin"
 [resources]
 vcpus = 1
 memory_mib = 256
 [root_image]
-reference = "image@sha256:abc"
+reference = "runtime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 [workspace]
 mount = true
 path = "/workspace/repo"
@@ -598,7 +805,6 @@ enabled = true
 [network]
 profile = "disabled"
 [triggers]
-push = true
-refs = ["refs/heads/main"]
+push = false
 "#
 }

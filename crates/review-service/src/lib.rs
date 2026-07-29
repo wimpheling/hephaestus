@@ -9,7 +9,11 @@ use identity_domain::{RequestId, UserId};
 use review_domain::{
     CONTROL_EXECUTE_SUBJECT, ControlCommand, ControlKind, ControlRequestId, ReviewProposalId,
 };
-use runtime_types::{AgentId, CommandId, RunId};
+use run_domain::{RunKind, StartRun};
+use runtime_types::{
+    AgentAttachmentId, AgentInstanceId, AgentInstanceRevisionId, CommandId, ReleaseAgentId,
+    ReleaseId, RunId,
+};
 use sqlx::{PgPool, Postgres, Transaction};
 use std::{path::Path, process::Stdio, sync::Arc};
 use time::OffsetDateTime;
@@ -243,6 +247,9 @@ impl ReviewControlService {
         Ok(ControlOutcome::Completed)
     }
 
+    // The authorization, exact provenance copy, outbox, and audit transition
+    // form one transaction and are clearest when reviewed together.
+    #[allow(clippy::too_many_lines)]
     async fn retry_run(
         &self,
         transaction: &mut Transaction<'_, Postgres>,
@@ -251,8 +258,10 @@ impl ReviewControlService {
         let source_run_id = command.run_id.ok_or(ControlServiceError::InvalidTarget)?;
         let source = sqlx::query_as::<_, RetrySource>(
             "SELECT request.repository_id, request.commit_sha, request.git_ref,
-                    request.config_hash, request.receive_id,
-                    request.config_revision_id, request.agent_id,
+                    request.receive_id, request.instance_id,
+                    request.instance_revision_id, request.release_id,
+                    request.release_agent_id, request.attachment_id,
+                    request.platform_policy_version, request.requires_state,
                     request.attempt
              FROM run_requests request
              WHERE request.run_id = $1
@@ -265,13 +274,13 @@ impl ReviewControlService {
         if source.repository_id != command.repository_id.as_uuid() {
             return Err(ControlServiceError::DeliveryMismatch);
         }
-        let agent_id = AgentId::from_uuid(source.agent_id);
+        let instance_id = AgentInstanceId::from_uuid(source.instance_id);
         let decision = self
             .authorize(
                 transaction,
                 command,
                 Permission::CanExecute,
-                ObjectRef::new(ObjectType::Agent, agent_id.as_uuid()),
+                ObjectRef::new(ObjectType::AgentInstance, instance_id.as_uuid()),
             )
             .await?;
         if !decision.is_allowed() {
@@ -283,12 +292,14 @@ impl ReviewControlService {
             "SELECT COALESCE(max(attempt), 0) + 1
              FROM run_requests
              WHERE repository_id = $1 AND commit_sha = $2 AND git_ref = $3
-               AND config_hash = $4 AND receive_id = $5",
+               AND attachment_id = $4 AND instance_revision_id = $5
+               AND receive_id = $6",
         )
         .bind(source.repository_id)
         .bind(&source.commit_sha)
         .bind(&source.git_ref)
-        .bind(&source.config_hash)
+        .bind(source.attachment_id)
+        .bind(source.instance_revision_id)
         .bind(source.receive_id)
         .fetch_one(&mut **transaction)
         .await?;
@@ -296,39 +307,53 @@ impl ReviewControlService {
         let start_id = CommandId::new();
         sqlx::query(
             "INSERT INTO run_requests
-             (id, repository_id, commit_sha, git_ref, config_hash, receive_id,
-              config_revision_id, agent_id, run_id, command_id, actor_id,
-              request_id, retry_of_run_id, attempt)
+             (id, repository_id, commit_sha, git_ref, receive_id,
+              instance_id, instance_revision_id, release_id, release_agent_id,
+              attachment_id, platform_policy_version, request_kind,
+              run_id, command_id, actor_id, request_id, retry_of_run_id, attempt,
+              requires_state)
              VALUES
-             ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
+             ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+              'instance_normal', $12, $13, $14, $15, $16, $17, $18)",
         )
         .bind(RunRequestId::new().as_uuid())
         .bind(source.repository_id)
         .bind(&source.commit_sha)
         .bind(&source.git_ref)
-        .bind(&source.config_hash)
         .bind(source.receive_id)
-        .bind(source.config_revision_id)
-        .bind(agent_id.as_uuid())
+        .bind(source.instance_id)
+        .bind(source.instance_revision_id)
+        .bind(source.release_id)
+        .bind(source.release_agent_id)
+        .bind(source.attachment_id)
+        .bind(&source.platform_policy_version)
         .bind(run_id.as_uuid())
         .bind(start_id.as_uuid())
         .bind(command.actor_id.as_uuid())
         .bind(command.request_id.as_uuid())
         .bind(source_run_id.as_uuid())
         .bind(attempt)
+        .bind(source.requires_state)
         .execute(&mut **transaction)
         .await?;
+        let start = StartRun {
+            command_id: start_id,
+            run_id,
+            instance_id,
+            instance_revision_id: AgentInstanceRevisionId::from_uuid(source.instance_revision_id),
+            release_id: ReleaseId::from_uuid(source.release_id),
+            release_agent_id: ReleaseAgentId::from_uuid(source.release_agent_id),
+            attachment_id: Some(AgentAttachmentId::from_uuid(source.attachment_id)),
+            kind: RunKind::Normal,
+            requires_state: source.requires_state,
+        };
         insert_outbox(
             transaction,
             "run_request",
             run_id.as_uuid(),
             START_RUN_SUBJECT,
             "run.retry_requested",
-            serde_json::json!({
-                "command_id": start_id,
-                "run_id": run_id,
-                "agent_id": agent_id,
-            }),
+            serde_json::to_value(start)?,
         )
         .await?;
         complete_control(transaction, command.command_id).await?;
@@ -673,10 +698,14 @@ struct RetrySource {
     repository_id: Uuid,
     commit_sha: String,
     git_ref: String,
-    config_hash: String,
     receive_id: Uuid,
-    config_revision_id: Uuid,
-    agent_id: Uuid,
+    instance_id: Uuid,
+    instance_revision_id: Uuid,
+    release_id: Uuid,
+    release_agent_id: Uuid,
+    attachment_id: Uuid,
+    platform_policy_version: String,
+    requires_state: bool,
     #[allow(dead_code)]
     attempt: i32,
 }
@@ -688,6 +717,7 @@ async fn set_actor(
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
         "SELECT set_config('hephaestus.actor_id', $1, true),
+                set_config('hephaestus.subject_type', 'user', true),
                 set_config('hephaestus.request_id', $2, true)",
     )
     .bind(actor_id.to_string())
@@ -919,6 +949,9 @@ pub enum ControlServiceError {
     /// Authorization evaluation failed.
     #[error(transparent)]
     Authorization(#[from] authz_domain::AuthzError),
+    /// Exact start-command serialization failed.
+    #[error(transparent)]
+    Serialization(#[from] serde_json::Error),
     /// Git process launch failed.
     #[error("Git process failed: {0}")]
     Io(#[source] std::io::Error),

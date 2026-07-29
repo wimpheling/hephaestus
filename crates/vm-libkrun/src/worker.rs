@@ -32,6 +32,7 @@ pub struct WorkerConfiguration {
     pub service_uid: u32,
     pub service_gid: u32,
     pub startup_timeout: Duration,
+    pub broker_socket_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -249,7 +250,12 @@ impl WorkerRuntime {
         let passt_socket = passt.as_ref().map(|_| self.runtime_dir.join("passt.sock"));
         let control_path = self.runtime_dir.join("guest-control.sock");
         let context = Context::load(&self.config.libkrun_library).map_err(WireError::from)?;
-        if let Err(error) = context.configure(&self.spec, passt_socket.as_deref(), &control_path) {
+        if let Err(error) = context.configure(
+            &self.spec,
+            passt_socket.as_deref(),
+            &control_path,
+            self.config.broker_socket_path.as_deref(),
+        ) {
             drop(passt);
             return Err(WireError::from(error));
         }

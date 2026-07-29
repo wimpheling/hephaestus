@@ -213,10 +213,15 @@ async fn seed(pool: &PgPool, storage: &GitStorage, temporary: &TempDir) -> Fixtu
     let organization_id = Uuid::new_v4();
     let project_id = Uuid::new_v4();
     let repository_id = RepositoryId::new();
-    let agent_id = Uuid::new_v4();
+    let family_id = Uuid::new_v4();
+    let build_id = Uuid::new_v4();
+    let release_id = Uuid::new_v4();
+    let release_agent_id = Uuid::new_v4();
+    let instance_id = Uuid::new_v4();
+    let instance_revision_id = Uuid::new_v4();
+    let attachment_id = Uuid::new_v4();
     let run_id = RunId::new();
     let receive_id = Uuid::new_v4();
-    let revision_id = Uuid::new_v4();
     let result_id = Uuid::new_v4();
     let proposal_id = ReviewProposalId::new();
 
@@ -251,7 +256,7 @@ async fn seed(pool: &PgPool, storage: &GitStorage, temporary: &TempDir) -> Fixtu
     std::fs::write(work.join("README.md"), "input\nagent result\n").expect("write result");
     run_git(&work, &["commit", "-am", "result"]);
     let result_commit = git_text(&work, &["rev-parse", "HEAD"]);
-    let result_ref = format!("refs/heads/hephaestus/{agent_id}/{run_id}");
+    let result_ref = format!("refs/heads/hephaestus/{instance_id}/{run_id}");
     run_git(&work, &["push", "origin", &format!("HEAD:{result_ref}")]);
 
     sqlx::query("INSERT INTO users (id, display_name) VALUES ($1, 'Reviewer')")
@@ -300,19 +305,135 @@ async fn seed(pool: &PgPool, storage: &GitStorage, temporary: &TempDir) -> Fixtu
     .execute(pool)
     .await
     .expect("repository");
-    sqlx::query("INSERT INTO agents (id, project_id, name) VALUES ($1, $2, 'agent')")
-        .bind(agent_id)
-        .bind(project_id)
+    sqlx::query(
+        "INSERT INTO agent_families (id, repository_id, agent_key)
+         VALUES ($1, $2, 'reviewer')",
+    )
+    .bind(family_id)
+    .bind(repository_id.as_uuid())
+    .execute(pool)
+    .await
+    .expect("agent family");
+    sqlx::query(
+        "INSERT INTO build_requests
+         (id, repository_id, source_commit, source_ref,
+          build_definition_hash, state, created_by)
+         VALUES ($1, $2, $3, 'refs/heads/main', $4, 'succeeded', $5)",
+    )
+    .bind(build_id)
+    .bind(repository_id.as_uuid())
+    .bind(&input_commit)
+    .bind([1_u8; 32].as_slice())
+    .bind(actor_id.as_uuid())
+    .execute(pool)
+    .await
+    .expect("build");
+    sqlx::query(
+        "INSERT INTO releases
+         (id, repository_id, version, source_commit, source_ref,
+          build_request_id, build_definition_hash, configuration,
+          configuration_hash, manifest_hash, state, publication_actor_id,
+          published_at)
+         VALUES ($1, $2, 'v1', $3, 'refs/heads/main', $4, $5, '{}',
+                 $6, $7, 'published', $8, now())",
+    )
+    .bind(release_id)
+    .bind(repository_id.as_uuid())
+    .bind(&input_commit)
+    .bind(build_id)
+    .bind([1_u8; 32].as_slice())
+    .bind([2_u8; 32].as_slice())
+    .bind([3_u8; 32].as_slice())
+    .bind(actor_id.as_uuid())
+    .execute(pool)
+    .await
+    .expect("release");
+    sqlx::query(
+        "INSERT INTO release_agents
+         (id, release_id, family_id, agent_key, display_name,
+          runtime_contract, runtime_contract_hash, parameter_schema,
+          secret_slot_schema, requires_state)
+         VALUES ($1, $2, $3, 'reviewer', 'Reviewer', $4, $5, '[]', '[]', false)",
+    )
+    .bind(release_agent_id)
+    .bind(release_id)
+    .bind(family_id)
+    .bind(serde_json::json!({
+        "command": "bin/reviewer",
+        "arguments": [],
+        "working_directory": ".",
+        "root_image_digest": "fixture"
+    }))
+    .bind([4_u8; 32].as_slice())
+    .execute(pool)
+    .await
+    .expect("release agent");
+    sqlx::query(
+        "INSERT INTO agent_instances
+         (id, project_id, family_id, name, state, created_by)
+         VALUES ($1, $2, $3, 'reviewer', 'active', $4)",
+    )
+    .bind(instance_id)
+    .bind(project_id)
+    .bind(family_id)
+    .bind(actor_id.as_uuid())
+    .execute(pool)
+    .await
+    .expect("instance");
+    sqlx::query(
+        "INSERT INTO agent_instance_revisions
+         (id, instance_id, release_agent_id, parameters, parameter_hash,
+          resource_selection, network_restriction, effective_runtime_policy,
+          effective_policy_hash, platform_policy_version, runnable, created_by)
+         VALUES ($1, $2, $3, '{}', $4, $5, $6, $7, $8,
+                 'fixture/v1', true, $9)",
+    )
+    .bind(instance_revision_id)
+    .bind(instance_id)
+    .bind(release_agent_id)
+    .bind([5_u8; 32].as_slice())
+    .bind(serde_json::json!({"vcpus": 1, "memory_mib": 128, "network": "disabled"}))
+    .bind(serde_json::json!({"network": "disabled"}))
+    .bind(serde_json::json!({"vcpus": 1, "memory_mib": 128, "network": "disabled"}))
+    .bind([6_u8; 32].as_slice())
+    .bind(actor_id.as_uuid())
+    .execute(pool)
+    .await
+    .expect("instance revision");
+    sqlx::query("UPDATE agent_instances SET active_revision_id = $2 WHERE id = $1")
+        .bind(instance_id)
+        .bind(instance_revision_id)
         .execute(pool)
         .await
-        .expect("agent");
+        .expect("activate revision");
+    sqlx::query(
+        "INSERT INTO agent_attachments
+         (id, instance_id, project_id, repository_id, ref_selector,
+          trigger_policy, created_by)
+         VALUES ($1, $2, $3, $4, 'refs/heads/main', 'push', $5)",
+    )
+    .bind(attachment_id)
+    .bind(instance_id)
+    .bind(project_id)
+    .bind(repository_id.as_uuid())
+    .bind(actor_id.as_uuid())
+    .execute(pool)
+    .await
+    .expect("attachment");
     sqlx::query(
         "INSERT INTO runs
-         (id, agent_id, command_id, state, outcome, created_at, updated_at)
-         VALUES ($1, $2, $3, 'cleaned_up', 'succeeded', now(), now())",
+         (id, instance_id, instance_revision_id, release_id, release_agent_id,
+          attachment_id, run_kind, command_id, state, outcome, requires_state,
+          created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, 'normal', $7,
+                 'cleaned_up', 'succeeded', false, now(), now())",
     )
     .bind(run_id.as_uuid())
-    .bind(agent_id)
+    .bind(instance_id)
+    .bind(instance_revision_id)
+    .bind(release_id)
+    .bind(release_agent_id)
+    .bind(attachment_id)
     .bind(Uuid::new_v4())
     .execute(pool)
     .await
@@ -329,53 +450,48 @@ async fn seed(pool: &PgPool, storage: &GitStorage, temporary: &TempDir) -> Fixtu
     .await
     .expect("receive");
     sqlx::query(
-        "INSERT INTO agent_config_revisions
-         (id, repository_id, receive_id, commit_sha, config_hash,
-          schema_version, agent_id, status, config)
-         VALUES ($1, $2, $3, $4, $5, 1, $6, 'valid', '{}'::jsonb)",
-    )
-    .bind(revision_id)
-    .bind(repository_id.as_uuid())
-    .bind(receive_id)
-    .bind(&input_commit)
-    .bind("a".repeat(64))
-    .bind(agent_id)
-    .execute(pool)
-    .await
-    .expect("configuration");
-    sqlx::query(
         "INSERT INTO run_requests
-         (id, repository_id, commit_sha, git_ref, config_hash, receive_id,
-          config_revision_id, agent_id, run_id, command_id, actor_id, request_id)
-         VALUES ($1, $2, $3, 'refs/heads/main', $4, $5, $6, $7, $8, $9, $10, $11)",
+         (id, repository_id, commit_sha, git_ref, receive_id,
+          run_id, command_id, actor_id, request_id, instance_id,
+          instance_revision_id, release_id, release_agent_id, attachment_id,
+          platform_policy_version, requires_state)
+         VALUES ($1, $2, $3, 'refs/heads/main', $4, $5, $6, $7, $8,
+                 $9, $10, $11, $12, $13, 'fixture/v1', false)",
     )
     .bind(Uuid::new_v4())
     .bind(repository_id.as_uuid())
     .bind(&input_commit)
-    .bind("a".repeat(64))
     .bind(receive_id)
-    .bind(revision_id)
-    .bind(agent_id)
     .bind(run_id.as_uuid())
     .bind(Uuid::new_v4())
     .bind(actor_id.as_uuid())
     .bind(Uuid::new_v4())
+    .bind(instance_id)
+    .bind(instance_revision_id)
+    .bind(release_id)
+    .bind(release_agent_id)
+    .bind(attachment_id)
     .execute(pool)
     .await
     .expect("run request");
     sqlx::query(
         "INSERT INTO run_results
-         (id, run_id, repository_id, agent_id, input_commit, result_commit,
-          result_ref, message, state, completed_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, 'fixture result', 'completed', now())",
+         (id, run_id, repository_id, instance_id, input_commit, result_commit,
+          result_ref, message, state, completed_at, instance_revision_id,
+          release_id, release_agent_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'fixture result',
+                 'completed', now(), $8, $9, $10)",
     )
     .bind(result_id)
     .bind(run_id.as_uuid())
     .bind(repository_id.as_uuid())
-    .bind(agent_id)
+    .bind(instance_id)
     .bind(&input_commit)
     .bind(&result_commit)
     .bind(&result_ref)
+    .bind(instance_revision_id)
+    .bind(release_id)
+    .bind(release_agent_id)
     .execute(pool)
     .await
     .expect("result");

@@ -1,6 +1,9 @@
 //! Durable run state, outcomes, commands, and transition rules.
 
-use runtime_types::{AgentId, CommandId, LeaseId, RunId, VolumeId};
+use runtime_types::{
+    AgentAttachmentId, AgentInstanceId, AgentInstanceRevisionId, CommandId, LeaseId,
+    ReleaseAgentId, ReleaseId, RunId, VolumeId,
+};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use vm_trait::VmExit;
@@ -77,13 +80,35 @@ pub enum RunOutcome {
     Cancelled,
 }
 
+/// Purpose of one exact reusable-agent execution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunKind {
+    /// A normal run against a repository attachment.
+    Normal,
+    /// An isolated state-migration hook for an instance update.
+    Update,
+}
+
 /// Durable representation of one run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Run {
     /// Stable run identifier.
     pub id: RunId,
-    /// Agent being executed.
-    pub agent_id: AgentId,
+    /// Project-owned instance being executed.
+    pub instance_id: AgentInstanceId,
+    /// Immutable instance revision selected for this run.
+    pub instance_revision_id: AgentInstanceRevisionId,
+    /// Immutable release selected by the revision.
+    pub release_id: ReleaseId,
+    /// Exported release agent selected by the revision.
+    pub release_agent_id: ReleaseAgentId,
+    /// Repository attachment for a normal run; update hooks have none.
+    pub attachment_id: Option<AgentAttachmentId>,
+    /// Execution purpose.
+    pub kind: RunKind,
+    /// Whether this exact release agent requires persistent instance state.
+    pub requires_state: bool,
     /// Command that created this run.
     pub command_id: CommandId,
     /// Persistent state volume, once resolved.
@@ -110,15 +135,27 @@ pub struct Run {
     pub state_version: i64,
 }
 
-/// Idempotent request to start an agent run.
+/// Idempotent request to start an exact reusable-agent run.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StartRun {
     /// Idempotency key for duplicate delivery handling.
     pub command_id: CommandId,
     /// Stable run identifier selected by the command producer.
     pub run_id: RunId,
-    /// Agent to execute.
-    pub agent_id: AgentId,
+    /// Project-owned instance to execute.
+    pub instance_id: AgentInstanceId,
+    /// Immutable instance revision to execute.
+    pub instance_revision_id: AgentInstanceRevisionId,
+    /// Immutable release selected by the revision.
+    pub release_id: ReleaseId,
+    /// Exported release agent selected by the revision.
+    pub release_agent_id: ReleaseAgentId,
+    /// Repository attachment for a normal run; update hooks have none.
+    pub attachment_id: Option<AgentAttachmentId>,
+    /// Execution purpose.
+    pub kind: RunKind,
+    /// Whether this exact release agent requires persistent instance state.
+    pub requires_state: bool,
 }
 
 /// Idempotent request to cancel a run.

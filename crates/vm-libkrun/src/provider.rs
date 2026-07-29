@@ -783,6 +783,7 @@ impl WorkerClient {
             service_uid: config.service_uid,
             service_gid: config.service_gid,
             startup_timeout: config.startup_timeout,
+            broker_socket_path: config.broker_socket_path.clone(),
         };
         if let Err(error) = client
             .request(WorkerCommand::Configure {
@@ -1127,7 +1128,7 @@ mod tests {
 
         let mut requested = spec("worker-failure", root);
         requested.disks.push(VmDisk {
-            id: String::from("agent-state"),
+            id: String::from("instance-state"),
             host_path: caller_disk.clone(),
             format: DiskFormat::Raw,
             read_only: false,

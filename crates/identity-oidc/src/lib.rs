@@ -142,6 +142,7 @@ pub async fn map_identity(
     }
     sqlx::query(
         "SELECT set_config('hephaestus.actor_id', $1, true),
+                set_config('hephaestus.subject_type', 'user', true),
                 set_config('hephaestus.request_id', $2, true)",
     )
     .bind(user_id.to_string())

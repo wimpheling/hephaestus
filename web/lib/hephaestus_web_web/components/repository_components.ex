@@ -6,7 +6,11 @@ defmodule HephaestusWebWeb.RepositoryComponents do
   use HephaestusWebWeb, :html
 
   attr :repository_id, :string, required: true
-  attr :active, :atom, required: true, values: [:files, :commits, :branches]
+
+  attr :active, :atom,
+    required: true,
+    values: [:files, :commits, :branches, :releases, :agents]
+
   attr :branch, :string, default: nil
 
   def repository_tabs(assigns) do
@@ -32,6 +36,20 @@ defmodule HephaestusWebWeb.RepositoryComponents do
         aria-current={if(@active == :branches, do: "page")}
       >
         <.icon name="hero-code-bracket" class="size-4" /> Branches
+      </.link>
+      <.link
+        navigate={~p"/repositories/#{@repository_id}/releases"}
+        class={["repository-tab", @active == :releases && "active"]}
+        aria-current={if(@active == :releases, do: "page")}
+      >
+        <.icon name="hero-cube-transparent" class="size-4" /> Releases
+      </.link>
+      <.link
+        navigate={~p"/repositories/#{@repository_id}/agents"}
+        class={["repository-tab", @active == :agents && "active"]}
+        aria-current={if(@active == :agents, do: "page")}
+      >
+        <.icon name="hero-cpu-chip" class="size-4" /> Agents
       </.link>
     </nav>
     """

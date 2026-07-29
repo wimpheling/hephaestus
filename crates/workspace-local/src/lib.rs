@@ -3,8 +3,11 @@
 use agent_config::AgentConfig;
 use async_trait::async_trait;
 use forge_domain::RepositoryId;
-use run_domain::{Run, RunState};
-use runtime_types::{AgentId, CommandId, RunId};
+use run_domain::{Run, RunKind, RunState};
+use runtime_types::{
+    AgentAttachmentId, AgentInstanceId, AgentInstanceRevisionId, CommandId, ReleaseAgentId,
+    ReleaseId, RunId,
+};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use sqlx::{FromRow, PgPool};
@@ -205,13 +208,12 @@ impl LocalWorkspaceManager {
 
     async fn request(&self, run: &Run) -> Result<Option<RunRequest>, LocalWorkspaceError> {
         let row = sqlx::query_as::<_, RunRequestRow>(
-            "SELECT request.repository_id, request.commit_sha, request.agent_id,
-                    revision.config
+            "SELECT request.repository_id, request.commit_sha,
+                    request.instance_id, release.configuration AS config
              FROM run_requests request
-             JOIN agent_config_revisions revision
-               ON revision.id = request.config_revision_id
+             JOIN releases release ON release.id = request.release_id
              WHERE request.command_id = $1
-               AND revision.status = 'valid'",
+               AND request.dispatch_state <> 'denied'",
         )
         .bind(run.command_id.as_uuid())
         .fetch_optional(&self.pool)
@@ -514,18 +516,22 @@ impl LocalWorkspaceManager {
         ensure_workspace_path(&self.config, &active, "active")?;
         ensure_workspace_path(&self.config, &sealed, "sealed")?;
         let result_id = ResultId::new();
-        let result_ref = format!("refs/heads/hephaestus/{}/{}", request.agent_id, run.id);
+        let result_ref = format!("refs/heads/hephaestus/{}/{}", request.instance_id, run.id);
         sqlx::query(
             "INSERT INTO run_results
-             (id, run_id, repository_id, agent_id, input_commit,
-              result_ref, message, state)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending')
+             (id, run_id, repository_id, instance_id, instance_revision_id,
+              release_id, release_agent_id, input_commit, result_ref, message,
+              state)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pending')
              ON CONFLICT (run_id) DO NOTHING",
         )
         .bind(result_id.as_uuid())
         .bind(run.id.as_uuid())
         .bind(request.repository_id.as_uuid())
-        .bind(request.agent_id.as_uuid())
+        .bind(request.instance_id.as_uuid())
+        .bind(run.instance_revision_id.as_uuid())
+        .bind(run.release_id.as_uuid())
+        .bind(run.release_agent_id.as_uuid())
         .bind(&workspace.input_commit)
         .bind(&result_ref)
         .bind(message)
@@ -761,7 +767,9 @@ impl LocalWorkspaceManager {
     async fn recover_incomplete(&self) -> Result<usize, LocalWorkspaceError> {
         let pending = sqlx::query_as::<_, PendingRecoveryRow>(
             "SELECT result.run_id, result.message, run.command_id,
-                    run.agent_id, run.created_at
+                    run.instance_id, run.instance_revision_id, run.release_id,
+                    run.release_agent_id, run.attachment_id, run.run_kind,
+                    run.requires_state, run.created_at
              FROM run_results result
              JOIN runs run ON run.id = result.run_id
              WHERE result.state = 'pending'",
@@ -773,8 +781,14 @@ impl LocalWorkspaceManager {
         for row in pending {
             let run = Run {
                 id: RunId::from_uuid(row.run_id),
-                agent_id: AgentId::from_uuid(row.agent_id),
+                instance_id: AgentInstanceId::from_uuid(row.instance_id),
+                instance_revision_id: AgentInstanceRevisionId::from_uuid(row.instance_revision_id),
+                release_id: ReleaseId::from_uuid(row.release_id),
+                release_agent_id: ReleaseAgentId::from_uuid(row.release_agent_id),
+                attachment_id: row.attachment_id.map(AgentAttachmentId::from_uuid),
+                kind: parse_run_kind(&row.run_kind)?,
                 command_id: CommandId::from_uuid(row.command_id),
+                requires_state: row.requires_state,
                 volume_id: None,
                 lease_id: None,
                 vm_id: None,
@@ -870,14 +884,14 @@ impl LocalWorkspaceManager {
 struct RunRequestRow {
     repository_id: Uuid,
     commit_sha: String,
-    agent_id: Uuid,
+    instance_id: Uuid,
     config: serde_json::Value,
 }
 
 struct RunRequest {
     repository_id: RepositoryId,
     commit: String,
-    agent_id: AgentId,
+    instance_id: AgentInstanceId,
     config: AgentConfig,
 }
 
@@ -888,7 +902,7 @@ impl TryFrom<RunRequestRow> for RunRequest {
         Ok(Self {
             repository_id: RepositoryId::from_uuid(row.repository_id),
             commit: row.commit_sha,
-            agent_id: AgentId::from_uuid(row.agent_id),
+            instance_id: AgentInstanceId::from_uuid(row.instance_id),
             config: serde_json::from_value(row.config).map_err(serialization)?,
         })
     }
@@ -948,13 +962,29 @@ struct PendingRecoveryRow {
     run_id: Uuid,
     message: String,
     command_id: Uuid,
-    agent_id: Uuid,
+    instance_id: Uuid,
+    instance_revision_id: Uuid,
+    release_id: Uuid,
+    release_agent_id: Uuid,
+    attachment_id: Option<Uuid>,
+    run_kind: String,
+    requires_state: bool,
     created_at: time::OffsetDateTime,
 }
 
 struct Materialized {
     tree: String,
     manifest_hash: String,
+}
+
+fn parse_run_kind(value: &str) -> Result<RunKind, LocalWorkspaceError> {
+    match value {
+        "normal" => Ok(RunKind::Normal),
+        "update" => Ok(RunKind::Update),
+        _ => Err(LocalWorkspaceError::State(String::from(
+            "stored run kind is invalid",
+        ))),
+    }
 }
 
 struct Imported {

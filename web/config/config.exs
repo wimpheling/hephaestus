@@ -54,8 +54,11 @@ config :logger, :default_formatter,
   format: "$time $metadata[$level] $message\n",
   metadata: [:request_id]
 
-# Use Jason for JSON parsing in Phoenix
-config :phoenix, :json_library, Jason
+# LiveView event payloads include write-only secret forms. Phoenix applies this
+# filter recursively before parameters reach request or channel debug logs.
+config :phoenix,
+  json_library: Jason,
+  filter_parameters: ["password", "secret", "token"]
 
 config :assent,
   http_adapter: Assent.HTTPAdapter.Req,

@@ -26,7 +26,7 @@ the lifecycle is designed, the main task records these updates as visible
 invalid candidates and does not start an update guest.
 
 This task follows
-[`reusable-agent-releases-and-instances.md`](reusable-agent-releases-and-instances.md).
+[`reusable-agent-releases-and-instances.md`](../done/reusable-agent-releases-and-instances.md).
 Its requirements, invariants, and implementation plan should be elaborated
 when work on it begins.
 

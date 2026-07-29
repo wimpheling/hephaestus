@@ -566,7 +566,7 @@ mod tests {
             let mut requested = spec(id);
             requested.root = RootFilesystem::Directory { host_path: root };
             requested.disks.push(VmDisk {
-                id: String::from("agent-state"),
+                id: String::from("instance-state"),
                 host_path: disk,
                 format: DiskFormat::Raw,
                 read_only: false,

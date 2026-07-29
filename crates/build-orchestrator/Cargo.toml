@@ -1,0 +1,34 @@
+[package]
+name = "build-orchestrator"
+description = "Isolated exact-source build execution and immutable artifact import"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+agent-config = { path = "../agent-config" }
+authz-domain = { path = "../authz-domain" }
+authz-postgres = { path = "../authz-postgres" }
+identity-domain = { path = "../identity-domain" }
+release-artifact-store = { path = "../release-artifact-store" }
+release-domain = { path = "../release-domain" }
+release-service = { path = "../release-service" }
+runtime-types = { path = "../runtime-types" }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["fs", "process", "rt", "sync", "time"] }
+tracing.workspace = true
+uuid.workspace = true
+vm-trait.workspace = true
+
+[dev-dependencies]
+async-trait.workspace = true
+serial_test = "3"
+tempfile = "3"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

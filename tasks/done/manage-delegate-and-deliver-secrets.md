@@ -1,6 +1,6 @@
 # Manage, delegate, and deliver secrets without disclosure
 
-Owner: unassigned
+Owner: Codex
 
 ## Outcome
 
@@ -144,333 +144,333 @@ audit, retention, and organization/project/repository settings.
 
 ## Implementation checklist
 
-- [ ] **1. Define provider-neutral secret contracts**
-  - [ ] **Add stable identifiers and bounded values**
-    - [ ] Add `SecretId`, `SecretVersionId`, `SecretGrantId`,
+- [x] **1. Define provider-neutral secret contracts**
+  - [x] **Add stable identifiers and bounded values**
+    - [x] Add `SecretId`, `SecretVersionId`, `SecretGrantId`,
       `SecretImportId`, `AgentSecretBindingId`, and `SecretLeaseId`.
-    - [ ] Add validated secret names, local aliases, declared slot keys,
+    - [x] Add validated secret names, local aliases, declared slot keys,
       delivery modes, phases, destination constraints, statuses, and bounded
       opaque values.
-    - [ ] Use redacted secret-value wrappers whose `Debug`, `Display`,
+    - [x] Use redacted secret-value wrappers whose `Debug`, `Display`,
       serialization errors, and tracing fields cannot expose contents.
-  - [ ] **Define lifecycle models**
-    - [ ] Define organization/project ownership, immutable versions, active
+  - [x] **Define lifecycle models**
+    - [x] Define organization/project ownership, immutable versions, active
       version selection, grants, imports, revision bindings, runtime leases,
       revocation, and purge state machines.
-    - [ ] Define deterministic idempotency keys for create, rotate, grant,
+    - [x] Define deterministic idempotency keys for create, rotate, grant,
       accept, bind, resolve, revoke, and purge commands.
-    - [ ] Define structured non-sensitive diagnostics for missing, revoked,
+    - [x] Define structured non-sensitive diagnostics for missing, revoked,
       expired, out-of-scope, wrong-mode, and unauthorized bindings.
-  - [ ] **Add domain tests**
-    - [ ] Test parsing, bounds, serialization, redaction, and malformed-input
+  - [x] **Add domain tests**
+    - [x] Test parsing, bounds, serialization, redaction, and malformed-input
       rejection.
-    - [ ] Test valid and invalid lifecycle transitions, tenant boundaries,
+    - [x] Test valid and invalid lifecycle transitions, tenant boundaries,
       scope matching, and deterministic identities.
-    - [ ] Add tests that intentionally format every error and domain value and
+    - [x] Add tests that intentionally format every error and domain value and
       prove a sentinel secret never appears.
 
-- [ ] **2. Store immutable encrypted secret versions**
-  - [ ] **Define the storage boundary**
-    - [ ] Add a provider-neutral encrypted secret store that accepts plaintext
+- [x] **2. Store immutable encrypted secret versions**
+  - [x] **Define the storage boundary**
+    - [x] Add a provider-neutral encrypted secret store that accepts plaintext
       only at create/rotate and returns it only to an authorized ephemeral
       resolver.
-    - [ ] Use authenticated encryption from a reviewed library, unique nonces,
+    - [x] Use authenticated encryption from a reviewed library, unique nonces,
       per-version data keys or equivalent isolation, and a versioned
       key-encryption-key reference outside PostgreSQL.
-    - [ ] Bind owner, secret, version, algorithm, and immutable metadata as
+    - [x] Bind owner, secret, version, algorithm, and immutable metadata as
       authenticated associated data so ciphertext cannot be transplanted.
-    - [ ] Define host key loading, startup validation, rotation, backup,
+    - [x] Define host key loading, startup validation, rotation, backup,
       restoration, and unavailable-key behavior without silently falling back
       to plaintext.
-  - [ ] **Add PostgreSQL records**
-    - [ ] Add secrets with exactly one organization or project owner, scoped
+  - [x] **Add PostgreSQL records**
+    - [x] Add secrets with exactly one organization or project owner, scoped
       unique names, status, active version, policy metadata, creator, and
       timestamps.
-    - [ ] Add immutable secret versions with ciphertext storage reference,
+    - [x] Add immutable secret versions with ciphertext storage reference,
       algorithm, nonce/key metadata, content length, creator, and timestamps.
-    - [ ] Add grants, imports, immutable agent bindings, runtime leases, and
+    - [x] Add grants, imports, immutable agent bindings, runtime leases, and
       tombstones with complete foreign keys and compare-and-swap constraints.
-    - [ ] Prevent cross-organization ownership, grants, imports, attachments,
+    - [x] Prevent cross-organization ownership, grants, imports, attachments,
       and agent bindings with database constraints where representable.
-  - [ ] **Implement rotation and purge**
-    - [ ] Create and activate a new version transactionally without rewriting
+  - [x] **Implement rotation and purge**
+    - [x] Create and activate a new version transactionally without rewriting
       existing versions or revision bindings.
-    - [ ] Revoke a secret, version, or grant immediately for new resolution and
+    - [x] Revoke a secret, version, or grant immediately for new resolution and
       enqueue affected-runtime reconciliation.
-    - [ ] Purge encrypted material only after active raw/broker leases and
+    - [x] Purge encrypted material only after active raw/broker leases and
       retention rules permit it while preserving tombstone provenance.
-  - [ ] **Add storage tests**
-    - [ ] Test ciphertext and associated-data tampering, wrong keys, nonce
+  - [x] **Add storage tests**
+    - [x] Test ciphertext and associated-data tampering, wrong keys, nonce
       uniqueness, unavailable keys, key rotation, backup/restore, and purge.
-    - [ ] Inspect PostgreSQL, NATS fixtures, logs, and filesystem artifacts to
+    - [x] Inspect PostgreSQL, NATS fixtures, logs, and filesystem artifacts to
       prove plaintext is absent.
-    - [ ] Test concurrent rotations and stale active-version CAS rejection.
+    - [x] Test concurrent rotations and stale active-version CAS rejection.
 
-- [ ] **3. Implement grants, imports, and non-disclosing authorization**
-  - [ ] **Extend the canonical OpenFGA model**
-    - [ ] Add secret, secret grant, secret import, agent secret binding, and
+- [x] **3. Implement grants, imports, and non-disclosing authorization**
+  - [x] **Extend the canonical OpenFGA model**
+    - [x] Add secret, secret grant, secret import, agent secret binding, and
       runtime lease object types with the permission vocabulary above.
-    - [ ] Add explicit organization and project secret-manager relations rather
+    - [x] Add explicit organization and project secret-manager relations rather
       than deriving secret authority from ordinary membership or repository
       read access.
-    - [ ] Let project/repository managers accept imports and bind them only
+    - [x] Let project/repository managers accept imports and bind them only
       when a live source grant authorizes that exact target, mode, and scope.
-    - [ ] Give agent runtimes only the exact brokered-use or raw-receive
+    - [x] Give agent runtimes only the exact brokered-use or raw-receive
       relation produced by an active binding and lease.
-    - [ ] Ensure public repositories and unrelated project members receive no
+    - [x] Ensure public repositories and unrelated project members receive no
       secret metadata or authority.
-  - [ ] **Update Mélange, RLS, and actor context**
-    - [ ] Generate and commit specialized permission SQL from the canonical
+  - [x] **Update Mélange, RLS, and actor context**
+    - [x] Generate and commit specialized permission SQL from the canonical
       model and update drift and compatibility fixtures.
-    - [ ] Derive `melange_tuples` from authoritative ownership, grants, imports,
+    - [x] Derive `melange_tuples` from authoritative ownership, grants, imports,
       bindings, instances, attachments, runs, and leases.
-    - [ ] Apply forced RLS to all secret metadata and audit tables while
+    - [x] Apply forced RLS to all secret metadata and audit tables while
       isolating ciphertext access behind the narrow resolver boundary.
-    - [ ] Support user and runtime subjects without granting agent-facing
+    - [x] Support user and runtime subjects without granting agent-facing
       requests the trusted worker role.
-  - [ ] **Authorize compound operations**
-    - [ ] Require an active source-issued grant for the exact target plus the
+  - [x] **Authorize compound operations**
+    - [x] Require an active source-issued grant for the exact target plus the
       accepting actor's target-management permission; do not require that actor
       to manage the source secret.
-    - [ ] Permit an atomic grant-and-import convenience command only when the
+    - [x] Permit an atomic grant-and-import convenience command only when the
       same actor independently passes both source- and target-side checks.
-    - [ ] Require agent configuration, import binding, attachment scope,
+    - [x] Require agent configuration, import binding, attachment scope,
       release-slot, delivery-mode, phase, and platform-policy authorization in
       one transaction when creating a binding.
-    - [ ] Reauthorize grant, import, binding, instance, attachment, run/session,
+    - [x] Reauthorize grant, import, binding, instance, attachment, run/session,
       delivery mode, and secret/version status at dispatch and on every broker
       call.
-    - [ ] Prevent a user allowed to bind or use a secret from rotating,
+    - [x] Prevent a user allowed to bind or use a secret from rotating,
       granting, purging, or retrieving it.
-  - [ ] **Add authorization tests**
-    - [ ] Cover organization owners, explicitly assigned secret managers,
+  - [x] **Add authorization tests**
+    - [x] Cover organization owners, explicitly assigned secret managers,
       project maintainers, repository managers, ordinary members, outsiders,
       agent instances, and exact run subjects.
-    - [ ] Test organization-to-project, organization-to-repository, and
+    - [x] Test organization-to-project, organization-to-repository, and
       project-to-repository imports, including every cross-tenant denial.
-    - [ ] Test that `bind_brokered` never implies `bind_raw`, and neither
+    - [x] Test that `bind_brokered` never implies `bind_raw`, and neither
       implies value management or grant management.
-    - [ ] Test unknown-object denial, RLS list filtering, normal-role
+    - [x] Test unknown-object denial, RLS list filtering, normal-role
       non-bypass, revocation, and Mélange/OpenFGA parity.
 
-- [ ] **4. Extend release declarations and instance bindings**
-  - [ ] **Add symbolic secret slots**
-    - [ ] Extend the versioned release configuration with bounded stable slot
+- [x] **4. Extend release declarations and instance bindings**
+  - [x] **Add symbolic secret slots**
+    - [x] Extend the versioned release configuration with bounded stable slot
       keys, human-readable purpose, required/optional state, allowed phases,
       accepted delivery modes, and broker/destination constraints.
-    - [ ] Reject tenant secret IDs, aliases, and plaintext values in source
+    - [x] Reject tenant secret IDs, aliases, and plaintext values in source
       configuration.
-    - [ ] Bind the normalized declaration and its hash into the immutable
+    - [x] Bind the normalized declaration and its hash into the immutable
       release agent.
-  - [ ] **Resolve instance revisions**
-    - [ ] Map each configured slot to an eligible `SecretImportId`, delivery
+  - [x] **Resolve instance revisions**
+    - [x] Map each configured slot to an eligible `SecretImportId`, delivery
       mode, selected attachments, execution phases, and broker constraints.
-    - [ ] Validate required slots and persist only opaque IDs and normalized
+    - [x] Validate required slots and persist only opaque IDs and normalized
       effective policy in the immutable instance revision.
-    - [ ] Mark a revision visibly unrunnable when a required import is missing,
+    - [x] Mark a revision visibly unrunnable when a required import is missing,
       revoked, expired, out of scope, or unsupported by current platform
       delivery capabilities.
-    - [ ] Make binding changes create new revisions without rewriting
+    - [x] Make binding changes create new revisions without rewriting
       historical runs or bindings.
-  - [ ] **Add binding tests**
-    - [ ] Test project imports across several repository attachments and strict
+  - [x] **Add binding tests**
+    - [x] Test project imports across several repository attachments and strict
       repository-import isolation on a multi-attachment instance.
-    - [ ] Test required, optional, normal-run-only, and update-hook-only slots.
-    - [ ] Test grant narrowing, import revocation, release changes, and platform
+    - [x] Test required, optional, normal-run-only, and update-hook-only slots.
+    - [x] Test grant narrowing, import revocation, release changes, and platform
       policy changes produce stable diagnostics rather than plaintext errors.
 
-- [ ] **5. Resolve exact versions and issue runtime authority**
-  - [ ] **Resolve at dispatch**
-    - [ ] Resolve every binding to the current active immutable secret version
+- [x] **5. Resolve exact versions and issue runtime authority**
+  - [x] **Resolve at dispatch**
+    - [x] Resolve every binding to the current active immutable secret version
       only after all live authorization and lifecycle checks pass.
-    - [ ] Persist protected run provenance containing secret, version, import,
+    - [x] Persist protected run provenance containing secret, version, import,
       binding, grant, authorization-model, and delivery-policy IDs without
       values.
-    - [ ] Mint short-lived opaque runtime credentials and secret leases bound
+    - [x] Mint short-lived opaque runtime credentials and secret leases bound
       to the exact instance, revision, run/update, attachment, versions,
       binding set, phases, expiry, and capability ceiling.
-    - [ ] Store only runtime-token hashes and never place a previously minted
+    - [x] Store only runtime-token hashes and never place a previously minted
       token in queued work or NATS.
-  - [ ] **Handle rotation and revocation**
-    - [ ] Make rotation affect only later dispatches unless an old version is
+  - [x] **Handle rotation and revocation**
+    - [x] Make rotation affect only later dispatches unless an old version is
       explicitly revoked.
-    - [ ] Deny new leases immediately after secret, version, grant, import, or
+    - [x] Deny new leases immediately after secret, version, grant, import, or
       binding revocation.
-    - [ ] Reconcile active broker leases immediately and request cancellation
+    - [x] Reconcile active broker leases immediately and request cancellation
       and destruction for guests holding revoked raw values.
-    - [ ] Record honestly when raw material may already have been observed and
+    - [x] Record honestly when raw material may already have been observed and
       cannot be withdrawn.
-  - [ ] **Add dispatch tests**
-    - [ ] Test exact version pinning across rotation, retries, NATS redelivery,
+  - [x] **Add dispatch tests**
+    - [x] Test exact version pinning across rotation, retries, NATS redelivery,
       update hooks, and concurrent dispatch.
-    - [ ] Test every revocation race before resolution, after lease creation,
+    - [x] Test every revocation race before resolution, after lease creation,
       during guest provisioning, and after raw or brokered use begins.
-    - [ ] Test that expired credentials, stale leases, and mismatched
+    - [x] Test that expired credentials, stale leases, and mismatched
       run/revision/attachment contexts fail closed.
 
-- [ ] **6. Deliver raw secrets through an ephemeral mount**
-  - [ ] **Construct the mount**
-    - [ ] Materialize raw values only after VM resources are ready into a
+- [x] **6. Deliver raw secrets through an ephemeral mount**
+  - [x] **Construct the mount**
+    - [x] Materialize raw values only after VM resources are ready into a
       per-run host-controlled ephemeral secret filesystem.
-    - [ ] Mount it read-only at `/run/hephaestus/secrets` with one stable
+    - [x] Mount it read-only at `/run/hephaestus/secrets` with one stable
       slot-derived filename, restrictive mode and ownership, and no
       user-controlled host paths.
-    - [ ] Exclude the mount from source, release, work, result, state, snapshot,
+    - [x] Exclude the mount from source, release, work, result, state, snapshot,
       debug-bundle, and backup importers.
-    - [ ] Pass non-secret slot/path metadata separately from values.
-  - [ ] **Finalize safely**
-    - [ ] Destroy the guest before destroying the ephemeral secret filesystem
+    - [x] Pass non-secret slot/path metadata separately from values.
+  - [x] **Finalize safely**
+    - [x] Destroy the guest before destroying the ephemeral secret filesystem
       and release lease state only after provider cleanup is confirmed.
-    - [ ] Reconcile crashes and orphaned secret mounts without exposing paths or
+    - [x] Reconcile crashes and orphaned secret mounts without exposing paths or
       retaining reusable plaintext.
-    - [ ] Bound secret sizes/counts and reject symlinks, special files, aliases
+    - [x] Bound secret sizes/counts and reject symlinks, special files, aliases
       that collide after normalization, and unsupported guest providers.
-  - [ ] **Add real-guest tests**
-    - [ ] Verify exact contents, ownership, modes, read-only behavior, absence
+  - [x] **Add real-guest tests**
+    - [x] Verify exact contents, ownership, modes, read-only behavior, absence
       from `/proc` environment and arguments, and removal after destruction.
-    - [ ] Attempt to copy secrets into results, logs, crashes, and state and
+    - [x] Attempt to copy secrets into results, logs, crashes, and state and
       verify platform-controlled collectors redact or reject known values while
       documenting that malicious arbitrary transformations cannot be detected
       reliably.
-    - [ ] Force termination and provider failure at every materialization and
+    - [x] Force termination and provider failure at every materialization and
       cleanup boundary and verify no reusable mount remains.
 
-- [ ] **7. Implement non-disclosing brokered use**
-  - [ ] **Define the broker protocol**
-    - [ ] Let a guest present its opaque runtime credential, symbolic slot,
+- [x] **7. Implement non-disclosing brokered use**
+  - [x] **Define the broker protocol**
+    - [x] Let a guest present its opaque runtime credential, symbolic slot,
       requested operation, destination, and bounded request without presenting
       a secret value.
-    - [ ] Authenticate the exact runtime, enforce its lease/capability ceiling,
+    - [x] Authenticate the exact runtime, enforce its lease/capability ceiling,
       perform live Mélange checks, validate destination and operation policy,
       and apply the credential only outside the guest.
-    - [ ] Return bounded sanitized responses and never echo upstream
+    - [x] Return bounded sanitized responses and never echo upstream
       authorization material, provider debug bodies, or secret-bearing headers.
-    - [ ] Prevent direct guest egress from bypassing the broker for a
+    - [x] Prevent direct guest egress from bypassing the broker for a
       broker-only binding.
-  - [ ] **Add an initial application-level adapter**
-    - [ ] Implement one narrow adapter against a fake upstream service that
+  - [x] **Add an initial application-level adapter**
+    - [x] Implement one narrow adapter against a fake upstream service that
       proves host-side credential application, destination binding, rotation,
       revocation, rate limiting, and audit.
-    - [ ] Keep adapter-specific operations semantic and allowlisted rather than
+    - [x] Keep adapter-specific operations semantic and allowlisted rather than
       exposing a generic credential-fetch endpoint.
-    - [ ] Define provider-neutral failure and retry semantics that never include
+    - [x] Define provider-neutral failure and retry semantics that never include
       values in diagnostics.
-  - [ ] **Add broker security tests**
-    - [ ] Test token theft across runs, instances, revisions, slots,
+  - [x] **Add broker security tests**
+    - [x] Test token theft across runs, instances, revisions, slots,
       attachments, destinations, and expired/revoked leases.
-    - [ ] Test alternate DNS, raw IP, redirects, IPv6, metadata endpoints,
+    - [x] Test alternate DNS, raw IP, redirects, IPv6, metadata endpoints,
       tunneling, oversized bodies, malicious headers, and response leakage.
-    - [ ] Prove through a fake-upstream sentinel that the guest never receives
+    - [x] Prove through a fake-upstream sentinel that the guest never receives
       the brokered credential while the authorized operation succeeds.
 
-- [ ] **8. Add durable commands, audit, and observability**
-  - [ ] **Publish safe commands and events**
-    - [ ] Add versioned commands/events for secret creation, rotation, grant,
+- [x] **8. Add durable commands, audit, and observability**
+  - [x] **Publish safe commands and events**
+    - [x] Add versioned commands/events for secret creation, rotation, grant,
       import, binding, revocation, purge, lease issuance, and reconciliation
       containing stable IDs and no values.
-    - [ ] Use transactional outboxes/inboxes and stable idempotency identities
+    - [x] Use transactional outboxes/inboxes and stable idempotency identities
       without serializing plaintext into their payloads.
-    - [ ] Ensure database rollback, publisher retry, and duplicate delivery
+    - [x] Ensure database rollback, publisher retry, and duplicate delivery
       cannot duplicate versions, grants, imports, leases, or raw
       materialization.
-  - [ ] **Audit every privileged transition**
-    - [ ] Record requester, mediator, runtime, source and target objects,
+  - [x] **Audit every privileged transition**
+    - [x] Record requester, mediator, runtime, source and target objects,
       permission, delivery mode, authorization-model version, decision,
       request/command ID, and outcome.
-    - [ ] Distinguish metadata inspection, value submission, delegation,
+    - [x] Distinguish metadata inspection, value submission, delegation,
       brokered use, and raw receipt without logging values.
-    - [ ] Reauthorize live subscriptions before sending secret metadata,
+    - [x] Reauthorize live subscriptions before sending secret metadata,
       binding, rotation, or revocation events.
-  - [ ] **Add redacted telemetry**
-    - [ ] Measure version age, rotations, denied resolutions, active leases,
+  - [x] **Add redacted telemetry**
+    - [x] Measure version age, rotations, denied resolutions, active leases,
       broker operations, raw-delivery runs, revocation latency, and cleanup
       failures using opaque IDs.
-    - [ ] Add automated sentinel scanning across structured logs, metrics,
+    - [x] Add automated sentinel scanning across structured logs, metrics,
       traces, NATS streams, PostgreSQL non-ciphertext columns, and test
       artifacts.
 
-- [ ] **9. Add organization, project, repository, and agent UI**
-  - [ ] **Manage owned secrets**
-    - [ ] Add organization and project secret settings with metadata listing,
+- [x] **9. Add organization, project, repository, and agent UI**
+  - [x] **Manage owned secrets**
+    - [x] Add organization and project secret settings with metadata listing,
       write-only create/replace forms, rotation, disable, revoke, and purge
       controls gated by exact permissions.
-    - [ ] Never prepopulate, reveal, return, or place values in LiveView state,
+    - [x] Never prepopulate, reveal, return, or place values in LiveView state,
       HTML, client logs, flash messages, URL parameters, or reconnect payloads.
-    - [ ] Show owner, status, version age, grants, affected imports/bindings,
+    - [x] Show owner, status, version age, grants, affected imports/bindings,
       delivery modes, and last-use audit without displaying values.
-  - [ ] **Manage grants and imports**
-    - [ ] Add exact project/repository grant flows with mode, phase,
+  - [x] **Manage grants and imports**
+    - [x] Add exact project/repository grant flows with mode, phase,
       destination, expiration, and scope review.
-    - [ ] Add target-side import acceptance and alias selection, clearly
+    - [x] Add target-side import acceptance and alias selection, clearly
       distinguishing direct organization imports from project-owned secrets.
-    - [ ] Show that imports are live references, are non-transitive, and stop
+    - [x] Show that imports are live references, are non-transitive, and stop
       working when their source grant or secret is revoked.
-  - [ ] **Bind agents safely**
-    - [ ] Generate instance binding forms from release slot declarations and
+  - [x] **Bind agents safely**
+    - [x] Generate instance binding forms from release slot declarations and
       list only imports eligible for the exact target scope.
-    - [ ] Show selected attachments, phases, destinations, and whether the
+    - [x] Show selected attachments, phases, destinations, and whether the
       guest receives raw material or only a broker capability.
-    - [ ] Require an explicit high-visibility confirmation for raw binding and
+    - [x] Require an explicit high-visibility confirmation for raw binding and
       explain that the guest can copy the value.
-    - [ ] Show missing or revoked required bindings as authorization-safe
+    - [x] Show missing or revoked required bindings as authorization-safe
       invalid revision states.
-  - [ ] **Add LiveView and browser tests**
-    - [ ] Test users who can create, rotate, grant, import, bind, or only view
+  - [x] **Add LiveView and browser tests**
+    - [x] Test users who can create, rotate, grant, import, bind, or only view
       metadata and prove each UI omits forbidden controls and values.
-    - [ ] Test organization-to-project, organization-to-repository, and
+    - [x] Test organization-to-project, organization-to-repository, and
       project-to-repository workflows plus revocation propagation.
-    - [ ] Scan rendered HTML, LiveView payloads, browser logs, screenshots, and
+    - [x] Scan rendered HTML, LiveView payloads, browser logs, screenshots, and
       traces for sentinel values.
 
-- [ ] **10. Verify end-to-end security and recovery**
-  - [ ] **Add a real-system scenario**
-    - [ ] Create one organization secret and one project secret, grant and
+- [x] **10. Verify end-to-end security and recovery**
+  - [x] **Add a real-system scenario**
+    - [x] Create one organization secret and one project secret, grant and
       import them into project and repository scopes, and bind them to separate
       slots without the binding user seeing either value.
-    - [ ] Run one raw-file slot and one brokered slot in a real libkrun guest
+    - [x] Run one raw-file slot and one brokered slot in a real libkrun guest
       and verify exact version, instance revision, attachment, and authorization
       provenance.
-    - [ ] Rotate both secrets and prove later runs use new versions while
+    - [x] Rotate both secrets and prove later runs use new versions while
       historical runs retain only protected version IDs.
-    - [ ] Revoke grants during active raw and brokered runs and verify the
+    - [x] Revoke grants during active raw and brokered runs and verify the
       distinct cancellation and live-denial guarantees.
-    - [ ] Verify cross-project, cross-repository, cross-agent, cross-run, and
+    - [x] Verify cross-project, cross-repository, cross-agent, cross-run, and
       cross-organization attempts fail closed.
-  - [ ] **Exercise failure recovery**
-    - [ ] Crash before and after encryption, database commit, version
+  - [x] **Exercise failure recovery**
+    - [x] Crash before and after encryption, database commit, version
       activation, lease issuance, raw materialization, guest start, broker use,
       revocation, guest destruction, and purge.
-    - [ ] Reconcile without duplicate versions, leaked plaintext, orphaned
+    - [x] Reconcile without duplicate versions, leaked plaintext, orphaned
       mounts, reusable credentials, or false revocation claims.
-    - [ ] Restore encrypted backups with the correct key set and prove missing
+    - [x] Restore encrypted backups with the correct key set and prove missing
       or wrong keys fail closed.
-  - [ ] **Run repository quality gates**
-    - [ ] Run `cargo fmt --all -- --check`.
-    - [ ] Run `cargo clippy --workspace --all-targets --all-features`.
-    - [ ] Run `cargo test --workspace --all-features`.
-    - [ ] Run `cargo doc --workspace --all-features --no-deps`.
-    - [ ] Run real PostgreSQL, NATS, libkrun, broker, and Playwright suites.
-    - [ ] Run `mix precommit` in `web/`.
-    - [ ] Run Mélange drift detection, `melange doctor`, and OpenFGA
+  - [x] **Run repository quality gates**
+    - [x] Run `cargo fmt --all -- --check`.
+    - [x] Run `cargo clippy --workspace --all-targets --all-features`.
+    - [x] Run `cargo test --workspace --all-features`.
+    - [x] Run `cargo doc --workspace --all-features --no-deps`.
+    - [x] Run real PostgreSQL, NATS, libkrun, broker, and Playwright suites.
+    - [x] Run `mix precommit` in `web/`.
+    - [x] Run Mélange drift detection, `melange doctor`, and OpenFGA
       compatibility fixtures.
-    - [ ] Run secret-sentinel scans and `git diff --check`.
+    - [x] Run secret-sentinel scans and `git diff --check`.
 
-- [ ] **11. Document and hand off**
-  - [ ] **Document the security model**
-    - [ ] Document ownership, grants, imports, non-transitivity, instance
+- [x] **11. Document and hand off**
+  - [x] **Document the security model**
+    - [x] Document ownership, grants, imports, non-transitivity, instance
       bindings, exact-version resolution, and permission vocabulary.
-    - [ ] Document the difference between human delegation without disclosure,
+    - [x] Document the difference between human delegation without disclosure,
       raw guest receipt, and non-disclosing brokered use.
-    - [ ] Document encryption/key custody, rotation, revocation, purge, backup,
+    - [x] Document encryption/key custody, rotation, revocation, purge, backup,
       recovery, audit, and unavoidable raw-delivery limitations.
-  - [ ] **Document operations**
-    - [ ] Document key provisioning and rotation, unavailable-key recovery,
+  - [x] **Document operations**
+    - [x] Document key provisioning and rotation, unavailable-key recovery,
       secret/import/binding inspection, runtime cancellation, orphan cleanup,
       and emergency revocation.
-    - [ ] Record migration versions, authorization-model and Mélange versions,
+    - [x] Record migration versions, authorization-model and Mélange versions,
       encryption algorithms/key versions, fixture IDs, test counts, and
       sentinel-scan evidence.
-    - [ ] Create focused todo tasks for deliberately deferred production KMS,
+    - [x] Create focused todo tasks for deliberately deferred production KMS,
       external vault, transparent proxy, additional broker adapters, or
       long-lived credential renewal work.
 
@@ -481,3 +481,90 @@ commands and results, migration and generated-authorization provenance,
 encryption/key-provider versions, golden secret/version/import/binding/lease
 IDs, real-libkrun and fake-upstream evidence, Playwright results, sentinel-scan
 results, and links to deliberate follow-up tasks.
+
+Evidence recorded 2026-07-29:
+
+- `cargo fmt --all -- --check`,
+  `cargo clippy --workspace --all-targets --all-features`,
+  `cargo test --workspace --all-features`, and
+  `cargo doc --workspace --all-features --no-deps` all passed.
+- `cargo test -p secret-domain -p secret-store`: 11 focused domain,
+  redaction, authenticated-encryption, tamper, key-rotation, and restore tests
+  passed.
+- `cargo test -p secret-service --test postgres -- --nocapture` against
+  PostgreSQL 17.10: encrypted create/idempotency, explicit project grant and
+  target acceptance, cross-organization denial, concurrent rotation CAS,
+  revocation propagation, and cryptographic purge passed.
+- The same fresh-PostgreSQL suite now covers project imports across two
+  attachments, repository-import isolation, required/optional and
+  phase-specific slots, grant narrowing, and import revocation. Narrowing
+  returns the stable binding-policy diagnostic; revocation returns an
+  authorization-safe denial, and neither diagnostic contains the sentinel.
+  Release-schema and current-platform-policy changes have corresponding stable
+  diagnostic tests in `release-domain` and `hephaestus-app`.
+- Secret-bearing runs now reauthorize the exact session and complete live
+  lease/binding/import/grant/secret/version chain after materialization and
+  immediately before VM provisioning. The provider-neutral race test proves a
+  revocation in that window prevents provisioning and removes the secret
+  mount/runtime. The daemon's supervised revocation reconciler durably cancels
+  raw guests revoked during provisioning or execution; the PostgreSQL suite
+  covers pre-resolution, post-lease, post-raw-observation, and active broker
+  denial.
+- Sentinel `postgres-secret-sentinel-2747dcb8` was absent from ciphertext
+  scans, secret metadata, transactional outbox payloads, and secret audit
+  events in the real-PostgreSQL test.
+- `scripts/check-openfga-model.sh`: 6 tests and 79 checks passed.
+- `scripts/check-authz.sh` with Mélange 0.8.5: schema checksum
+  `76e7043ed8a534103adff658f24be57485646163ab73a8e33c2dc6d56c91d298`;
+  665 generated functions; 12 doctor checks passed with zero warnings/errors.
+- Migrations `0005_releases_instances_and_secrets.sql`,
+  `0006_melange_releases_and_secrets.sql`, and
+  `0007_release_secret_rls.sql` plus `0008_remove_legacy_agents.sql` applied
+  cleanly to PostgreSQL 17.10.
+- The daemon now loads multiple retained wrapping-key versions from a strict
+  service-owned `0700` directory of raw 32-byte `0400` files, selects the
+  active version by reference, and fails closed on unsafe ownership/modes,
+  symlinks, invalid length, or a missing active key. The focused daemon test
+  proves active-key rotation can retain and resolve the prior version. The
+  operator runbook covers provisioning, rotation, unavailable-key recovery,
+  metadata-only inspection, emergency revocation/cancellation, and orphan
+  reconciliation. Production KMS/vault/proxy/adapter/renewal work is isolated
+  in `tasks/todo/production-secret-custody-and-adapters.md`.
+- Migration `0009_operational_observability.sql` applied cleanly to fresh
+  PostgreSQL 17.10 and has SHA-256
+  `77d6d9cd5c04f495d1106e42d538087fa9c33914d9f2c0d6d00466b27429cb16`.
+  Its security-barrier secret metrics and version metadata views reauthorize
+  the exact actor-visible secrets without granting the application role access
+  to `secret_versions`.
+- `scripts/run-libkrun-integration.sh` passed on Fedora 44, kernel
+  6.19.10, libkrun 1.19.0, and libkrunfw 5.5.0. The real guest verified the
+  exact raw value, UID/GID, `0400` mode, read-only mount, process-metadata
+  absence, ordinary destruction, forced destruction, and zero retained raw
+  mounts, runtime trees, or cgroups.
+- `scripts/run-ui-e2e.sh` passed 2 Chromium tests. It created organization and
+  project secrets, granted/imported project and repository scopes, bound raw
+  and brokered slots, ran/reviewed exact revisions, activated an update,
+  rejected an uncertain update, and ran again after recovery. Sentinel
+  `HEPHAESTUS_BROWSER_SECRET_4d7ccf` was absent from HTML, console output,
+  screenshots, Phoenix/daemon/OIDC logs, PostgreSQL dump, JetStream storage,
+  repositories, workspaces, artifacts, runtime files, and the empty
+  post-cleanup secret root.
+- AES-256-GCM data encryption and AES-256-GCM key wrapping use versioned local
+  key references. The secret-store rotation/restore fixture proves retained
+  correct keys decrypt old versions and missing, wrong, or tampered key
+  material fails closed. The PostgreSQL/NATS secret suite passed serially
+  against dedicated services.
+- Final authorization evidence: OpenFGA 6/6 tests and 79/79 checks; Mélange
+  0.8.5 doctor 12/12; 665 generated functions; tuple-source SHA-256
+  `543e99b9827b2f8dc077e510184f0d4c352beb51e568e704574d2ef49f7c6897`;
+  generated migration SHA-256
+  `698f7b637f16cf7eb592f99308c46e739950a50e673c3aa5bbe9ed7c869eb1a0`.
+- Final repository gates passed: 166 Rust workspace tests, 43 serial
+  PostgreSQL/NATS package tests, 25 Phoenix tests, strict formatting/Clippy,
+  rustdoc, `git diff --check`, real KVM daemon/smoke/update scenarios, and the
+  browser sentinel suite.
+- Organization secret management now uses routed Projects/Secrets tabs,
+  separate create-secret and bounded-grant pages, and one business-logic-free
+  resource-list component for projects, owned secrets, and grants. The final
+  Playwright suite passed both Chromium journeys, including the section-local
+  action placement assertions.

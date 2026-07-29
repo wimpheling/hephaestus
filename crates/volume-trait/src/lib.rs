@@ -1,21 +1,21 @@
 //! Provider-neutral contracts for persistent agent volumes.
 
 use async_trait::async_trait;
-use runtime_types::{AgentId, LeaseId, RunId, VolumeId};
+use runtime_types::{AgentInstanceId, LeaseId, RunId, VolumeId};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
 /// Stable block-device identifier used for the agent state disk.
-pub const AGENT_STATE_DISK_ID: &str = "agent-state";
+pub const INSTANCE_STATE_DISK_ID: &str = "instance-state";
 
 /// The purpose of a persistent volume.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum VolumeKind {
     /// Per-agent `SQLite` state.
-    AgentState,
+    InstanceState,
 }
 
 /// Durable lifecycle state of a volume.
@@ -41,7 +41,7 @@ pub struct Volume {
     /// Stable volume identifier.
     pub id: VolumeId,
     /// Agent that owns the volume.
-    pub agent_id: AgentId,
+    pub instance_id: AgentInstanceId,
     /// Purpose of the volume.
     pub kind: VolumeKind,
     /// Host that owns the local backing file.
@@ -140,7 +140,7 @@ pub enum VolumeError {
 /// Persistent volume operations used by the run orchestrator.
 #[async_trait]
 pub trait VolumeStore: Send + Sync + 'static {
-    /// Creates or resolves the single agent-state volume for `agent_id`.
+    /// Creates or resolves the single instance-state volume for `instance_id`.
     ///
     /// The returned backing file is formatted by the host before the volume
     /// enters [`VolumeState::Ready`].
@@ -148,9 +148,9 @@ pub trait VolumeStore: Send + Sync + 'static {
     /// # Errors
     ///
     /// Returns an error when metadata or backing-file creation fails.
-    async fn resolve_agent_state(
+    async fn resolve_instance_state(
         &self,
-        agent_id: AgentId,
+        instance_id: AgentInstanceId,
         capacity_bytes: u64,
     ) -> Result<Volume, VolumeError>;
 

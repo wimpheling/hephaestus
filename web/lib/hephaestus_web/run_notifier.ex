@@ -25,6 +25,12 @@ defmodule HephaestusWeb.RunNotifier do
     Phoenix.PubSub.subscribe(HephaestusWeb.PubSub, "repository-wakeups")
   end
 
+  def subscribe_kinds(kinds) when is_list(kinds) do
+    Enum.each(kinds, fn kind ->
+      Phoenix.PubSub.subscribe(HephaestusWeb.PubSub, "ui-wakeup:#{kind}")
+    end)
+  end
+
   @impl true
   def init(_state) do
     case Application.get_env(:hephaestus_web, :database_url) do
@@ -40,11 +46,17 @@ defmodule HephaestusWeb.RunNotifier do
 
   @impl true
   def handle_info({:notification, _pid, _reference, @channel, payload}, state) do
-    with {:ok, %{"id" => run_id}} <- Jason.decode(payload) do
+    with {:ok, %{"kind" => kind, "id" => run_id}} <- Jason.decode(payload) do
       Phoenix.PubSub.broadcast(
         HephaestusWeb.PubSub,
         "run:#{run_id}",
         {:run_wakeup, run_id}
+      )
+
+      Phoenix.PubSub.broadcast(
+        HephaestusWeb.PubSub,
+        "ui-wakeup:#{kind}",
+        :repository_wakeup
       )
 
       Phoenix.PubSub.broadcast(

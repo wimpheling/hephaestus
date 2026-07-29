@@ -13,9 +13,11 @@ authz-postgres = { path = "../authz-postgres" }
 forge-domain = { path = "../forge-domain" }
 gix.workspace = true
 identity-domain = { path = "../identity-domain" }
+release-domain = { path = "../release-domain" }
 run-domain = { path = "../run-domain" }
 runtime-types = { path = "../runtime-types" }
 serde_json.workspace = true
+sha2.workspace = true
 sqlx.workspace = true
 thiserror.workspace = true
 time.workspace = true

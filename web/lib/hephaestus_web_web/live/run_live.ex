@@ -94,6 +94,19 @@ defmodule HephaestusWebWeb.RunLive do
             Exact input <code>{short_sha(@run["input_commit"])}</code>
             on <code>{@run["git_ref"]}</code>
           </p>
+          <div class="provenance-links" id="run-exact-provenance">
+            <.link navigate={
+              ~p"/repositories/#{@run["source_repository_id"]}/releases/#{@run["release_id"]}"
+            }>
+              Release {@run["release_version"]}
+            </.link>
+            <span>·</span>
+            <.link navigate={~p"/projects/#{@run["instance_project_id"]}/agents/#{@run["agent_id"]}"}>
+              Revision {short_sha(@run["instance_revision_id"])}
+            </.link>
+            <span>·</span>
+            <code>target {short_sha(@run["input_commit"])}</code>
+          </div>
         </div>
         <div class="control-bar">
           <button

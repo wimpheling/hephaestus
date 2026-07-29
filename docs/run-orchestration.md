@@ -1,7 +1,8 @@
 # Durable run orchestration
 
-Phase 1B is single-host while keeping VM and volume interfaces
-provider-neutral. PostgreSQL is authoritative for agents, local-volume
+The current proof of concept is single-host while keeping VM and volume
+interfaces provider-neutral. PostgreSQL is authoritative for project agent
+instances, immutable revisions, local-volume
 ownership, exclusive leases, runs, events, the command inbox, and the
 transactional outbox. Raw ext4 backing files live beneath a configured
 persistent volume root and never beneath libkrun's transient runtime root.
@@ -14,6 +15,23 @@ persistent volume root and never beneath libkrun's transient runtime root.
 - `run-domain`: durable states, outcomes, and commands.
 - `run-orchestrator`: PostgreSQL repository, VM coordination, restart
   reconciliation, and JetStream outbox publication.
+
+## Live launch authorization
+
+An accepted command is not a reusable authorization decision. Every normal or
+update start rechecks live Mélange authority twice:
+
+1. before the host materializes the immutable release tree or any warm-cache
+   artifact into a fresh per-run runtime root;
+2. immediately before VM provisioning.
+
+A normal run requires `can_execute` on its exact attachment and `can_use` on
+its exact release agent. An update run requires `can_update` on its instance
+and `can_use` on the candidate release agent. Each decision is written to
+`authorization_audit_events`. A denial fails and cleans the run before the VM
+provider is called. Once the second check and guest start complete, later
+source-access revocation does not terminate that already materialized guest;
+its runtime tree is destroyed after the guest and is never reused.
 
 ## Lease recovery
 

@@ -9,6 +9,41 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
+name = "aead"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d122413f284cf2d62fb1b7db97e02edb8cda96d769b16e443a4f6195e35662b0"
+dependencies = [
+ "crypto-common",
+ "generic-array",
+]
+
+[[package]]
+name = "aes"
+version = "0.8.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b169f7a6d4742236a0a00c541b845991d0ac43e546831af1249753ab4c3aa3a0"
+dependencies = [
+ "cfg-if",
+ "cipher",
+ "cpufeatures",
+]
+
+[[package]]
+name = "aes-gcm"
+version = "0.10.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "831010a0f742e1209b3bcea8fab6a8e149051ba6099432c8cb2cc117dec3ead1"
+dependencies = [
+ "aead",
+ "aes",
+ "cipher",
+ "ctr",
+ "ghash",
+ "subtle",
+]
+
+[[package]]
 name = "agent-config"
 version = "0.1.0"
 dependencies = [
@@ -122,6 +157,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "identity-domain",
+ "runtime-types",
  "serde",
  "sqlx",
  "thiserror 2.0.19",
@@ -135,6 +171,7 @@ dependencies = [
  "async-trait",
  "authz-domain",
  "identity-domain",
+ "runtime-types",
  "serde_json",
  "serial_test",
  "sqlx",
@@ -249,6 +286,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "build-orchestrator"
+version = "0.1.0"
+dependencies = [
+ "agent-config",
+ "async-trait",
+ "authz-domain",
+ "authz-postgres",
+ "identity-domain",
+ "release-artifact-store",
+ "release-domain",
+ "release-service",
+ "runtime-types",
+ "serde",
+ "serde_json",
+ "serial_test",
+ "sha2",
+ "sqlx",
+ "tempfile",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing",
+ "uuid",
+ "vm-trait",
+]
+
+[[package]]
 name = "bumpalo"
 version = "3.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -310,6 +373,16 @@ checksum = "57663b653d948a338bfb3eeba9bb2fd5fcfaecb9e199e87e1eda4d9e8b240fd9"
 dependencies = [
  "ciborium-io",
  "half",
+]
+
+[[package]]
+name = "cipher"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "773f3b9af64447d2ce9850330c473515014aa235e6a783b02db81ff39e4a3dad"
+dependencies = [
+ "crypto-common",
+ "inout",
 ]
 
 [[package]]
@@ -413,7 +486,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "78c8292055d1c1df0cce5d180393dc8cce0abec0a7102adb6c7b1eef6016d60a"
 dependencies = [
  "generic-array",
+ "rand_core",
  "typenum",
+]
+
+[[package]]
+name = "ctr"
+version = "0.9.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0369ee1ad671834580515889b80f2ea915f23b8be8d0daa4bbaf2ac5c7590835"
+dependencies = [
+ "cipher",
 ]
 
 [[package]]
@@ -718,11 +801,13 @@ dependencies = [
  "futures-util",
  "gix",
  "identity-domain",
+ "release-domain",
  "run-domain",
  "run-orchestrator",
  "runtime-types",
  "serde_json",
  "serial_test",
+ "sha2",
  "sqlx",
  "tempfile",
  "thiserror 2.0.19",
@@ -877,6 +962,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ghash"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f0d8a4362ccb29cb0b265253fb0a2728f592895ee6854fd9bc13f2ffda266ff1"
+dependencies = [
+ "opaque-debug",
+ "polyval",
+]
+
+[[package]]
 name = "git-http"
 version = "0.1.0"
 dependencies = [
@@ -900,6 +995,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -1574,8 +1670,10 @@ dependencies = [
  "agent-config",
  "async-nats",
  "async-trait",
+ "authz-domain",
  "authz-postgres",
  "axum",
+ "build-orchestrator",
  "forge-domain",
  "forge-service",
  "futures-util",
@@ -1583,13 +1681,24 @@ dependencies = [
  "identity-domain",
  "identity-oidc",
  "jsonwebtoken",
+ "release-artifact-store",
+ "release-domain",
+ "release-service",
  "review-domain",
  "review-service",
  "run-domain",
  "run-orchestrator",
+ "run-runtime-local",
  "runtime-types",
+ "secret-broker",
+ "secret-domain",
+ "secret-runtime",
+ "secret-service",
+ "secret-store",
+ "serde",
  "serde_json",
  "serial_test",
+ "sha2",
  "sqlx",
  "tempfile",
  "thiserror 2.0.19",
@@ -1604,6 +1713,7 @@ dependencies = [
  "vm-trait",
  "volume-local",
  "workspace-local",
+ "zeroize",
 ]
 
 [[package]]
@@ -1853,6 +1963,15 @@ checksum = "d466e9454f08e4a911e14806c24e16fba1b4c121d1ea474396f396069cf949d9"
 dependencies = [
  "equivalent",
  "hashbrown 0.17.1",
+]
+
+[[package]]
+name = "inout"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "879f10e63c20629ecabbb64a8010319738c66a5cd0c29b02d63d272b03751d01"
+dependencies = [
+ "generic-array",
 ]
 
 [[package]]
@@ -2200,6 +2319,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
+name = "opaque-debug"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
+
+[[package]]
 name = "openssl-probe"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2317,6 +2442,18 @@ name = "plain"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
+
+[[package]]
+name = "polyval"
+version = "0.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9d1fe60d06143b2430aa532c94cfe9e29783047f06c0d7fd359a9a51b729fa25"
+dependencies = [
+ "cfg-if",
+ "cpufeatures",
+ "opaque-debug",
+ "universal-hash",
+]
 
 [[package]]
 name = "portable-atomic"
@@ -2469,6 +2606,55 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
+name = "release-artifact-store"
+version = "0.1.0"
+dependencies = [
+ "release-domain",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.19",
+ "uuid",
+]
+
+[[package]]
+name = "release-domain"
+version = "0.1.0"
+dependencies = [
+ "forge-domain",
+ "runtime-types",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.19",
+ "time",
+ "uuid",
+]
+
+[[package]]
+name = "release-service"
+version = "0.1.0"
+dependencies = [
+ "agent-config",
+ "async-nats",
+ "authz-domain",
+ "authz-postgres",
+ "forge-domain",
+ "identity-domain",
+ "release-domain",
+ "run-domain",
+ "runtime-types",
+ "serde_json",
+ "serial_test",
+ "sha2",
+ "sqlx",
+ "thiserror 2.0.19",
+ "time",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "review-domain"
 version = "0.1.0"
 dependencies = [
@@ -2554,7 +2740,10 @@ version = "0.1.0"
 dependencies = [
  "async-nats",
  "async-trait",
+ "authz-postgres",
  "futures-util",
+ "release-domain",
+ "release-service",
  "review-domain",
  "run-domain",
  "runtime-types",
@@ -2574,6 +2763,27 @@ dependencies = [
  "volume-local",
  "volume-trait",
  "workspace-domain",
+]
+
+[[package]]
+name = "run-runtime-local"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "release-artifact-store",
+ "release-domain",
+ "run-domain",
+ "run-orchestrator",
+ "runtime-types",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "uuid",
+ "vm-trait",
 ]
 
 [[package]]
@@ -2721,6 +2931,98 @@ name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
+
+[[package]]
+name = "secret-broker"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "runtime-types",
+ "secret-domain",
+ "secret-service",
+ "secret-store",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.19",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
+name = "secret-domain"
+version = "0.1.0"
+dependencies = [
+ "forge-domain",
+ "identity-domain",
+ "runtime-types",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.19",
+ "time",
+ "uuid",
+]
+
+[[package]]
+name = "secret-runtime"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "forge-domain",
+ "identity-domain",
+ "run-domain",
+ "run-orchestrator",
+ "runtime-types",
+ "secret-domain",
+ "secret-service",
+ "secret-store",
+ "serde_json",
+ "sqlx",
+ "tempfile",
+ "thiserror 2.0.19",
+ "time",
+ "uuid",
+ "vm-trait",
+]
+
+[[package]]
+name = "secret-service"
+version = "0.1.0"
+dependencies = [
+ "async-nats",
+ "async-trait",
+ "authz-domain",
+ "authz-postgres",
+ "forge-domain",
+ "identity-domain",
+ "release-domain",
+ "runtime-types",
+ "secret-domain",
+ "secret-store",
+ "serde_json",
+ "serial_test",
+ "sha2",
+ "sqlx",
+ "thiserror 2.0.19",
+ "time",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "secret-store"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "forge-domain",
+ "secret-domain",
+ "sha2",
+ "thiserror 2.0.19",
+ "zeroize",
+]
 
 [[package]]
 name = "security-framework"
@@ -3659,6 +3961,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7df058c713841ad818f1dc5d3fd88063241cc61f49f5fbea4b951e8cf5a8d71d"
 
 [[package]]
+name = "universal-hash"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fc1de2c688dc15305988b563c3854064043356019f97a4b46276fe734c4f07ea"
+dependencies = [
+ "crypto-common",
+ "subtle",
+]
+
+[[package]]
 name = "untrusted"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3739,8 +4051,11 @@ dependencies = [
  "ciborium",
  "libc",
  "libloading",
+ "runtime-types",
  "rusqlite",
  "rustix",
+ "secret-domain",
+ "secret-runtime",
  "serde",
  "tempfile",
  "thiserror 2.0.19",

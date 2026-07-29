@@ -757,314 +757,209 @@ understand, customize, secure, and govern.
 ## Dependencies and relationship to existing work
 
 This task refines and extends
-[`reusable-agent-releases-and-instances.md`](./reusable-agent-releases-and-instances.md).
+[`reusable-agent-releases-and-instances.md`](../done/reusable-agent-releases-and-instances.md).
 The release/instance task supplies the immutable software and exact-run
-foundation. Its authorization workstream should incorporate the accepted
-agent-principal, capability-binding, token-ceiling, and authorization-snapshot
-decisions produced here.
+foundation. Before that task is completed, it should preserve extension seams
+for the accepted agent-principal, capability-binding, token-ceiling, and
+authorization-snapshot decisions without absorbing their implementation.
 
-Secret brokering, interactive sessions, fast gateways, long-lived services,
-state checkpoints, distributions, and the curated catalog should become
-separate tasks after their boundaries are accepted.
+[`manage-delegate-and-deliver-secrets.md`](../done/manage-delegate-and-deliver-secrets.md)
+supplies encrypted secret storage, bindings, runtime leases, raw delivery, and
+the base non-disclosing broker. The MVP tasks below extend that broker for
+model and outbound semantic operations. Interactive sessions, optimized fast
+gateways, long-lived services, snapshots, distributions, packaged agents, and
+the curated catalog remain deferred.
 
-## Implementation checklist
+## MVP
 
-- [ ] **1. Ratify and document the product definition**
-  - [ ] **Write the canonical product document**
-    - [ ] Add an architecture/product document defining “own the loop” and
-      “authority remains outside the loop.”
-    - [ ] Document the target users, reference workloads, core promise,
-      deliberate tradeoffs, and non-goals.
-    - [ ] Document the platform-versus-released-agent placement test with
-      concrete examples.
-    - [ ] Link the product document from the root README and relevant
-      architecture documentation.
-  - [ ] **Validate terminology**
-    - [ ] Decide the user-facing and domain names for Operator/Admin Agent,
-      Project Agent, gateway, distribution, catalog, capability requirement,
-      binding, grant, runtime credential, delegation, approval, and
-      authorization snapshot.
-    - [ ] Ensure product-level agent instances remain distinct from runtime
-      guests, gateway isolates, VMs, runs, and service sessions.
-    - [ ] Record rejected or overloaded terms and the reason for avoiding them.
-  - [ ] **Review the existing release/instance task**
-    - [ ] Identify decisions from this task that belong in the existing task’s
-      locked decisions.
-    - [ ] Add links in both directions without copying competing requirements.
-    - [ ] Split any newly independent release/instance work into focused todo
-      tasks instead of expanding that epic indefinitely.
+The MVP is the smallest end-to-end product slice that proves released agents
+can own their loops while Hephaestus retains authority. Implementation details,
+tests, documentation, and completion evidence live in the six child tasks
+below, ordered by dependency rather than duplicated in this umbrella task.
 
-- [ ] **2. Specify agent principals, capabilities, and runtime credentials**
-  - [ ] **Design the canonical OpenFGA model extension**
-    - [ ] Model `agent_instance` as an authorization subject.
-    - [ ] Model gateways and any required runtime/delegation objects.
-    - [ ] Define explicit agent relations for repositories, gateways,
-      instances, models, schedules, secrets/capabilities, and other initial
-      resources without granting implicit project-maintainer authority.
-    - [ ] Define who may bind, grant, revoke, and delegate each capability.
-    - [ ] Define autonomous-agent and user-mediated authorization semantics.
-    - [ ] Verify the proposed model with OpenFGA compatibility fixtures and
-      Mélange generation before accepting it.
-  - [ ] **Design authoritative domain records**
-    - [ ] Specify capability requirements declared by a release agent.
-    - [ ] Specify immutable instance-revision bindings from symbolic slots to
-      concrete resources.
-    - [ ] Specify live grants, revocation, and binding lifecycle.
-    - [ ] Specify immutable authorization snapshots and their hashes.
-    - [ ] Specify runtime credentials, capability ceilings, delegation, and
-      one-shot approval records.
-    - [ ] Define which records produce authoritative `melange_tuples`.
-  - [ ] **Generalize transaction and RLS identity**
-    - [ ] Specify typed transaction-local subject, request, mediator,
-      run/session, and delegation context.
-    - [ ] Define autonomous agent, delegated user, gateway, and trusted-worker
-      database-role flows.
-    - [ ] Require agent-facing APIs to remain under non-`BYPASSRLS` roles.
-    - [ ] Define audit fields sufficient to reconstruct the complete
-      delegation and authorization chain.
-  - [ ] **Specify credential minting and checking**
-    - [ ] Decide opaque versus signed credential formats for each trust
-      boundary, using opaque server-side credentials as the initial default.
-    - [ ] Define dispatch-time authorization and minting.
-    - [ ] Define ceiling checks plus live Mélange checks for every privileged
-      API call.
-    - [ ] Define expiry, rotation, revocation, renewal, theft response, and
-      cleanup.
-    - [ ] Define behavior when authorization changes during queued, running,
-      mounted, or long-lived service work.
-  - [ ] **Create focused implementation tasks**
-    - [ ] Create a todo task for domain types, schema, OpenFGA/Mélange
-      generation, and real-PostgreSQL tests.
-    - [ ] Create a todo task for runtime credential issuance, validation,
-      revocation, and audit.
-    - [ ] Create a todo task for generalized RLS subject context and migration
-      from the current user-only context.
+- [ ] **0. Ratify the minimum product contract**
+  - [ ] Add a concise canonical architecture/product document defining “own
+    the loop” and “authority remains outside the loop.”
+  - [ ] Document the initial technically acute audience, coding-agent reference
+    workload, cooking-agent acceptance workload, core promise, placement test,
+    deliberate tradeoffs, and MVP non-goals.
+  - [ ] Lock the user-facing and domain vocabulary needed by the MVP:
+    agent instance, gateway instance, mailbox, capability requirement, binding,
+    grant, authorization snapshot, runtime credential, state generation, and
+    ingress binding.
+  - [ ] Keep product agent instances distinct from runtime guests, gateway
+    guests, VMs, runs, and future service sessions.
+  - [ ] Record rejected or overloaded terms and why they are avoided.
+  - [ ] Link the accepted product document from the root README and relevant
+    architecture documents.
+  - [ ] Review the reusable-release task and lock only the extension seams for
+    symbolic capability requirements, immutable revision bindings,
+    authorization snapshots, and runtime principals.
+  - [ ] Add links in both directions without copying competing implementation
+    requirements into the reusable-release task.
 
-- [ ] **3. Decide the gateway and service model**
-  - [ ] **Write a gateway architecture decision**
-    - [ ] Define the separation between Caddy, gateway code, durable inboxes,
-      agent guests, and outbound responses.
-    - [ ] Specify authoritative ingress-binding records and derived,
-      atomically reconciled Caddy configuration.
-    - [ ] Define domain verification, certificate lifecycle, route-conflict
-      handling, revision cutover, and recovery after Caddy restart.
-    - [ ] Keep Caddy's administration API private to the trusted reconciler;
-      require agents to use capability-checked Hephaestus APIs.
-    - [ ] Define gateway identity, capabilities, state, lifecycle, limits, and
-      isolation.
-    - [ ] Compare V8 isolates, WebAssembly runtimes, microVMs, and other
-      candidates using cold-start, density, compatibility, observability, and
-      security criteria.
-    - [ ] Evaluate Unikraft as an optional `instant-service` backend, keeping
-      the general Linux microVM as the compatibility baseline for coding
-      agents.
-    - [ ] Distinguish functionality available from open-source Unikraft and
-      KraftKit from managed Unikraft Cloud routing, wake-up, and scale-to-zero
-      behavior.
-    - [ ] Define how gateway releases are built, reviewed, installed, updated,
-      and rolled back.
-  - [ ] **Run an Unikraft gateway proof**
-    - [ ] Package the same small Rust webhook gateway for Unikraft, the current
-      Linux microVM runtime, and the leading isolate candidate.
-    - [ ] Compare image size, cold request latency, steady memory, concurrent
-      start density, packaging effort, observability, and cleanup behavior.
-    - [ ] Validate a read-only release with writable SQLite state, including
-      WAL, `fsync`, forced termination, restart, and crash recovery.
-    - [ ] Validate Caddy request buffering or durable acknowledgement while a
-      stopped instance starts.
-    - [ ] Validate default-deny egress, credential brokering, capability
-      revocation, and runtime-token renewal after snapshot resume.
-    - [ ] Record unsupported syscalls, libraries, tooling, and architecture
-      constraints; define explicit acceptance and rejection criteria.
-  - [ ] **Resolve event versus service bindings**
-    - [ ] Specify generic event-ingress request, acknowledgement,
-      deduplication, inbox, retry, and response semantics.
-    - [ ] Specify live-service routing, health, readiness, idle policy,
-      WebSockets, streaming, restart, drain, revision cutover, and volume
-      ownership.
-    - [ ] Decide which mode or modes are required for the first product
-      milestone.
-    - [ ] Document why neither contract introduces Telegram-specific semantics
-      into the core.
-  - [ ] **Create focused implementation tasks**
-    - [ ] Create a todo task for Caddy routing and the selected fast gateway
-      runtime proof.
-    - [ ] Create a todo task for generic durable ingress inbox/outbox.
-    - [ ] Create a separate todo task for long-lived services if they remain in
-      scope after the architecture decision.
+- [ ] **1. Establish agent principals and runtime authority**
+  - [ ] Complete
+    [MVP 01: Agent principals, capabilities, and runtime authority](mvp-01-agent-principals-capabilities-and-runtime-authority.md).
+  - [ ] Verify the completed task extends the existing OpenFGA/Mélange, RLS,
+    release, and secret-runtime models rather than creating parallel authority.
 
-- [ ] **4. Specify credential and network capability brokering**
-  - [ ] **Write the threat model**
-    - [ ] Cover prompt injection, compromised dependencies, raw secret reads,
-      alternate egress, DNS rebinding, SSRF, metadata endpoints, tunneling,
-      logs, state persistence, model context, and authorized-channel data
-      exfiltration.
-    - [ ] Distinguish protecting a credential value from constraining the
-      authority exercised through that credential.
-    - [ ] Define assumptions and limits for microVM, isolate, gateway, build,
-      update-hook, and normal-run guests.
-  - [ ] **Design the broker**
-    - [ ] Specify raw delivery, proxy substitution, and semantic capability
-      modes.
-    - [ ] Specify placeholder/capability identifiers, host storage, TLS
-      handling, destination policy, DNS/firewall enforcement, audit, rotation,
-      and revocation.
-    - [ ] Specify model-provider brokering, budgets, rate limits, and usage
-      attribution without prescribing the agent loop.
-    - [ ] Specify how Git, Telegram, search, browser, and arbitrary API
-      capabilities can be supported without creating a monolithic integration
-      framework.
-  - [ ] **Validate with an adversarial proof**
-    - [ ] Create a focused task for a fake upstream service and brokered-secret
-      prototype.
-    - [ ] Require tests showing the guest cannot read the real credential or
-      bypass the intended network path.
-    - [ ] Require tests showing that authorized requests remain capable of
-      data exfiltration, documenting why least privilege and semantic
-      capabilities remain necessary.
+- [ ] **2. Add durable mailboxes and serialized stateful dispatch**
+  - [ ] Complete
+    [MVP 02: Durable agent mailboxes and stateful dispatch](mvp-02-durable-agent-mailboxes-and-stateful-dispatch.md).
+  - [ ] Verify a stopped stateful instance can accept durable work, restart,
+    serialize execution under its exclusive volume lease, and recover honestly
+    from crashes.
 
-- [ ] **5. Define state, concurrency, hibernation, and provenance**
-  - [ ] **Specify state concurrency**
-    - [ ] Define default serialization for an instance with one exclusive
-      state volume.
-    - [ ] Define stateless parallelism, bounded concurrency, and future state
-      sharding or session-volume options.
-    - [ ] Define behavior for simultaneous messages, scheduled tasks, repository
-      triggers, updates, and service traffic.
-  - [ ] **Specify sleep and wake**
-    - [ ] Define what the agent must persist before becoming idle.
-    - [ ] Define wake triggers, restart context, inbox replay, ephemeral-state
-      loss, and crash behavior.
-    - [ ] Distinguish durable application state from arbitrary process or
-      workflow-stack checkpointing.
-  - [ ] **Specify state provenance**
-    - [ ] Define volume generations, checkpoints, hashes, backups, and
-      snapshots as distinct concepts.
-    - [ ] Define pre-run and post-run state provenance.
-    - [ ] Define retention, privacy, inspection, and reproducibility policy.
-    - [ ] Define how mutable private skills and promoted released skills appear
-      in provenance.
-  - [ ] **Create focused implementation tasks**
-    - [ ] Create a todo task for per-instance durable mailboxes and concurrency
-      policy.
-    - [ ] Create a todo task for state generations/checkpoints and run
-      provenance.
-    - [ ] Create an interactive-session task only after its relationship to
-      generic event and service bindings is explicit.
+- [ ] **3. Add event-only public ingress**
+  - [ ] Complete
+    [MVP 03: Event ingress and Caddy routing](mvp-03-event-ingress-and-caddy-routing.md).
+  - [ ] Verify Caddy configuration is derived from authoritative bindings and a
+    compromised gateway cannot acquire target-agent, repository, project-state,
+    or Caddy-administration authority.
 
-- [ ] **6. Define distributions, packaged agents, and the catalog**
-  - [ ] **Specify distribution manifests**
-    - [ ] Define raw, advanced, and beginner bootstrap contents while keeping
-      one core binary/schema and one security update path.
-    - [ ] Define how distributions pin, install, update, and remove curated
-      releases and policy defaults.
-    - [ ] Define ejectability and source visibility for packaged agents.
-    - [ ] Define upgrade compatibility across distributions.
-  - [ ] **Specify the Hephaestus coding skill**
-    - [ ] Document expected architecture and coding philosophy, not only API
-      syntax.
-    - [ ] Version the skill with the supported Hephaestus contracts.
-    - [ ] Pair it with templates, reference adapters, fixtures, conformance
-      tests, and `heph doctor`.
-    - [ ] Demonstrate generation of a small bespoke loop and gateway without a
-      privileged framework dependency.
-  - [ ] **Specify packaged agents**
-    - [ ] Define the Operator Agent’s mediation, approval, separation, and
-      self-management restrictions.
-    - [ ] Define the Project Agent’s default project-scoped capabilities,
-      memory, workflows, and approval boundaries.
-    - [ ] Define how beginner functionality may use XState, LangGraph, and
-      existing adapters without making those libraries part of the platform
-      ABI.
-    - [ ] Define safe removal, replacement, and recovery of packaged agents.
-  - [ ] **Specify catalog governance**
-    - [ ] Define publisher identity, review, signing, provenance, permission
-      manifests, update diffs, revocation, and retention.
-    - [ ] Define beginner curated-only behavior and advanced/raw explicit
-      untrusted import behavior.
-    - [ ] Define organization-private catalogs and allowlists.
-    - [ ] Treat skills, dependencies, gateways, and agents consistently as
-      executable supply-chain inputs.
-  - [ ] **Create focused implementation tasks**
-    - [ ] Create separate todo tasks for distribution bootstrapping, the
-      Hephaestus skill, packaged agents, and catalog infrastructure after each
-      contract is accepted.
+- [ ] **4. Add brokered model and outbound operations**
+  - [ ] Complete
+    [MVP 04: Brokered model and outbound capabilities](mvp-04-brokered-model-and-outbound-capabilities.md).
+  - [ ] Verify model and Telegram-compatible outbound operations succeed while
+    broker credentials remain outside guests and broker-only egress cannot be
+    bypassed.
 
-- [ ] **7. Validate the golden cooking-agent product journey**
-  - [ ] **Write the reference application**
-    - [ ] Specify the two-user Telegram policy, gateway code, agent loop,
-      persistent recipe state, blog repository, static-site build, and Caddy
-      publication flow.
-    - [ ] Specify exact capability requirements and denied capabilities.
-    - [ ] Specify model/search usage and credential-broker behavior.
-    - [ ] Specify normal operation, simultaneous messages, retry, update,
-      credential revocation, gateway failure, and state recovery.
-  - [ ] **Define the end-to-end acceptance scenario**
-    - [ ] Install the cooking-agent release from a curated source.
-    - [ ] Bind its Telegram gateway, two authorized users, state volume, model
-      policy, and cooking-blog repository.
-    - [ ] Receive messages from both users and update the static blog through
-      controlled Git publication.
-    - [ ] Demonstrate that an unauthorized Telegram user cannot invoke the
-      project agent.
-    - [ ] Demonstrate that gateway compromise does not confer repository
-      authority.
-    - [ ] Demonstrate that the agent cannot read brokered raw credentials or
-      grant itself another repository.
-    - [ ] Update the released loop while retaining state and exact historical
-      provenance.
-    - [ ] Inspect release, revision, state generations, authorization snapshot,
-      ingress, run, result, and audit chain.
-  - [ ] **Create the implementation task**
-    - [ ] Create a focused todo task for the golden scenario after its
-      dependent gateway, capabilities, credentials, and state contracts are
-      accepted.
+- [ ] **5. Record state generations and exact provenance**
+  - [ ] Complete
+    [MVP 05: State generations and exact run provenance](mvp-05-state-generations-and-run-provenance.md).
+  - [ ] Verify each stateful run resolves immutable release, revision, trigger,
+    authorization snapshot, pre/post state generations, capability uses, and
+    result without claiming a full reproducible state snapshot.
 
-- [ ] **8. Validate product positioning and valuable-customer requirements**
-  - [ ] **Write positioning material**
-    - [ ] Produce a one-page narrative using “Own the loop” and “Authority
-      remains outside the loop.”
-    - [ ] Produce a comparison explaining why Hephaestus does not pursue core
-      feature parity with OpenClaw, Hermes, Codex, Claude Code, or Pi.
-    - [ ] Describe when a personal-agent harness is the better choice and when
-      governed released agents are the better choice.
-    - [ ] Use the cooking bot and complex-project coding agent as complementary
-      demos of the same platform.
-  - [ ] **Validate target users**
-    - [ ] Interview or obtain structured feedback from technically acute
-      individual users, software teams, and at least one security/operations
-      stakeholder.
-    - [ ] Test whether release/update rigor is understood as valuable control
-      or merely experienced as bureaucracy.
-    - [ ] Test willingness to adopt bespoke code plus a Hephaestus skill over
-      a universal agent harness.
-    - [ ] Record which packaged beginner features materially improve adoption
-      without contaminating the core boundary.
-  - [ ] **Define enterprise readiness gaps**
-    - [ ] Create or link focused tasks for SSO, backups, audit export,
-      availability, stable upgrades, operational security, documentation, and
-      support expectations that are required by the selected first customer.
-    - [ ] Separate first-customer blockers from generic “enterprise” feature
-      accumulation.
+- [ ] **6. Prove the golden cooking-agent journey**
+  - [ ] Complete
+    [MVP 06: Golden cooking-agent journey](mvp-06-golden-cooking-agent-journey.md).
+  - [ ] Verify the deterministic real-system journey exercises authorized and
+    denied users, gateway isolation, stateful operation, brokered credentials,
+    controlled Git publication, release update, recovery, and complete
+    provenance.
 
-- [ ] **9. Decompose and hand off**
-  - [ ] **Create a dependency-ordered roadmap**
-    - [ ] Order the focused tasks created above by architectural dependency and
-      smallest demonstrable product slice.
-    - [ ] Identify which tasks modify the existing reusable-release epic and
-      which remain independent.
-    - [ ] Ensure no child task requires reconstructing decisions from chat
-      history.
-    - [ ] Keep implementation ownership and completion evidence in child tasks,
-      not this definition task.
-  - [ ] **Verify the definition package**
-    - [ ] Review every locked or working decision for internal contradictions.
-    - [ ] Confirm every unresolved architecture question has an owner or child
-      task.
-    - [ ] Run Markdown/link checks used by the repository, if any.
-    - [ ] Run `git diff --check`.
-    - [ ] Record reviewed product documents, architecture decisions, prototype
-      evidence, interview notes, and created child-task paths below.
+- [ ] **7. Verify and hand off the MVP roadmap**
+  - [x] Create the six dependency-ordered MVP task files with independent
+    outcomes, locked decisions, non-goals, checklists, verification, and
+    completion-evidence requirements.
+  - [ ] Review the umbrella decisions and all six MVP tasks for contradictory
+    terminology, authority, lifecycle, and commit-point requirements.
+  - [ ] Confirm each unresolved MVP architecture question has one authoritative
+    child task and no requirement depends on chat history.
+  - [ ] Confirm the current reusable-release and secret tasks link or hand off
+    every shared boundary without silently duplicating ownership.
+  - [ ] Run the repository's Markdown and link checks, if any.
+  - [ ] Run git diff --check.
+  - [ ] Record accepted documents, child-task completion evidence, and any new
+    deliberate deferrals below.
+
+## Deferred
+
+The following work is deliberately outside the first product slice. Keep it in
+this umbrella until it is prioritized, then create one focused todo task with
+independently verifiable acceptance criteria before implementation.
+
+- [ ] **Fast gateway runtimes and live service bindings**
+  - [ ] Compare V8 isolates, WebAssembly, Unikraft, and the general Linux
+    microVM using cold start, density, compatibility, observability, packaging,
+    isolation, and cleanup evidence.
+  - [ ] Distinguish open-source Unikraft/KraftKit capabilities from managed
+    Unikraft Cloud routing, wake-up, and scale-to-zero behavior.
+  - [ ] Validate Unikraft SQLite WAL, fsync, forced termination, restart,
+    snapshot renewal, credential renewal, and crash recovery before accepting
+    it for stateful services.
+  - [ ] Specify service routing, activation, readiness, health, idle policy,
+    WebSockets, streaming, restart, drain, revision cutover, and exclusive
+    volume ownership.
+  - [ ] Keep Linux microVM behavior as the compatibility baseline and prohibit
+    transparent cross-runtime substitution without proven equivalence.
+  - [ ] Create separate runtime-proof and long-lived-service tasks if this work
+    is prioritized.
+
+- [ ] **Advanced state, concurrency, hibernation, and sessions**
+  - [ ] Define stateless parallelism, bounded concurrency, state sharding,
+    session volumes, and interactions among schedules, repository triggers,
+    ingress, updates, and services.
+  - [ ] Define checkpoints, integrity hashes, backups, reproducible volume
+    snapshots, VM snapshots, retention, privacy, and restoration as distinct
+    features.
+  - [ ] Define stateful hibernation and snapshot resume with live revision,
+    lease, authorization, credential, network, and filesystem revalidation.
+  - [ ] Define mutable private skill provenance and promotion into immutable
+    released software.
+  - [ ] Complete or replace
+    [state-capability transitions](support-agent-state-capability-transitions.md)
+    when transitions beyond the MVP reject-by-default contract are required.
+  - [ ] Create an interactive-session task only after its relationship to event
+    and service bindings is explicit.
+
+- [ ] **Broader credential, egress, and semantic capability coverage**
+  - [ ] Specify and validate a transparent destination-bound TLS interception
+    proxy only if application-level semantic adapters are insufficient.
+  - [ ] Add search, browser, GitHub, arbitrary API, and additional provider
+    adapters as separate bounded capabilities rather than a monolithic
+    integration framework.
+  - [ ] Define long-lived service credential renewal, rotation, revocation, and
+    snapshot-resume behavior.
+  - [ ] Add production KMS, external-vault synchronization, hardware-backed
+    custody, and additional secret delivery modes through focused security
+    tasks.
+  - [ ] Preserve the explicit safety ladder between raw receipt,
+    destination-bound substitution, and semantic host-performed operations.
+
+- [ ] **Operator/Admin Agent, Project Agent, and delegated management**
+  - [ ] Define user-mediated authority with the human as effective principal
+    and the agent recorded as mediator under a short-lived delegation ceiling.
+  - [ ] Define one-shot approvals bound to an exact action, target, command,
+    approver, and expiry.
+  - [ ] Specify Operator Agent separation, proposal and approval behavior,
+    self-management restrictions, and a non-agent break-glass path.
+  - [ ] Specify Project Agent defaults, project-scoped continuity, memory,
+    workflows, schedules, and explicit self-update and publication boundaries.
+  - [ ] Define safe removal, replacement, recovery, and audit of packaged
+    management agents.
+
+- [ ] **Distributions and developer experience**
+  - [ ] Define raw, advanced, and beginner bootstrap manifests over one core
+    binary, schema, security model, and update path.
+  - [ ] Define how distributions pin, install, update, remove, and recover
+    curated releases and policy defaults without becoming divergent forks.
+  - [ ] Produce a versioned Hephaestus coding skill, starter repositories,
+    reference adapters, fixtures, conformance tests, and heph doctor.
+  - [ ] Demonstrate small direct, XState, LangGraph, and model-SDK loops without
+    making any library part of the platform ABI.
+  - [ ] Define source visibility, ejectability, and upgrade compatibility
+    across distributions.
+
+- [ ] **Catalog and executable supply-chain governance**
+  - [ ] Define publisher identity, signing, isolated builds, provenance,
+    dependency and artifact manifests, permission diffs, review, revocation,
+    retention, and update approval.
+  - [ ] Define beginner curated-only behavior and raw/advanced explicit
+    untrusted-import behavior.
+  - [ ] Define organization-private catalogs and allowlists.
+  - [ ] Treat agents, gateways, skills, templates, and executable dependencies
+    consistently as supply-chain inputs.
+  - [ ] Create separate catalog, signing, distribution-bootstrap, and packaged-
+    agent tasks only when their contracts are accepted.
+
+- [ ] **Product positioning and customer validation**
+  - [ ] Produce a concise narrative using “Own the loop” and “Authority remains
+    outside the loop.”
+  - [ ] Compare Hephaestus with personal-agent harnesses and coding agents,
+    explaining both when governed released agents win and when another product
+    is the better choice.
+  - [ ] Obtain structured feedback from technically acute users, software
+    teams, and at least one security or operations stakeholder.
+  - [ ] Test whether release/update rigor creates valuable control or unwanted
+    bureaucracy and which packaged features materially affect adoption.
+  - [ ] Identify first-customer blockers separately from generic enterprise
+    accumulation.
+  - [ ] Create focused tasks for selected-customer requirements such as SSO,
+    backups, audit export, availability, stable upgrades, operational security,
+    documentation, and support.
 
 ## Completion evidence
 
@@ -1074,11 +969,11 @@ Record:
 
 - accepted product and architecture document paths;
 - accepted terminology and rejected alternatives;
-- OpenFGA/Mélange model and compatibility evidence;
-- gateway/runtime and credential-broker prototype results;
-- state/provenance decisions;
-- distribution, packaged-agent, and catalog specifications;
-- cooking-agent scenario evidence;
-- target-user feedback and resulting positioning changes;
-- the dependency-ordered list of child implementation tasks; and
-- deliberate deferrals and their todo-task paths.
+- completion evidence from each of the six dependency-ordered MVP tasks;
+- OpenFGA/Mélange, RLS, runtime-credential, and revocation evidence;
+- mailbox, ingress, gateway-isolation, broker, and network-denial evidence;
+- state-generation and exact-provenance evidence;
+- cooking-agent normal, denial, update, recovery, and inspection evidence;
+- reviewed contradictions and the resolution chosen for each;
+- deliberate deferrals retained here; and
+- focused todo-task paths created when a deferred workstream is prioritized.

@@ -33,3 +33,9 @@ config :phoenix_live_view,
 # Sort query params output of verified routes for robust url comparisons
 config :phoenix,
   sort_verified_routes_query_params: true
+
+config :hephaestus_web,
+  internal_commands: [
+    url: "http://internal.test/internal/v1/commands",
+    token: "test-internal-command-token"
+  ]

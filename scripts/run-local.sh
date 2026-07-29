@@ -21,6 +21,10 @@ local_root="${HEPHAESTUS_LOCAL_ROOT:-${repo_root}/.local/hephaestus}"
 readonly local_root
 readonly root_image_path="${local_root}/root-images/fedora-minimal-8f42d200"
 readonly runtime_root="${HEPHAESTUS_LOCAL_RUNTIME_ROOT:-/tmp/hephaestus-runtime-$(id -u)}"
+readonly secret_runtime_root="${HEPHAESTUS_LOCAL_SECRET_RUNTIME_ROOT:-/dev/shm/hephaestus-secret-runtime-$(id -u)}"
+readonly secret_key_directory="${local_root}/secret-keys"
+readonly secret_key_reference="local-v1"
+readonly internal_command_token="development-internal-command-token"
 
 readonly postgres_container="hephaestus-local-postgres"
 readonly nats_container="hephaestus-local-nats"
@@ -136,6 +140,13 @@ cleanup_recorded_cgroup() {
     rm -f -- "${cgroup_path_file}"
 }
 
+cleanup_secret_runtime() {
+    if [[ -d "${secret_runtime_root}" ]]; then
+        find "${secret_runtime_root}" -mindepth 1 -delete
+        rmdir -- "${secret_runtime_root}" 2>/dev/null || true
+    fi
+}
+
 if [[ "${1:-}" == "stop" ]]; then
     stop_pid_file "${supervisor_pid_file}"
     stop_pid_file "${daemon_pid_file}"
@@ -144,6 +155,7 @@ if [[ "${1:-}" == "stop" ]]; then
         "${web_container}" "${nats_container}" "${postgres_container}" "${rootfs_container}" \
         >/dev/null 2>&1 || true
     cleanup_recorded_cgroup
+    cleanup_secret_runtime
     rm -f -- "${supervisor_pid_file}" "${daemon_pid_file}" "${oidc_pid_file}"
     printf 'Hephaestus local services stopped; persistent data was retained.\n'
     exit 0
@@ -164,6 +176,7 @@ cleanup() {
         "${web_container}" "${nats_container}" "${postgres_container}" "${rootfs_container}" \
         >/dev/null 2>&1 || true
     cleanup_cgroup_path "${cgroup_root}"
+    cleanup_secret_runtime
     rm -f -- "${supervisor_pid_file}" "${daemon_pid_file}" "${oidc_pid_file}"
     rm -f -- "${cgroup_path_file}"
     printf '\nHephaestus stopped. Local data remains in %s and Podman volumes.\n' \
@@ -231,9 +244,19 @@ mkdir -p \
     "${local_root}/workspaces" \
     "${local_root}/artifacts" \
     "${local_root}/root-images" \
+    "${secret_key_directory}" \
     "${local_root}/logs" \
-    "${runtime_root}"
-chmod 0700 "${runtime_root}"
+    "${runtime_root}" \
+    "${secret_runtime_root}"
+chmod 0700 "${runtime_root}" "${secret_runtime_root}" "${secret_key_directory}"
+find "${secret_runtime_root}" -mindepth 1 -delete
+if [[ ! -e "${secret_key_directory}/${secret_key_reference}" ]]; then
+    umask 077
+    dd if=/dev/urandom \
+        of="${secret_key_directory}/${secret_key_reference}" \
+        bs=32 count=1 status=none
+    chmod 0400 "${secret_key_directory}/${secret_key_reference}"
+fi
 printf '%s\n' "$$" >"${supervisor_pid_file}"
 
 # Remove containers left by an interrupted prior local session. Named volumes
@@ -322,6 +345,7 @@ cargo build -p hephaestus-app --bins
 readonly database_url="postgres://postgres:postgres@127.0.0.1:55432/hephaestus?sslmode=disable"
 HEPHAESTUS_DATABASE_URL="${database_url}" \
 HEPHAESTUS_REPOSITORY_ROOT="${local_root}/repositories" \
+HEPHAESTUS_ARTIFACT_ROOT="${local_root}/artifacts" \
 HEPHAESTUS_BROWSER_OIDC_ISSUER="http://127.0.0.1:5556" \
     "${repo_root}/target/debug/hephaestus-e2e-seed" \
     >"${local_root}/seed.json"
@@ -339,6 +363,10 @@ export HEPHAESTUS_VOLUME_ROOT="${local_root}/volumes"
 export HEPHAESTUS_WORKSPACE_ROOT="${local_root}/workspaces"
 export HEPHAESTUS_ARTIFACT_ROOT="${local_root}/artifacts"
 export HEPHAESTUS_RUNTIME_ROOT="${runtime_root}"
+export HEPHAESTUS_SECRET_RUNTIME_ROOT="${secret_runtime_root}"
+export HEPHAESTUS_SECRET_KEY_DIRECTORY="${secret_key_directory}"
+export HEPHAESTUS_SECRET_KEY_REFERENCE="${secret_key_reference}"
+export HEPHAESTUS_INTERNAL_COMMAND_TOKEN="${internal_command_token}"
 export HEPHAESTUS_ROOT_IMAGE_PATH="${root_image_path}"
 export HEPHAESTUS_ROOT_IMAGE_REFERENCE="${ROOT_IMAGE_REFERENCE}"
 export HEPHAESTUS_VM_BACKEND="libkrun"
@@ -346,6 +374,11 @@ export HEPHAESTUS_LIBKRUN_WORKER="${repo_root}/target/debug/hephaestus-vm-libkru
 export HEPHAESTUS_CGROUP_ROOT="${cgroup_root}"
 export HEPHAESTUS_HOST_ID="manual-local"
 export HEPHAESTUS_MKFS_EXT4="$(command -v mkfs.ext4)"
+export HEPHAESTUS_RUNTIME_POLICY_VERSION="manual-local/v1"
+export HEPHAESTUS_RUNTIME_MAX_VCPUS="2"
+export HEPHAESTUS_RUNTIME_MAX_MEMORY_MIB="1024"
+export HEPHAESTUS_RUNTIME_ALLOW_BROKER_ONLY="true"
+export HEPHAESTUS_RUNTIME_ALLOW_EGRESS="false"
 export RUST_LOG="${RUST_LOG:-hephaestus_app=info,git_http=info,forge_service=info,run_orchestrator=info,review_service=info}"
 
 unshare --map-user 10001 --map-group 10001 \
@@ -357,10 +390,12 @@ wait_for_url "http://127.0.0.1:8080/healthz" \
     "${local_root}/logs/daemon.log"
 
 readonly web_database_url="ecto://hephaestus_web_e2e:hephaestus-web-e2e@127.0.0.1:55432/hephaestus"
+# The repository is also mounted by browser-test containers, so use a shared
+# SELinux label rather than letting either container revoke access.
 podman run --detach --rm \
     --name "${web_container}" \
     --network host \
-    --volume "${repo_root}:/workspace:Z" \
+    --volume "${repo_root}:/workspace:z" \
     --volume "${local_root}/artifacts:${local_root}/artifacts:ro,Z" \
     --volume "${local_root}/repositories:${local_root}/repositories:ro,Z" \
     --workdir /workspace/web \
@@ -370,13 +405,15 @@ podman run --detach --rm \
     --env DATABASE_URL="${web_database_url}" \
     --env HEPHAESTUS_ARTIFACT_ROOT="${local_root}/artifacts" \
     --env HEPHAESTUS_REPOSITORY_ROOT="${local_root}/repositories" \
+    --env HEPHAESTUS_INTERNAL_COMMAND_URL="http://127.0.0.1:8080/internal/v1/commands" \
+    --env HEPHAESTUS_INTERNAL_COMMAND_TOKEN="${internal_command_token}" \
     --env HEPHAESTUS_BROWSER_OIDC_ISSUER="http://127.0.0.1:5556" \
     --env HEPHAESTUS_BROWSER_OIDC_CLIENT_ID="hephaestus-web" \
     --env HEPHAESTUS_BROWSER_OIDC_CLIENT_SECRET="development-secret" \
     --env HEPHAESTUS_BROWSER_OIDC_REDIRECT_URI="http://127.0.0.1:4000/auth/oidc/callback" \
     "${ELIXIR_IMAGE}" \
     sh -lc \
-    'apt-get update -qq && apt-get install -y -qq --no-install-recommends git ca-certificates >/dev/null && rm -rf /var/lib/apt/lists/* && mix local.hex --force >/dev/null && mix deps.get && mix assets.setup && mix assets.build && mix phx.server' \
+    'apt-get update -qq && apt-get install -y -qq --no-install-recommends git ca-certificates inotify-tools >/dev/null && rm -rf /var/lib/apt/lists/* && mix local.hex --force >/dev/null && mix deps.get && mix assets.setup && mix assets.build && mix phx.server' \
     >/dev/null
 wait_for_url "http://127.0.0.1:4000/" \
     "${local_root}/logs/web.log"

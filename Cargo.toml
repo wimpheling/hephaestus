@@ -10,6 +10,7 @@ rust-version = "1.85"
 [workspace.dependencies]
 async-trait = "0.1"
 async-nats = "0.42"
+aes-gcm = "0.10"
 axum = "0.8"
 bytes = "1"
 ciborium = "0.2"
@@ -45,6 +46,7 @@ toml = "0.9"
 tracing = "0.1"
 uuid = { version = "1", features = ["serde", "v4"] }
 vm-trait = { path = "crates/vm-trait" }
+zeroize = "1"
 
 [workspace.lints.rust]
 missing_docs = "deny"

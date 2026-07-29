@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::str::FromStr;
 use uuid::Uuid;
 
 macro_rules! identifier {
@@ -56,10 +57,34 @@ macro_rules! identifier {
                 value.as_uuid()
             }
         }
+
+        impl FromStr for $name {
+            type Err = uuid::Error;
+
+            fn from_str(value: &str) -> Result<Self, Self::Err> {
+                Uuid::parse_str(value).map(Self)
+            }
+        }
     };
 }
 
-identifier!(AgentId, "A stable identifier for an autonomous agent.");
+identifier!(
+    AgentInstanceId,
+    "A stable identifier for a project-owned reusable agent instance."
+);
+identifier!(
+    AgentInstanceRevisionId,
+    "A stable identifier for an immutable agent-instance revision."
+);
+identifier!(
+    AgentAttachmentId,
+    "A stable identifier for a repository/ref attachment."
+);
+identifier!(ReleaseId, "A stable identifier for an immutable release.");
+identifier!(
+    ReleaseAgentId,
+    "A stable identifier for one exported agent in a release."
+);
 identifier!(VolumeId, "A stable identifier for a persistent volume.");
 identifier!(RunId, "A stable identifier for one agent execution.");
 identifier!(

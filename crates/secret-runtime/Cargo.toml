@@ -1,0 +1,29 @@
+[package]
+name = "secret-runtime"
+description = "Ephemeral raw-secret mounts and crash reconciliation"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+forge-domain = { path = "../forge-domain" }
+identity-domain = { path = "../identity-domain" }
+run-domain = { path = "../run-domain" }
+run-orchestrator = { path = "../run-orchestrator" }
+runtime-types = { path = "../runtime-types" }
+secret-domain = { path = "../secret-domain" }
+secret-service = { path = "../secret-service" }
+secret-store = { path = "../secret-store" }
+serde_json.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+time.workspace = true
+uuid.workspace = true
+vm-trait.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

@@ -214,6 +214,7 @@ mod tests {
             service_uid: 1000,
             service_gid: 1001,
             startup_timeout: Duration::from_secs(1),
+            broker_socket_path: None,
         };
         let arguments = passt_arguments(
             &config,

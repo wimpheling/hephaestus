@@ -1,9 +1,13 @@
 //! Opt-in hardware integration tests for the Fedora libkrun backend.
 
+use runtime_types::RunId;
+use secret_domain::{SecretSlotKey, SecretValue};
+use secret_runtime::{EphemeralSecretConfig, RawSecretFile, materialize};
 use std::{
     collections::BTreeMap,
     env, fs, io,
     net::{IpAddr, Ipv4Addr},
+    os::unix::fs::PermissionsExt,
     path::PathBuf,
     sync::Arc,
     time::{Duration, Instant},
@@ -40,6 +44,23 @@ async fn boots_and_exercises_guest_runtime_without_privilege_escalation() {
     let sqlite_disk_for_assertion = sqlite_disk.clone();
     let sqlite_uuid = required_text("HEPHAESTUS_LIBKRUN_SQLITE_UUID");
     let mount_root = required_path("HEPHAESTUS_LIBKRUN_MOUNT_ROOT");
+    let secret_root = mount_root.join("secrets");
+    fs::create_dir(&secret_root).expect("create secret mount root");
+    fs::set_permissions(&secret_root, fs::Permissions::from_mode(0o700))
+        .expect("protect secret mount root");
+    let mut secret_mount = materialize(
+        &EphemeralSecretConfig {
+            root: secret_root,
+            require_memory_filesystem: false,
+        },
+        RunId::new(),
+        vec![RawSecretFile {
+            slot: SecretSlotKey::parse("model").expect("secret slot"),
+            value: SecretValue::new("libkrun-secret-sentinel-8a4c").expect("secret fixture value"),
+        }],
+    )
+    .expect("materialize exact raw secret fixture");
+    let secret_path = secret_mount.host_path().to_path_buf();
     let repository = required_path("HEPHAESTUS_LIBKRUN_REPOSITORY");
     let workspace = required_path("HEPHAESTUS_LIBKRUN_WORKSPACE");
     let cgroup_root = required_path("HEPHAESTUS_LIBKRUN_CGROUP_ROOT");
@@ -70,6 +91,7 @@ async fn boots_and_exercises_guest_runtime_without_privilege_escalation() {
         &sqlite_uuid,
         repository.clone(),
         workspace.clone(),
+        Some(secret_mount.vm_mount()),
     );
 
     let vm = provider.provision(spec).await.expect("provision VM");
@@ -114,6 +136,7 @@ async fn boots_and_exercises_guest_runtime_without_privilege_escalation() {
     for marker in [
         "sqlite=ok",
         "mounts=ok",
+        "secrets=ok",
         "dns=ok",
         "tcp=ok",
         "udp=ok",
@@ -133,8 +156,41 @@ async fn boots_and_exercises_guest_runtime_without_privilege_escalation() {
     .expect("idempotent graceful stop");
     vm.destroy().await.expect("complete cleanup");
     vm.destroy().await.expect("idempotent cleanup");
+    secret_mount
+        .mark_guest_destroyed()
+        .expect("confirm primary guest destruction");
+    secret_mount
+        .destroy()
+        .expect("destroy exact raw secret mount");
+    assert!(
+        !secret_path.exists(),
+        "raw secret mount survived guest destruction"
+    );
     assert!(!runtime_root.join(&vm_id).exists());
     assert!(!cgroup_root_for_assertion.join(&vm_id).exists());
+
+    let rollback = provider
+        .provision(state_probe_spec(
+            "integration-state-rollback",
+            rootfs.clone(),
+            sqlite_disk.clone(),
+            &sqlite_uuid,
+            "--state-rollback",
+        ))
+        .await
+        .expect("provision rollback update VM");
+    let rollback_id = rollback.id().0.clone();
+    let mut rollback_events = rollback.subscribe_events();
+    rollback.start().await.expect("start rollback update VM");
+    let (rollback_markers, rollback_exit) = collect_logs_until_any_exit(&mut rollback_events).await;
+    assert_eq!(rollback_exit.code, Some(23));
+    assert!(rollback_markers.contains("sqlite-rollback=ok"));
+    rollback
+        .destroy()
+        .await
+        .expect("destroy rollback update VM");
+    assert!(!runtime_root.join(&rollback_id).exists());
+    assert!(!cgroup_root_for_assertion.join(&rollback_id).exists());
 
     let persisted = provider
         .provision(integration_spec(
@@ -144,6 +200,7 @@ async fn boots_and_exercises_guest_runtime_without_privilege_escalation() {
             &sqlite_uuid,
             repository,
             workspace,
+            None,
         ))
         .await
         .expect("provision persistence VM");
@@ -182,8 +239,27 @@ async fn boots_and_exercises_guest_runtime_without_privilege_escalation() {
     assert!(!runtime_root.join(&graceful_id).exists());
     assert!(!cgroup_root_for_assertion.join(&graceful_id).exists());
 
+    let mut forced_secret_mount = materialize(
+        &EphemeralSecretConfig {
+            root: secret_path
+                .parent()
+                .expect("primary secret mount has a parent")
+                .to_path_buf(),
+            require_memory_filesystem: false,
+        },
+        RunId::new(),
+        vec![RawSecretFile {
+            slot: SecretSlotKey::parse("forced_model").expect("forced secret slot"),
+            value: SecretValue::new("libkrun-forced-secret-sentinel-91bd")
+                .expect("forced secret fixture value"),
+        }],
+    )
+    .expect("materialize forced-cleanup raw secret fixture");
+    let forced_secret_path = forced_secret_mount.host_path().to_path_buf();
+    let mut forced_spec = long_running_spec(rootfs_for_force_test.clone(), "force");
+    forced_spec.mounts.push(forced_secret_mount.vm_mount());
     let forced = provider
-        .provision(long_running_spec(rootfs_for_force_test.clone(), "force"))
+        .provision(forced_spec)
         .await
         .expect("provision forced-cleanup VM");
     let forced_id = forced.id().0.clone();
@@ -191,6 +267,16 @@ async fn boots_and_exercises_guest_runtime_without_privilege_escalation() {
     forced.destroy().await.expect("force cleanup running VM");
     let forced_exit = forced.wait().await.expect("forced exit is cached");
     assert!(forced_exit.signal.is_some() || forced_exit.code.is_some());
+    forced_secret_mount
+        .mark_guest_destroyed()
+        .expect("confirm forced guest destruction");
+    forced_secret_mount
+        .destroy()
+        .expect("destroy forced-cleanup raw secret mount");
+    assert!(
+        !forced_secret_path.exists(),
+        "raw secret mount survived forced guest destruction"
+    );
     assert!(!runtime_root.join(&forced_id).exists());
     assert!(!cgroup_root_for_assertion.join(&forced_id).exists());
 
@@ -316,6 +402,48 @@ async fn boots_and_exercises_guest_runtime_without_privilege_escalation() {
     vm_conformance::lifecycle_suite(&conformance).await;
 }
 
+fn state_probe_spec(
+    id: &str,
+    rootfs: PathBuf,
+    sqlite_disk: PathBuf,
+    sqlite_uuid: &str,
+    argument: &str,
+) -> VmSpec {
+    VmSpec {
+        id: VmId(id.to_owned()),
+        root: RootFilesystem::Directory { host_path: rootfs },
+        disks: vec![VmDisk {
+            id: "instance-state".to_owned(),
+            host_path: sqlite_disk,
+            format: DiskFormat::Raw,
+            read_only: false,
+        }],
+        mounts: Vec::new(),
+        resources: VmResources {
+            vcpus: 1,
+            memory_mib: 512,
+        },
+        network: NetworkMode::Disabled,
+        command: GuestCommand {
+            program: String::from("/usr/libexec/hephaestus/integration-check"),
+            args: vec![argument.to_owned()],
+            env: BTreeMap::new(),
+            working_dir: Some(PathBuf::from("/")),
+        },
+        labels: BTreeMap::from([
+            ("test".to_owned(), id.to_owned()),
+            (
+                "hephaestus.agent-state.filesystem-uuid".to_owned(),
+                sqlite_uuid.to_owned(),
+            ),
+            (
+                "hephaestus.agent-state.mount-path".to_owned(),
+                "/var/lib/hephaestus".to_owned(),
+            ),
+        ]),
+    }
+}
+
 struct LibkrunHarness {
     provider: Arc<LibkrunProvider>,
     rootfs: PathBuf,
@@ -377,30 +505,34 @@ fn integration_spec(
     sqlite_uuid: &str,
     repository: PathBuf,
     workspace: PathBuf,
+    secret_mount: Option<VmMount>,
 ) -> VmSpec {
+    let mut mounts = vec![
+        VmMount {
+            tag: "repository".to_owned(),
+            host_path: repository,
+            guest_path: PathBuf::from("/repository"),
+            read_only: true,
+        },
+        VmMount {
+            tag: "workspace".to_owned(),
+            host_path: workspace,
+            guest_path: PathBuf::from("/workspace"),
+            read_only: false,
+        },
+    ];
+    let expects_secrets = secret_mount.is_some();
+    mounts.extend(secret_mount);
     VmSpec {
         id: VmId(id.to_owned()),
         root: RootFilesystem::Directory { host_path: rootfs },
         disks: vec![VmDisk {
-            id: "agent-state".to_owned(),
+            id: "instance-state".to_owned(),
             host_path: sqlite_disk,
             format: DiskFormat::Raw,
             read_only: false,
         }],
-        mounts: vec![
-            VmMount {
-                tag: "repository".to_owned(),
-                host_path: repository,
-                guest_path: PathBuf::from("/repository"),
-                read_only: true,
-            },
-            VmMount {
-                tag: "workspace".to_owned(),
-                host_path: workspace,
-                guest_path: PathBuf::from("/workspace"),
-                read_only: false,
-            },
-        ],
+        mounts,
         resources: VmResources {
             vcpus: 2,
             memory_mib: 1024,
@@ -416,7 +548,11 @@ fn integration_spec(
         command: GuestCommand {
             program: "/usr/libexec/hephaestus/integration-check".to_owned(),
             args: Vec::new(),
-            env: BTreeMap::new(),
+            env: if expects_secrets {
+                BTreeMap::from([(String::from("HEPH_EXPECT_SECRET_MOUNT"), String::from("1"))])
+            } else {
+                BTreeMap::new()
+            },
             working_dir: Some(PathBuf::from("/workspace")),
         },
         labels: BTreeMap::from([
@@ -466,6 +602,25 @@ async fn collect_logs_until_exit(events: &mut tokio::sync::broadcast::Receiver<V
                     assert_eq!(exit.code, Some(0));
                     return logs;
                 }
+                _ => {}
+            }
+        }
+    })
+    .await
+    .expect("guest completion timeout")
+}
+
+async fn collect_logs_until_any_exit(
+    events: &mut tokio::sync::broadcast::Receiver<VmEvent>,
+) -> (String, vm_trait::VmExit) {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let mut logs = String::new();
+        loop {
+            match events.recv().await.expect("ordered VM event") {
+                VmEvent::Log { bytes, .. } => {
+                    logs.push_str(&String::from_utf8_lossy(&bytes));
+                }
+                VmEvent::Exited(exit) => return (logs, exit),
                 _ => {}
             }
         }

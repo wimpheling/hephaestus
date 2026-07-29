@@ -8,46 +8,160 @@ type organization
     define owner: [user]
     define admin: [user] or owner
     define member: [user] or admin
+    define secret_manager: [user]
     define can_read: member
     define can_manage: owner
     define can_delete: owner
     define can_manage_members: admin
     define can_create_project: admin
+    define can_inspect_secrets: secret_manager or owner
+    define can_write_secret_value: secret_manager or owner
+    define can_rotate_secrets: secret_manager or owner
+    define can_manage_secret_grants: secret_manager or owner
+    define can_revoke_secrets: secret_manager or owner
+    define can_purge_secrets: secret_manager or owner
 
 type project
   relations
     define organization: [organization]
     define maintainer: [user]
+    define secret_manager: [user]
+    define brokered_secret_binder: [user]
+    define raw_secret_binder: [user]
     define can_read: maintainer or can_read from organization
     define can_write: maintainer
     define can_manage: maintainer
     define can_delete: owner from organization
+    define can_inspect_secrets: secret_manager
+    define can_write_secret_value: secret_manager
+    define can_rotate_secrets: secret_manager
+    define can_manage_secret_grants: secret_manager
+    define can_revoke_secrets: secret_manager
+    define can_purge_secrets: secret_manager
+    define can_accept_secret_import: secret_manager
+    define can_bind_brokered_secret: brokered_secret_binder or secret_manager
+    define can_bind_raw_secret: raw_secret_binder or secret_manager
 
 type repository
   relations
     define project: [project]
     define public: [user:*]
+    define manager: [user]
+    define secret_manager: [user]
+    define brokered_secret_binder: [user]
+    define raw_secret_binder: [user]
     define can_read: public or can_read from project
-    define can_write: can_write from project
+    define can_write: manager or can_write from project
     define can_delete: can_delete from project
-
-type agent
-  relations
-    define project: [project]
-    define can_read: can_read from project
-    define can_execute: can_write from project
-    define can_manage: can_manage from project
+    define can_accept_secret_import: secret_manager
+    define can_bind_brokered_secret: brokered_secret_binder or secret_manager
+    define can_bind_raw_secret: raw_secret_binder or secret_manager
 
 type run
   relations
-    define agent: [agent]
-    define can_read: can_read from agent
-    define can_cancel: can_execute from agent or can_manage from agent
+    define instance: [agent_instance]
+    define can_read: can_read from instance
+    define can_cancel: can_execute from instance or can_manage from instance
 
 type state_volume
   relations
-    define agent: [agent]
-    define can_read: can_read from agent
-    define can_attach: can_execute from agent
-    define can_restore: can_manage from agent
-    define can_manage: can_manage from agent
+    define instance: [agent_instance]
+    define can_read: can_read from instance
+    define can_attach: can_execute from instance
+    define can_restore: can_manage from instance
+    define can_manage: can_manage from instance
+
+type build
+  relations
+    define repository: [repository]
+    define can_read: can_read from repository
+    define can_execute: can_write from repository
+    define can_cancel: can_write from repository
+
+type release
+  relations
+    define repository: [repository]
+    define usable_repository: [repository]
+    define can_read: can_read from repository
+    define can_publish: can_write from repository
+    define can_use: can_read from usable_repository
+    define can_revoke: can_write from repository
+
+type release_agent
+  relations
+    define release: [release]
+    define can_read: can_read from release
+    define can_use: can_use from release
+
+type agent_instance
+  relations
+    define project: [project]
+    define release_agent: [release_agent]
+    define can_read: can_read from project
+    define can_manage: can_manage from project
+    define can_execute: can_write from project
+    define can_update: can_manage from project
+    define can_recover: can_manage from project
+    define can_use_release: can_use from release_agent
+
+type agent_attachment
+  relations
+    define instance: [agent_instance]
+    define repository: [repository]
+    define can_read: can_read from instance
+    # The database requires attachment repository and instance to share one
+    # project, so an instance project maintainer necessarily has repository
+    # write authority. Keeping this as one parent traversal is also supported
+    # by both OpenFGA and the pinned Mélange compiler.
+    define can_manage: can_manage from instance
+    define can_execute: can_execute from instance
+
+type agent_update
+  relations
+    define instance: [agent_instance]
+    define can_read: can_read from instance
+    define can_start: can_update from instance
+    define can_recover: can_recover from instance
+
+type secret
+  relations
+    define owner: [organization, project]
+    define inspect_metadata: can_inspect_secrets from owner
+    define write_value: can_write_secret_value from owner
+    define rotate: can_rotate_secrets from owner
+    define manage_grants: can_manage_secret_grants from owner
+    define revoke: can_revoke_secrets from owner
+    define purge: can_purge_secrets from owner
+
+type secret_grant
+  relations
+    define secret: [secret]
+    define target: [project, repository]
+    define inspect_metadata: inspect_metadata from secret
+    define manage: manage_grants from secret
+
+type secret_import
+  relations
+    define grant: [secret_grant]
+    define target: [project, repository]
+    define active_target: [project, repository]
+    define inspect_metadata: can_accept_secret_import from target
+    define accept: can_accept_secret_import from target
+    define bind_brokered: can_bind_brokered_secret from active_target
+    define bind_raw: can_bind_raw_secret from active_target
+
+type agent_secret_binding
+  relations
+    define instance: [agent_instance]
+    define secret_import: [secret_import]
+    define can_read: can_read from instance
+    define can_manage: can_manage from instance
+    define bind_brokered: can_manage from instance and bind_brokered from secret_import
+    define bind_raw: can_manage from instance and bind_raw from secret_import
+
+type secret_lease
+  relations
+    define binding: [agent_secret_binding]
+    define run: [run]
+    define use_brokered: [run]
+    define receive_raw: [run]

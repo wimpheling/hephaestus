@@ -5,6 +5,8 @@ import {SignJWT, exportJWK, generateKeyPair} from "jose";
 const host = "127.0.0.1";
 const port = Number(process.env.HEPHAESTUS_E2E_OIDC_PORT ?? "5556");
 const issuer = `http://${host}:${port}`;
+const webUrl = process.env.HEPHAESTUS_E2E_WEB_URL ?? "http://127.0.0.1:4000";
+const redirectUri = `${webUrl}/auth/oidc/callback`;
 const clientId = "hephaestus-web";
 const clientSecret = "development-secret";
 const gitSecret = new TextEncoder().encode(
@@ -96,8 +98,7 @@ const server = http.createServer(async (request, response) => {
   if (request.method === "GET" && url.pathname === "/authorize") {
     if (
       url.searchParams.get("client_id") !== clientId ||
-      url.searchParams.get("redirect_uri") !==
-        "http://127.0.0.1:4000/auth/oidc/callback" ||
+      url.searchParams.get("redirect_uri") !== redirectUri ||
       url.searchParams.get("response_type") !== "code"
     ) {
       return json(response, 400, {error: "invalid_request"});

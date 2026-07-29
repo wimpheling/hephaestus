@@ -12,6 +12,10 @@ use vm_trait::{DiskFormat, NetworkMode, PortProtocol, RootFilesystem, VmError, V
 
 pub const PROVIDER_NAME: &str = "libkrun";
 
+// libkrun's virtio-fs tag buffer is fixed at 36 bytes. Rejecting at the typed
+// provider boundary prevents an out-of-bounds abort inside the VMM.
+const MAX_VIRTIO_FS_TAG_BYTES: usize = 36;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PreparedSpec {
     pub id: String,
@@ -49,6 +53,7 @@ pub struct PreparedMount {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum PreparedNetwork {
     Disabled,
+    BrokerOnly,
     UserMode { ingress: Vec<PreparedForward> },
 }
 
@@ -87,6 +92,9 @@ pub fn validate_config(config: &LibkrunConfig) -> Result<(), VmError> {
     validate_allowed_roots("image_roots", &config.image_roots)?;
     validate_allowed_roots("disk_roots", &config.disk_roots)?;
     validate_allowed_roots("mount_roots", &config.mount_roots)?;
+    if let Some(path) = &config.broker_socket_path {
+        validate_absolute("broker_socket_path", path)?;
+    }
 
     OpenOptions::new()
         .read(true)
@@ -224,6 +232,12 @@ pub fn prepare_spec(config: &LibkrunConfig, spec: &VmSpec) -> Result<PreparedSpe
             );
         }
         validate_no_nul(&format!("mounts[{index}].tag"), &mount.tag)?;
+        if mount.tag.len() > MAX_VIRTIO_FS_TAG_BYTES {
+            return invalid(
+                format!("mounts[{index}].tag"),
+                "exceeds libkrun's 36-byte virtio-fs tag limit",
+            );
+        }
         validate_absolute(&format!("mounts[{index}].guest_path"), &mount.guest_path)?;
         let host_path = canonical_allowed(
             &format!("mounts[{index}].host_path"),
@@ -248,6 +262,15 @@ pub fn prepare_spec(config: &LibkrunConfig, spec: &VmSpec) -> Result<PreparedSpe
 
     let network = match &spec.network {
         NetworkMode::Disabled => PreparedNetwork::Disabled,
+        NetworkMode::BrokerOnly => {
+            if config.broker_socket_path.is_none() {
+                return invalid(
+                    "network",
+                    "broker-only mode requires a configured broker socket",
+                );
+            }
+            PreparedNetwork::BrokerOnly
+        }
         NetworkMode::UserMode { ingress } => {
             let mut forwards = Vec::with_capacity(ingress.len());
             let mut fixed_bindings = HashSet::new();
@@ -328,11 +351,11 @@ fn validate_state_volume_labels(spec: &VmSpec, disks: &[PreparedDisk]) -> Result
             }
             if !disks
                 .iter()
-                .any(|disk| disk.id == "agent-state" && !disk.read_only)
+                .any(|disk| disk.id == "instance-state" && !disk.read_only)
             {
                 return invalid(
                     "disks",
-                    "state-volume labels require a writable agent-state disk",
+                    "state-volume labels require a writable instance-state disk",
                 );
             }
             Ok(())
@@ -499,7 +522,7 @@ impl PathKind {
 
 #[cfg(test)]
 mod tests {
-    use super::{prepare_spec, validate_config};
+    use super::{PreparedNetwork, prepare_spec, validate_config};
     use crate::config::LibkrunConfig;
     use std::{
         collections::BTreeMap,
@@ -530,6 +553,25 @@ mod tests {
         assert!(matches!(
             prepare_spec(&fixture.config, &spec),
             Err(VmError::InvalidSpec { field, .. }) if field == "mounts[0].host_path"
+        ));
+    }
+
+    #[test]
+    fn oversized_mount_tag_is_rejected_before_ffi() {
+        let fixture = Fixture::new();
+        let repository = fixture.mounts.join("repository");
+        fs::create_dir(&repository).unwrap();
+        let mut spec = fixture.spec();
+        spec.mounts.push(VmMount {
+            tag: "x".repeat(37),
+            host_path: repository,
+            guest_path: PathBuf::from("/repository"),
+            read_only: true,
+        });
+
+        assert!(matches!(
+            prepare_spec(&fixture.config, &spec),
+            Err(VmError::InvalidSpec { field, .. }) if field == "mounts[0].tag"
         ));
     }
 
@@ -569,6 +611,18 @@ mod tests {
             Err(VmError::InvalidSpec { field, .. })
                 if field == "network.ingress[0].bind_addr"
         ));
+    }
+
+    #[test]
+    fn broker_only_requires_host_transport_and_has_no_ip_network() {
+        let mut fixture = Fixture::new();
+        let mut spec = fixture.spec();
+        spec.network = NetworkMode::BrokerOnly;
+        assert_invalid_field(prepare_spec(&fixture.config, &spec), "network");
+
+        fixture.config.broker_socket_path = Some(PathBuf::from("/run/hephaestus/broker.sock"));
+        let prepared = prepare_spec(&fixture.config, &spec).expect("broker transport");
+        assert!(matches!(prepared.network, PreparedNetwork::BrokerOnly));
     }
 
     #[test]
@@ -707,7 +761,7 @@ mod tests {
         let mut invalid_uuid = missing_disk;
         fs::write(fixture.disks.join("data.raw"), []).unwrap();
         invalid_uuid.disks.push(VmDisk {
-            id: String::from("agent-state"),
+            id: String::from("instance-state"),
             host_path: fixture.disks.join("data.raw"),
             format: DiskFormat::Raw,
             read_only: false,

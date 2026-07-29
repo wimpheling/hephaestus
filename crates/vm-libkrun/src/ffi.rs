@@ -115,6 +115,7 @@ impl Context {
         spec: &PreparedSpec,
         passt_socket: Option<&Path>,
         control_socket: &Path,
+        broker_socket: Option<&Path>,
     ) -> Result<(), FfiError> {
         let id = self.id();
         status(
@@ -156,9 +157,26 @@ impl Context {
             self.api
                 .add_vsock_port(id, crate::protocol::GUEST_VSOCK_PORT, &control_socket),
         )?;
+        if matches!(spec.network, PreparedNetwork::BrokerOnly) {
+            let broker_socket = broker_socket.ok_or_else(|| {
+                FfiError::message(
+                    "krun_add_vsock_port",
+                    "broker-only mode has no host broker socket",
+                )
+            })?;
+            let broker_socket = path_cstring(broker_socket)?;
+            status(
+                "krun_add_vsock_port",
+                self.api.add_vsock_port(
+                    id,
+                    crate::protocol::SECRET_BROKER_VSOCK_PORT,
+                    &broker_socket,
+                ),
+            )?;
+        }
 
         match (&spec.network, passt_socket) {
-            (PreparedNetwork::Disabled, None) => {}
+            (PreparedNetwork::Disabled | PreparedNetwork::BrokerOnly, None) => {}
             (PreparedNetwork::UserMode { .. }, Some(socket)) => {
                 let socket = path_cstring(socket)?;
                 let mut mac = deterministic_mac(&spec.id);
@@ -469,6 +487,7 @@ mod tests {
                 &prepared_spec(),
                 Some(Path::new("/run/vm/passt.sock")),
                 Path::new("/run/vm/control.sock"),
+                None,
             )
             .unwrap();
         drop(context);
@@ -532,7 +551,7 @@ mod tests {
         spec.mounts.clear();
         spec.network = PreparedNetwork::Disabled;
         context
-            .configure(&spec, None, Path::new("/run/vm/control.sock"))
+            .configure(&spec, None, Path::new("/run/vm/control.sock"), None)
             .unwrap();
         drop(context);
         let calls = api.calls();
@@ -551,6 +570,34 @@ mod tests {
             !calls
                 .iter()
                 .any(|call| matches!(call, Call::Network { .. }))
+        );
+    }
+
+    #[test]
+    fn broker_only_adds_dedicated_vsock_without_ip_network() {
+        let api = Arc::new(RecordingApi::new(None));
+        let context = Context::from_api(api.clone()).unwrap();
+        let mut spec = prepared_spec();
+        spec.network = PreparedNetwork::BrokerOnly;
+        context
+            .configure(
+                &spec,
+                None,
+                Path::new("/run/vm/control.sock"),
+                Some(Path::new("/run/hephaestus/broker.sock")),
+            )
+            .unwrap();
+        drop(context);
+        let calls = api.calls();
+        assert!(calls.contains(&Call::VsockPort {
+            id: 7,
+            port: crate::protocol::SECRET_BROKER_VSOCK_PORT,
+            path: String::from("/run/hephaestus/broker.sock"),
+        }));
+        assert!(
+            calls
+                .iter()
+                .all(|call| !matches!(call, Call::Network { .. }))
         );
     }
 
@@ -574,6 +621,7 @@ mod tests {
                     &prepared_spec(),
                     Some(Path::new("/run/vm/passt.sock")),
                     Path::new("/run/vm/control.sock"),
+                    None,
                 )
             });
             let error = result.expect_err("injected FFI failure must propagate");
@@ -596,7 +644,8 @@ mod tests {
                 .configure(
                     &raw_root,
                     Some(Path::new("/run/vm/passt.sock")),
-                    Path::new("/run/vm/control.sock")
+                    Path::new("/run/vm/control.sock"),
+                    None,
                 )
                 .unwrap_err()
                 .diagnostic_code(),

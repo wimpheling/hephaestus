@@ -2,7 +2,7 @@
 
 use async_trait::async_trait;
 use authz_domain::{AuthorizationDecision, Authorizer, ObjectRef, ObjectType, Permission, Subject};
-use authz_postgres::{PostgresMelangeAuthorizer, audit_decision};
+use authz_postgres::{PostgresMelangeAuthorizer, audit_decision, begin_actor_transaction};
 use axum::{
     Router,
     body::Body,
@@ -163,20 +163,9 @@ impl PostgresGitAuthorizer {
 #[async_trait]
 impl GitAuthorizer for PostgresGitAuthorizer {
     async fn authorize(&self, request: &AuthorizationRequest) -> Result<(), AuthorizationError> {
-        let mut transaction = self
-            .pool
-            .begin()
+        let mut transaction = begin_actor_transaction(&self.pool, &request.identity)
             .await
             .map_err(|_| AuthorizationError::denied("authorization is unavailable"))?;
-        sqlx::query(
-            "SELECT set_config('hephaestus.actor_id', $1, true),
-                    set_config('hephaestus.request_id', $2, true)",
-        )
-        .bind(request.identity.user_id.to_string())
-        .bind(request.identity.request_id.to_string())
-        .execute(&mut *transaction)
-        .await
-        .map_err(|_| AuthorizationError::denied("authorization is unavailable"))?;
         let permission = match request.operation {
             GitOperation::Clone | GitOperation::Fetch => Permission::CanRead,
             GitOperation::Push => Permission::CanWrite,

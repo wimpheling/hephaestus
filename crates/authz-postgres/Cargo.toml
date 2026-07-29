@@ -9,6 +9,7 @@ rust-version.workspace = true
 async-trait.workspace = true
 authz-domain = { path = "../authz-domain" }
 identity-domain = { path = "../identity-domain" }
+runtime-types = { path = "../runtime-types" }
 serde_json.workspace = true
 sqlx.workspace = true
 time.workspace = true

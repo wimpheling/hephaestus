@@ -111,6 +111,9 @@ pub struct VmResources {
 pub enum NetworkMode {
     /// The guest has no network connectivity.
     Disabled,
+    /// The guest has no IP network and may use only the host secret broker
+    /// through its dedicated provider transport.
+    BrokerOnly,
     /// The provider supplies user-mode networking.
     UserMode {
         /// Host ports forwarded to ports inside the guest.

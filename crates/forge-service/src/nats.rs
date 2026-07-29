@@ -6,10 +6,15 @@ use crate::{ForgeRepositoryError, PgForgeRepository};
 pub const GIT_RECEIVE_ACCEPTED_SUBJECT: &str = "hephaestus.git.receive.accepted";
 /// Invalid repository agent configuration events.
 pub const AGENT_CONFIG_INVALID_SUBJECT: &str = "hephaestus.git.agent_config.invalid";
+/// Durable isolated-build requests for reusable releases.
+pub const BUILD_REQUESTED_SUBJECT: &str = "hephaestus.build.requested.v1";
+/// Exact reusable-instance run requests awaiting dispatch.
+pub const INSTANCE_RUN_REQUESTED_SUBJECT: &str = "hephaestus.instance.run.requested.v1";
 /// Durable commands consumed by the run orchestrator.
 pub const RUN_START_SUBJECT: &str = "hephaestus.run.start";
 
 const GIT_EVENT_STREAM: &str = "HEPHAESTUS_GIT_EVENTS";
+const BUILD_CONSUMER: &str = "isolated-build-executor-v1";
 
 /// Creates the durable Git event stream.
 ///
@@ -30,6 +35,8 @@ pub async fn ensure_forge_jetstream_topology(
             subjects: vec![
                 GIT_RECEIVE_ACCEPTED_SUBJECT.to_owned(),
                 AGENT_CONFIG_INVALID_SUBJECT.to_owned(),
+                BUILD_REQUESTED_SUBJECT.to_owned(),
+                INSTANCE_RUN_REQUESTED_SUBJECT.to_owned(),
             ],
             retention: RetentionPolicy::Limits,
             storage: StorageType::File,
@@ -38,6 +45,32 @@ pub async fn ensure_forge_jetstream_topology(
         .await
         .map_err(|error| ForgeOutboxPublishError::JetStream(error.to_string()))?;
     Ok(())
+}
+
+/// Creates or resolves the durable isolated-build request consumer.
+///
+/// # Errors
+///
+/// Returns an error when the Git event stream or consumer is unavailable.
+pub async fn ensure_build_consumer(
+    context: &jetstream::Context,
+) -> Result<jetstream::consumer::PullConsumer, ForgeOutboxPublishError> {
+    let stream = context
+        .get_stream(GIT_EVENT_STREAM)
+        .await
+        .map_err(|error| ForgeOutboxPublishError::JetStream(error.to_string()))?;
+    stream
+        .get_or_create_consumer(
+            BUILD_CONSUMER,
+            jetstream::consumer::pull::Config {
+                durable_name: Some(BUILD_CONSUMER.to_owned()),
+                filter_subject: BUILD_REQUESTED_SUBJECT.to_owned(),
+                ack_wait: std::time::Duration::from_secs(30),
+                ..Default::default()
+            },
+        )
+        .await
+        .map_err(|error| ForgeOutboxPublishError::JetStream(error.to_string()))
 }
 
 /// Publishes committed forge outbox records to `JetStream`.

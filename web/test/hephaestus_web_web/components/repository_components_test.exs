@@ -18,13 +18,23 @@ defmodule HephaestusWebWeb.RepositoryComponentsTest do
 
     document = LazyHTML.from_fragment(html)
 
-    assert count(document, "#repository-tabs a") == 3
+    assert count(document, "#repository-tabs a") == 5
 
     assert count(document, ~s|#repository-tabs a[aria-current="page"]|) == 1
 
     assert count(
              document,
              ~s|a[href="/repositories/#{@repository_id}/commits?ref=feature%2Freview"]|
+           ) == 1
+
+    assert count(
+             document,
+             ~s|a[href="/repositories/#{@repository_id}/releases"]|
+           ) == 1
+
+    assert count(
+             document,
+             ~s|a[href="/repositories/#{@repository_id}/agents"]|
            ) == 1
   end
 

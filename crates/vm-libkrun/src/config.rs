@@ -63,6 +63,9 @@ pub struct LibkrunConfig {
     pub disk_roots: Vec<PathBuf>,
     /// Canonical roots from which virtio-fs mounts may be selected.
     pub mount_roots: Vec<PathBuf>,
+    /// Host Unix socket exposed only through the dedicated guest broker vsock
+    /// port.
+    pub broker_socket_path: Option<PathBuf>,
     /// Dedicated worker executable.
     pub worker_binary: PathBuf,
     /// `passt` executable.
@@ -106,6 +109,7 @@ impl LibkrunConfig {
             image_roots,
             disk_roots,
             mount_roots,
+            broker_socket_path: None,
             worker_binary: worker_binary.into(),
             passt_binary: PathBuf::from("/usr/bin/passt"),
             kvm_device: PathBuf::from("/dev/kvm"),

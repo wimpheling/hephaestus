@@ -6,7 +6,12 @@ use forge_service::{CreateRepository, GitStorage, PgForgeRepository};
 use hephaestus_app::{AppConfig, HephaestusApp, OidcConfig, RunEventKind, VmBackendConfig};
 use identity_domain::UserId;
 use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
+use run_runtime_local::LocalRunRuntimeConfig;
+use secret_broker::DenyingBrokerAdapter;
+use secret_runtime::EphemeralSecretConfig;
+use secret_store::LocalKeyProvider;
 use serial_test::serial;
+use sha2::{Digest, Sha256};
 use sqlx::postgres::PgPoolOptions;
 use std::{
     collections::BTreeMap,
@@ -28,12 +33,41 @@ use workspace_local::{LocalWorkspaceConfig, WorkspaceLimits};
 const ISSUER: &str = "https://issuer.golden.invalid";
 const AUDIENCE: &str = "hephaestus-git";
 const SIGNING_SECRET: &[u8] = b"golden-test-signing-secret-with-sufficient-entropy";
-const ROOT_IMAGE: &str = "golden-root@sha256:provider-neutral";
+const ROOT_IMAGE: &str =
+    "golden-root@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const GOLDEN_AGENT: &str = r#"#!/bin/sh
+set -eu
+test -r /workspace/repo/input.txt
+test -r /run/hephaestus/parameters.json
+test -r /run/hephaestus/context.json
+if printf 'forbidden\n' > /release/write-must-fail 2>/dev/null; then
+    exit 91
+fi
+if printf 'forbidden\n' > /workspace/repo/write-must-fail 2>/dev/null; then
+    exit 92
+fi
+if printf 'forbidden\n' > /run/hephaestus/write-must-fail 2>/dev/null; then
+    exit 93
+fi
+printf 'state-ok\n' > /var/lib/hephaestus/golden-state
+test "$(cat /var/lib/hephaestus/golden-state)" = "state-ok"
+printf 'agent edit\n' > /workspace/work/input.txt
+printf 'durable report\n' > /workspace/work/reports/result.txt
+"#;
 
 #[tokio::test(flavor = "multi_thread")]
 #[serial]
 #[allow(clippy::too_many_lines)]
 async fn bearer_push_starts_run_through_production_bootstrap() {
+    drop(
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+            )
+            .with_test_writer()
+            .try_init(),
+    );
     let (Ok(database_url), Ok(nats_url)) = (
         std::env::var("HEPHAESTUS_POSTGRES_TEST_URL"),
         std::env::var("HEPHAESTUS_NATS_TEST_URL"),
@@ -111,15 +145,31 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
         })
         .await
         .expect("seed repository");
+    seed_reusable_instance(
+        &pool,
+        user_id,
+        project.id.as_uuid(),
+        repository.id.as_uuid(),
+        &root.join("release-artifacts"),
+    )
+    .await;
 
     let backend_fixture = backend_fixture(&root).await;
     let mut transient_runtime_roots = backend_fixture.transient_runtime_roots;
     transient_runtime_roots.push(root.join("workspaces"));
     let backend = git_backend().await;
+    let secret_mount_root = root.join("secret-mounts");
+    std::fs::create_dir(&secret_mount_root).expect("secret mount root");
+    std::fs::set_permissions(
+        &secret_mount_root,
+        std::os::unix::fs::PermissionsExt::from_mode(0o700),
+    )
+    .expect("secret mount root mode");
     let app = HephaestusApp::build(AppConfig {
         database_url,
         nats_url: nats_url.clone(),
         http_listen: "127.0.0.1:0".parse().expect("ephemeral listen address"),
+        internal_command_token_hash: sha2::Sha256::digest(b"golden-internal-command-token").into(),
         repository_root: repository_root.clone(),
         git_http_backend: backend,
         git_http_limits: git_http::GitHttpLimits::default(),
@@ -143,6 +193,20 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             git_binary: git_binary().await,
             limits: WorkspaceLimits::default(),
         },
+        run_runtime: LocalRunRuntimeConfig {
+            runtime_root: root.join("run-runtime"),
+            release_artifact_root: root.join("release-artifacts"),
+        },
+        build_workspace_root: root.join("isolated-builds"),
+        build_timeout: Duration::from_secs(30),
+        secret_mounts: EphemeralSecretConfig {
+            root: secret_mount_root,
+            require_memory_filesystem: false,
+        },
+        secret_keys: LocalKeyProvider::new("golden/v1", [("golden/v1", [17_u8; 32])])
+            .expect("secret key"),
+        secret_broker_socket: root.join("secret-broker.sock"),
+        secret_broker_adapter: Arc::new(DenyingBrokerAdapter),
         vm_backend: backend_fixture.backend,
         root_images: BTreeMap::from([(
             String::from(ROOT_IMAGE),
@@ -150,6 +214,13 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
                 host_path: backend_fixture.root_image,
             },
         )]),
+        runtime_policy: hephaestus_app::RuntimePolicy {
+            version: String::from("golden/v1"),
+            max_vcpus: 2,
+            max_memory_mib: 1_024,
+            allow_broker_only: true,
+            allow_egress: true,
+        },
         agent_state_capacity_bytes: 16 * 1024 * 1024,
         worker_concurrency: 4,
         outbox_poll_interval: Duration::from_millis(10),
@@ -172,6 +243,9 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
     tokio::fs::write(source.join("agent.toml"), agent_config())
         .await
         .expect("provider-neutral agent.toml");
+    tokio::fs::write(source.join("golden-agent.sh"), GOLDEN_AGENT)
+        .await
+        .expect("golden agent executable source");
     tokio::fs::write(source.join("input.txt"), "accepted\n")
         .await
         .expect("input file");
@@ -230,19 +304,16 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
 
     let permissions: Vec<String> = sqlx::query_scalar(
         "SELECT permission FROM authorization_audit_events
-         WHERE actor_id = $1 AND object_id IN ($2, (
-             SELECT agent_id FROM run_requests WHERE run_id = $3
-         ))
+         WHERE actor_id = $1
          ORDER BY permission",
     )
     .bind(user_id.as_uuid())
-    .bind(repository.id.as_uuid())
-    .bind(run_id.as_uuid())
     .fetch_all(&pool)
     .await
     .expect("authorization audit");
     assert!(permissions.iter().any(|value| value == "can_write"));
     assert!(permissions.iter().any(|value| value == "can_execute"));
+    assert!(permissions.iter().any(|value| value == "can_use"));
     let mapped_profile: bool = sqlx::query_scalar(
         "SELECT EXISTS(
             SELECT 1 FROM user_profiles
@@ -280,32 +351,255 @@ fn signed_token() -> String {
 
 const fn agent_config() -> &'static str {
     r#"
-version = 1
+version = 2
 [agent]
-name = "golden-agent"
-[guest]
+name = "Golden Agent"
+key = "golden-agent"
+[build]
 command = "/bin/sh"
-arguments = ["-c", "printf 'agent edit\n' > input.txt; printf 'durable report\n' > reports/result.txt"]
-working_directory = "/workspace/work"
+arguments = ["-c", "mkdir -p /workspace/output/bin && cp /workspace/source/golden-agent.sh /workspace/output/bin/golden && chmod 0555 /workspace/output/bin/golden"]
+working_directory = "/workspace/source"
+root_image = "golden-root@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+triggers = ["refs/heads/main"]
+[build.resources]
+vcpus = 1
+memory_mib = 128
+[build.network]
+profile = "disabled"
+[[build.artifacts]]
+path = "bin/golden"
+kind = "executable"
+[guest]
+command = "bin/golden"
+arguments = []
+working_directory = "bin"
 [resources]
 vcpus = 1
 memory_mib = 128
 [root_image]
-reference = "golden-root@sha256:provider-neutral"
+reference = "golden-root@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 [workspace]
 mount = true
 path = "/workspace/repo"
 read_only = true
 [state_volume]
 enabled = true
-[results]
-declared_files = ["reports/result.txt"]
 [network]
 profile = "disabled"
 [triggers]
-push = true
+push = false
 refs = ["refs/heads/main"]
+[update_hook]
+command = "bin/golden"
+arguments = []
+timeout_seconds = 60
+[update_hook.resources]
+vcpus = 1
+memory_mib = 128
 "#
+}
+
+#[allow(clippy::too_many_lines)]
+async fn seed_reusable_instance(
+    pool: &sqlx::PgPool,
+    actor: UserId,
+    project_id: uuid::Uuid,
+    repository_id: uuid::Uuid,
+    artifact_root: &Path,
+) {
+    let build_id = uuid::Uuid::new_v4();
+    let family_id = uuid::Uuid::new_v4();
+    let release_id = uuid::Uuid::new_v4();
+    let release_agent_id = uuid::Uuid::new_v4();
+    let instance_id = uuid::Uuid::new_v4();
+    let revision_id = uuid::Uuid::new_v4();
+    let attachment_id = uuid::Uuid::new_v4();
+    let state_volume_id = uuid::Uuid::new_v4();
+    let artifact_id = uuid::Uuid::new_v4();
+    let storage_key = uuid::Uuid::new_v4();
+    let artifact = GOLDEN_AGENT.as_bytes();
+    let release_configuration = serde_json::to_value(
+        agent_config::parse(agent_config().as_bytes())
+            .config
+            .expect("golden reusable configuration should parse"),
+    )
+    .expect("serialize golden reusable configuration");
+    tokio::fs::create_dir_all(artifact_root)
+        .await
+        .expect("release artifact root");
+    let artifact_path = artifact_root.join(storage_key.simple().to_string());
+    tokio::fs::write(&artifact_path, artifact)
+        .await
+        .expect("release artifact");
+    let mut permissions = tokio::fs::metadata(&artifact_path)
+        .await
+        .expect("artifact metadata")
+        .permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o555);
+    tokio::fs::set_permissions(&artifact_path, permissions)
+        .await
+        .expect("artifact mode");
+    let artifact_hash: [u8; 32] = Sha256::digest(artifact).into();
+
+    sqlx::query(
+        "INSERT INTO build_requests
+         (id, repository_id, source_commit, source_ref,
+          build_definition_hash, state, created_by, completed_at)
+         VALUES ($1, $2, $3, 'refs/heads/main', $4, 'succeeded',
+                 $5, now())",
+    )
+    .bind(build_id)
+    .bind(repository_id)
+    .bind("a".repeat(40))
+    .bind([1_u8; 32].as_slice())
+    .bind(actor.as_uuid())
+    .execute(pool)
+    .await
+    .expect("seed reusable build");
+    sqlx::query(
+        "INSERT INTO agent_families (id, repository_id, agent_key)
+         VALUES ($1, $2, 'golden-agent')",
+    )
+    .bind(family_id)
+    .bind(repository_id)
+    .execute(pool)
+    .await
+    .expect("seed reusable family");
+    sqlx::query(
+        "INSERT INTO releases
+         (id, repository_id, version, source_commit, source_ref,
+         build_request_id, build_definition_hash, configuration,
+          configuration_hash, manifest_hash, state, published_at)
+         VALUES ($1, $2, 'v1', $3, 'refs/heads/main', $4, $5,
+                 $6, $7, $8, 'published', now())",
+    )
+    .bind(release_id)
+    .bind(repository_id)
+    .bind("a".repeat(40))
+    .bind(build_id)
+    .bind([1_u8; 32].as_slice())
+    .bind(release_configuration)
+    .bind([2_u8; 32].as_slice())
+    .bind([3_u8; 32].as_slice())
+    .execute(pool)
+    .await
+    .expect("seed reusable release");
+    sqlx::query(
+        "INSERT INTO release_artifacts
+         (id, release_id, path, kind, mode, content_hash, size_bytes,
+          media_type, storage_key)
+         VALUES ($1, $2, 'bin/golden', 'executable', 365, $3, $4,
+                 'application/octet-stream', $5)",
+    )
+    .bind(artifact_id)
+    .bind(release_id)
+    .bind(artifact_hash.as_slice())
+    .bind(i64::try_from(artifact.len()).expect("artifact length"))
+    .bind(storage_key)
+    .execute(pool)
+    .await
+    .expect("seed reusable artifact");
+    sqlx::query(
+        "INSERT INTO release_agents
+         (id, release_id, family_id, agent_key, display_name,
+          runtime_contract, runtime_contract_hash, parameter_schema,
+          secret_slot_schema, requires_state, update_hook)
+         VALUES ($1, $2, $3, 'golden-agent', 'Golden Agent', $4, $5,
+                 '[]', '[]', true, $6)",
+    )
+    .bind(release_agent_id)
+    .bind(release_id)
+    .bind(family_id)
+    .bind(serde_json::json!({
+        "executable": "bin/golden",
+        "arguments": [],
+        "working_directory": "bin",
+        "root_image_digest": ROOT_IMAGE,
+        "requires_state": true
+    }))
+    .bind([4_u8; 32].as_slice())
+    .bind(serde_json::json!({
+        "command": "bin/golden",
+        "arguments": [],
+        "timeout_seconds": 60,
+        "resources": {"vcpus": 1, "memory_mib": 128}
+    }))
+    .execute(pool)
+    .await
+    .expect("seed reusable release agent");
+    sqlx::query(
+        "INSERT INTO agent_instances
+         (id, project_id, family_id, name, state, created_by)
+         VALUES ($1, $2, $3, 'golden-agent', 'active', $4)",
+    )
+    .bind(instance_id)
+    .bind(project_id)
+    .bind(family_id)
+    .bind(actor.as_uuid())
+    .execute(pool)
+    .await
+    .expect("seed reusable instance");
+    sqlx::query(
+        "INSERT INTO agent_instance_state_volumes
+         (id, instance_id, state, capacity_bytes)
+         VALUES ($1, $2, 'uninitialized', $3)",
+    )
+    .bind(state_volume_id)
+    .bind(instance_id)
+    .bind(16_i64 * 1024 * 1024)
+    .execute(pool)
+    .await
+    .expect("seed reusable instance state volume");
+    sqlx::query("UPDATE agent_instances SET state_volume_id = $2 WHERE id = $1")
+        .bind(instance_id)
+        .bind(state_volume_id)
+        .execute(pool)
+        .await
+        .expect("attach reusable instance state volume");
+    sqlx::query(
+        "INSERT INTO agent_instance_revisions
+         (id, instance_id, release_agent_id, parameters, parameter_hash,
+          secret_bindings, resource_selection, network_restriction,
+          effective_runtime_policy, effective_policy_hash,
+          platform_policy_version, runnable, diagnostics, created_by)
+         VALUES ($1, $2, $3, '{}', $4, '[]', $5, $6, $5, $7,
+                 'platform/v1', true, '[]', $8)",
+    )
+    .bind(revision_id)
+    .bind(instance_id)
+    .bind(release_agent_id)
+    .bind([5_u8; 32].as_slice())
+    .bind(serde_json::json!({
+        "vcpus": 1,
+        "memory_mib": 128,
+        "network": "disabled"
+    }))
+    .bind(serde_json::json!({"network": "disabled"}))
+    .bind([6_u8; 32].as_slice())
+    .bind(actor.as_uuid())
+    .execute(pool)
+    .await
+    .expect("seed reusable revision");
+    sqlx::query("UPDATE agent_instances SET active_revision_id = $2 WHERE id = $1")
+        .bind(instance_id)
+        .bind(revision_id)
+        .execute(pool)
+        .await
+        .expect("activate reusable revision");
+    sqlx::query(
+        "INSERT INTO agent_attachments
+         (id, instance_id, project_id, repository_id, ref_selector,
+          trigger_policy, enabled, created_by)
+         VALUES ($1, $2, $3, $4, 'refs/heads/main', 'push', true, $5)",
+    )
+    .bind(attachment_id)
+    .bind(instance_id)
+    .bind(project_id)
+    .bind(repository_id)
+    .bind(actor.as_uuid())
+    .execute(pool)
+    .await
+    .expect("seed reusable attachment");
 }
 
 async fn git_backend() -> PathBuf {
@@ -583,6 +877,8 @@ async fn cleanup_streams(nats_url: &str) {
         "HEPH_RUN_COMMANDS",
         "HEPH_RUN_EVENTS",
         "HEPHAESTUS_GIT_EVENTS",
+        "HEPHAESTUS_RELEASE_EVENTS",
+        "HEPHAESTUS_SECRET_EVENTS",
     ] {
         drop(context.delete_stream(stream).await);
     }

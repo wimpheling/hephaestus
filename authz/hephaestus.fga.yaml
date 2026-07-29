@@ -11,11 +11,20 @@ tuples:
   - user: user:member
     relation: member
     object: organization:acme
+  - user: user:org-secret-manager
+    relation: secret_manager
+    object: organization:acme
   - user: organization:acme
     relation: organization
     object: project:forge
   - user: user:maintainer
     relation: maintainer
+    object: project:forge
+  - user: user:project-secret-manager
+    relation: secret_manager
+    object: project:forge
+  - user: user:broker-binder
+    relation: brokered_secret_binder
     object: project:forge
   - user: project:forge
     relation: project
@@ -26,15 +35,60 @@ tuples:
   - user: user:*
     relation: public
     object: repository:public
+  - user: agent_instance:reviewer
+    relation: instance
+    object: run:one
+  - user: agent_instance:reviewer
+    relation: instance
+    object: state_volume:builder-state
+  - user: repository:private
+    relation: repository
+    object: release:reviewer-v1
+  - user: repository:private
+    relation: usable_repository
+    object: release:reviewer-v1
+  - user: release:reviewer-v1
+    relation: release
+    object: release_agent:reviewer-v1
   - user: project:forge
     relation: project
-    object: agent:builder
-  - user: agent:builder
-    relation: agent
-    object: run:one
-  - user: agent:builder
-    relation: agent
-    object: state_volume:builder-state
+    object: agent_instance:reviewer
+  - user: release_agent:reviewer-v1
+    relation: release_agent
+    object: agent_instance:reviewer
+  - user: organization:acme
+    relation: owner
+    object: secret:model-token
+  - user: secret:model-token
+    relation: secret
+    object: secret_grant:model-project
+  - user: project:forge
+    relation: target
+    object: secret_grant:model-project
+  - user: secret_grant:model-project
+    relation: grant
+    object: secret_import:model
+  - user: project:forge
+    relation: target
+    object: secret_import:model
+  - user: project:forge
+    relation: active_target
+    object: secret_import:model
+  - user: agent_instance:reviewer
+    relation: instance
+    object: agent_secret_binding:model
+  - user: secret_import:model
+    relation: secret_import
+    object: agent_secret_binding:model
+  - user: agent_secret_binding:model
+    relation: binding
+    object: secret_lease:model-one
+  - user: run:one
+    relation: run
+    object: secret_lease:model-one
+  - user: run:one
+    relation: use_brokered
+    object: secret_lease:model-one
 
 tests:
   - name: organization hierarchy
@@ -99,16 +153,16 @@ tests:
           can_read: true
           can_write: false
 
-  - name: agent run and state volume inheritance
+  - name: instance run and state volume inheritance
     check:
       - user: user:maintainer
-        object: agent:builder
+        object: agent_instance:reviewer
         assertions:
           can_read: true
           can_execute: true
           can_manage: true
       - user: user:member
-        object: agent:builder
+        object: agent_instance:reviewer
         assertions:
           can_read: true
           can_execute: false
@@ -148,3 +202,75 @@ tests:
         assertions:
           can_read: false
           can_write: false
+
+  - name: secret permissions are explicit and mode separated
+    check:
+      - user: user:org-secret-manager
+        object: secret:model-token
+        assertions:
+          inspect_metadata: true
+          write_value: true
+          rotate: true
+          manage_grants: true
+          revoke: true
+          purge: true
+      - user: user:member
+        object: secret:model-token
+        assertions:
+          inspect_metadata: false
+          write_value: false
+          manage_grants: false
+      - user: user:project-secret-manager
+        object: secret_import:model
+        assertions:
+          accept: true
+          bind_brokered: true
+          bind_raw: true
+      - user: user:broker-binder
+        object: secret_import:model
+        assertions:
+          accept: false
+          bind_brokered: true
+          bind_raw: false
+      - user: user:broker-binder
+        object: agent_secret_binding:model
+        assertions:
+          bind_brokered: false
+          bind_raw: false
+      - user: user:maintainer
+        object: agent_secret_binding:model
+        assertions:
+          can_manage: true
+          bind_brokered: false
+          bind_raw: false
+      - user: run:one
+        object: secret_lease:model-one
+        assertions:
+          use_brokered: true
+          receive_raw: false
+      - user: run:two
+        object: secret_lease:model-one
+        assertions:
+          use_brokered: false
+          receive_raw: false
+
+  - name: reusable release and instance authority remains two sided
+    check:
+      - user: user:member
+        object: release:reviewer-v1
+        assertions:
+          can_read: true
+          can_use: true
+          can_publish: false
+      - user: user:maintainer
+        object: agent_instance:reviewer
+        assertions:
+          can_read: true
+          can_manage: true
+          can_execute: true
+          can_use_release: true
+      - user: user:outsider
+        object: agent_instance:reviewer
+        assertions:
+          can_read: false
+          can_manage: false

@@ -1,10 +1,13 @@
 //! Opt-in `PostgreSQL` integration coverage for durable run persistence.
 
-use run_domain::{CancelRun, RunState, StartRun};
+use run_domain::{CancelRun, RunKind, RunState, StartRun};
 use run_orchestrator::{
     LIFECYCLE_EVENT_SUBJECT, NatsOutboxPublisher, PgRunRepository, RepositoryError, RunRepository,
 };
-use runtime_types::{AgentId, CommandId, RunId};
+use runtime_types::{
+    AgentAttachmentId, AgentInstanceId, AgentInstanceRevisionId, CommandId, ReleaseAgentId,
+    ReleaseId, RunId,
+};
 use sqlx::postgres::PgPoolOptions;
 use std::{env, sync::Arc, time::Duration};
 
@@ -32,9 +35,15 @@ async fn commands_transitions_and_outbox_are_idempotent() {
     let command = StartRun {
         command_id: CommandId::new(),
         run_id: RunId::new(),
-        agent_id: AgentId::new(),
+        instance_id: AgentInstanceId::new(),
+        instance_revision_id: AgentInstanceRevisionId::new(),
+        release_id: ReleaseId::new(),
+        release_agent_id: ReleaseAgentId::new(),
+        attachment_id: Some(AgentAttachmentId::new()),
+        kind: RunKind::Normal,
+        requires_state: true,
     };
-    seed_agent(&pool, command.agent_id).await;
+    seed_instance(&pool, &command).await;
     let created = repository.create_run(&command).await.expect("create run");
     assert!(created.created);
     assert_eq!(created.run.state, RunState::Queued);
@@ -44,6 +53,40 @@ async fn commands_transitions_and_outbox_are_idempotent() {
         .expect("duplicate start command");
     assert!(!duplicate.created);
     assert_eq!(duplicate.run.id, created.run.id);
+
+    let update = StartRun {
+        command_id: CommandId::new(),
+        run_id: RunId::new(),
+        instance_id: AgentInstanceId::new(),
+        instance_revision_id: AgentInstanceRevisionId::new(),
+        release_id: ReleaseId::new(),
+        release_agent_id: ReleaseAgentId::new(),
+        attachment_id: None,
+        kind: RunKind::Update,
+        requires_state: true,
+    };
+    seed_instance(&pool, &update).await;
+    sqlx::query(
+        "INSERT INTO runs
+         (id, instance_id, instance_revision_id, release_id, release_agent_id,
+          run_kind, command_id, state, requires_state, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, 'update', $6, 'queued', true, now(), now())",
+    )
+    .bind(update.run_id.as_uuid())
+    .bind(update.instance_id.as_uuid())
+    .bind(update.instance_revision_id.as_uuid())
+    .bind(update.release_id.as_uuid())
+    .bind(update.release_agent_id.as_uuid())
+    .bind(update.command_id.as_uuid())
+    .execute(&pool)
+    .await
+    .expect("precreate update run");
+    let adopted = repository
+        .create_run(&update)
+        .await
+        .expect("adopt precreated update run");
+    assert!(adopted.created);
+    assert_eq!(adopted.run, repository.get(update.run_id).await.unwrap());
 
     repository
         .transition(command.run_id, RunState::LeasingVolume, None, None)
@@ -119,11 +162,16 @@ async fn commands_transitions_and_outbox_are_idempotent() {
         .execute(&pool)
         .await
         .expect("clean run fixture");
-    sqlx::query("DELETE FROM agents WHERE id = $1")
-        .bind(command.agent_id.as_uuid())
+    sqlx::query("DELETE FROM command_inbox WHERE command_id = $1")
+        .bind(update.command_id.as_uuid())
         .execute(&pool)
         .await
-        .expect("clean agent fixture");
+        .expect("clean update inbox");
+    sqlx::query("DELETE FROM runs WHERE id = $1")
+        .bind(update.run_id.as_uuid())
+        .execute(&pool)
+        .await
+        .expect("clean update run");
 }
 
 #[tokio::test]
@@ -152,9 +200,15 @@ async fn outbox_retries_are_deduplicated_by_jetstream_message_id() {
     let command = StartRun {
         command_id: CommandId::new(),
         run_id: RunId::new(),
-        agent_id: AgentId::new(),
+        instance_id: AgentInstanceId::new(),
+        instance_revision_id: AgentInstanceRevisionId::new(),
+        release_id: ReleaseId::new(),
+        release_agent_id: ReleaseAgentId::new(),
+        attachment_id: Some(AgentAttachmentId::new()),
+        kind: RunKind::Normal,
+        requires_state: true,
     };
-    seed_agent(&pool, command.agent_id).await;
+    seed_instance(&pool, &command).await;
     repository.create_run(&command).await.expect("create run");
     let event_id: uuid::Uuid = sqlx::query_scalar("SELECT id FROM outbox WHERE aggregate_id = $1")
         .bind(command.run_id.as_uuid())
@@ -246,16 +300,16 @@ async fn outbox_retries_are_deduplicated_by_jetstream_message_id() {
         .execute(&pool)
         .await
         .expect("clean run fixture");
-    sqlx::query("DELETE FROM agents WHERE id = $1")
-        .bind(command.agent_id.as_uuid())
-        .execute(&pool)
-        .await
-        .expect("clean agent fixture");
 }
 
-async fn seed_agent(pool: &sqlx::PgPool, agent_id: AgentId) {
+// Keeping the complete exact-provenance graph together makes this fixture auditable.
+#[allow(clippy::too_many_lines)]
+async fn seed_instance(pool: &sqlx::PgPool, command: &StartRun) {
     let organization_id = uuid::Uuid::new_v4();
     let project_id = uuid::Uuid::new_v4();
+    let repository_id = uuid::Uuid::new_v4();
+    let family_id = uuid::Uuid::new_v4();
+    let build_request_id = uuid::Uuid::new_v4();
     sqlx::query("INSERT INTO organizations (id, name) VALUES ($1, $2)")
         .bind(organization_id)
         .bind(format!("runtime-{organization_id}"))
@@ -269,11 +323,119 @@ async fn seed_agent(pool: &sqlx::PgPool, agent_id: AgentId) {
         .execute(pool)
         .await
         .expect("runtime project");
-    sqlx::query("INSERT INTO agents (id, project_id, name) VALUES ($1, $2, $3)")
-        .bind(agent_id.as_uuid())
+    sqlx::query(
+        "INSERT INTO repositories (id, project_id, name)
+         VALUES ($1, $2, $3)",
+    )
+    .bind(repository_id)
+    .bind(project_id)
+    .bind(format!("runtime-{repository_id}"))
+    .execute(pool)
+    .await
+    .expect("runtime repository");
+    sqlx::query(
+        "INSERT INTO agent_families (id, repository_id, agent_key)
+         VALUES ($1, $2, 'runtime')",
+    )
+    .bind(family_id)
+    .bind(repository_id)
+    .execute(pool)
+    .await
+    .expect("runtime family");
+    sqlx::query(
+        "INSERT INTO build_requests
+         (id, repository_id, source_commit, source_ref,
+          build_definition_hash, state, completed_at)
+         VALUES ($1, $2, $3, 'refs/heads/main', $4, 'succeeded', now())",
+    )
+    .bind(build_request_id)
+    .bind(repository_id)
+    .bind("a".repeat(40))
+    .bind([1_u8; 32].as_slice())
+    .execute(pool)
+    .await
+    .expect("runtime build");
+    sqlx::query(
+        "INSERT INTO releases
+         (id, repository_id, version, source_commit, source_ref,
+          build_request_id, build_definition_hash, configuration,
+          configuration_hash, manifest_hash, state, published_at)
+         VALUES ($1, $2, $3, $4, 'refs/heads/main', $5, $6, '{}', $7, $8,
+                 'published', now())",
+    )
+    .bind(command.release_id.as_uuid())
+    .bind(repository_id)
+    .bind(format!("test-{}", command.release_id))
+    .bind("a".repeat(40))
+    .bind(build_request_id)
+    .bind([1_u8; 32].as_slice())
+    .bind([2_u8; 32].as_slice())
+    .bind([3_u8; 32].as_slice())
+    .execute(pool)
+    .await
+    .expect("runtime release");
+    sqlx::query(
+        "INSERT INTO release_agents
+         (id, release_id, family_id, agent_key, display_name,
+          runtime_contract, runtime_contract_hash, requires_state)
+         VALUES ($1, $2, $3, 'runtime', 'Runtime', '{}', $4, $5)",
+    )
+    .bind(command.release_agent_id.as_uuid())
+    .bind(command.release_id.as_uuid())
+    .bind(family_id)
+    .bind([4_u8; 32].as_slice())
+    .bind(command.requires_state)
+    .execute(pool)
+    .await
+    .expect("runtime release agent");
+    sqlx::query(
+        "INSERT INTO agent_instances (id, project_id, family_id, name, state)
+         VALUES ($1, $2, $3, $4, 'active')",
+    )
+    .bind(command.instance_id.as_uuid())
+    .bind(project_id)
+    .bind(family_id)
+    .bind(format!("runtime-{}", command.instance_id))
+    .execute(pool)
+    .await
+    .expect("runtime instance");
+    sqlx::query(
+        "INSERT INTO agent_instance_revisions
+         (id, instance_id, release_agent_id, parameters, parameter_hash,
+          resource_selection, network_restriction, effective_runtime_policy,
+          effective_policy_hash, platform_policy_version, runnable)
+         VALUES ($1, $2, $3, '{}', $4, '{}', '{}', '{}', $5, 'test/v1', true)",
+    )
+    .bind(command.instance_revision_id.as_uuid())
+    .bind(command.instance_id.as_uuid())
+    .bind(command.release_agent_id.as_uuid())
+    .bind([5_u8; 32].as_slice())
+    .bind([6_u8; 32].as_slice())
+    .execute(pool)
+    .await
+    .expect("runtime revision");
+    sqlx::query(
+        "UPDATE agent_instances SET active_revision_id = $2
+         WHERE id = $1",
+    )
+    .bind(command.instance_id.as_uuid())
+    .bind(command.instance_revision_id.as_uuid())
+    .execute(pool)
+    .await
+    .expect("activate runtime revision");
+    if let Some(attachment_id) = command.attachment_id {
+        sqlx::query(
+            "INSERT INTO agent_attachments
+             (id, instance_id, project_id, repository_id, ref_selector,
+              trigger_policy)
+             VALUES ($1, $2, $3, $4, 'refs/heads/main', 'manual')",
+        )
+        .bind(attachment_id.as_uuid())
+        .bind(command.instance_id.as_uuid())
         .bind(project_id)
-        .bind(format!("agent-{agent_id}"))
+        .bind(repository_id)
         .execute(pool)
         .await
-        .expect("runtime agent");
+        .expect("runtime attachment");
+    }
 }
