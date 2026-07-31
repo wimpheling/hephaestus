@@ -1,12 +1,33 @@
 //! Typed authorization values and transaction-aware provider contract.
 
 use async_trait::async_trait;
+use identity_domain::AuthenticatedIdentity;
 use identity_domain::UserId;
 use runtime_types::RunId;
 use serde::{Deserialize, Serialize};
-use sqlx::{Postgres, Transaction};
-use std::{fmt, str::FromStr};
+use std::{error::Error, fmt, str::FromStr};
 use uuid::Uuid;
+
+/// Git operation requiring repository authorization.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GitRepositoryOperation {
+    /// Read refs and objects.
+    Read,
+    /// Write refs and objects.
+    Write,
+}
+
+/// Provider-neutral authorization port for Git transport adapters.
+#[async_trait]
+pub trait GitRepositoryAuthorizer: Send + Sync + 'static {
+    /// Authorizes an authenticated identity for one repository operation.
+    async fn authorize_git(
+        &self,
+        repository_id: Uuid,
+        operation: GitRepositoryOperation,
+        identity: &AuthenticatedIdentity,
+    ) -> Result<AuthorizationDecision, AuthzError>;
+}
 
 /// An authorization subject.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -331,27 +352,17 @@ pub enum AuthzError {
     /// A subject or object identifier was malformed.
     #[error("malformed authorization identifier {0:?}")]
     MalformedId(String),
-    /// The database authorization evaluator failed.
+    /// The configured authorization evaluator failed.
     #[error("authorization evaluator failed: {0}")]
-    Database(#[source] sqlx::Error),
+    Evaluator(#[source] Box<dyn Error + Send + Sync>),
 }
 
-/// Provider-neutral transaction-aware authorization boundary.
-#[async_trait]
-pub trait Authorizer: Send + Sync {
-    /// Checks one permission using current-transaction domain state.
-    ///
-    /// # Errors
-    ///
-    /// Returns a typed error for missing context, invalid values, or evaluator
-    /// failure. Invalid inputs never produce an allow decision.
-    async fn check(
-        &self,
-        tx: &mut Transaction<'_, Postgres>,
-        subject: Subject,
-        permission: Permission,
-        object: ObjectRef,
-    ) -> Result<AuthorizationDecision, AuthzError>;
+impl AuthzError {
+    /// Wraps a provider-specific evaluator failure without exposing its type.
+    #[must_use]
+    pub fn evaluator(error: impl Error + Send + Sync + 'static) -> Self {
+        Self::Evaluator(Box::new(error))
+    }
 }
 
 #[cfg(test)]

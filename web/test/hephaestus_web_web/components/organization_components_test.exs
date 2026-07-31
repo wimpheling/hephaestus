@@ -3,7 +3,6 @@ defmodule HephaestusWebWeb.OrganizationComponentsTest do
 
   use HephaestusWebWeb, :html
 
-  import HephaestusWebWeb.OrganizationComponents
   import Phoenix.LiveViewTest
 
   @organization %{
@@ -52,5 +51,6 @@ defmodule HephaestusWebWeb.OrganizationComponentsTest do
     document
     |> LazyHTML.query(selector)
     |> LazyHTML.text()
+    |> String.trim()
   end
 end

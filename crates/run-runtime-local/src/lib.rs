@@ -8,17 +8,19 @@
 use async_trait::async_trait;
 use release_domain::ArtifactPath;
 use run_domain::{Run, RunKind};
-use run_orchestrator::{PreparedRunRuntime, RunRuntimeError, RunRuntimeManager};
+use run_orchestrator::{
+    PreparedRunRuntime, RunRuntimeArtifact, RunRuntimeArtifactKind, RunRuntimeCatalog,
+    RunRuntimeCatalogError, RunRuntimeError, RunRuntimeInput, RunRuntimeManager,
+};
 use runtime_types::RunId;
 use serde::Serialize;
-use serde_json::Value;
 use sha2::{Digest, Sha256};
-use sqlx::{FromRow, PgPool};
 use std::{
     fs::{self, OpenOptions},
     io::{Read, Write},
     os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
+    sync::Arc,
 };
 use uuid::Uuid;
 use vm_trait::VmMount;
@@ -38,10 +40,10 @@ pub struct LocalRunRuntimeConfig {
     pub release_artifact_root: PathBuf,
 }
 
-/// PostgreSQL-backed local exact-runtime lifecycle manager.
-#[derive(Debug, Clone)]
+/// Local exact-runtime lifecycle manager over a provider-neutral catalog.
+#[derive(Clone)]
 pub struct LocalRunRuntimeManager {
-    pool: PgPool,
+    catalog: Arc<dyn RunRuntimeCatalog>,
     config: LocalRunRuntimeConfig,
 }
 
@@ -53,7 +55,7 @@ impl LocalRunRuntimeManager {
     /// Rejects relative, overlapping, symlink, non-directory, or
     /// group/world-writable roots.
     pub fn initialize(
-        pool: PgPool,
+        catalog: Arc<dyn RunRuntimeCatalog>,
         mut config: LocalRunRuntimeConfig,
     ) -> Result<Self, RunRuntimeError> {
         if !config.runtime_root.is_absolute() || !config.release_artifact_root.is_absolute() {
@@ -75,7 +77,7 @@ impl LocalRunRuntimeManager {
         }
         validate_root(&config.runtime_root)?;
         validate_root(&config.release_artifact_root)?;
-        Ok(Self { pool, config })
+        Ok(Self { catalog, config })
     }
 
     fn active_path(&self, run_id: RunId) -> PathBuf {
@@ -85,98 +87,24 @@ impl LocalRunRuntimeManager {
             .join(run_id.to_string())
     }
 
-    async fn load(&self, run: &Run) -> Result<RuntimeInput, RunRuntimeError> {
-        let context = sqlx::query_as::<_, ContextRow>(
-            "SELECT revision.parameters,
-                    request.repository_id, request.git_ref, request.commit_sha,
-                    release.state AS release_state,
-                    update.id AS update_id,
-                    update.expected_current_revision_id AS previous_revision_id,
-                    previous_agent.release_id AS previous_release_id,
-                    previous.parameters AS previous_parameters
-             FROM runs AS stored_run
-             JOIN agent_instance_revisions AS revision
-               ON revision.id = stored_run.instance_revision_id
-              AND revision.instance_id = stored_run.instance_id
-             JOIN release_agents AS release_agent
-               ON release_agent.id = stored_run.release_agent_id
-              AND release_agent.release_id = stored_run.release_id
-              AND revision.release_agent_id = release_agent.id
-             JOIN releases AS release ON release.id = stored_run.release_id
-             LEFT JOIN run_requests AS request ON request.run_id = stored_run.id
-             LEFT JOIN agent_updates AS update
-               ON update.hook_run_id = stored_run.id
-             LEFT JOIN agent_instance_revisions AS previous
-               ON previous.id = update.expected_current_revision_id
-              AND previous.instance_id = stored_run.instance_id
-             LEFT JOIN release_agents AS previous_agent
-               ON previous_agent.id = previous.release_agent_id
-             WHERE stored_run.id = $1
-               AND stored_run.instance_id = $2
-               AND stored_run.instance_revision_id = $3
-               AND stored_run.release_id = $4
-               AND stored_run.release_agent_id = $5
-               AND stored_run.run_kind = $6",
-        )
-        .bind(run.id.as_uuid())
-        .bind(run.instance_id.as_uuid())
-        .bind(run.instance_revision_id.as_uuid())
-        .bind(run.release_id.as_uuid())
-        .bind(run.release_agent_id.as_uuid())
-        .bind(run_kind(run.kind))
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(database)?
-        .ok_or_else(|| runtime_error("exact runtime provenance is unavailable"))?;
-        if context.release_state != "published" {
-            return Err(runtime_error("release is not available for acquisition"));
-        }
-        if run.kind == RunKind::Normal
-            && (context.repository_id.is_none()
-                || context.git_ref.is_none()
-                || context.commit_sha.is_none())
-        {
-            return Err(runtime_error("normal run target provenance is unavailable"));
-        }
-        let artifacts = self.load_artifacts(run.release_id.as_uuid()).await?;
-        if artifacts.is_empty() || artifacts.len() > MAX_RUNTIME_ARTIFACTS {
+    async fn load(&self, run: &Run) -> Result<RunRuntimeInput, RunRuntimeError> {
+        let input = self.catalog.load_runtime(run).await.map_err(catalog)?;
+        if input.artifacts.is_empty() || input.artifacts.len() > MAX_RUNTIME_ARTIFACTS {
             return Err(runtime_error("release artifact count is invalid"));
         }
-        let previous_artifacts = match context.previous_release_id {
-            Some(release_id) => self.load_artifacts(release_id).await?,
-            None => Vec::new(),
-        };
-        if run.kind == RunKind::Update && previous_artifacts.is_empty() {
+        if run.kind == RunKind::Update && input.previous_artifacts.is_empty() {
             return Err(runtime_error("previous release artifacts are unavailable"));
         }
-        if previous_artifacts.len() > MAX_RUNTIME_ARTIFACTS {
+        if input.previous_artifacts.len() > MAX_RUNTIME_ARTIFACTS {
             return Err(runtime_error("previous release artifact count is invalid"));
         }
-        Ok(RuntimeInput {
-            context,
-            artifacts,
-            previous_artifacts,
-        })
-    }
-
-    async fn load_artifacts(&self, release_id: Uuid) -> Result<Vec<ArtifactRow>, RunRuntimeError> {
-        sqlx::query_as::<_, ArtifactRow>(
-            "SELECT path, kind, mode, content_hash, size_bytes, storage_key
-             FROM release_artifacts
-             WHERE release_id = $1
-               AND kind IN ('executable', 'file', 'manifest')
-             ORDER BY path, id",
-        )
-        .bind(release_id)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(database)
+        Ok(input)
     }
 
     fn materialize(
         &self,
         run: &Run,
-        input: &RuntimeInput,
+        input: &RunRuntimeInput,
     ) -> Result<PreparedRunRuntime, RunRuntimeError> {
         let staging = self
             .config
@@ -190,10 +118,13 @@ impl LocalRunRuntimeManager {
         result
     }
 
+    // Staging the complete runtime is deliberately kept in one linear routine so
+    // every validation failure shares the caller's atomic cleanup path.
+    #[allow(clippy::cognitive_complexity)]
     fn materialize_staging(
         &self,
         run: &Run,
-        input: &RuntimeInput,
+        input: &RunRuntimeInput,
         staging: &Path,
     ) -> Result<PreparedRunRuntime, RunRuntimeError> {
         let release = staging.join("release");
@@ -204,10 +135,7 @@ impl LocalRunRuntimeManager {
         let mut total = 0_u64;
         for artifact in &input.artifacts {
             total = total
-                .checked_add(
-                    u64::try_from(artifact.size_bytes)
-                        .map_err(|_| runtime_error("release artifact size is invalid"))?,
-                )
+                .checked_add(artifact.size_bytes)
                 .ok_or_else(|| runtime_error("release artifact size is invalid"))?;
             if total > MAX_RUNTIME_BYTES {
                 return Err(runtime_error("release artifact size is invalid"));
@@ -219,10 +147,7 @@ impl LocalRunRuntimeManager {
             create_directory(&previous_release, 0o700)?;
             for artifact in &input.previous_artifacts {
                 total = total
-                    .checked_add(
-                        u64::try_from(artifact.size_bytes)
-                            .map_err(|_| runtime_error("release artifact size is invalid"))?,
-                    )
+                    .checked_add(artifact.size_bytes)
                     .ok_or_else(|| runtime_error("release artifact size is invalid"))?;
                 if total > MAX_RUNTIME_BYTES {
                     return Err(runtime_error("release artifact size is invalid"));
@@ -235,12 +160,12 @@ impl LocalRunRuntimeManager {
             }
             make_tree_read_only(&previous_release)?;
         }
-        write_json(&control.join("parameters.json"), &input.context.parameters)?;
+        write_json(&control.join("parameters.json"), &input.parameters)?;
         tracing::debug!(run_id = %run.id, "runtime parameters materialized");
-        let context = HostContext::new(run, &input.context);
+        let context = HostContext::new(run, input);
         write_json(&control.join("context.json"), &context)?;
         tracing::debug!(run_id = %run.id, "runtime context materialized");
-        if let Some(parameters) = input.context.previous_parameters.as_ref() {
+        if let Some(parameters) = input.previous_parameters.as_ref() {
             write_json(&control.join("parameters-previous.json"), parameters)?;
         }
         make_tree_read_only(&release)?;
@@ -311,16 +236,11 @@ impl RunRuntimeManager for LocalRunRuntimeManager {
                 .map_err(|_| runtime_error("run runtime entry is invalid"))?;
             let uuid = Uuid::parse_str(&name)
                 .map_err(|_| runtime_error("run runtime entry is invalid"))?;
-            let live: bool = sqlx::query_scalar(
-                "SELECT EXISTS(
-                    SELECT 1 FROM runs
-                    WHERE id = $1 AND state <> 'cleaned_up'
-                 )",
-            )
-            .bind(uuid)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(database)?;
+            let live = self
+                .catalog
+                .run_is_live(RunId::from_uuid(uuid))
+                .await
+                .map_err(catalog)?;
             if !live {
                 self.destroy(RunId::from_uuid(uuid)).await?;
                 recovered += 1;
@@ -328,35 +248,6 @@ impl RunRuntimeManager for LocalRunRuntimeManager {
         }
         Ok(recovered)
     }
-}
-
-#[derive(Debug, FromRow)]
-struct ContextRow {
-    parameters: Value,
-    repository_id: Option<Uuid>,
-    git_ref: Option<String>,
-    commit_sha: Option<String>,
-    release_state: String,
-    update_id: Option<Uuid>,
-    previous_revision_id: Option<Uuid>,
-    previous_release_id: Option<Uuid>,
-    previous_parameters: Option<Value>,
-}
-
-#[derive(Debug, FromRow)]
-struct ArtifactRow {
-    path: String,
-    kind: String,
-    mode: i32,
-    content_hash: Vec<u8>,
-    size_bytes: i64,
-    storage_key: Uuid,
-}
-
-struct RuntimeInput {
-    context: ContextRow,
-    artifacts: Vec<ArtifactRow>,
-    previous_artifacts: Vec<ArtifactRow>,
 }
 
 #[derive(Serialize)]
@@ -385,7 +276,7 @@ struct HostContext<'a> {
 }
 
 impl<'a> HostContext<'a> {
-    fn new(run: &Run, row: &'a ContextRow) -> Self {
+    fn new(run: &Run, input: &'a RunRuntimeInput) -> Self {
         Self {
             schema_version: 1,
             run_id: run.id,
@@ -395,19 +286,19 @@ impl<'a> HostContext<'a> {
             release_id: run.release_id,
             release_agent_id: run.release_agent_id,
             attachment_id: run.attachment_id,
-            repository_id: row.repository_id,
-            git_ref: row.git_ref.as_deref(),
-            commit_sha: row.commit_sha.as_deref(),
+            repository_id: input.repository_id,
+            git_ref: input.git_ref.as_deref(),
+            commit_sha: input.commit_sha.as_deref(),
             release_mount: "/release",
             repository_mount: "/workspace/repo",
             work_mount: "/workspace/work",
             state_mount: run.requires_state.then_some("/var/lib/hephaestus"),
             parameters_path: "/run/hephaestus/parameters.json",
-            update_id: row.update_id,
-            previous_revision_id: row.previous_revision_id,
-            previous_release_id: row.previous_release_id,
-            previous_release_mount: row.previous_release_id.map(|_| "/release-previous"),
-            previous_parameters_path: row
+            update_id: input.update_id,
+            previous_revision_id: input.previous_revision_id,
+            previous_release_id: input.previous_release_id,
+            previous_release_mount: input.previous_release_id.map(|_| "/release-previous"),
+            previous_parameters_path: input
                 .previous_parameters
                 .as_ref()
                 .map(|_| "/run/hephaestus/parameters-previous.json"),
@@ -418,21 +309,15 @@ impl<'a> HostContext<'a> {
 fn materialize_artifact(
     store_root: &Path,
     release_root: &Path,
-    artifact: &ArtifactRow,
+    artifact: &RunRuntimeArtifact,
 ) -> Result<(), RunRuntimeError> {
     let relative = ArtifactPath::parse(artifact.path.clone())
         .map_err(|_| runtime_error("release artifact path is invalid"))?;
-    let expected_mode: u32 = match artifact.kind.as_str() {
-        "executable" => 0o555,
-        "file" | "manifest" => 0o444,
-        _ => return Err(runtime_error("release artifact kind is invalid")),
+    let expected_mode = match artifact.kind {
+        RunRuntimeArtifactKind::Executable => 0o555,
+        RunRuntimeArtifactKind::File | RunRuntimeArtifactKind::Manifest => 0o444,
     };
-    if artifact.mode
-        != i32::try_from(expected_mode)
-            .map_err(|_| runtime_error("release artifact mode is invalid"))?
-        || artifact.content_hash.len() != 32
-        || artifact.size_bytes < 0
-    {
+    if artifact.mode != expected_mode {
         return Err(runtime_error("release artifact metadata is invalid"));
     }
     let source = store_root.join(artifact.storage_key.simple().to_string());
@@ -448,9 +333,7 @@ fn materialize_artifact(
     let metadata = input.metadata().map_err(filesystem)?;
     if !metadata.file_type().is_file()
         || metadata.nlink() != 1
-        || metadata.len()
-            != u64::try_from(artifact.size_bytes)
-                .map_err(|_| runtime_error("release artifact size is invalid"))?
+        || metadata.len() != artifact.size_bytes
     {
         return Err(runtime_error("canonical release object is invalid"));
     }
@@ -479,15 +362,7 @@ fn materialize_artifact(
         output.write_all(&buffer[..count]).map_err(filesystem)?;
     }
     output.flush().map_err(filesystem)?;
-    let expected_hash: [u8; 32] = artifact
-        .content_hash
-        .as_slice()
-        .try_into()
-        .map_err(|_| runtime_error("release artifact hash is invalid"))?;
-    if length
-        != u64::try_from(artifact.size_bytes)
-            .map_err(|_| runtime_error("release artifact size is invalid"))?
-        || <[u8; 32]>::from(digest.finalize()) != expected_hash
+    if length != artifact.size_bytes || <[u8; 32]>::from(digest.finalize()) != artifact.content_hash
     {
         return Err(runtime_error(
             "canonical release object failed verification",
@@ -558,13 +433,6 @@ fn validate_root(path: &Path) -> Result<(), RunRuntimeError> {
     Ok(())
 }
 
-const fn run_kind(kind: RunKind) -> &'static str {
-    match kind {
-        RunKind::Normal => "normal",
-        RunKind::Update => "update",
-    }
-}
-
 fn runtime_mount_tag(prefix: &str, run_id: RunId) -> String {
     format!("{prefix}-{}", run_id.as_uuid().simple())
 }
@@ -583,7 +451,7 @@ fn runtime_error(message: impl Into<String>) -> RunRuntimeError {
     RunRuntimeError::redacted(message)
 }
 
-// Error details may contain host paths or SQL values, so only stable classes
+// Error details may contain host paths or catalog diagnostics, so only stable classes
 // cross the runtime-manager boundary.
 #[allow(clippy::needless_pass_by_value)]
 fn filesystem(error: std::io::Error) -> RunRuntimeError {
@@ -595,9 +463,9 @@ fn filesystem(error: std::io::Error) -> RunRuntimeError {
     runtime_error("runtime filesystem operation failed")
 }
 
-// See `filesystem`: database diagnostics are intentionally redacted.
+// See `filesystem`: catalog diagnostics are intentionally redacted.
 #[allow(clippy::needless_pass_by_value)]
-fn database(_error: sqlx::Error) -> RunRuntimeError {
+fn catalog(_error: RunRuntimeCatalogError) -> RunRuntimeError {
     runtime_error("runtime provenance query failed")
 }
 
@@ -610,10 +478,11 @@ fn serialization(_error: serde_json::Error) -> RunRuntimeError {
 #[cfg(test)]
 mod tests {
     use super::{
-        ArtifactRow, CONTEXT_TAG_PREFIX, PREVIOUS_RELEASE_TAG_PREFIX, RELEASE_TAG_PREFIX,
-        make_tree_read_only, materialize_artifact, runtime_mount_tag,
+        CONTEXT_TAG_PREFIX, PREVIOUS_RELEASE_TAG_PREFIX, RELEASE_TAG_PREFIX, make_tree_read_only,
+        materialize_artifact, runtime_mount_tag,
     };
     use release_artifact_store::LocalArtifactStore;
+    use run_orchestrator::{RunRuntimeArtifact, RunRuntimeArtifactKind};
     use runtime_types::RunId;
     use sha2::{Digest, Sha256};
     use std::{fs, os::unix::fs::PermissionsExt, process::Command};
@@ -644,12 +513,12 @@ mod tests {
         let key = Uuid::new_v4();
         let bytes = b"exact release executable";
         fs::write(store.join(key.simple().to_string()), bytes).expect("object");
-        let artifact = ArtifactRow {
+        let artifact = RunRuntimeArtifact {
             path: String::from("bin/agent"),
-            kind: String::from("executable"),
+            kind: RunRuntimeArtifactKind::Executable,
             mode: 0o555,
-            content_hash: Sha256::digest(bytes).to_vec(),
-            size_bytes: i64::try_from(bytes.len()).expect("length"),
+            content_hash: Sha256::digest(bytes).into(),
+            size_bytes: u64::try_from(bytes.len()).expect("length"),
             storage_key: key,
         };
 
@@ -672,11 +541,11 @@ mod tests {
         fs::create_dir(&release).expect("release");
         let key = Uuid::new_v4();
         fs::write(store.join(key.simple().to_string()), b"tampered").expect("object");
-        let artifact = ArtifactRow {
+        let artifact = RunRuntimeArtifact {
             path: String::from("agent"),
-            kind: String::from("file"),
+            kind: RunRuntimeArtifactKind::File,
             mode: 0o444,
-            content_hash: vec![0; 32],
+            content_hash: [0; 32],
             size_bytes: 8,
             storage_key: key,
         };
@@ -713,12 +582,12 @@ mod tests {
         materialize_artifact(
             &store_root,
             &release_tree,
-            &ArtifactRow {
+            &RunRuntimeArtifact {
                 path: artifact.path.as_str().to_owned(),
-                kind: String::from("executable"),
-                mode: i32::from(artifact.mode),
-                content_hash: artifact.content_hash.as_bytes().to_vec(),
-                size_bytes: i64::try_from(artifact.size_bytes).expect("artifact size"),
+                kind: RunRuntimeArtifactKind::Executable,
+                mode: u32::from(artifact.mode),
+                content_hash: *artifact.content_hash.as_bytes(),
+                size_bytes: artifact.size_bytes,
                 storage_key: artifact.storage_key,
             },
         )

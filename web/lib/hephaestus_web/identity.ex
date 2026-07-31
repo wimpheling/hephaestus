@@ -8,24 +8,31 @@ defmodule HephaestusWeb.Identity do
   @enforce_keys [:user_id, :issuer, :subject, :display_name]
   defstruct [:user_id, :issuer, :subject, :display_name]
 
+  @uuid_pattern ~r/\A[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\z/i
+
+  @type t :: %__MODULE__{
+          user_id: String.t(),
+          issuer: String.t(),
+          subject: String.t(),
+          display_name: String.t()
+        }
+
   def from_session(%{
         "user_id" => user_id,
         "issuer" => issuer,
         "subject" => subject,
         "display_name" => display_name
       }) do
-    case Ecto.UUID.cast(user_id) do
-      {:ok, canonical_id} ->
-        {:ok,
-         %__MODULE__{
-           user_id: canonical_id,
-           issuer: issuer,
-           subject: subject,
-           display_name: display_name
-         }}
-
-      :error ->
-        :error
+    if is_binary(user_id) and Regex.match?(@uuid_pattern, user_id) do
+      {:ok,
+       %__MODULE__{
+         user_id: String.downcase(user_id),
+         issuer: issuer,
+         subject: subject,
+         display_name: display_name
+       }}
+    else
+      :error
     end
   end
 

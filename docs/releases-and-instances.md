@@ -153,33 +153,18 @@ materialization, and records the decision in structured authorization audit
 rows. A revoked release remains readable through historical foreign keys but
 the VM specification factory rejects it for a new guest.
 
-State changes and their messages share one PostgreSQL transaction. The daemon
-publishes pending outbox rows with the outbox UUID as `Nats-Msg-Id`, making
-acknowledgement-loss retries deduplicated by JetStream. Current subjects are:
+State changes and their canonical `ProductEvent` rows share one PostgreSQL
+transaction. Build, release, and agent-instance lifecycle changes are delivered
+only through the durable product-event log and its scoped watch API; they are
+not duplicated as informational JSON subjects in the internal outbox.
 
-- `hephaestus.build.requested.v1`, `hephaestus.build.completed.v1`, and
-  `hephaestus.build.failed.v1`;
-- `hephaestus.release.published.v1` and
-  `hephaestus.release.revoked.v1`;
-- `hephaestus.agent_instance.created.v1` and
-  `hephaestus.agent_instance.revised.v1`, plus
-  `hephaestus.agent_instance.attachment_changed.v1` and
-  `hephaestus.agent_instance.paused.v1`;
-- `hephaestus.agent_update.requested.v1`,
-  `hephaestus.agent_update.hook_started.v1`,
-  `hephaestus.agent_update.hook_committed.v1`,
-  `hephaestus.agent_update.completed.v1`,
-  `hephaestus.agent_update.rejected.v1`,
-  `hephaestus.agent_update.uncertain.v1`, and
-  `hephaestus.agent_update.recovered.v1`;
-- `hephaestus.instance.run.requested.v1` and the actionable
-  `hephaestus.run.start`.
-
-Payloads carry a schema version, stable message/idempotency IDs, nullable
-request/trace context, and exact transition provenance. They never carry
-artifact bytes, secret values, parameter-secret values, reusable runtime
-credentials, or unbounded guest logs. Worker-originated transitions use null
-request/trace context rather than inventing a caller.
+The legacy outbox is restricted to actionable internal commands. This workflow
+retains `hephaestus.build.requested.v1`,
+`hephaestus.instance.run.requested.v1`, and `hephaestus.run.start`. Its publisher
+uses the outbox UUID as `Nats-Msg-Id`, making acknowledgement-loss retries
+deduplicated by JetStream. Command payloads carry only the bounded execution
+inputs needed by their trusted consumer; product lifecycle and UI invalidation
+remain the responsibility of the canonical typed event envelope.
 
 Revocation is a lifecycle tombstone, not deletion. It immediately prevents
 new imports and guest starts while retaining the release, release agent,
@@ -202,8 +187,9 @@ project instances alongside files, commits, and branches.
 
 ## Local workflow and operator recovery
 
-`scripts/run-local.sh` starts the persistent PostgreSQL, JetStream, OIDC,
-Rust-daemon, and Phoenix development stack. The browser flow can publish or
+`cargo dev` starts the persistent PostgreSQL, JetStream, OIDC, Rust-daemon,
+and Phoenix development stack; `cargo dev --watch` also rebuilds changed Rust
+components before restarting the daemon. The browser flow can publish or
 select a release, import its exported agent into a project, set typed
 parameters, attach an exact repository ref, push a target commit, inspect the
 result, start a reviewed update, and choose an authorized recovery action.

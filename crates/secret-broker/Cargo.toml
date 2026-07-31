@@ -9,7 +9,7 @@ rust-version.workspace = true
 async-trait.workspace = true
 runtime-types = { path = "../runtime-types" }
 secret-domain = { path = "../secret-domain" }
-secret-service = { path = "../secret-service" }
+secret-application = { path = "../secret-application" }
 secret-store = { path = "../secret-store" }
 serde.workspace = true
 serde_json.workspace = true

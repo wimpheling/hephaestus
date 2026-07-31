@@ -1,0 +1,35 @@
+[package]
+name = "workspace-postgres"
+description = "PostgreSQL adapter for workspace metadata and result persistence"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+runtime-types = { path = "../runtime-types" }
+sqlx.workspace = true
+serde_json.workspace = true
+time.workspace = true
+uuid.workspace = true
+workspace-domain = { path = "../workspace-domain" }
+
+[dev-dependencies]
+agent-config = { path = "../agent-config" }
+forge-domain = { path = "../forge-domain" }
+forge-postgres = { path = "../forge-postgres" }
+forge-service = { path = "../forge-service" }
+run-domain = { path = "../run-domain" }
+run-orchestrator = { path = "../run-orchestrator" }
+run-postgres = { path = "../run-postgres" }
+serial_test = "3"
+tempfile = "3"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+workspace-local = { path = "../workspace-local" }
+
+[package.metadata.hephaestus]
+postgres_adapter = true
+database_context = "workspace"
+
+[lints]
+workspace = true

@@ -306,6 +306,9 @@ impl RunOrchestrator {
     // Keeping the ordered lifecycle in one method makes lease cleanup ordering
     // directly auditable.
     #[allow(clippy::too_many_lines)]
+    // Keeping authorization, compare-and-swap state, and outbox persistence in
+    // one transaction makes this security-sensitive operation auditable.
+    #[allow(clippy::cognitive_complexity)]
     pub async fn start_run(&self, command: &StartRun) -> Result<Run, OrchestratorError> {
         let created = self.repository.create_run(command).await?;
         if !created.created {

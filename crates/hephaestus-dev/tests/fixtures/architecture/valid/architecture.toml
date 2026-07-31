@@ -1,0 +1,12 @@
+version = 1
+enabled_rules = ["ARCH-RULE-REGISTRY"]
+
+[maximum_file_lines]
+domain = 500
+
+[[exceptions]]
+rule_id = "ARCH-MAX-FILE-LENGTH"
+scope = "src/lib.rs#GENERATED_TABLE"
+rationale = "The fixture demonstrates the required exception record."
+owner = "architecture-test"
+tracking_task = "tasks/todo/split-generated-table.md"

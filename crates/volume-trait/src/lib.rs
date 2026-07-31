@@ -100,6 +100,76 @@ pub struct VolumeAttachment {
     pub disk_id: &'static str,
 }
 
+/// Provider-neutral durable metadata boundary for local volume effects.
+///
+/// Implementations own rows, leases, transactions, optimistic fencing, and
+/// recovery state. The local adapter owns only backing-file creation and
+/// filesystem formatting.
+#[async_trait]
+pub trait VolumeMetadataRepository: Send + Sync + 'static {
+    /// Reserves or returns one instance-state volume metadata row.
+    async fn resolve_instance_state(
+        &self,
+        instance_id: AgentInstanceId,
+        capacity_bytes: u64,
+        host_id: &str,
+        host_path: &std::path::Path,
+        filesystem_uuid: Uuid,
+    ) -> Result<Volume, VolumeError>;
+
+    /// Marks a successfully formatted backing file ready for use.
+    async fn mark_ready(&self, volume_id: VolumeId) -> Result<(), VolumeError>;
+
+    /// Reads one durable volume row.
+    async fn volume(&self, volume_id: VolumeId) -> Result<Volume, VolumeError>;
+
+    /// Claims one writable lease with a fresh fencing generation.
+    async fn acquire(
+        &self,
+        volume_id: VolumeId,
+        run_id: RunId,
+        host_id: &str,
+        now: OffsetDateTime,
+        expires_at: OffsetDateTime,
+    ) -> Result<VolumeLease, VolumeError>;
+
+    /// Marks a lease attached using its fencing token.
+    async fn mark_attached(
+        &self,
+        lease: &VolumeLease,
+        now: OffsetDateTime,
+        expires_at: OffsetDateTime,
+    ) -> Result<VolumeLease, VolumeError>;
+
+    /// Extends a live lease heartbeat using its fencing token.
+    async fn heartbeat(
+        &self,
+        lease: &VolumeLease,
+        now: OffsetDateTime,
+        expires_at: OffsetDateTime,
+    ) -> Result<VolumeLease, VolumeError>;
+
+    /// Returns the active lease held by one run.
+    async fn active_lease_for_run(
+        &self,
+        run_id: RunId,
+        host_id: &str,
+    ) -> Result<Option<VolumeLease>, VolumeError>;
+
+    /// Releases a detached lease, optionally after recovery fencing.
+    async fn release_after_detach(
+        &self,
+        lease: &VolumeLease,
+        recovering: bool,
+    ) -> Result<(), VolumeError>;
+
+    /// Lists leases whose expiry requires supervised recovery.
+    async fn stale_leases(&self, now: OffsetDateTime) -> Result<Vec<VolumeLease>, VolumeError>;
+
+    /// Fences an expired lease before provider cleanup.
+    async fn begin_recovery(&self, lease: &VolumeLease) -> Result<(), VolumeError>;
+}
+
 /// Failure returned by a volume store.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]

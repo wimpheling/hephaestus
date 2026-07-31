@@ -9,7 +9,10 @@ rust-version.workspace = true
 async-trait.workspace = true
 run-domain = { path = "../run-domain" }
 runtime-types = { path = "../runtime-types" }
+serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
+time.workspace = true
 uuid.workspace = true
 vm-trait.workspace = true
 

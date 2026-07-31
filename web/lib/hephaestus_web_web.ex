@@ -82,16 +82,11 @@ defmodule HephaestusWebWeb do
       # Translation
       use Gettext, backend: HephaestusWebWeb.Gettext
 
-      # HTML escaping functionality
-      import Phoenix.HTML
-      # Core UI components
-      import HephaestusWebWeb.CoreComponents
+      # Public design-system facade
       import HephaestusWebWeb.DesignSystem
-      import HephaestusWebWeb.ResourceComponents
-
       # Common modules used in templates
       alias Phoenix.LiveView.JS
-      alias HephaestusWebWeb.Layouts
+      alias HephaestusWebWeb.DesignSystem, as: Layouts
 
       # Routes generation with the ~p sigil
       unquote(verified_routes())

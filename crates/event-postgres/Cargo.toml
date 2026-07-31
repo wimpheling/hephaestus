@@ -1,0 +1,29 @@
+[package]
+name = "event-postgres"
+description = "PostgreSQL adapter for durable application events"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+readme = "README.md"
+
+[dependencies]
+async-trait.workspace = true
+async-nats.workspace = true
+event-application = { path = "../event-application" }
+identity-domain = { path = "../identity-domain" }
+serde_json.workspace = true
+sqlx.workspace = true
+time.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+serial_test = "3"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true
+
+[package.metadata.hephaestus]
+postgres_adapter = true
+database_context = "event"

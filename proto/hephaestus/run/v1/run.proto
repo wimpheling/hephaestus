@@ -1,0 +1,175 @@
+syntax = "proto3";
+
+package hephaestus.run.v1;
+
+import "google/protobuf/timestamp.proto";
+import "hephaestus/artifact/v1/artifact.proto";
+import "hephaestus/common/v1/common.proto";
+import "hephaestus/options/v1/options.proto";
+
+service RunService {
+  rpc ListProjectRuns(ListProjectRunsRequest) returns (ListProjectRunsResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (hephaestus.options.v1.authorization) = {
+      permission: "run.list"
+      audience: "/hephaestus.run.v1.RunService/ListProjectRuns"
+      actor_source: ACTOR_SOURCE_MEDIATOR_JWT_METADATA
+    };
+    option (hephaestus.options.v1.operation_kind) = OPERATION_KIND_QUERY;
+    option (hephaestus.options.v1.max_request_bytes) = 8192;
+    option (hephaestus.options.v1.max_response_bytes) = 4194304;
+  }
+  rpc GetRun(GetRunRequest) returns (GetRunResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (hephaestus.options.v1.authorization) = {
+      permission: "run.read"
+      audience: "/hephaestus.run.v1.RunService/GetRun"
+      actor_source: ACTOR_SOURCE_MEDIATOR_JWT_METADATA
+    };
+    option (hephaestus.options.v1.operation_kind) = OPERATION_KIND_QUERY;
+    option (hephaestus.options.v1.max_request_bytes) = 4096;
+    option (hephaestus.options.v1.max_response_bytes) = 8388608;
+  }
+  rpc RequestControl(RequestControlRequest) returns (RequestControlResponse) {
+    option (hephaestus.options.v1.authorization) = {
+      permission: "run.control"
+      audience: "/hephaestus.run.v1.RunService/RequestControl"
+      actor_source: ACTOR_SOURCE_MEDIATOR_JWT_METADATA
+    };
+    option (hephaestus.options.v1.operation_kind) = OPERATION_KIND_MUTATION;
+    option (hephaestus.options.v1.max_request_bytes) = 16384;
+    option (hephaestus.options.v1.max_response_bytes) = 8192;
+  }
+}
+
+enum RunControlKind {
+  RUN_CONTROL_KIND_UNSPECIFIED = 0;
+  RUN_CONTROL_KIND_CANCEL = 1;
+  RUN_CONTROL_KIND_RETRY = 2;
+  RUN_CONTROL_KIND_APPROVE_RESULT = 3;
+  RUN_CONTROL_KIND_REJECT_RESULT = 4;
+}
+enum ControlState {
+  CONTROL_STATE_UNSPECIFIED = 0;
+  CONTROL_STATE_QUEUED = 1;
+  CONTROL_STATE_APPLIED = 2;
+  CONTROL_STATE_REJECTED = 3;
+}
+message RunSummary {
+  hephaestus.common.v1.OpaqueId id = 1;
+  string state = 2;
+  string outcome = 3;
+  string run_kind = 4;
+  google.protobuf.Timestamp updated_at = 5;
+  hephaestus.common.v1.OpaqueId instance_id = 6;
+  string instance_name = 7;
+  hephaestus.common.v1.OpaqueId repository_id = 8;
+  string repository_name = 9;
+  string commit_sha = 10;
+  string git_ref = 11;
+  hephaestus.common.v1.OpaqueId release_id = 12;
+  string release_version = 13;
+  hephaestus.common.v1.OpaqueId instance_revision_id = 14;
+}
+message RunFailure {
+  string code = 1;
+  repeated hephaestus.common.v1.Diagnostic diagnostics = 2;
+}
+message RunEvent {
+  uint64 sequence = 1;
+  string event_type = 2;
+  oneof payload {
+    string bounded_log_message = 3;
+    string state = 4;
+    hephaestus.common.v1.RuntimeMetric metric = 5;
+    hephaestus.common.v1.Diagnostic diagnostic = 6;
+  }
+  google.protobuf.Timestamp occurred_at = 7;
+}
+message RunMetrics {
+  uint64 event_count = 1;
+  uint64 log_count = 2;
+  uint64 elapsed_ms = 3;
+  repeated hephaestus.common.v1.RuntimeMetric runtime_metrics = 4;
+}
+message ResultProposal {
+  hephaestus.common.v1.OpaqueId id = 1;
+  string state = 2;
+  string target_ref = 3;
+  uint64 version = 4;
+}
+message RunResult {
+  hephaestus.common.v1.OpaqueId id = 1;
+  string commit = 2;
+  string ref = 3;
+  string tree = 4;
+  string message = 5;
+  string artifact_manifest_hash = 6;
+  ResultProposal proposal = 7;
+}
+message Run {
+  hephaestus.common.v1.OpaqueId id = 1;
+  string state = 2;
+  string outcome = 3;
+  optional int32 exit_code = 4;
+  optional int32 exit_signal = 5;
+  RunFailure failure = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp updated_at = 8;
+  uint64 state_version = 9;
+  hephaestus.common.v1.OpaqueId agent_id = 10;
+  string agent_name = 11;
+  hephaestus.common.v1.OpaqueId instance_project_id = 12;
+  string instance_project_name = 13;
+  hephaestus.common.v1.OpaqueId instance_revision_id = 14;
+  hephaestus.common.v1.OpaqueId release_id = 15;
+  string release_version = 16;
+  hephaestus.common.v1.OpaqueId source_repository_id = 17;
+  hephaestus.common.v1.OpaqueId repository_id = 18;
+  string repository_name = 19;
+  hephaestus.common.v1.OpaqueId project_id = 20;
+  string project_name = 21;
+  hephaestus.common.v1.OpaqueId organization_id = 22;
+  string organization_name = 23;
+  string input_commit = 24;
+  string git_ref = 25;
+  uint32 attempt = 26;
+  RunResult result = 27;
+  repeated RunEvent events = 28;
+  repeated hephaestus.artifact.v1.Artifact artifacts = 29;
+  RunMetrics metrics = 30;
+  optional string patch_preview = 31;
+  optional string manifest_preview = 32;
+}
+message ListProjectRunsRequest {
+  hephaestus.common.v1.OpaqueId project_id = 1;
+  hephaestus.common.v1.PageRequest page = 2;
+}
+message ListProjectRunsResponse {
+  repeated RunSummary runs = 1;
+  hephaestus.common.v1.PageResponse page = 2;
+}
+message GetRunRequest {
+  hephaestus.common.v1.OpaqueId run_id = 1;
+}
+message GetRunResponse {
+  Run run = 1;
+}
+message RunControlTarget {
+  oneof target {
+    hephaestus.common.v1.OpaqueId run_id = 1;
+    hephaestus.common.v1.OpaqueId proposal_id = 2;
+  }
+}
+message RequestControlRequest {
+  hephaestus.common.v1.RequestContext context = 1;
+  RunControlKind kind = 2;
+  hephaestus.common.v1.OpaqueId repository_id = 3;
+  RunControlTarget target = 4;
+  string reason = 5;
+}
+message RequestControlResponse {
+  hephaestus.common.v1.OpaqueId control_request_id = 1;
+  ControlState state = 2;
+  hephaestus.common.v1.MutationReceipt receipt = 3;
+}

@@ -21,7 +21,7 @@ defmodule HephaestusWebWeb.ResourceComponentsTest do
     assert count(document, "#generic-resources .resource-list-row") == 2
     assert text(document, "#resource-first strong") == "First resource"
     assert text(document, "#resource-second span:last-child") == "7"
-    assert count(document, "#generic-resources-empty") == 0
+    assert count(document, "#resource-empty-generic-resources") == 0
   end
 
   test "resource list exposes the caller's empty copy" do
@@ -29,18 +29,20 @@ defmodule HephaestusWebWeb.ResourceComponentsTest do
     document = LazyHTML.from_fragment(html)
 
     assert count(document, "#generic-resources .resource-list-row") == 0
-    assert text(document, "#generic-resources-empty") == "Nothing here yet."
+    assert text(document, "#resource-empty-generic-resources") == "Nothing here yet."
   end
 
   def list_fixture(assigns) do
     ~H"""
-    <.resource_list id="generic-resources" columns="1fr 5rem">
-      <:header><span>Name</span><span>Count</span></:header>
+    <.resource_list id="generic-resources" layout={:compact}>
+      <:header>
+        <.text as="span">Name</.text><.text as="span">Count</.text>
+      </:header>
       <:empty :if={@rows == []}>Nothing here yet.</:empty>
       <:row :for={row <- @rows}>
-        <article id={"resource-#{row.id}"} class="resource-list-row">
-          <strong>{row.name}</strong><span>{row.count}</span>
-        </article>
+        <.frame as="article" id={"resource-#{row.id}"} variant={:resource_row}>
+          <.text as="strong">{row.name}</.text><.text as="span">{row.count}</.text>
+        </.frame>
       </:row>
     </.resource_list>
     """

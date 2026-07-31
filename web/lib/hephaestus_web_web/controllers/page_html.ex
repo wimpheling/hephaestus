@@ -6,5 +6,8 @@ defmodule HephaestusWebWeb.PageHTML do
   """
   use HephaestusWebWeb, :html
 
-  embed_templates "page_html/*"
+  alias HephaestusWebWeb.DesignSystem.Pages.HomePage
+
+  @doc "Renders the public landing page through the design-system facade."
+  def home(assigns), do: HomePage.home_page(assigns)
 end

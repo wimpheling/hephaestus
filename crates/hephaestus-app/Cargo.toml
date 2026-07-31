@@ -1,9 +1,14 @@
 [package]
 name = "hephaestus-app"
+autobins = false
 description = "Internal composition root and daemon lifecycle for Hephaestus"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+
+[package.metadata.hephaestus]
+# SQLx is retained only for cfg(test) and integration-test database fixtures.
+sqlx_test_dependency = true
 
 [dependencies]
 agent-config = { path = "../agent-config" }
@@ -12,36 +17,54 @@ async-trait.workspace = true
 authz-domain = { path = "../authz-domain" }
 authz-postgres = { path = "../authz-postgres" }
 axum.workspace = true
+connectrpc = { workspace = true, features = ["axum"] }
+connectrpc-reflection.workspace = true
+control-plane-postgres = { path = "../control-plane-postgres" }
 build-orchestrator = { path = "../build-orchestrator" }
+build-postgres = { path = "../build-postgres" }
+buffa.workspace = true
+buffa-types.workspace = true
+event-application = { path = "../event-application" }
+event-postgres = { path = "../event-postgres" }
 forge-service = { path = "../forge-service" }
+forge-postgres = { path = "../forge-postgres" }
 forge-domain = { path = "../forge-domain" }
 futures-util.workspace = true
 git-http = { path = "../git-http" }
 identity-oidc = { path = "../identity-oidc" }
 identity-domain = { path = "../identity-domain" }
+identity-application = { path = "../identity-application" }
+identity-postgres = { path = "../identity-postgres" }
+http.workspace = true
+hmac.workspace = true
 jsonwebtoken.workspace = true
 release-service = { path = "../release-service" }
 release-artifact-store = { path = "../release-artifact-store" }
 release-domain = { path = "../release-domain" }
+release-postgres = { path = "../release-postgres" }
+rpc-proto = { path = "../rpc-proto", default-features = false }
 review-domain = { path = "../review-domain" }
+review-postgres = { path = "../review-postgres" }
 review-service = { path = "../review-service" }
 run-domain = { path = "../run-domain" }
 run-orchestrator = { path = "../run-orchestrator" }
+run-postgres = { path = "../run-postgres" }
 run-runtime-local = { path = "../run-runtime-local" }
 runtime-types = { path = "../runtime-types" }
 secret-broker = { path = "../secret-broker" }
 secret-domain = { path = "../secret-domain" }
 secret-runtime = { path = "../secret-runtime" }
+secret-postgres = { path = "../secret-postgres" }
+secret-application = { path = "../secret-application" }
 secret-service = { path = "../secret-service" }
 secret-store = { path = "../secret-store" }
 zeroize.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
-sqlx.workspace = true
 thiserror.workspace = true
 time.workspace = true
-tokio = { workspace = true, features = ["macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util.workspace = true
 tracing.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -50,9 +73,14 @@ vm-fake = { path = "../vm-fake" }
 vm-libkrun = { path = "../vm-libkrun" }
 vm-trait.workspace = true
 volume-local = { path = "../volume-local" }
+volume-postgres = { path = "../volume-postgres" }
 workspace-local = { path = "../workspace-local" }
+workspace-postgres = { path = "../workspace-postgres" }
+workspace-domain = { path = "../workspace-domain" }
 
 [dev-dependencies]
+rpc-proto = { path = "../rpc-proto", features = ["client"] }
+sqlx.workspace = true
 serial_test = "3"
 tempfile = "3"
 

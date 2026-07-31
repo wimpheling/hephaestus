@@ -3,7 +3,6 @@ defmodule HephaestusWebWeb.RepositoryComponentsTest do
 
   use HephaestusWebWeb, :html
 
-  import HephaestusWebWeb.RepositoryComponents
   import Phoenix.LiveViewTest
 
   @repository_id "018f689a-a81d-7c2e-943f-3a41f7981234"
@@ -86,24 +85,48 @@ defmodule HephaestusWebWeb.RepositoryComponentsTest do
   end
 
   def tabs_fixture(assigns) do
+    root = "/repositories/#{assigns.repository_id}"
+    query = URI.encode_query(%{"ref" => assigns.branch})
+
+    assigns =
+      assign(assigns, :items, [
+        %{key: :files, label: "Files", destination: "#{root}/files?#{query}"},
+        %{key: :commits, label: "Commits", destination: "#{root}/commits?#{query}"},
+        %{key: :branches, label: "Branches", destination: "#{root}/branches"},
+        %{key: :releases, label: "Releases", destination: "#{root}/releases"},
+        %{key: :agents, label: "Agents", destination: "#{root}/agents"}
+      ])
+
     ~H"""
-    <.repository_tabs
-      repository_id={@repository_id}
-      active={@active}
-      branch={@branch}
-    />
+    <.tab_navigation id="repository-tabs" label="Repository" items={@items} active={@active} />
     """
   end
 
   def tree_fixture(assigns) do
+    tree = decorate_tree(assigns.tree, assigns.repository_id, assigns.branch)
+    assigns = assign(assigns, :tree, tree)
+
     ~H"""
-    <.file_tree
-      tree={@tree}
-      repository_id={@repository_id}
-      branch={@branch}
-      current_path={assigns[:current_path]}
-    />
+    <.repository_tree tree={@tree} current_path={assigns[:current_path]} />
     """
+  end
+
+  defp decorate_tree(node, repository_id, branch) do
+    %{
+      node
+      | directories: Enum.map(node.directories, &decorate_tree(&1, repository_id, branch)),
+        files:
+          Enum.map(node.files, fn file ->
+            encoded_path =
+              file.path
+              |> String.split("/", trim: true)
+              |> Enum.map_join("/", &URI.encode/1)
+
+            query = URI.encode_query(%{"ref" => branch})
+            destination = "/repositories/#{repository_id}/files/#{encoded_path}?#{query}"
+            Map.put(file, :destination, destination)
+          end)
+    }
   end
 
   defp count(document, selector) do

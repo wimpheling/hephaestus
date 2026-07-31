@@ -1,10 +1,9 @@
-//! OIDC signature and claim validation followed by internal identity mapping.
+//! OIDC signature and claim validation.
 
-use identity_domain::{AuthenticatedIdentity, RequestId, UserId};
+use identity_application::VerifiedExternalIdentity;
 use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sqlx::{Postgres, Transaction};
 
 /// Verified standard and provider OIDC claims.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -34,17 +33,6 @@ pub enum Audience {
     One(String),
     /// Multiple audiences.
     Many(Vec<String>),
-}
-
-/// Result of cryptographic OIDC verification.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VerifiedOidcIdentity {
-    /// Verified issuer.
-    pub issuer: String,
-    /// Verified issuer-local subject.
-    pub subject: String,
-    /// Complete validated claims persisted in the user profile.
-    pub claims: Value,
 }
 
 /// Configured verifier for one trusted OIDC issuer and signing key.
@@ -89,7 +77,7 @@ impl OidcVerifier {
         &self,
         token: &str,
         expected_nonce: Option<&str>,
-    ) -> Result<VerifiedOidcIdentity, OidcError> {
+    ) -> Result<VerifiedExternalIdentity, OidcError> {
         let token = decode::<VerifiedOidcClaims>(token, &self.decoding_key, &self.validation)
             .map_err(OidcError::InvalidToken)?;
         if token.claims.iss != self.issuer {
@@ -101,75 +89,12 @@ impl OidcVerifier {
             }
         }
         let claims = serde_json::to_value(&token.claims).map_err(OidcError::Claims)?;
-        Ok(VerifiedOidcIdentity {
+        Ok(VerifiedExternalIdentity {
             issuer: token.claims.iss,
             subject: token.claims.sub,
             claims,
         })
     }
-}
-
-/// Maps a verified issuer/subject pair to exactly one active internal user and
-/// refreshes its validated profile in the same transaction.
-///
-/// # Errors
-///
-/// Returns a typed error for an unmapped or inactive identity or database
-/// failure.
-pub async fn map_identity(
-    transaction: &mut Transaction<'_, Postgres>,
-    verified: &VerifiedOidcIdentity,
-    request_id: RequestId,
-    trace_id: Option<&str>,
-) -> Result<AuthenticatedIdentity, OidcError> {
-    let row: Option<(uuid::Uuid, String)> = sqlx::query_as(
-        "SELECT users.id, users.status
-         FROM external_identities
-         JOIN users ON users.id = external_identities.user_id
-         WHERE external_identities.issuer = $1
-           AND external_identities.subject = $2",
-    )
-    .bind(&verified.issuer)
-    .bind(&verified.subject)
-    .fetch_optional(&mut **transaction)
-    .await
-    .map_err(OidcError::Database)?;
-    let Some((user_id, status)) = row else {
-        return Err(OidcError::UnmappedIdentity);
-    };
-    if status != "active" {
-        return Err(OidcError::InactiveUser);
-    }
-    sqlx::query(
-        "SELECT set_config('hephaestus.actor_id', $1, true),
-                set_config('hephaestus.subject_type', 'user', true),
-                set_config('hephaestus.request_id', $2, true)",
-    )
-    .bind(user_id.to_string())
-    .bind(request_id.to_string())
-    .execute(&mut **transaction)
-    .await
-    .map_err(OidcError::Database)?;
-    sqlx::query(
-        "INSERT INTO user_profiles (user_id, validated_claims)
-         VALUES ($1, $2)
-         ON CONFLICT (user_id) DO UPDATE
-         SET validated_claims = EXCLUDED.validated_claims, updated_at = now()",
-    )
-    .bind(user_id)
-    .bind(&verified.claims)
-    .execute(&mut **transaction)
-    .await
-    .map_err(OidcError::Database)?;
-    let mut identity = AuthenticatedIdentity::new(
-        UserId::from_uuid(user_id),
-        verified.issuer.clone(),
-        verified.subject.clone(),
-        verified.claims.clone(),
-        request_id,
-    );
-    identity.trace_id = trace_id.map(str::to_owned);
-    Ok(identity)
 }
 
 /// Validates the state returned by an interactive authorization response.
@@ -188,7 +113,7 @@ pub fn validate_authorization_state(expected: &str, received: &str) -> Result<()
     }
 }
 
-/// OIDC verification or identity-mapping failure.
+/// OIDC verification failure.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum OidcError {
@@ -204,18 +129,9 @@ pub enum OidcError {
     /// Interactive-flow state did not match the initiating session.
     #[error("OIDC authorization state does not match")]
     StateMismatch,
-    /// Verified external identity has no internal mapping.
-    #[error("OIDC identity is not mapped to an internal user")]
-    UnmappedIdentity,
-    /// Mapped user cannot authenticate.
-    #[error("mapped user is not active")]
-    InactiveUser,
     /// Validated claims could not be represented as JSON.
     #[error("OIDC claims could not be represented")]
     Claims(#[source] serde_json::Error),
-    /// Identity persistence failed.
-    #[error("OIDC identity mapping failed")]
-    Database(#[source] sqlx::Error),
 }
 
 #[cfg(test)]

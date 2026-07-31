@@ -2,7 +2,8 @@
 
 use async_trait::async_trait;
 use forge_domain::{GitRef, OrganizationId};
-use forge_service::{CreateRepository, GitStorage, PgForgeRepository};
+use forge_postgres::PgForgeRepository;
+use forge_service::{CreateRepository, GitStorage};
 use hephaestus_app::{AppConfig, HephaestusApp, OidcConfig, RunEventKind, VmBackendConfig};
 use identity_domain::UserId;
 use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
@@ -36,24 +37,24 @@ const SIGNING_SECRET: &[u8] = b"golden-test-signing-secret-with-sufficient-entro
 const ROOT_IMAGE: &str =
     "golden-root@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const GOLDEN_AGENT: &str = r#"#!/bin/sh
-set -eu
-test -r /workspace/repo/input.txt
-test -r /run/hephaestus/parameters.json
-test -r /run/hephaestus/context.json
-if printf 'forbidden\n' > /release/write-must-fail 2>/dev/null; then
-    exit 91
-fi
-if printf 'forbidden\n' > /workspace/repo/write-must-fail 2>/dev/null; then
-    exit 92
-fi
-if printf 'forbidden\n' > /run/hephaestus/write-must-fail 2>/dev/null; then
-    exit 93
-fi
-printf 'state-ok\n' > /var/lib/hephaestus/golden-state
-test "$(cat /var/lib/hephaestus/golden-state)" = "state-ok"
-printf 'agent edit\n' > /workspace/work/input.txt
-printf 'durable report\n' > /workspace/work/reports/result.txt
-"#;
+  set -eu
+  test -r /workspace/repo/input.txt
+  test -r /run/hephaestus/parameters.json
+  test -r /run/hephaestus/context.json
+  if printf 'forbidden\n' > /release/write-must-fail 2>/dev/null; then
+      exit 91
+  fi
+  if printf 'forbidden\n' > /workspace/repo/write-must-fail 2>/dev/null; then
+      exit 92
+  fi
+  if printf 'forbidden\n' > /run/hephaestus/write-must-fail 2>/dev/null; then
+      exit 93
+  fi
+  printf 'state-ok\n' > /var/lib/hephaestus/golden-state
+  test "$(cat /var/lib/hephaestus/golden-state)" = "state-ok"
+  printf 'agent edit\n' > /workspace/work/input.txt
+  printf 'durable report\n' > /workspace/work/reports/result.txt
+  "#;
 
 #[tokio::test(flavor = "multi_thread")]
 #[serial]
@@ -108,7 +109,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
         .expect("seed organization");
     sqlx::query(
         "INSERT INTO organization_members (organization_id, user_id, role)
-         VALUES ($1, $2, 'owner')",
+           VALUES ($1, $2, 'owner')",
     )
     .bind(organization_id.as_uuid())
     .bind(user_id.as_uuid())
@@ -117,8 +118,8 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
     .expect("seed organization owner");
     sqlx::query(
         "INSERT INTO external_identities
-         (user_id, issuer, subject, provider_metadata)
-         VALUES ($1, $2, 'golden-subject', '{}')",
+           (user_id, issuer, subject, provider_metadata)
+           VALUES ($1, $2, 'golden-subject', '{}')",
     )
     .bind(user_id.as_uuid())
     .bind(ISSUER)
@@ -169,7 +170,9 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
         database_url,
         nats_url: nats_url.clone(),
         http_listen: "127.0.0.1:0".parse().expect("ephemeral listen address"),
-        internal_command_token_hash: sha2::Sha256::digest(b"golden-internal-command-token").into(),
+        rpc_mediator_signing_key: hephaestus_app::rpc::mediator_signing_key(
+            b"golden-internal-command-token",
+        ),
         repository_root: repository_root.clone(),
         git_http_backend: backend,
         git_http_limits: git_http::GitHttpLimits::default(),
@@ -280,7 +283,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
 
     let (result_ref, result_commit): (String, String) = sqlx::query_as(
         "SELECT result_ref, result_commit
-         FROM run_results WHERE run_id = $1 AND state = 'completed'",
+           FROM run_results WHERE run_id = $1 AND state = 'completed'",
     )
     .bind(run_id.as_uuid())
     .fetch_one(&pool)
@@ -304,8 +307,8 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
 
     let permissions: Vec<String> = sqlx::query_scalar(
         "SELECT permission FROM authorization_audit_events
-         WHERE actor_id = $1
-         ORDER BY permission",
+           WHERE actor_id = $1
+           ORDER BY permission",
     )
     .bind(user_id.as_uuid())
     .fetch_all(&pool)
@@ -316,10 +319,10 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
     assert!(permissions.iter().any(|value| value == "can_use"));
     let mapped_profile: bool = sqlx::query_scalar(
         "SELECT EXISTS(
-            SELECT 1 FROM user_profiles
-            WHERE user_id = $1
-              AND validated_claims->>'sub' = 'golden-subject'
-         )",
+              SELECT 1 FROM user_profiles
+              WHERE user_id = $1
+                AND validated_claims->>'sub' = 'golden-subject'
+           )",
     )
     .bind(user_id.as_uuid())
     .fetch_one(&pool)
@@ -328,6 +331,24 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
     assert!(mapped_profile);
 
     running.shutdown().await.expect("graceful daemon shutdown");
+    let (signals, unpublished_signals): (i64, i64) = sqlx::query_as(
+        "SELECT count(*) FILTER (WHERE message_class = 'internal_signal'),
+                  count(*) FILTER (
+                      WHERE message_class = 'internal_signal' AND published_at IS NULL
+                  )
+           FROM outbox",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("internal signal outbox census");
+    assert_eq!(
+        signals, 0,
+        "legacy informational signals must not be emitted"
+    );
+    assert_eq!(
+        unpublished_signals, 0,
+        "legacy informational signals must never remain pending"
+    );
     cleanup_streams(&nats_url).await;
 }
 
@@ -351,52 +372,52 @@ fn signed_token() -> String {
 
 const fn agent_config() -> &'static str {
     r#"
-version = 2
-[agent]
-name = "Golden Agent"
-key = "golden-agent"
-[build]
-command = "/bin/sh"
-arguments = ["-c", "mkdir -p /workspace/output/bin && cp /workspace/source/golden-agent.sh /workspace/output/bin/golden && chmod 0555 /workspace/output/bin/golden"]
-working_directory = "/workspace/source"
-root_image = "golden-root@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-triggers = ["refs/heads/main"]
-[build.resources]
-vcpus = 1
-memory_mib = 128
-[build.network]
-profile = "disabled"
-[[build.artifacts]]
-path = "bin/golden"
-kind = "executable"
-[guest]
-command = "bin/golden"
-arguments = []
-working_directory = "bin"
-[resources]
-vcpus = 1
-memory_mib = 128
-[root_image]
-reference = "golden-root@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-[workspace]
-mount = true
-path = "/workspace/repo"
-read_only = true
-[state_volume]
-enabled = true
-[network]
-profile = "disabled"
-[triggers]
-push = false
-refs = ["refs/heads/main"]
-[update_hook]
-command = "bin/golden"
-arguments = []
-timeout_seconds = 60
-[update_hook.resources]
-vcpus = 1
-memory_mib = 128
-"#
+  version = 2
+  [agent]
+  name = "Golden Agent"
+  key = "golden-agent"
+  [build]
+  command = "/bin/sh"
+  arguments = ["-c", "mkdir -p /workspace/output/bin && cp /workspace/source/golden-agent.sh /workspace/output/bin/golden && chmod 0555 /workspace/output/bin/golden"]
+  working_directory = "/workspace/source"
+  root_image = "golden-root@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  triggers = ["refs/heads/main"]
+  [build.resources]
+  vcpus = 1
+  memory_mib = 128
+  [build.network]
+  profile = "disabled"
+  [[build.artifacts]]
+  path = "bin/golden"
+  kind = "executable"
+  [guest]
+  command = "bin/golden"
+  arguments = []
+  working_directory = "bin"
+  [resources]
+  vcpus = 1
+  memory_mib = 128
+  [root_image]
+  reference = "golden-root@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  [workspace]
+  mount = true
+  path = "/workspace/repo"
+  read_only = true
+  [state_volume]
+  enabled = true
+  [network]
+  profile = "disabled"
+  [triggers]
+  push = false
+  refs = ["refs/heads/main"]
+  [update_hook]
+  command = "bin/golden"
+  arguments = []
+  timeout_seconds = 60
+  [update_hook.resources]
+  vcpus = 1
+  memory_mib = 128
+  "#
 }
 
 #[allow(clippy::too_many_lines)]
@@ -443,10 +464,10 @@ async fn seed_reusable_instance(
 
     sqlx::query(
         "INSERT INTO build_requests
-         (id, repository_id, source_commit, source_ref,
-          build_definition_hash, state, created_by, completed_at)
-         VALUES ($1, $2, $3, 'refs/heads/main', $4, 'succeeded',
-                 $5, now())",
+           (id, repository_id, source_commit, source_ref,
+            build_definition_hash, state, created_by, completed_at)
+           VALUES ($1, $2, $3, 'refs/heads/main', $4, 'succeeded',
+                   $5, now())",
     )
     .bind(build_id)
     .bind(repository_id)
@@ -458,7 +479,7 @@ async fn seed_reusable_instance(
     .expect("seed reusable build");
     sqlx::query(
         "INSERT INTO agent_families (id, repository_id, agent_key)
-         VALUES ($1, $2, 'golden-agent')",
+           VALUES ($1, $2, 'golden-agent')",
     )
     .bind(family_id)
     .bind(repository_id)
@@ -467,11 +488,11 @@ async fn seed_reusable_instance(
     .expect("seed reusable family");
     sqlx::query(
         "INSERT INTO releases
-         (id, repository_id, version, source_commit, source_ref,
-         build_request_id, build_definition_hash, configuration,
-          configuration_hash, manifest_hash, state, published_at)
-         VALUES ($1, $2, 'v1', $3, 'refs/heads/main', $4, $5,
-                 $6, $7, $8, 'published', now())",
+           (id, repository_id, version, source_commit, source_ref,
+           build_request_id, build_definition_hash, configuration,
+            configuration_hash, manifest_hash, state, published_at)
+           VALUES ($1, $2, 'v1', $3, 'refs/heads/main', $4, $5,
+                   $6, $7, $8, 'published', now())",
     )
     .bind(release_id)
     .bind(repository_id)
@@ -486,10 +507,10 @@ async fn seed_reusable_instance(
     .expect("seed reusable release");
     sqlx::query(
         "INSERT INTO release_artifacts
-         (id, release_id, path, kind, mode, content_hash, size_bytes,
-          media_type, storage_key)
-         VALUES ($1, $2, 'bin/golden', 'executable', 365, $3, $4,
-                 'application/octet-stream', $5)",
+           (id, release_id, path, kind, mode, content_hash, size_bytes,
+            media_type, storage_key)
+           VALUES ($1, $2, 'bin/golden', 'executable', 365, $3, $4,
+                   'application/octet-stream', $5)",
     )
     .bind(artifact_id)
     .bind(release_id)
@@ -501,11 +522,11 @@ async fn seed_reusable_instance(
     .expect("seed reusable artifact");
     sqlx::query(
         "INSERT INTO release_agents
-         (id, release_id, family_id, agent_key, display_name,
-          runtime_contract, runtime_contract_hash, parameter_schema,
-          secret_slot_schema, requires_state, update_hook)
-         VALUES ($1, $2, $3, 'golden-agent', 'Golden Agent', $4, $5,
-                 '[]', '[]', true, $6)",
+           (id, release_id, family_id, agent_key, display_name,
+            runtime_contract, runtime_contract_hash, parameter_schema,
+            secret_slot_schema, requires_state, update_hook)
+           VALUES ($1, $2, $3, 'golden-agent', 'Golden Agent', $4, $5,
+                   '[]', '[]', true, $6)",
     )
     .bind(release_agent_id)
     .bind(release_id)
@@ -529,8 +550,8 @@ async fn seed_reusable_instance(
     .expect("seed reusable release agent");
     sqlx::query(
         "INSERT INTO agent_instances
-         (id, project_id, family_id, name, state, created_by)
-         VALUES ($1, $2, $3, 'golden-agent', 'active', $4)",
+           (id, project_id, family_id, name, state, created_by)
+           VALUES ($1, $2, $3, 'golden-agent', 'active', $4)",
     )
     .bind(instance_id)
     .bind(project_id)
@@ -541,8 +562,8 @@ async fn seed_reusable_instance(
     .expect("seed reusable instance");
     sqlx::query(
         "INSERT INTO agent_instance_state_volumes
-         (id, instance_id, state, capacity_bytes)
-         VALUES ($1, $2, 'uninitialized', $3)",
+           (id, instance_id, state, capacity_bytes)
+           VALUES ($1, $2, 'uninitialized', $3)",
     )
     .bind(state_volume_id)
     .bind(instance_id)
@@ -558,12 +579,12 @@ async fn seed_reusable_instance(
         .expect("attach reusable instance state volume");
     sqlx::query(
         "INSERT INTO agent_instance_revisions
-         (id, instance_id, release_agent_id, parameters, parameter_hash,
-          secret_bindings, resource_selection, network_restriction,
-          effective_runtime_policy, effective_policy_hash,
-          platform_policy_version, runnable, diagnostics, created_by)
-         VALUES ($1, $2, $3, '{}', $4, '[]', $5, $6, $5, $7,
-                 'platform/v1', true, '[]', $8)",
+           (id, instance_id, release_agent_id, parameters, parameter_hash,
+            secret_bindings, resource_selection, network_restriction,
+            effective_runtime_policy, effective_policy_hash,
+            platform_policy_version, runnable, diagnostics, created_by)
+           VALUES ($1, $2, $3, '{}', $4, '[]', $5, $6, $5, $7,
+                   'platform/v1', true, '[]', $8)",
     )
     .bind(revision_id)
     .bind(instance_id)
@@ -588,9 +609,9 @@ async fn seed_reusable_instance(
         .expect("activate reusable revision");
     sqlx::query(
         "INSERT INTO agent_attachments
-         (id, instance_id, project_id, repository_id, ref_selector,
-          trigger_policy, enabled, created_by)
-         VALUES ($1, $2, $3, $4, 'refs/heads/main', 'push', true, $5)",
+           (id, instance_id, project_id, repository_id, ref_selector,
+            trigger_policy, enabled, created_by)
+           VALUES ($1, $2, $3, $4, 'refs/heads/main', 'push', true, $5)",
     )
     .bind(attachment_id)
     .bind(instance_id)
@@ -879,6 +900,7 @@ async fn cleanup_streams(nats_url: &str) {
         "HEPHAESTUS_GIT_EVENTS",
         "HEPHAESTUS_RELEASE_EVENTS",
         "HEPHAESTUS_SECRET_EVENTS",
+        "HEPHAESTUS_PRODUCT_EVENTS",
     ] {
         drop(context.delete_stream(stream).await);
     }

@@ -1,0 +1,349 @@
+syntax = "proto3";
+
+package hephaestus.instance.v1;
+
+import "google/protobuf/timestamp.proto";
+import "hephaestus/common/v1/common.proto";
+import "hephaestus/options/v1/options.proto";
+import "hephaestus/secret/v1/secret.proto";
+
+service AgentInstanceService {
+  rpc GetInstance(GetInstanceRequest) returns (GetInstanceResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (hephaestus.options.v1.authorization) = {
+      permission: "instance.read"
+      audience: "/hephaestus.instance.v1.AgentInstanceService/GetInstance"
+      actor_source: ACTOR_SOURCE_MEDIATOR_JWT_METADATA
+    };
+    option (hephaestus.options.v1.operation_kind) = OPERATION_KIND_QUERY;
+    option (hephaestus.options.v1.max_request_bytes) = 4096;
+    option (hephaestus.options.v1.max_response_bytes) = 4194304;
+  }
+  rpc ImportAgent(ImportAgentRequest) returns (ImportAgentResponse) {
+    option (hephaestus.options.v1.authorization) = {
+      permission: "instance.import"
+      audience: "/hephaestus.instance.v1.AgentInstanceService/ImportAgent"
+      actor_source: ACTOR_SOURCE_MEDIATOR_JWT_METADATA
+    };
+    option (hephaestus.options.v1.operation_kind) = OPERATION_KIND_MUTATION;
+    option (hephaestus.options.v1.max_request_bytes) = 262144;
+    option (hephaestus.options.v1.max_response_bytes) = 8192;
+  }
+  rpc CreateAttachment(CreateAttachmentRequest) returns (CreateAttachmentResponse) {
+    option (hephaestus.options.v1.authorization) = {
+      permission: "attachment.create"
+      audience: "/hephaestus.instance.v1.AgentInstanceService/CreateAttachment"
+      actor_source: ACTOR_SOURCE_MEDIATOR_JWT_METADATA
+    };
+    option (hephaestus.options.v1.operation_kind) = OPERATION_KIND_MUTATION;
+    option (hephaestus.options.v1.max_request_bytes) = 16384;
+    option (hephaestus.options.v1.max_response_bytes) = 4096;
+  }
+  rpc SetAttachmentEnabled(SetAttachmentEnabledRequest) returns (SetAttachmentEnabledResponse) {
+    option (hephaestus.options.v1.authorization) = {
+      permission: "attachment.set_enabled"
+      audience: "/hephaestus.instance.v1.AgentInstanceService/SetAttachmentEnabled"
+      actor_source: ACTOR_SOURCE_MEDIATOR_JWT_METADATA
+    };
+    option (hephaestus.options.v1.operation_kind) = OPERATION_KIND_MUTATION;
+    option (hephaestus.options.v1.max_request_bytes) = 8192;
+    option (hephaestus.options.v1.max_response_bytes) = 4096;
+  }
+  rpc RemoveAttachment(RemoveAttachmentRequest) returns (RemoveAttachmentResponse) {
+    option (hephaestus.options.v1.authorization) = {
+      permission: "attachment.remove"
+      audience: "/hephaestus.instance.v1.AgentInstanceService/RemoveAttachment"
+      actor_source: ACTOR_SOURCE_MEDIATOR_JWT_METADATA
+    };
+    option (hephaestus.options.v1.operation_kind) = OPERATION_KIND_MUTATION;
+    option (hephaestus.options.v1.max_request_bytes) = 8192;
+    option (hephaestus.options.v1.max_response_bytes) = 4096;
+  }
+  rpc ReviseInstance(ReviseInstanceRequest) returns (ReviseInstanceResponse) {
+    option (hephaestus.options.v1.authorization) = {
+      permission: "instance.revise"
+      audience: "/hephaestus.instance.v1.AgentInstanceService/ReviseInstance"
+      actor_source: ACTOR_SOURCE_MEDIATOR_JWT_METADATA
+    };
+    option (hephaestus.options.v1.operation_kind) = OPERATION_KIND_MUTATION;
+    option (hephaestus.options.v1.max_request_bytes) = 262144;
+    option (hephaestus.options.v1.max_response_bytes) = 8192;
+  }
+  rpc CreateUpdate(CreateUpdateRequest) returns (CreateUpdateResponse) {
+    option (hephaestus.options.v1.authorization) = {
+      permission: "instance_update.create"
+      audience: "/hephaestus.instance.v1.AgentInstanceService/CreateUpdate"
+      actor_source: ACTOR_SOURCE_MEDIATOR_JWT_METADATA
+    };
+    option (hephaestus.options.v1.operation_kind) = OPERATION_KIND_MUTATION;
+    option (hephaestus.options.v1.max_request_bytes) = 262144;
+    option (hephaestus.options.v1.max_response_bytes) = 16384;
+  }
+  rpc RecoverUpdate(RecoverUpdateRequest) returns (RecoverUpdateResponse) {
+    option (hephaestus.options.v1.authorization) = {
+      permission: "instance_update.recover"
+      audience: "/hephaestus.instance.v1.AgentInstanceService/RecoverUpdate"
+      actor_source: ACTOR_SOURCE_MEDIATOR_JWT_METADATA
+    };
+    option (hephaestus.options.v1.operation_kind) = OPERATION_KIND_MUTATION;
+    option (hephaestus.options.v1.max_request_bytes) = 8192;
+    option (hephaestus.options.v1.max_response_bytes) = 4096;
+  }
+  rpc BindSecret(BindSecretRequest) returns (BindSecretResponse) {
+    option (hephaestus.options.v1.authorization) = {
+      permission: "instance_secret.bind"
+      audience: "/hephaestus.instance.v1.AgentInstanceService/BindSecret"
+      actor_source: ACTOR_SOURCE_MEDIATOR_JWT_METADATA
+    };
+    option (hephaestus.options.v1.operation_kind) = OPERATION_KIND_MUTATION;
+    option (hephaestus.options.v1.max_request_bytes) = 65536;
+    option (hephaestus.options.v1.max_response_bytes) = 8192;
+  }
+}
+
+enum TriggerPolicy {
+  TRIGGER_POLICY_UNSPECIFIED = 0;
+  TRIGGER_POLICY_MANUAL = 1;
+  TRIGGER_POLICY_PUSH = 2;
+  TRIGGER_POLICY_PUSH_AND_MANUAL = 3;
+}
+enum RecoveryAction {
+  RECOVERY_ACTION_UNSPECIFIED = 0;
+  RECOVERY_ACTION_RETRY = 1;
+  RECOVERY_ACTION_REJECT = 2;
+  RECOVERY_ACTION_RESUME = 3;
+}
+enum RecoveryDecision {
+  RECOVERY_DECISION_UNSPECIFIED = 0;
+  RECOVERY_DECISION_RETRY_QUEUED = 1;
+  RECOVERY_DECISION_REJECTED = 2;
+  RECOVERY_DECISION_RESUMED = 3;
+}
+enum RemovalState {
+  REMOVAL_STATE_UNSPECIFIED = 0;
+  REMOVAL_STATE_REMOVED = 1;
+}
+message RefSelector {
+  oneof selector {
+    string exact = 1;
+    string prefix = 2;
+  }
+}
+message InstanceRevision {
+  hephaestus.common.v1.OpaqueId id = 1;
+  repeated hephaestus.common.v1.ParameterValue parameters = 2;
+  string parameter_hash = 3;
+  hephaestus.common.v1.RuntimePolicy resource_selection = 4;
+  hephaestus.common.v1.NetworkPolicy network_restriction = 5;
+  hephaestus.common.v1.RuntimePolicy effective_runtime_policy = 6;
+  string platform_policy_version = 7;
+  bool runnable = 8;
+  repeated hephaestus.common.v1.Diagnostic diagnostics = 9;
+  google.protobuf.Timestamp created_at = 10;
+  hephaestus.common.v1.OpaqueId release_agent_id = 11;
+  repeated hephaestus.common.v1.ParameterDeclaration parameter_schema = 12;
+  repeated hephaestus.common.v1.SecretSlotDeclaration secret_slot_schema = 13;
+  hephaestus.common.v1.RuntimeContract runtime_contract = 14;
+  hephaestus.common.v1.UpdateHook update_hook = 15;
+  hephaestus.common.v1.OpaqueId release_id = 16;
+  string release_version = 17;
+  string release_state = 18;
+  string release_agent_name = 19;
+}
+message Attachment {
+  hephaestus.common.v1.OpaqueId id = 1;
+  RefSelector ref_selector = 2;
+  TriggerPolicy trigger_policy = 3;
+  bool enabled = 4;
+  google.protobuf.Timestamp removed_at = 5;
+  hephaestus.common.v1.OpaqueId repository_id = 6;
+  string repository_name = 7;
+  bool can_manage = 8;
+}
+message UpdateEvent {
+  uint64 sequence = 1;
+  string event_type = 2;
+  oneof payload {
+    string bounded_log_message = 3;
+    hephaestus.common.v1.Diagnostic diagnostic = 4;
+    hephaestus.common.v1.OperationState operation_state = 5;
+  }
+}
+message AgentUpdate {
+  hephaestus.common.v1.OpaqueId id = 1;
+  hephaestus.common.v1.OpaqueId expected_current_revision_id = 2;
+  hephaestus.common.v1.OpaqueId candidate_revision_id = 3;
+  string state = 4;
+  hephaestus.common.v1.OpaqueId hook_run_id = 5;
+  optional int32 hook_exit_code = 6;
+  optional int32 hook_exit_signal = 7;
+  repeated hephaestus.common.v1.Diagnostic diagnostics = 8;
+  RecoveryDecision final_decision = 9;
+  google.protobuf.Timestamp created_at = 10;
+  google.protobuf.Timestamp updated_at = 11;
+  repeated UpdateEvent hook_events = 12;
+}
+message RepositoryOption {
+  hephaestus.common.v1.OpaqueId id = 1;
+  string name = 2;
+  string default_branch = 3;
+}
+message SecretImport {
+  hephaestus.common.v1.OpaqueId id = 1;
+  string alias = 2;
+  hephaestus.secret.v1.SecretTarget target = 3;
+  hephaestus.secret.v1.AuthorityState state = 4;
+  string secret_name = 5;
+  hephaestus.secret.v1.SecretState secret_state = 6;
+  hephaestus.secret.v1.SecretPolicy policy = 7;
+  google.protobuf.Timestamp expires_at = 8;
+}
+message UpdateCandidate {
+  hephaestus.common.v1.OpaqueId id = 1;
+  string display_name = 2;
+  repeated hephaestus.common.v1.ParameterDeclaration parameter_schema = 3;
+  repeated hephaestus.common.v1.SecretSlotDeclaration secret_slot_schema = 4;
+  hephaestus.common.v1.RuntimeContract runtime_contract = 5;
+  bool requires_state = 6;
+  hephaestus.common.v1.UpdateHook update_hook = 7;
+  hephaestus.common.v1.OpaqueId release_id = 8;
+  string release_version = 9;
+}
+message RecentRun {
+  hephaestus.common.v1.OpaqueId id = 1;
+  string state = 2;
+  string outcome = 3;
+  string run_kind = 4;
+  hephaestus.common.v1.OpaqueId instance_revision_id = 5;
+  hephaestus.common.v1.OpaqueId release_id = 6;
+  hephaestus.common.v1.OpaqueId attachment_id = 7;
+  google.protobuf.Timestamp created_at = 8;
+  google.protobuf.Timestamp updated_at = 9;
+}
+message AgentInstance {
+  hephaestus.common.v1.OpaqueId id = 1;
+  string name = 2;
+  string state = 3;
+  bool run_gate_open = 4;
+  hephaestus.common.v1.OpaqueId active_revision_id = 5;
+  hephaestus.common.v1.OpaqueId state_volume_id = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp updated_at = 8;
+  hephaestus.common.v1.OpaqueId project_id = 9;
+  string project_name = 10;
+  hephaestus.common.v1.OpaqueId organization_id = 11;
+  string organization_name = 12;
+  bool can_manage = 13;
+  bool can_update = 14;
+  bool can_recover = 15;
+  repeated InstanceRevision revisions = 16;
+  repeated Attachment attachments = 17;
+  repeated AgentUpdate updates = 18;
+  repeated RepositoryOption repositories = 19;
+  repeated SecretImport secret_imports = 20;
+  repeated UpdateCandidate update_candidates = 21;
+  repeated RecentRun recent_runs = 22;
+}
+
+message GetInstanceRequest {
+  hephaestus.common.v1.OpaqueId instance_id = 1;
+}
+message GetInstanceResponse {
+  AgentInstance instance = 1;
+}
+message ImportAgentRequest {
+  hephaestus.common.v1.RequestContext context = 1;
+  hephaestus.common.v1.OpaqueId project_id = 2;
+  hephaestus.common.v1.OpaqueId release_agent_id = 3;
+  string name = 4;
+  repeated hephaestus.common.v1.ParameterValue parameters = 5;
+  hephaestus.common.v1.RuntimePolicy selected_policy = 6;
+}
+message ImportAgentResponse {
+  hephaestus.common.v1.OpaqueId instance_id = 1;
+  hephaestus.common.v1.OpaqueId revision_id = 2;
+  hephaestus.common.v1.MutationReceipt receipt = 3;
+}
+message CreateAttachmentRequest {
+  hephaestus.common.v1.RequestContext context = 1;
+  hephaestus.common.v1.OpaqueId instance_id = 2;
+  hephaestus.common.v1.OpaqueId repository_id = 3;
+  RefSelector ref_selector = 4;
+  TriggerPolicy trigger_policy = 5;
+}
+message CreateAttachmentResponse {
+  hephaestus.common.v1.OpaqueId attachment_id = 1;
+  hephaestus.common.v1.MutationReceipt receipt = 2;
+}
+message SetAttachmentEnabledRequest {
+  hephaestus.common.v1.RequestContext context = 1;
+  hephaestus.common.v1.OpaqueId attachment_id = 2;
+  bool enabled = 3;
+}
+message SetAttachmentEnabledResponse {
+  hephaestus.common.v1.OpaqueId attachment_id = 1;
+  bool enabled = 2;
+  hephaestus.common.v1.MutationReceipt receipt = 3;
+}
+message RemoveAttachmentRequest {
+  hephaestus.common.v1.RequestContext context = 1;
+  hephaestus.common.v1.OpaqueId attachment_id = 2;
+}
+message RemoveAttachmentResponse {
+  hephaestus.common.v1.OpaqueId attachment_id = 1;
+  RemovalState state = 2;
+  hephaestus.common.v1.MutationReceipt receipt = 3;
+}
+message ReviseInstanceRequest {
+  hephaestus.common.v1.RequestContext context = 1;
+  hephaestus.common.v1.OpaqueId instance_id = 2;
+  hephaestus.common.v1.OpaqueId expected_revision_id = 3;
+  repeated hephaestus.common.v1.ParameterValue parameters = 4;
+  hephaestus.common.v1.RuntimePolicy selected_policy = 5;
+}
+message ReviseInstanceResponse {
+  hephaestus.common.v1.OpaqueId instance_id = 1;
+  hephaestus.common.v1.OpaqueId revision_id = 2;
+  hephaestus.common.v1.MutationReceipt receipt = 3;
+}
+message CreateUpdateRequest {
+  hephaestus.common.v1.RequestContext context = 1;
+  hephaestus.common.v1.OpaqueId instance_id = 2;
+  hephaestus.common.v1.OpaqueId expected_revision_id = 3;
+  hephaestus.common.v1.OpaqueId candidate_release_agent_id = 4;
+  repeated hephaestus.common.v1.ParameterValue parameters = 5;
+  hephaestus.common.v1.RuntimePolicy selected_policy = 6;
+}
+message CreateUpdateResponse {
+  hephaestus.common.v1.OpaqueId update_id = 1;
+  hephaestus.common.v1.OpaqueId candidate_revision_id = 2;
+  hephaestus.common.v1.OpaqueId hook_run_id = 3;
+  hephaestus.common.v1.Operation operation = 4;
+  hephaestus.common.v1.MutationReceipt receipt = 5;
+}
+message RecoverUpdateRequest {
+  hephaestus.common.v1.RequestContext context = 1;
+  hephaestus.common.v1.OpaqueId update_id = 2;
+  RecoveryAction action = 3;
+}
+message RecoverUpdateResponse {
+  hephaestus.common.v1.OpaqueId update_id = 1;
+  RecoveryDecision decision = 2;
+  hephaestus.common.v1.MutationReceipt receipt = 3;
+}
+message BindSecretRequest {
+  hephaestus.common.v1.RequestContext context = 1;
+  hephaestus.common.v1.OpaqueId instance_id = 2;
+  hephaestus.common.v1.OpaqueId expected_revision_id = 3;
+  hephaestus.common.v1.OpaqueId import_id = 4;
+  string slot = 5;
+  hephaestus.secret.v1.DeliveryMode mode = 6;
+  repeated hephaestus.secret.v1.DeliveryPhase phases = 7;
+  repeated hephaestus.common.v1.OpaqueId attachment_ids = 8;
+  repeated string destinations = 9;
+}
+message BindSecretResponse {
+  hephaestus.common.v1.OpaqueId binding_id = 1;
+  hephaestus.common.v1.OpaqueId instance_revision_id = 2;
+  hephaestus.common.v1.MutationReceipt receipt = 3;
+}

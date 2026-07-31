@@ -1,0 +1,7 @@
+version: v2
+clean: true
+plugins:
+  - local: protoc-gen-elixir
+    out: web/lib/hephaestus_web/rpc/generated
+    opt:
+      - plugins=grpc

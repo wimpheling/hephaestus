@@ -1,0 +1,69 @@
+syntax = "proto3";
+
+package hephaestus.artifact.v1;
+
+import "hephaestus/common/v1/common.proto";
+import "hephaestus/options/v1/options.proto";
+
+service ArtifactService {
+  rpc GetArtifactPreview(GetArtifactPreviewRequest) returns (GetArtifactPreviewResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (hephaestus.options.v1.authorization) = {
+      permission: "artifact.preview"
+      audience: "/hephaestus.artifact.v1.ArtifactService/GetArtifactPreview"
+      actor_source: ACTOR_SOURCE_MEDIATOR_JWT_METADATA
+    };
+    option (hephaestus.options.v1.operation_kind) = OPERATION_KIND_QUERY;
+    option (hephaestus.options.v1.max_request_bytes) = 4096;
+    option (hephaestus.options.v1.max_response_bytes) = 2097152;
+  }
+  rpc StreamArtifact(StreamArtifactRequest) returns (stream StreamArtifactResponse) {
+    option (hephaestus.options.v1.authorization) = {
+      permission: "artifact.read"
+      audience: "/hephaestus.artifact.v1.ArtifactService/StreamArtifact"
+      actor_source: ACTOR_SOURCE_MEDIATOR_JWT_METADATA
+    };
+    option (hephaestus.options.v1.operation_kind) = OPERATION_KIND_SERVER_STREAM;
+    option (hephaestus.options.v1.max_request_bytes) = 8192;
+    option (hephaestus.options.v1.max_response_bytes) = 67108864;
+  }
+}
+
+message ArtifactProvenance {
+  hephaestus.common.v1.OpaqueId build_id = 1;
+  hephaestus.common.v1.OpaqueId release_id = 2;
+  hephaestus.common.v1.OpaqueId run_id = 3;
+  string source_commit = 4;
+}
+message Artifact {
+  hephaestus.common.v1.OpaqueId id = 1;
+  string path = 2;
+  string kind = 3;
+  uint32 mode = 4;
+  string sha256 = 5;
+  uint64 size_bytes = 6;
+  string media_type = 7;
+  ArtifactProvenance provenance = 8;
+}
+message GetArtifactPreviewRequest {
+  hephaestus.common.v1.OpaqueId artifact_id = 1;
+  uint32 max_bytes = 2;
+}
+message GetArtifactPreviewResponse {
+  Artifact artifact = 1;
+  string utf8_contents = 2;
+  bool truncated = 3;
+}
+message StreamArtifactRequest {
+  hephaestus.common.v1.OpaqueId artifact_id = 1;
+  hephaestus.common.v1.Cursor resume_cursor = 2;
+  uint64 max_total_bytes = 3;
+  uint32 max_chunk_bytes = 4;
+}
+message StreamArtifactResponse {
+  uint64 sequence = 1;
+  bytes contents = 2;
+  hephaestus.common.v1.Cursor committed_cursor = 3;
+  bool end_of_artifact = 4;
+  string media_type = 5;
+}

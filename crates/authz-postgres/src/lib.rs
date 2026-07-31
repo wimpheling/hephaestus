@@ -1,7 +1,10 @@
 //! PostgreSQL-native authorization and request actor context.
 
 use async_trait::async_trait;
-use authz_domain::{AuthorizationDecision, Authorizer, AuthzError, ObjectRef, Permission, Subject};
+use authz_domain::{
+    AuthorizationDecision, AuthzError, GitRepositoryAuthorizer, GitRepositoryOperation, ObjectRef,
+    Permission, Subject,
+};
 use identity_domain::{AuthenticatedIdentity, RequestId, UserId};
 use runtime_types::RunId;
 use sqlx::{PgPool, Postgres, Transaction};
@@ -14,9 +17,68 @@ pub const AUTHORIZATION_MODEL_VERSION: &str =
 #[derive(Debug, Clone, Copy, Default)]
 pub struct PostgresMelangeAuthorizer;
 
+/// `PostgreSQL` Git repository authorization adapter.
+#[derive(Clone)]
+pub struct PostgresGitAuthorizer {
+    pool: PgPool,
+    authorizer: PostgresMelangeAuthorizer,
+}
+
+impl PostgresGitAuthorizer {
+    /// Creates an adapter over a shared pool.
+    #[must_use]
+    pub const fn new(pool: PgPool) -> Self {
+        Self {
+            pool,
+            authorizer: PostgresMelangeAuthorizer,
+        }
+    }
+}
+
 #[async_trait]
-impl Authorizer for PostgresMelangeAuthorizer {
-    async fn check(
+impl GitRepositoryAuthorizer for PostgresGitAuthorizer {
+    async fn authorize_git(
+        &self,
+        repository_id: uuid::Uuid,
+        operation: GitRepositoryOperation,
+        identity: &AuthenticatedIdentity,
+    ) -> Result<AuthorizationDecision, AuthzError> {
+        let mut tx = begin_actor_transaction(&self.pool, identity)
+            .await
+            .map_err(AuthzError::evaluator)?;
+        let permission = match operation {
+            GitRepositoryOperation::Read => Permission::CanRead,
+            GitRepositoryOperation::Write => Permission::CanWrite,
+        };
+        let object = ObjectRef::new(authz_domain::ObjectType::Repository, repository_id);
+        let decision = self
+            .authorizer
+            .check(&mut tx, Subject::User(identity.user_id), permission, object)
+            .await?;
+        audit_decision(
+            &mut tx,
+            identity.user_id,
+            permission,
+            object,
+            decision,
+            identity.request_id,
+        )
+        .await
+        .map_err(AuthzError::evaluator)?;
+        tx.commit().await.map_err(AuthzError::evaluator)?;
+        Ok(decision)
+    }
+}
+
+impl PostgresMelangeAuthorizer {
+    /// Checks one permission against transaction-local actor context and the
+    /// Mélange evaluator in the same `PostgreSQL` transaction as the caller.
+    ///
+    /// # Errors
+    ///
+    /// Returns a provider-neutral authorization error when actor context is
+    /// missing or `PostgreSQL` cannot evaluate the decision.
+    pub async fn check(
         &self,
         tx: &mut Transaction<'_, Postgres>,
         subject: Subject,
@@ -29,7 +91,7 @@ impl Authorizer for PostgresMelangeAuthorizer {
         )
         .fetch_one(&mut **tx)
         .await
-        .map_err(AuthzError::Database)?;
+        .map_err(AuthzError::evaluator)?;
         let subject_id = subject.id();
         if context.0.as_deref().unwrap_or("user") != subject.object_type()
             || context.1.as_deref() != Some(subject_id.as_str())
@@ -44,7 +106,7 @@ impl Authorizer for PostgresMelangeAuthorizer {
             .bind(object.id.to_string())
             .fetch_one(&mut **tx)
             .await
-            .map_err(AuthzError::Database)?;
+            .map_err(AuthzError::evaluator)?;
         Ok(if allowed {
             AuthorizationDecision::Allow
         } else {
@@ -66,10 +128,12 @@ pub async fn begin_actor_transaction<'pool>(
     sqlx::query(
         "SELECT set_config('hephaestus.actor_id', $1, true),
                 set_config('hephaestus.subject_type', 'user', true),
-                set_config('hephaestus.request_id', $2, true)",
+                set_config('hephaestus.request_id', $2, true),
+                set_config('hephaestus.occurrence_id', $3, true)",
     )
     .bind(identity.user_id.to_string())
     .bind(identity.request_id.to_string())
+    .bind(identity.idempotency_id.to_string())
     .execute(&mut *transaction)
     .await?;
     Ok(transaction)

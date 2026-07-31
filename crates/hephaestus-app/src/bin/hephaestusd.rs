@@ -6,7 +6,6 @@ use run_runtime_local::LocalRunRuntimeConfig;
 use secret_broker::DenyingBrokerAdapter;
 use secret_runtime::EphemeralSecretConfig;
 use secret_store::LocalKeyProvider;
-use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
     env,
@@ -106,14 +105,14 @@ fn environment_config() -> Result<AppConfig, Box<dyn Error>> {
             host_path: root_image_path,
         },
     );
+    let rpc_mediator_secret = required("HEPHAESTUS_RPC_MEDIATOR_SECRET")?;
     Ok(AppConfig {
         database_url: required("HEPHAESTUS_DATABASE_URL")?,
         nats_url: required("HEPHAESTUS_NATS_URL")?,
         http_listen,
-        internal_command_token_hash: Sha256::digest(
-            required("HEPHAESTUS_INTERNAL_COMMAND_TOKEN")?.as_bytes(),
-        )
-        .into(),
+        rpc_mediator_signing_key: hephaestus_app::rpc::mediator_signing_key(
+            rpc_mediator_secret.as_bytes(),
+        ),
         repository_root: repository_root.clone(),
         git_http_backend: path("HEPHAESTUS_GIT_HTTP_BACKEND")?,
         git_http_limits: git_http::GitHttpLimits::default(),

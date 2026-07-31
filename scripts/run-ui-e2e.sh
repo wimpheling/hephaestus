@@ -60,6 +60,14 @@ cleanup() {
             --dbname hephaestus --tuples-only --command \
             "SELECT run_id, sequence, event_type, payload FROM run_events ORDER BY run_id, sequence" \
             >&2 2>/dev/null || true
+        podman exec "${postgres_container}" psql --username postgres \
+            --dbname hephaestus --tuples-only --command \
+            "SELECT scope_kind, scope_id, cursor, aggregate_type, aggregate_id, event_type, change_kind, safe_state FROM application_events ORDER BY occurred_at, cursor" \
+            >&2 2>/dev/null || true
+        podman exec "${postgres_container}" psql --username postgres \
+            --dbname hephaestus --tuples-only --command \
+            "SELECT event.scope_kind, event.scope_id, event.cursor, outbox.published_at IS NOT NULL AS published, outbox.dead_lettered_at IS NOT NULL AS dead_lettered, outbox.last_error FROM product_event_outbox outbox JOIN application_events event ON event.id = outbox.event_id ORDER BY event.occurred_at, event.cursor" \
+            >&2 2>/dev/null || true
         podman logs "${web_container}" >&2 2>/dev/null || true
     fi
     if [[ -n "${daemon_pid}" ]]; then
@@ -93,6 +101,51 @@ wait_for_url() {
     fi
     printf 'timed out waiting for %s\n' "${url}" >&2
     exit 1
+}
+
+assert_web_isolation() {
+    local actual_hephaestus_environment
+    local expected_hephaestus_environment
+    local mount_destinations
+
+    actual_hephaestus_environment="$(
+        podman exec "${web_container}" env |
+            sed -n 's/^\(HEPHAESTUS_[^=]*\)=.*/\1/p' |
+            sort
+    )"
+    expected_hephaestus_environment="$(
+        printf '%s\n' \
+            HEPHAESTUS_BROWSER_OIDC_CLIENT_ID \
+            HEPHAESTUS_BROWSER_OIDC_CLIENT_SECRET \
+            HEPHAESTUS_BROWSER_OIDC_ISSUER \
+            HEPHAESTUS_BROWSER_OIDC_REDIRECT_URI \
+            HEPHAESTUS_RPC_ENDPOINT \
+            HEPHAESTUS_RPC_MEDIATOR_SECRET |
+            sort
+    )"
+    if [[ "${actual_hephaestus_environment}" != "${expected_hephaestus_environment}" ]]; then
+        printf 'Phoenix received unexpected HEPHAESTUS_* configuration:\n%s\n' \
+            "${actual_hephaestus_environment}" >&2
+        exit 1
+    fi
+
+    if podman exec "${web_container}" sh -c 'command -v git >/dev/null 2>&1'; then
+        printf 'Phoenix container unexpectedly contains the Git CLI\n' >&2
+        exit 1
+    fi
+
+    mount_destinations="$(
+        podman inspect --format '{{range .Mounts}}{{println .Destination}}{{end}}' \
+            "${web_container}" |
+            sed '/^$/d' |
+            sort
+    )"
+    if [[ "${mount_destinations}" != "/workspace" ]]; then
+        printf 'Phoenix received unexpected mounts:\n%s\n' "${mount_destinations}" >&2
+        exit 1
+    fi
+
+    printf 'Phoenix isolation verified: RPC/OIDC configuration only; no Git CLI or product-storage mounts\n'
 }
 
 published_port() {
@@ -177,7 +230,7 @@ export HEPHAESTUS_RUNTIME_ROOT="${fixture_root}/runtime"
 export HEPHAESTUS_SECRET_RUNTIME_ROOT="${secret_runtime_root}"
 export HEPHAESTUS_SECRET_KEY_DIRECTORY="${fixture_root}/secret-keys"
 export HEPHAESTUS_SECRET_KEY_REFERENCE="e2e-v1"
-export HEPHAESTUS_INTERNAL_COMMAND_TOKEN="e2e-internal-command-token-with-sufficient-entropy"
+export HEPHAESTUS_RPC_MEDIATOR_SECRET="e2e-rpc-mediator-secret-with-sufficient-entropy"
 export HEPHAESTUS_ROOT_IMAGE_PATH="${fixture_root}/root-image"
 export HEPHAESTUS_ROOT_IMAGE_REFERENCE="fixture-root@sha256:e2e"
 export HEPHAESTUS_VM_BACKEND="fixture"
@@ -194,33 +247,27 @@ export RUST_LOG="hephaestus_app=debug,git_http=debug,forge_service=debug,run_orc
 daemon_pid="$!"
 wait_for_url "${daemon_url}/healthz" "${fixture_root}/daemon.log"
 
-web_database_url="ecto://hephaestus_web_e2e:hephaestus-web-e2e@127.0.0.1:${postgres_port}/hephaestus"
 # The repository may also be mounted by the persistent local server, so keep
 # one shared SELinux label across development containers.
 podman run --detach --rm \
     --name "${web_container}" \
     --network host \
     --volume "${repo_root}:/workspace:z" \
-    --volume "${fixture_root}:${fixture_root}:Z" \
     --workdir /workspace/web \
     --env MIX_ENV=dev \
     --env PHX_SERVER=true \
     --env PORT="${web_port}" \
-    --env DATABASE_URL="${web_database_url}" \
-    --env HEPHAESTUS_ARTIFACT_ROOT="${fixture_root}/artifacts" \
-    --env HEPHAESTUS_INTERNAL_COMMAND_URL="${daemon_url}/internal/v1/commands" \
-    --env HEPHAESTUS_INTERNAL_COMMAND_TOKEN="${HEPHAESTUS_INTERNAL_COMMAND_TOKEN}" \
+    --env HEPHAESTUS_RPC_ENDPOINT="127.0.0.1:${daemon_port}" \
+    --env HEPHAESTUS_RPC_MEDIATOR_SECRET="${HEPHAESTUS_RPC_MEDIATOR_SECRET}" \
     --env HEPHAESTUS_BROWSER_OIDC_ISSUER="${oidc_url}" \
     --env HEPHAESTUS_BROWSER_OIDC_CLIENT_ID="hephaestus-web" \
     --env HEPHAESTUS_BROWSER_OIDC_CLIENT_SECRET="development-secret" \
     --env HEPHAESTUS_BROWSER_OIDC_REDIRECT_URI="${web_url}/auth/oidc/callback" \
     docker.io/hexpm/elixir:1.18.4-erlang-27.3.4-debian-bookworm-20250428-slim \
-    sh -lc 'apt-get update -qq &&
-        apt-get install -y -qq git >/dev/null &&
-        mix local.hex --force >/dev/null &&
-        mix phx.server' \
+    sh -lc 'mix local.hex --force >/dev/null && mix phx.server' \
     >"${fixture_root}/web-container-id"
 wait_for_url "${web_url}/" "${fixture_root}/web.log"
+assert_web_isolation
 
 cd "${repo_root}/e2e/playwright"
 HEPHAESTUS_E2E_DATABASE_URL="${database_url}" \

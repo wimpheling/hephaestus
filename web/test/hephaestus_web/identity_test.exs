@@ -5,7 +5,7 @@ defmodule HephaestusWeb.IdentityTest do
 
   test "round-trips only a validated internal browser principal" do
     identity = %Identity{
-      user_id: Ecto.UUID.generate(),
+      user_id: "01934f4c-9123-7a42-9f8e-21ad98f3c102",
       issuer: "https://issuer.example",
       subject: "stable-subject",
       display_name: "Ada"

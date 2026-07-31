@@ -7,9 +7,7 @@
 # General application configuration
 import Config
 
-config :hephaestus_web,
-  ecto_repos: [HephaestusWeb.Repo],
-  generators: [timestamp_type: :utc_datetime]
+config :hephaestus_web, generators: [timestamp_type: :utc_datetime]
 
 # Configure the endpoint
 config :hephaestus_web, HephaestusWebWeb.Endpoint,

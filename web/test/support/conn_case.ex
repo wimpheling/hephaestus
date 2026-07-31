@@ -3,16 +3,10 @@ defmodule HephaestusWebWeb.ConnCase do
   This module defines the test case to be used by
   tests that require setting up a connection.
 
-  Such tests rely on `Phoenix.ConnTest` and also
-  import other functionality to make it easier
-  to build common data structures and query the data layer.
-
-  Finally, if the test case interacts with the database,
-  we enable the SQL sandbox, so changes done to the database
-  are reverted at the end of every test. If you are using
-  PostgreSQL, you can even run database tests asynchronously
-  by setting `use HephaestusWebWeb.ConnCase, async: true`, although
-  this option is not recommended for other databases.
+  Such tests rely on `Phoenix.ConnTest` and import the small set of
+  conveniences needed to exercise the browser boundary. Backend state is
+  supplied through RPC test doubles; Phoenix has no database sandbox or
+  infrastructure client to configure here.
   """
 
   use ExUnit.CaseTemplate
@@ -31,8 +25,5 @@ defmodule HephaestusWebWeb.ConnCase do
     end
   end
 
-  setup tags do
-    HephaestusWeb.DataCase.setup_sandbox(tags)
-    {:ok, conn: Phoenix.ConnTest.build_conn()}
-  end
+  setup _tags, do: {:ok, conn: Phoenix.ConnTest.build_conn()}
 end

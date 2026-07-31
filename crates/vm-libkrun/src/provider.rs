@@ -463,6 +463,9 @@ impl LibkrunInstance {
         });
     }
 
+    // One exhaustive match keeps the worker protocol's state transitions
+    // auditable beside each decoded event variant.
+    #[allow(clippy::cognitive_complexity)]
     async fn handle_worker_event(&self, event: WorkerEvent) {
         match event {
             WorkerEvent::Started {

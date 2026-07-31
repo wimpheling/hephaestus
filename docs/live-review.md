@@ -11,16 +11,18 @@ audience, expiry, and signature validation. The verified issuer and subject
 must map to one active internal user. Flexible verified claims are persisted
 to `user_profiles`.
 
-Every protected web operation uses one PostgreSQL transaction with
-transaction-local actor and request IDs. The web login role is a non-owning,
-non-`BYPASSRLS` member of the application role. Reads are filtered by RLS;
-commands are also checked by database policies and re-authorized in Rust before
-an external side effect.
+Phoenix has no database, NATS, repository, artifact-store, filesystem, or
+subprocess authority. After browser OIDC establishes the session, every
+protected query and command crosses the authenticated RPC mediator over a
+generated, typed client. The Rust application derives the actor from trusted
+session context, applies authorization, and keeps PostgreSQL transactions and
+RLS defense in depth behind its application boundary.
 
-PostgreSQL `NOTIFY` payloads are hints, not data or capabilities. They contain
-only a run identifier. Each run LiveView authorizes before subscribing,
-periodically re-authorizes, and re-fetches through RLS after every wake-up.
-Repository wake-ups similarly trigger an RLS-filtered re-fetch.
+LiveView updates come from typed, product-scoped RPC streams. Phoenix resumes
+from committed cursors and treats terminal authorization failures as typed
+denials; the Rust stream handler re-authorizes subscriptions. Event payloads
+are bounded presentation data, not database notification hints or
+capabilities.
 
 ## Durable controls
 
@@ -46,8 +48,10 @@ or merges automatically.
 
 [`scripts/run-ui-e2e.sh`](../scripts/run-ui-e2e.sh) creates fresh PostgreSQL
 and JetStream services, applies normal migrations, seeds an OIDC identity and
-repository, starts the Rust daemon with a deterministic VM fixture, starts
-Phoenix under a normal RLS-constrained role, and runs Playwright in Chromium.
+repository, starts the Rust daemon with a deterministic VM fixture, starts an
+isolated Phoenix process with only browser/OIDC and RPC configuration, and runs
+Playwright in Chromium. The gate asserts that Phoenix has no Git executable,
+database/NATS/storage environment variables, or product-storage mounts.
 
 The journey proves:
 

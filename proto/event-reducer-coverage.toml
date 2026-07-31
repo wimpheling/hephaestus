@@ -1,0 +1,81 @@
+schema = "hephaestus.event.v1.ProductEvent"
+
+[[variants]]
+field = "identity_organizations_changed"
+rust_projection = "IdentityOrganizationsChanged"
+phoenix_reducer = "identity_organizations_changed"
+
+[[variants]]
+field = "organization_changed"
+rust_projection = "OrganizationChanged"
+phoenix_reducer = "organization_changed"
+
+[[variants]]
+field = "project_changed"
+rust_projection = "ProjectChanged"
+phoenix_reducer = "project_changed"
+
+[[variants]]
+field = "repository_changed"
+rust_projection = "RepositoryChanged"
+phoenix_reducer = "repository_changed"
+
+[[variants]]
+field = "repository_ref_changed"
+rust_projection = "RepositoryRefChanged"
+phoenix_reducer = "repository_ref_changed"
+
+[[variants]]
+field = "build_changed"
+rust_projection = "BuildChanged"
+phoenix_reducer = "build_changed"
+
+[[variants]]
+field = "release_changed"
+rust_projection = "ReleaseChanged"
+phoenix_reducer = "release_changed"
+
+[[variants]]
+field = "agent_instance_changed"
+rust_projection = "AgentInstanceChanged"
+phoenix_reducer = "agent_instance_changed"
+
+[[variants]]
+field = "run_changed"
+rust_projection = "RunChanged"
+phoenix_reducer = "run_changed"
+
+[[variants]]
+field = "review_changed"
+rust_projection = "ReviewChanged"
+phoenix_reducer = "review_changed"
+
+[[variants]]
+field = "secret_metadata_changed"
+rust_projection = "SecretMetadataChanged"
+phoenix_reducer = "secret_metadata_changed"
+
+[[variants]]
+field = "secret_grant_changed"
+rust_projection = "SecretGrantChanged"
+phoenix_reducer = "secret_grant_changed"
+
+[[variants]]
+field = "secret_import_changed"
+rust_projection = "SecretImportChanged"
+phoenix_reducer = "secret_import_changed"
+
+[[variants]]
+field = "agent_secret_binding_changed"
+rust_projection = "AgentSecretBindingChanged"
+phoenix_reducer = "agent_secret_binding_changed"
+
+[[variants]]
+field = "artifact_changed"
+rust_projection = "ArtifactChanged"
+phoenix_reducer = "artifact_changed"
+
+[[variants]]
+field = "identity_profile_changed"
+rust_projection = "IdentityProfileChanged"
+phoenix_reducer = "identity_profile_changed"

@@ -34,7 +34,9 @@ implementations:
 | [`volume-trait`](crates/volume-trait) | Provider-neutral persistent-volume and lease contracts |
 | [`volume-local`](crates/volume-local) | Single-host raw volumes with PostgreSQL metadata |
 | [`run-domain`](crates/run-domain) | Durable run states and commands |
-| [`run-orchestrator`](crates/run-orchestrator) | PostgreSQL, VM, volume, and JetStream coordination |
+| [`run-orchestrator`](crates/run-orchestrator) | Provider-neutral VM, volume, repository, runtime-catalog, and JetStream coordination |
+| [`run-postgres`](crates/run-postgres) | PostgreSQL run persistence and exact-runtime catalog adapter |
+| [`run-runtime-local`](crates/run-runtime-local) | SQL-free local runtime artifact materialization and recovery |
 | [`forge-domain`](crates/forge-domain) | Project, repository, receive, and run-request domain values |
 | [`agent-config`](crates/agent-config) | Versioned `agent.toml` parsing and validation |
 | [`release-domain`](crates/release-domain) | Immutable releases, project instances, revisions, attachments, updates, and typed policy |
@@ -104,25 +106,34 @@ For a persistent manual-smoke environment using real libkrun/KVM microVMs,
 run:
 
 ```sh
-scripts/run-local.sh
+cargo dev
 ```
 
-This starts PostgreSQL, NATS JetStream, a local OIDC issuer, the Rust forge
-daemon, and Phoenix LiveView without executing automated tests. It builds the
-guest bootstrap, prepares the digest-pinned Fedora 44 root filesystem once,
-discovers a delegated cgroup-v2 subtree, and runs the daemon in an unprivileged
-user namespace with the UID/GID mapping required by writable guest workspaces.
-Ephemeral VM sockets use a short `/tmp/hephaestus-runtime-<uid>` path to stay
-within Unix-domain socket limits. The host must satisfy the
-[libkrun backend contract](docs/vm-libkrun.md).
+`cargo dev` incrementally builds and starts PostgreSQL, NATS JetStream, a local
+OIDC issuer, the Rust daemon, and Phoenix LiveView in the foreground. Press
+Ctrl-C for a clean shutdown that retains state. Use `cargo dev --watch` to
+rebuild changed Rust components and restart the daemon after successful builds;
+Phoenix retains its native code and asset watchers.
 
-The launcher prints the seeded repository URL and Git authentication command.
-Press Ctrl-C to stop the services; repository, image, artifact, volume,
-PostgreSQL, and NATS data are retained for the next launch. From another
-terminal, `scripts/run-local.sh stop` performs the same clean shutdown. Remove
-`.local/hephaestus` and the `hephaestus-local-postgres-data` /
-`hephaestus-local-nats-data` Podman volumes when you intentionally want a
-completely fresh environment.
+The development CLI also exposes typed maintenance commands:
+
+```sh
+cargo dev doctor
+cargo dev status
+cargo dev build --daemon
+cargo dev logs daemon --follow
+cargo dev state list
+cargo dev state reinit --postgresql --nats --fixtures
+cargo dev state clean --all
+cargo dev cache clean --rust
+```
+
+State selectors cover PostgreSQL, NATS, repositories, artifacts, agent
+volumes, workspaces, secret keys, rootfs, fixtures, runtime files, and logs.
+With no selectors, `state init`, `clean`, and `reinit` operate on every
+resource. State mutation refuses to run while the foreground supervisor is
+active. The host must satisfy the
+[libkrun backend contract](docs/vm-libkrun.md).
 
 On a prepared Fedora host, run the real KVM/libkrun smoke test without root:
 

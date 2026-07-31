@@ -5,20 +5,17 @@
 //! output tree. It receives no canonical Git directory, release-store path,
 //! instance state volume, secret mount, or host credential.
 
-use agent_config::{AgentConfig, BuildArtifactKind, BuildConfig, NetworkProfile};
-use authz_domain::{Authorizer, ObjectRef, ObjectType, Permission, Subject};
-use authz_postgres::audit_decision;
-use identity_domain::UserId;
+use agent_config::{BuildArtifactKind, BuildConfig, NetworkProfile};
 use release_artifact_store::{ImportedArtifact, LocalArtifactStore};
 use release_domain::{
     ArtifactKind, BuildRequestId, ReleaseAgentId, ReleaseArtifactId, ReleaseCommandKey, ReleaseId,
     ReleaseVersion,
 };
-use release_service::{CompleteBuild, ReleaseArtifactInput, ReleaseService};
+use release_postgres::ReleaseService;
+use release_service::{CompleteBuild, ReleaseArtifactInput};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use sqlx::{FromRow, PgPool};
 use std::{
     collections::BTreeMap,
     ffi::OsStr,
@@ -35,6 +32,12 @@ use uuid::Uuid;
 use vm_trait::{
     GuestCommand, LogStream, NetworkMode, RootFilesystem, StopMode, VmEvent, VmExit, VmId, VmMount,
     VmProvider, VmResources, VmSpec,
+};
+
+mod repository;
+pub use repository::{
+    BuildInput, BuildRepository, BuildRepositoryError, ClaimedBuild, FinalizationBuild,
+    RecoverableBuild,
 };
 
 const SOURCE_GUEST_PATH: &str = "/workspace/source";
@@ -76,11 +79,10 @@ pub struct BuildExecutionResult {
 
 /// PostgreSQL-coordinated isolated build worker.
 pub struct BuildExecutor {
-    pool: PgPool,
+    repository: Arc<dyn BuildRepository>,
     provider: Arc<dyn VmProvider>,
     artifacts: LocalArtifactStore,
     releases: Arc<ReleaseService>,
-    authorizer: Arc<dyn Authorizer>,
     config: BuildExecutorConfig,
 }
 
@@ -91,11 +93,10 @@ impl BuildExecutor {
     ///
     /// Rejects relative, overlapping, unsafe, or missing trusted paths.
     pub fn initialize(
-        pool: PgPool,
+        repository: Arc<dyn BuildRepository>,
         provider: Arc<dyn VmProvider>,
         artifacts: LocalArtifactStore,
         releases: Arc<ReleaseService>,
-        authorizer: Arc<dyn Authorizer>,
         mut config: BuildExecutorConfig,
     ) -> Result<Self, BuildExecutionError> {
         if !config.workspace_root.is_absolute()
@@ -117,11 +118,10 @@ impl BuildExecutor {
         }
         validate_private_directory(&config.workspace_root)?;
         Ok(Self {
-            pool,
+            repository,
             provider,
             artifacts,
             releases,
-            authorizer,
             config,
         })
     }
@@ -227,42 +227,18 @@ impl BuildExecutor {
     /// Returns an error unless every selected orphan is confirmed destroyed
     /// and its private transient workspace is removed.
     pub async fn recover_after_restart(&self) -> Result<usize, BuildExecutionError> {
-        let rows: Vec<(Uuid, String)> = sqlx::query_as(
-            "SELECT build_request_id, vm_id
-             FROM build_executions
-             WHERE state IN ('claimed', 'running')
-             ORDER BY updated_at, build_request_id",
-        )
-        .fetch_all(&self.pool)
-        .await?;
-        for (id, vm_id) in &rows {
+        let rows = self.repository.recoverable().await?;
+        for row in &rows {
             self.provider
-                .cleanup_orphan(&VmId(vm_id.clone()))
+                .cleanup_orphan(&VmId(row.vm_id.clone()))
                 .await
                 .map_err(|_| BuildExecutionError::VmCleanup)?;
-            cleanup_workspace(&self.active_path(BuildRequestId::from_uuid(*id)))?;
-            sqlx::query(
-                "UPDATE build_executions
-                 SET state = 'claimed', exit_code = NULL, exit_signal = NULL,
-                     logs = '[]', metrics = '[]', started_at = NULL,
-                     updated_at = now()
-                 WHERE build_request_id = $1
-                   AND state IN ('claimed', 'running')",
-            )
-            .bind(id)
-            .execute(&self.pool)
-            .await?;
+            cleanup_workspace(&self.active_path(row.id))?;
+            self.repository.reset_after_cleanup(row.id).await?;
         }
-        let finalizing: Vec<Uuid> = sqlx::query_scalar(
-            "SELECT build_request_id
-             FROM build_executions
-             WHERE state IN ('sealed', 'imported')
-             ORDER BY updated_at, build_request_id",
-        )
-        .fetch_all(&self.pool)
-        .await?;
+        let finalizing = self.repository.finalizing().await?;
         for id in &finalizing {
-            self.execute(BuildRequestId::from_uuid(*id)).await?;
+            self.execute(*id).await?;
         }
         Ok(rows.len() + finalizing.len())
     }
@@ -278,55 +254,33 @@ impl BuildExecutor {
         &self,
         id: BuildRequestId,
     ) -> Result<Option<BuildExecutionResult>, BuildExecutionError> {
-        let row: Option<(Uuid, Uuid, String, Value)> = sqlx::query_as(
-            "SELECT release_id, release_agent_id, release_version,
-                    artifact_manifest
-             FROM build_executions
-             WHERE build_request_id = $1 AND state = 'drafted'",
-        )
-        .bind(id.as_uuid())
-        .fetch_optional(&self.pool)
-        .await?;
-        row.map(|(release_id, release_agent_id, version, manifest)| {
-            Ok(BuildExecutionResult {
-                build_request_id: id,
-                release_id: ReleaseId::from_uuid(release_id),
-                release_agent_id: ReleaseAgentId::from_uuid(release_agent_id),
-                release_version: ReleaseVersion::parse(version)?,
-                artifact_count: manifest
-                    .as_array()
-                    .ok_or(BuildExecutionError::StoredState)?
-                    .len(),
+        self.repository
+            .completed(id)
+            .await?
+            .map(|(release_id, release_agent_id, version, artifact_count)| {
+                Ok(BuildExecutionResult {
+                    build_request_id: id,
+                    release_id,
+                    release_agent_id,
+                    release_version: version,
+                    artifact_count,
+                })
             })
-        })
-        .transpose()
+            .transpose()
     }
 
     async fn resume_finalization(
         &self,
         id: BuildRequestId,
     ) -> Result<Option<BuildExecutionResult>, BuildExecutionError> {
-        let row: Option<(String, Uuid, Uuid, String, Option<Value>)> = sqlx::query_as(
-            "SELECT state, release_id, release_agent_id, release_version,
-                    artifact_manifest
-             FROM build_executions
-             WHERE build_request_id = $1
-               AND state IN ('sealed', 'imported')",
-        )
-        .bind(id.as_uuid())
-        .fetch_optional(&self.pool)
-        .await?;
-        let Some((state, release_id, release_agent_id, version, manifest)) = row else {
+        let Some(finalization) = self.repository.finalization(id).await? else {
             return Ok(None);
         };
-        let claimed = self
-            .load_claimed(
-                id,
-                ReleaseId::from_uuid(release_id),
-                ReleaseAgentId::from_uuid(release_agent_id),
-                ReleaseVersion::parse(version)?,
-            )
-            .await?;
+        let FinalizationBuild {
+            state,
+            claimed,
+            artifact_manifest,
+        } = finalization;
         let artifacts = if state == "sealed" {
             let output = self.active_path(id).join("output");
             let imported = self.artifacts.import_for(id.as_uuid(), &output)?;
@@ -335,52 +289,9 @@ impl BuildExecutor {
             self.mark_imported(id, &artifacts).await?;
             artifacts
         } else {
-            stored_release_inputs(manifest.ok_or(BuildExecutionError::StoredState)?)?
+            stored_release_inputs(artifact_manifest.ok_or(BuildExecutionError::StoredState)?)?
         };
         self.finish_release(claimed, artifacts).await.map(Some)
-    }
-
-    async fn load_claimed(
-        &self,
-        id: BuildRequestId,
-        release_id: ReleaseId,
-        release_agent_id: ReleaseAgentId,
-        release_version: ReleaseVersion,
-    ) -> Result<ClaimedBuild, BuildExecutionError> {
-        let row: BuildInputRow = sqlx::query_as(
-            "SELECT request.repository_id, request.source_commit,
-                    request.source_ref, request.state, request.created_by,
-                    revision.config
-             FROM build_requests AS request
-             JOIN LATERAL (
-                 SELECT config
-                 FROM agent_config_revisions
-                 WHERE repository_id = request.repository_id
-                   AND commit_sha = request.source_commit
-                   AND status = 'valid'
-                 ORDER BY created_at DESC
-                 LIMIT 1
-             ) AS revision ON true
-             WHERE request.id = $1",
-        )
-        .bind(id.as_uuid())
-        .fetch_optional(&self.pool)
-        .await?
-        .ok_or(BuildExecutionError::Unavailable)?;
-        let config: AgentConfig =
-            serde_json::from_value(row.config).map_err(|_| BuildExecutionError::StoredState)?;
-        Ok(ClaimedBuild {
-            input: BuildInput {
-                id,
-                repository_id: row.repository_id,
-                source_commit: row.source_commit,
-                source_ref: row.source_ref,
-                build: config.build.ok_or(BuildExecutionError::StoredState)?,
-            },
-            release_id,
-            release_agent_id,
-            release_version,
-        })
     }
 
     async fn finish_release(
@@ -416,138 +327,7 @@ impl BuildExecutor {
     }
 
     async fn claim(&self, id: BuildRequestId) -> Result<ClaimedBuild, BuildExecutionError> {
-        let mut tx = self.pool.begin().await?;
-        let row: BuildInputRow = sqlx::query_as(
-            "SELECT request.repository_id, request.source_commit,
-                    request.source_ref, request.state, request.created_by,
-                    revision.config
-             FROM build_requests AS request
-             JOIN LATERAL (
-                 SELECT config
-                 FROM agent_config_revisions
-                 WHERE repository_id = request.repository_id
-                   AND commit_sha = request.source_commit
-                   AND status = 'valid'
-                 ORDER BY created_at DESC
-                 LIMIT 1
-             ) AS revision ON true
-             WHERE request.id = $1
-             FOR UPDATE OF request",
-        )
-        .bind(id.as_uuid())
-        .fetch_optional(&mut *tx)
-        .await?
-        .ok_or(BuildExecutionError::Unavailable)?;
-        let config: AgentConfig =
-            serde_json::from_value(row.config).map_err(|_| BuildExecutionError::StoredState)?;
-        let build = config.build.ok_or(BuildExecutionError::StoredState)?;
-        let input = BuildInput {
-            id,
-            repository_id: row.repository_id,
-            source_commit: row.source_commit,
-            source_ref: row.source_ref,
-            build,
-        };
-        if !self.authorize_build(&mut tx, id, row.created_by).await? {
-            tx.commit().await?;
-            return Err(BuildExecutionError::Unauthorized);
-        }
-        if row.state == "running" {
-            let existing: Option<(Uuid, Uuid, String, String)> = sqlx::query_as(
-                "SELECT release_id, release_agent_id, release_version, state
-                 FROM build_executions WHERE build_request_id = $1",
-            )
-            .bind(id.as_uuid())
-            .fetch_optional(&mut *tx)
-            .await?;
-            let Some((release_id, release_agent_id, version, state)) = existing else {
-                return Err(BuildExecutionError::StoredState);
-            };
-            if state != "claimed" {
-                return Err(BuildExecutionError::AlreadyClaimed);
-            }
-            tx.commit().await?;
-            return Ok(ClaimedBuild {
-                input,
-                release_id: ReleaseId::from_uuid(release_id),
-                release_agent_id: ReleaseAgentId::from_uuid(release_agent_id),
-                release_version: ReleaseVersion::parse(version)?,
-            });
-        }
-        if row.state != "queued" {
-            return Err(BuildExecutionError::AlreadyClaimed);
-        }
-        let release_id = ReleaseId::new();
-        let release_agent_id = ReleaseAgentId::new();
-        let release_version = ReleaseVersion::parse(format!(
-            "build-{}",
-            &id.as_uuid().simple().to_string()[..16]
-        ))?;
-        sqlx::query(
-            "INSERT INTO build_executions
-             (build_request_id, vm_id, release_id, release_agent_id,
-              release_version, state)
-             VALUES ($1, $2, $3, $4, $5, 'claimed')",
-        )
-        .bind(id.as_uuid())
-        .bind(format!("build-{id}"))
-        .bind(release_id.as_uuid())
-        .bind(release_agent_id.as_uuid())
-        .bind(release_version.as_str())
-        .execute(&mut *tx)
-        .await?;
-        sqlx::query(
-            "UPDATE build_requests
-             SET state = 'running', started_at = now()
-             WHERE id = $1 AND state = 'queued'",
-        )
-        .bind(id.as_uuid())
-        .execute(&mut *tx)
-        .await?;
-        tx.commit().await?;
-        Ok(ClaimedBuild {
-            input,
-            release_id,
-            release_agent_id,
-            release_version,
-        })
-    }
-
-    async fn authorize_build(
-        &self,
-        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-        id: BuildRequestId,
-        actor_id: Option<Uuid>,
-    ) -> Result<bool, BuildExecutionError> {
-        let Some(actor_id) = actor_id else {
-            return Ok(false);
-        };
-        sqlx::query(
-            "SELECT set_config('hephaestus.actor_id', $1, true),
-                    set_config('hephaestus.subject_type', 'user', true),
-                    set_config('hephaestus.request_id', $2, true)",
-        )
-        .bind(actor_id.to_string())
-        .bind(id.to_string())
-        .execute(&mut **tx)
-        .await?;
-        let object = ObjectRef::new(ObjectType::Build, id.as_uuid());
-        let actor = UserId::from_uuid(actor_id);
-        let decision = self
-            .authorizer
-            .check(tx, Subject::User(actor), Permission::CanExecute, object)
-            .await
-            .map_err(|_| BuildExecutionError::Authorization)?;
-        audit_decision(
-            tx,
-            actor,
-            Permission::CanExecute,
-            object,
-            decision,
-            identity_domain::RequestId::from_uuid(id.as_uuid()),
-        )
-        .await?;
-        Ok(decision.is_allowed())
+        self.repository.claim(id).await.map_err(Into::into)
     }
 
     fn vm_spec(
@@ -613,15 +393,7 @@ impl BuildExecutor {
     }
 
     async fn mark_running(&self, id: BuildRequestId) -> Result<(), BuildExecutionError> {
-        sqlx::query(
-            "UPDATE build_executions
-             SET state = 'running', started_at = now(), updated_at = now()
-             WHERE build_request_id = $1 AND state = 'claimed'",
-        )
-        .bind(id.as_uuid())
-        .execute(&self.pool)
-        .await?;
-        Ok(())
+        self.repository.mark_running(id).await.map_err(Into::into)
     }
 
     async fn mark_sealed(
@@ -631,26 +403,10 @@ impl BuildExecutor {
         logs: &[Value],
         metrics: &[Value],
     ) -> Result<(), BuildExecutionError> {
-        let mut tx = self.pool.begin().await?;
-        sqlx::query(
-            "UPDATE build_executions
-             SET state = 'sealed', exit_code = $2, exit_signal = $3,
-                 logs = $4, metrics = $5, sealed_at = now(), updated_at = now()
-             WHERE build_request_id = $1 AND state = 'running'",
-        )
-        .bind(id.as_uuid())
-        .bind(exit.code)
-        .bind(exit.signal)
-        .bind(Value::Array(logs.to_vec()))
-        .bind(Value::Array(metrics.to_vec()))
-        .execute(&mut *tx)
-        .await?;
-        sqlx::query("UPDATE build_requests SET state = 'importing' WHERE id = $1")
-            .bind(id.as_uuid())
-            .execute(&mut *tx)
-            .await?;
-        tx.commit().await?;
-        Ok(())
+        self.repository
+            .mark_sealed(id, exit, logs, metrics)
+            .await
+            .map_err(Into::into)
     }
 
     async fn mark_imported(
@@ -673,29 +429,14 @@ impl BuildExecutor {
                 })
             })
             .collect::<Vec<_>>();
-        sqlx::query(
-            "UPDATE build_executions
-             SET state = 'imported', artifact_manifest = $2,
-                 imported_at = now(), updated_at = now()
-             WHERE build_request_id = $1 AND state = 'sealed'",
-        )
-        .bind(id.as_uuid())
-        .bind(Value::Array(manifest))
-        .execute(&self.pool)
-        .await?;
-        Ok(())
+        self.repository
+            .mark_imported(id, &manifest)
+            .await
+            .map_err(Into::into)
     }
 
     async fn mark_drafted(&self, id: BuildRequestId) -> Result<(), BuildExecutionError> {
-        sqlx::query(
-            "UPDATE build_executions
-             SET state = 'drafted', completed_at = now(), updated_at = now()
-             WHERE build_request_id = $1 AND state = 'imported'",
-        )
-        .bind(id.as_uuid())
-        .execute(&self.pool)
-        .await?;
-        Ok(())
+        self.repository.mark_drafted(id).await.map_err(Into::into)
     }
 
     async fn fail(
@@ -705,7 +446,10 @@ impl BuildExecutor {
         logs: &[Value],
         metrics: &[Value],
     ) -> Result<(), BuildExecutionError> {
-        self.fail_record(id, code, None, None, logs, metrics).await
+        self.repository
+            .fail(id, code, None, None, logs, metrics)
+            .await
+            .map_err(Into::into)
     }
 
     async fn fail_with_exit(
@@ -716,100 +460,11 @@ impl BuildExecutor {
         logs: &[Value],
         metrics: &[Value],
     ) -> Result<(), BuildExecutionError> {
-        self.fail_record(id, code, exit.code, exit.signal, logs, metrics)
+        self.repository
+            .fail(id, code, exit.code, exit.signal, logs, metrics)
             .await
+            .map_err(Into::into)
     }
-
-    async fn fail_record(
-        &self,
-        id: BuildRequestId,
-        code: &str,
-        exit_code: Option<i32>,
-        exit_signal: Option<i32>,
-        logs: &[Value],
-        metrics: &[Value],
-    ) -> Result<(), BuildExecutionError> {
-        let mut tx = self.pool.begin().await?;
-        sqlx::query(
-            "UPDATE build_executions
-             SET state = 'failed', exit_code = $2, exit_signal = $3,
-                 failure_code = $4, logs = $5, metrics = $6,
-                 completed_at = now(), updated_at = now()
-             WHERE build_request_id = $1 AND state <> 'drafted'",
-        )
-        .bind(id.as_uuid())
-        .bind(exit_code)
-        .bind(exit_signal)
-        .bind(code)
-        .bind(Value::Array(logs.to_vec()))
-        .bind(Value::Array(metrics.to_vec()))
-        .execute(&mut *tx)
-        .await?;
-        sqlx::query(
-            "UPDATE build_requests
-             SET state = 'failed',
-                 diagnostics = jsonb_build_array(jsonb_build_object('code', $2)),
-                 completed_at = now()
-             WHERE id = $1 AND state <> 'succeeded'",
-        )
-        .bind(id.as_uuid())
-        .bind(code)
-        .execute(&mut *tx)
-        .await?;
-        let event_id = Uuid::new_v4();
-        sqlx::query(
-            "INSERT INTO outbox
-             (id, aggregate_type, aggregate_id, subject, event_type,
-              payload, occurred_at)
-             VALUES (
-                 $1, 'release', $2, 'hephaestus.build.failed.v1',
-                 'build.failed.v1', $3, now()
-             )",
-        )
-        .bind(event_id)
-        .bind(id.as_uuid())
-        .bind(json!({
-            "schema_version": 1,
-            "message_id": event_id,
-            "idempotency_key": event_id,
-            "request_id": null,
-            "trace_id": null,
-            "build_request_id": id,
-            "failure_code": code,
-            "exit_code": exit_code,
-            "exit_signal": exit_signal,
-        }))
-        .execute(&mut *tx)
-        .await?;
-        tx.commit().await?;
-        Ok(())
-    }
-}
-
-#[derive(Debug, FromRow)]
-struct BuildInputRow {
-    repository_id: Uuid,
-    source_commit: String,
-    source_ref: String,
-    state: String,
-    config: Value,
-    created_by: Option<Uuid>,
-}
-
-#[derive(Clone)]
-struct BuildInput {
-    id: BuildRequestId,
-    repository_id: Uuid,
-    source_commit: String,
-    source_ref: String,
-    build: BuildConfig,
-}
-
-struct ClaimedBuild {
-    input: BuildInput,
-    release_id: ReleaseId,
-    release_agent_id: ReleaseAgentId,
-    release_version: ReleaseVersion,
 }
 
 struct PreparedBuildWorkspace {
@@ -1318,9 +973,9 @@ pub enum BuildExecutionError {
     /// Draft release construction failed after import.
     #[error("isolated build release finalization failed")]
     Release,
-    /// `PostgreSQL` persistence failed.
+    /// Durable persistence failed.
     #[error(transparent)]
-    Database(#[from] sqlx::Error),
+    Database(#[from] BuildRepositoryError),
     /// A validated release value could not be reconstructed.
     #[error(transparent)]
     ReleaseValue(#[from] release_domain::ReleaseValueError),

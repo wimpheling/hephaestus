@@ -1,0 +1,11 @@
+version = 1
+enabled_rules = ["ARCH-RULE-REGISTRY"]
+
+[maximum_file_lines]
+domain = 500
+
+[[exceptions]]
+rule_id = "ARCH-MAX-FILE-LENGTH"
+scope = "src/lib.rs#fixture"
+rationale = "The owner field is deliberately absent."
+tracking_task = "tasks/todo/missing-owner.md"

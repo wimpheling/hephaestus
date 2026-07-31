@@ -1,0 +1,39 @@
+syntax = "proto3";
+
+package hephaestus.options.v1;
+
+import "google/protobuf/descriptor.proto";
+
+// Describes where trusted caller identity is obtained.
+enum ActorSource {
+  ACTOR_SOURCE_UNSPECIFIED = 0;
+  ACTOR_SOURCE_MEDIATOR_JWT_METADATA = 1;
+  ACTOR_SOURCE_VERIFIED_OIDC_BOOTSTRAP_ASSERTION = 2;
+}
+
+// Classifies a method for descriptor policy and retry handling.
+enum OperationKind {
+  OPERATION_KIND_UNSPECIFIED = 0;
+  OPERATION_KIND_QUERY = 1;
+  OPERATION_KIND_MUTATION = 2;
+  OPERATION_KIND_SERVER_STREAM = 3;
+}
+
+// Declares the reviewed authentication and authorization contract of a method.
+message AuthorizationPolicy {
+  string permission = 1;
+  string audience = 2;
+  ActorSource actor_source = 3;
+}
+
+extend google.protobuf.FieldOptions {
+  // Marks request-only plaintext that must be redacted and never retained.
+  bool sensitive = 51001;
+}
+
+extend google.protobuf.MethodOptions {
+  AuthorizationPolicy authorization = 51002;
+  OperationKind operation_kind = 51003;
+  uint64 max_request_bytes = 51004;
+  uint64 max_response_bytes = 51005;
+}

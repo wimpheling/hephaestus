@@ -14,7 +14,6 @@ runtime-types = { path = "../runtime-types" }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
-sqlx.workspace = true
 thiserror.workspace = true
 time.workspace = true
 tokio = { workspace = true, features = ["fs", "process", "rt"] }
@@ -23,9 +22,6 @@ vm-trait.workspace = true
 workspace-domain = { path = "../workspace-domain" }
 
 [dev-dependencies]
-forge-service = { path = "../forge-service" }
-run-orchestrator = { path = "../run-orchestrator" }
-serial_test = "3"
 tempfile = "3"
 
 [lints]

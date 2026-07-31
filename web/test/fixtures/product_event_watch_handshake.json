@@ -1,0 +1,22 @@
+{
+  "barrier": {
+    "cursor": "cursor-7",
+    "schema_version": 1,
+    "aggregate_type": "project",
+    "aggregate_id": "project-1",
+    "aggregate_version": 3
+  },
+  "buffered_event": {
+    "id": "event-1",
+    "cursor": "cursor-8",
+    "aggregate_type": "project",
+    "aggregate_id": "project-1",
+    "aggregate_version": 4,
+    "payload_kind": "project_changed"
+  },
+  "retention_gap": {
+    "requested_cursor": "cursor-1",
+    "earliest_available_cursor": "cursor-6",
+    "latest_committed_cursor": "cursor-8"
+  }
+}

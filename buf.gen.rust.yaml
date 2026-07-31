@@ -1,0 +1,21 @@
+version: v2
+clean: true
+plugins:
+  - local: protoc-gen-buffa
+    out: crates/rpc-proto/src/generated/messages
+    opt:
+      - views=true
+      - json=true
+  - local: protoc-gen-buffa-packaging
+    out: crates/rpc-proto/src/generated/messages
+    strategy: all
+  - local: protoc-gen-connect-rust
+    out: crates/rpc-proto/src/generated/connect
+    opt:
+      - buffa_module=crate::messages
+      - gate_client_feature
+  - local: protoc-gen-buffa-packaging
+    out: crates/rpc-proto/src/generated/connect
+    strategy: all
+    opt:
+      - filter=services

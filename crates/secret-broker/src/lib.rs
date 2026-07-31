@@ -3,12 +3,11 @@
 
 use async_trait::async_trait;
 use runtime_types::RunId;
-use secret_domain::{OpaqueRuntimeCredential, SecretSlotKey, SecretValue};
-use secret_service::{
+use secret_application::{
     BrokerAdapter, BrokerAdapterError, BrokerRequest, BrokerResponse, BrokerStatus,
-    SecretRuntimeService,
+    SecretRuntimeResolver,
 };
-use secret_store::KeyProvider;
+use secret_domain::{OpaqueRuntimeCredential, SecretSlotKey, SecretValue};
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
@@ -78,25 +77,21 @@ pub trait BrokerExecutor: Send + Sync + 'static {
 }
 
 /// Connects the wire protocol to live secret runtime authorization.
-pub struct ServiceBrokerExecutor<K, A: ?Sized> {
-    runtime: Arc<SecretRuntimeService<K>>,
-    adapter: Arc<A>,
+pub struct ServiceBrokerExecutor {
+    runtime: Arc<dyn SecretRuntimeResolver>,
+    adapter: Arc<dyn BrokerAdapter>,
 }
 
-impl<K, A: ?Sized> ServiceBrokerExecutor<K, A> {
+impl ServiceBrokerExecutor {
     /// Creates the live executor.
     #[must_use]
-    pub const fn new(runtime: Arc<SecretRuntimeService<K>>, adapter: Arc<A>) -> Self {
+    pub fn new(runtime: Arc<dyn SecretRuntimeResolver>, adapter: Arc<dyn BrokerAdapter>) -> Self {
         Self { runtime, adapter }
     }
 }
 
 #[async_trait]
-impl<K, A> BrokerExecutor for ServiceBrokerExecutor<K, A>
-where
-    K: KeyProvider + Send + Sync + 'static,
-    A: BrokerAdapter + ?Sized + 'static,
-{
+impl BrokerExecutor for ServiceBrokerExecutor {
     async fn execute(&self, request: WireBrokerRequest) -> WireBrokerResponse {
         if request.credential.len() > MAX_CREDENTIAL_BYTES {
             return denied();
@@ -475,12 +470,12 @@ const fn denied() -> WireBrokerResponse {
     }
 }
 
-const fn error_class(error: &secret_service::SecretServiceError) -> &'static str {
+const fn error_class(error: &secret_application::SecretServiceError) -> &'static str {
     match error {
-        secret_service::SecretServiceError::BrokerAdapter(BrokerAdapterError::Retryable) => {
+        secret_application::SecretServiceError::BrokerAdapter(BrokerAdapterError::Retryable) => {
             "adapter_retryable"
         }
-        secret_service::SecretServiceError::BrokerAdapter(BrokerAdapterError::Rejected) => {
+        secret_application::SecretServiceError::BrokerAdapter(BrokerAdapterError::Rejected) => {
             "adapter_rejected"
         }
         _ => "denied",

@@ -1,0 +1,146 @@
+syntax = "proto3";
+
+package hephaestus.repository_browser.v1;
+
+import "google/protobuf/timestamp.proto";
+import "hephaestus/common/v1/common.proto";
+import "hephaestus/options/v1/options.proto";
+
+service RepositoryBrowserService {
+  rpc ListBranches(ListBranchesRequest) returns (ListBranchesResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (hephaestus.options.v1.authorization) = {
+      permission: "repository.browse"
+      audience: "/hephaestus.repository_browser.v1.RepositoryBrowserService/ListBranches"
+      actor_source: ACTOR_SOURCE_MEDIATOR_JWT_METADATA
+    };
+    option (hephaestus.options.v1.operation_kind) = OPERATION_KIND_QUERY;
+    option (hephaestus.options.v1.max_request_bytes) = 8192;
+    option (hephaestus.options.v1.max_response_bytes) = 1114112;
+  }
+  rpc ListCommits(ListCommitsRequest) returns (ListCommitsResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (hephaestus.options.v1.authorization) = {
+      permission: "repository.browse"
+      audience: "/hephaestus.repository_browser.v1.RepositoryBrowserService/ListCommits"
+      actor_source: ACTOR_SOURCE_MEDIATOR_JWT_METADATA
+    };
+    option (hephaestus.options.v1.operation_kind) = OPERATION_KIND_QUERY;
+    option (hephaestus.options.v1.max_request_bytes) = 16384;
+    option (hephaestus.options.v1.max_response_bytes) = 2097152;
+  }
+  rpc GetTree(GetTreeRequest) returns (GetTreeResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (hephaestus.options.v1.authorization) = {
+      permission: "repository.browse"
+      audience: "/hephaestus.repository_browser.v1.RepositoryBrowserService/GetTree"
+      actor_source: ACTOR_SOURCE_MEDIATOR_JWT_METADATA
+    };
+    option (hephaestus.options.v1.operation_kind) = OPERATION_KIND_QUERY;
+    option (hephaestus.options.v1.max_request_bytes) = 16384;
+    option (hephaestus.options.v1.max_response_bytes) = 4194304;
+  }
+  rpc GetFile(GetFileRequest) returns (GetFileResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (hephaestus.options.v1.authorization) = {
+      permission: "repository.browse"
+      audience: "/hephaestus.repository_browser.v1.RepositoryBrowserService/GetFile"
+      actor_source: ACTOR_SOURCE_MEDIATOR_JWT_METADATA
+    };
+    option (hephaestus.options.v1.operation_kind) = OPERATION_KIND_QUERY;
+    option (hephaestus.options.v1.max_request_bytes) = 16384;
+    option (hephaestus.options.v1.max_response_bytes) = 1114112;
+  }
+  rpc StreamFile(StreamFileRequest) returns (stream StreamFileResponse) {
+    option (hephaestus.options.v1.authorization) = {
+      permission: "repository.browse"
+      audience: "/hephaestus.repository_browser.v1.RepositoryBrowserService/StreamFile"
+      actor_source: ACTOR_SOURCE_MEDIATOR_JWT_METADATA
+    };
+    option (hephaestus.options.v1.operation_kind) = OPERATION_KIND_SERVER_STREAM;
+    option (hephaestus.options.v1.max_request_bytes) = 16384;
+    option (hephaestus.options.v1.max_response_bytes) = 16777216;
+  }
+}
+
+message Branch {
+  string name = 1;
+  string ref = 2;
+  string commit = 3;
+  google.protobuf.Timestamp committed_at = 4;
+  string subject = 5;
+}
+message Commit {
+  string id = 1;
+  repeated string parents = 2;
+  string author_name = 3;
+  string author_email = 4;
+  google.protobuf.Timestamp authored_at = 5;
+  string subject = 6;
+}
+enum TreeEntryType {
+  TREE_ENTRY_TYPE_UNSPECIFIED = 0;
+  TREE_ENTRY_TYPE_BLOB = 1;
+  TREE_ENTRY_TYPE_TREE = 2;
+  TREE_ENTRY_TYPE_COMMIT = 3;
+}
+message TreeEntry {
+  string mode = 1;
+  TreeEntryType type = 2;
+  string object_id = 3;
+  optional uint64 size = 4;
+  string path = 5;
+}
+message ListBranchesRequest {
+  hephaestus.common.v1.OpaqueId repository_id = 1;
+  hephaestus.common.v1.PageRequest page = 2;
+}
+message ListBranchesResponse {
+  repeated Branch branches = 1;
+  hephaestus.common.v1.PageResponse page = 2;
+}
+message ListCommitsRequest {
+  hephaestus.common.v1.OpaqueId repository_id = 1;
+  string branch = 2;
+  hephaestus.common.v1.PageRequest page = 3;
+}
+message ListCommitsResponse {
+  Branch selected_branch = 1;
+  repeated Commit commits = 2;
+  hephaestus.common.v1.PageResponse page = 3;
+}
+message GetTreeRequest {
+  hephaestus.common.v1.OpaqueId repository_id = 1;
+  string branch = 2;
+  hephaestus.common.v1.PageRequest page = 3;
+}
+message GetTreeResponse {
+  Branch selected_branch = 1;
+  repeated TreeEntry entries = 2;
+  hephaestus.common.v1.PageResponse page = 3;
+}
+message GetFileRequest {
+  hephaestus.common.v1.OpaqueId repository_id = 1;
+  string branch = 2;
+  string path = 3;
+}
+message GetFileResponse {
+  TreeEntry entry = 1;
+  string utf8_contents = 2;
+  string language = 3;
+}
+message StreamFileRequest {
+  hephaestus.common.v1.OpaqueId repository_id = 1;
+  string branch = 2;
+  string path = 3;
+  hephaestus.common.v1.Cursor resume_cursor = 4;
+  uint64 max_total_bytes = 5;
+  uint32 max_chunk_bytes = 6;
+}
+message StreamFileResponse {
+  uint64 sequence = 1;
+  bytes contents = 2;
+  hephaestus.common.v1.Cursor committed_cursor = 3;
+  bool end_of_file = 4;
+  string media_type = 5;
+}

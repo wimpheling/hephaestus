@@ -1,0 +1,37 @@
+[package]
+name = "build-postgres"
+description = "PostgreSQL persistence adapter for isolated build execution"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+agent-config = { path = "../agent-config" }
+authz-domain = { path = "../authz-domain" }
+authz-postgres = { path = "../authz-postgres" }
+build-orchestrator = { path = "../build-orchestrator" }
+identity-domain = { path = "../identity-domain" }
+release-domain = { path = "../release-domain" }
+release-postgres = { path = "../release-postgres" }
+runtime-types = { path = "../runtime-types" }
+serde_json.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+time.workspace = true
+uuid.workspace = true
+vm-trait.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+release-artifact-store = { path = "../release-artifact-store" }
+release-service = { path = "../release-service" }
+serial_test = "3"
+tempfile = "3"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[package.metadata.hephaestus]
+postgres_adapter = true
+database_context = "build"

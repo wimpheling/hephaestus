@@ -1,0 +1,23 @@
+ [package]
+ name = "secret-application"
+ description = "Provider-neutral secret command, runtime, and broker contracts"
+ version.workspace = true
+ edition.workspace = true
+ rust-version.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+authz-domain = { path = "../authz-domain" }
+ forge-domain = { path = "../forge-domain" }
+ identity-domain = { path = "../identity-domain" }
+ release-domain = { path = "../release-domain" }
+ runtime-types = { path = "../runtime-types" }
+ secret-domain = { path = "../secret-domain" }
+ secret-store = { path = "../secret-store" }
+ serde_json.workspace = true
+ thiserror.workspace = true
+ time.workspace = true
+ uuid.workspace = true
+
+ [lints]
+ workspace = true

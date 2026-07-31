@@ -9,6 +9,29 @@ defmodule HephaestusWeb.MixProject do
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       aliases: aliases(),
+      hephaestus_architecture: [
+        enabled_rules: [
+          "WEB-NO-INFRASTRUCTURE-DEPENDENCIES",
+          "WEB-RPC-CLIENTS-ONLY-IN-STATE",
+          "WEB-NO-HANDWRITTEN-BACKEND-CLIENT",
+          "WEB-NO-RAW-BACKEND-ERROR",
+          "WEB-NO-FILESYSTEM-OR-PROCESS",
+          "UI-RAW-HTML-ONLY-IN-COMPONENTS",
+          "UI-TIER-DIRECTION",
+          "UI-DECLARED-INTERACTIONS-ONLY",
+          "UI-NO-CLASS-ESCAPE-HATCH",
+          "UI-DESIGN-TOKENS-ONLY",
+          "UI-NO-EXTERNAL-UI-IMPORTS",
+          "UI-NO-DOM-INJECTION",
+          "UI-PUBLIC-FACADE-COMPLETE",
+          "UI-SHOWCASE-AND-TEST-PARITY",
+          "UI-PAGE-STATE-COVERAGE",
+          "UI-PAGE-COMPANIONS",
+          "UI-LIVE-RENDERS-ONE-PAGE",
+          "UI-STATE-HAS-NO-HEEX",
+          "UI-PAGE-IS-PURE"
+        ]
+      ],
       deps: deps(),
       compilers: [:phoenix_live_view] ++ Mix.compilers(),
       listeners: [Phoenix.CodeReloader]
@@ -41,22 +64,14 @@ defmodule HephaestusWeb.MixProject do
   defp deps do
     [
       {:phoenix, "~> 1.8.9"},
-      {:phoenix_ecto, "~> 4.5"},
-      {:ecto_sql, "~> 3.13"},
-      {:postgrex, ">= 0.0.0"},
       {:phoenix_html, "~> 4.1"},
       {:phoenix_live_reload, "~> 1.2", only: :dev},
       {:phoenix_live_view, "~> 1.2.0"},
       {:assent, "~> 0.3.1"},
       {:req, "~> 0.5"},
       {:jose, "~> 1.11"},
-      {:heroicons,
-       github: "tailwindlabs/heroicons",
-       tag: "v2.2.0",
-       sparse: "optimized",
-       app: false,
-       compile: false,
-       depth: 1},
+      {:protobuf, "== 0.17.0"},
+      {:grpc, "== 1.0.2"},
       {:lazy_html, ">= 0.1.0", only: :test},
       {:phoenix_live_dashboard, "~> 0.8.3"},
       {:esbuild, "~> 0.10", runtime: Mix.env() == :dev},
@@ -78,9 +93,7 @@ defmodule HephaestusWeb.MixProject do
   # See the documentation for `Mix` for more info on aliases.
   defp aliases do
     [
-      setup: ["deps.get", "ecto.setup", "assets.setup", "assets.build"],
-      "ecto.setup": ["ecto.create", "ecto.migrate", "run priv/repo/seeds.exs"],
-      "ecto.reset": ["ecto.drop", "ecto.setup"],
+      setup: ["deps.get", "assets.setup", "assets.build"],
       test: ["test"],
       "assets.setup": ["tailwind.install --if-missing", "esbuild.install --if-missing"],
       "assets.build": ["compile", "tailwind hephaestus_web", "esbuild hephaestus_web"],

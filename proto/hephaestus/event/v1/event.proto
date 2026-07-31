@@ -1,0 +1,406 @@
+syntax = "proto3";
+
+package hephaestus.event.v1;
+
+import "google/protobuf/timestamp.proto";
+import "hephaestus/common/v1/common.proto";
+import "hephaestus/options/v1/options.proto";
+
+// Exposes only explicitly authorized product-event scopes. There is no global
+// watch method.
+service ProductEventService {
+  rpc WatchIdentity(WatchIdentityRequest) returns (stream WatchIdentityResponse) {
+    option (hephaestus.options.v1.authorization) = {
+      permission: "event.watch.identity"
+      audience: "/hephaestus.event.v1.ProductEventService/WatchIdentity"
+      actor_source: ACTOR_SOURCE_MEDIATOR_JWT_METADATA
+    };
+    option (hephaestus.options.v1.operation_kind) = OPERATION_KIND_SERVER_STREAM;
+    option (hephaestus.options.v1.max_request_bytes) = 4096;
+    option (hephaestus.options.v1.max_response_bytes) = 262144;
+  }
+  rpc WatchOrganization(WatchOrganizationRequest) returns (stream WatchOrganizationResponse) {
+    option (hephaestus.options.v1.authorization) = {
+      permission: "event.watch.organization"
+      audience: "/hephaestus.event.v1.ProductEventService/WatchOrganization"
+      actor_source: ACTOR_SOURCE_MEDIATOR_JWT_METADATA
+    };
+    option (hephaestus.options.v1.operation_kind) = OPERATION_KIND_SERVER_STREAM;
+    option (hephaestus.options.v1.max_request_bytes) = 4096;
+    option (hephaestus.options.v1.max_response_bytes) = 262144;
+  }
+  rpc WatchProject(WatchProjectRequest) returns (stream WatchProjectResponse) {
+    option (hephaestus.options.v1.authorization) = {
+      permission: "event.watch.project"
+      audience: "/hephaestus.event.v1.ProductEventService/WatchProject"
+      actor_source: ACTOR_SOURCE_MEDIATOR_JWT_METADATA
+    };
+    option (hephaestus.options.v1.operation_kind) = OPERATION_KIND_SERVER_STREAM;
+    option (hephaestus.options.v1.max_request_bytes) = 4096;
+    option (hephaestus.options.v1.max_response_bytes) = 262144;
+  }
+  rpc WatchRepository(WatchRepositoryRequest) returns (stream WatchRepositoryResponse) {
+    option (hephaestus.options.v1.authorization) = {
+      permission: "event.watch.repository"
+      audience: "/hephaestus.event.v1.ProductEventService/WatchRepository"
+      actor_source: ACTOR_SOURCE_MEDIATOR_JWT_METADATA
+    };
+    option (hephaestus.options.v1.operation_kind) = OPERATION_KIND_SERVER_STREAM;
+    option (hephaestus.options.v1.max_request_bytes) = 4096;
+    option (hephaestus.options.v1.max_response_bytes) = 262144;
+  }
+  rpc WatchRun(WatchRunRequest) returns (stream WatchRunResponse) {
+    option (hephaestus.options.v1.authorization) = {
+      permission: "event.watch.run"
+      audience: "/hephaestus.event.v1.ProductEventService/WatchRun"
+      actor_source: ACTOR_SOURCE_MEDIATOR_JWT_METADATA
+    };
+    option (hephaestus.options.v1.operation_kind) = OPERATION_KIND_SERVER_STREAM;
+    option (hephaestus.options.v1.max_request_bytes) = 4096;
+    option (hephaestus.options.v1.max_response_bytes) = 262144;
+  }
+  rpc WatchAgentInstance(WatchAgentInstanceRequest) returns (stream WatchAgentInstanceResponse) {
+    option (hephaestus.options.v1.authorization) = {
+      permission: "event.watch.agent_instance"
+      audience: "/hephaestus.event.v1.ProductEventService/WatchAgentInstance"
+      actor_source: ACTOR_SOURCE_MEDIATOR_JWT_METADATA
+    };
+    option (hephaestus.options.v1.operation_kind) = OPERATION_KIND_SERVER_STREAM;
+    option (hephaestus.options.v1.max_request_bytes) = 4096;
+    option (hephaestus.options.v1.max_response_bytes) = 262144;
+  }
+}
+
+enum EventScopeKind {
+  EVENT_SCOPE_KIND_UNSPECIFIED = 0;
+  EVENT_SCOPE_KIND_IDENTITY = 1;
+  EVENT_SCOPE_KIND_ORGANIZATION = 2;
+  EVENT_SCOPE_KIND_PROJECT = 3;
+  EVENT_SCOPE_KIND_REPOSITORY = 4;
+  EVENT_SCOPE_KIND_RUN = 5;
+  EVENT_SCOPE_KIND_AGENT_INSTANCE = 6;
+}
+
+message EventScope {
+  EventScopeKind kind = 1;
+  hephaestus.common.v1.OpaqueId id = 2;
+}
+
+enum AggregateType {
+  AGGREGATE_TYPE_UNSPECIFIED = 0;
+  AGGREGATE_TYPE_IDENTITY_ORGANIZATIONS = 1;
+  AGGREGATE_TYPE_ORGANIZATION = 2;
+  AGGREGATE_TYPE_PROJECT = 3;
+  AGGREGATE_TYPE_REPOSITORY = 4;
+  AGGREGATE_TYPE_REPOSITORY_REF = 5;
+  AGGREGATE_TYPE_BUILD = 6;
+  AGGREGATE_TYPE_RELEASE = 7;
+  AGGREGATE_TYPE_AGENT_INSTANCE = 8;
+  AGGREGATE_TYPE_RUN = 9;
+  AGGREGATE_TYPE_REVIEW = 10;
+  AGGREGATE_TYPE_SECRET_METADATA = 11;
+  AGGREGATE_TYPE_SECRET_GRANT = 12;
+  AGGREGATE_TYPE_SECRET_IMPORT = 13;
+  AGGREGATE_TYPE_AGENT_SECRET_BINDING = 14;
+  AGGREGATE_TYPE_ARTIFACT = 15;
+  AGGREGATE_TYPE_IDENTITY_PROFILE = 16;
+}
+
+enum ChangeKind {
+  CHANGE_KIND_UNSPECIFIED = 0;
+  CHANGE_KIND_CREATED = 1;
+  CHANGE_KIND_UPDATED = 2;
+  CHANGE_KIND_STATE_CHANGED = 3;
+  CHANGE_KIND_REMOVED = 4;
+}
+
+// Safe normalized product state. Domain-specific detail remains available
+// from the corresponding snapshot RPC.
+enum LifecycleState {
+  LIFECYCLE_STATE_UNSPECIFIED = 0;
+  LIFECYCLE_STATE_PENDING = 1;
+  LIFECYCLE_STATE_QUEUED = 2;
+  LIFECYCLE_STATE_RUNNING = 3;
+  LIFECYCLE_STATE_ACTIVE = 4;
+  LIFECYCLE_STATE_PAUSED = 5;
+  LIFECYCLE_STATE_SUCCEEDED = 6;
+  LIFECYCLE_STATE_FAILED = 7;
+  LIFECYCLE_STATE_PUBLISHED = 8;
+  LIFECYCLE_STATE_REVOKED = 9;
+  LIFECYCLE_STATE_DISABLED = 10;
+  LIFECYCLE_STATE_REJECTED = 11;
+  LIFECYCLE_STATE_CONFLICTED = 12;
+  LIFECYCLE_STATE_REMOVED = 13;
+}
+
+message EventProvenance {
+  hephaestus.common.v1.OpaqueId actor_id = 1;
+  hephaestus.common.v1.OpaqueId request_id = 2;
+}
+
+message IdentityOrganizationsChanged {
+  hephaestus.common.v1.OpaqueId organization_id = 1;
+  ChangeKind change = 2;
+  LifecycleState state = 3;
+}
+
+// Safe identity invalidation. Issuer, subject, display name, and email remain
+// available only from the authorized identity snapshot.
+message IdentityProfileChanged {
+  ChangeKind change = 1;
+  LifecycleState state = 2;
+}
+
+message OrganizationChanged {
+  ChangeKind change = 1;
+  LifecycleState state = 2;
+}
+
+message ProjectChanged {
+  hephaestus.common.v1.OpaqueId organization_id = 1;
+  ChangeKind change = 2;
+  LifecycleState state = 3;
+}
+
+message RepositoryChanged {
+  hephaestus.common.v1.OpaqueId project_id = 1;
+  ChangeKind change = 2;
+  LifecycleState state = 3;
+}
+
+message RepositoryRefChanged {
+  ChangeKind change = 1;
+  LifecycleState state = 2;
+}
+
+message BuildChanged {
+  hephaestus.common.v1.OpaqueId repository_id = 1;
+  ChangeKind change = 2;
+  LifecycleState state = 3;
+}
+
+message ReleaseChanged {
+  hephaestus.common.v1.OpaqueId repository_id = 1;
+  ChangeKind change = 2;
+  LifecycleState state = 3;
+}
+
+message AgentInstanceChanged {
+  hephaestus.common.v1.OpaqueId project_id = 1;
+  ChangeKind change = 2;
+  LifecycleState state = 3;
+}
+
+message RunChanged {
+  hephaestus.common.v1.OpaqueId project_id = 1;
+  hephaestus.common.v1.OpaqueId repository_id = 2;
+  ChangeKind change = 3;
+  LifecycleState state = 4;
+}
+
+message ReviewChanged {
+  hephaestus.common.v1.OpaqueId run_id = 1;
+  ChangeKind change = 2;
+  LifecycleState state = 3;
+}
+
+message SecretMetadataChanged {
+  hephaestus.common.v1.OpaqueId owner_id = 1;
+  ChangeKind change = 2;
+  LifecycleState state = 3;
+}
+
+message SecretGrantChanged {
+  hephaestus.common.v1.OpaqueId secret_id = 1;
+  hephaestus.common.v1.OpaqueId target_id = 2;
+  ChangeKind change = 3;
+  LifecycleState state = 4;
+}
+
+message SecretImportChanged {
+  hephaestus.common.v1.OpaqueId secret_id = 1;
+  hephaestus.common.v1.OpaqueId target_id = 2;
+  ChangeKind change = 3;
+  LifecycleState state = 4;
+}
+
+message AgentSecretBindingChanged {
+  hephaestus.common.v1.OpaqueId agent_instance_id = 1;
+  hephaestus.common.v1.OpaqueId secret_import_id = 2;
+  ChangeKind change = 3;
+  LifecycleState state = 4;
+}
+
+message ArtifactChanged {
+  hephaestus.common.v1.OpaqueId release_id = 1;
+  hephaestus.common.v1.OpaqueId build_id = 2;
+  ChangeKind change = 3;
+  LifecycleState state = 4;
+}
+
+// Canonical client-facing event envelope. High-volume logs, metrics, artifact
+// bytes, secret material, command parameters, and unrestricted diagnostics are
+// deliberately absent.
+message ProductEvent {
+  hephaestus.common.v1.OpaqueId event_id = 1;
+  hephaestus.common.v1.Cursor cursor = 2;
+  EventScope scope = 3;
+  AggregateType aggregate_type = 4;
+  hephaestus.common.v1.OpaqueId aggregate_id = 5;
+  uint64 aggregate_version = 6;
+  google.protobuf.Timestamp occurred_at = 7;
+  EventProvenance provenance = 8;
+  uint32 schema_version = 9;
+  oneof payload {
+    IdentityOrganizationsChanged identity_organizations_changed = 20;
+    OrganizationChanged organization_changed = 21;
+    ProjectChanged project_changed = 22;
+    RepositoryChanged repository_changed = 23;
+    RepositoryRefChanged repository_ref_changed = 24;
+    BuildChanged build_changed = 25;
+    ReleaseChanged release_changed = 26;
+    AgentInstanceChanged agent_instance_changed = 27;
+    RunChanged run_changed = 28;
+    ReviewChanged review_changed = 29;
+    SecretMetadataChanged secret_metadata_changed = 30;
+    SecretGrantChanged secret_grant_changed = 31;
+    SecretImportChanged secret_import_changed = 32;
+    AgentSecretBindingChanged agent_secret_binding_changed = 33;
+    ArtifactChanged artifact_changed = 34;
+    IdentityProfileChanged identity_profile_changed = 35;
+  }
+}
+
+message AggregateVersionReference {
+  AggregateType aggregate_type = 1;
+  hephaestus.common.v1.OpaqueId aggregate_id = 2;
+  uint64 aggregate_version = 3;
+}
+
+// First item for a new watch. The server establishes the subscription before
+// reading this transactionally consistent cursor/version inventory.
+message ScopeSnapshotBarrier {
+  EventScope scope = 1;
+  hephaestus.common.v1.Cursor committed_cursor = 2;
+  repeated AggregateVersionReference aggregate_versions = 3;
+  uint32 schema_version = 4;
+}
+
+message RetentionGap {
+  EventScope scope = 1;
+  hephaestus.common.v1.Cursor requested_cursor = 2;
+  hephaestus.common.v1.Cursor earliest_available_cursor = 3;
+  hephaestus.common.v1.Cursor latest_committed_cursor = 4;
+}
+
+message AccessRevoked {
+  EventScope scope = 1;
+  google.protobuf.Timestamp observed_at = 2;
+}
+
+message WatchIdentityRequest {
+  hephaestus.common.v1.Cursor resume_cursor = 1;
+  uint32 max_events = 2;
+  uint64 max_total_bytes = 3;
+}
+
+message WatchOrganizationRequest {
+  hephaestus.common.v1.OpaqueId organization_id = 1;
+  hephaestus.common.v1.Cursor resume_cursor = 2;
+  uint32 max_events = 3;
+  uint64 max_total_bytes = 4;
+}
+
+message WatchProjectRequest {
+  hephaestus.common.v1.OpaqueId project_id = 1;
+  hephaestus.common.v1.Cursor resume_cursor = 2;
+  uint32 max_events = 3;
+  uint64 max_total_bytes = 4;
+}
+
+message WatchRepositoryRequest {
+  hephaestus.common.v1.OpaqueId repository_id = 1;
+  hephaestus.common.v1.Cursor resume_cursor = 2;
+  uint32 max_events = 3;
+  uint64 max_total_bytes = 4;
+}
+
+message WatchRunRequest {
+  hephaestus.common.v1.OpaqueId run_id = 1;
+  hephaestus.common.v1.Cursor resume_cursor = 2;
+  uint32 max_events = 3;
+  uint64 max_total_bytes = 4;
+}
+
+message WatchAgentInstanceRequest {
+  hephaestus.common.v1.OpaqueId agent_instance_id = 1;
+  hephaestus.common.v1.Cursor resume_cursor = 2;
+  uint32 max_events = 3;
+  uint64 max_total_bytes = 4;
+}
+
+message WatchIdentityResponse {
+  uint64 sequence = 1;
+  hephaestus.common.v1.Cursor committed_cursor = 2;
+  oneof item {
+    ScopeSnapshotBarrier snapshot_barrier = 10;
+    ProductEvent event = 11;
+    RetentionGap retention_gap = 12;
+    AccessRevoked access_revoked = 13;
+  }
+}
+
+message WatchOrganizationResponse {
+  uint64 sequence = 1;
+  hephaestus.common.v1.Cursor committed_cursor = 2;
+  oneof item {
+    ScopeSnapshotBarrier snapshot_barrier = 10;
+    ProductEvent event = 11;
+    RetentionGap retention_gap = 12;
+    AccessRevoked access_revoked = 13;
+  }
+}
+
+message WatchProjectResponse {
+  uint64 sequence = 1;
+  hephaestus.common.v1.Cursor committed_cursor = 2;
+  oneof item {
+    ScopeSnapshotBarrier snapshot_barrier = 10;
+    ProductEvent event = 11;
+    RetentionGap retention_gap = 12;
+    AccessRevoked access_revoked = 13;
+  }
+}
+
+message WatchRepositoryResponse {
+  uint64 sequence = 1;
+  hephaestus.common.v1.Cursor committed_cursor = 2;
+  oneof item {
+    ScopeSnapshotBarrier snapshot_barrier = 10;
+    ProductEvent event = 11;
+    RetentionGap retention_gap = 12;
+    AccessRevoked access_revoked = 13;
+  }
+}
+
+message WatchRunResponse {
+  uint64 sequence = 1;
+  hephaestus.common.v1.Cursor committed_cursor = 2;
+  oneof item {
+    ScopeSnapshotBarrier snapshot_barrier = 10;
+    ProductEvent event = 11;
+    RetentionGap retention_gap = 12;
+    AccessRevoked access_revoked = 13;
+  }
+}
+
+message WatchAgentInstanceResponse {
+  uint64 sequence = 1;
+  hephaestus.common.v1.Cursor committed_cursor = 2;
+  oneof item {
+    ScopeSnapshotBarrier snapshot_barrier = 10;
+    ProductEvent event = 11;
+    RetentionGap retention_gap = 12;
+    AccessRevoked access_revoked = 13;
+  }
+}

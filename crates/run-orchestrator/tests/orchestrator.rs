@@ -3,13 +3,13 @@
 use async_trait::async_trait;
 use run_domain::{CancelRun, Run, RunKind, RunOutcome, RunState, StartRun};
 use run_orchestrator::{
-    CreateRunResult, OrchestratorError, OutboxRecord, PreparedRunRuntime, PreparedRunSecrets,
-    RepositoryError, RunAuthorizationError, RunCompletionError, RunCompletionObserver,
-    RunLaunchAuthorizer, RunOrchestrator, RunRepository, RunRuntimeError, RunRuntimeManager,
-    RunSecretError, RunSecretManager, StoredVmEvent, VmSpecFactory,
+    CreateRunResult, OrchestratorError, PreparedRunRuntime, PreparedRunSecrets, RepositoryError,
+    RunAuthorizationError, RunCompletionError, RunCompletionObserver, RunLaunchAuthorizer,
+    RunOrchestrator, RunRepository, RunRuntimeError, RunRuntimeManager, RunSecretError,
+    RunSecretManager, StoredVmEvent, VmSpecFactory,
 };
 use runtime_types::{
-    AgentAttachmentId, AgentInstanceId, AgentInstanceRevisionId, CommandId, EventId, LeaseId,
+    AgentAttachmentId, AgentInstanceId, AgentInstanceRevisionId, CommandId, LeaseId,
     ReleaseAgentId, ReleaseId, RunId, VolumeId,
 };
 use std::{
@@ -872,10 +872,6 @@ impl MemoryRepository {
 
 #[async_trait]
 impl RunRepository for MemoryRepository {
-    async fn initialize(&self) -> Result<(), RepositoryError> {
-        Ok(())
-    }
-
     async fn create_run(&self, _command: &StartRun) -> Result<CreateRunResult, RepositoryError> {
         let mut created = self.created.lock().await;
         let was_created = !*created;
@@ -946,22 +942,6 @@ impl RunRepository for MemoryRepository {
 
     async fn recoverable_runs(&self) -> Result<Vec<Run>, RepositoryError> {
         Ok(vec![self.run.lock().await.clone()])
-    }
-
-    async fn unpublished_outbox(&self, _limit: i64) -> Result<Vec<OutboxRecord>, RepositoryError> {
-        Ok(Vec::new())
-    }
-
-    async fn mark_outbox_published(&self, _event_id: EventId) -> Result<(), RepositoryError> {
-        Ok(())
-    }
-
-    async fn mark_outbox_failed(
-        &self,
-        _event_id: EventId,
-        _error: &str,
-    ) -> Result<(), RepositoryError> {
-        Ok(())
     }
 }
 

@@ -10,13 +10,11 @@ use identity_domain::{AuthenticatedIdentity, RequestId, UserId};
 use run_domain::{Run, RunKind};
 use run_orchestrator::{PreparedRunSecrets, RunSecretError, RunSecretManager};
 use runtime_types::RunId;
+use secret_application::{ResolveRunSecrets, SecretDispatchResolver, SecretRuntimeResolver};
 use secret_domain::{
     DeliveryMode, ExecutionPhase, OpaqueRuntimeCredential, SecretCommandKey,
     SecretRuntimeSessionId, SecretSlotKey, SecretValue,
 };
-use secret_service::{ResolveRunSecrets, SecretRuntimeService, SecretService};
-use secret_store::KeyProvider;
-use sqlx::{FromRow, PgPool};
 use std::{
     collections::BTreeSet,
     fs::{self, OpenOptions},
@@ -37,6 +35,52 @@ pub const RUNTIME_CREDENTIAL_FILE: &str = ".runtime-credential";
 pub const MAX_RAW_SECRET_FILES: usize = 32;
 /// Maximum aggregate plaintext in one mount.
 pub const MAX_RAW_SECRET_BYTES: usize = 256 * 1024;
+
+/// Exact persisted dispatch provenance needed to resolve runtime secrets.
+#[derive(Debug, Clone)]
+pub struct SecretDispatchInput {
+    /// Declared symbolic bindings from the immutable instance revision.
+    pub secret_bindings: serde_json::Value,
+    /// Authenticated actor selected by the dispatch request.
+    pub actor_id: Option<Uuid>,
+    /// Idempotent dispatch request identity.
+    pub request_id: Option<Uuid>,
+    /// Optional target ref for a normal run.
+    pub git_ref: Option<String>,
+    /// Optional target commit for a normal run.
+    pub commit_sha: Option<String>,
+}
+
+/// Database boundary for ephemeral secret mount lifecycle and provenance.
+///
+/// The runtime owns encrypted-store, broker, and filesystem effects; this
+/// narrow port owns only durable metadata and journal transitions. Adapters
+/// must keep mount inserts and state updates transactional with the same
+/// authorization queries used to resolve the exact run.
+#[async_trait]
+pub trait SecretMountMetadata: Send + Sync {
+    /// Loads exact dispatch provenance for one run.
+    async fn dispatch_input(
+        &self,
+        run: &Run,
+    ) -> Result<Option<SecretDispatchInput>, RunSecretError>;
+    /// Persists a materialized mount before guest attachment.
+    async fn persist_mount(
+        &self,
+        run_id: RunId,
+        mount: &EphemeralSecretMount,
+    ) -> Result<(), RunSecretError>;
+    /// Revalidates all active leases for one exact run.
+    async fn authorized(&self, run: &Run) -> Result<bool, RunSecretError>;
+    /// Returns a persisted materialized mount directory, if any.
+    async fn materialized_directory(&self, run_id: RunId) -> Result<Option<Uuid>, RunSecretError>;
+    /// Marks a mount destroyed after filesystem cleanup succeeds.
+    async fn mark_destroyed(&self, run_id: RunId) -> Result<(), RunSecretError>;
+    /// Returns opaque directories that belong to live runs.
+    async fn live_directories(&self) -> Result<BTreeSet<String>, RunSecretError>;
+    /// Marks cleaned-up run mounts destroyed in the durable journal.
+    async fn mark_cleaned_mounts_destroyed(&self) -> Result<(), RunSecretError>;
+}
 
 /// Configuration for the local ephemeral mount boundary.
 #[derive(Debug, Clone)]
@@ -349,14 +393,19 @@ pub fn destroy_confirmed(
 }
 
 /// Live-dispatch and ephemeral-mount integration for the run orchestrator.
-pub struct PgSecretMountManager<D, R> {
-    pool: PgPool,
-    dispatch: SecretService<D>,
-    runtime: SecretRuntimeService<R>,
+pub struct SecretMountManager<M, D, R> {
+    metadata: M,
+    dispatch: D,
+    runtime: R,
     config: EphemeralSecretConfig,
 }
 
-impl<D: Sync, R: Sync> PgSecretMountManager<D, R> {
+impl<M, D, R> SecretMountManager<M, D, R>
+where
+    M: SecretMountMetadata + 'static,
+    D: SecretDispatchResolver,
+    R: SecretRuntimeResolver,
+{
     /// Validates configuration and creates a manager from separate command and
     /// narrow resolver services.
     ///
@@ -364,14 +413,14 @@ impl<D: Sync, R: Sync> PgSecretMountManager<D, R> {
     ///
     /// Rejects an unsafe or non-memory-backed secret root.
     pub fn initialize(
-        pool: PgPool,
-        dispatch: SecretService<D>,
-        runtime: SecretRuntimeService<R>,
+        metadata: M,
+        dispatch: D,
+        runtime: R,
         config: EphemeralSecretConfig,
     ) -> Result<Self, RunSecretError> {
         validate_root(&config).map_err(secret_runtime_error)?;
         Ok(Self {
-            pool,
+            metadata,
             dispatch,
             runtime,
             config,
@@ -379,29 +428,11 @@ impl<D: Sync, R: Sync> PgSecretMountManager<D, R> {
     }
 
     async fn dispatch_input(&self, run: &Run) -> Result<Option<DispatchInput>, RunSecretError> {
-        let row = sqlx::query_as::<_, DispatchInput>(
-            "SELECT revision.secret_bindings,
-                    COALESCE(request.actor_id, update.actor_id) AS actor_id,
-                    request.request_id,
-                    request.git_ref, request.commit_sha
-             FROM runs AS stored_run
-             JOIN agent_instance_revisions AS revision
-               ON revision.id = stored_run.instance_revision_id
-              AND revision.instance_id = stored_run.instance_id
-             LEFT JOIN run_requests AS request ON request.run_id = stored_run.id
-             LEFT JOIN agent_updates AS update
-               ON update.hook_run_id = stored_run.id
-             WHERE stored_run.id = $1
-               AND stored_run.instance_id = $2
-               AND stored_run.instance_revision_id = $3",
-        )
-        .bind(run.id.as_uuid())
-        .bind(run.instance_id.as_uuid())
-        .bind(run.instance_revision_id.as_uuid())
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(secret_database)?
-        .ok_or_else(|| secret_error("exact secret dispatch provenance is unavailable"))?;
+        let row = self
+            .metadata
+            .dispatch_input(run)
+            .await?
+            .ok_or_else(|| secret_error("exact secret dispatch provenance is unavailable"))?;
         let bindings: Vec<Uuid> =
             serde_json::from_value(row.secret_bindings.clone()).map_err(secret_serialization)?;
         if bindings.is_empty() {
@@ -410,37 +441,14 @@ impl<D: Sync, R: Sync> PgSecretMountManager<D, R> {
             Ok(Some(row))
         }
     }
-
-    async fn persist_mount(
-        &self,
-        run_id: RunId,
-        mount: &EphemeralSecretMount,
-    ) -> Result<(), RunSecretError> {
-        let directory = mount
-            .host_path()
-            .file_name()
-            .and_then(|value| value.to_str())
-            .and_then(|value| Uuid::parse_str(value).ok())
-            .ok_or_else(|| secret_error("ephemeral secret identity is invalid"))?;
-        sqlx::query(
-            "INSERT INTO secret_runtime_mounts
-             (run_id, opaque_directory, state)
-             VALUES ($1, $2, 'materialized')",
-        )
-        .bind(run_id.as_uuid())
-        .bind(directory)
-        .execute(&self.pool)
-        .await
-        .map_err(secret_database)?;
-        Ok(())
-    }
 }
 
 #[async_trait]
-impl<D, R> RunSecretManager for PgSecretMountManager<D, R>
+impl<M, D, R> RunSecretManager for SecretMountManager<M, D, R>
 where
-    D: KeyProvider + Send + Sync + 'static,
-    R: KeyProvider + Send + Sync + 'static,
+    M: SecretMountMetadata + 'static,
+    D: SecretDispatchResolver + 'static,
+    R: SecretRuntimeResolver + 'static,
 {
     async fn prepare(&self, run: &Run) -> Result<PreparedRunSecrets, RunSecretError> {
         let Some(input) = self.dispatch_input(run).await? else {
@@ -507,7 +515,7 @@ where
         let mut mount =
             materialize_with_authority(&self.config, run.id, raw, &authority.credential)
                 .map_err(secret_runtime_error)?;
-        if let Err(error) = self.persist_mount(run.id, &mount).await {
+        if let Err(error) = self.metadata.persist_mount(run.id, &mount).await {
             mount.mark_guest_destroyed().map_err(secret_runtime_error)?;
             mount.destroy().map_err(secret_runtime_error)?;
             return Err(error);
@@ -521,55 +529,7 @@ where
         if self.dispatch_input(run).await?.is_none() {
             return Ok(());
         }
-        let authorized: bool = sqlx::query_scalar(
-            "SELECT EXISTS (
-                SELECT 1
-                FROM secret_runtime_sessions AS session
-                WHERE session.run_id = $1
-                  AND session.instance_id = $2
-                  AND session.instance_revision_id = $3
-                  AND session.status = 'active'
-                  AND session.expires_at > now()
-                  AND (
-                      SELECT count(*)
-                      FROM run_secret_provenance
-                      WHERE run_id = session.run_id
-                  ) = (
-                      SELECT count(*)
-                      FROM secret_leases AS lease
-                      JOIN agent_secret_bindings AS binding
-                        ON binding.id = lease.binding_id
-                       AND binding.status = 'active'
-                      JOIN secret_imports AS imported
-                        ON imported.id = binding.import_id
-                       AND imported.status = 'active'
-                      JOIN secret_grants AS source_grant
-                        ON source_grant.id = imported.grant_id
-                       AND source_grant.status = 'active'
-                       AND (
-                           source_grant.expires_at IS NULL
-                           OR source_grant.expires_at > now()
-                       )
-                      JOIN secrets AS secret
-                        ON secret.id = imported.secret_id
-                       AND secret.status = 'active'
-                      JOIN secret_versions AS version
-                        ON version.id = lease.secret_version_id
-                       AND version.secret_id = secret.id
-                       AND version.status = 'active'
-                      WHERE lease.session_id = session.id
-                        AND lease.run_id = session.run_id
-                        AND lease.status = 'active'
-                        AND lease.expires_at > now()
-                  )
-            )",
-        )
-        .bind(run.id.as_uuid())
-        .bind(run.instance_id.as_uuid())
-        .bind(run.instance_revision_id.as_uuid())
-        .fetch_one(&self.pool)
-        .await
-        .map_err(secret_database)?;
+        let authorized = self.metadata.authorized(run).await?;
         if authorized {
             Ok(())
         } else {
@@ -578,70 +538,24 @@ where
     }
 
     async fn destroy_after_guest(&self, run_id: RunId) -> Result<(), RunSecretError> {
-        let directory: Option<Uuid> = sqlx::query_scalar(
-            "SELECT opaque_directory
-             FROM secret_runtime_mounts
-             WHERE run_id = $1 AND state = 'materialized'",
-        )
-        .bind(run_id.as_uuid())
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(secret_database)?;
+        let directory = self.metadata.materialized_directory(run_id).await?;
         let Some(directory) = directory else {
             return Ok(());
         };
         destroy_confirmed(&self.config, directory).map_err(secret_runtime_error)?;
-        sqlx::query(
-            "UPDATE secret_runtime_mounts
-             SET state = 'destroyed', destroyed_at = now()
-             WHERE run_id = $1 AND state = 'materialized'",
-        )
-        .bind(run_id.as_uuid())
-        .execute(&self.pool)
-        .await
-        .map_err(secret_database)?;
+        self.metadata.mark_destroyed(run_id).await?;
         Ok(())
     }
 
     async fn recover(&self) -> Result<usize, RunSecretError> {
-        let live: Vec<Uuid> = sqlx::query_scalar(
-            "SELECT mount.opaque_directory
-             FROM secret_runtime_mounts AS mount
-             JOIN runs AS run ON run.id = mount.run_id
-             WHERE mount.state = 'materialized'
-               AND run.state <> 'cleaned_up'",
-        )
-        .fetch_all(&self.pool)
-        .await
-        .map_err(secret_database)?;
-        let names = live
-            .into_iter()
-            .map(|value| value.simple().to_string())
-            .collect();
+        let names = self.metadata.live_directories().await?;
         let removed = reconcile_orphans(&self.config, &names).map_err(secret_runtime_error)?;
-        sqlx::query(
-            "UPDATE secret_runtime_mounts AS mount
-             SET state = 'destroyed', destroyed_at = now()
-             FROM runs AS run
-             WHERE run.id = mount.run_id
-               AND mount.state = 'materialized'
-               AND run.state = 'cleaned_up'",
-        )
-        .execute(&self.pool)
-        .await
-        .map_err(secret_database)?;
+        self.metadata.mark_cleaned_mounts_destroyed().await?;
         Ok(removed)
     }
 }
 
-#[derive(Debug, FromRow)]
-struct DispatchInput {
-    secret_bindings: serde_json::Value,
-    actor_id: Option<Uuid>,
-    request_id: Option<Uuid>,
-    git_ref: Option<String>,
-    commit_sha: Option<String>,
-}
+type DispatchInput = SecretDispatchInput;
 
 fn remove_secret_directory(path: &Path) -> Result<(), SecretRuntimeError> {
     let metadata = fs::symlink_metadata(path).map_err(io_error)?;
@@ -674,7 +588,7 @@ fn secret_error(message: impl Into<String>) -> RunSecretError {
 // Secret-service errors are already non-disclosing; the orchestration boundary
 // nevertheless exposes only a stable failure class.
 #[allow(clippy::needless_pass_by_value)]
-fn secret_service_error(_error: secret_service::SecretServiceError) -> RunSecretError {
+fn secret_service_error(_error: secret_application::SecretServiceError) -> RunSecretError {
     secret_error("live secret dispatch failed")
 }
 
@@ -684,10 +598,6 @@ fn secret_runtime_error(_error: SecretRuntimeError) -> RunSecretError {
 }
 
 #[allow(clippy::needless_pass_by_value)]
-fn secret_database(_error: sqlx::Error) -> RunSecretError {
-    secret_error("secret runtime persistence failed")
-}
-
 #[allow(clippy::needless_pass_by_value)]
 fn secret_serialization(_error: serde_json::Error) -> RunSecretError {
     secret_error("stored secret binding provenance is invalid")

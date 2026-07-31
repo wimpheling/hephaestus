@@ -5,7 +5,7 @@ defmodule HephaestusWebWeb.Router do
     plug :accepts, ["html"]
     plug :fetch_session
     plug :fetch_live_flash
-    plug :put_root_layout, html: {HephaestusWebWeb.Layouts, :root}
+    plug :put_root_layout, html: {HephaestusWebWeb.DesignSystem, :root}
     plug :protect_from_forgery
     plug :put_secure_browser_headers
     plug HephaestusWebWeb.UserAuth, :fetch_current_identity
@@ -35,30 +35,30 @@ defmodule HephaestusWebWeb.Router do
       on_mount: [{HephaestusWebWeb.UserAuth, :require_authenticated}] do
       live "/organizations", OrganizationLive
       live "/organizations/:organization_id", OrganizationWorkspaceLive, :projects
-      live "/organizations/:organization_id/secrets", OrganizationWorkspaceLive, :secrets
+      live "/organizations/:organization_id/secrets", OrganizationSecretsLive, :secrets
 
       live "/organizations/:organization_id/secrets/new",
-           OrganizationWorkspaceLive,
+           OrganizationNewSecretLive,
            :new_secret
 
       live "/organizations/:organization_id/secret-grants/new",
-           OrganizationWorkspaceLive,
+           OrganizationNewGrantLive,
            :new_grant
 
       live "/projects/:project_id", ProjectLive, :repositories
       live "/projects/:project_id/repositories", ProjectLive, :repositories
-      live "/projects/:project_id/agents", ProjectLive, :agents
+      live "/projects/:project_id/agents", ProjectAgentsLive, :agents
       live "/projects/:project_id/agents/:instance_id", AgentInstanceLive, :show
-      live "/projects/:project_id/runs", ProjectLive, :runs
-      live "/projects/:project_id/settings", ProjectLive, :settings
-      live "/repositories/:repository_id", RepositoryLive, :files
-      live "/repositories/:repository_id/files", RepositoryLive, :files
-      live "/repositories/:repository_id/files/*path", RepositoryLive, :files
-      live "/repositories/:repository_id/commits", RepositoryLive, :commits
-      live "/repositories/:repository_id/branches", RepositoryLive, :branches
-      live "/repositories/:repository_id/releases", RepositoryLive, :releases
+      live "/projects/:project_id/runs", ProjectRunsLive, :runs
+      live "/projects/:project_id/settings", ProjectSettingsLive, :settings
+      live "/repositories/:repository_id", RepositoryFilesLive, :files
+      live "/repositories/:repository_id/files", RepositoryFilesLive, :files
+      live "/repositories/:repository_id/files/*path", RepositoryFilesLive, :files
+      live "/repositories/:repository_id/commits", RepositoryCommitsLive, :commits
+      live "/repositories/:repository_id/branches", RepositoryBranchesLive, :branches
+      live "/repositories/:repository_id/releases", RepositoryReleasesLive, :releases
       live "/repositories/:repository_id/releases/:release_id", ReleaseLive, :show
-      live "/repositories/:repository_id/agents", RepositoryLive, :agents
+      live "/repositories/:repository_id/agents", RepositoryAgentsLive, :agents
       live "/runs/:run_id", RunLive
     end
   end

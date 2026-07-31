@@ -1,22 +1,16 @@
 [package]
 name = "identity-oidc"
-description = "OIDC token verification and PostgreSQL identity mapping"
+description = "OIDC token and claim verification"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-identity-domain = { path = "../identity-domain" }
+identity-application = { path = "../identity-application" }
 jsonwebtoken.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-sqlx.workspace = true
 thiserror.workspace = true
-uuid.workspace = true
-
-[dev-dependencies]
-serial_test = "3"
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [lints]
 workspace = true

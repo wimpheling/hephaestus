@@ -1,10 +1,10 @@
-use async_nats::{HeaderMap, jetstream};
+use async_nats::jetstream;
 use futures_util::StreamExt;
 use review_domain::CONTROL_EXECUTE_SUBJECT;
 use run_domain::{CancelRun, StartRun};
 use std::sync::Arc;
 
-use crate::{OrchestratorError, RepositoryError, RunOrchestrator, RunRepository};
+use crate::{OrchestratorError, RunOrchestrator};
 
 const ACK_PROGRESS_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
 const MAX_CONCURRENT_COMMANDS: usize = 64;
@@ -14,14 +14,10 @@ pub const START_RUN_SUBJECT: &str = "heph.run.command.start.v1";
 pub const FORGE_START_RUN_SUBJECT: &str = "hephaestus.run.start";
 /// Durable subject carrying `CancelRun` commands.
 pub const CANCEL_RUN_SUBJECT: &str = "heph.run.command.cancel.v1";
-/// Durable subject carrying run lifecycle events.
-pub const LIFECYCLE_EVENT_SUBJECT: &str = "heph.run.event.lifecycle.v1";
 const COMMAND_STREAM: &str = "HEPH_RUN_COMMANDS";
-const EVENT_STREAM: &str = "HEPH_RUN_EVENTS";
 const COMMAND_CONSUMER: &str = "run-orchestrator-v1";
 
-/// Creates or resolves the durable command/event streams and command
-/// consumer.
+/// Creates or resolves the durable command stream and command consumer.
 ///
 /// # Errors
 ///
@@ -41,16 +37,6 @@ pub async fn ensure_jetstream_topology(
                 CONTROL_EXECUTE_SUBJECT.to_owned(),
             ],
             retention: RetentionPolicy::WorkQueue,
-            storage: StorageType::File,
-            ..Default::default()
-        })
-        .await
-        .map_err(|error| TopologyError(error.to_string()))?;
-    context
-        .get_or_create_stream(Config {
-            name: EVENT_STREAM.to_owned(),
-            subjects: vec![LIFECYCLE_EVENT_SUBJECT.to_owned()],
-            retention: RetentionPolicy::Limits,
             storage: StorageType::File,
             ..Default::default()
         })
@@ -220,76 +206,4 @@ pub enum CommandHandlingError {
     /// The durable consumer received an unsupported subject.
     #[error("unsupported run-command subject {0}")]
     UnknownSubject(String),
-}
-
-/// Publishes transactional outbox records to NATS `JetStream`.
-#[derive(Clone)]
-pub struct NatsOutboxPublisher {
-    context: jetstream::Context,
-}
-
-impl NatsOutboxPublisher {
-    /// Creates a publisher from a `JetStream` context.
-    #[must_use]
-    pub const fn new(context: jetstream::Context) -> Self {
-        Self { context }
-    }
-
-    /// Publishes up to `limit` pending records.
-    ///
-    /// The outbox identifier is sent as `Nats-Msg-Id`, making retries
-    /// idempotent within `JetStream`'s configured duplicate window. Consumers
-    /// still use the durable command inbox for unbounded idempotency.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when repository access, serialization, publication, or
-    /// the `JetStream` acknowledgement fails.
-    pub async fn publish_pending(
-        &self,
-        repository: &Arc<dyn RunRepository>,
-        limit: i64,
-    ) -> Result<usize, OutboxPublishError> {
-        let records = repository.unpublished_outbox(limit).await?;
-        let count = records.len();
-        for record in records {
-            let payload = serde_json::to_vec(&record.payload)?;
-            let mut headers = HeaderMap::new();
-            headers.insert("Nats-Msg-Id", record.id.to_string());
-            let publication = self
-                .context
-                .publish_with_headers(record.subject, headers, payload.into())
-                .await;
-            let result = match publication {
-                Ok(acknowledgement) => acknowledgement.await.map_err(|error| error.to_string()),
-                Err(error) => Err(error.to_string()),
-            };
-            match result {
-                Ok(_acknowledgement) => {
-                    repository.mark_outbox_published(record.id).await?;
-                }
-                Err(error) => {
-                    let message = error.clone();
-                    repository.mark_outbox_failed(record.id, &message).await?;
-                    return Err(OutboxPublishError::JetStream(message));
-                }
-            }
-        }
-        Ok(count)
-    }
-}
-
-/// Transactional outbox publication failure.
-#[derive(Debug, thiserror::Error)]
-#[non_exhaustive]
-pub enum OutboxPublishError {
-    /// Durable repository access failed.
-    #[error(transparent)]
-    Repository(#[from] RepositoryError),
-    /// Event serialization failed.
-    #[error(transparent)]
-    Serialization(#[from] serde_json::Error),
-    /// `JetStream` did not acknowledge publication.
-    #[error("JetStream publication failed: {0}")]
-    JetStream(String),
 }

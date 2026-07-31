@@ -14,7 +14,6 @@ review-domain = { path = "../review-domain" }
 runtime-types = { path = "../runtime-types" }
 serde.workspace = true
 serde_json.workspace = true
-sqlx.workspace = true
 thiserror.workspace = true
 time.workspace = true
 tokio = { workspace = true, features = ["rt", "sync", "time"] }
@@ -25,15 +24,7 @@ volume-trait = { path = "../volume-trait" }
 workspace-domain = { path = "../workspace-domain" }
 
 [dev-dependencies]
-authz-postgres = { path = "../authz-postgres" }
-release-domain = { path = "../release-domain" }
-release-service = { path = "../release-service" }
-serial_test = "3"
-tempfile = "3"
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
-vm-fake = { path = "../vm-fake" }
-vm-libkrun = { path = "../vm-libkrun", features = ["integration-guest"] }
-volume-local = { path = "../volume-local" }
 
 [lints]
 workspace = true

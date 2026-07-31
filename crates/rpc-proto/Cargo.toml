@@ -1,0 +1,27 @@
+[package]
+name = "rpc-proto"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[features]
+default = ["client"]
+client = ["connectrpc/client"]
+
+[dependencies]
+buffa.workspace = true
+buffa-descriptor.workspace = true
+buffa-types.workspace = true
+connectrpc.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+connectrpc = { workspace = true, features = ["axum"] }
+connectrpc-reflection.workspace = true
+toml.workspace = true
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread"] }
+
+[lints]
+workspace = true

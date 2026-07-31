@@ -35,11 +35,14 @@ readonly nats_volume="hephaestus-local-nats-data"
 readonly supervisor_pid_file="${local_root}/run-local.pid"
 readonly oidc_pid_file="${local_root}/oidc.pid"
 readonly daemon_pid_file="${local_root}/daemon.pid"
+readonly web_log_pid_file="${local_root}/web-log.pid"
 readonly cgroup_path_file="${local_root}/cgroup.path"
 
 oidc_pid=""
 daemon_pid=""
+web_log_pid=""
 cgroup_root=""
+daemon_restart_requested="false"
 
 stop_pid_file() {
     local pid_file="$1"
@@ -151,12 +154,14 @@ if [[ "${1:-}" == "stop" ]]; then
     stop_pid_file "${supervisor_pid_file}"
     stop_pid_file "${daemon_pid_file}"
     stop_pid_file "${oidc_pid_file}"
+    stop_pid_file "${web_log_pid_file}"
     podman rm --force \
         "${web_container}" "${nats_container}" "${postgres_container}" "${rootfs_container}" \
         >/dev/null 2>&1 || true
     cleanup_recorded_cgroup
     cleanup_secret_runtime
-    rm -f -- "${supervisor_pid_file}" "${daemon_pid_file}" "${oidc_pid_file}"
+    rm -f -- \
+        "${supervisor_pid_file}" "${daemon_pid_file}" "${oidc_pid_file}" "${web_log_pid_file}"
     printf 'Hephaestus local services stopped; persistent data was retained.\n'
     exit 0
 fi
@@ -172,12 +177,17 @@ cleanup() {
         kill "${oidc_pid}" 2>/dev/null || true
         wait "${oidc_pid}" 2>/dev/null || true
     fi
+    if [[ -n "${web_log_pid}" ]]; then
+        kill "${web_log_pid}" 2>/dev/null || true
+        wait "${web_log_pid}" 2>/dev/null || true
+    fi
     podman rm --force \
         "${web_container}" "${nats_container}" "${postgres_container}" "${rootfs_container}" \
         >/dev/null 2>&1 || true
     cleanup_cgroup_path "${cgroup_root}"
     cleanup_secret_runtime
-    rm -f -- "${supervisor_pid_file}" "${daemon_pid_file}" "${oidc_pid_file}"
+    rm -f -- \
+        "${supervisor_pid_file}" "${daemon_pid_file}" "${oidc_pid_file}" "${web_log_pid_file}"
     rm -f -- "${cgroup_path_file}"
     printf '\nHephaestus stopped. Local data remains in %s and Podman volumes.\n' \
         "${local_root}"
@@ -366,7 +376,7 @@ export HEPHAESTUS_RUNTIME_ROOT="${runtime_root}"
 export HEPHAESTUS_SECRET_RUNTIME_ROOT="${secret_runtime_root}"
 export HEPHAESTUS_SECRET_KEY_DIRECTORY="${secret_key_directory}"
 export HEPHAESTUS_SECRET_KEY_REFERENCE="${secret_key_reference}"
-export HEPHAESTUS_INTERNAL_COMMAND_TOKEN="${internal_command_token}"
+export HEPHAESTUS_RPC_MEDIATOR_SECRET="${internal_command_token}"
 export HEPHAESTUS_ROOT_IMAGE_PATH="${root_image_path}"
 export HEPHAESTUS_ROOT_IMAGE_REFERENCE="${ROOT_IMAGE_REFERENCE}"
 export HEPHAESTUS_VM_BACKEND="libkrun"
@@ -381,40 +391,45 @@ export HEPHAESTUS_RUNTIME_ALLOW_BROKER_ONLY="true"
 export HEPHAESTUS_RUNTIME_ALLOW_EGRESS="false"
 export RUST_LOG="${RUST_LOG:-hephaestus_app=info,git_http=info,forge_service=info,run_orchestrator=info,review_service=info}"
 
-unshare --map-user 10001 --map-group 10001 \
-    "${repo_root}/target/debug/hephaestusd" \
-    >"${local_root}/logs/daemon.log" 2>&1 &
-daemon_pid="$!"
-printf '%s\n' "${daemon_pid}" >"${daemon_pid_file}"
-wait_for_url "http://127.0.0.1:8080/healthz" \
-    "${local_root}/logs/daemon.log"
+start_daemon() {
+    unshare --map-user 10001 --map-group 10001 \
+        "${repo_root}/target/debug/hephaestusd" \
+        >"${local_root}/logs/daemon.log" 2>&1 &
+    daemon_pid="$!"
+    printf '%s\n' "${daemon_pid}" >"${daemon_pid_file}"
+    wait_for_url "http://127.0.0.1:8080/healthz" \
+        "${local_root}/logs/daemon.log"
+}
 
-readonly web_database_url="ecto://hephaestus_web_e2e:hephaestus-web-e2e@127.0.0.1:55432/hephaestus"
+request_daemon_restart() {
+    daemon_restart_requested="true"
+}
+
+trap request_daemon_restart USR1
+start_daemon
+
 # The repository is also mounted by browser-test containers, so use a shared
 # SELinux label rather than letting either container revoke access.
 podman run --detach --rm \
     --name "${web_container}" \
     --network host \
     --volume "${repo_root}:/workspace:z" \
-    --volume "${local_root}/artifacts:${local_root}/artifacts:ro,Z" \
-    --volume "${local_root}/repositories:${local_root}/repositories:ro,Z" \
     --workdir /workspace/web \
     --env MIX_ENV=dev \
     --env PHX_SERVER=true \
     --env PORT=4000 \
-    --env DATABASE_URL="${web_database_url}" \
-    --env HEPHAESTUS_ARTIFACT_ROOT="${local_root}/artifacts" \
-    --env HEPHAESTUS_REPOSITORY_ROOT="${local_root}/repositories" \
-    --env HEPHAESTUS_INTERNAL_COMMAND_URL="http://127.0.0.1:8080/internal/v1/commands" \
-    --env HEPHAESTUS_INTERNAL_COMMAND_TOKEN="${internal_command_token}" \
+    --env HEPHAESTUS_RPC_MEDIATOR_SECRET="${internal_command_token}" \
     --env HEPHAESTUS_BROWSER_OIDC_ISSUER="http://127.0.0.1:5556" \
     --env HEPHAESTUS_BROWSER_OIDC_CLIENT_ID="hephaestus-web" \
     --env HEPHAESTUS_BROWSER_OIDC_CLIENT_SECRET="development-secret" \
     --env HEPHAESTUS_BROWSER_OIDC_REDIRECT_URI="http://127.0.0.1:4000/auth/oidc/callback" \
     "${ELIXIR_IMAGE}" \
     sh -lc \
-    'apt-get update -qq && apt-get install -y -qq --no-install-recommends git ca-certificates inotify-tools >/dev/null && rm -rf /var/lib/apt/lists/* && mix local.hex --force >/dev/null && mix deps.get && mix assets.setup && mix assets.build && mix phx.server' \
+    'apt-get update -qq && apt-get install -y -qq --no-install-recommends ca-certificates inotify-tools >/dev/null && rm -rf /var/lib/apt/lists/* && mix local.hex --force >/dev/null && mix deps.get && mix assets.setup && mix assets.build && mix phx.server' \
     >/dev/null
+podman logs --follow "${web_container}" >"${local_root}/logs/web.log" 2>&1 &
+web_log_pid="$!"
+printf '%s\n' "${web_log_pid}" >"${web_log_pid_file}"
 wait_for_url "http://127.0.0.1:4000/" \
     "${local_root}/logs/web.log"
 
@@ -438,7 +453,18 @@ printf 'Then clone with:\n\n'
 printf '  git -c http.extraHeader="Authorization: Bearer ${HEPHAESTUS_GIT_TOKEN}" clone http://127.0.0.1:8080/%s\n\n' \
     "${repository_id}"
 printf 'Daemon log: %s\n' "${local_root}/logs/daemon.log"
-printf 'Web log:    podman logs -f %s\n' "${web_container}"
+printf 'Web log:    %s\n' "${local_root}/logs/web.log"
 printf 'Press Ctrl-C here to stop services while retaining local data.\n\n'
 
-wait "${daemon_pid}"
+while true; do
+    daemon_status=0
+    wait "${daemon_pid}" || daemon_status="$?"
+    if [[ "${daemon_restart_requested}" == "true" ]]; then
+        daemon_restart_requested="false"
+        kill "${daemon_pid}" 2>/dev/null || true
+        wait "${daemon_pid}" 2>/dev/null || true
+        start_daemon
+        continue
+    fi
+    exit "${daemon_status}"
+done

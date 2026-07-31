@@ -1,8 +1,6 @@
 //! Opt-in real-PostgreSQL tests for Mélange evaluation and RLS.
 
-use authz_domain::{
-    AuthorizationDecision, Authorizer, AuthzError, ObjectRef, ObjectType, Permission, Subject,
-};
+use authz_domain::{AuthorizationDecision, AuthzError, ObjectRef, ObjectType, Permission, Subject};
 use authz_postgres::{PostgresMelangeAuthorizer, begin_actor_transaction};
 use identity_domain::{AuthenticatedIdentity, RequestId, UserId};
 use serde_json::json;
@@ -26,6 +24,7 @@ struct Fixture {
     consuming_repository: Uuid,
     build: Uuid,
     release: Uuid,
+    artifact: Uuid,
     release_agent: Uuid,
     instance: Uuid,
     attachment: Uuid,
@@ -171,6 +170,41 @@ async fn generated_permissions_and_rls_enforce_the_same_perimeter() {
     );
     owner_tx.rollback().await.expect("rollback owner checks");
 
+    let maintainer_identity = identity(fixture.maintainer);
+    let mut maintainer_tx = begin_actor_transaction(&pool, &maintainer_identity)
+        .await
+        .expect("maintainer RLS transaction");
+    sqlx::query("SET LOCAL ROLE hephaestus_app")
+        .execute(&mut *maintainer_tx)
+        .await
+        .expect("use normal application role");
+    let authorized_build: Option<Uuid> =
+        sqlx::query_scalar("SELECT id FROM build_requests WHERE id = $1")
+            .bind(fixture.build)
+            .fetch_optional(&mut *maintainer_tx)
+            .await
+            .expect("authorized build request read");
+    let authorized_execution: Option<Uuid> = sqlx::query_scalar(
+        "SELECT build_request_id FROM build_executions WHERE build_request_id = $1",
+    )
+    .bind(fixture.build)
+    .fetch_optional(&mut *maintainer_tx)
+    .await
+    .expect("authorized build execution read");
+    let authorized_artifact: Option<Uuid> =
+        sqlx::query_scalar("SELECT id FROM release_artifacts WHERE id = $1")
+            .bind(fixture.artifact)
+            .fetch_optional(&mut *maintainer_tx)
+            .await
+            .expect("authorized release artifact read");
+    assert_eq!(authorized_build, Some(fixture.build));
+    assert_eq!(authorized_execution, Some(fixture.build));
+    assert_eq!(authorized_artifact, Some(fixture.artifact));
+    maintainer_tx
+        .rollback()
+        .await
+        .expect("rollback authorized RLS checks");
+
     let outsider_identity = identity(fixture.outsider);
     let mut outsider_tx = begin_actor_transaction(&pool, &outsider_identity)
         .await
@@ -226,6 +260,28 @@ async fn generated_permissions_and_rls_enforce_the_same_perimeter() {
         .await
         .expect("RLS direct release read");
     assert!(private_release.is_none());
+    let private_build: Option<Uuid> =
+        sqlx::query_scalar("SELECT id FROM build_requests WHERE id = $1")
+            .bind(fixture.build)
+            .fetch_optional(&mut *outsider_tx)
+            .await
+            .expect("RLS direct build request read");
+    let private_execution: Option<Uuid> = sqlx::query_scalar(
+        "SELECT build_request_id FROM build_executions WHERE build_request_id = $1",
+    )
+    .bind(fixture.build)
+    .fetch_optional(&mut *outsider_tx)
+    .await
+    .expect("RLS direct build execution read");
+    let private_artifact: Option<Uuid> =
+        sqlx::query_scalar("SELECT id FROM release_artifacts WHERE id = $1")
+            .bind(fixture.artifact)
+            .fetch_optional(&mut *outsider_tx)
+            .await
+            .expect("RLS direct release artifact read");
+    assert!(private_build.is_none());
+    assert!(private_execution.is_none());
+    assert!(private_artifact.is_none());
     let changed = sqlx::query("UPDATE repositories SET name = 'forbidden' WHERE id = $1")
         .bind(fixture.private_repository)
         .execute(&mut *outsider_tx)
@@ -795,6 +851,7 @@ async fn seed(pool: &PgPool) -> Fixture {
         consuming_repository: Uuid::new_v4(),
         build: Uuid::new_v4(),
         release: Uuid::new_v4(),
+        artifact: Uuid::new_v4(),
         release_agent: Uuid::new_v4(),
         instance: Uuid::new_v4(),
         attachment: Uuid::new_v4(),
@@ -894,6 +951,19 @@ async fn seed(pool: &PgPool) -> Fixture {
     .await
     .expect("seed build");
     sqlx::query(
+        "INSERT INTO build_executions
+         (build_request_id, vm_id, release_id, release_agent_id,
+          release_version, state, exit_code)
+         VALUES ($1, $2, $3, $4, 'v1', 'drafted', 0)",
+    )
+    .bind(fixture.build)
+    .bind(format!("vm-{}", fixture.build))
+    .bind(fixture.release)
+    .bind(fixture.release_agent)
+    .execute(pool)
+    .await
+    .expect("seed build execution");
+    sqlx::query(
         "INSERT INTO releases
          (id, repository_id, version, source_commit, source_ref,
           build_request_id, build_definition_hash, configuration,
@@ -911,6 +981,20 @@ async fn seed(pool: &PgPool) -> Fixture {
     .execute(pool)
     .await
     .expect("seed release");
+    sqlx::query(
+        "INSERT INTO release_artifacts
+         (id, release_id, path, kind, mode, content_hash, size_bytes,
+          media_type, storage_key)
+         VALUES ($1, $2, 'bin/agent', 'executable', 365, $3, 1,
+                 'application/octet-stream', $4)",
+    )
+    .bind(fixture.artifact)
+    .bind(fixture.release)
+    .bind([5_u8; 32].as_slice())
+    .bind(Uuid::new_v4())
+    .execute(pool)
+    .await
+    .expect("seed release artifact");
     sqlx::query(
         "INSERT INTO release_agents
          (id, release_id, family_id, agent_key, display_name,

@@ -10,7 +10,6 @@ use runtime_types::{
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use sqlx::{FromRow, PgPool};
 use std::{
     ffi::OsStr,
     fs::{self, File, OpenOptions},
@@ -19,12 +18,15 @@ use std::{
     os::unix::fs::{PermissionsExt, symlink},
     path::{Component, Path, PathBuf},
     process::{Command, Stdio},
+    sync::Arc,
 };
 use uuid::Uuid;
 use vm_trait::VmMount;
 use workspace_domain::{
-    ArtifactId, PreparedWorkspace, PublishedResult, ResultId, RunWorkspaceManager, WorkspaceError,
-    WorkspaceId,
+    ArtifactId, PreparedWorkspace, PublishedResult, ResultArtifactMetadata, ResultId,
+    ResultMetadata, ResultRepository, RunWorkspaceManager, WorkspaceError, WorkspaceId,
+    WorkspaceMetadata, WorkspaceMetadataRepository, WorkspaceRepositoryError,
+    WorkspaceRequestMetadata,
 };
 
 const SOURCE_GUEST_PATH: &str = "/workspace/repo";
@@ -70,10 +72,11 @@ pub struct LocalWorkspaceConfig {
     pub limits: WorkspaceLimits,
 }
 
-/// PostgreSQL-coordinated local workspace and result implementation.
+/// Filesystem/Git workspace and result implementation over provider-neutral ports.
 #[derive(Clone)]
 pub struct LocalWorkspaceManager {
-    pool: PgPool,
+    metadata: Arc<dyn WorkspaceMetadataRepository>,
+    results: Arc<dyn ResultRepository>,
     config: LocalWorkspaceConfig,
 }
 
@@ -84,7 +87,11 @@ impl LocalWorkspaceManager {
     ///
     /// Returns an error when a path is relative, overlaps another storage
     /// class, or the Git executable is not an absolute regular file.
-    pub fn new(pool: PgPool, config: LocalWorkspaceConfig) -> Result<Self, LocalWorkspaceError> {
+    pub fn new(
+        metadata: Arc<dyn WorkspaceMetadataRepository>,
+        results: Arc<dyn ResultRepository>,
+        config: LocalWorkspaceConfig,
+    ) -> Result<Self, LocalWorkspaceError> {
         for (name, path) in [
             ("workspace_root", &config.workspace_root),
             ("artifact_root", &config.artifact_root),
@@ -132,7 +139,11 @@ impl LocalWorkspaceManager {
                 "workspace limits must be greater than zero",
             )));
         }
-        Ok(Self { pool, config })
+        Ok(Self {
+            metadata,
+            results,
+            config,
+        })
     }
 
     /// Creates and canonicalizes workspace and artifact storage roots.
@@ -207,18 +218,11 @@ impl LocalWorkspaceManager {
     }
 
     async fn request(&self, run: &Run) -> Result<Option<RunRequest>, LocalWorkspaceError> {
-        let row = sqlx::query_as::<_, RunRequestRow>(
-            "SELECT request.repository_id, request.commit_sha,
-                    request.instance_id, release.configuration AS config
-             FROM run_requests request
-             JOIN releases release ON release.id = request.release_id
-             WHERE request.command_id = $1
-               AND request.dispatch_state <> 'denied'",
-        )
-        .bind(run.command_id.as_uuid())
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(database)?;
+        let row = self
+            .metadata
+            .request(run.command_id.as_uuid())
+            .await
+            .map_err(repository)?;
         row.map(TryInto::try_into).transpose()
     }
 
@@ -226,52 +230,8 @@ impl LocalWorkspaceManager {
         &self,
         run_id: RunId,
     ) -> Result<Option<PublishedResult>, LocalWorkspaceError> {
-        let row = sqlx::query_as::<_, ResultRow>(
-            "SELECT id, result_ref, result_commit, result_tree
-             FROM run_results
-             WHERE run_id = $1 AND state = 'completed'",
-        )
-        .bind(run_id.as_uuid())
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(database)?;
-        row.map(ResultRow::published).transpose()
-    }
-
-    async fn persist_event(
-        &self,
-        run_id: RunId,
-        event_type: &str,
-        payload: serde_json::Value,
-    ) -> Result<(), LocalWorkspaceError> {
-        let mut transaction = self.pool.begin().await.map_err(database)?;
-        sqlx::query("SELECT id FROM runs WHERE id = $1 FOR UPDATE")
-            .bind(run_id.as_uuid())
-            .fetch_one(&mut *transaction)
-            .await
-            .map_err(database)?;
-        let sequence: i64 = sqlx::query_scalar(
-            "SELECT COALESCE(MAX(sequence), 0) + 1
-             FROM run_events WHERE run_id = $1",
-        )
-        .bind(run_id.as_uuid())
-        .fetch_one(&mut *transaction)
-        .await
-        .map_err(database)?;
-        sqlx::query(
-            "INSERT INTO run_events
-             (id, run_id, sequence, event_type, payload, occurred_at)
-             VALUES ($1, $2, $3, $4, $5, now())",
-        )
-        .bind(Uuid::new_v4())
-        .bind(run_id.as_uuid())
-        .bind(sequence)
-        .bind(event_type)
-        .bind(payload)
-        .execute(&mut *transaction)
-        .await
-        .map_err(database)?;
-        transaction.commit().await.map_err(database)
+        let row = self.results.completed(run_id).await.map_err(repository)?;
+        row.map(published_result).transpose()
     }
 }
 
@@ -319,15 +279,7 @@ impl LocalWorkspaceManager {
         }
         validate_mount_policy(&request.config)?;
 
-        if let Some(row) = sqlx::query_as::<_, WorkspaceRow>(
-            "SELECT id, state, active_path, sealed_path
-             FROM run_workspaces WHERE run_id = $1",
-        )
-        .bind(run.id.as_uuid())
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(database)?
-        {
+        if let Some(row) = self.metadata.workspace(run.id).await.map_err(repository)? {
             if row.state == "active" {
                 return self.prepared_from_row(&row);
             }
@@ -342,20 +294,21 @@ impl LocalWorkspaceManager {
         let sealed_path = self.sealed_path(run.id);
         let active_text = utf8_path(&active_path)?;
         let sealed_text = utf8_path(&sealed_path)?;
-        sqlx::query(
-            "INSERT INTO run_workspaces
-             (id, run_id, repository_id, input_commit, active_path, sealed_path, state)
-             VALUES ($1, $2, $3, $4, $5, $6, 'preparing')",
-        )
-        .bind(workspace_id.as_uuid())
-        .bind(run.id.as_uuid())
-        .bind(request.repository_id.as_uuid())
-        .bind(&request.commit)
-        .bind(active_text)
-        .bind(sealed_text)
-        .execute(&self.pool)
-        .await
-        .map_err(database)?;
+        self.metadata
+            .insert_preparing(
+                &WorkspaceMetadata {
+                    id: workspace_id.as_uuid(),
+                    state: String::from("preparing"),
+                    active_path: active_text.clone(),
+                    sealed_path: sealed_text.clone(),
+                    input_commit: Some(request.commit.clone()),
+                },
+                request.repository_id.as_uuid(),
+                &request.commit,
+                run.id,
+            )
+            .await
+            .map_err(repository)?;
 
         let temporary_path = self
             .config
@@ -386,51 +339,36 @@ impl LocalWorkspaceManager {
                 {
                     remove_owned_workspace(&self.config, &failed_temporary_path, "active")?;
                 }
-                sqlx::query(
-                    "UPDATE run_workspaces
-                     SET state = 'materialization_failed',
-                         failure = jsonb_build_object('message', $2)
-                     WHERE run_id = $1",
-                )
-                .bind(run.id.as_uuid())
-                .bind(error.to_string())
-                .execute(&self.pool)
-                .await
-                .map_err(database)?;
+                self.metadata
+                    .mark_materialization_failed(run.id, &error.to_string())
+                    .await
+                    .map_err(repository)?;
                 return Err(error);
             }
         };
-        sqlx::query(
-            "UPDATE run_workspaces
-             SET state = 'active', input_tree = $2, materialization_hash = $3
-             WHERE run_id = $1 AND state = 'preparing'",
-        )
-        .bind(run.id.as_uuid())
-        .bind(&materialized.tree)
-        .bind(&materialized.manifest_hash)
-        .execute(&self.pool)
-        .await
-        .map_err(database)?;
-        self.persist_event(
-            run.id,
-            "workspace.active",
-            serde_json::json!({
-                "workspace_id": workspace_id.to_string(),
-                "repository_id": request.repository_id,
-                "input_commit": request.commit,
-                "input_tree": materialized.tree,
-                "materialization_hash": materialized.manifest_hash,
-                "source_mount": SOURCE_GUEST_PATH,
-                "work_mount": WORK_GUEST_PATH,
-            }),
-        )
-        .await?;
+        self.metadata
+            .mark_active(
+                run.id,
+                &materialized.tree,
+                &materialized.manifest_hash,
+                serde_json::json!({
+                    "workspace_id": workspace_id.to_string(),
+                    "repository_id": request.repository_id,
+                    "input_commit": request.commit,
+                    "input_tree": materialized.tree,
+                    "materialization_hash": materialized.manifest_hash,
+                    "source_mount": SOURCE_GUEST_PATH,
+                    "work_mount": WORK_GUEST_PATH,
+                }),
+            )
+            .await
+            .map_err(repository)?;
         self.prepared(workspace_id, &self.active_path(run.id))
     }
 
     fn prepared_from_row(
         &self,
-        row: &WorkspaceRow,
+        row: &WorkspaceMetadata,
     ) -> Result<PreparedWorkspace, LocalWorkspaceError> {
         let active = PathBuf::from(&row.active_path);
         let expected =
@@ -487,6 +425,9 @@ impl LocalWorkspaceManager {
     // The seal, import, database, artifact, and Git CAS order is security
     // sensitive and intentionally visible as one state-machine operation.
     #[allow(clippy::too_many_lines)]
+    // Finalization must keep validation and every durable filesystem/database
+    // transition in one ordered cleanup path.
+    #[allow(clippy::cognitive_complexity)]
     async fn finalize_run(
         &self,
         run: &Run,
@@ -503,102 +444,79 @@ impl LocalWorkspaceManager {
             return Ok(None);
         }
         let message = validate_message(message)?;
-        let workspace = sqlx::query_as::<_, WorkspaceDetailRow>(
-            "SELECT id, state, active_path, sealed_path, input_commit
-             FROM run_workspaces WHERE run_id = $1",
-        )
-        .bind(run.id.as_uuid())
-        .fetch_one(&self.pool)
-        .await
-        .map_err(database)?;
+        let workspace = self
+            .metadata
+            .workspace(run.id)
+            .await
+            .map_err(repository)?
+            .ok_or_else(|| {
+                LocalWorkspaceError::State(String::from("workspace metadata is missing"))
+            })?;
         let active = PathBuf::from(&workspace.active_path);
         let sealed = PathBuf::from(&workspace.sealed_path);
         ensure_workspace_path(&self.config, &active, "active")?;
         ensure_workspace_path(&self.config, &sealed, "sealed")?;
-        let result_id = ResultId::new();
         let result_ref = format!("refs/heads/hephaestus/{}/{}", request.instance_id, run.id);
-        sqlx::query(
-            "INSERT INTO run_results
-             (id, run_id, repository_id, instance_id, instance_revision_id,
-              release_id, release_agent_id, input_commit, result_ref, message,
-              state)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pending')
-             ON CONFLICT (run_id) DO NOTHING",
-        )
-        .bind(result_id.as_uuid())
-        .bind(run.id.as_uuid())
-        .bind(request.repository_id.as_uuid())
-        .bind(request.instance_id.as_uuid())
-        .bind(run.instance_revision_id.as_uuid())
-        .bind(run.release_id.as_uuid())
-        .bind(run.release_agent_id.as_uuid())
-        .bind(&workspace.input_commit)
-        .bind(&result_ref)
-        .bind(message)
-        .execute(&self.pool)
-        .await
-        .map_err(database)?;
+        self.results
+            .insert_pending(
+                run.id,
+                request.repository_id.as_uuid(),
+                request.instance_id.as_uuid(),
+                run.instance_revision_id.as_uuid(),
+                run.release_id.as_uuid(),
+                run.release_agent_id.as_uuid(),
+                workspace.input_commit.as_deref().unwrap_or_default(),
+                &result_ref,
+                message,
+            )
+            .await
+            .map_err(repository)?;
 
         if workspace.state == "active" {
-            sqlx::query(
-                "UPDATE run_workspaces
-                 SET state = 'finalize_requested', finalized_at = now()
-                 WHERE run_id = $1 AND state = 'active'",
-            )
-            .bind(run.id.as_uuid())
-            .execute(&self.pool)
-            .await
-            .map_err(database)?;
-            self.persist_event(
-                run.id,
-                "result.finalize_requested",
-                serde_json::json!({"message": message}),
-            )
-            .await?;
+            self.metadata
+                .set_state(run.id, "finalize_requested")
+                .await
+                .map_err(repository)?;
+            self.metadata
+                .event(
+                    run.id,
+                    "result.finalize_requested",
+                    serde_json::json!({"message": message}),
+                )
+                .await
+                .map_err(repository)?;
         }
         if matches!(
             workspace.state.as_str(),
             "active" | "finalize_requested" | "seal_failed"
         ) {
             if let Err(error) = seal_workspace(&active, &sealed) {
-                sqlx::query(
-                    "UPDATE run_workspaces
-                     SET state = 'seal_failed',
-                         failure = jsonb_build_object('message', $2)
-                     WHERE run_id = $1",
-                )
-                .bind(run.id.as_uuid())
-                .bind(error.to_string())
-                .execute(&self.pool)
-                .await
-                .map_err(database)?;
+                self.metadata
+                    .mark_failed(run.id, "seal_failed", &error.to_string())
+                    .await
+                    .map_err(repository)?;
                 return Err(error);
             }
-            sqlx::query(
-                "UPDATE run_workspaces
-                 SET state = 'sealed', sealed_at = now()
-                 WHERE run_id = $1
-                   AND state IN ('active', 'finalize_requested', 'seal_failed')",
-            )
-            .bind(run.id.as_uuid())
-            .execute(&self.pool)
-            .await
-            .map_err(database)?;
-            self.persist_event(
-                run.id,
-                "result.workspace_sealed",
-                serde_json::json!({"workspace_id": workspace.id}),
-            )
-            .await?;
+            self.metadata
+                .set_state(run.id, "sealed")
+                .await
+                .map_err(repository)?;
+            self.metadata
+                .event(
+                    run.id,
+                    "result.workspace_sealed",
+                    serde_json::json!({"workspace_id": workspace.id}),
+                )
+                .await
+                .map_err(repository)?;
         }
 
-        sqlx::query("UPDATE run_workspaces SET state = 'importing' WHERE run_id = $1")
-            .bind(run.id.as_uuid())
-            .execute(&self.pool)
+        self.metadata
+            .set_state(run.id, "importing")
             .await
-            .map_err(database)?;
+            .map_err(repository)?;
 
-        let repository = self.repository_path(request.repository_id);
+        let repository_path = self.repository_path(request.repository_id);
         let config = self.config.clone();
         let sealed_for_import = sealed.clone();
         let input_commit = workspace.input_commit.clone();
@@ -607,7 +525,7 @@ impl LocalWorkspaceManager {
         let timestamp = run.created_at.unix_timestamp();
         let result_run_id = run.id;
         let import = ImportRequest {
-            input_commit,
+            input_commit: input_commit.unwrap_or_default(),
             message: message_for_import,
             timestamp,
             declared_paths: declared_files,
@@ -615,72 +533,66 @@ impl LocalWorkspaceManager {
             run_id: result_run_id,
         };
         let imported = tokio::task::spawn_blocking(move || {
-            import_result(&config, &repository, &sealed_for_import, &import)
+            import_result(&config, &repository_path, &sealed_for_import, &import)
         })
         .await
         .map_err(join_error)?;
         let imported = match imported {
             Ok(imported) => imported,
             Err(error) => {
-                sqlx::query(
-                    "UPDATE run_results
-                     SET state = 'rejected',
-                         diagnostics = jsonb_build_array(
-                             jsonb_build_object('message', $2)
-                         )
-                     WHERE run_id = $1",
-                )
-                .bind(run.id.as_uuid())
-                .bind(error.to_string())
-                .execute(&self.pool)
-                .await
-                .map_err(database)?;
-                sqlx::query(
-                    "UPDATE run_workspaces
-                     SET state = 'import_rejected',
-                         failure = jsonb_build_object('message', $2)
-                     WHERE run_id = $1",
-                )
-                .bind(run.id.as_uuid())
-                .bind(error.to_string())
-                .execute(&self.pool)
-                .await
-                .map_err(database)?;
-                self.persist_event(
-                    run.id,
-                    "result.import_rejected",
-                    serde_json::json!({"message": error.to_string()}),
-                )
-                .await?;
+                self.results
+                    .reject(run.id, &error.to_string())
+                    .await
+                    .map_err(repository)?;
+                self.metadata
+                    .mark_failed(run.id, "import_rejected", &error.to_string())
+                    .await
+                    .map_err(repository)?;
+                self.metadata
+                    .event(
+                        run.id,
+                        "result.import_rejected",
+                        serde_json::json!({"message": error.to_string()}),
+                    )
+                    .await
+                    .map_err(repository)?;
                 return Err(error);
             }
         };
 
-        let persisted_id: Uuid = sqlx::query_scalar("SELECT id FROM run_results WHERE run_id = $1")
-            .bind(run.id.as_uuid())
-            .fetch_one(&self.pool)
-            .await
-            .map_err(database)?;
-        let persisted_id = ResultId::from_uuid(persisted_id);
-        persist_prepared(
-            &self.pool,
-            persisted_id,
-            run.id,
+        let persisted_id = self.results.id_for_run(run.id).await.map_err(repository)?;
+        let (logs, exit) = self.results.vm_logs(run.id).await.map_err(repository)?;
+        let artifacts = persist_artifacts(
             &imported,
-            &self.config.artifact_root,
-        )
-        .await?;
-        self.persist_event(
+            &logs,
+            &exit.unwrap_or(serde_json::Value::Null),
             run.id,
-            "result.import_prepared",
-            serde_json::json!({
-                "result_id": persisted_id.to_string(),
-                "result_tree": imported.tree,
-                "result_commit": imported.commit,
-                "artifact_manifest_hash": imported.manifest_hash,
-            }),
-        )
-        .await?;
+            &self.config.artifact_root,
+        )?;
+        self.results
+            .persist_prepared(
+                persisted_id,
+                run.id,
+                &imported.tree,
+                &imported.commit,
+                &imported.manifest_hash,
+                &artifacts,
+            )
+            .await
+            .map_err(repository)?;
+        self.metadata
+            .event(
+                run.id,
+                "result.import_prepared",
+                serde_json::json!({
+                    "result_id": persisted_id.to_string(),
+                    "result_tree": imported.tree,
+                    "result_commit": imported.commit,
+                    "artifact_manifest_hash": imported.manifest_hash,
+                }),
+            )
+            .await
+            .map_err(repository)?;
 
         cas_publish_ref(
             &self.config,
@@ -688,37 +600,30 @@ impl LocalWorkspaceManager {
             &result_ref,
             &imported.commit,
         )?;
-        sqlx::query(
-            "UPDATE run_results
-             SET state = 'ref_published', published_at = now()
-             WHERE id = $1 AND result_commit = $2",
-        )
-        .bind(persisted_id.as_uuid())
-        .bind(&imported.commit)
-        .execute(&self.pool)
-        .await
-        .map_err(database)?;
-        self.persist_event(
-            run.id,
-            "result.ref_published",
-            serde_json::json!({"result_ref": result_ref, "result_commit": imported.commit}),
-        )
-        .await?;
-        sqlx::query(
-            "UPDATE run_results
-             SET state = 'completed', completed_at = now()
-             WHERE id = $1 AND state = 'ref_published'",
-        )
-        .bind(persisted_id.as_uuid())
-        .execute(&self.pool)
-        .await
-        .map_err(database)?;
-        self.persist_event(
-            run.id,
-            "result.completed",
-            serde_json::json!({"result_id": persisted_id.to_string()}),
-        )
-        .await?;
+        self.results
+            .mark_ref_published(persisted_id, &imported.commit)
+            .await
+            .map_err(repository)?;
+        self.metadata
+            .event(
+                run.id,
+                "result.ref_published",
+                serde_json::json!({"result_ref": result_ref, "result_commit": imported.commit}),
+            )
+            .await
+            .map_err(repository)?;
+        self.results
+            .mark_completed(persisted_id)
+            .await
+            .map_err(repository)?;
+        self.metadata
+            .event(
+                run.id,
+                "result.completed",
+                serde_json::json!({"result_id": persisted_id.to_string()}),
+            )
+            .await
+            .map_err(repository)?;
         self.cleanup_completed_workspace(run.id).await?;
         Ok(Some(PublishedResult {
             id: persisted_id,
@@ -729,14 +634,7 @@ impl LocalWorkspaceManager {
     }
 
     async fn abandon_run(&self, run_id: RunId) -> Result<(), LocalWorkspaceError> {
-        let row = sqlx::query_as::<_, WorkspaceRow>(
-            "SELECT id, state, active_path, sealed_path
-             FROM run_workspaces WHERE run_id = $1",
-        )
-        .bind(run_id.as_uuid())
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(database)?;
+        let row = self.metadata.workspace(run_id).await.map_err(repository)?;
         let Some(row) = row else {
             return Ok(());
         };
@@ -751,32 +649,18 @@ impl LocalWorkspaceManager {
         if sealed.exists() {
             remove_owned_workspace(&self.config, &sealed, "sealed")?;
         }
-        sqlx::query(
-            "UPDATE run_workspaces
-             SET state = 'abandoned', cleaned_at = now()
-             WHERE run_id = $1 AND state <> 'cleaned'",
-        )
-        .bind(run_id.as_uuid())
-        .execute(&self.pool)
-        .await
-        .map_err(database)?;
-        self.persist_event(run_id, "workspace.abandoned", serde_json::json!({}))
+        self.metadata
+            .set_state(run_id, "abandoned")
             .await
+            .map_err(repository)?;
+        self.metadata
+            .event(run_id, "workspace.abandoned", serde_json::json!({}))
+            .await
+            .map_err(repository)
     }
 
     async fn recover_incomplete(&self) -> Result<usize, LocalWorkspaceError> {
-        let pending = sqlx::query_as::<_, PendingRecoveryRow>(
-            "SELECT result.run_id, result.message, run.command_id,
-                    run.instance_id, run.instance_revision_id, run.release_id,
-                    run.release_agent_id, run.attachment_id, run.run_kind,
-                    run.requires_state, run.created_at
-             FROM run_results result
-             JOIN runs run ON run.id = result.run_id
-             WHERE result.state = 'pending'",
-        )
-        .fetch_all(&self.pool)
-        .await
-        .map_err(database)?;
+        let pending = self.results.pending().await.map_err(repository)?;
         let mut recovered = 0;
         for row in pending {
             let run = Run {
@@ -804,38 +688,25 @@ impl LocalWorkspaceManager {
             self.finalize_run(&run, &row.message).await?;
             recovered += 1;
         }
-        let rows = sqlx::query_as::<_, RecoveryRow>(
-            "SELECT result.id, result.run_id, result.repository_id,
-                    result.result_ref, result.result_commit
-             FROM run_results result
-             WHERE result.state IN ('prepared', 'ref_published')",
-        )
-        .fetch_all(&self.pool)
-        .await
-        .map_err(database)?;
+        let rows = self.results.prepared().await.map_err(repository)?;
         for row in rows {
             let Some(commit) = row.result_commit else {
                 continue;
             };
-            let repository = self.repository_path(RepositoryId::from_uuid(row.repository_id));
-            cas_publish_ref(&self.config, &repository, &row.result_ref, &commit)?;
-            sqlx::query(
-                "UPDATE run_results
-                 SET state = 'completed',
-                     published_at = COALESCE(published_at, now()),
-                     completed_at = now()
-                 WHERE id = $1",
-            )
-            .bind(row.id)
-            .execute(&self.pool)
-            .await
-            .map_err(database)?;
-            self.persist_event(
-                RunId::from_uuid(row.run_id),
-                "result.completed",
-                serde_json::json!({"recovered": true, "result_commit": commit}),
-            )
-            .await?;
+            let repository_path = self.repository_path(RepositoryId::from_uuid(row.repository_id));
+            cas_publish_ref(&self.config, &repository_path, &row.result_ref, &commit)?;
+            self.results
+                .mark_completed(ResultId::from_uuid(row.id))
+                .await
+                .map_err(repository)?;
+            self.metadata
+                .event(
+                    RunId::from_uuid(row.run_id),
+                    "result.completed",
+                    serde_json::json!({"recovered": true, "result_commit": commit}),
+                )
+                .await
+                .map_err(repository)?;
             self.cleanup_completed_workspace(RunId::from_uuid(row.run_id))
                 .await?;
             recovered += 1;
@@ -844,14 +715,7 @@ impl LocalWorkspaceManager {
     }
 
     async fn cleanup_completed_workspace(&self, run_id: RunId) -> Result<(), LocalWorkspaceError> {
-        let workspace = sqlx::query_as::<_, WorkspaceRow>(
-            "SELECT id, state, active_path, sealed_path
-             FROM run_workspaces WHERE run_id = $1",
-        )
-        .bind(run_id.as_uuid())
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(database)?;
+        let workspace = self.metadata.workspace(run_id).await.map_err(repository)?;
         let Some(workspace) = workspace else {
             return Ok(());
         };
@@ -866,26 +730,15 @@ impl LocalWorkspaceManager {
                 remove_owned_workspace(&self.config, &path, class)?;
             }
         }
-        sqlx::query(
-            "UPDATE run_workspaces
-             SET state = 'cleaned', cleaned_at = now()
-             WHERE run_id = $1 AND state <> 'cleaned'",
-        )
-        .bind(run_id.as_uuid())
-        .execute(&self.pool)
-        .await
-        .map_err(database)?;
-        self.persist_event(run_id, "workspace.cleaned", serde_json::json!({}))
+        self.metadata
+            .mark_cleaned(run_id)
             .await
+            .map_err(repository)?;
+        self.metadata
+            .event(run_id, "workspace.cleaned", serde_json::json!({}))
+            .await
+            .map_err(repository)
     }
-}
-
-#[derive(FromRow)]
-struct RunRequestRow {
-    repository_id: Uuid,
-    commit_sha: String,
-    instance_id: Uuid,
-    config: serde_json::Value,
 }
 
 struct RunRequest {
@@ -895,81 +748,29 @@ struct RunRequest {
     config: AgentConfig,
 }
 
-impl TryFrom<RunRequestRow> for RunRequest {
+impl TryFrom<WorkspaceRequestMetadata> for RunRequest {
     type Error = LocalWorkspaceError;
 
-    fn try_from(row: RunRequestRow) -> Result<Self, Self::Error> {
+    fn try_from(row: WorkspaceRequestMetadata) -> Result<Self, Self::Error> {
         Ok(Self {
             repository_id: RepositoryId::from_uuid(row.repository_id),
             commit: row.commit_sha,
             instance_id: AgentInstanceId::from_uuid(row.instance_id),
-            config: serde_json::from_value(row.config).map_err(serialization)?,
+            config: serde_json::from_value(row.configuration).map_err(serialization)?,
         })
     }
 }
-
-#[derive(FromRow)]
-struct WorkspaceRow {
-    id: Uuid,
-    state: String,
-    active_path: String,
-    sealed_path: String,
-}
-
-#[derive(FromRow)]
-struct WorkspaceDetailRow {
-    id: Uuid,
-    state: String,
-    active_path: String,
-    sealed_path: String,
-    input_commit: String,
-}
-
-#[derive(FromRow)]
-struct ResultRow {
-    id: Uuid,
-    result_ref: String,
-    result_commit: Option<String>,
-    result_tree: Option<String>,
-}
-
-impl ResultRow {
-    fn published(self) -> Result<PublishedResult, LocalWorkspaceError> {
-        Ok(PublishedResult {
-            id: ResultId::from_uuid(self.id),
-            result_ref: self.result_ref,
-            result_commit: self.result_commit.ok_or_else(|| {
-                LocalWorkspaceError::State(String::from("completed result has no commit"))
-            })?,
-            result_tree: self.result_tree.ok_or_else(|| {
-                LocalWorkspaceError::State(String::from("completed result has no tree"))
-            })?,
-        })
-    }
-}
-
-#[derive(FromRow)]
-struct RecoveryRow {
-    id: Uuid,
-    run_id: Uuid,
-    repository_id: Uuid,
-    result_ref: String,
-    result_commit: Option<String>,
-}
-
-#[derive(FromRow)]
-struct PendingRecoveryRow {
-    run_id: Uuid,
-    message: String,
-    command_id: Uuid,
-    instance_id: Uuid,
-    instance_revision_id: Uuid,
-    release_id: Uuid,
-    release_agent_id: Uuid,
-    attachment_id: Option<Uuid>,
-    run_kind: String,
-    requires_state: bool,
-    created_at: time::OffsetDateTime,
+fn published_result(row: ResultMetadata) -> Result<PublishedResult, LocalWorkspaceError> {
+    Ok(PublishedResult {
+        id: ResultId::from_uuid(row.id),
+        result_ref: row.result_ref,
+        result_commit: row.result_commit.ok_or_else(|| {
+            LocalWorkspaceError::State(String::from("completed result has no commit"))
+        })?,
+        result_tree: row.result_tree.ok_or_else(|| {
+            LocalWorkspaceError::State(String::from("completed result has no tree"))
+        })?,
+    })
 }
 
 struct Materialized {
@@ -1490,37 +1291,16 @@ struct TreeObject {
     name: String,
 }
 
-// One transaction intentionally records every artifact beside the prepared
-// result state so partial metadata is never externally visible.
-#[allow(clippy::too_many_lines)]
-async fn persist_prepared(
-    pool: &PgPool,
-    result_id: ResultId,
-    run_id: RunId,
+#[allow(clippy::too_many_lines)] // Artifact metadata mirrors the durable result schema explicitly.
+fn persist_artifacts(
     imported: &Imported,
+    logs: &[serde_json::Value],
+    exit: &serde_json::Value,
+    run_id: RunId,
     artifact_root: &Path,
-) -> Result<(), LocalWorkspaceError> {
-    let logs: Vec<serde_json::Value> = sqlx::query_scalar(
-        "SELECT payload FROM run_events
-         WHERE run_id = $1 AND event_type = 'vm.log'
-         ORDER BY sequence",
-    )
-    .bind(run_id.as_uuid())
-    .fetch_all(pool)
-    .await
-    .map_err(database)?;
-    let exit: Option<serde_json::Value> = sqlx::query_scalar(
-        "SELECT payload FROM run_events
-         WHERE run_id = $1 AND event_type = 'vm.exited'
-         ORDER BY sequence DESC LIMIT 1",
-    )
-    .bind(run_id.as_uuid())
-    .fetch_optional(pool)
-    .await
-    .map_err(database)?;
-    let logs = serde_json::to_vec(&logs).map_err(serialization)?;
-    let exit =
-        serde_json::to_vec(&exit.unwrap_or(serde_json::Value::Null)).map_err(serialization)?;
+) -> Result<Vec<ResultArtifactMetadata>, LocalWorkspaceError> {
+    let logs = serde_json::to_vec(logs).map_err(serialization)?;
+    let exit = serde_json::to_vec(exit).map_err(serialization)?;
     let artifact_directory = artifact_root.join(run_id.to_string());
     fs::create_dir_all(&artifact_directory).map_err(io_error)?;
     let manifest_key = store_artifact(
@@ -1558,7 +1338,48 @@ async fn persist_prepared(
         "json",
         &exit,
     )?;
-    let mut declared_artifacts = Vec::with_capacity(imported.declared_files.len());
+    let mut artifacts = vec![
+        ResultArtifactMetadata {
+            id: ArtifactId::new().as_uuid(),
+            kind: String::from("manifest"),
+            path: String::new(),
+            git_mode: None,
+            media_type: String::from("application/json"),
+            size_bytes: i64::try_from(imported.manifest.len()).map_err(integer_error)?,
+            sha256: imported.manifest_hash.clone(),
+            storage_key: manifest_key,
+        },
+        ResultArtifactMetadata {
+            id: ArtifactId::new().as_uuid(),
+            kind: String::from("logs"),
+            path: String::new(),
+            git_mode: None,
+            media_type: String::from("application/json"),
+            size_bytes: i64::try_from(logs.len()).map_err(integer_error)?,
+            sha256: logs_hash,
+            storage_key: logs_key,
+        },
+        ResultArtifactMetadata {
+            id: ArtifactId::new().as_uuid(),
+            kind: String::from("exit"),
+            path: String::new(),
+            git_mode: None,
+            media_type: String::from("application/json"),
+            size_bytes: i64::try_from(exit.len()).map_err(integer_error)?,
+            sha256: exit_hash,
+            storage_key: exit_key,
+        },
+        ResultArtifactMetadata {
+            id: ArtifactId::new().as_uuid(),
+            kind: String::from("patch"),
+            path: String::new(),
+            git_mode: None,
+            media_type: String::from("text/x-diff"),
+            size_bytes: i64::try_from(imported.patch.len()).map_err(integer_error)?,
+            sha256: patch_hash,
+            storage_key: patch_key,
+        },
+    ];
     for declared in &imported.declared_files {
         let key = store_artifact(
             artifact_root,
@@ -1568,118 +1389,18 @@ async fn persist_prepared(
             "bin",
             &declared.bytes,
         )?;
-        declared_artifacts.push((declared, key));
+        artifacts.push(ResultArtifactMetadata {
+            id: ArtifactId::new().as_uuid(),
+            kind: String::from("declared_file"),
+            path: declared.path.clone(),
+            git_mode: Some(i32::try_from(declared.mode).map_err(integer_error)?),
+            media_type: String::from("application/octet-stream"),
+            size_bytes: i64::try_from(declared.bytes.len()).map_err(integer_error)?,
+            sha256: declared.sha256.clone(),
+            storage_key: key,
+        });
     }
-    let mut transaction = pool.begin().await.map_err(database)?;
-    sqlx::query(
-        "UPDATE run_results
-         SET state = 'prepared', result_tree = $2, result_commit = $3,
-             artifact_manifest_hash = $4, prepared_at = now()
-         WHERE id = $1 AND state IN ('pending', 'prepared')",
-    )
-    .bind(result_id.as_uuid())
-    .bind(&imported.tree)
-    .bind(&imported.commit)
-    .bind(&imported.manifest_hash)
-    .execute(&mut *transaction)
-    .await
-    .map_err(database)?;
-    for artifact in [
-        ArtifactInsert {
-            id: ArtifactId::new(),
-            kind: "manifest",
-            media_type: "application/json",
-            size: imported.manifest.len(),
-            sha256: &imported.manifest_hash,
-            storage_key: &manifest_key,
-            path: "",
-            git_mode: None,
-        },
-        ArtifactInsert {
-            id: ArtifactId::new(),
-            kind: "logs",
-            media_type: "application/json",
-            size: logs.len(),
-            sha256: &logs_hash,
-            storage_key: &logs_key,
-            path: "",
-            git_mode: None,
-        },
-        ArtifactInsert {
-            id: ArtifactId::new(),
-            kind: "exit",
-            media_type: "application/json",
-            size: exit.len(),
-            sha256: &exit_hash,
-            storage_key: &exit_key,
-            path: "",
-            git_mode: None,
-        },
-        ArtifactInsert {
-            id: ArtifactId::new(),
-            kind: "patch",
-            media_type: "text/x-diff",
-            size: imported.patch.len(),
-            sha256: &patch_hash,
-            storage_key: &patch_key,
-            path: "",
-            git_mode: None,
-        },
-    ] {
-        sqlx::query(
-            "INSERT INTO result_artifacts
-             (id, result_id, kind, path, git_mode, media_type, size_bytes,
-              sha256, storage_key, provenance)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
-                     jsonb_build_object('generated_by', 'workspace-local'))
-             ON CONFLICT (result_id, kind, path) DO NOTHING",
-        )
-        .bind(artifact.id.as_uuid())
-        .bind(result_id.as_uuid())
-        .bind(artifact.kind)
-        .bind(artifact.path)
-        .bind(artifact.git_mode)
-        .bind(artifact.media_type)
-        .bind(i64::try_from(artifact.size).map_err(integer_error)?)
-        .bind(artifact.sha256)
-        .bind(artifact.storage_key)
-        .execute(&mut *transaction)
-        .await
-        .map_err(database)?;
-    }
-    for (declared, storage_key) in declared_artifacts {
-        sqlx::query(
-            "INSERT INTO result_artifacts
-             (id, result_id, kind, path, git_mode, media_type, size_bytes,
-              sha256, storage_key, provenance)
-             VALUES ($1, $2, 'declared_file', $3, $4,
-                     'application/octet-stream', $5, $6, $7,
-                     jsonb_build_object('generated_by', 'workspace-local'))
-             ON CONFLICT (result_id, kind, path) DO NOTHING",
-        )
-        .bind(ArtifactId::new().as_uuid())
-        .bind(result_id.as_uuid())
-        .bind(&declared.path)
-        .bind(i32::try_from(declared.mode).map_err(integer_error)?)
-        .bind(i64::try_from(declared.bytes.len()).map_err(integer_error)?)
-        .bind(&declared.sha256)
-        .bind(storage_key)
-        .execute(&mut *transaction)
-        .await
-        .map_err(database)?;
-    }
-    transaction.commit().await.map_err(database)
-}
-
-struct ArtifactInsert<'a> {
-    id: ArtifactId,
-    kind: &'static str,
-    media_type: &'static str,
-    size: usize,
-    sha256: &'a str,
-    storage_key: &'a str,
-    path: &'static str,
-    git_mode: Option<i32>,
+    Ok(artifacts)
 }
 
 fn store_artifact(
@@ -2091,8 +1812,9 @@ fn sha256(bytes: &[u8]) -> String {
     value
 }
 
-const fn database(error: sqlx::Error) -> LocalWorkspaceError {
-    LocalWorkspaceError::Database(error)
+#[allow(clippy::needless_pass_by_value)] // `map_err` supplies ownership at the persistence boundary.
+fn repository(error: WorkspaceRepositoryError) -> LocalWorkspaceError {
+    LocalWorkspaceError::Persistence(error.to_string())
 }
 
 const fn serialization(error: serde_json::Error) -> LocalWorkspaceError {
@@ -2139,9 +1861,9 @@ pub enum LocalWorkspaceError {
     /// Trusted Git plumbing failed.
     #[error("trusted Git plumbing failed: {0}")]
     Git(String),
-    /// `PostgreSQL` persistence failed.
-    #[error("workspace database operation failed: {0}")]
-    Database(#[source] sqlx::Error),
+    /// Provider persistence failed.
+    #[error("workspace persistence operation failed: {0}")]
+    Persistence(String),
     /// Filesystem persistence failed.
     #[error("workspace filesystem operation failed: {0}")]
     Io(#[source] io::Error),
@@ -2159,11 +1881,10 @@ pub enum LocalWorkspaceError {
 #[cfg(test)]
 mod tests {
     use super::{
-        LocalWorkspaceConfig, LocalWorkspaceError, LocalWorkspaceManager, WorkspaceLimits,
-        declared_regular_file, validate_message, validate_relative_path, validate_symlink_target,
+        LocalWorkspaceError, declared_regular_file, validate_message, validate_relative_path,
+        validate_symlink_target,
     };
-    use sqlx::postgres::PgPoolOptions;
-    use std::{fs, os::unix::fs::symlink, path::PathBuf};
+    use std::{fs, os::unix::fs::symlink};
 
     #[test]
     fn rejects_repository_and_symlink_path_escapes() {
@@ -2218,26 +1939,5 @@ mod tests {
             Err(LocalWorkspaceError::InvalidResult(_))
         ));
         declared_regular_file(&work, "actual/result.txt").expect("direct regular file");
-    }
-
-    #[tokio::test]
-    async fn rejects_overlapping_storage_classes() {
-        let pool = PgPoolOptions::new()
-            .connect_lazy("postgres://test:test@localhost/test")
-            .expect("lazy test pool");
-        let root = PathBuf::from("/var/lib/hephaestus");
-        let error = LocalWorkspaceManager::new(
-            pool,
-            LocalWorkspaceConfig {
-                workspace_root: root.join("workspaces"),
-                artifact_root: root.join("workspaces/artifacts"),
-                repository_root: root.join("repositories"),
-                git_binary: PathBuf::from("/usr/bin/git"),
-                limits: WorkspaceLimits::default(),
-            },
-        )
-        .err()
-        .expect("overlap must be rejected");
-        assert!(matches!(error, LocalWorkspaceError::Configuration(_)));
     }
 }

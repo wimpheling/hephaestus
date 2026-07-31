@@ -13,10 +13,9 @@ run-domain = { path = "../run-domain" }
 run-orchestrator = { path = "../run-orchestrator" }
 runtime-types = { path = "../runtime-types" }
 secret-domain = { path = "../secret-domain" }
-secret-service = { path = "../secret-service" }
+secret-application = { path = "../secret-application" }
 secret-store = { path = "../secret-store" }
 serde_json.workspace = true
-sqlx.workspace = true
 thiserror.workspace = true
 time.workspace = true
 uuid.workspace = true

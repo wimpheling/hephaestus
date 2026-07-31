@@ -129,11 +129,15 @@ structured diagnostics.
 
 - `hephaestus.run.start`: durable `StartRun` commands, consumed by the existing
   run orchestrator.
-- `hephaestus.git.receive.accepted`: durable accepted-receive events.
-- `hephaestus.git.agent_config.invalid`: durable invalid-config events.
+- `hephaestus.build.requested.v1`: durable isolated-build commands.
+- `hephaestus.instance.run.requested.v1`: durable reusable-instance run
+  commands.
 
 The orchestrator retains its original Phase 1 start subject and also consumes
-the forge start subject. Outbox IDs are published as `Nats-Msg-Id`.
+the forge start subject. Command outbox IDs are published as `Nats-Msg-Id`.
+Accepted receives, ref changes, and configuration validity update canonical
+PostgreSQL state and are exposed as typed repository/ref/build invalidations on
+authorization-scoped product-event watches, not informational JSON subjects.
 
 ## Integration tests
 

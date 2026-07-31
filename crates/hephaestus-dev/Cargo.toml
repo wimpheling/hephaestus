@@ -1,0 +1,23 @@
+[package]
+name = "hephaestus-dev"
+description = "Repository-local development environment supervisor"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+clap.workspace = true
+ctrlc.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+syn = { version = "2", features = ["full", "visit"] }
+thiserror.workspace = true
+time.workspace = true
+toml.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

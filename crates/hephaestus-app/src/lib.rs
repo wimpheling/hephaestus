@@ -1,45 +1,53 @@
 //! Production composition root and supervised daemon lifecycle.
 
-mod internal_commands;
+mod application;
+mod event_adapter;
+mod event_cursor;
+pub mod rpc;
 
 use async_trait::async_trait;
-use authz_domain::{Authorizer, ObjectRef, ObjectType, Permission, Subject};
-use authz_postgres::audit_decision;
 use axum::{Router, routing::get};
 use build_orchestrator::{BuildExecutionError, BuildExecutor, BuildExecutorConfig};
+use build_postgres::PgBuildRepository;
+use control_plane_postgres::launch::PgRunLaunchAuthorizer;
+use control_plane_postgres::{
+    ControlPlanePool, connect as connect_control_plane, load_vm_launch_contract,
+    recoverable_update_hook_run_ids,
+};
+use event_postgres::{ReleaseOutboxPublisher, ensure_release_jetstream_topology};
+use forge_postgres::PgForgeRepository;
 use forge_service::{
-    BUILD_REQUESTED_SUBJECT, ForgeNatsOutboxPublisher, GitStorage, PgForgeRepository,
-    ensure_build_consumer, ensure_forge_jetstream_topology,
+    BUILD_REQUESTED_SUBJECT, ForgeNatsOutboxPublisher, GitStorage, ensure_build_consumer,
+    ensure_forge_jetstream_topology,
 };
 use futures_util::StreamExt;
-use git_http::{
-    GitHttpLimits, GitHttpService, PostgresGitAuthorizer, PostgresOidcGitAuthenticator,
-};
-use identity_domain::{RequestId, UserId};
+use git_http::{GitHttpLimits, GitHttpService, OidcGitAuthenticator, PostgresGitAuthorizer};
+use identity_application::IdempotentIdentityResolver;
 use identity_oidc::OidcVerifier;
+use identity_postgres::PostgresIdentityStore;
 use jsonwebtoken::{Algorithm, DecodingKey};
 use release_artifact_store::LocalArtifactStore;
 use release_domain::BuildRequestId;
-use release_service::{ReleaseOutboxPublisher, ReleaseService, ensure_release_jetstream_topology};
+use release_postgres::ReleaseService;
 use review_domain::CONTROL_EXECUTE_SUBJECT;
+use review_postgres::{GitRepositoryLocator, PostgresReviewRepository};
 use review_service::{NatsControlHandler, ReviewControlService, ReviewOutboxPublisher};
 use run_domain::{CancelRun, Run, RunKind};
 use run_orchestrator::{
-    NatsCommandHandler, NatsOutboxPublisher, PgRunRepository, RunCompletionError,
-    RunCompletionObserver, RunLaunchAuthorizer, RunOrchestrator, RunRepository, RunSecretManager,
-    VmSpecFactory, ensure_jetstream_topology,
+    NatsCommandHandler, RunCompletionError, RunCompletionObserver, RunOrchestrator, RunRepository,
+    RunSecretManager, VmSpecFactory, ensure_jetstream_topology,
 };
+use run_postgres::PgRunRepository;
 use run_runtime_local::{LocalRunRuntimeConfig, LocalRunRuntimeManager};
 use runtime_types::{CommandId, RunId};
+use secret_application::BrokerAdapter;
 use secret_broker::{BrokerExecutor, BrokerServer, ServiceBrokerExecutor};
-use secret_runtime::{EphemeralSecretConfig, PgSecretMountManager};
-use secret_service::{
-    BrokerAdapter, SecretOutboxPublisher, SecretRuntimeService, SecretService,
-    ensure_secret_jetstream_topology,
-};
+use secret_postgres::initialize_manager;
+use secret_postgres::{SecretRuntimeService, SecretService};
+use secret_runtime::EphemeralSecretConfig;
 use secret_store::{EncryptedStore, LocalKeyProvider};
 use serde::Deserialize;
-use sqlx::{PgPool, postgres::PgPoolOptions};
+type PgPool = ControlPlanePool;
 use std::{
     collections::BTreeMap,
     net::SocketAddr,
@@ -61,10 +69,12 @@ use vm_trait::{
     VmInstance, VmMetric, VmMount, VmProvider, VmResources, VmSpec,
 };
 use volume_local::{LocalVolumeConfig, LocalVolumeStore};
+use volume_postgres::PostgresVolumeMetadataRepository;
 use workspace_local::{LocalWorkspaceConfig, LocalWorkspaceManager};
+use workspace_postgres::PgWorkspaceMetadataRepository;
 
 /// Ordered database migration expected by this application version.
-pub const EXPECTED_DATABASE_MIGRATION: i64 = 9;
+pub const EXPECTED_DATABASE_MIGRATION: i64 = 10;
 
 /// OIDC issuer configuration used for bearer-token authentication.
 pub struct OidcConfig {
@@ -113,8 +123,8 @@ pub struct AppConfig {
     pub nats_url: String,
     /// HTTP address for the API and Git transport.
     pub http_listen: SocketAddr,
-    /// SHA-256 digest of the trusted web mediator bearer token.
-    pub internal_command_token_hash: [u8; 32],
+    /// Domain-separated HS256 key for short-lived mediator assertions.
+    pub rpc_mediator_signing_key: [u8; 32],
     /// Canonical root containing bare repositories.
     pub repository_root: PathBuf,
     /// Absolute native `git-http-backend` executable.
@@ -168,9 +178,9 @@ impl AppConfig {
                 "git_http_backend must be absolute",
             )));
         }
-        if self.internal_command_token_hash == [0; 32] {
+        if self.rpc_mediator_signing_key == [0; 32] {
             return Err(AppError::Configuration(String::from(
-                "internal command token hash must not be all-zero",
+                "RPC mediator authentication key must not be all-zero",
             )));
         }
         if !self.secret_broker_socket.is_absolute() {
@@ -235,18 +245,22 @@ pub struct HephaestusApp {
     jetstream: async_nats::jetstream::Context,
     forge: Arc<PgForgeRepository>,
     storage: Arc<GitStorage>,
-    git_authenticator: Arc<PostgresOidcGitAuthenticator>,
+    identity_store: Arc<PostgresIdentityStore>,
+    git_authenticator: Arc<OidcGitAuthenticator>,
     git_authorizer: Arc<PostgresGitAuthorizer>,
     git_backend: PathBuf,
     git_limits: GitHttpLimits,
     http_listen: SocketAddr,
     run_repository: Arc<PgRunRepository>,
+    review_repository: Arc<PostgresReviewRepository>,
     review_control: ReviewControlService,
     orchestrator: Arc<RunOrchestrator>,
     build_executor: Arc<BuildExecutor>,
+    artifact_store: LocalArtifactStore,
+    result_artifact_root: PathBuf,
     release_service: Arc<ReleaseService>,
     secret_service: Arc<SecretService<LocalKeyProvider>>,
-    internal_command_token_hash: [u8; 32],
+    rpc_mediator_signing_key: [u8; 32],
     internal_platform_policy: release_domain::RuntimePolicy,
     internal_platform_policy_version: String,
     secret_broker_socket: PathBuf,
@@ -284,9 +298,7 @@ impl HephaestusApp {
             }
             provider.broker_socket_path = Some(config.secret_broker_socket.clone());
         }
-        let pool = PgPoolOptions::new()
-            .max_connections(20)
-            .connect(&config.database_url)
+        let pool = connect_control_plane(&config.database_url, 20)
             .await
             .map_err(component("PostgreSQL connection"))?;
         verify_database_contract(&pool).await?;
@@ -301,9 +313,15 @@ impl HephaestusApp {
                 .with_authorizer(Arc::new(authz_postgres::PostgresMelangeAuthorizer)),
         );
         let run_repository = Arc::new(PgRunRepository::new(pool.clone()));
-        let review_control = ReviewControlService::new(pool.clone(), Arc::clone(&storage));
+        let review_repository = Arc::new(PostgresReviewRepository::new(pool.clone()));
+        let review_locator = Arc::new(GitRepositoryLocator::new(Arc::clone(&storage)));
+        let review_control = ReviewControlService::new(
+            Arc::clone(&review_repository) as Arc<dyn review_service::ReviewRepository>,
+            review_locator,
+        );
+        let volume_metadata = Arc::new(PostgresVolumeMetadataRepository::new(pool.clone()));
         let volumes = Arc::new(
-            LocalVolumeStore::new(pool.clone(), config.volumes)
+            LocalVolumeStore::new(volume_metadata, config.volumes)
                 .map_err(component("volume configuration"))?,
         );
         volumes
@@ -311,15 +329,24 @@ impl HephaestusApp {
             .await
             .map_err(component("volume initialization"))?;
         let build_git_binary = config.workspaces.git_binary.clone();
-        let mut workspaces = LocalWorkspaceManager::new(pool.clone(), config.workspaces)
-            .map_err(component("workspace configuration"))?;
+        let result_artifact_root = config.workspaces.artifact_root.clone();
+        let workspace_repository = Arc::new(PgWorkspaceMetadataRepository::new(pool.clone()));
+        let mut workspaces = LocalWorkspaceManager::new(
+            Arc::clone(&workspace_repository)
+                as Arc<dyn workspace_domain::WorkspaceMetadataRepository>,
+            Arc::clone(&workspace_repository) as Arc<dyn workspace_domain::ResultRepository>,
+            config.workspaces,
+        )
+        .map_err(component("workspace configuration"))?;
         workspaces
             .initialize()
             .map_err(component("workspace initialization"))?;
+        let result_artifact_root = std::fs::canonicalize(result_artifact_root)
+            .map_err(component("result artifact root"))?;
         let workspaces = Arc::new(workspaces);
         let release_artifact_root = config.run_runtime.release_artifact_root.clone();
         let run_runtime = Arc::new(
-            LocalRunRuntimeManager::initialize(pool.clone(), config.run_runtime)
+            LocalRunRuntimeManager::initialize(run_repository.clone(), config.run_runtime)
                 .map_err(component("run runtime initialization"))?,
         );
         let (secret_mounts, secret_runtime, secret_service) = build_secret_mount_manager(
@@ -354,11 +381,10 @@ impl HephaestusApp {
         .map_err(component("release artifact store"))?;
         let build_executor = Arc::new(
             BuildExecutor::initialize(
-                pool.clone(),
+                Arc::new(PgBuildRepository::new(pool.clone())),
                 Arc::clone(&provider),
-                artifact_store,
+                artifact_store.clone(),
                 Arc::clone(&release_service),
-                release_authorizer.clone(),
                 BuildExecutorConfig {
                     workspace_root: config.build_workspace_root,
                     repository_root: config.repository_root.clone(),
@@ -386,10 +412,8 @@ impl HephaestusApp {
             root_images: config.root_images,
             runtime_policy: config.runtime_policy,
         });
-        let launch_authorizer = Arc::new(PgRunLaunchAuthorizer {
-            pool: pool.clone(),
-            authorizer: release_authorizer,
-        });
+        let launch_authorizer =
+            Arc::new(PgRunLaunchAuthorizer::new(pool.clone(), release_authorizer));
         let completion = Arc::new(UpdateRunCompletion {
             pool: pool.clone(),
             releases: Arc::clone(&release_service),
@@ -415,8 +439,14 @@ impl HephaestusApp {
             config.oidc.algorithm,
             config.oidc.decoding_key,
         ));
-        let git_authenticator = Arc::new(PostgresOidcGitAuthenticator::new(pool.clone(), verifier));
-        let git_authorizer = Arc::new(PostgresGitAuthorizer::new(pool.clone()));
+        let identity_store = Arc::new(PostgresIdentityStore::new(pool.clone()));
+        let git_authenticator = Arc::new(OidcGitAuthenticator::new(
+            verifier,
+            Arc::clone(&identity_store) as Arc<dyn identity_application::VerifiedIdentityMapper>,
+        ));
+        let git_authorizer = Arc::new(PostgresGitAuthorizer::new(Arc::new(
+            authz_postgres::PostgresGitAuthorizer::new(pool.clone()),
+        )));
         let nats_client = async_nats::connect(&config.nats_url)
             .await
             .map_err(component("NATS connection"))?;
@@ -428,18 +458,22 @@ impl HephaestusApp {
             jetstream,
             forge,
             storage,
+            identity_store,
             git_authenticator,
             git_authorizer,
             git_backend: config.git_http_backend,
             git_limits: config.git_http_limits,
             http_listen: config.http_listen,
             run_repository,
+            review_repository,
             review_control,
             orchestrator,
             build_executor,
+            artifact_store,
+            result_artifact_root,
             release_service,
             secret_service,
-            internal_command_token_hash: config.internal_command_token_hash,
+            rpc_mediator_signing_key: config.rpc_mediator_signing_key,
             internal_platform_policy,
             internal_platform_policy_version,
             secret_broker_socket: config.secret_broker_socket,
@@ -483,9 +517,9 @@ impl HephaestusApp {
         ensure_release_jetstream_topology(&self.jetstream)
             .await
             .map_err(component("release JetStream topology"))?;
-        ensure_secret_jetstream_topology(&self.jetstream)
+        event_adapter::ensure_topology(&self.jetstream)
             .await
-            .map_err(component("secret JetStream topology"))?;
+            .map_err(component("product-event JetStream topology"))?;
         let consumer = ensure_jetstream_topology(&self.jetstream)
             .await
             .map_err(component("run JetStream topology"))?;
@@ -503,18 +537,34 @@ impl HephaestusApp {
             self.git_limits,
         )
         .map_err(component("Git HTTP configuration"))?;
-        let internal_commands =
-            internal_commands::router(internal_commands::InternalCommandState::new(
-                self.internal_command_token_hash,
-                Arc::clone(&self.release_service),
-                Arc::clone(&self.secret_service),
-                self.internal_platform_policy.clone(),
-                self.internal_platform_policy_version.clone(),
-            ));
+        let command_state = application::commands::InternalCommandState::new(
+            Arc::clone(&self.release_service),
+            Arc::clone(&self.secret_service),
+            self.internal_platform_policy.clone(),
+            self.internal_platform_policy_version.clone(),
+        );
+        let rpc = rpc::service(
+            rpc::ApplicationDependencies::new(
+                self.pool.clone(),
+                Arc::new(event_postgres::PostgresMutationReceiptReader::new(
+                    self.pool.clone(),
+                )),
+                Arc::clone(&self.identity_store) as Arc<dyn IdempotentIdentityResolver>,
+            ),
+            Arc::clone(&self.storage),
+            self.artifact_store.clone(),
+            self.result_artifact_root,
+            &self.rpc_mediator_signing_key,
+            command_state,
+            Arc::new(event_adapter::NatsEventWakeups::new(
+                self.nats_client.clone(),
+            )),
+        )
+        .map_err(component("Connect RPC configuration"))?;
         let router = Router::new()
             .route("/healthz", get(|| async { "ok" }))
-            .merge(internal_commands)
-            .merge(git.router());
+            .merge(git.router())
+            .fallback_service(rpc);
         let listener = tokio::net::TcpListener::bind(self.http_listen)
             .await
             .map_err(component("HTTP listener"))?;
@@ -558,18 +608,24 @@ impl HephaestusApp {
 
         let (publisher_ready_tx, publisher_ready_rx) = oneshot::channel();
         let publisher_cancel = cancellation.clone();
-        let run_repository_trait: Arc<dyn RunRepository> = self.run_repository.clone();
         let outbox = OutboxWorker {
             forge_publisher: ForgeNatsOutboxPublisher::new(self.jetstream.clone()),
-            run_publisher: NatsOutboxPublisher::new(self.jetstream.clone()),
             release_publisher: ReleaseOutboxPublisher::new(
                 self.jetstream.clone(),
                 self.pool.clone(),
             ),
-            secret_publisher: SecretOutboxPublisher::new(self.jetstream.clone(), self.pool.clone()),
-            review_publisher: ReviewOutboxPublisher::new(self.jetstream.clone(), self.pool.clone()),
+            review_publisher: ReviewOutboxPublisher::new(
+                self.jetstream.clone(),
+                Arc::clone(&self.review_repository) as Arc<dyn review_service::ReviewOutboxStore>,
+            ),
+            event_publisher: event_adapter::EventPublisher::new(
+                self.jetstream.clone(),
+                Arc::new(event_postgres::PostgresProductEventOutbox::new(
+                    self.pool.clone(),
+                )),
+                self.rpc_mediator_signing_key,
+            ),
             forge: Arc::clone(&self.forge),
-            run_repository: run_repository_trait,
             poll_interval: self.outbox_poll_interval,
             batch_size: self.outbox_batch_size,
         };
@@ -690,8 +746,10 @@ impl HephaestusApp {
             jetstream: self.jetstream,
             forge: self.forge,
             run_repository: self.run_repository,
+            review_repository: self.review_repository,
             orchestrator: self.orchestrator,
             outbox_batch_size: self.outbox_batch_size,
+            product_event_cursor_key: self.rpc_mediator_signing_key,
             shutdown_timeout: self.shutdown_timeout,
         })
     }
@@ -706,12 +764,10 @@ async fn reap_failed_start(tasks: Vec<JoinHandle<Result<(), String>>>) {
 
 struct OutboxWorker {
     forge_publisher: ForgeNatsOutboxPublisher,
-    run_publisher: NatsOutboxPublisher,
     release_publisher: ReleaseOutboxPublisher,
-    secret_publisher: SecretOutboxPublisher,
     review_publisher: ReviewOutboxPublisher,
+    event_publisher: event_adapter::EventPublisher,
     forge: Arc<PgForgeRepository>,
-    run_repository: Arc<dyn RunRepository>,
     poll_interval: Duration,
     batch_size: i64,
 }
@@ -720,6 +776,9 @@ impl OutboxWorker {
     // Rust 1.85 Clippy incorrectly reports Tokio's private select expansion as
     // redundant public crate visibility.
     #[allow(clippy::redundant_pub_crate)]
+    // The explicit worker fan-out keeps each durable outbox and its failure
+    // policy visible in one supervised loop.
+    #[allow(clippy::cognitive_complexity)]
     async fn run(self, cancellation: CancellationToken, ready: oneshot::Sender<()>) {
         let mut interval = tokio::time::interval(self.poll_interval);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -732,17 +791,10 @@ impl OutboxWorker {
                 _ = interval.tick() => {
                     if let Err(error) = self
                         .forge_publisher
-                        .publish_pending(&self.forge, self.batch_size)
+                        .publish_pending(self.forge.as_ref(), self.batch_size)
                         .await
                     {
                         tracing::warn!(%error, "forge outbox publication pass failed");
-                    }
-                    if let Err(error) = self
-                        .run_publisher
-                        .publish_pending(&self.run_repository, self.batch_size)
-                        .await
-                    {
-                        tracing::warn!(%error, "run outbox publication pass failed");
                     }
                     if let Err(error) = self
                         .release_publisher
@@ -752,18 +804,14 @@ impl OutboxWorker {
                         tracing::warn!(%error, "release outbox publication pass failed");
                     }
                     if let Err(error) = self
-                        .secret_publisher
-                        .publish_pending(self.batch_size)
-                        .await
-                    {
-                        tracing::warn!(%error, "secret outbox publication pass failed");
-                    }
-                    if let Err(error) = self
                         .review_publisher
                         .publish_pending(self.batch_size)
                         .await
                     {
                         tracing::warn!(%error, "review outbox publication pass failed");
+                    }
+                    if let Err(error) = self.event_publisher.publish_pending(self.batch_size).await {
+                        tracing::warn!(%error, "product-event outbox publication pass failed");
                     }
                 }
             }
@@ -778,7 +826,7 @@ async fn secret_revocation_loop(
     cancellation: CancellationToken,
     ready: oneshot::Sender<()>,
 ) -> Result<(), String> {
-    reconcile_revoked_raw_runs(&pool, &orchestrator).await?;
+    reconcile_revoked_raw_runs(&pool, orchestrator.as_ref()).await?;
     if ready.send(()).is_err() {
         return Ok(());
     }
@@ -786,7 +834,7 @@ async fn secret_revocation_loop(
         tokio::select! {
             () = cancellation.cancelled() => return Ok(()),
             () = tokio::time::sleep(poll_interval) => {
-                reconcile_revoked_raw_runs(&pool, &orchestrator).await?;
+                reconcile_revoked_raw_runs(&pool, orchestrator.as_ref()).await?;
             }
         }
     }
@@ -794,39 +842,37 @@ async fn secret_revocation_loop(
 
 async fn reconcile_revoked_raw_runs(
     pool: &PgPool,
-    orchestrator: &RunOrchestrator,
+    canceller: &(impl RevokedRawRunCanceller + ?Sized),
 ) -> Result<usize, String> {
-    let run_ids: Vec<Uuid> = sqlx::query_scalar(
-        "SELECT DISTINCT session.run_id
-         FROM secret_runtime_sessions AS session
-         JOIN secret_leases AS lease ON lease.session_id = session.id
-         JOIN runs AS run ON run.id = session.run_id
-         WHERE session.status = 'revoked'
-           AND lease.delivery_mode = 'raw'
-           AND run.state IN ('provisioning', 'starting', 'running')
-           AND run.cancel_requested_at IS NULL
-         ORDER BY session.run_id",
-    )
-    .fetch_all(pool)
-    .await
-    .map_err(|error| error.to_string())?;
-    let mut cancelled = 0;
+    let run_ids = control_plane_postgres::revoked_raw_run_ids(pool)
+        .await
+        .map_err(|error| error.to_string())?;
+    let mut cancellation_count = 0;
     for run_id in run_ids {
         let run_id = RunId::from_uuid(run_id);
-        let command = CancelRun {
+        if canceller.cancel_revoked_raw_run(run_id).await? {
+            cancellation_count += 1;
+        }
+    }
+    Ok(cancellation_count)
+}
+
+#[async_trait]
+trait RevokedRawRunCanceller: Sync {
+    async fn cancel_revoked_raw_run(&self, run_id: RunId) -> Result<bool, String>;
+}
+
+#[async_trait]
+impl RevokedRawRunCanceller for RunOrchestrator {
+    async fn cancel_revoked_raw_run(&self, run_id: RunId) -> Result<bool, String> {
+        self.cancel_run(&CancelRun {
             command_id: CommandId::new(),
             run_id,
             reason: String::from("raw secret authority was revoked"),
-        };
-        if orchestrator
-            .cancel_run(&command)
-            .await
-            .map_err(|error| error.to_string())?
-        {
-            cancelled += 1;
-        }
+        })
+        .await
+        .map_err(|error| error.to_string())
     }
-    Ok(cancelled)
 }
 
 async fn build_secret_mount_manager(
@@ -842,9 +888,7 @@ async fn build_secret_mount_manager(
     ),
     AppError,
 > {
-    let resolver_pool = PgPoolOptions::new()
-        .max_connections(4)
-        .connect(database_url)
+    let resolver_pool = connect_control_plane(database_url, 4)
         .await
         .map_err(component("secret resolver PostgreSQL connection"))?;
     let authorizer = Arc::new(authz_postgres::PostgresMelangeAuthorizer);
@@ -859,7 +903,7 @@ async fn build_secret_mount_manager(
         EncryptedStore::new(keys),
         authorizer,
     ));
-    let manager = PgSecretMountManager::initialize(
+    let manager = initialize_manager(
         pool,
         dispatch.as_ref().clone(),
         runtime.as_ref().clone(),
@@ -894,17 +938,9 @@ impl RunCompletionObserver for UpdateRunCompletion {
     }
 
     async fn recover(&self) -> Result<usize, RunCompletionError> {
-        let run_ids: Vec<Uuid> = sqlx::query_scalar(
-            "SELECT update.hook_run_id
-             FROM agent_updates AS update
-             JOIN runs AS run ON run.id = update.hook_run_id
-             WHERE update.state IN ('hook_running', 'hook_committed')
-               AND run.state = 'cleaned_up'
-             ORDER BY update.created_at, update.id",
-        )
-        .fetch_all(&self.pool)
-        .await
-        .map_err(completion_error)?;
+        let run_ids = recoverable_update_hook_run_ids(&self.pool)
+            .await
+            .map_err(completion_error)?;
         let mut recovered = 0;
         for run_id in run_ids {
             self.releases
@@ -1006,12 +1042,9 @@ async fn handle_build_message(
                         message.double_ack().await.map_err(|error| error.to_string())?;
                         return Ok(());
                     }
-                    Err(error @ (
-                        BuildExecutionError::Database(_)
-                        | BuildExecutionError::Release
-                        | BuildExecutionError::AlreadyClaimed
-                        | BuildExecutionError::VmCleanup
-                    )) => return Err(error.to_string()),
+                    Err(error) if build_delivery_requires_redelivery(&error) => {
+                        return Err(error.to_string());
+                    }
                     Err(error) => {
                         message.double_ack().await.map_err(|ack_error| ack_error.to_string())?;
                         return Err(error.to_string());
@@ -1028,6 +1061,15 @@ async fn handle_build_message(
             }
         }
     }
+}
+
+const fn build_delivery_requires_redelivery(error: &BuildExecutionError) -> bool {
+    matches!(
+        error,
+        BuildExecutionError::Database(_)
+            | BuildExecutionError::Release
+            | BuildExecutionError::VmCleanup
+    )
 }
 
 fn completion_error(error: impl std::fmt::Display) -> RunCompletionError {
@@ -1105,8 +1147,10 @@ pub struct RunningHephaestus {
     jetstream: async_nats::jetstream::Context,
     forge: Arc<PgForgeRepository>,
     run_repository: Arc<PgRunRepository>,
+    review_repository: Arc<PostgresReviewRepository>,
     orchestrator: Arc<RunOrchestrator>,
     outbox_batch_size: i64,
+    product_event_cursor_key: [u8; 32],
     shutdown_timeout: Duration,
 }
 
@@ -1130,17 +1174,10 @@ impl RunningHephaestus {
     ) -> Result<(), AppError> {
         let deadline = Instant::now() + timeout;
         loop {
-            let exists: bool = sqlx::query_scalar(
-                "SELECT EXISTS(
-                    SELECT 1 FROM run_events
-                    WHERE run_id = $1 AND event_type = $2
-                 )",
-            )
-            .bind(run_id.as_uuid())
-            .bind(kind.as_str())
-            .fetch_one(&self.pool)
-            .await
-            .map_err(component("run event query"))?;
+            let exists =
+                control_plane_postgres::has_run_event(&self.pool, run_id.as_uuid(), kind.as_str())
+                    .await
+                    .map_err(component("run event query"))?;
             if exists {
                 return Ok(());
             }
@@ -1211,36 +1248,37 @@ impl RunningHephaestus {
 
     async fn flush_outbox(&self) -> Result<(), AppError> {
         let forge_publisher = ForgeNatsOutboxPublisher::new(self.jetstream.clone());
-        let run_publisher = NatsOutboxPublisher::new(self.jetstream.clone());
         let release_publisher =
             ReleaseOutboxPublisher::new(self.jetstream.clone(), self.pool.clone());
-        let secret_publisher =
-            SecretOutboxPublisher::new(self.jetstream.clone(), self.pool.clone());
-        let review_publisher =
-            ReviewOutboxPublisher::new(self.jetstream.clone(), self.pool.clone());
-        let run_repository: Arc<dyn RunRepository> = self.run_repository.clone();
+        let review_publisher = ReviewOutboxPublisher::new(
+            self.jetstream.clone(),
+            Arc::clone(&self.review_repository) as Arc<dyn review_service::ReviewOutboxStore>,
+        );
+        let event_publisher = event_adapter::EventPublisher::new(
+            self.jetstream.clone(),
+            Arc::new(event_postgres::PostgresProductEventOutbox::new(
+                self.pool.clone(),
+            )),
+            self.product_event_cursor_key,
+        );
         for _pass in 0..100 {
             let forge = forge_publisher
-                .publish_pending(&self.forge, self.outbox_batch_size)
+                .publish_pending(self.forge.as_ref(), self.outbox_batch_size)
                 .await
                 .map_err(component("final forge outbox flush"))?;
-            let runs = run_publisher
-                .publish_pending(&run_repository, self.outbox_batch_size)
-                .await
-                .map_err(component("final run outbox flush"))?;
             let releases = release_publisher
                 .publish_pending(self.outbox_batch_size)
                 .await
                 .map_err(component("final release outbox flush"))?;
-            let secrets = secret_publisher
-                .publish_pending(self.outbox_batch_size)
-                .await
-                .map_err(component("final secret outbox flush"))?;
             let reviews = review_publisher
                 .publish_pending(self.outbox_batch_size)
                 .await
                 .map_err(component("final review outbox flush"))?;
-            if forge == 0 && runs == 0 && releases == 0 && secrets == 0 && reviews == 0 {
+            let events = event_publisher
+                .publish_pending(self.outbox_batch_size)
+                .await
+                .map_err(component("final product-event outbox flush"))?;
+            if forge == 0 && releases == 0 && reviews == 0 && events == 0 {
                 return Ok(());
             }
         }
@@ -1266,120 +1304,6 @@ impl RunEventKind {
             Self::ResultCompleted => "result.completed",
         }
     }
-}
-
-struct PgRunLaunchAuthorizer {
-    pool: PgPool,
-    authorizer: Arc<dyn Authorizer>,
-}
-
-#[derive(sqlx::FromRow)]
-struct LaunchAuthorizationRow {
-    actor_id: Option<Uuid>,
-    request_id: Uuid,
-    run_kind: String,
-    instance_id: Uuid,
-    release_agent_id: Uuid,
-    attachment_id: Option<Uuid>,
-}
-
-#[async_trait]
-impl RunLaunchAuthorizer for PgRunLaunchAuthorizer {
-    async fn authorize(&self, run: &Run) -> Result<(), run_orchestrator::RunAuthorizationError> {
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .map_err(launch_authorization_error)?;
-        let row: LaunchAuthorizationRow = sqlx::query_as(
-            "SELECT COALESCE(request.actor_id, update.actor_id) AS actor_id,
-                    COALESCE(request.request_id, update.id, run.command_id)
-                        AS request_id,
-                    run.run_kind, run.instance_id, run.release_agent_id,
-                    run.attachment_id
-             FROM runs AS run
-             LEFT JOIN run_requests AS request ON request.run_id = run.id
-             LEFT JOIN agent_updates AS update ON update.hook_run_id = run.id
-             WHERE run.id = $1",
-        )
-        .bind(run.id.as_uuid())
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(launch_authorization_error)?
-        .ok_or_else(|| {
-            run_orchestrator::RunAuthorizationError::redacted(
-                "exact launch provenance is unavailable",
-            )
-        })?;
-        let Some(actor_id) = row.actor_id else {
-            return Err(run_orchestrator::RunAuthorizationError::redacted(
-                "launch requester is unavailable",
-            ));
-        };
-        sqlx::query(
-            "SELECT set_config('hephaestus.actor_id', $1, true),
-                    set_config('hephaestus.subject_type', 'user', true),
-                    set_config('hephaestus.request_id', $2, true)",
-        )
-        .bind(actor_id.to_string())
-        .bind(row.request_id.to_string())
-        .execute(&mut *tx)
-        .await
-        .map_err(launch_authorization_error)?;
-        let actor = UserId::from_uuid(actor_id);
-        let request_id = RequestId::from_uuid(row.request_id);
-        let mut required = vec![(
-            Permission::CanUse,
-            ObjectRef::new(ObjectType::ReleaseAgent, row.release_agent_id),
-        )];
-        if row.run_kind == "normal" {
-            required.push((
-                Permission::CanExecute,
-                ObjectRef::new(
-                    ObjectType::AgentAttachment,
-                    row.attachment_id.ok_or_else(|| {
-                        run_orchestrator::RunAuthorizationError::redacted(
-                            "normal run attachment is unavailable",
-                        )
-                    })?,
-                ),
-            ));
-        } else if row.run_kind == "update" {
-            required.push((
-                Permission::CanUpdate,
-                ObjectRef::new(ObjectType::AgentInstance, row.instance_id),
-            ));
-        } else {
-            return Err(run_orchestrator::RunAuthorizationError::redacted(
-                "run kind is invalid",
-            ));
-        }
-        for (permission, object) in required {
-            let decision = self
-                .authorizer
-                .check(&mut tx, Subject::User(actor), permission, object)
-                .await
-                .map_err(launch_authorization_error)?;
-            audit_decision(&mut tx, actor, permission, object, decision, request_id)
-                .await
-                .map_err(launch_authorization_error)?;
-            if !decision.is_allowed() {
-                tx.commit().await.map_err(launch_authorization_error)?;
-                return Err(run_orchestrator::RunAuthorizationError::redacted(
-                    "live launch permission was denied",
-                ));
-            }
-        }
-        tx.commit().await.map_err(launch_authorization_error)?;
-        Ok(())
-    }
-}
-
-fn launch_authorization_error(
-    error: impl std::fmt::Display,
-) -> run_orchestrator::RunAuthorizationError {
-    tracing::warn!(%error, "live run launch authorization failed closed");
-    run_orchestrator::RunAuthorizationError::redacted("authorization provider unavailable")
 }
 
 struct PgAgentVmSpecFactory {
@@ -1432,80 +1356,32 @@ impl VmSpecFactory for PgAgentVmSpecFactory {
     // place keeps the no-substitution boundary directly auditable.
     #[allow(clippy::too_many_lines)]
     async fn build(&self, run: &Run) -> Result<VmSpec, VmError> {
-        let stored: (
-            serde_json::Value,
-            serde_json::Value,
-            bool,
-            Option<serde_json::Value>,
-            String,
-            bool,
-            bool,
-            Option<Uuid>,
-        ) = sqlx::query_as(
-            "SELECT release_agent.runtime_contract,
-                    revision.effective_runtime_policy,
-                    release_agent.requires_state,
-                    release_agent.update_hook,
-                    release.state,
-                    revision.runnable,
-                    (
-                        run.run_kind = 'update'
-                        AND instance.state = 'updating'
-                    )
-                    OR (
-                        run.run_kind = 'normal'
-                        AND instance.state IN ('active', 'update_rejected')
-                        AND instance.active_revision_id = revision.id
-                        AND (
-                              attachment.enabled
-                              AND attachment.removed_at IS NULL
-                        )
-                    ),
-                    agent_update.id
-             FROM runs AS run
-             JOIN agent_instances AS instance ON instance.id = run.instance_id
-             JOIN agent_instance_revisions AS revision
-               ON revision.id = run.instance_revision_id
-              AND revision.instance_id = run.instance_id
-             JOIN release_agents AS release_agent
-               ON release_agent.id = run.release_agent_id
-              AND release_agent.release_id = run.release_id
-              AND revision.release_agent_id = release_agent.id
-             JOIN releases AS release ON release.id = run.release_id
-             LEFT JOIN agent_attachments AS attachment
-               ON attachment.id = run.attachment_id
-              AND attachment.instance_id = run.instance_id
-             LEFT JOIN agent_updates AS agent_update
-               ON agent_update.hook_run_id = run.id
-             WHERE run.id = $1",
-        )
-        .bind(run.id.as_uuid())
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(vm_factory_error)?
-        .ok_or_else(|| invalid_spec("run", "exact reusable run provenance is missing"))?;
-        if stored.4 != "published" {
+        let stored = load_vm_launch_contract(&self.pool, run.id.as_uuid())
+            .await
+            .map_err(vm_factory_error)?
+            .ok_or_else(|| invalid_spec("run", "exact reusable run provenance is missing"))?;
+        if stored.release_state != "published" {
             return Err(invalid_spec(
                 "release",
                 "release is not currently available",
             ));
         }
-        if !stored.5 || !stored.6 {
+        if !stored.revision_runnable || !stored.attachment_runnable {
             return Err(invalid_spec(
                 "instance_revision",
                 "the exact revision or attachment is not runnable",
             ));
         }
-        if stored.2 != run.requires_state {
+        if stored.requires_state != run.requires_state {
             return Err(invalid_spec(
                 "requires_state",
                 "run state capability does not match the immutable release agent",
             ));
         }
         let contract: StoredRuntimeContract =
-            serde_json::from_value(stored.0).map_err(vm_factory_error)?;
+            serde_json::from_value(stored.runtime_contract).map_err(vm_factory_error)?;
         let policy: StoredEffectivePolicy =
-            serde_json::from_value(stored.1).map_err(vm_factory_error)?;
+            serde_json::from_value(stored.effective_runtime_policy).map_err(vm_factory_error)?;
         let root = self
             .root_images
             .get(&contract.root_image_digest)
@@ -1533,7 +1409,7 @@ impl VmSpecFactory for PgAgentVmSpecFactory {
             run_domain::RunKind::Update => {
                 let hook: StoredUpdateHook = serde_json::from_value(
                     stored
-                        .3
+                        .update_hook
                         .ok_or_else(|| invalid_spec("update_hook", "update hook is missing"))?,
                 )
                 .map_err(vm_factory_error)?;
@@ -1574,7 +1450,7 @@ impl VmSpecFactory for PgAgentVmSpecFactory {
                 seconds.to_string(),
             );
         }
-        let env = guest_environment(run.kind, stored.7)?;
+        let env = guest_environment(run.kind, stored.agent_update_id)?;
         Ok(VmSpec {
             id: vm_trait::VmId(run.id.to_string()),
             root,
@@ -1814,24 +1690,14 @@ fn fixture_vm_error(error: std::io::Error) -> VmError {
 }
 
 async fn verify_database_contract(pool: &PgPool) -> Result<(), AppError> {
-    let migration: Option<i64> =
-        sqlx::query_scalar("SELECT max(version) FROM _sqlx_migrations WHERE success")
-            .fetch_one(pool)
-            .await
-            .map_err(component("migration version check"))?;
+    let (migration, melange) = control_plane_postgres::verify_contract(pool)
+        .await
+        .map_err(component("database contract check"))?;
     if migration != Some(EXPECTED_DATABASE_MIGRATION) {
         return Err(AppError::Configuration(format!(
             "database migration is {migration:?}; expected {EXPECTED_DATABASE_MIGRATION}"
         )));
     }
-    let melange: bool = sqlx::query_scalar(
-        "SELECT to_regprocedure(
-            'check_permission(text,text,text,text,text)'
-         ) IS NOT NULL",
-    )
-    .fetch_one(pool)
-    .await
-    .map_err(component("Mélange dispatcher check"))?;
     if !melange {
         return Err(AppError::Configuration(String::from(
             "Mélange check_permission dispatcher is missing",
@@ -1880,7 +1746,10 @@ pub enum AppError {
 
 #[cfg(test)]
 mod tests {
-    use super::{RuntimePolicy, StoredNetworkAccess, guest_environment, validate_runtime_policy};
+    use super::{
+        BuildExecutionError, RuntimePolicy, StoredNetworkAccess,
+        build_delivery_requires_redelivery, guest_environment, validate_runtime_policy,
+    };
     use run_domain::RunKind;
     use uuid::Uuid;
     use vm_trait::{VmError, VmResources};
@@ -1906,6 +1775,19 @@ mod tests {
             StoredNetworkAccess::BrokerOnly,
         )
         .expect("contract remains allowed");
+    }
+
+    #[test]
+    fn claimed_build_delivery_is_acknowledged_instead_of_poison_redelivered() {
+        assert!(!build_delivery_requires_redelivery(
+            &BuildExecutionError::AlreadyClaimed
+        ));
+        assert!(!build_delivery_requires_redelivery(
+            &BuildExecutionError::GuestFailed
+        ));
+        assert!(build_delivery_requires_redelivery(
+            &BuildExecutionError::Release
+        ));
     }
 
     #[test]

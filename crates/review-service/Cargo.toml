@@ -7,25 +7,16 @@ rust-version.workspace = true
 
 [dependencies]
 async-nats.workspace = true
-authz-domain = { path = "../authz-domain" }
-authz-postgres = { path = "../authz-postgres" }
+async-trait.workspace = true
 forge-domain = { path = "../forge-domain" }
-forge-service = { path = "../forge-service" }
-identity-domain = { path = "../identity-domain" }
 review-domain = { path = "../review-domain" }
-run-domain = { path = "../run-domain" }
 runtime-types = { path = "../runtime-types" }
 serde_json.workspace = true
-sqlx.workspace = true
 thiserror.workspace = true
-time.workspace = true
 tokio = { workspace = true, features = ["process"] }
-tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
-serial_test = "3"
-tempfile = "3"
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [lints]

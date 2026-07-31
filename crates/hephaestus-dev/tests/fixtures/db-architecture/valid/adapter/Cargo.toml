@@ -1,0 +1,11 @@
+[package]
+name = "adapter"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+sqlx = "0.8"
+
+[package.metadata.hephaestus]
+postgres_adapter = true
+database_context = "fixture"

@@ -1,22 +1,37 @@
 defmodule HephaestusWebWeb.RepositoryRoutesTest do
   use ExUnit.Case, async: true
 
-  alias HephaestusWebWeb.{ReleaseLive, RepositoryLive, Router}
+  alias HephaestusWebWeb.{
+    ReleaseLive,
+    RepositoryAgentsLive,
+    RepositoryBranchesLive,
+    RepositoryCommitsLive,
+    RepositoryFilesLive,
+    RepositoryReleasesLive,
+    Router
+  }
 
   @repository_id "018f689a-a81d-7c2e-943f-3a41f7981234"
   @release_id "018f689a-a81d-7c2e-943f-3a41f7985678"
 
   test "repository resources resolve to explicit LiveView actions" do
-    assert live_action("/repositories/#{@repository_id}") == {RepositoryLive, :files}
-    assert live_action("/repositories/#{@repository_id}/files") == {RepositoryLive, :files}
-    assert live_action("/repositories/#{@repository_id}/commits") == {RepositoryLive, :commits}
-    assert live_action("/repositories/#{@repository_id}/branches") == {RepositoryLive, :branches}
-    assert live_action("/repositories/#{@repository_id}/releases") == {RepositoryLive, :releases}
+    assert live_action("/repositories/#{@repository_id}") == {RepositoryFilesLive, :files}
+    assert live_action("/repositories/#{@repository_id}/files") == {RepositoryFilesLive, :files}
+
+    assert live_action("/repositories/#{@repository_id}/commits") ==
+             {RepositoryCommitsLive, :commits}
+
+    assert live_action("/repositories/#{@repository_id}/branches") ==
+             {RepositoryBranchesLive, :branches}
+
+    assert live_action("/repositories/#{@repository_id}/releases") ==
+             {RepositoryReleasesLive, :releases}
 
     assert live_action("/repositories/#{@repository_id}/releases/#{@release_id}") ==
              {ReleaseLive, :show}
 
-    assert live_action("/repositories/#{@repository_id}/agents") == {RepositoryLive, :agents}
+    assert live_action("/repositories/#{@repository_id}/agents") ==
+             {RepositoryAgentsLive, :agents}
   end
 
   test "file paths remain route data rather than a query-time revision expression" do
@@ -31,7 +46,7 @@ defmodule HephaestusWebWeb.RepositoryRoutesTest do
     assert route.phoenix_live_view
            |> then(fn {module, action, _options, _session} ->
              {module, action}
-           end) == {RepositoryLive, :files}
+           end) == {RepositoryFilesLive, :files}
 
     assert route.path_params == %{
              "repository_id" => @repository_id,

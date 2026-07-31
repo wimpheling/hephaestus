@@ -1,0 +1,41 @@
+[package]
+name = "secret-postgres"
+description = "PostgreSQL adapter for encrypted secret and runtime-mount metadata"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[package.metadata.hephaestus]
+database_context = "secret"
+postgres_adapter = true
+transactional_outbox = false
+row_level_security = true
+
+[dependencies]
+async-trait.workspace = true
+authz-domain = { path = "../authz-domain" }
+authz-postgres = { path = "../authz-postgres" }
+forge-domain = { path = "../forge-domain" }
+identity-domain = { path = "../identity-domain" }
+release-domain = { path = "../release-domain" }
+run-domain = { path = "../run-domain" }
+run-orchestrator = { path = "../run-orchestrator" }
+runtime-types = { path = "../runtime-types" }
+secret-runtime = { path = "../secret-runtime" }
+secret-domain = { path = "../secret-domain" }
+secret-application = { path = "../secret-application" }
+secret-store = { path = "../secret-store" }
+serde_json.workspace = true
+sha2.workspace = true
+sqlx.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+time.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+serial_test = "3"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

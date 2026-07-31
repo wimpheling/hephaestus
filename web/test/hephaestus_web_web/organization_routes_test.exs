@@ -1,7 +1,13 @@
 defmodule HephaestusWebWeb.OrganizationRoutesTest do
   use ExUnit.Case, async: true
 
-  alias HephaestusWebWeb.{OrganizationWorkspaceLive, Router}
+  alias HephaestusWebWeb.{
+    OrganizationNewGrantLive,
+    OrganizationNewSecretLive,
+    OrganizationSecretsLive,
+    OrganizationWorkspaceLive,
+    Router
+  }
 
   @organization_id "018f689a-a81d-7c2e-943f-3a41f7981234"
 
@@ -10,13 +16,13 @@ defmodule HephaestusWebWeb.OrganizationRoutesTest do
              {OrganizationWorkspaceLive, :projects}
 
     assert live_action("/organizations/#{@organization_id}/secrets") ==
-             {OrganizationWorkspaceLive, :secrets}
+             {OrganizationSecretsLive, :secrets}
 
     assert live_action("/organizations/#{@organization_id}/secrets/new") ==
-             {OrganizationWorkspaceLive, :new_secret}
+             {OrganizationNewSecretLive, :new_secret}
 
     assert live_action("/organizations/#{@organization_id}/secret-grants/new") ==
-             {OrganizationWorkspaceLive, :new_grant}
+             {OrganizationNewGrantLive, :new_grant}
   end
 
   defp live_action(path) do

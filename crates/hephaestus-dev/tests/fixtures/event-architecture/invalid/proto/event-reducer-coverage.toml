@@ -1,0 +1,6 @@
+schema = "example.LegacyEvent"
+
+[[variants]]
+field = "untyped_payload"
+rust_projection = ""
+phoenix_reducer = ""

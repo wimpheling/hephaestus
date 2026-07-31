@@ -9,10 +9,10 @@ defmodule HephaestusWeb.Application do
   def start(_type, _args) do
     children = [
       HephaestusWebWeb.Telemetry,
-      HephaestusWeb.Repo,
       {DNSCluster, query: Application.get_env(:hephaestus_web, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: HephaestusWeb.PubSub},
-      HephaestusWeb.RunNotifier,
+      HephaestusWeb.RPC.Channel,
+      {Task.Supervisor, name: HephaestusWeb.PageTaskSupervisor},
       # Start to serve requests, typically the last entry
       HephaestusWebWeb.Endpoint
     ]

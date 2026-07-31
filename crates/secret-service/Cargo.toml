@@ -5,23 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-async-nats.workspace = true
-async-trait.workspace = true
-authz-domain = { path = "../authz-domain" }
-authz-postgres = { path = "../authz-postgres" }
-forge-domain = { path = "../forge-domain" }
-identity-domain = { path = "../identity-domain" }
-release-domain = { path = "../release-domain" }
-runtime-types = { path = "../runtime-types" }
-secret-domain = { path = "../secret-domain" }
-secret-store = { path = "../secret-store" }
-serde_json.workspace = true
-sha2.workspace = true
-sqlx.workspace = true
-thiserror.workspace = true
-time.workspace = true
-tracing.workspace = true
-uuid.workspace = true
+secret-application = { path = "../secret-application" }
 
 [dev-dependencies]
 serial_test = "3"

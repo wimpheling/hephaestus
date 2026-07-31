@@ -318,22 +318,22 @@ Persistent SQLite or other files in an instance volume provide durable memory,
 but not arbitrary process checkpointing. A sleeping agent restarts its process
 and reconstructs ephemeral objects from durable state.
 
-Because memory, prompts, and agent-authored skills may affect behavior, exact
-run provenance should eventually include:
+Because memory, prompts, and agent-authored skills may affect behavior, MVP run
+provenance includes:
 
 ```text
 immutable release
 + immutable instance revision
-+ pre-run state generation/checkpoint
++ exact state volume and fenced lease
++ serialized instance dispatch order
++ terminal state-access outcome
 + authorization snapshot
 + trigger and target
 ```
 
-and record the post-run state generation when state changes.
-
-Full state snapshots may be expensive and privacy-sensitive. The architecture
-must distinguish generation identifiers, integrity hashes, backups, and
-reproducible snapshots rather than assuming all four are equivalent.
+This evidence does not claim which application-owned bytes changed. Numbered
+state generations, integrity evidence, checkpoints, backups, and reproducible
+snapshots remain separate deferred concepts.
 
 ### Self-improvement
 
@@ -662,8 +662,8 @@ The agent:
 - is served publicly through Caddy;
 - can use a model and optional web search without reading provider secrets;
 - can be inspected, updated, paused, and recovered;
-- retains exact release, state-generation, authorization, trigger, and result
-  provenance; and
+- retains exact release, state-volume, fenced-lease, dispatch-order,
+  authorization, trigger, and result provenance; and
 - demonstrates that protocol behavior can remain bespoke and small without
   becoming a Hephaestus core feature.
 
@@ -774,7 +774,7 @@ the curated catalog remain deferred.
 
 The MVP is the smallest end-to-end product slice that proves released agents
 can own their loops while Hephaestus retains authority. Implementation details,
-tests, documentation, and completion evidence live in the six child tasks
+tests, documentation, and completion evidence live in the five child tasks
 below, ordered by dependency rather than duplicated in this umbrella task.
 
 - [ ] **0. Ratify the minimum product contract**
@@ -785,8 +785,8 @@ below, ordered by dependency rather than duplicated in this umbrella task.
     deliberate tradeoffs, and MVP non-goals.
   - [ ] Lock the user-facing and domain vocabulary needed by the MVP:
     agent instance, gateway instance, mailbox, capability requirement, binding,
-    grant, authorization snapshot, runtime credential, state generation, and
-    ingress binding.
+    grant, authorization snapshot, runtime credential, state-access outcome,
+    and ingress binding.
   - [ ] Keep product agent instances distinct from runtime guests, gateway
     guests, VMs, runs, and future service sessions.
   - [ ] Record rejected or overloaded terms and why they are avoided.
@@ -800,7 +800,7 @@ below, ordered by dependency rather than duplicated in this umbrella task.
 
 - [ ] **1. Establish agent principals and runtime authority**
   - [ ] Complete
-    [MVP 01: Agent principals, capabilities, and runtime authority](mvp-01-agent-principals-capabilities-and-runtime-authority.md).
+    [MVP 01: Agent capability requirements and instance permissions](mvp-01-agent-principals-capabilities-and-runtime-authority.md).
   - [ ] Verify the completed task extends the existing OpenFGA/Mélange, RLS,
     release, and secret-runtime models rather than creating parallel authority.
 
@@ -825,26 +825,19 @@ below, ordered by dependency rather than duplicated in this umbrella task.
     broker credentials remain outside guests and broker-only egress cannot be
     bypassed.
 
-- [ ] **5. Record state generations and exact provenance**
+- [ ] **5. Prove the golden cooking-agent journey**
   - [ ] Complete
-    [MVP 05: State generations and exact run provenance](mvp-05-state-generations-and-run-provenance.md).
-  - [ ] Verify each stateful run resolves immutable release, revision, trigger,
-    authorization snapshot, pre/post state generations, capability uses, and
-    result without claiming a full reproducible state snapshot.
-
-- [ ] **6. Prove the golden cooking-agent journey**
-  - [ ] Complete
-    [MVP 06: Golden cooking-agent journey](mvp-06-golden-cooking-agent-journey.md).
+    [MVP 05: Golden cooking-agent journey](mvp-05-golden-cooking-agent-journey.md).
   - [ ] Verify the deterministic real-system journey exercises authorized and
     denied users, gateway isolation, stateful operation, brokered credentials,
     controlled Git publication, release update, recovery, and complete
     provenance.
 
-- [ ] **7. Verify and hand off the MVP roadmap**
-  - [x] Create the six dependency-ordered MVP task files with independent
+- [ ] **6. Verify and hand off the MVP roadmap**
+  - [x] Create the five dependency-ordered MVP task files with independent
     outcomes, locked decisions, non-goals, checklists, verification, and
     completion-evidence requirements.
-  - [ ] Review the umbrella decisions and all six MVP tasks for contradictory
+  - [ ] Review the umbrella decisions and all five MVP tasks for contradictory
     terminology, authority, lifecycle, and commit-point requirements.
   - [ ] Confirm each unresolved MVP architecture question has one authoritative
     child task and no requirement depends on chat history.
@@ -879,6 +872,8 @@ independently verifiable acceptance criteria before implementation.
     is prioritized.
 
 - [ ] **Advanced state, concurrency, hibernation, and sessions**
+  - [ ] Define numbered state generations, lineage, transition semantics,
+    integrity evidence, and authorized state-history inspection.
   - [ ] Define stateless parallelism, bounded concurrency, state sharding,
     session volumes, and interactions among schedules, repository triggers,
     ingress, updates, and services.
@@ -969,10 +964,11 @@ Record:
 
 - accepted product and architecture document paths;
 - accepted terminology and rejected alternatives;
-- completion evidence from each of the six dependency-ordered MVP tasks;
+- completion evidence from each of the five dependency-ordered MVP tasks;
 - OpenFGA/Mélange, RLS, runtime-credential, and revocation evidence;
 - mailbox, ingress, gateway-isolation, broker, and network-denial evidence;
-- state-generation and exact-provenance evidence;
+- serialized state-volume, fenced-lease, dispatch-order, state-access, and
+  exact-provenance evidence;
 - cooking-agent normal, denial, update, recovery, and inspection evidence;
 - reviewed contradictions and the resolution chosen for each;
 - deliberate deferrals retained here; and

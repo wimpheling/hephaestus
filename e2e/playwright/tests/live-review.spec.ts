@@ -1,3 +1,4 @@
+import {AxeBuilder} from "@axe-core/playwright";
 import {expect, test} from "@playwright/test";
 import {execFileSync} from "node:child_process";
 import {mkdtempSync, rmSync, writeFileSync, mkdirSync} from "node:fs";
@@ -14,6 +15,50 @@ const oidcUrl = process.env.HEPHAESTUS_OIDC_URL ?? "http://127.0.0.1:5556";
 const secretSentinel = "HEPHAESTUS_BROWSER_SECRET_4d7ccf";
 
 test.describe.serial("release, instance, secret, and live-review product journey", () => {
+  test("ready, empty, form, and error states are accessible", async ({
+    page
+  }) => {
+    const fixture = await loadFixture();
+    await signIn(page);
+
+    await expect(page.getByRole("main")).toBeVisible();
+    await expect(page.getByRole("heading", {level: 1})).toBeVisible();
+    await assertAccessible(page, "main");
+
+    await page.goto(`/projects/${fixture.projectId}/runs`);
+    await waitForLiveView(page);
+    const projectNavigation = page.getByRole("navigation", {name: "Project"});
+    await expect(projectNavigation.getByRole("link", {name: "Runs"})).toHaveAttribute(
+      "aria-current",
+      "page"
+    );
+    await expect(page.locator("#project-run-stream")).toContainText(
+      "No exact runs have been created."
+    );
+    await assertAccessible(page, "main");
+
+    const agentsLink = projectNavigation.getByRole("link", {name: "Agents"});
+    await agentsLink.focus();
+    await expect(agentsLink).toBeFocused();
+    await agentsLink.press("Enter");
+    await expect(page).toHaveURL(new RegExp(`/projects/${fixture.projectId}/agents$`));
+    await waitForLiveView(page);
+
+    await page.goto(`/organizations/${fixture.organizationId}/secrets/new`);
+    await waitForLiveView(page);
+    const secretForm = page.locator("#create-organization-secret");
+    await expect(secretForm.getByLabel("Secret name")).toBeVisible();
+    await expect(secretForm.getByLabel("New value")).toHaveAttribute("type", "password");
+    await expect(secretForm.getByLabel("Allowed delivery modes")).toBeVisible();
+    await assertAccessible(page, "#create-organization-secret");
+
+    await page.goto("/runs/00000000-0000-0000-0000-000000000000");
+    await expect(page).toHaveURL(/\/organizations$/);
+    await waitForLiveView(page);
+    await expect(page.getByRole("alert")).toContainText("Run not found or access was revoked.");
+    await assertAccessible(page, "#flash-error");
+  });
+
   test("imports, binds, runs, updates, recovers, and never renders secret values", async ({
     page
   }) => {
@@ -158,6 +203,32 @@ test.describe.serial("release, instance, secret, and live-review product journey
     await page.getByTestId("reject-result").click();
     await expect(page.getByTestId("review-proposal")).toContainText("rejected");
   });
+
+  test("confirmation controls are keyboard reachable and preserve focus", async ({page}) => {
+    const fixture = await loadFixture();
+    const instanceId = await latestInstanceId(fixture.projectId);
+    await signIn(page);
+    await page.goto(`/projects/${fixture.projectId}/agents/${instanceId}`);
+    await waitForLiveView(page);
+
+    const remove = page.getByRole("button", {name: "Remove"}).first();
+    await remove.focus();
+    await expect(remove).toBeFocused();
+
+    const confirmation = new Promise<string>(resolve => {
+      page.once("dialog", async dialog => {
+        resolve(dialog.message());
+        await dialog.dismiss();
+      });
+    });
+
+    await remove.press("Enter");
+    await expect(confirmation).resolves.toContain(
+      "Remove this attachment while retaining historical run provenance?"
+    );
+    await expect(remove).toBeFocused();
+    await assertAccessible(page, "main");
+  });
 });
 
 async function signIn(page: import("@playwright/test").Page) {
@@ -171,6 +242,20 @@ async function signIn(page: import("@playwright/test").Page) {
 
 async function waitForLiveView(page: import("@playwright/test").Page) {
   await expect(page.locator("[data-phx-main].phx-connected")).toBeVisible();
+}
+
+async function assertAccessible(page: import("@playwright/test").Page, selector: string) {
+  const results = await new AxeBuilder({page})
+    .include(selector)
+    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+    .analyze();
+
+  expect(
+    results.violations,
+    results.violations
+      .map(violation => `${violation.id}: ${violation.help} (${violation.nodes.length})`)
+      .join("\n")
+  ).toEqual([]);
 }
 
 function escapeRegExp(value: string) {
@@ -207,6 +292,21 @@ async function loadFixture() {
     repositoryId: result.rows[0].repository_id,
     releaseAgents: releases.rows.map(row => row.id)
   };
+}
+
+async function latestInstanceId(projectId: string) {
+  const client = new pg.Client({connectionString: databaseUrl});
+  await client.connect();
+  const result = await client.query(
+    `SELECT id
+     FROM agent_instances
+     WHERE project_id = $1
+     ORDER BY created_at DESC, id DESC
+     LIMIT 1`,
+    [projectId]
+  );
+  await client.end();
+  return result.rows[0].id as string;
 }
 
 async function createOrganizationSecretAndGrant(

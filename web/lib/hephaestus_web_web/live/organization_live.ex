@@ -1,76 +1,108 @@
 defmodule HephaestusWebWeb.OrganizationLive do
   use HephaestusWebWeb, :live_view
 
-  alias HephaestusWeb.Store
+  alias HephaestusWebWeb.DesignSystem.Pages.OrganizationPage
+  alias HephaestusWebWeb.{OrganizationState, PageStream}
+
+  @stream_mode :page_scoped
 
   @impl true
   def mount(_params, _session, socket) do
-    case Store.list_organizations(socket.assigns.current_identity) do
-      {:ok, organizations} ->
-        {:ok,
-         socket
-         |> stream_configure(:organizations,
-           dom_id: &"organization-stream-#{&1["id"]}"
-         )
-         |> assign(:page_title, "Organizations")
-         |> assign(:organization_count, length(organizations))
-         |> stream(:organizations, organizations)}
+    _stream_mode = @stream_mode
+    state = OrganizationState.new(%{})
 
-      {:error, _reason} ->
-        {:ok,
-         socket
-         |> stream_configure(:organizations,
-           dom_id: &"organization-stream-#{&1["id"]}"
-         )
-         |> put_flash(:error, "Unable to load organizations.")
-         |> assign(:organization_count, 0)
-         |> stream(:organizations, [])}
+    socket =
+      socket
+      |> stream_configure(:organizations, dom_id: &"organization-#{&1["id"]}")
+      |> stream(:organizations, [])
+      |> assign(:page_state, state)
+      |> assign(:watch_task, nil)
+      |> assign(:snapshot_task, nil)
+      |> assign(:stream_mode, @stream_mode)
+      |> assign(:page_title, "Organizations")
+
+    if connected?(socket) do
+      {:ok, PageStream.start_watch(socket, OrganizationState)}
+    else
+      {:ok, socket}
     end
   end
 
   @impl true
+  def handle_info(
+        {:page_watch, generation, response},
+        %{assigns: %{page_state: %{stream_generation: generation}}} = socket
+      ) do
+    {socket, effects} = PageStream.reduce_watch(socket, OrganizationState, response)
+    {:noreply, socket |> sync_state() |> PageStream.apply_effects(OrganizationState, effects)}
+  end
+
+  def handle_info(
+        {:page_watch_ended, generation, result},
+        %{assigns: %{page_state: %{stream_generation: generation}}} = socket
+      ) do
+    {socket, effects} = PageStream.reduce_ended(socket, OrganizationState, result)
+    {:noreply, socket |> sync_state() |> PageStream.apply_effects(OrganizationState, effects)}
+  end
+
+  def handle_info({:page_watch, _generation, _response}, socket), do: {:noreply, socket}
+  def handle_info({:page_watch_ended, _generation, _result}, socket), do: {:noreply, socket}
+
+  def handle_info({ref, event}, %{assigns: %{snapshot_task: %Task{ref: ref}}} = socket) do
+    Process.demonitor(ref, [:flush])
+    {state, effects} = OrganizationState.reduce(socket.assigns.page_state, event)
+
+    socket =
+      socket
+      |> assign(:snapshot_task, nil)
+      |> assign(:page_state, state)
+      |> sync_state()
+      |> PageStream.apply_effects(OrganizationState, effects)
+
+    {:noreply, socket}
+  end
+
+  def handle_info(
+        {:DOWN, ref, :process, _pid, reason},
+        %{assigns: %{snapshot_task: %Task{ref: ref}}} = socket
+      ) do
+    {state, _effects} = OrganizationState.reduce(socket.assigns.page_state, {:failed, reason})
+    {:noreply, socket |> assign(:snapshot_task, nil) |> assign(:page_state, state)}
+  end
+
+  def handle_info(_message, socket), do: {:noreply, socket}
+
+  @impl true
+  def terminate(_reason, socket) do
+    PageStream.cancel(socket.assigns[:watch_task])
+    PageStream.cancel(socket.assigns[:snapshot_task])
+    :ok
+  end
+
+  @impl true
   def render(assigns) do
+    presentation = OrganizationState.present(assigns.page_state)
+    assigns = assign(assigns, :presentation, presentation)
+
     ~H"""
-    <Layouts.app flash={@flash} current_identity={@current_identity}>
-      <section class="hero-panel">
-        <div>
-          <p class="eyebrow">Control plane</p>
-          <h1>Good evening, {@current_identity.display_name}.</h1>
-          <p class="lede">Review live agents, inspect exact commits, and decide what reaches Git.</p>
-        </div>
-        <div class="system-health">
-          <span class="status-dot"></span>
-          <div><strong>Forge online</strong><small>durable workers connected</small></div>
-        </div>
-      </section>
-
-      <section class="section-heading">
-        <div>
-          <p class="eyebrow">Your perimeter</p>
-          <h2>Organizations</h2>
-        </div>
-        <.tag>{@organization_count} visible</.tag>
-      </section>
-
-      <div id="organizations" class="org-grid" phx-update="stream">
-        <.link
-          :for={{dom_id, organization} <- @streams.organizations}
-          id={dom_id}
-          navigate={~p"/organizations/#{organization["id"]}"}
-          class="org-card"
-          data-testid={"organization-#{organization["id"]}"}
-        >
-          <div class="org-mark">{organization["name"] |> String.first() |> String.upcase()}</div>
-          <div class="org-copy">
-            <h3>{organization["name"]}</h3>
-            <p>
-              {organization["project_count"]} projects · {organization["repository_count"]} repositories
-            </p>
-          </div>
-          <span class="arrow">↗</span>
-        </.link>
-      </div>
+    <Layouts.app
+      flash={@flash}
+      current_identity={@current_identity}
+      organizations_destination={~p"/organizations"}
+      logout_destination={~p"/logout"}
+    >
+      <OrganizationPage.organization_page
+        state={@presentation.status}
+        current_identity={@current_identity}
+        organization_count={@presentation.organization_count}
+        organizations={@streams.organizations}
+      />
     </Layouts.app>
     """
+  end
+
+  defp sync_state(socket) do
+    organizations = socket.assigns.page_state.data.organizations
+    stream(socket, :organizations, organizations, reset: true)
   end
 end

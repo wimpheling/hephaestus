@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::{fmt, str::FromStr};
 use uuid::Uuid;
 
@@ -60,6 +61,42 @@ identifier!(UserId, "An immutable internal user identifier.");
 identifier!(OrganizationId, "An immutable organization identifier.");
 identifier!(RequestId, "A request correlation identifier.");
 
+const IDEMPOTENCY_SEED_DOMAIN: &[u8] = b"hephaestus-mutation-idempotency-seed-v1\0";
+const IDEMPOTENCY_ACTOR_DOMAIN: &[u8] = b"hephaestus-mutation-idempotency-actor-v1\0";
+
+/// Produces a one-way seed from an exact operation audience and bounded key.
+///
+/// The returned digest is safe to pass inward; the raw caller key must never
+/// be persisted or logged.
+#[must_use]
+pub fn mutation_idempotency_seed(audience: &str, idempotency_key: &str) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(IDEMPOTENCY_SEED_DOMAIN);
+    update_hash_field(&mut digest, audience.as_bytes());
+    update_hash_field(&mut digest, idempotency_key.as_bytes());
+    digest.finalize().into()
+}
+
+/// Binds a one-way operation seed to the exact authenticated actor.
+#[must_use]
+pub fn actor_idempotency_id(actor_identity: &[u8], seed: &[u8; 32]) -> RequestId {
+    let mut digest = Sha256::new();
+    digest.update(IDEMPOTENCY_ACTOR_DOMAIN);
+    update_hash_field(&mut digest, actor_identity);
+    update_hash_field(&mut digest, seed);
+    let mut bytes = [0_u8; 16];
+    bytes.copy_from_slice(&digest.finalize()[..16]);
+    // RFC 9562 version 8 is reserved for application-defined UUID layouts.
+    bytes[6] = (bytes[6] & 0x0f) | 0x80;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    RequestId::from_uuid(uuid::Uuid::from_bytes(bytes))
+}
+
+fn update_hash_field(digest: &mut Sha256, value: &[u8]) {
+    digest.update(value.len().to_be_bytes());
+    digest.update(value);
+}
+
 /// Identity established by verified authentication middleware.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuthenticatedIdentity {
@@ -73,6 +110,12 @@ pub struct AuthenticatedIdentity {
     pub verified_claims: Value,
     /// Request correlation identifier.
     pub request_id: RequestId,
+    /// Opaque logical mutation identifier used only for durable deduplication.
+    ///
+    /// Non-RPC callers default this to [`Self::request_id`]. Inbound mutation
+    /// adapters replace it with a domain-separated identifier derived from the
+    /// authenticated actor, exact RPC audience, and bounded idempotency key.
+    pub idempotency_id: RequestId,
     /// Optional distributed trace identifier.
     pub trace_id: Option<String>,
 }
@@ -93,8 +136,17 @@ impl AuthenticatedIdentity {
             subject: subject.into(),
             verified_claims,
             request_id,
+            idempotency_id: request_id,
             trace_id: None,
         }
+    }
+
+    /// Replaces the logical mutation identifier without changing client
+    /// request provenance.
+    #[must_use]
+    pub const fn with_idempotency_id(mut self, idempotency_id: RequestId) -> Self {
+        self.idempotency_id = idempotency_id;
+        self
     }
 
     /// Adds a distributed trace identifier.

@@ -1,0 +1,29 @@
+[package]
+name = "identity-postgres"
+description = "PostgreSQL adapter for verified and idempotent identity mapping"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+readme = "README.md"
+
+[dependencies]
+async-trait.workspace = true
+identity-application = { path = "../identity-application" }
+identity-domain = { path = "../identity-domain" }
+serde_json.workspace = true
+sqlx.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+git-http = { path = "../git-http" }
+identity-oidc = { path = "../identity-oidc" }
+jsonwebtoken.workspace = true
+serial_test = "3"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true
+
+[package.metadata.hephaestus]
+postgres_adapter = true
+database_context = "identity"

@@ -1,0 +1,48 @@
+[package]
+name = "forge-postgres"
+description = "PostgreSQL metadata adapter for forge receives and repositories"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+agent-config = { path = "../agent-config" }
+authz-domain = { path = "../authz-domain" }
+authz-postgres = { path = "../authz-postgres" }
+forge-domain = { path = "../forge-domain" }
+forge-service = { path = "../forge-service" }
+gix.workspace = true
+identity-domain = { path = "../identity-domain" }
+release-domain = { path = "../release-domain" }
+run-domain = { path = "../run-domain" }
+runtime-types = { path = "../runtime-types" }
+serde_json.workspace = true
+sha2.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+time.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+git-http = { path = "../git-http" }
+async-nats.workspace = true
+futures-util.workspace = true
+run-orchestrator = { path = "../run-orchestrator" }
+run-postgres = { path = "../run-postgres" }
+serial_test = "3"
+tempfile = "3"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+vm-fake = { path = "../vm-fake" }
+vm-trait.workspace = true
+volume-local = { path = "../volume-local" }
+volume-postgres = { path = "../volume-postgres" }
+
+[lints]
+workspace = true
+
+[package.metadata.hephaestus]
+postgres_adapter = true
+database_context = "forge"

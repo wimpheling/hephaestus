@@ -1,0 +1,68 @@
+syntax = "proto3";
+
+package hephaestus.build.v1;
+
+import "google/protobuf/timestamp.proto";
+import "hephaestus/common/v1/common.proto";
+import "hephaestus/options/v1/options.proto";
+
+service BuildService {
+  rpc GetBuild(GetBuildRequest) returns (GetBuildResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (hephaestus.options.v1.authorization) = {
+      permission: "build.read"
+      audience: "/hephaestus.build.v1.BuildService/GetBuild"
+      actor_source: ACTOR_SOURCE_MEDIATOR_JWT_METADATA
+    };
+    option (hephaestus.options.v1.operation_kind) = OPERATION_KIND_QUERY;
+    option (hephaestus.options.v1.max_request_bytes) = 4096;
+    option (hephaestus.options.v1.max_response_bytes) = 2097152;
+  }
+  rpc RequestBuild(RequestBuildRequest) returns (RequestBuildResponse) {
+    option (hephaestus.options.v1.authorization) = {
+      permission: "build.request"
+      audience: "/hephaestus.build.v1.BuildService/RequestBuild"
+      actor_source: ACTOR_SOURCE_MEDIATOR_JWT_METADATA
+    };
+    option (hephaestus.options.v1.operation_kind) = OPERATION_KIND_MUTATION;
+    option (hephaestus.options.v1.max_request_bytes) = 65536;
+    option (hephaestus.options.v1.max_response_bytes) = 16384;
+  }
+}
+
+enum BuildState {
+  BUILD_STATE_UNSPECIFIED = 0;
+  BUILD_STATE_QUEUED = 1;
+  BUILD_STATE_RUNNING = 2;
+  BUILD_STATE_SUCCEEDED = 3;
+  BUILD_STATE_FAILED = 4;
+  BUILD_STATE_CANCELLED = 5;
+}
+message Build {
+  hephaestus.common.v1.OpaqueId id = 1;
+  BuildState state = 2;
+  optional int32 exit_code = 3;
+  string failure_code = 4;
+  repeated string logs = 5;
+  repeated hephaestus.common.v1.RuntimeMetric metrics = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp updated_at = 8;
+}
+message GetBuildRequest {
+  hephaestus.common.v1.OpaqueId build_id = 1;
+}
+message GetBuildResponse {
+  Build build = 1;
+}
+message RequestBuildRequest {
+  hephaestus.common.v1.RequestContext context = 1;
+  hephaestus.common.v1.OpaqueId repository_id = 2;
+  string source_commit = 3;
+  string build_definition_hash = 4;
+  string configuration_hash = 5;
+}
+message RequestBuildResponse {
+  hephaestus.common.v1.OpaqueId build_id = 1;
+  hephaestus.common.v1.Operation operation = 2;
+  hephaestus.common.v1.MutationReceipt receipt = 3;
+}

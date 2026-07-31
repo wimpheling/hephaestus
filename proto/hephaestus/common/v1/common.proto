@@ -1,0 +1,219 @@
+syntax = "proto3";
+
+package hephaestus.common.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// Opaque canonical UUID. Callers must not infer resource semantics from it.
+message OpaqueId {
+  string value = 1;
+}
+
+// Mutation retry identity. It never carries an authenticated actor.
+message RequestContext {
+  OpaqueId request_id = 1;
+  string idempotency_key = 2;
+}
+
+// Bounded collection request. Tokens are scoped to method, caller, and filter.
+message PageRequest {
+  uint32 page_size = 1;
+  string page_token = 2;
+}
+
+// Collection continuation and the server's declared deterministic ordering.
+message PageResponse {
+  string next_page_token = 1;
+  string stable_order = 2;
+}
+
+// Opaque resumable stream position bound to the authorized scope.
+message Cursor {
+  string value = 1;
+}
+
+// Read-your-writes position for the mutation's documented primary product-
+// event scope. Commands that invalidate several scopes return the primary
+// event; clients reload other views through their ordinary snapshot RPCs.
+message MutationReceipt {
+  Cursor committed_cursor = 1;
+  uint64 aggregate_version = 2;
+  OpaqueId event_id = 3;
+}
+
+// A typed submitted parameter; maps and arbitrary JSON are intentionally absent.
+message ParameterValue {
+  string name = 1;
+  oneof value {
+    string string_value = 2;
+    int64 integer_value = 3;
+    bool boolean_value = 4;
+  }
+}
+
+message StringParameterConstraints {
+  uint32 minimum_length = 1;
+  uint32 maximum_length = 2;
+}
+
+message IntegerParameterConstraints {
+  int64 minimum = 1;
+  int64 maximum = 2;
+}
+
+message BooleanParameterConstraints {}
+
+message EnumParameterConstraints {
+  repeated string values = 1;
+}
+
+message ParameterType {
+  oneof constraint {
+    StringParameterConstraints string = 1;
+    IntegerParameterConstraints integer = 2;
+    BooleanParameterConstraints boolean = 3;
+    EnumParameterConstraints enumeration = 4;
+  }
+}
+
+message ParameterDefault {
+  oneof value {
+    string string_value = 1;
+    int64 integer_value = 2;
+    bool boolean_value = 3;
+  }
+}
+
+message ParameterDeclaration {
+  string name = 1;
+  string label = 2;
+  ParameterType value_type = 3;
+  bool required = 4;
+  ParameterDefault default = 5;
+  bool sensitive = 6;
+}
+
+enum NetworkPolicy {
+  NETWORK_POLICY_UNSPECIFIED = 0;
+  NETWORK_POLICY_DISABLED = 1;
+  NETWORK_POLICY_BROKER_ONLY = 2;
+  NETWORK_POLICY_EGRESS = 3;
+}
+
+message RuntimePolicy {
+  uint32 vcpus = 1;
+  uint32 memory_mib = 2;
+  NetworkPolicy network = 3;
+}
+
+message RuntimeContract {
+  RuntimePolicy policy_ceiling = 1;
+  string platform_policy_version = 2;
+  bool requires_state = 3;
+}
+
+enum DiagnosticSeverity {
+  DIAGNOSTIC_SEVERITY_UNSPECIFIED = 0;
+  DIAGNOSTIC_SEVERITY_INFO = 1;
+  DIAGNOSTIC_SEVERITY_WARNING = 2;
+  DIAGNOSTIC_SEVERITY_ERROR = 3;
+}
+
+enum DiagnosticCode {
+  DIAGNOSTIC_CODE_UNSPECIFIED = 0;
+  DIAGNOSTIC_CODE_INVALID_PARAMETER = 1;
+  DIAGNOSTIC_CODE_POLICY_EXCEEDED = 2;
+  DIAGNOSTIC_CODE_INCOMPATIBLE_UPDATE = 3;
+  DIAGNOSTIC_CODE_RUN_GATE_CLOSED = 4;
+  DIAGNOSTIC_CODE_RESOURCE_UNAVAILABLE = 5;
+}
+
+message Diagnostic {
+  DiagnosticCode code = 1;
+  DiagnosticSeverity severity = 2;
+  string field = 3;
+  string message = 4;
+}
+
+enum ErrorCode {
+  ERROR_CODE_UNSPECIFIED = 0;
+  ERROR_CODE_UNAUTHENTICATED = 1;
+  ERROR_CODE_PERMISSION_DENIED = 2;
+  ERROR_CODE_NOT_FOUND = 3;
+  ERROR_CODE_INVALID_ARGUMENT = 4;
+  ERROR_CODE_STALE_VERSION = 5;
+  ERROR_CODE_IDEMPOTENCY_CONFLICT = 6;
+  ERROR_CODE_LIFECYCLE_CONFLICT = 7;
+  ERROR_CODE_RESOURCE_EXHAUSTED = 8;
+  ERROR_CODE_UNAVAILABLE = 9;
+  ERROR_CODE_INTERNAL = 10;
+  ERROR_CODE_CURSOR_EXPIRED = 11;
+  ERROR_CODE_ALREADY_EXISTS = 12;
+  ERROR_CODE_DEADLINE_EXCEEDED = 13;
+  ERROR_CODE_CANCELLED = 14;
+}
+
+// Stable Connect error detail carried in google.rpc.Status details.
+message ErrorDetail {
+  ErrorCode code = 1;
+  string reason = 2;
+  repeated Diagnostic diagnostics = 3;
+  OpaqueId request_id = 4;
+  bool retryable = 5;
+}
+
+enum OperationState {
+  OPERATION_STATE_UNSPECIFIED = 0;
+  OPERATION_STATE_QUEUED = 1;
+  OPERATION_STATE_RUNNING = 2;
+  OPERATION_STATE_SUCCEEDED = 3;
+  OPERATION_STATE_FAILED = 4;
+  OPERATION_STATE_CANCELLED = 5;
+}
+
+// Durable long-running work returned immediately by mutation RPCs.
+message Operation {
+  OpaqueId id = 1;
+  OperationState state = 2;
+  google.protobuf.Timestamp created_at = 3;
+  google.protobuf.Timestamp updated_at = 4;
+  repeated Diagnostic diagnostics = 5;
+}
+
+enum SecretSlotDeliveryMode {
+  SECRET_SLOT_DELIVERY_MODE_UNSPECIFIED = 0;
+  SECRET_SLOT_DELIVERY_MODE_RAW = 1;
+  SECRET_SLOT_DELIVERY_MODE_BROKERED = 2;
+}
+
+enum SecretSlotPhase {
+  SECRET_SLOT_PHASE_UNSPECIFIED = 0;
+  SECRET_SLOT_PHASE_NORMAL = 1;
+  SECRET_SLOT_PHASE_UPDATE = 2;
+}
+
+message SecretSlotDeclaration {
+  string key = 1;
+  string purpose = 2;
+  bool required = 3;
+  repeated SecretSlotDeliveryMode delivery_modes = 4;
+  repeated SecretSlotPhase phases = 5;
+  repeated string destinations = 6;
+}
+
+message UpdateHook {
+  bool required = 1;
+  uint32 timeout_seconds = 2;
+}
+
+message MetricLabel {
+  string key = 1;
+  string value = 2;
+}
+
+message RuntimeMetric {
+  string name = 1;
+  double value = 2;
+  string unit = 3;
+  repeated MetricLabel labels = 4;
+}

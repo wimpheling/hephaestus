@@ -1,7 +1,14 @@
 defmodule HephaestusWebWeb.ProjectRoutesTest do
   use ExUnit.Case, async: true
 
-  alias HephaestusWebWeb.{AgentInstanceLive, ProjectLive, Router}
+  alias HephaestusWebWeb.{
+    AgentInstanceLive,
+    ProjectAgentsLive,
+    ProjectLive,
+    ProjectRunsLive,
+    ProjectSettingsLive,
+    Router
+  }
 
   @project_id "018f689a-a81d-7c2e-943f-3a41f7981234"
   @instance_id "018f689a-a81d-7c2e-943f-3a41f7984321"
@@ -9,9 +16,9 @@ defmodule HephaestusWebWeb.ProjectRoutesTest do
   test "project resources resolve to exact LiveView actions" do
     assert live_action("/projects/#{@project_id}") == {ProjectLive, :repositories}
     assert live_action("/projects/#{@project_id}/repositories") == {ProjectLive, :repositories}
-    assert live_action("/projects/#{@project_id}/agents") == {ProjectLive, :agents}
-    assert live_action("/projects/#{@project_id}/runs") == {ProjectLive, :runs}
-    assert live_action("/projects/#{@project_id}/settings") == {ProjectLive, :settings}
+    assert live_action("/projects/#{@project_id}/agents") == {ProjectAgentsLive, :agents}
+    assert live_action("/projects/#{@project_id}/runs") == {ProjectRunsLive, :runs}
+    assert live_action("/projects/#{@project_id}/settings") == {ProjectSettingsLive, :settings}
 
     assert live_action("/projects/#{@project_id}/agents/#{@instance_id}") ==
              {AgentInstanceLive, :show}

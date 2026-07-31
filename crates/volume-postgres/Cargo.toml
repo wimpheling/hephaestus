@@ -1,0 +1,27 @@
+[package]
+name = "volume-postgres"
+description = "PostgreSQL metadata adapter for persistent agent volumes"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+runtime-types = { path = "../runtime-types" }
+sqlx.workspace = true
+time.workspace = true
+uuid.workspace = true
+volume-trait = { path = "../volume-trait" }
+
+[dev-dependencies]
+serial_test = "3"
+tempfile = "3"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+volume-local = { path = "../volume-local" }
+
+[lints]
+workspace = true
+
+[package.metadata.hephaestus]
+postgres_adapter = true
+database_context = "volume"

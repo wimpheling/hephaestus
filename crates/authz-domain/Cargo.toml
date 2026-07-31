@@ -10,7 +10,6 @@ async-trait.workspace = true
 identity-domain = { path = "../identity-domain" }
 runtime-types = { path = "../runtime-types" }
 serde.workspace = true
-sqlx.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
 

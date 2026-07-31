@@ -1,19 +1,21 @@
-//! Durable run orchestration, `PostgreSQL` persistence, and `JetStream` delivery.
+//! Durable run orchestration and `JetStream` delivery over provider-neutral ports.
 
 mod nats;
 mod orchestrator;
 mod repository;
+mod runtime_catalog;
 
 pub use nats::{
     CANCEL_RUN_SUBJECT, CommandConsumerError, CommandHandlingError, FORGE_START_RUN_SUBJECT,
-    LIFECYCLE_EVENT_SUBJECT, NatsCommandHandler, NatsOutboxPublisher, OutboxPublishError,
-    START_RUN_SUBJECT, TopologyError, ensure_jetstream_topology,
+    NatsCommandHandler, START_RUN_SUBJECT, TopologyError, ensure_jetstream_topology,
 };
 pub use orchestrator::{
     OrchestratorError, PreparedRunRuntime, PreparedRunSecrets, RunAuthorizationError,
     RunCompletionError, RunCompletionObserver, RunLaunchAuthorizer, RunOrchestrator,
     RunRuntimeError, RunRuntimeManager, RunSecretError, RunSecretManager, VmSpecFactory,
 };
-pub use repository::{
-    CreateRunResult, OutboxRecord, PgRunRepository, RepositoryError, RunRepository, StoredVmEvent,
+pub use repository::{CreateRunResult, RepositoryError, RunRepository, StoredVmEvent};
+pub use runtime_catalog::{
+    RunRuntimeArtifact, RunRuntimeArtifactKind, RunRuntimeCatalog, RunRuntimeCatalogError,
+    RunRuntimeInput,
 };

@@ -1,0 +1,19 @@
+[package]
+name = "event-application"
+description = "Provider-neutral durable event application ports and values"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+identity-domain = { path = "../identity-domain" }
+thiserror.workspace = true
+time.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }
+
+[lints]
+workspace = true

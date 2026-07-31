@@ -1,8 +1,7 @@
 //! Authorized, bounded, streaming Git smart-HTTP transport.
 
 use async_trait::async_trait;
-use authz_domain::{AuthorizationDecision, Authorizer, ObjectRef, ObjectType, Permission, Subject};
-use authz_postgres::{PostgresMelangeAuthorizer, audit_decision, begin_actor_transaction};
+use authz_domain::{AuthorizationDecision, GitRepositoryAuthorizer, GitRepositoryOperation};
 use axum::{
     Router,
     body::Body,
@@ -14,11 +13,12 @@ use axum::{
 };
 use bytes::{Bytes, BytesMut};
 use forge_domain::{CommitSha, GitRef, ReceiveId, RefUpdate, RepositoryId};
-use forge_service::{ForgeRepositoryError, GitStorage, PgForgeRepository};
+use forge_postgres::PgForgeRepository;
+use forge_service::{ForgeRepositoryError, GitStorage};
 use futures_util::StreamExt;
+use identity_application::VerifiedIdentityMapper;
 use identity_domain::{AuthenticatedIdentity, RequestId};
-use identity_oidc::{OidcVerifier, map_identity};
-use sqlx::PgPool;
+use identity_oidc::OidcVerifier;
 use std::{
     collections::{BTreeMap, HashMap},
     io,
@@ -96,22 +96,22 @@ pub trait GitAuthorizer: Send + Sync + 'static {
     async fn authorize(&self, request: &AuthorizationRequest) -> Result<(), AuthorizationError>;
 }
 
-/// PostgreSQL-mapped OIDC bearer-token authenticator for Git HTTP.
-pub struct PostgresOidcGitAuthenticator {
-    pool: PgPool,
+/// OIDC bearer-token authenticator backed by an injected identity mapper.
+pub struct OidcGitAuthenticator {
     verifier: Arc<OidcVerifier>,
+    mapper: Arc<dyn VerifiedIdentityMapper>,
 }
 
-impl PostgresOidcGitAuthenticator {
+impl OidcGitAuthenticator {
     /// Creates an OIDC-backed Git authenticator.
     #[must_use]
-    pub const fn new(pool: PgPool, verifier: Arc<OidcVerifier>) -> Self {
-        Self { pool, verifier }
+    pub const fn new(verifier: Arc<OidcVerifier>, mapper: Arc<dyn VerifiedIdentityMapper>) -> Self {
+        Self { verifier, mapper }
     }
 }
 
 #[async_trait]
-impl GitAuthenticator for PostgresOidcGitAuthenticator {
+impl GitAuthenticator for OidcGitAuthenticator {
     async fn authenticate(
         &self,
         credential: Option<&str>,
@@ -124,18 +124,11 @@ impl GitAuthenticator for PostgresOidcGitAuthenticator {
             .verifier
             .verify(token, None)
             .map_err(|_| AuthenticationError::denied("the bearer token is invalid"))?;
-        let mut transaction = self
-            .pool
-            .begin()
-            .await
-            .map_err(|_| AuthenticationError::denied("authentication is unavailable"))?;
-        let identity = map_identity(&mut transaction, &verified, request_id, None)
+        let identity = self
+            .mapper
+            .map_verified_identity(&verified, request_id, None)
             .await
             .map_err(|_| AuthenticationError::denied("the bearer identity is unavailable"))?;
-        transaction
-            .commit()
-            .await
-            .map_err(|_| AuthenticationError::denied("authentication is unavailable"))?;
         Ok(Principal {
             name: identity.subject.clone(),
             identity,
@@ -145,54 +138,31 @@ impl GitAuthenticator for PostgresOidcGitAuthenticator {
 
 /// Database-native Git authorizer backed by the generated Mélange dispatcher.
 pub struct PostgresGitAuthorizer {
-    pool: PgPool,
-    authorizer: PostgresMelangeAuthorizer,
+    delegate: Arc<dyn GitRepositoryAuthorizer>,
 }
 
 impl PostgresGitAuthorizer {
     /// Creates a `PostgreSQL` Git authorizer.
     #[must_use]
-    pub const fn new(pool: PgPool) -> Self {
-        Self {
-            pool,
-            authorizer: PostgresMelangeAuthorizer,
-        }
+    pub fn new(delegate: Arc<dyn GitRepositoryAuthorizer>) -> Self {
+        Self { delegate }
     }
 }
 
 #[async_trait]
 impl GitAuthorizer for PostgresGitAuthorizer {
     async fn authorize(&self, request: &AuthorizationRequest) -> Result<(), AuthorizationError> {
-        let mut transaction = begin_actor_transaction(&self.pool, &request.identity)
-            .await
-            .map_err(|_| AuthorizationError::denied("authorization is unavailable"))?;
-        let permission = match request.operation {
-            GitOperation::Clone | GitOperation::Fetch => Permission::CanRead,
-            GitOperation::Push => Permission::CanWrite,
+        let operation = match request.operation {
+            GitOperation::Clone | GitOperation::Fetch => GitRepositoryOperation::Read,
+            GitOperation::Push => GitRepositoryOperation::Write,
         };
-        let object = ObjectRef::new(ObjectType::Repository, request.repository_id.as_uuid());
         let decision = self
-            .authorizer
-            .check(
-                &mut transaction,
-                Subject::User(request.identity.user_id),
-                permission,
-                object,
+            .delegate
+            .authorize_git(
+                request.repository_id.as_uuid(),
+                operation,
+                &request.identity,
             )
-            .await
-            .map_err(|_| AuthorizationError::denied("authorization is unavailable"))?;
-        audit_decision(
-            &mut transaction,
-            request.identity.user_id,
-            permission,
-            object,
-            decision,
-            request.identity.request_id,
-        )
-        .await
-        .map_err(|_| AuthorizationError::denied("authorization is unavailable"))?;
-        transaction
-            .commit()
             .await
             .map_err(|_| AuthorizationError::denied("authorization is unavailable"))?;
         if decision == AuthorizationDecision::Deny {

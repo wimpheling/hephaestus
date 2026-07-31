@@ -1,0 +1,34 @@
+syntax = "proto3";
+
+package hephaestus.identity.v1;
+
+import "hephaestus/common/v1/common.proto";
+import "hephaestus/options/v1/options.proto";
+
+service IdentityService {
+  rpc ResolveIdentity(ResolveIdentityRequest) returns (ResolveIdentityResponse) {
+    option (hephaestus.options.v1.authorization) = {
+      permission: "identity.resolve"
+      audience: "/hephaestus.identity.v1.IdentityService/ResolveIdentity"
+      actor_source: ACTOR_SOURCE_VERIFIED_OIDC_BOOTSTRAP_ASSERTION
+    };
+    option (hephaestus.options.v1.operation_kind) = OPERATION_KIND_MUTATION;
+    option (hephaestus.options.v1.max_request_bytes) = 16384;
+    option (hephaestus.options.v1.max_response_bytes) = 4096;
+  }
+}
+
+message ResolveIdentityRequest {
+  hephaestus.common.v1.RequestContext context = 1;
+  string issuer = 2;
+  string subject = 3;
+  string display_name = 4;
+  string email = 5;
+  bool email_verified = 6;
+}
+
+message ResolveIdentityResponse {
+  hephaestus.common.v1.OpaqueId user_id = 1;
+  string display_name = 2;
+  hephaestus.common.v1.MutationReceipt receipt = 3;
+}

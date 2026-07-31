@@ -1,20 +1,17 @@
 # Hephaestus Live Review
 
 This Phoenix LiveView application is the browser control plane for the Rust
-forge daemon. It does not own domain migrations or bypass PostgreSQL
-authorization. Every protected read and command:
+forge daemon. It does not own domain migrations or connect directly to domain
+tables. Every protected read and command uses generated protobuf messages and
+native gRPC stubs, with a short-lived mediator assertion scoped to the exact
+RPC method.
 
-1. runs in a transaction;
-2. installs `hephaestus.actor_id` and `hephaestus.request_id` locally;
-3. relies on RLS and the generated Mélange permission functions.
+Each product page consumes an authorized, scope-specific gRPC event stream,
+resumes from its exact committed cursor, and re-fetches authoritative snapshots
+after a typed event or mutation receipt is observed.
 
-Live database notifications carry only opaque wake-up identifiers. A LiveView
-authorizes before subscribing and re-fetches protected data through RLS on
-every wake-up and periodic reauthorization pass.
-
-The Rust migration set must be applied before the web application starts.
-Configure `DATABASE_URL`, the browser OIDC settings documented in
-[`config/runtime.exs`](config/runtime.exs), and `HEPHAESTUS_ARTIFACT_ROOT`.
+Configure `HEPHAESTUS_RPC_ENDPOINT`, `HEPHAESTUS_RPC_MEDIATOR_SECRET`, and the
+browser OIDC settings documented in [`config/runtime.exs`](config/runtime.exs).
 Then run:
 
 ```sh

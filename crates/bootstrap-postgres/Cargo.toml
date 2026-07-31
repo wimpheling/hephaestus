@@ -1,0 +1,37 @@
+[package]
+name = "bootstrap-postgres"
+description = "PostgreSQL bootstrap and operator utilities"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+agent-config = { path = "../agent-config" }
+authz-domain = { path = "../authz-domain" }
+authz-postgres = { path = "../authz-postgres" }
+forge-domain = { path = "../forge-domain" }
+forge-postgres = { path = "../forge-postgres" }
+forge-service = { path = "../forge-service" }
+identity-domain = { path = "../identity-domain" }
+release-domain = { path = "../release-domain" }
+release-postgres = { path = "../release-postgres" }
+serde_json.workspace = true
+sha2.workspace = true
+sqlx.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+uuid.workspace = true
+
+[lints]
+workspace = true
+
+[package.metadata.hephaestus]
+postgres_adapter = true
+database_context = "bootstrap"
+
+[[bin]]
+name = "hephaestus-e2e-seed"
+path = "src/bin/hephaestus-e2e-seed.rs"
+
+[[bin]]
+name = "hephaestus-operator"
+path = "src/bin/hephaestus-operator.rs"

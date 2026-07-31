@@ -5,7 +5,7 @@ resolver = "3"
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 
 [workspace.dependencies]
 async-trait = "0.1"
@@ -13,10 +13,18 @@ async-nats = "0.42"
 aes-gcm = "0.10"
 axum = "0.8"
 bytes = "1"
+buffa = { version = "=0.8.1", features = ["json"] }
+buffa-descriptor = { version = "=0.8.1", features = ["reflect"] }
+buffa-types = { version = "=0.8.1", features = ["json"] }
 ciborium = "0.2"
+clap = { version = "4.5", features = ["derive"] }
+ctrlc = "3"
+connectrpc = { version = "=0.8.1", features = ["server"] }
+connectrpc-reflection = "=0.8.0"
 futures-util = "0.3"
 gix = { version = "0.72", default-features = false, features = ["revision"] }
 http = "1"
+hmac = "0.12"
 jsonwebtoken = "9"
 libloading = "0.8"
 libc = "0.2"
@@ -37,7 +45,8 @@ sqlx = { version = "0.8.6", default-features = false, features = [
     "uuid",
 ] }
 thiserror = "2"
-# 0.3.46+ raised MSRV beyond this workspace's Rust 1.85 contract.
+# Keep the audited release fixed independently of the workspace's RPC-driven
+# Rust 1.88 floor.
 time = { version = "=0.3.45", features = ["serde"] }
 tokio = { version = "1", features = ["sync"] }
 tokio-stream = "0.1"

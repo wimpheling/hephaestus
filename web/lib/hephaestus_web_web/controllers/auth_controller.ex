@@ -2,7 +2,8 @@ defmodule HephaestusWebWeb.AuthController do
   use HephaestusWebWeb, :controller
 
   alias Assent.Strategy.OIDC
-  alias HephaestusWeb.{Identity, IdentityMapper}
+  alias HephaestusWeb.Identity
+  alias HephaestusWeb.RPC.IdentityBootstrap
 
   def login(conn, _params) do
     config = Keyword.put(oidc_config(), :nonce, nonce())
@@ -13,10 +14,10 @@ defmodule HephaestusWebWeb.AuthController do
         |> put_session(:oidc_session_params, session_params)
         |> redirect(external: url)
 
-      {:error, reason} ->
+      {:error, _reason} ->
         conn
         |> put_status(:service_unavailable)
-        |> text("OIDC provider is unavailable: #{inspect(reason)}")
+        |> text("OIDC provider is unavailable.")
     end
   end
 
@@ -40,17 +41,17 @@ defmodule HephaestusWebWeb.AuthController do
 
     with {:ok, %{user: claims}} <- OIDC.callback(config, params),
          issuer <- Keyword.fetch!(config, :base_url),
-         {:ok, identity} <- IdentityMapper.map_verified(issuer, claims) do
+         {:ok, identity} <- IdentityBootstrap.resolve(issuer, claims) do
       conn
       |> delete_session(:oidc_session_params)
       |> put_session(:identity, Identity.to_session(identity))
       |> configure_session(renew: true)
       |> redirect(to: ~p"/organizations")
     else
-      {:error, reason} ->
+      {:error, _reason} ->
         conn
         |> clear_session()
-        |> put_flash(:error, "Sign-in failed: #{inspect(reason)}")
+        |> put_flash(:error, "Sign-in failed. Start the sign-in flow again.")
         |> redirect(to: ~p"/")
     end
   end

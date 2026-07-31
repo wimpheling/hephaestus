@@ -1,0 +1,82 @@
+version = 1
+
+# Constraint migrations add a rule here only after every repository violation
+# has been removed. Constraints 1 through 5 enable the repository-wide UI,
+# LiveView state, RPC transport, durable event, and Phoenix isolation boundaries.
+enabled_rules = [
+  "ARCH-RULE-REGISTRY",
+  "ARCH-EXCEPTION-FORMAT",
+  "ARCH-CARGO-METADATA",
+  "DB-MIGRATIONS-ONLY-IN-MIGRATIONS",
+  "DB-SQLX-ONLY-IN-POSTGRES-ADAPTERS",
+  "DB-STATIC-SQL",
+  "RPC-AUTHORIZATION-POLICY-DECLARED",
+  "RPC-CONNECT-ONLY-IN-TRANSPORT",
+  "RPC-ERRORS-MAPPED-AT-BOUNDARY",
+  "RPC-GENERATED-FILES-CLEAN",
+  "RPC-GENERATED-TYPES-DO-NOT-LEAK-INWARD",
+  "RPC-HANDLER-IS-THIN",
+  "RPC-LIST-HAS-PAGINATION",
+  "RPC-METHOD-IN-SEPARATE-FILE",
+  "RPC-MUTATION-HAS-IDEMPOTENCY-KEY",
+  "RPC-NON_RPC-HTTP-ALLOWLIST",
+  "RPC-NO-ACTOR-IN-REQUEST",
+  "RPC-NO-DIRECT-CONNECT-ERROR",
+  "RPC-NO-UNTYPED-APPLICATION-PAYLOADS",
+  "RPC-QUERY-IDEMPOTENCY-ANNOTATED",
+  "RPC-REMOVED-FIELDS-RESERVED",
+  "RPC-WATCH-HAS-RESUME-CURSOR",
+  "EVT-CANONICAL-ENVELOPE",
+  "EVT-CONSUMER-USES-INBOX",
+  "EVT-NATS-ONLY-IN-EVENT-ADAPTERS",
+  "EVT-OUTBOX-PUBLISHER-ONLY",
+  "EVT-REDUCER-COVERAGE",
+  "EVT-SIDE-EFFECT-AFTER-DURABLE-CLAIM",
+  "EVT-STATE-AND-EVENT-COMMIT-ATOMICALLY",
+  "EVT-STREAM-REAUTHORIZATION",
+  "EVT-TYPED-ONEOF-PAYLOAD",
+  "WEB-NO-INFRASTRUCTURE-DEPENDENCIES",
+  "WEB-RPC-CLIENTS-ONLY-IN-STATE",
+  "WEB-NO-HANDWRITTEN-BACKEND-CLIENT",
+  "WEB-NO-RAW-BACKEND-ERROR",
+  "WEB-NO-FILESYSTEM-OR-PROCESS",
+  "UI-RAW-HTML-ONLY-IN-COMPONENTS",
+  "UI-TIER-DIRECTION",
+  "UI-DECLARED-INTERACTIONS-ONLY",
+  "UI-NO-CLASS-ESCAPE-HATCH",
+  "UI-DESIGN-TOKENS-ONLY",
+  "UI-NO-EXTERNAL-UI-IMPORTS",
+  "UI-NO-DOM-INJECTION",
+  "UI-PUBLIC-FACADE-COMPLETE",
+  "UI-SHOWCASE-AND-TEST-PARITY",
+  "UI-PAGE-STATE-COVERAGE",
+  "UI-PAGE-COMPANIONS",
+  "UI-LIVE-RENDERS-ONE-PAGE",
+  "UI-STATE-HAS-NO-HEEX",
+  "UI-PAGE-IS-PURE",
+]
+
+# ARCH-MAX-FILE-LENGTH consumes these values when its global migration is
+# complete. Keeping them here makes the eventual policy reviewable and avoids
+# layer-specific constants in checker code.
+[maximum_file_lines]
+domain = 500
+application = 500
+adapter = 700
+transport = 500
+composition = 500
+development = 700
+phoenix_state = 500
+phoenix_page = 350
+ui_component = 500
+
+# A temporary exception has this exact shape. Scopes must identify one file
+# plus either a line (`path:line`) or item (`path#item`); globs and directories
+# are rejected. An exception also needs either `expires` or `tracking_task`.
+#
+# [[exceptions]]
+# rule_id = "ARCH-MAX-FILE-LENGTH"
+# scope = "crates/example/src/lib.rs#large_generated_table"
+# rationale = "Split is tracked separately while the table format stabilizes."
+# owner = "runtime-team"
+# tracking_task = "tasks/todo/split-example-table.md"

@@ -1,40 +1,24 @@
 [package]
 name = "forge-service"
-description = "PostgreSQL and bare-Git services for the Hephaestus forge"
+description = "Provider-neutral forge ports and bare-Git storage"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-agent-config = { path = "../agent-config" }
 async-nats.workspace = true
-authz-domain = { path = "../authz-domain" }
-authz-postgres = { path = "../authz-postgres" }
+async-trait.workspace = true
 forge-domain = { path = "../forge-domain" }
 gix.workspace = true
-identity-domain = { path = "../identity-domain" }
 release-domain = { path = "../release-domain" }
 run-domain = { path = "../run-domain" }
 runtime-types = { path = "../runtime-types" }
 serde_json.workspace = true
-sha2.workspace = true
-sqlx.workspace = true
 thiserror.workspace = true
-time.workspace = true
 tokio = { workspace = true, features = ["fs", "process", "rt"] }
-tracing.workspace = true
-uuid.workspace = true
 
 [dev-dependencies]
-async-trait.workspace = true
-futures-util.workspace = true
-run-orchestrator = { path = "../run-orchestrator" }
-serial_test = "3"
 tempfile = "3"
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
-vm-fake = { path = "../vm-fake" }
-vm-trait.workspace = true
-volume-local = { path = "../volume-local" }
 
 [lints]
 workspace = true

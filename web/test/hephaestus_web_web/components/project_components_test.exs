@@ -3,7 +3,6 @@ defmodule HephaestusWebWeb.ProjectComponentsTest do
 
   use HephaestusWebWeb, :html
 
-  import HephaestusWebWeb.ProjectComponents
   import Phoenix.LiveViewTest
 
   @project_id "018f689a-a81d-7c2e-943f-3a41f7981234"
@@ -26,8 +25,18 @@ defmodule HephaestusWebWeb.ProjectComponentsTest do
   end
 
   def tabs_fixture(assigns) do
+    project_id = assigns.project_id
+
+    assigns =
+      assign(assigns, :items, [
+        %{key: :repositories, label: "Repositories", destination: "/projects/#{project_id}"},
+        %{key: :agents, label: "Agents", destination: "/projects/#{project_id}/agents"},
+        %{key: :runs, label: "Runs", destination: "/projects/#{project_id}/runs"},
+        %{key: :settings, label: "Settings", destination: "/projects/#{project_id}/settings"}
+      ])
+
     ~H"""
-    <.project_tabs project_id={@project_id} active={@active} />
+    <.tab_navigation id="project-tabs" label="Project" items={@items} active={@active} />
     """
   end
 

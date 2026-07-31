@@ -1,18 +1,5 @@
 import Config
 
-# Configure your database
-#
-# The MIX_TEST_PARTITION environment variable can be used
-# to provide built-in test partitioning in CI environment.
-# Run `mix help test` for more information.
-config :hephaestus_web, HephaestusWeb.Repo,
-  username: "postgres",
-  password: "postgres",
-  hostname: "localhost",
-  database: "hephaestus_web_test#{System.get_env("MIX_TEST_PARTITION")}",
-  pool: Ecto.Adapters.SQL.Sandbox,
-  pool_size: System.schedulers_online() * 2
-
 # We don't run a server during test. If one is required,
 # you can enable the server option below.
 config :hephaestus_web, HephaestusWebWeb.Endpoint,
@@ -35,7 +22,7 @@ config :phoenix,
   sort_verified_routes_query_params: true
 
 config :hephaestus_web,
-  internal_commands: [
-    url: "http://internal.test/internal/v1/commands",
-    token: "test-internal-command-token"
+  rpc: [
+    endpoint: "rpc.test:443",
+    mediator_secret: "test-rpc-mediator-secret-that-is-never-transmitted"
   ]

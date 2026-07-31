@@ -1,0 +1,61 @@
+version = 1
+enabled_rules = ["ARCH-RULE-REGISTRY"]
+
+[maximum_file_lines]
+domain = 500
+
+[[exceptions]]
+rule_id = "NOT-A-RULE"
+scope = "src/lib.rs#fixture"
+rationale = "Unknown rules must not be accepted."
+owner = "architecture-test"
+tracking_task = "tasks/todo/unknown.md"
+
+[[exceptions]]
+rule_id = "ARCH-MAX-FILE-LENGTH"
+scope = "src/lib.rs#fixture"
+rationale = "A lifecycle is deliberately absent."
+owner = "architecture-test"
+tracking_task = ""
+
+[[exceptions]]
+rule_id = "ARCH-MAX-FILE-LENGTH"
+scope = "src/*.rs#fixture"
+rationale = "Globs must not be accepted."
+owner = "architecture-test"
+tracking_task = "tasks/todo/glob.md"
+
+[[exceptions]]
+rule_id = "ARCH-MAX-FILE-LENGTH"
+scope = "src/lib.rs:50"
+rationale = "Out-of-range lines must not be accepted."
+owner = "architecture-test"
+tracking_task = "tasks/todo/line.md"
+
+[[exceptions]]
+rule_id = "ARCH-MAX-FILE-LENGTH"
+scope = "src/lib.rs#missing_item"
+rationale = "Missing items must not be accepted."
+owner = "architecture-test"
+tracking_task = "tasks/todo/item.md"
+
+[[exceptions]]
+rule_id = "ARCH-MAX-FILE-LENGTH"
+scope = "src/lib.rs#fixture"
+rationale = "Expired exceptions must not be accepted."
+owner = "architecture-test"
+expires = "2000-01-01"
+
+[[exceptions]]
+rule_id = "ARCH-MAX-FILE-LENGTH"
+scope = "src/lib.rs#fixture"
+rationale = "First duplicate record."
+owner = "architecture-test"
+tracking_task = "tasks/todo/duplicate.md"
+
+[[exceptions]]
+rule_id = "ARCH-MAX-FILE-LENGTH"
+scope = "src/lib.rs#fixture"
+rationale = "Second duplicate record."
+owner = "architecture-test"
+tracking_task = "tasks/todo/duplicate.md"

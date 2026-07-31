@@ -13,8 +13,33 @@ persistent volume root and never beneath libkrun's transient runtime root.
 - `volume-trait`: provider-neutral volume and fenced-lease contract.
 - `volume-local`: PostgreSQL-coordinated local raw-file implementation.
 - `run-domain`: durable states, outcomes, and commands.
-- `run-orchestrator`: PostgreSQL repository, VM coordination, restart
-  reconciliation, and JetStream outbox publication.
+- `run-orchestrator`: provider-neutral repository port, VM coordination,
+  exact-runtime catalog port, restart reconciliation, and JetStream command
+  handling.
+- `run-postgres`: PostgreSQL implementation of the run repository port,
+  including command-inbox idempotency, bounded run-event persistence, and
+  exact runtime provenance and liveness queries.
+- `run-runtime-local`: SQL-free local filesystem materialization and recovery
+  over the provider-neutral runtime catalog.
+
+## PostgreSQL schema dependency
+
+`run-postgres` is the sole SQL-capable run package. It depends on the root
+migrations for `runs`, `run_requests`, `run_events`, `command_inbox`,
+`agent_instance_revisions`, `release_agents`, `releases`,
+`release_artifacts`, and `agent_updates`.
+Updates to `runs` also rely on the root durable-application-event triggers,
+which insert `application_events` and `product_event_outbox` records in the
+same transaction. The adapter therefore keeps run creation, inbox processing,
+state transitions, optimistic `state_version` increments, and bounded event
+insertion inside their existing transactions. Schema changes remain owned by
+the root `migrations/` directory; the provider-neutral repository port never
+runs or exposes migrations.
+
+`run-runtime-local` receives exact persisted context through
+`RunRuntimeCatalog`; its filesystem and process boundary has no SQLx
+dependency. PostgreSQL row decoding, closed artifact-kind conversion, and
+stored metadata validation stay inside `run-postgres`.
 
 ## Live launch authorization
 
@@ -58,21 +83,21 @@ Commands:
 - `hephaestus.run.start` (forge-originated start command)
 - `heph.run.command.cancel.v1`
 
-Lifecycle distribution:
+The command stream is `HEPH_RUN_COMMANDS`, with a durable pull consumer named
+`run-orchestrator-v1`. Incoming `command_id` values are retained in the
+PostgreSQL inbox for unbounded duplicate handling. Long-running start handlers
+send progress acknowledgements while the VM runs; a supervisor crash stops
+those acknowledgements and makes the command eligible for redelivery.
 
-- `heph.run.event.lifecycle.v1`
-
-Recommended streams are `HEPH_RUN_COMMANDS` with a durable pull consumer named
-`run-orchestrator-v1`, and `HEPH_RUN_EVENTS` with limits-based retention.
-Incoming `command_id` values are retained in the PostgreSQL inbox for
-unbounded duplicate handling. Outbox IDs are sent as `Nats-Msg-Id` to suppress
-publication retries within JetStream's duplicate window. Long-running start
-handlers send progress acknowledgements while the VM runs; a supervisor crash
-stops those acknowledgements and makes the command eligible for redelivery.
+Run lifecycle changes are committed to `application_events` with the run state
+and exposed through the authorization-scoped `WatchRun` product-event stream.
+The bounded `run_events` table remains the separate source for logs, metrics,
+and provider diagnostics; lifecycle state is not duplicated as an
+informational JSON NATS subject.
 
 ## Opt-in integration tests
 
-The PostgreSQL repository and local-volume tests run only when
+The `run-postgres` adapter and local-volume tests run only when
 `HEPHAESTUS_POSTGRES_TEST_URL` is set. The JetStream delivery test additionally
 requires `HEPHAESTUS_NATS_TEST_URL`. These tests are skipped in an ordinary
 workspace test run.

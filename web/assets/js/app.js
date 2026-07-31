@@ -23,7 +23,10 @@ import "phoenix_html"
 import {Socket} from "phoenix"
 import {LiveSocket} from "phoenix_live_view"
 import {hooks as colocatedHooks} from "phoenix-colocated/hephaestus_web"
-import topbar from "../vendor/topbar"
+import {installNavigationProgress} from "./design_system/hooks/navigation_progress"
+import {installTheme} from "./design_system/theme"
+
+installTheme()
 
 const csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
 const liveSocket = new LiveSocket("/live", Socket, {
@@ -32,10 +35,8 @@ const liveSocket = new LiveSocket("/live", Socket, {
   hooks: {...colocatedHooks},
 })
 
-// Show progress bar on live navigation and form submits
-topbar.config({barColors: {0: "#29d"}, shadowColor: "rgba(0, 0, 0, .3)"})
-window.addEventListener("phx:page-loading-start", _info => topbar.show(300))
-window.addEventListener("phx:page-loading-stop", _info => topbar.hide())
+// Show bounded design-system progress on live navigation and form submits.
+installNavigationProgress()
 
 // connect if there are any LiveViews on the page
 liveSocket.connect()
@@ -80,4 +81,3 @@ if (process.env.NODE_ENV === "development") {
     window.liveReloader = reloader
   })
 }
-

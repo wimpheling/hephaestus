@@ -1,0 +1,94 @@
+use crate::application::build::{BuildError, BuildMetric, BuildState, BuildView};
+use rpc_proto::messages::hephaestus::{
+    build::v1::{Build, BuildState as ProtoBuildState},
+    common::v1::{MetricLabel, OpaqueId, RuntimeMetric},
+};
+use time::OffsetDateTime;
+use uuid::Uuid;
+
+pub(in crate::rpc) fn build(value: BuildView) -> Build {
+    Build {
+        id: opaque(value.id).into(),
+        state: proto_state(value.state).into(),
+        exit_code: value.exit_code,
+        failure_code: value.failure_code.unwrap_or_default(),
+        logs: value.logs,
+        metrics: value.metrics.into_iter().map(metric).collect(),
+        created_at: timestamp(value.created_at).into(),
+        updated_at: timestamp(value.updated_at).into(),
+        ..Default::default()
+    }
+}
+
+pub(super) const fn operation_state(
+    value: BuildState,
+) -> rpc_proto::messages::hephaestus::common::v1::OperationState {
+    use rpc_proto::messages::hephaestus::common::v1::OperationState;
+
+    match value {
+        BuildState::Queued => OperationState::Queued,
+        BuildState::Running => OperationState::Running,
+        BuildState::Succeeded => OperationState::Succeeded,
+        BuildState::Failed => OperationState::Failed,
+        BuildState::Cancelled => OperationState::Cancelled,
+    }
+}
+
+const fn proto_state(value: BuildState) -> ProtoBuildState {
+    match value {
+        BuildState::Queued => ProtoBuildState::Queued,
+        BuildState::Running => ProtoBuildState::Running,
+        BuildState::Succeeded => ProtoBuildState::Succeeded,
+        BuildState::Failed => ProtoBuildState::Failed,
+        BuildState::Cancelled => ProtoBuildState::Cancelled,
+    }
+}
+
+fn metric(value: BuildMetric) -> RuntimeMetric {
+    RuntimeMetric {
+        name: value.name,
+        value: value.value,
+        labels: value
+            .labels
+            .into_iter()
+            .map(|(key, value)| MetricLabel {
+                key,
+                value,
+                ..Default::default()
+            })
+            .collect(),
+        ..Default::default()
+    }
+}
+
+pub(super) fn opaque(id: Uuid) -> OpaqueId {
+    OpaqueId {
+        value: id.to_string(),
+        ..Default::default()
+    }
+}
+
+pub(super) fn timestamp(value: OffsetDateTime) -> buffa_types::google::protobuf::Timestamp {
+    buffa_types::google::protobuf::Timestamp {
+        seconds: value.unix_timestamp(),
+        nanos: i32::try_from(value.nanosecond()).unwrap_or_default(),
+        ..Default::default()
+    }
+}
+
+pub(super) fn application_error(error: BuildError) -> super::super::RpcError {
+    use super::super::RpcError;
+
+    match error {
+        BuildError::NotFound => RpcError::NotFound,
+        BuildError::FailedPrecondition => RpcError::FailedPrecondition,
+        BuildError::InvalidStoredData | BuildError::Serialization(_) => {
+            tracing::error!(%error, "stored build data could not be represented");
+            RpcError::Internal
+        }
+        BuildError::Persistence(source) => {
+            tracing::error!(error = %source, "build application persistence failed");
+            RpcError::Unavailable
+        }
+    }
+}

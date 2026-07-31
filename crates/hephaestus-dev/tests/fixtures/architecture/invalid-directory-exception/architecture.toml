@@ -1,0 +1,12 @@
+version = 1
+enabled_rules = ["ARCH-RULE-REGISTRY"]
+
+[maximum_file_lines]
+domain = 500
+
+[[exceptions]]
+rule_id = "ARCH-MAX-FILE-LENGTH"
+scope = "src#all_files"
+rationale = "This deliberately invalid fixture tries to exempt a directory."
+owner = "architecture-test"
+expires = "2026-12-31"
