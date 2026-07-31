@@ -1,0 +1,11 @@
+[[packages]]
+id = "left"
+layer = "adapter"
+context = "left"
+dependencies = ["right"]
+
+[[packages]]
+id = "right"
+layer = "adapter"
+context = "right"
+dependencies = ["left"]

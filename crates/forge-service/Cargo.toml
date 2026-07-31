@@ -5,6 +5,10 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 
+[package.metadata.hephaestus]
+layer = "application"
+context = "forge"
+
 [dependencies]
 async-nats.workspace = true
 async-trait.workspace = true

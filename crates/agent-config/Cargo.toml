@@ -5,6 +5,10 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 
+[package.metadata.hephaestus]
+layer = "application"
+context = "platform"
+
 [dependencies]
 forge-domain = { path = "../forge-domain" }
 serde.workspace = true

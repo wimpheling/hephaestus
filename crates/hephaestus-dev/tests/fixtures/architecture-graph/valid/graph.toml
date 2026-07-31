@@ -1,0 +1,11 @@
+[[packages]]
+id = "orders-domain"
+layer = "domain"
+context = "orders"
+dependencies = []
+
+[[packages]]
+id = "orders-adapter"
+layer = "adapter"
+context = "orders"
+dependencies = ["orders-domain"]

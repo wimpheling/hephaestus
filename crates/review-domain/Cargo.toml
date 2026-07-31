@@ -5,6 +5,10 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 
+[package.metadata.hephaestus]
+layer = "domain"
+context = "review"
+
 [dependencies]
 forge-domain = { path = "../forge-domain" }
 identity-domain = { path = "../identity-domain" }

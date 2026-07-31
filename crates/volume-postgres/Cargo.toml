@@ -23,5 +23,7 @@ volume-local = { path = "../volume-local" }
 workspace = true
 
 [package.metadata.hephaestus]
+layer = "adapter"
+context = "volume"
 postgres_adapter = true
 database_context = "volume"

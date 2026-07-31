@@ -5,6 +5,10 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 
+[package.metadata.hephaestus]
+layer = "development"
+context = "vm"
+
 [dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 vm-trait.workspace = true

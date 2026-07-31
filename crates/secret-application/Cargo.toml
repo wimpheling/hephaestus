@@ -3,7 +3,11 @@
  description = "Provider-neutral secret command, runtime, and broker contracts"
  version.workspace = true
  edition.workspace = true
- rust-version.workspace = true
+rust-version.workspace = true
+
+[package.metadata.hephaestus]
+layer = "application"
+context = "secret"
 
 [dependencies]
 async-trait.workspace = true

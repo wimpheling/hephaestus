@@ -25,5 +25,7 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 workspace = true
 
 [package.metadata.hephaestus]
+layer = "adapter"
+context = "identity"
 postgres_adapter = true
 database_context = "identity"

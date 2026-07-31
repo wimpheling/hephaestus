@@ -5,6 +5,10 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 
+[package.metadata.hephaestus]
+layer = "adapter"
+context = "release"
+
 [dependencies]
 release-domain = { path = "../release-domain" }
 sha2.workspace = true

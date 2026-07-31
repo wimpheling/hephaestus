@@ -4,6 +4,10 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 
+[package.metadata.hephaestus]
+layer = "transport"
+context = "platform"
+
 [features]
 default = ["client"]
 client = ["connectrpc/client"]

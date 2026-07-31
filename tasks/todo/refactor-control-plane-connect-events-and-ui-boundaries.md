@@ -617,33 +617,35 @@ The migration affects at least:
   code has no SQLx capability. The architecture checker requires the narrow
   `hephaestus.sqlx_test_dependency = true` metadata marker for this case.
 
-- [ ] **Constraint 7 — Enforce the complete Rust layer graph and boundary safety**
-  - [ ] Assign every workspace crate a declared architecture layer and bounded
+- [x] **Constraint 7 — Enforce the complete Rust layer graph and boundary safety**
+  - [x] Assign every workspace crate a declared architecture layer and bounded
     context in Cargo package metadata.
-  - [ ] Define allowed dependency edges between domain, application, port,
+  - [x] Define allowed dependency edges between domain, application, port,
     adapter, transport, worker, and composition layers.
-  - [ ] Reject cycles, upward imports, undeclared cross-context adapter access,
+  - [x] Reject cycles, upward imports, undeclared cross-context adapter access,
     and composition-root logic leaking into reusable crates.
-  - [ ] Keep Connect, Axum, and transport errors in transport/composition
+  - [x] Keep Connect, Axum, and transport errors in transport/composition
     modules only.
-  - [ ] Keep NATS client types in event adapters and worker composition only.
-  - [ ] Keep environment-variable access in explicit configuration modules.
-  - [ ] Keep filesystem repository, artifact, workspace, volume, and runtime
+  - [x] Keep NATS client types in event adapters and worker composition only.
+  - [x] Keep environment-variable access in explicit configuration modules.
+  - [x] Keep filesystem repository, artifact, workspace, volume, and runtime
     operations in their designated adapters.
-  - [ ] Keep VM provider implementations behind `vm-trait` and prohibit
+  - [x] Keep VM provider implementations behind `vm-trait` and prohibit
     application services from importing provider-specific crates.
-  - [ ] Ensure domain crates remain free from async runtime, transport,
+  - [x] Enforce VM provider imports with `ARCH-VM-PROVIDER-ONLY-IN-COMPOSITION`
+    and a checked invalid architecture fixture.
+  - [x] Ensure domain crates remain free from async runtime, transport,
     persistence, serialization-format, and operating-system dependencies unless
     a documented invariant requires one.
-  - [ ] Centralize conversion between protobuf, domain, persistence, and event
+  - [x] Centralize conversion between protobuf, domain, persistence, and event
     representations at their corresponding boundaries.
-  - [ ] Add custom semantic lints for transport-error construction, direct
+  - [x] Add custom semantic lints for transport-error construction, direct
     environment reads, forbidden client construction, sensitive formatting,
     and other rules that metadata cannot prove.
-  - [ ] Add valid and invalid crate-graph fixtures and actionable diagnostics.
-  - [ ] Remove every repository violation before enabling `ARCH-*` layer checks
+  - [x] Add valid and invalid crate-graph fixtures and actionable diagnostics.
+  - [x] Remove every repository violation before enabling `ARCH-*` layer checks
     as hard failures.
-  - [ ] Gate completion of Constraint 7 on a repository-wide architecture graph
+  - [x] Gate completion of Constraint 7 on a repository-wide architecture graph
     report with no undeclared or forbidden edge.
 
 - [ ] **Constraint 8 — Enforce authentication, authorization, and secret safety at the new boundary**

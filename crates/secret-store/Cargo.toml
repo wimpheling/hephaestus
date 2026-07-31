@@ -4,6 +4,10 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 
+[package.metadata.hephaestus]
+layer = "domain"
+context = "secret"
+
 [dependencies]
 aes-gcm.workspace = true
 secret-domain = { path = "../secret-domain" }

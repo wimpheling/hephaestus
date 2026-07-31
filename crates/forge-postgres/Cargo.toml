@@ -44,5 +44,8 @@ volume-postgres = { path = "../volume-postgres" }
 workspace = true
 
 [package.metadata.hephaestus]
+layer = "adapter"
+context = "forge"
+allow_cross_context_dependencies = ["authz-postgres"]
 postgres_adapter = true
 database_context = "forge"

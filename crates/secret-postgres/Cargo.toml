@@ -6,6 +6,9 @@ edition.workspace = true
 rust-version.workspace = true
 
 [package.metadata.hephaestus]
+layer = "adapter"
+context = "secret"
+allow_cross_context_dependencies = ["authz-postgres"]
 database_context = "secret"
 postgres_adapter = true
 transactional_outbox = false

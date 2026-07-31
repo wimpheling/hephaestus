@@ -5,6 +5,10 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 
+[package.metadata.hephaestus]
+layer = "domain"
+context = "workspace"
+
 [dependencies]
 async-trait.workspace = true
 run-domain = { path = "../run-domain" }

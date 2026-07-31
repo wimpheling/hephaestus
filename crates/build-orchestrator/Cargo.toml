@@ -5,6 +5,11 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 
+[package.metadata.hephaestus]
+layer = "worker"
+context = "build"
+allow_cross_context_dependencies = ["release-artifact-store", "release-postgres"]
+
 [dependencies]
 async-trait.workspace = true
 agent-config = { path = "../agent-config" }

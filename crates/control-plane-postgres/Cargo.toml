@@ -30,6 +30,9 @@ time.workspace = true
 uuid.workspace = true
 
 [package.metadata.hephaestus]
+layer = "adapter"
+context = "control-plane"
+allow_cross_context_dependencies = ["authz-postgres", "release-artifact-store"]
 postgres_adapter = true
 database_context = "control-plane"
 

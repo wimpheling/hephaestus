@@ -13,7 +13,9 @@ use std::{
 
 mod db_architecture;
 mod event_architecture;
+mod layer_architecture;
 mod rpc_architecture;
+mod rust_architecture;
 
 const DOCUMENT: &str = "ARCHITECTURE.md";
 const CONFIGURATION: &str = "architecture.toml";
@@ -24,7 +26,7 @@ const HARNESS_RULE_IDS: [&str; 3] = [
     "ARCH-RULE-REGISTRY",
 ];
 
-const REQUIRED_RULE_IDS: [&str; 58] = [
+const REQUIRED_RULE_IDS: [&str; 59] = [
     "ARCH-CONTROLLED-PUBLIC-MODULES",
     "ARCH-CRATE-LAYERS",
     "ARCH-ENV-ONLY-IN-CONFIG",
@@ -32,6 +34,7 @@ const REQUIRED_RULE_IDS: [&str; 58] = [
     "ARCH-HTTP-ONLY-IN-INTEGRATIONS",
     "ARCH-MAX-FILE-LENGTH",
     "ARCH-PROCESS-ONLY-IN-ADAPTERS",
+    "ARCH-VM-PROVIDER-ONLY-IN-COMPOSITION",
     "DB-MIGRATIONS-ONLY-IN-MIGRATIONS",
     "DB-SQLX-ONLY-IN-POSTGRES-ADAPTERS",
     "DB-STATIC-SQL",
@@ -223,6 +226,19 @@ pub fn run(context: &DevContext) -> Result<()> {
                     .join(", ")
             );
         }
+        let rust_audit = rust_architecture::audit(root);
+        if rust_audit.is_empty() {
+            println!("migration-gated Rust semantic dry-run: clean");
+        } else {
+            println!(
+                "migration-gated Rust semantic dry-run: {}",
+                rust_audit
+                    .iter()
+                    .map(|(rule, count)| format!("{rule}={count}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
         Ok(())
     } else {
         Err(DevError::Invalid(render_diagnostics(&diagnostics)))
@@ -298,6 +314,7 @@ fn validate_repository(
     validate_configuration(configuration, &mut diagnostics);
     validate_exceptions(root, configuration, &mut diagnostics);
     validate_metadata(root, metadata, &mut diagnostics);
+    layer_architecture::validate(&configuration.enabled_rules, metadata, &mut diagnostics);
     db_architecture::validate(
         root,
         &configuration.enabled_rules,
@@ -306,6 +323,7 @@ fn validate_repository(
     );
     event_architecture::validate(root, &configuration.enabled_rules, &mut diagnostics);
     rpc_architecture::validate(root, &configuration.enabled_rules, &mut diagnostics);
+    rust_architecture::validate(root, &configuration.enabled_rules, &mut diagnostics);
     diagnostics.sort();
     diagnostics
 }

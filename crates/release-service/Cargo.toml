@@ -4,6 +4,10 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 
+[package.metadata.hephaestus]
+layer = "application"
+context = "release"
+
 [dependencies]
 forge-domain = { path = "../forge-domain" }
 release-domain = { path = "../release-domain" }

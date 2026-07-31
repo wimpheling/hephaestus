@@ -25,6 +25,8 @@ uuid.workspace = true
 workspace = true
 
 [package.metadata.hephaestus]
+layer = "composition"
+context = "bootstrap"
 postgres_adapter = true
 database_context = "bootstrap"
 

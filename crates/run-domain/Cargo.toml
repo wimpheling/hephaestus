@@ -5,6 +5,10 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 
+[package.metadata.hephaestus]
+layer = "domain"
+context = "run"
+
 [dependencies]
 runtime-types = { path = "../runtime-types" }
 serde.workspace = true

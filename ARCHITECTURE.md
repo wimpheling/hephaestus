@@ -87,6 +87,27 @@ The default areas are `domain`, `application`, `ports`, `postgres`, `events`,
 applicable to the declared layer. A package does not gain all areas merely by
 naming one; its metadata is the authority.
 
+The graph declaration is explicit and checked from Cargo metadata. Every
+workspace package has `layer` (`domain`, `port`, `application`, `adapter`,
+`worker`, `transport`, `composition`, or `development`) and a lowercase
+bounded `context`. Production and build path dependencies must point inward in
+that layer order; development-only test dependencies are excluded from the
+production graph. A deliberate cross-context adapter edge names its exact
+target in `allow_cross_context_dependencies`; undeclared edges and dependency
+cycles fail `cargo dev check architecture`.
+
+Domain packages may use bounded value-object support such as `serde`,
+`serde_json` for typed documents, `time`, `uuid`, hashing, and typed error
+crates. They may not depend on async runtimes, transport stacks, SQL clients,
+or operating-system/process libraries; the checker reports those capability
+dependencies as layer violations.
+
+Representation conversion is kept at the corresponding boundary: generated
+RPC types cannot be imported by inward layers, SQL row decoding remains in
+PostgreSQL adapters, and durable event envelopes are validated by the event
+architecture checks. These checks make protobuf, persistence, and event
+representations unavailable as reusable domain/application types.
+
 Environment reads belong in `config`; external HTTP clients in `integrations`;
 subprocess creation in declared process, Git, image, or runtime adapters; and
 repository, artifact, workspace, volume, and runtime filesystem access in
@@ -462,12 +483,13 @@ exception must follow the policy above.
 
 | Rule | Class / state | Rationale and scope | Command | Exceptions and remediation |
 | --- | --- | --- | --- | --- |
-| `ARCH-CRATE-LAYERS` | Structural + lint / migration-gated | Cargo package layers make the complete workspace dependency graph reviewable; covers every workspace package, edge, cycle, and undeclared layer. | `cargo dev check architecture` | Exact edge only; declare the package metadata or invert/extract the dependency. |
+| `ARCH-CRATE-LAYERS` | Structural + lint / harness | Cargo package layers make the complete workspace dependency graph reviewable; covers every workspace package, edge, cycle, and undeclared layer. | `cargo dev check architecture` | Exact edge only; declare the package metadata or invert/extract the dependency. |
 | `ARCH-CONTROLLED-PUBLIC-MODULES` | Structural + lint / migration-gated | Prevents accidental architectural entry points; covers top-level public modules in every layered crate. | `cargo dev check architecture` | One module only; move it under an approved area or add the bounded metadata declaration. |
-| `ARCH-ENV-ONLY-IN-CONFIG` | Semantic lint / migration-gated | Makes runtime configuration auditable; covers all Rust environment reads. | `cargo dev check rust` | One source item only; inject typed config instead. |
-| `ARCH-HTTP-ONLY-IN-INTEGRATIONS` | Structural + semantic lint / migration-gated | Keeps outbound protocols behind ports; covers external HTTP client dependencies and construction. | `cargo dev check architecture` | One integration only; create or use a declared integration adapter. |
-| `ARCH-PROCESS-ONLY-IN-ADAPTERS` | Semantic lint / migration-gated | Prevents hidden host effects; covers subprocess creation in Rust. | `cargo dev check rust` | One adapter item only; move it to a declared process, Git, image, or runtime adapter. |
-| `ARCH-FILESYSTEM-ONLY-IN-ADAPTERS` | Semantic lint / migration-gated | Keeps durable and runtime files behind authority boundaries; covers repository, artifact, workspace, volume, and runtime I/O. | `cargo dev check rust` | One adapter item only; inject the appropriate storage port. |
+| `ARCH-ENV-ONLY-IN-CONFIG` | Semantic lint / harness | Makes runtime configuration auditable; covers all Rust environment reads. | `cargo dev check architecture` | One source item only; inject typed config instead. |
+| `ARCH-HTTP-ONLY-IN-INTEGRATIONS` | Structural + semantic lint / harness | Keeps outbound protocols behind ports; covers external HTTP client dependencies and construction. | `cargo dev check architecture` | One integration only; create or use a declared integration adapter. |
+| `ARCH-PROCESS-ONLY-IN-ADAPTERS` | Semantic lint / harness | Prevents hidden host effects; covers subprocess creation in Rust. | `cargo dev check architecture` | One adapter item only; move it to a declared process, Git, image, or runtime adapter. |
+| `ARCH-VM-PROVIDER-ONLY-IN-COMPOSITION` | Semantic lint / harness | Prevents VM provider coupling from leaking into application code. | `cargo dev check architecture` | VM providers may be imported only by composition or adapter crates; application code uses `vm-trait`. |
+| `ARCH-FILESYSTEM-ONLY-IN-ADAPTERS` | Semantic lint / harness | Keeps durable and runtime files behind authority boundaries; covers repository, artifact, workspace, volume, and runtime I/O. | `cargo dev check architecture` | One adapter item only; inject the appropriate storage port. |
 | `ARCH-MAX-FILE-LENGTH` | Lint warning / migration-gated | Oversized files signal mixed responsibilities; covers source files using the central layer thresholds. | `cargo dev check architecture` | One file with owner and tracking task; split cohesive modules. |
 | `DB-SQLX-ONLY-IN-POSTGRES-ADAPTERS` | Structural + lint / harness | Prevents persistence capability leaking inward; covers direct and transitive SQLx capability in the Cargo graph. Dev-only SQLx test fixtures require explicit `hephaestus.sqlx_test_dependency = true` metadata. | `cargo dev check architecture` | No production capability exception; move SQL to a metadata-declared PostgreSQL adapter. |
 | `DB-MIGRATIONS-ONLY-IN-MIGRATIONS` | Filesystem lint / harness | Gives schema changes one owner; covers schema-changing SQL repository-wide. | `cargo dev check architecture` | Exact generator-owned schema artifact only; move changes under root `migrations/`. |
@@ -486,8 +508,8 @@ exception must follow the policy above.
 | `RPC-NO-DIRECT-CONNECT-ERROR` | Semantic lint / harness | Ensures one stable error vocabulary; covers construction of Connect errors. | `cargo dev check rust` | Central typed error adapter only; call that adapter. |
 | `RPC-HANDLER-IS-THIN` | Semantic lint + integration / harness | Keeps transport deterministic; covers all RPC method implementations and forbidden I/O/domain operations. | `cargo dev check rust` | No I/O exception; invoke one application operation through ports. |
 | `RPC-GENERATED-TYPES-DO-NOT-LEAK-INWARD` | Semantic lint / harness | Preserves independent domain/application models; covers public signatures below RPC. | `cargo dev check rust` | Boundary conversion item only; introduce an inward type and converter. |
-| `SEC-SENSITIVE-NO-UNRESTRICTED-FORMAT` | Type structure + semantic lint / migration-gated | Prevents accidental disclosure by derived behavior; covers known sensitive domain/request types. | `cargo dev check rust` | Exact redacted implementation only; remove derive or implement fixed redaction. |
-| `SEC-NO-SENSITIVE-LOG-ARGUMENTS` | Semantic lint + sentinel integration / migration-gated | Prevents disclosure through observability; covers logging, diagnostics, metrics labels, and error formatting. | `cargo dev check rust` | No plaintext exception; log opaque IDs or fixed classifications. |
+| `SEC-SENSITIVE-NO-UNRESTRICTED-FORMAT` | Type structure + semantic lint / harness | Prevents accidental disclosure by derived behavior; covers known sensitive domain/request types. | `cargo dev check architecture` | Exact redacted implementation only; remove derive or implement fixed redaction. |
+| `SEC-NO-SENSITIVE-LOG-ARGUMENTS` | Semantic lint + sentinel integration / harness | Prevents disclosure through observability; covers logging, diagnostics, metrics labels, and error formatting. | `cargo dev check architecture` | No plaintext exception; log opaque IDs or fixed classifications. |
 
 ### Protobuf descriptors
 

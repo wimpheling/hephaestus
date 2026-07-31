@@ -28,6 +28,8 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 workspace-local = { path = "../workspace-local" }
 
 [package.metadata.hephaestus]
+layer = "adapter"
+context = "workspace"
 postgres_adapter = true
 database_context = "workspace"
 

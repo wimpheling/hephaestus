@@ -7,6 +7,8 @@ edition.workspace = true
 rust-version.workspace = true
 
 [package.metadata.hephaestus]
+layer = "composition"
+context = "platform"
 # SQLx is retained only for cfg(test) and integration-test database fixtures.
 sqlx_test_dependency = true
 

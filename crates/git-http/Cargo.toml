@@ -5,6 +5,11 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 
+[package.metadata.hephaestus]
+layer = "transport"
+context = "forge"
+allow_cross_context_dependencies = ["identity-oidc"]
+
 [dependencies]
 async-trait.workspace = true
 authz-domain = { path = "../authz-domain" }
