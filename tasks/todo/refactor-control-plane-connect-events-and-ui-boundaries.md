@@ -122,27 +122,27 @@ integration tests instead of being approximated by a misleading linter.
 
 ### Stable Rust and repository-structure checks
 
-- [ ] `ARCH-CRATE-LAYERS` — read declared Cargo package layers and reject every
+- [x] `ARCH-CRATE-LAYERS` — read declared Cargo package layers and reject every
   forbidden dependency edge, cycle, or undeclared layer.
-- [ ] `ARCH-CONTROLLED-PUBLIC-MODULES` — reject top-level public modules outside
+- [x] `ARCH-CONTROLLED-PUBLIC-MODULES` — reject top-level public modules outside
   the approved architecture areas for each crate layer.
-- [ ] `ARCH-ENV-ONLY-IN-CONFIG` — reject environment-variable reads outside
+- [x] `ARCH-ENV-ONLY-IN-CONFIG` — reject environment-variable reads outside
   designated configuration modules.
-- [ ] `ARCH-HTTP-ONLY-IN-INTEGRATIONS` — reject external HTTP clients outside
+- [x] `ARCH-HTTP-ONLY-IN-INTEGRATIONS` — reject external HTTP clients outside
   designated integration adapters.
-- [ ] `ARCH-PROCESS-ONLY-IN-ADAPTERS` — reject subprocess creation outside
+- [x] `ARCH-PROCESS-ONLY-IN-ADAPTERS` — reject subprocess creation outside
   designated process, Git, image, or runtime adapters.
-- [ ] `ARCH-FILESYSTEM-ONLY-IN-ADAPTERS` — reject repository, artifact,
+- [x] `ARCH-FILESYSTEM-ONLY-IN-ADAPTERS` — reject repository, artifact,
   workspace, volume, and runtime filesystem access outside declared storage
   adapters.
-- [ ] `ARCH-MAX-FILE-LENGTH` — warn when a source file exceeds the documented
+- [x] `ARCH-MAX-FILE-LENGTH` — warn when a source file exceeds the documented
   layer-specific threshold; configure thresholds centrally and allow only
   narrow justified exceptions.
-- [ ] `DB-SQLX-ONLY-IN-POSTGRES-ADAPTERS` — reject direct or transitive SQLx
+- [x] `DB-SQLX-ONLY-IN-POSTGRES-ADAPTERS` — reject direct or transitive SQLx
   capability in every crate not explicitly marked as a PostgreSQL adapter.
-- [ ] `DB-MIGRATIONS-ONLY-IN-MIGRATIONS` — reject schema-changing SQL outside
+- [x] `DB-MIGRATIONS-ONLY-IN-MIGRATIONS` — reject schema-changing SQL outside
   the root migration ownership boundary.
-- [ ] `DB-STATIC-SQL` — reject dynamically constructed SQL passed to SQLx unless
+- [x] `DB-STATIC-SQL` — reject dynamically constructed SQL passed to SQLx unless
   an exact, documented query-builder exception applies.
 - [x] `RPC-CONNECT-ONLY-IN-TRANSPORT` — reject Connect, Axum application
   transport, or generated server types outside RPC and composition modules.
@@ -166,9 +166,9 @@ integration tests instead of being approximated by a misleading linter.
   HTTP, and subprocess operations from RPC method implementations.
 - [x] `RPC-GENERATED-TYPES-DO-NOT-LEAK-INWARD` — reject generated protobuf
   request/response types in domain and application-service public signatures.
-- [ ] `SEC-SENSITIVE-NO-UNRESTRICTED-FORMAT` — reject unrestricted debug,
+- [x] `SEC-SENSITIVE-NO-UNRESTRICTED-FORMAT` — reject unrestricted debug,
   display, serialization, or tracing of sensitive domain and request types.
-- [ ] `SEC-NO-SENSITIVE-LOG-ARGUMENTS` — reject known sensitive types passed to
+- [x] `SEC-NO-SENSITIVE-LOG-ARGUMENTS` — reject known sensitive types passed to
   logging, diagnostics, metrics-label, and error-formatting macros.
 
 ### Protobuf and descriptor checks
@@ -197,10 +197,10 @@ integration tests instead of being approximated by a misleading linter.
   and payload envelope.
 - [x] `EVT-TYPED-ONEOF-PAYLOAD` — require event payloads to be typed `oneof`
   variants rather than arbitrary bytes, JSON, or unbounded maps.
-- [ ] `SEC-SENSITIVE-REQUEST-ANNOTATED` — require the custom sensitive-field
+- [x] `SEC-SENSITIVE-REQUEST-ANNOTATED` — require the custom sensitive-field
   option on every permitted plaintext secret, credential, token, or sensitive
   parameter request field.
-- [ ] `SEC-NO-SENSITIVE-OUTPUT-FIELDS` — reject sensitive fields and suspicious
+- [x] `SEC-NO-SENSITIVE-OUTPUT-FIELDS` — reject sensitive fields and suspicious
   secret-bearing names in responses, events, errors, logs, metrics, and durable
   product-event messages.
 
@@ -723,7 +723,7 @@ The migration affects at least:
     local/browser runners, and container mounts found no unsupported target
     path (the documented release and command JSON adapters are intentional).
 
-- [ ] **Final verification**
+- [ ] **Final verification — BLOCKED by the three explicitly marked environment/E2E checks below**
   - [x] Run `buf format` in check mode.
   - [x] Run `buf lint`.
   - [x] Run the configured Buf breaking-change check against the accepted
@@ -747,14 +747,24 @@ The migration affects at least:
   - [x] Run all PostgreSQL adapter, RLS, outbox, idempotency, concurrency, and
     recovery integration tests.
   - [ ] Run the browser E2E journey with Phoenix denied PostgreSQL, NATS,
-    repository-root, and artifact-root access.
-  - [ ] Run the real libkrun build/run integration suite through the new API and
-    event contracts.
+    repository-root, and artifact-root access. **BLOCKED:** the isolated
+    journey reaches the secret form, but the existing
+    `SecretApplication::list_organization_secrets` PostgreSQL adapter stub
+    returns `UNAVAILABLE` (1 failed, 3 skipped).
+  - [x] Run the real libkrun build/run integration suite through the new API and
+    event contracts. Phase 1B run/update persistence and the daemon golden
+    build/run path both pass; the latter now aliases the launch-contract
+    `release_state` column and no longer emits the retired build-completed
+    internal signal.
   - [x] Run the complete secret sentinel/non-disclosure scan.
   - [ ] Stop and restart the complete development environment, reconnect an
     active browser stream from its cursor, and verify no duplicate visible
-    transition or side effect.
+    transition or side effect. **BLOCKED:** no isolated restart/reconnect
+    harness exists and the populated local state cannot be destructively
+    reset as part of this run.
   - [ ] Verify all documented development commands from a clean state.
+    **BLOCKED:** the non-destructive command audit passes, but the clean-state
+    sequence requires resetting the populated local state.
 
 ## Completion evidence
 
@@ -774,6 +784,18 @@ Record before moving this task to `tasks/done/`:
 - Rust formatting, Clippy, test, and documentation results;
 - Phoenix formatting and test results;
 - browser and libkrun E2E results;
+- development-environment command audit: `cargo dev doctor`, `status`,
+  `logs`, `state list`, `cache list`, and all subcommand `--help` invocations
+  completed successfully. The
+  destructive clean-state sequence and restart/reconnect proof remain
+  deferred because the current local state is populated. The real libkrun
+  Phase 1B and daemon golden suites pass, including result persistence and
+  cgroup cleanup. The browser E2E now
+  completes OIDC callback and the denied-access isolation checks, then reaches
+  the secret form; `SecretApplication::list_organization_secrets` is still an
+  intentional PostgreSQL adapter stub returning `UNAVAILABLE`, so the journey
+  remains blocked (1 failed, 3 skipped; artifact:
+  `/tmp/tmp.bpR3RIG9C8/web.log`).
 - sentinel/non-disclosure results; and
 - any deliberately deferred work split into independently deliverable todo
   tasks with links from this document.

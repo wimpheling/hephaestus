@@ -180,7 +180,7 @@ pub async fn load_vm_launch_contract(
                 revision.effective_runtime_policy,
                 release_agent.requires_state,
                 release_agent.update_hook,
-                release.state,
+                release.state AS release_state,
                 revision.runnable AS revision_runnable,
                 COALESCE((
                     (run.run_kind = 'update' AND instance.state = 'updating')

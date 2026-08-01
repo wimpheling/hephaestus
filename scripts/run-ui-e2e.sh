@@ -70,6 +70,9 @@ cleanup() {
             >&2 2>/dev/null || true
         podman logs "${web_container}" >&2 2>/dev/null || true
     fi
+    if [[ "${HEPHAESTUS_E2E_KEEP_FIXTURES:-0}" == "1" ]]; then
+        podman logs "${web_container}" >"${fixture_root}/web.log" 2>&1 || true
+    fi
     if [[ -n "${daemon_pid}" ]]; then
         kill "${daemon_pid}" 2>/dev/null || true
         wait "${daemon_pid}" 2>/dev/null || true
@@ -81,8 +84,13 @@ cleanup() {
     podman stop "${web_container}" >/dev/null 2>&1 || true
     podman stop "${nats_container}" >/dev/null 2>&1 || true
     podman stop "${postgres_container}" >/dev/null 2>&1 || true
-    rm -rf -- "${fixture_root}"
-    rm -rf -- "${secret_runtime_root}"
+    if [[ "${HEPHAESTUS_E2E_KEEP_FIXTURES:-0}" == "1" ]]; then
+        printf 'retained browser E2E fixtures at %s\n' "${fixture_root}" >&2
+        printf 'retained secret runtime at %s\n' "${secret_runtime_root}" >&2
+    else
+        rm -rf -- "${fixture_root}"
+        rm -rf -- "${secret_runtime_root}"
+    fi
     return "${status}"
 }
 trap cleanup EXIT
@@ -264,7 +272,7 @@ podman run --detach --rm \
     --env HEPHAESTUS_BROWSER_OIDC_CLIENT_SECRET="development-secret" \
     --env HEPHAESTUS_BROWSER_OIDC_REDIRECT_URI="${web_url}/auth/oidc/callback" \
     docker.io/hexpm/elixir:1.18.4-erlang-27.3.4-debian-bookworm-20250428-slim \
-    sh -lc 'mix local.hex --force >/dev/null && mix phx.server' \
+    sh -lc 'mix local.hex --force >/dev/null && mix clean && mix phx.server' \
     >"${fixture_root}/web-container-id"
 wait_for_url "${web_url}/" "${fixture_root}/web.log"
 assert_web_isolation

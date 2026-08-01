@@ -10,6 +10,7 @@ use uuid::Uuid;
 const ISSUER: &str = "hephaestus-web-mediator";
 const BOOTSTRAP_SUBJECT: &str = "hephaestus-web-mediator";
 const BOOTSTRAP_ACTOR_KIND: &str = "verified_oidc_bootstrap";
+const BOOTSTRAP_AUDIENCE: &str = "/hephaestus.identity.v1.IdentityService/ResolveIdentity";
 const MAX_LIFETIME_SECONDS: i64 = 30;
 const CLOCK_SKEW_SECONDS: i64 = 5;
 
@@ -108,6 +109,10 @@ impl MediatorAuthenticator {
 
 /// Axum middleware that validates a mediator assertion for the exact request
 /// path and installs the resulting identity in request extensions.
+///
+/// Identity bootstrap is the one RPC exception: its assertion binds to
+/// request-body OIDC fields, so the identity adapter performs that validation
+/// after decoding the typed request.
 pub async fn mediator_identity_middleware(
     State(authenticator): State<MediatorAuthenticator>,
     mut request: Request<Body>,
@@ -135,7 +140,7 @@ pub async fn mediator_identity_middleware(
 }
 
 fn requires_mediator_auth(path: &str) -> bool {
-    path.starts_with("/hephaestus.")
+    path.starts_with("/hephaestus.") && path != BOOTSTRAP_AUDIENCE
 }
 
 #[derive(Deserialize)]
@@ -211,8 +216,8 @@ fn mediator_validation(expected_audience: &str) -> Validation {
 #[cfg(test)]
 mod tests {
     use super::{
-        BOOTSTRAP_ACTOR_KIND, BOOTSTRAP_SUBJECT, BootstrapIdentity, CLOCK_SKEW_SECONDS, ISSUER,
-        MediatorAuthenticator, requires_mediator_auth,
+        BOOTSTRAP_ACTOR_KIND, BOOTSTRAP_AUDIENCE, BOOTSTRAP_SUBJECT, BootstrapIdentity,
+        CLOCK_SKEW_SECONDS, ISSUER, MediatorAuthenticator, requires_mediator_auth,
     };
     use crate::rpc::mediator_signing_key;
     use http::{HeaderMap, HeaderValue, header::AUTHORIZATION};
@@ -311,6 +316,7 @@ mod tests {
         assert!(requires_mediator_auth(
             "/hephaestus.agent.v1.AgentService/ImportAgent"
         ));
+        assert!(!requires_mediator_auth(BOOTSTRAP_AUDIENCE));
         assert!(!requires_mediator_auth("/healthz"));
         assert!(!requires_mediator_auth("/git/repository/info/refs"));
         assert!(!requires_mediator_auth("/"));

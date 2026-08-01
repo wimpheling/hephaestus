@@ -224,20 +224,6 @@ impl ReleaseService {
             None,
         )
         .await?;
-        append_event(
-            &mut tx,
-            command.release_id.as_uuid(),
-            "hephaestus.build.completed.v1",
-            "build.completed.v1",
-            json!({
-                "schema_version": 1,
-                "build_request_id": command.build_request_id,
-                "release_id": command.release_id,
-                "release_agent_id": command.release_agent_id,
-                "manifest_hash": hex_hash(manifest_hash.as_bytes()),
-            }),
-        )
-        .await?;
         tx.commit().await?;
         Ok(command.release_id)
     }
@@ -2742,16 +2728,6 @@ fn decode_hash(value: &str) -> Result<[u8; 32], ReleaseServiceError> {
             u8::from_str_radix(pair, 16).map_err(|_| ReleaseServiceError::InvalidStoredData)?;
     }
     Ok(output)
-}
-
-fn hex_hash(value: &[u8; 32]) -> String {
-    use std::fmt::Write as _;
-
-    let mut output = String::with_capacity(64);
-    for byte in value {
-        write!(&mut output, "{byte:02x}").expect("writing to String cannot fail");
-    }
-    output
 }
 
 async fn existing_command(

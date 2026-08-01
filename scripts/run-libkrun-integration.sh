@@ -336,7 +336,7 @@ elif [[ "${HEPHAESTUS_PHASE1B_INTEGRATION:-0}" == "1" ]]; then
         HEPHAESTUS_LIBKRUN_WORKER="${repo_root}/target/debug/hephaestus-vm-libkrun-worker" \
         cargo test \
         --manifest-path "${repo_root}/Cargo.toml" \
-        --package run-orchestrator \
+        --package run-postgres \
         --test phase1b_libkrun \
         -- --nocapture
 else

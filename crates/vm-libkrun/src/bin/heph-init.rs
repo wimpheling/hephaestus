@@ -31,6 +31,10 @@ fn main() {
     }
 }
 
+// Keep guest bootstrap sequencing together so each failure can report while
+// the control stream is still open; the resulting function is intentionally
+// longer than the pedantic line-count threshold.
+#[allow(clippy::too_many_lines)]
 fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut control = connect_control()?;
     write_frame(
@@ -53,9 +57,18 @@ fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
 
     for mount in mounts {
-        mount_virtiofs(&mount.tag, &mount.guest_path, mount.read_only)?;
+        if let Err(error) = mount_virtiofs(&mount.tag, &mount.guest_path, mount.read_only) {
+            send_guest_error(&mut control, "mount", &error);
+            return Err(error.into());
+        }
     }
-    let mounted_state = state_volume.as_ref().map(mount_state_volume).transpose()?;
+    let mounted_state = match state_volume.as_ref().map(mount_state_volume).transpose() {
+        Ok(path) => path,
+        Err(error) => {
+            send_guest_error(&mut control, "state-volume", &error);
+            return Err(error.into());
+        }
+    };
     if let Some(delay) = command.env.get("HEPH_TEST_READY_DELAY_MS") {
         let milliseconds = delay.parse::<u64>().map_err(|error| {
             io::Error::new(
@@ -79,7 +92,13 @@ fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if let Some(working_dir) = command.working_dir {
         child.current_dir(working_dir);
     }
-    let mut child = child.spawn()?;
+    let mut child = match child.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            send_guest_error(&mut control, "command-spawn", &error);
+            return Err(error.into());
+        }
+    };
 
     let writer = Arc::new(Mutex::new(control.try_clone()?));
     write_message(&writer, &GuestMessage::Ready)?;
@@ -140,6 +159,21 @@ fn mount_state_volume(volume: &GuestStateVolume) -> io::Result<PathBuf> {
     mount_ext4(&device, &volume.guest_path)?;
     initialize_database(&volume.guest_path)?;
     Ok(volume.guest_path.clone())
+}
+
+/// Sends a bounded bootstrap diagnostic while the host control stream is
+/// still available. This keeps mount and command failures distinguishable
+/// from a worker that disappears before guest initialization completes.
+fn send_guest_error(control: &mut File, code: &str, error: &impl std::fmt::Display) {
+    let mut message = error.to_string();
+    message.truncate(1_024);
+    let _write_result = write_frame(
+        control,
+        &GuestMessage::Error {
+            code: code.to_owned(),
+            message,
+        },
+    );
 }
 
 fn find_ext4_device(expected: Uuid) -> io::Result<PathBuf> {
