@@ -760,7 +760,7 @@ The migration affects at least:
     active browser stream from its cursor, and verify no duplicate visible
     transition or side effect. **BLOCKED:** the isolated namespace support is
     now available, but no restart/reconnect harness exists yet. Follow-up:
-    [verify browser reconnect and restart semantics](verify-browser-reconnect-and-restart.md).
+    [verify browser reconnect and restart semantics](../todo/verify-browser-reconnect-and-restart.md).
   - [x] Verify all documented development commands from a clean state. An
     isolated `HEPHAESTUS_LOCAL_ROOT` and `HEPHAESTUS_LOCAL_NAMESPACE` were
     cleaned, initialized, listed, diagnosed, and cleaned again successfully;
@@ -789,7 +789,7 @@ Record before moving this task to `tasks/done/`:
   `logs`, `state list`, `cache list`, and all subcommand `--help` invocations
   completed successfully. The
   restart/reconnect proof remains deferred to
-  [verify browser reconnect and restart semantics](verify-browser-reconnect-and-restart.md)
+  [verify browser reconnect and restart semantics](../todo/verify-browser-reconnect-and-restart.md)
   because the current local state is populated. The real libkrun
   Phase 1B and daemon golden suites pass, including result persistence and
   cgroup cleanup. The browser E2E now
