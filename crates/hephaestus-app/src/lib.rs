@@ -564,7 +564,11 @@ impl HephaestusApp {
         let router = Router::new()
             .route("/healthz", get(|| async { "ok" }))
             .merge(git.router())
-            .fallback_service(rpc);
+            .fallback_service(rpc)
+            .layer(axum::middleware::from_fn_with_state(
+                rpc::MediatorAuthenticator::new(&self.rpc_mediator_signing_key),
+                rpc::mediator_identity_middleware,
+            ));
         let listener = tokio::net::TcpListener::bind(self.http_listen)
             .await
             .map_err(component("HTTP listener"))?;

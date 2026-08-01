@@ -18,6 +18,7 @@ mod request;
 mod run;
 mod secret;
 
+pub use auth::mediator_identity_middleware;
 pub use auth::{
     BootstrapIdentity, MediatorAssertionError, MediatorAuthenticator, MediatorPrincipal,
 };

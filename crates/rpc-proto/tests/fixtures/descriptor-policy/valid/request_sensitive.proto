@@ -1,0 +1,7 @@
+syntax = "proto3";
+
+import "hephaestus/options/v1/options.proto";
+
+message ValidRequest {
+  bytes value = 1 [(hephaestus.options.v1.sensitive) = true];
+}

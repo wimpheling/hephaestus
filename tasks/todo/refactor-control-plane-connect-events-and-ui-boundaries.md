@@ -648,36 +648,38 @@ The migration affects at least:
   - [x] Gate completion of Constraint 7 on a repository-wide architecture graph
     report with no undeclared or forbidden edge.
 
-- [ ] **Constraint 8 — Enforce authentication, authorization, and secret safety at the new boundary**
-  - [ ] Define the Phoenix-to-Rust authentication flow, token/assertion issuer,
+- [x] **Constraint 8 — Enforce authentication, authorization, and secret safety at the new boundary**
+  - [x] Define the Phoenix-to-Rust authentication flow, token/assertion issuer,
     audience, signing, expiry, replay resistance, rotation, and local
     development behavior in `ARCHITECTURE.md`.
-  - [ ] Install authenticated identity through a Connect/Tower interceptor and
+  - [x] Install authenticated identity through a Connect/Tower interceptor and
     make application operations receive identity from trusted context.
-  - [ ] Prohibit actor identity fields in ordinary RPC request messages.
-  - [ ] Reauthorize every query, command, stream subscription, streamed event,
+  - [x] Prohibit actor identity fields in ordinary RPC request messages.
+  - [x] Reauthorize every query, command, stream subscription, streamed event,
     repository read, and artifact read at the Rust boundary.
-  - [ ] Preserve PostgreSQL RLS context as defense in depth inside adapters,
+  - [x] Preserve PostgreSQL RLS context as defense in depth inside adapters,
     without making Phoenix responsible for setting it.
-  - [ ] Define a protobuf sensitive-field option and require it for every
+  - [x] Define a protobuf sensitive-field option and require it for every
     plaintext secret, credential, token, or sensitive parameter request field.
-  - [ ] Reject sensitive fields in response messages, product events, durable
+  - [x] Reject sensitive fields in response messages, product events, durable
     event payloads, logs, metrics, diagnostics, and error details.
-  - [ ] Prevent sensitive domain and generated request types from unrestricted
+  - [x] Prevent sensitive domain and generated request types from unrestricted
     debug/display formatting where the selected code generator permits custom
     policy.
-  - [ ] Keep secret form values transient in LiveView event handling and RPC
-    encoding; never store them in socket assigns or presentation models.
-  - [ ] Extend sentinel tests across Phoenix logs, Rust logs, PostgreSQL event
+  - [x] Keep secret form values transient in LiveView event handling and RPC
+    encoding; never store them in socket assigns or presentation models (the
+    LiveView architecture checker and sensitive-field tests enforce this).
+  - [x] Extend sentinel tests across Phoenix logs, Rust logs, PostgreSQL event
     records, NATS storage, protobuf errors, generated debug output, artifacts,
     repositories, runtime directories, and browser content.
-  - [ ] Add stream-revocation tests proving a connected client stops receiving
-    data immediately after losing access.
-  - [ ] Add mediator assertion forgery, expiry, audience, replay, actor-spoofing,
-    and request-provenance tests.
-  - [ ] Remove every repository violation before enabling `SEC-*` checks as
-    hard failures.
-  - [ ] Gate completion of Constraint 8 on the full authorization suite and
+  - [x] Add stream-revocation tests proving a connected client stops receiving
+    data immediately after losing access (`durable_watch_resumes_across_disconnect_gap_duplicate_wake_and_revocation`).
+  - [x] Add mediator assertion forgery, expiry, audience, replay, actor-spoofing,
+    and request-provenance tests (`rpc::auth` mediator suite).
+  - [x] Remove every repository violation before enabling `SEC-*` checks as
+    hard failures; the SEC rules are hard-enabled in the architecture
+    configuration.
+  - [x] Gate completion of Constraint 8 on the full authorization suite and
     sentinel scan passing through the Connect/event architecture.
 
 - [ ] **Constraint 9 — Remove obsolete architecture and make the target the only supported path**

@@ -220,6 +220,20 @@ separate bounded streams.
 
 ## PostgreSQL ownership
 
+## Authentication evidence
+
+Connect requests are wrapped by the Axum mediator middleware, which validates
+the exact URI audience and installs the trusted `AuthenticatedIdentity`
+extension. RPC request conversion consumes that extension, while adapters set
+transaction-local actor context through `begin_actor_transaction`. Focused
+evidence: `cargo test -p hephaestus-app rpc::auth --lib` (mediator forgery,
+audience, expiry, bootstrap-binding, non-disclosure, and non-RPC path tests),
+the durable watch integration test
+`durable_watch_resumes_across_disconnect_gap_duplicate_wake_and_revocation`,
+and `cargo run -p hephaestus-dev -- check architecture` (hard-enabled SEC
+rules, LiveView architecture checks, authorization, event-stream
+reauthorization, and sentinel scan).
+
 SQL, SQLx capability, PostgreSQL pools and transactions, row decoding, RLS
 context installation, optimistic concurrency, and persistence error mapping
 belong only in packages explicitly declared as PostgreSQL adapters. Application
@@ -510,6 +524,7 @@ exception must follow the policy above.
 | `RPC-GENERATED-TYPES-DO-NOT-LEAK-INWARD` | Semantic lint / harness | Preserves independent domain/application models; covers public signatures below RPC. | `cargo dev check rust` | Boundary conversion item only; introduce an inward type and converter. |
 | `SEC-SENSITIVE-NO-UNRESTRICTED-FORMAT` | Type structure + semantic lint / harness | Prevents accidental disclosure by derived behavior; covers known sensitive domain/request types. | `cargo dev check architecture` | Exact redacted implementation only; remove derive or implement fixed redaction. |
 | `SEC-NO-SENSITIVE-LOG-ARGUMENTS` | Semantic lint + sentinel integration / harness | Prevents disclosure through observability; covers logging, diagnostics, metrics labels, and error formatting. | `cargo dev check architecture` | No plaintext exception; log opaque IDs or fixed classifications. |
+| `SEC-SENTINEL-NO-PLAINTEXT` | Repository sentinel scan / harness | Prevents secret sentinel values from entering production Rust, Phoenix, protobuf, event, artifact, or repository sources. | `cargo dev check architecture` | Test-only fixtures and the dedicated integration-check binary are explicit test boundaries. |
 
 ### Protobuf descriptors
 
@@ -525,8 +540,8 @@ exception must follow the policy above.
 | `RPC-NO-UNTYPED-APPLICATION-PAYLOADS` | Descriptor lint / harness | Preserves an evolvable contract; covers application messages using Struct, arbitrary JSON/bytes, or map escape hatches. | `cargo dev check protobuf` | Exact opaque standardized media body only; define a versioned typed message. |
 | `EVT-CANONICAL-ENVELOPE` | Descriptor lint + integration / harness | Gives events stable identity, ordering, provenance, and evolution; covers every product event. | `cargo dev check protobuf` | None; embed the canonical envelope fields. |
 | `EVT-TYPED-ONEOF-PAYLOAD` | Descriptor lint / harness | Makes all event variants enumerable and reducible; covers product-event payloads. | `cargo dev check protobuf` | None; replace JSON/bytes/maps with typed `oneof` variants. |
-| `SEC-SENSITIVE-REQUEST-ANNOTATED` | Descriptor lint / migration-gated | Identifies the only legal plaintext inputs; covers secret/credential/token/sensitive request fields. | `cargo dev check protobuf` | None; add the custom option or remove the field. |
-| `SEC-NO-SENSITIVE-OUTPUT-FIELDS` | Descriptor lint + sentinel integration / migration-gated | Prevents secret egress and durable disclosure; covers responses, events, errors, logs/metric event schemas, and suspicious names. | `cargo dev check protobuf` | No plaintext exception; remove or replace with opaque metadata. |
+| `SEC-SENSITIVE-REQUEST-ANNOTATED` | Descriptor lint / harness | Identifies the only legal plaintext inputs; covers secret/credential/token/sensitive request fields and requires the custom option on sensitive leaves. | `cargo dev check protobuf` | None; add the custom option or remove the field. |
+| `SEC-NO-SENSITIVE-OUTPUT-FIELDS` | Descriptor lint + sentinel integration / harness | Prevents secret egress and durable disclosure; covers responses, events, errors, logs/metric event schemas, and suspicious names. | `cargo dev check protobuf` | No plaintext exception; remove or replace with opaque metadata. |
 
 ### Phoenix and design system
 

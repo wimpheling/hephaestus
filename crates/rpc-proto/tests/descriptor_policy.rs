@@ -145,6 +145,79 @@ fn reachable_sensitive_field(
     None
 }
 
+fn message_reaches_named_message(
+    pool: &DescriptorPool,
+    message: &MessageDescriptor,
+    target: &str,
+    visited: &mut BTreeSet<String>,
+) -> bool {
+    if message.full_name() == target {
+        return true;
+    }
+    if !visited.insert(message.full_name().to_owned()) {
+        return false;
+    }
+    message.fields().iter().any(|field| {
+        let nested = match field.kind() {
+            FieldKind::Singular(SingularKind::Message(index))
+            | FieldKind::List(SingularKind::Message(index))
+            | FieldKind::Map {
+                value: SingularKind::Message(index),
+                ..
+            } => Some(index),
+            _ => None,
+        };
+        nested.is_some_and(|index| {
+            message_reaches_named_message(pool, pool.message(index), target, visited)
+        })
+    })
+}
+
+fn reachable_actor_field(
+    pool: &DescriptorPool,
+    message: &MessageDescriptor,
+    visited: &mut BTreeSet<String>,
+) -> Option<String> {
+    if !visited.insert(message.full_name().to_owned()) {
+        return None;
+    }
+    for field in message.fields() {
+        if field.name().contains("actor") {
+            return Some(format!("{}.{}", message.full_name(), field.name()));
+        }
+        let nested = match field.kind() {
+            FieldKind::Singular(SingularKind::Message(index))
+            | FieldKind::List(SingularKind::Message(index))
+            | FieldKind::Map {
+                value: SingularKind::Message(index),
+                ..
+            } => Some(index),
+            _ => None,
+        };
+        if let Some(found) =
+            nested.and_then(|index| reachable_actor_field(pool, pool.message(index), visited))
+        {
+            return Some(found);
+        }
+    }
+    None
+}
+
+fn contains_forbidden_sensitive_name(name: &str) -> bool {
+    [
+        "plaintext",
+        "ciphertext",
+        "credential",
+        "password",
+        "private_key",
+        "api_key",
+        "access_token",
+        "refresh_token",
+    ]
+    .iter()
+    .any(|forbidden| name.contains(forbidden))
+}
+
 fn validate_mutation_method(
     pool: &DescriptorPool,
     method: &buffa_descriptor::MethodDescriptor,
@@ -877,6 +950,79 @@ fn application_payloads_are_typed_and_responses_are_secret_safe() {
 }
 
 #[test]
+fn sensitive_fields_are_annotated_request_only_and_error_safe() {
+    let pool = pool();
+    let sensitive = sensitive_fields(&pool);
+    assert_eq!(
+        sensitive.len(),
+        1,
+        "review every sensitive descriptor field"
+    );
+    for qualified in sensitive {
+        let (message_name, field_name) = qualified
+            .rsplit_once('.')
+            .expect("sensitive field is qualified");
+        let message = pool
+            .message_by_name(message_name)
+            .expect("sensitive field message");
+        let field = message
+            .field_by_name(field_name)
+            .expect("sensitive field descriptor");
+        assert!(matches!(
+            field.kind(),
+            FieldKind::Singular(SingularKind::Scalar(ScalarType::Bytes))
+        ));
+        let request_roots = pool
+            .services()
+            .iter()
+            .filter(|service| service.full_name().starts_with("hephaestus."))
+            .flat_map(|service| {
+                service
+                    .methods()
+                    .iter()
+                    .map(|method| pool.message(method.input()))
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            request_roots.iter().any(|request| {
+                message_reaches_named_message(&pool, request, message_name, &mut BTreeSet::new())
+            }),
+            "{qualified} is not reachable from a request"
+        );
+    }
+
+    for error_message in [
+        "hephaestus.common.v1.ErrorDetail",
+        "hephaestus.common.v1.Diagnostic",
+        "hephaestus.common.v1.RuntimeMetric",
+    ] {
+        let message = pool
+            .message_by_name(error_message)
+            .expect("error/observability descriptor");
+        assert_eq!(
+            reachable_sensitive_field(&pool, message, &mut BTreeSet::new()),
+            None,
+            "{error_message} can carry sensitive material"
+        );
+        for field in message.fields() {
+            assert!(
+                !contains_forbidden_sensitive_name(field.name()),
+                "{error_message}.{} has a sensitive output name",
+                field.name()
+            );
+            assert!(
+                !matches!(
+                    field.kind(),
+                    FieldKind::Singular(SingularKind::Scalar(ScalarType::Bytes))
+                ),
+                "{error_message}.{} exposes opaque bytes",
+                field.name()
+            );
+        }
+    }
+}
+
+#[test]
 fn actor_identity_is_metadata_only_except_for_exact_bootstrap_shape() {
     let pool = pool();
     for service in pool
@@ -912,6 +1058,11 @@ fn actor_identity_is_metadata_only_except_for_exact_bootstrap_shape() {
                         .all(|field| !field.name().contains("actor")),
                     "{qualified} contains a caller-selectable actor field"
                 );
+                assert_eq!(
+                    reachable_actor_field(&pool, request, &mut BTreeSet::new()),
+                    None,
+                    "{qualified} hides a caller-selectable actor field in a nested message"
+                );
             }
         }
     }
@@ -932,4 +1083,19 @@ fn actor_identity_is_metadata_only_except_for_exact_bootstrap_shape() {
             "bootstrap contract omits {required}"
         );
     }
+}
+
+#[test]
+fn descriptor_policy_fixtures_cover_sensitive_and_actor_failures() {
+    let valid = include_str!("fixtures/descriptor-policy/valid/request_sensitive.proto");
+    assert!(valid.contains("sensitive) = true"));
+    assert!(!valid.contains("plaintext"));
+
+    let invalid_output = include_str!("fixtures/descriptor-policy/invalid/sensitive_output.proto");
+    assert!(contains_forbidden_sensitive_name("plaintext"));
+    assert!(invalid_output.contains("bytes plaintext"));
+    assert!(!invalid_output.contains("sensitive) = true"));
+
+    let invalid_actor = include_str!("fixtures/descriptor-policy/invalid/actor_request.proto");
+    assert!(invalid_actor.contains("string actor"));
 }

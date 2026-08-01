@@ -3,13 +3,14 @@
 use super::Diagnostic;
 use std::{collections::BTreeMap, ffi::OsStr, fs, path::Path};
 
-const RULES: [&str; 7] = [
+const RULES: [&str; 8] = [
     "ARCH-ENV-ONLY-IN-CONFIG",
     "ARCH-HTTP-ONLY-IN-INTEGRATIONS",
     "ARCH-PROCESS-ONLY-IN-ADAPTERS",
     "ARCH-FILESYSTEM-ONLY-IN-ADAPTERS",
     "SEC-SENSITIVE-NO-UNRESTRICTED-FORMAT",
     "SEC-NO-SENSITIVE-LOG-ARGUMENTS",
+    "SEC-SENTINEL-NO-PLAINTEXT",
     "ARCH-VM-PROVIDER-ONLY-IN-COMPOSITION",
 ];
 
@@ -22,16 +23,82 @@ pub(super) fn validate(root: &Path, enabled_rules: &[String], diagnostics: &mut 
         return;
     }
     visit_sources(root, &root.join("crates"), &active, diagnostics);
+    if active.contains(&"SEC-SENTINEL-NO-PLAINTEXT") {
+        scan_repository_sentinels(root, diagnostics);
+    }
 }
 
 pub(super) fn audit(root: &Path) -> BTreeMap<&'static str, usize> {
     let mut diagnostics = Vec::new();
     visit_sources(root, &root.join("crates"), &RULES, &mut diagnostics);
+    scan_repository_sentinels(root, &mut diagnostics);
     let mut counts = BTreeMap::new();
     for diagnostic in diagnostics {
         *counts.entry(diagnostic.rule_id).or_insert(0) += 1;
     }
     counts
+}
+
+fn scan_repository_sentinels(root: &Path, diagnostics: &mut Vec<Diagnostic>) {
+    scan_sentinel_directory(root, root, diagnostics);
+}
+
+fn scan_sentinel_directory(root: &Path, directory: &Path, diagnostics: &mut Vec<Diagnostic>) {
+    let Ok(entries) = fs::read_dir(directory) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let relative = path.strip_prefix(root).unwrap_or(&path);
+        if path.is_dir() {
+            if relative.starts_with("target")
+                || relative.starts_with(".git")
+                || relative.starts_with("web/deps")
+                || relative.starts_with("web/_build")
+                || relative.starts_with("crates/hephaestus-dev")
+                || relative.starts_with("crates/rpc-proto/src/generated")
+                || is_test_path(relative)
+            {
+                continue;
+            }
+            scan_sentinel_directory(root, &path, diagnostics);
+        } else if is_scannable_source(&path) {
+            let Ok(source) = fs::read_to_string(&path) else {
+                continue;
+            };
+            scan_sentinel_source(relative, &source, diagnostics);
+        }
+    }
+}
+
+fn is_scannable_source(path: &Path) -> bool {
+    matches!(
+        path.extension().and_then(OsStr::to_str),
+        Some("rs" | "ex" | "exs" | "proto" | "json")
+    )
+}
+
+fn scan_sentinel_source(path: &Path, source: &str, diagnostics: &mut Vec<Diagnostic>) {
+    if path.to_string_lossy().contains("integration-check") {
+        return;
+    }
+    let mut test_module = false;
+    for (line_number, line) in source.lines().enumerate() {
+        if line.contains("#[cfg(test)]") {
+            test_module = true;
+        }
+        if !test_module && line.to_ascii_lowercase().contains("sentinel") {
+            diagnostics.push(Diagnostic::new(
+                "SEC-SENTINEL-NO-PLAINTEXT",
+                format!(
+                    "{}:{} contains a secret sentinel outside test-only or integration-check code",
+                    path.display(),
+                    line_number + 1
+                ),
+            ));
+            break;
+        }
+    }
 }
 
 fn visit_sources(
@@ -232,7 +299,7 @@ fn contains_sensitive_binding(source: &str) -> bool {
 
 fn is_test_path(path: &Path) -> bool {
     path.components()
-        .any(|component| component.as_os_str() == OsStr::new("tests"))
+        .any(|component| matches!(component.as_os_str().to_str(), Some("test" | "tests")))
 }
 
 fn is_configuration_path(path: &Path) -> bool {
@@ -340,7 +407,11 @@ mod tests {
             &active,
             &mut diagnostics,
         );
-        for rule in RULES {
+        for rule in RULES
+            .iter()
+            .copied()
+            .filter(|rule| *rule != "SEC-SENTINEL-NO-PLAINTEXT")
+        {
             assert!(
                 diagnostics
                     .iter()
@@ -348,5 +419,25 @@ mod tests {
                 "missing diagnostic for {rule}: {diagnostics:?}"
             );
         }
+    }
+
+    #[test]
+    fn sentinel_scan_allows_test_only_values_and_rejects_production_values() {
+        let mut valid = Vec::new();
+        super::scan_sentinel_source(
+            Path::new("crates/example/src/lib.rs"),
+            include_str!("../../../tests/fixtures/secret-safety/valid/src/lib.rs"),
+            &mut valid,
+        );
+        assert!(valid.is_empty(), "unexpected diagnostics: {valid:?}");
+
+        let mut invalid = Vec::new();
+        super::scan_sentinel_source(
+            Path::new("crates/example/src/lib.rs"),
+            include_str!("../../../tests/fixtures/secret-safety/invalid/src/lib.rs"),
+            &mut invalid,
+        );
+        assert_eq!(invalid.len(), 1);
+        assert_eq!(invalid[0].rule_id, "SEC-SENTINEL-NO-PLAINTEXT");
     }
 }

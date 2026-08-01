@@ -1,4 +1,5 @@
-use http::{HeaderMap, header::AUTHORIZATION};
+use axum::{body::Body, extract::State, http::Request, middleware::Next, response::Response};
+use http::{HeaderMap, StatusCode, header::AUTHORIZATION};
 use identity_domain::UserId;
 use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode};
 use serde::Deserialize;
@@ -105,6 +106,38 @@ impl MediatorAuthenticator {
     }
 }
 
+/// Axum middleware that validates a mediator assertion for the exact request
+/// path and installs the resulting identity in request extensions.
+pub async fn mediator_identity_middleware(
+    State(authenticator): State<MediatorAuthenticator>,
+    mut request: Request<Body>,
+    next: Next,
+) -> Response {
+    if !requires_mediator_auth(request.uri().path()) {
+        return next.run(request).await;
+    }
+    let audience = request.uri().path().to_owned();
+    let Ok(principal) = authenticator.authenticate(request.headers(), &audience) else {
+        let mut response = Response::new(Body::empty());
+        *response.status_mut() = StatusCode::UNAUTHORIZED;
+        return response;
+    };
+    request
+        .extensions_mut()
+        .insert(identity_domain::AuthenticatedIdentity::new(
+            principal.user_id,
+            ISSUER,
+            principal.user_id.to_string(),
+            serde_json::json!({"mediator": "phoenix", "assertion_id": principal.assertion_id}),
+            identity_domain::RequestId::from_uuid(principal.assertion_id),
+        ));
+    next.run(request).await
+}
+
+fn requires_mediator_auth(path: &str) -> bool {
+    path.starts_with("/hephaestus.")
+}
+
 #[derive(Deserialize)]
 struct MediatorClaims {
     sub: String,
@@ -179,7 +212,7 @@ fn mediator_validation(expected_audience: &str) -> Validation {
 mod tests {
     use super::{
         BOOTSTRAP_ACTOR_KIND, BOOTSTRAP_SUBJECT, BootstrapIdentity, CLOCK_SKEW_SECONDS, ISSUER,
-        MediatorAuthenticator,
+        MediatorAuthenticator, requires_mediator_auth,
     };
     use crate::rpc::mediator_signing_key;
     use http::{HeaderMap, HeaderValue, header::AUTHORIZATION};
@@ -271,6 +304,16 @@ mod tests {
             .expect_err("malformed assertion must fail");
         assert!(!error.to_string().contains(sentinel));
         assert!(!format!("{error:?}").contains(sentinel));
+    }
+
+    #[test]
+    fn middleware_authenticates_only_connect_paths() {
+        assert!(requires_mediator_auth(
+            "/hephaestus.agent.v1.AgentService/ImportAgent"
+        ));
+        assert!(!requires_mediator_auth("/healthz"));
+        assert!(!requires_mediator_auth("/git/repository/info/refs"));
+        assert!(!requires_mediator_auth("/"));
     }
 
     #[test]

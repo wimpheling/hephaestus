@@ -17,9 +17,20 @@ pub(super) fn mutation_identity(
     audience: &str,
     context: Option<&RequestContext>,
 ) -> Result<AuthenticatedIdentity, RpcError> {
-    let principal = authenticator
-        .authenticate(transport.headers(), audience)
-        .map_err(|_| RpcError::Unauthenticated)?;
+    let principal = transport
+        .extensions()
+        .get::<AuthenticatedIdentity>()
+        .cloned()
+        .map(|identity| super::MediatorPrincipal {
+            user_id: identity.user_id,
+            assertion_id: identity.request_id.as_uuid(),
+        });
+    let principal = match principal {
+        Some(principal) => principal,
+        None => authenticator
+            .authenticate(transport.headers(), audience)
+            .map_err(|_| RpcError::Unauthenticated)?,
+    };
     let context = context.ok_or(RpcError::InvalidArgument)?;
     let request_id = mutation_request_id(context)?;
     let idempotency_id = derive_idempotency_id(
@@ -63,6 +74,9 @@ pub(super) fn query_identity(
     authenticator: &MediatorAuthenticator,
     audience: &str,
 ) -> Result<AuthenticatedIdentity, RpcError> {
+    if let Some(identity) = transport.extensions().get::<AuthenticatedIdentity>() {
+        return Ok(identity.clone());
+    }
     let principal = authenticator
         .authenticate(transport.headers(), audience)
         .map_err(|_| RpcError::Unauthenticated)?;

@@ -1,0 +1,5 @@
+syntax = "proto3";
+
+message InvalidRequest {
+  string actor = 1;
+}
