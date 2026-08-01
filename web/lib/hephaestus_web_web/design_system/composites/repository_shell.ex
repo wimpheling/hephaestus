@@ -15,7 +15,7 @@ defmodule HephaestusWebWeb.DesignSystem.Composites.RepositoryShell do
 
   attr :active, :atom,
     required: true,
-    values: [:files, :commits, :branches, :releases, :agents]
+    values: [:files, :commits, :branches, :builds, :releases, :agents]
 
   attr :organization_index_destination, :string, default: nil
   attr :organization_destination, :string, default: nil

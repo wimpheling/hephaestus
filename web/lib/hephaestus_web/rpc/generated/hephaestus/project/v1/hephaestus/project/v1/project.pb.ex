@@ -1,3 +1,29 @@
+defmodule Hephaestus.Project.V1.CreateProjectRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.project.v1.CreateProjectRequest",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:context, 1, type: Hephaestus.Common.V1.RequestContext)
+  field(:organization_id, 2, type: Hephaestus.Common.V1.OpaqueId, json_name: "organizationId")
+  field(:name, 3, type: :string)
+  field(:description, 4, type: :string)
+end
+
+defmodule Hephaestus.Project.V1.CreateProjectResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.project.v1.CreateProjectResponse",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:project_id, 1, type: Hephaestus.Common.V1.OpaqueId, json_name: "projectId")
+  field(:receipt, 2, type: Hephaestus.Common.V1.MutationReceipt)
+end
+
 defmodule Hephaestus.Project.V1.Project do
   @moduledoc false
 
@@ -10,6 +36,7 @@ defmodule Hephaestus.Project.V1.Project do
   field(:name, 2, type: :string)
   field(:organization_id, 3, type: Hephaestus.Common.V1.OpaqueId, json_name: "organizationId")
   field(:organization_name, 4, type: :string, json_name: "organizationName")
+  field(:description, 5, type: :string)
 end
 
 defmodule Hephaestus.Project.V1.ProjectRepository do
@@ -211,6 +238,12 @@ defmodule Hephaestus.Project.V1.ProjectService.Service do
   use GRPC.Service,
     name: "hephaestus.project.v1.ProjectService",
     protoc_gen_elixir_version: "0.17.0"
+
+  rpc(
+    :CreateProject,
+    Hephaestus.Project.V1.CreateProjectRequest,
+    Hephaestus.Project.V1.CreateProjectResponse
+  )
 
   rpc(
     :GetProject,

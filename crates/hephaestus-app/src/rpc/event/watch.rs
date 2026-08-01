@@ -7,6 +7,8 @@ use crate::{
 use buffa::Message as _;
 use futures_util::StreamExt as _;
 use identity_domain::AuthenticatedIdentity;
+use rpc_proto::messages::hephaestus::event::v1::ProductEvent;
+use std::sync::Arc;
 use tokio::sync::mpsc;
 
 const DEFAULT_MAX_EVENTS: u32 = 256;
@@ -16,13 +18,13 @@ const MAX_TOTAL_BYTES: u64 = 16 * 1024 * 1024;
 // Authorization is re-evaluated for every product-event delivery.
 const READ_BATCH: i64 = 1;
 
-pub(super) struct Frame {
+pub(crate) struct Frame {
     pub sequence: u64,
     pub committed_cursor: String,
     pub delivery: Delivery,
 }
 
-pub(super) async fn start(
+pub(crate) async fn start(
     application: EventApplication,
     identity: AuthenticatedIdentity,
     scope: EventScope,
@@ -30,6 +32,35 @@ pub(super) async fn start(
     max_events: u32,
     max_total_bytes: u64,
     codec: EventCursorCodec,
+) -> Result<mpsc::Receiver<Result<Frame, connectrpc::ConnectError>>, connectrpc::ConnectError> {
+    start_filtered(
+        application,
+        identity,
+        scope,
+        resume_cursor,
+        max_events,
+        max_total_bytes,
+        codec,
+        Arc::new(accept_all),
+    )
+    .await
+}
+
+/// Starts a durable scope watch while retaining only the requested typed
+/// product-event family. The cursor still advances over every event in the
+/// authorized scope, so reconnects cannot replay unrelated events forever.
+// The arguments mirror the existing public watch contract and keep the filter
+// explicit at this policy boundary.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn start_filtered(
+    application: EventApplication,
+    identity: AuthenticatedIdentity,
+    scope: EventScope,
+    resume_cursor: Option<&str>,
+    max_events: u32,
+    max_total_bytes: u64,
+    codec: EventCursorCodec,
+    filter: EventFilter,
 ) -> Result<mpsc::Receiver<Result<Frame, connectrpc::ConnectError>>, connectrpc::ConnectError> {
     let max_events = if max_events == 0 {
         DEFAULT_MAX_EVENTS
@@ -97,6 +128,7 @@ pub(super) async fn start(
             max_total_bytes,
             notifications,
             codec,
+            filter,
             sender,
         )
         .await;
@@ -109,7 +141,13 @@ fn snapshot_cursor(initial: Option<&(i64, Delivery)>) -> i64 {
 }
 
 // The watch loop keeps its delivery, authorization, and budget state explicit.
-#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+// The loop intentionally keeps authorization, cursor, filtering, and budget
+// transitions together so each delivery path shares identical semantics.
+#[allow(
+    clippy::cognitive_complexity,
+    clippy::too_many_arguments,
+    clippy::too_many_lines
+)]
 async fn run(
     application: EventApplication,
     identity: AuthenticatedIdentity,
@@ -120,6 +158,7 @@ async fn run(
     max_total_bytes: u64,
     mut notifications: crate::application::event::EventWakeupStream,
     codec: EventCursorCodec,
+    filter: EventFilter,
     sender: mpsc::Sender<Result<Frame, connectrpc::ConnectError>>,
 ) {
     let mut sequence = 0_u64;
@@ -241,7 +280,6 @@ async fn run(
                         return;
                     }
                     cursor = value.cursor;
-                    sequence += 1;
                     let delivery = match model::event(&codec, scope, &value) {
                         Ok(value) => Delivery::Event(value),
                         Err(error) => {
@@ -249,6 +287,12 @@ async fn run(
                             return;
                         }
                     };
+                    if let Delivery::Event(ref event) = delivery {
+                        if !(filter)(event) {
+                            continue;
+                        }
+                    }
+                    sequence += 1;
                     let frame = Frame {
                         sequence,
                         committed_cursor: codec.encode(
@@ -274,6 +318,12 @@ async fn run(
             }
         }
     }
+}
+
+pub(crate) type EventFilter = Arc<dyn Fn(&ProductEvent) -> bool + Send + Sync>;
+
+const fn accept_all(_: &ProductEvent) -> bool {
+    true
 }
 
 fn encoded_frame_size(frame: &Frame) -> u64 {

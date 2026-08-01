@@ -1,4 +1,4 @@
-use crate::application::build::{BuildError, BuildMetric, BuildState, BuildView};
+use crate::application::build::{BuildActionError, BuildError, BuildMetric, BuildState, BuildView};
 use rpc_proto::messages::hephaestus::{
     build::v1::{Build, BuildState as ProtoBuildState},
     common::v1::{MetricLabel, OpaqueId, RuntimeMetric},
@@ -9,6 +9,7 @@ use uuid::Uuid;
 pub(in crate::rpc) fn build(value: BuildView) -> Build {
     Build {
         id: opaque(value.id).into(),
+        repository_id: opaque(value.repository_id).into(),
         state: proto_state(value.state).into(),
         exit_code: value.exit_code,
         failure_code: value.failure_code.unwrap_or_default(),
@@ -16,6 +17,12 @@ pub(in crate::rpc) fn build(value: BuildView) -> Build {
         metrics: value.metrics.into_iter().map(metric).collect(),
         created_at: timestamp(value.created_at).into(),
         updated_at: timestamp(value.updated_at).into(),
+        source_commit: value.source_commit,
+        source_ref: value.source_ref,
+        build_definition_hash: value.build_definition_hash,
+        release_id: value.release_id.map(opaque).into(),
+        release_state: value.release_state.unwrap_or_default(),
+        artifact_count: value.artifact_count,
         ..Default::default()
     }
 }
@@ -90,5 +97,34 @@ pub(super) fn application_error(error: BuildError) -> super::super::RpcError {
             tracing::error!(error = %source, "build application persistence failed");
             RpcError::Unavailable
         }
+    }
+}
+
+pub(super) fn action_error(error: BuildActionError) -> super::super::RpcError {
+    match error {
+        BuildActionError::Application(error) => application_error(error),
+        BuildActionError::RetryNotAllowed
+        | BuildActionError::RetryUnavailable
+        | BuildActionError::VerificationNotAllowed
+        | BuildActionError::VerificationUnavailable => super::super::RpcError::FailedPrecondition,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::action_error;
+    use crate::application::build::BuildActionError;
+    use crate::rpc::RpcError;
+
+    #[test]
+    fn unsupported_actions_map_to_a_lifecycle_precondition() {
+        assert_eq!(
+            action_error(BuildActionError::RetryUnavailable),
+            RpcError::FailedPrecondition
+        );
+        assert_eq!(
+            action_error(BuildActionError::VerificationUnavailable),
+            RpcError::FailedPrecondition
+        );
     }
 }

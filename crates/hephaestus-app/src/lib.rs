@@ -7,8 +7,11 @@ pub mod rpc;
 
 use async_trait::async_trait;
 use axum::{Router, routing::get};
-use build_orchestrator::{BuildExecutionError, BuildExecutor, BuildExecutorConfig};
+use build_orchestrator::{
+    BuildExecutionError, BuildExecutor, BuildExecutorConfig, CatalogBuilderImageResolver,
+};
 use build_postgres::PgBuildRepository;
+use builder_catalog_postgres::PgBuilderCatalog;
 use control_plane_postgres::launch::PgRunLaunchAuthorizer;
 use control_plane_postgres::{
     ControlPlanePool, connect as connect_control_plane, load_vm_launch_contract,
@@ -74,7 +77,7 @@ use workspace_local::{LocalWorkspaceConfig, LocalWorkspaceManager};
 use workspace_postgres::PgWorkspaceMetadataRepository;
 
 /// Ordered database migration expected by this application version.
-pub const EXPECTED_DATABASE_MIGRATION: i64 = 10;
+pub const EXPECTED_DATABASE_MIGRATION: i64 = 11;
 
 /// OIDC issuer configuration used for bearer-token authentication.
 pub struct OidcConfig {
@@ -379,6 +382,11 @@ impl HephaestusApp {
                 .map_err(component("release artifact store"))?,
         )
         .map_err(component("release artifact store"))?;
+        let builder_catalog = Arc::new(PgBuilderCatalog::new(pool.clone()));
+        let build_root_resolver = Arc::new(CatalogBuilderImageResolver::new(
+            builder_catalog,
+            config.root_images.clone(),
+        ));
         let build_executor = Arc::new(
             BuildExecutor::initialize(
                 Arc::new(PgBuildRepository::new(pool.clone())),
@@ -393,7 +401,8 @@ impl HephaestusApp {
                     timeout: config.build_timeout,
                 },
             )
-            .map_err(component("isolated build executor"))?,
+            .map_err(component("isolated build executor"))?
+            .with_root_image_resolver(build_root_resolver),
         );
         let internal_platform_policy = release_domain::RuntimePolicy {
             vcpus: config.runtime_policy.max_vcpus,
@@ -546,6 +555,7 @@ impl HephaestusApp {
         let rpc = rpc::service(
             rpc::ApplicationDependencies::new(
                 self.pool.clone(),
+                Arc::clone(&self.forge),
                 Arc::new(event_postgres::PostgresMutationReceiptReader::new(
                     self.pool.clone(),
                 )),

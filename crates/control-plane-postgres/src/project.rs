@@ -30,6 +30,7 @@ pub enum ProjectError {
 pub struct ProjectRow {
     pub id: Uuid,
     pub name: String,
+    pub description: String,
     pub organization_id: Uuid,
     pub organization_name: String,
 }
@@ -103,7 +104,9 @@ impl ProjectApplication {
         let mut tx = self.transaction(identity).await?;
         require_permission(&mut tx, "can_read", "project", project_id).await?;
         let row = sqlx::query_as(
-            "SELECT project.id, project.name, organization.id AS organization_id,
+            "SELECT project.id, project.name,
+                    COALESCE(project.settings->>'description', '') AS description,
+                    organization.id AS organization_id,
                     organization.name AS organization_name
              FROM projects project
              JOIN organizations organization ON organization.id = project.organization_id

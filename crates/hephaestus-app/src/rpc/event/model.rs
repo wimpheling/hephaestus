@@ -20,7 +20,7 @@ use rpc_proto::messages::hephaestus::{
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-pub(super) enum Delivery {
+pub(crate) enum Delivery {
     Barrier(ScopeSnapshotBarrier),
     Event(ProductEvent),
     Gap(RetentionGap),

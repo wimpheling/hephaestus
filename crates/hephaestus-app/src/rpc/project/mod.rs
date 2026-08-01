@@ -1,5 +1,6 @@
 //! Project RPC composition and shared conversions.
 
+mod create_project;
 mod get_project;
 mod list_importable_release_agents;
 mod list_project_instances;
@@ -7,17 +8,20 @@ mod list_project_repositories;
 
 use super::{MediatorAuthenticator, RpcError};
 use crate::application::project::{Page, ProjectApplication, ProjectError};
+use crate::rpc::MutationReceipts;
 use connectrpc::{RequestContext, Router, ServiceRequest, ServiceResult};
 use control_plane_postgres::ControlPlanePool as PgPool;
+use forge_postgres::PgForgeRepository;
+use forge_service::ForgeRepositoryError;
 use rpc_proto::{
     connect::hephaestus::project::v1::{ProjectService, ProjectServiceExt},
     messages::hephaestus::{
         common::v1::{OpaqueId, PageRequest},
         project::v1::{
-            GetProjectRequest, GetProjectResponse, ListImportableReleaseAgentsRequest,
-            ListImportableReleaseAgentsResponse, ListProjectInstancesRequest,
-            ListProjectInstancesResponse, ListProjectRepositoriesRequest,
-            ListProjectRepositoriesResponse,
+            CreateProjectRequest, CreateProjectResponse, GetProjectRequest, GetProjectResponse,
+            ListImportableReleaseAgentsRequest, ListImportableReleaseAgentsResponse,
+            ListProjectInstancesRequest, ListProjectInstancesResponse,
+            ListProjectRepositoriesRequest, ListProjectRepositoriesResponse,
         },
     },
 };
@@ -29,28 +33,51 @@ const MAX_PAGE_SIZE: u32 = 200;
 
 pub struct ProjectRpc {
     application: ProjectApplication,
+    forge: std::sync::Arc<PgForgeRepository>,
     authenticator: MediatorAuthenticator,
+    receipts: MutationReceipts,
 }
 
 impl ProjectRpc {
-    const fn new(pool: PgPool, authenticator: MediatorAuthenticator) -> Self {
+    const fn new(
+        pool: PgPool,
+        forge: std::sync::Arc<PgForgeRepository>,
+        authenticator: MediatorAuthenticator,
+        receipts: MutationReceipts,
+    ) -> Self {
         Self {
             application: ProjectApplication::new(pool),
+            forge,
             authenticator,
+            receipts,
         }
     }
 }
 
 /// Registers the generated project service.
-pub fn register(router: Router, pool: PgPool, authenticator: MediatorAuthenticator) -> Router {
+pub fn register(
+    router: Router,
+    pool: PgPool,
+    forge: std::sync::Arc<PgForgeRepository>,
+    authenticator: MediatorAuthenticator,
+    receipts: MutationReceipts,
+) -> Router {
     ProjectServiceExt::register(
-        std::sync::Arc::new(ProjectRpc::new(pool, authenticator)),
+        std::sync::Arc::new(ProjectRpc::new(pool, forge, authenticator, receipts)),
         router,
     )
 }
 
 #[allow(refining_impl_trait)]
 impl ProjectService for ProjectRpc {
+    async fn create_project(
+        &self,
+        ctx: RequestContext,
+        request: ServiceRequest<'_, CreateProjectRequest>,
+    ) -> ServiceResult<CreateProjectResponse> {
+        create_project::handle(self, ctx, request).await
+    }
+
     async fn get_project(
         &self,
         ctx: RequestContext,
@@ -81,6 +108,25 @@ impl ProjectService for ProjectRpc {
         request: ServiceRequest<'_, ListImportableReleaseAgentsRequest>,
     ) -> ServiceResult<ListImportableReleaseAgentsResponse> {
         list_importable_release_agents::handle(self, ctx, request).await
+    }
+}
+
+fn map_forge_error(error: &ForgeRepositoryError) -> RpcError {
+    match error {
+        ForgeRepositoryError::AuthorizationDenied => RpcError::PermissionDenied,
+        ForgeRepositoryError::AuthorizationUnavailable
+        | ForgeRepositoryError::GitStorage(_)
+        | ForgeRepositoryError::GitInspection(_)
+        | ForgeRepositoryError::Storage(_) => RpcError::Unavailable,
+        ForgeRepositoryError::InvalidMetadata(_) => RpcError::InvalidArgument,
+        ForgeRepositoryError::InvalidStoredData(_) | ForgeRepositoryError::Serialization(_) => {
+            tracing::error!(error = %error, "forge project creation returned invalid data");
+            RpcError::Internal
+        }
+        _ => {
+            tracing::error!(error = %error, "forge project creation failed");
+            RpcError::Internal
+        }
     }
 }
 
@@ -142,7 +188,9 @@ fn map_error(error: ProjectError) -> RpcError {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_PAGE_SIZE, parse_page};
+    use super::{MAX_PAGE_SIZE, map_forge_error, parse_page};
+    use crate::rpc::RpcError;
+    use forge_service::ForgeRepositoryError;
     use rpc_proto::messages::hephaestus::common::v1::PageRequest;
 
     #[test]
@@ -161,6 +209,18 @@ mod tests {
                 ..Default::default()
             }))
             .is_err()
+        );
+    }
+
+    #[test]
+    fn project_creation_preserves_authorization_and_validation_categories() {
+        assert_eq!(
+            map_forge_error(&ForgeRepositoryError::AuthorizationDenied),
+            RpcError::PermissionDenied
+        );
+        assert_eq!(
+            map_forge_error(&ForgeRepositoryError::InvalidMetadata("invalid name")),
+            RpcError::InvalidArgument
         );
     }
 }

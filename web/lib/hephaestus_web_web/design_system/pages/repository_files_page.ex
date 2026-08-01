@@ -23,7 +23,11 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.RepositoryFilesPage do
       organization_destination={@model.destinations[:organization]}
       project_destination={@model.destinations[:project]}
     >
-      <.repository_browser id="repository-files">
+      <.empty_repository_push
+        :if={@model.branches_empty?}
+        model={@model}
+      />
+      <.repository_browser :if={!@model.branches_empty?} id="repository-files">
         <:navigation>
           <.frame variant={:branch_toolbar}>
             <.form_container
@@ -81,6 +85,78 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.RepositoryFilesPage do
     </.repository_shell>
     """
   end
+
+  defp empty_repository_push(assigns) do
+    ~H"""
+    <.frame as="section" id="repository-empty-push" variant={:summary_body}>
+      <.page_heading
+        eyebrow="Empty repository"
+        title="Push your first commit"
+        description="This repository has no branches yet. Add an agent.toml at the repository root, then push the default branch to start the validated build journey."
+      />
+
+      <.frame as="section" id="repository-remote" variant={:panel}>
+        <.text as="strong">Git remote</.text>
+        <.text as="small" variant={:muted}>
+          This URL contains only the repository identity. It never contains a password or bearer token.
+        </.text>
+        <.text as="code" variant={:mono}>
+          {Map.get(@model, :remote_url) || "Remote URL unavailable"}
+        </.text>
+      </.frame>
+
+      <.frame as="section" id="repository-push-instructions" variant={:panel}>
+        <.text as="strong">First push</.text>
+        <.text as="small" variant={:muted}>
+          Use a short-lived OIDC bearer token through your approved Git HTTP wrapper. Keep the token in
+          HEPHAESTUS_GIT_TOKEN; never put it in the remote URL or commit it to the repository.
+        </.text>
+        <.text as="pre" variant={:mono}>{push_commands(@model)}</.text>
+      </.frame>
+
+      <.frame as="section" id="agent-toml-guidance" variant={:panel}>
+        <.text as="strong">agent.toml guidance</.text>
+        <.text as="small" variant={:muted}>
+          Place this file at the repository root. The server parses and validates the exact pushed commit;
+          it must describe the version-2 build and runtime contract before an agent run can be requested.
+        </.text>
+        <.text as="pre" variant={:mono}>{agent_toml_guidance()}</.text>
+      </.frame>
+    </.frame>
+    """
+  end
+
+  defp push_commands(model) do
+    branch = Map.get(model, :default_branch) || friendly_ref(model.repository["default_branch"])
+    remote = Map.get(model, :remote_url) || "<remote-url>"
+
+    """
+    git init -b #{branch}
+    git remote add origin #{remote}
+    git add agent.toml
+    git commit -m "Add agent configuration"
+    git -c http.extraHeader="Authorization: Bearer ${HEPHAESTUS_GIT_TOKEN}" push -u origin #{branch}
+    """
+    |> String.trim()
+  end
+
+  defp agent_toml_guidance do
+    """
+    version = 2
+
+    [agent]
+    name = "your-agent"
+    key = "your-agent"
+
+    [build]
+    # Declare the isolated build command, pinned root image, resources,
+    # network policy, artifacts, and push-triggered refs here.
+    """
+    |> String.trim()
+  end
+
+  defp friendly_ref("refs/heads/" <> branch), do: branch
+  defp friendly_ref(branch), do: branch
 
   defp decorate_tree(node, %{repository: nil}), do: node
 

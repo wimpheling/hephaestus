@@ -15,6 +15,20 @@ defmodule HephaestusWeb.RPC.Client do
 
   alias Hephaestus.Identity.V1.{IdentityService, ResolveIdentityRequest}
 
+  alias Hephaestus.Builder.V1.{
+    BuilderCatalogService,
+    GetBuilderImageRequest,
+    ListBuilderImagesRequest,
+    ValidateAgentConfigRequest
+  }
+
+  alias Hephaestus.Build.V1.{
+    BuildService,
+    GetBuildRequest,
+    ListBuildsRequest,
+    RequestBuildRequest
+  }
+
   alias Hephaestus.Instance.V1.{
     AgentInstanceService,
     BindSecretRequest,
@@ -40,6 +54,7 @@ defmodule HephaestusWeb.RPC.Client do
   }
 
   alias Hephaestus.Project.V1.{
+    CreateProjectRequest,
     GetProjectRequest,
     ListImportableReleaseAgentsRequest,
     ListProjectInstancesRequest,
@@ -47,9 +62,16 @@ defmodule HephaestusWeb.RPC.Client do
     ProjectService
   }
 
-  alias Hephaestus.Release.V1.{GetReleaseRequest, ListRepositoryReleasesRequest, ReleaseService}
+  alias Hephaestus.Release.V1.{
+    GetReleaseRequest,
+    ListRepositoryReleasesRequest,
+    PublishReleaseRequest,
+    ReleaseService,
+    SetDraftVersionRequest
+  }
 
   alias Hephaestus.Repository.V1.{
+    CreateRepositoryRequest,
     GetRepositoryRequest,
     ListRepositoryInstancesRequest,
     RepositoryService
@@ -199,6 +221,50 @@ defmodule HephaestusWeb.RPC.Client do
         :project
       )
 
+  def list_builder_images(identity),
+    do:
+      unary_projected(
+        identity,
+        "/hephaestus.builder.v1.BuilderCatalogService/ListBuilderImages",
+        %ListBuilderImagesRequest{},
+        &BuilderCatalogService.Stub.list_builder_images/3,
+        nil,
+        maximum_response_bytes: 1_048_576
+      )
+
+  def get_builder_image(identity, builder_image_id),
+    do:
+      unary_projected(
+        identity,
+        "/hephaestus.builder.v1.BuilderCatalogService/GetBuilderImage",
+        %GetBuilderImageRequest{builder_image_id: id(builder_image_id)},
+        &BuilderCatalogService.Stub.get_builder_image/3,
+        :builder_image,
+        maximum_response_bytes: 65_536
+      )
+
+  def validate_agent_config(identity, agent_toml) when is_binary(agent_toml),
+    do:
+      unary_projected(
+        identity,
+        "/hephaestus.builder.v1.BuilderCatalogService/ValidateAgentConfig",
+        %ValidateAgentConfigRequest{agent_toml: agent_toml},
+        &BuilderCatalogService.Stub.validate_agent_config/3,
+        nil,
+        maximum_request_bytes: 65_536,
+        maximum_response_bytes: 16_384
+      )
+
+  def create_project(identity, organization_id, name, description \\ ""),
+    do:
+      mutation(
+        identity,
+        "/hephaestus.project.v1.ProjectService/CreateProject",
+        CreateProjectRequest,
+        [organization_id: id(organization_id), name: name, description: description],
+        &ProjectService.Stub.create_project/3
+      )
+
   def list_project_repositories(identity, project_id),
     do:
       paged_by_id(
@@ -297,6 +363,72 @@ defmodule HephaestusWeb.RPC.Client do
         :repository
       )
 
+  def create_repository(
+        identity,
+        project_id,
+        name,
+        default_branch,
+        is_public,
+        agent_runs_enabled
+      ),
+      do:
+        mutation(
+          identity,
+          "/hephaestus.repository.v1.RepositoryService/CreateRepository",
+          CreateRepositoryRequest,
+          [
+            project_id: id(project_id),
+            name: name,
+            default_branch: default_branch,
+            is_public: is_public,
+            agent_runs_enabled: agent_runs_enabled
+          ],
+          &RepositoryService.Stub.create_repository/3
+        )
+
+  def list_builds(identity, repository_id),
+    do:
+      paged_by_id(
+        identity,
+        "/hephaestus.build.v1.BuildService/ListBuilds",
+        ListBuildsRequest,
+        :repository_id,
+        repository_id,
+        &BuildService.Stub.list_builds/3,
+        :builds
+      )
+
+  def get_build(identity, build_id),
+    do:
+      unary_projected(
+        identity,
+        "/hephaestus.build.v1.BuildService/GetBuild",
+        %GetBuildRequest{build_id: id(build_id)},
+        &BuildService.Stub.get_build/3,
+        :build
+      )
+
+  def request_build(
+        identity,
+        repository_id,
+        source_commit,
+        build_definition_hash,
+        configuration_hash
+      ),
+      do:
+        mutation(
+          identity,
+          "/hephaestus.build.v1.BuildService/RequestBuild",
+          RequestBuildRequest,
+          [
+            repository_id: id(repository_id),
+            source_commit: source_commit,
+            build_definition_hash: build_definition_hash,
+            configuration_hash: configuration_hash
+          ],
+          &BuildService.Stub.request_build/3
+        )
+
   def list_repository_releases(identity, repository_id),
     do:
       paged_by_id(
@@ -318,6 +450,26 @@ defmodule HephaestusWeb.RPC.Client do
         &ReleaseService.Stub.get_release/3,
         :release,
         maximum_response_bytes: 8_388_608
+      )
+
+  def set_draft_version(identity, release_id, version),
+    do:
+      mutation(
+        identity,
+        "/hephaestus.release.v1.ReleaseService/SetDraftVersion",
+        SetDraftVersionRequest,
+        [release_id: id(release_id), version: version],
+        &ReleaseService.Stub.set_draft_version/3
+      )
+
+  def publish_release(identity, release_id),
+    do:
+      mutation(
+        identity,
+        "/hephaestus.release.v1.ReleaseService/PublishRelease",
+        PublishReleaseRequest,
+        [release_id: id(release_id)],
+        &ReleaseService.Stub.publish_release/3
       )
 
   def list_repository_instances(identity, repository_id),

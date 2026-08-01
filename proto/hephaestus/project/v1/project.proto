@@ -7,6 +7,16 @@ import "hephaestus/common/v1/common.proto";
 import "hephaestus/options/v1/options.proto";
 
 service ProjectService {
+  rpc CreateProject(CreateProjectRequest) returns (CreateProjectResponse) {
+    option (hephaestus.options.v1.authorization) = {
+      permission: "project.create"
+      audience: "/hephaestus.project.v1.ProjectService/CreateProject"
+      actor_source: ACTOR_SOURCE_MEDIATOR_JWT_METADATA
+    };
+    option (hephaestus.options.v1.operation_kind) = OPERATION_KIND_MUTATION;
+    option (hephaestus.options.v1.max_request_bytes) = 8192;
+    option (hephaestus.options.v1.max_response_bytes) = 4096;
+  }
   rpc GetProject(GetProjectRequest) returns (GetProjectResponse) {
     option idempotency_level = NO_SIDE_EFFECTS;
     option (hephaestus.options.v1.authorization) = {
@@ -53,11 +63,23 @@ service ProjectService {
   }
 }
 
+message CreateProjectRequest {
+  hephaestus.common.v1.RequestContext context = 1;
+  hephaestus.common.v1.OpaqueId organization_id = 2;
+  string name = 3;
+  string description = 4;
+}
+message CreateProjectResponse {
+  hephaestus.common.v1.OpaqueId project_id = 1;
+  hephaestus.common.v1.MutationReceipt receipt = 2;
+}
+
 message Project {
   hephaestus.common.v1.OpaqueId id = 1;
   string name = 2;
   hephaestus.common.v1.OpaqueId organization_id = 3;
   string organization_name = 4;
+  string description = 5;
 }
 
 message ProjectRepository {

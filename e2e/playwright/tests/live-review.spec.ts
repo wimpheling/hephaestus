@@ -15,6 +15,147 @@ const oidcUrl = process.env.HEPHAESTUS_OIDC_URL ?? "http://127.0.0.1:5556";
 const secretSentinel = "HEPHAESTUS_BROWSER_SECRET_4d7ccf";
 
 test.describe.serial("release, instance, secret, and live-review product journey", () => {
+  test("creates a repository, pushes agent.toml, and publishes its built release", async ({
+    page
+  }) => {
+    const fixture = await loadFixture();
+    await signIn(page);
+
+    const suffix = Date.now().toString(36);
+    const projectName = `browser-build-${suffix}`;
+    const repositoryName = `release-source-${suffix}`;
+
+    await page.goto(`/organizations/${fixture.organizationId}/projects/new`);
+    await waitForLiveView(page);
+    await page
+      .locator("#create-project-form")
+      .locator('input[name="project[name]"]')
+      .fill(projectName);
+    await page
+      .locator("#create-project-form")
+      .locator('textarea[name="project[description]"]')
+      .fill("Real browser build journey fixture");
+    await page.getByRole("button", {name: "Create project"}).click();
+    await expect(page).toHaveURL(/\/projects\/[0-9a-f-]+$/);
+    const projectId = page.url().split("/").at(-1)!;
+    await waitForLiveView(page);
+
+    await page.getByTestId("create-repository-link").click();
+    await waitForLiveView(page);
+    await page
+      .locator("#create-repository-form")
+      .locator('input[name="repository[name]"]')
+      .fill(repositoryName);
+    await page.getByRole("button", {name: "Create repository"}).click();
+    await expect(page).toHaveURL(/\/repositories\/[0-9a-f-]+$/);
+    const repositoryId = page.url().split("/").at(-1)!;
+
+    const sourceCommit = pushCommit(repositoryId, "build browser release", false, true);
+    const build = await waitForBuild(repositoryId, sourceCommit);
+    const release = await waitForDraftRelease(build.id);
+    writeJourneyEvidence({
+      organizationId: fixture.organizationId,
+      projectId,
+      repositoryId,
+      buildId: build.id,
+      releaseId: release.id,
+      releaseAgentId: release.release_agent_id,
+      sourceCommit
+    });
+
+    await page.goto(`/repositories/${repositoryId}/builds/${build.id}`);
+    await waitForLiveView(page);
+    await expect(page.getByText("Agent release build", {exact: true})).toBeVisible();
+    await expect(page.locator("#build-provenance")).toContainText(sourceCommit);
+    await expect(page.getByRole("main").getByText("succeeded", {exact: true})).toBeVisible();
+    await captureJourneyScreenshot(page, "01-build-detail.png");
+
+    await page.goto(`/repositories/${repositoryId}/releases/${release.id}`);
+    await waitForLiveView(page);
+    const review = page.locator("#release-draft-review");
+    await expect(review).toBeVisible();
+    await review.locator('input[name="release[version]"]').fill("v1.0.0");
+    await review.getByRole("button", {name: "Save draft version"}).click();
+    page.once("dialog", dialog => dialog.accept());
+    await review.getByRole("button", {name: "Publish release"}).click();
+    await expect(page.locator("#release-draft-review")).toHaveCount(0);
+    await expect(page.getByRole("main").getByText("published", {exact: true})).toBeVisible();
+    await captureJourneyScreenshot(page, "02-published-release.png");
+
+    await page.goto(`/projects/${projectId}/agents`);
+    await waitForLiveView(page);
+    const importForm = page.locator(`#import-agent-${release.release_agent_id}`);
+    await expect(importForm).toBeVisible();
+    await importForm.locator('input[name="import[name]"]').fill("browser-built-agent");
+    await importForm.getByRole("button", {name: "Import as new instance"}).click();
+    await expect(page).toHaveURL(/\/projects\/[0-9a-f-]+\/agents\/[0-9a-f-]+$/);
+    await waitForLiveView(page);
+    await expect(page.getByRole("main")).toContainText("browser-built-agent");
+    await captureJourneyScreenshot(page, "03-imported-agent.png");
+  });
+
+  test("reviews and publishes seeded draft releases through the durable UI workflow", async ({
+    page
+  }) => {
+    const fixture = await loadFixture();
+    await signIn(page);
+
+    for (const releaseId of fixture.releaseIds) {
+      await page.goto(`/repositories/${fixture.repositoryId}/releases/${releaseId}`);
+      await waitForLiveView(page);
+
+      const review = page.locator("#release-draft-review");
+      await expect(review).toBeVisible();
+      const version = review.locator('input[name="release[version]"]');
+      const currentVersion = await version.inputValue();
+      const chosenVersion = currentVersion || "v1.0.0";
+      await version.fill(chosenVersion);
+      await review.getByRole("button", {name: "Save draft version"}).click();
+      await expect(review).toBeVisible();
+
+      page.once("dialog", dialog => dialog.accept());
+      await review.getByRole("button", {name: "Publish release"}).click();
+      await expect(page.locator("#release-draft-review")).toHaveCount(0);
+      await expect(page.locator("#release-page-state")).toHaveCount(0);
+      await expect(page.getByRole("main").getByText("published", {exact: true})).toBeVisible();
+    }
+  });
+
+  test("shows build history, build detail, and published release provenance", async ({
+    page
+  }) => {
+    const fixture = await loadFixture();
+    await signIn(page);
+
+    await page.goto(`/repositories/${fixture.repositoryId}/builds`);
+    await waitForLiveView(page);
+    await expect(page.getByRole("heading", {name: "Build history"})).toBeVisible();
+    await expect(page.locator("#builds article")).toHaveCount(fixture.buildIds.length);
+    await expect(page.locator("#builds")).toContainText("succeeded");
+
+    await page.goto(
+      `/repositories/${fixture.repositoryId}/builds/${fixture.buildIds[0]}`
+    );
+    await waitForLiveView(page);
+    await expect(page.getByText("Agent release build", {exact: true})).toBeVisible();
+    await expect(page.locator("#build-provenance")).toContainText("refs/heads/main");
+    await expect(page.getByRole("main").getByText("succeeded", {exact: true})).toBeVisible();
+    await expect(page.locator("#build-logs")).toContainText("No logs were returned.");
+
+    await page.goto(`/repositories/${fixture.repositoryId}/releases`);
+    await waitForLiveView(page);
+    await expect(page.locator("#releases article")).toHaveCount(fixture.releaseIds.length);
+    await expect(page.locator("#releases")).toContainText("published");
+
+    await page.goto(
+      `/repositories/${fixture.repositoryId}/releases/${fixture.releaseIds[0]}`
+    );
+    await waitForLiveView(page);
+    await expect(page.locator("#release-provenance")).toBeVisible();
+    await expect(page.locator("#release-artifacts article")).toHaveCount(1);
+    await expect(page.locator("#release-agents article")).toHaveCount(1);
+  });
+
   test("ready, empty, form, and error states are accessible", async ({
     page
   }) => {
@@ -278,7 +419,7 @@ async function loadFixture() {
   const releaseClient = new pg.Client({connectionString: databaseUrl});
   await releaseClient.connect();
   const releases = await releaseClient.query(
-    `SELECT release_agent.id
+    `SELECT release.id AS release_id, release_agent.id
      FROM release_agents release_agent
      JOIN releases release ON release.id = release_agent.release_id
      WHERE release.repository_id = $1
@@ -290,8 +431,26 @@ async function loadFixture() {
     organizationId: result.rows[0].organization_id,
     projectId: result.rows[0].project_id,
     repositoryId: result.rows[0].repository_id,
-    releaseAgents: releases.rows.map(row => row.id)
+    releaseIds: releases.rows.map(row => row.release_id),
+    releaseAgents: releases.rows.map(row => row.id),
+    buildIds: (
+      await queryBuilds(result.rows[0].repository_id)
+    ).map(row => row.id)
   };
+}
+
+async function queryBuilds(repositoryId: string) {
+  const client = new pg.Client({connectionString: databaseUrl});
+  await client.connect();
+  const result = await client.query(
+    `SELECT id
+     FROM build_requests
+     WHERE repository_id = $1
+     ORDER BY created_at, id`,
+    [repositoryId]
+  );
+  await client.end();
+  return result.rows as Array<{id: string}>;
 }
 
 async function latestInstanceId(projectId: string) {
@@ -486,7 +645,12 @@ async function latestProposal(repositoryId: string) {
   return result.rows[0];
 }
 
-function pushCommit(repositoryId: string, message: string, clone = false) {
+function pushCommit(
+  repositoryId: string,
+  message: string,
+  clone = false,
+  includeBuild = false
+) {
   const work = mkdtempSync(path.join(tmpdir(), "hephaestus-ui-e2e-"));
   try {
     const token = execFileSync("curl", ["--fail", "--silent", `${oidcUrl}/test/git-token`], {
@@ -512,9 +676,10 @@ function pushCommit(repositoryId: string, message: string, clone = false) {
     writeFileSync(path.join(work, "input.txt"), `${message}\n`);
     mkdirSync(path.join(work, "reports"), {recursive: true});
     writeFileSync(path.join(work, "reports/result.txt"), "waiting for agent\n");
-    writeFileSync(path.join(work, "agent.toml"), agentConfig());
+    writeFileSync(path.join(work, "agent.toml"), agentConfig(includeBuild));
     git(["add", "."], work);
     git(["commit", "-m", message], work);
+    const sourceCommit = git(["rev-parse", "HEAD"], work);
     if (!clone) git(["remote", "add", "origin", remote], work);
     git(
       [
@@ -526,6 +691,7 @@ function pushCommit(repositoryId: string, message: string, clone = false) {
       ],
       work
     );
+    return sourceCommit;
   } finally {
     rmSync(work, {recursive: true, force: true});
   }
@@ -535,7 +701,9 @@ function git(arguments_: string[], cwd = process.cwd()) {
   return execFileSync("git", arguments_, {cwd, encoding: "utf8"}).trim();
 }
 
-function agentConfig() {
+function agentConfig(includeBuild = false) {
+  if (includeBuild) return buildAgentConfig();
+
   return `
 version = 1
 [agent]
@@ -563,4 +731,133 @@ profile = "disabled"
 push = true
 refs = ["refs/heads/main"]
 `.trimStart();
+}
+
+function buildAgentConfig() {
+  return `
+version = 2
+[agent]
+name = "browser-built-agent"
+key = "browser-built-agent"
+[build]
+command = "/bin/sh"
+arguments = ["-c", "mkdir -p /workspace/output/reports && printf 'built browser artifact\\n' > /workspace/output/reports/result.txt"]
+working_directory = "/workspace/source"
+root_image = "fixture-root@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+triggers = ["refs/heads/main"]
+[[build.artifacts]]
+path = "reports/result.txt"
+kind = "file"
+media_type = "text/plain"
+[guest]
+command = "bin/browser-built-agent"
+arguments = []
+working_directory = "bin"
+[resources]
+vcpus = 1
+memory_mib = 128
+[root_image]
+reference = "fixture-root@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+[workspace]
+mount = true
+path = "/workspace/repo"
+read_only = true
+[state_volume]
+enabled = true
+[results]
+declared_files = ["reports/result.txt"]
+[network]
+profile = "disabled"
+[triggers]
+push = true
+refs = ["refs/heads/main"]
+`.trimStart();
+}
+
+async function waitForBuild(repositoryId: string, sourceCommit: string) {
+  await expect
+    .poll(
+      async () => {
+        const client = new pg.Client({connectionString: databaseUrl});
+        await client.connect();
+        const result = await client.query(
+          `SELECT id, state
+           FROM build_requests
+           WHERE repository_id = $1 AND source_commit = $2
+           ORDER BY created_at DESC LIMIT 1`,
+          [repositoryId, sourceCommit]
+        );
+        await client.end();
+        return result.rows[0] ?? null;
+      },
+      {timeout: 90_000, intervals: [250, 500, 1_000, 2_000]}
+    )
+    .toEqual(expect.objectContaining({state: "drafted"}));
+
+  const client = new pg.Client({connectionString: databaseUrl});
+  await client.connect();
+  const result = await client.query(
+    `SELECT id, state
+     FROM build_requests
+     WHERE repository_id = $1 AND source_commit = $2
+     ORDER BY created_at DESC LIMIT 1`,
+    [repositoryId, sourceCommit]
+  );
+  await client.end();
+  return result.rows[0] as {id: string; state: string};
+}
+
+async function waitForDraftRelease(buildId: string) {
+  await expect
+    .poll(
+      async () => {
+        const client = new pg.Client({connectionString: databaseUrl});
+        await client.connect();
+        const result = await client.query(
+          `SELECT release.id, release_agent.id AS release_agent_id, release.state
+           FROM releases release
+           JOIN release_agents release_agent ON release_agent.release_id = release.id
+           WHERE release.build_request_id = $1
+           ORDER BY release.created_at DESC LIMIT 1`,
+          [buildId]
+        );
+        await client.end();
+        return result.rows[0] ?? null;
+      },
+      {timeout: 90_000, intervals: [250, 500, 1_000, 2_000]}
+    )
+    .toEqual(expect.objectContaining({state: "draft"}));
+
+  const client = new pg.Client({connectionString: databaseUrl});
+  await client.connect();
+  const result = await client.query(
+    `SELECT release.id, release_agent.id AS release_agent_id, release.state
+     FROM releases release
+     JOIN release_agents release_agent ON release_agent.release_id = release.id
+     WHERE release.build_request_id = $1
+     ORDER BY release.created_at DESC LIMIT 1`,
+    [buildId]
+  );
+  await client.end();
+  return result.rows[0] as {id: string; release_agent_id: string; state: string};
+}
+
+function writeJourneyEvidence(ids: Record<string, string>) {
+  const directory = process.env.HEPHAESTUS_E2E_EVIDENCE_DIR;
+  if (!directory) return;
+  mkdirSync(directory, {recursive: true});
+  writeFileSync(
+    path.join(directory, "real-build-journey-ids.json"),
+    `${JSON.stringify(ids, null, 2)}\n`
+  );
+}
+
+async function captureJourneyScreenshot(
+  page: import("@playwright/test").Page,
+  filename: string
+) {
+  const directory = process.env.HEPHAESTUS_E2E_EVIDENCE_DIR;
+  if (!directory) return;
+  mkdirSync(directory, {recursive: true});
+  await page.screenshot({path: path.join(directory, filename), fullPage: true});
 }

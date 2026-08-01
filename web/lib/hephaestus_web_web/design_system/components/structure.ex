@@ -187,7 +187,9 @@ defmodule HephaestusWebWeb.DesignSystem.Components.Structure do
       "revoke-secret",
       "rotate-secret",
       "set-attachment",
-      "set-secret-enabled"
+      "set-secret-enabled",
+      "set-draft-version",
+      "publish-release"
     ]
 
   attr :value, :string, default: nil

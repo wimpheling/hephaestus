@@ -39,6 +39,19 @@ defmodule HephaestusWebWeb.ReleaseLive do
   end
 
   @impl true
+  def handle_event("set-draft-version", %{"release" => %{"version" => version}}, socket) do
+    {state, effects} =
+      ReleaseState.reduce(socket.assigns.page_state, {:set_draft_version, version})
+
+    {:noreply, socket |> sync_state(state) |> schedule_effects(effects)}
+  end
+
+  def handle_event("publish-release", _params, socket) do
+    {state, effects} = ReleaseState.reduce(socket.assigns.page_state, :publish_release)
+    {:noreply, socket |> sync_state(state) |> schedule_effects(effects)}
+  end
+
+  @impl true
   def handle_info(
         {:page_watch, generation, response},
         %{assigns: %{page_state: %{stream_generation: generation}}} = socket
@@ -112,6 +125,9 @@ defmodule HephaestusWebWeb.ReleaseLive do
         project_destination={@presentation.destinations[:project]}
         repository_releases_destination={@presentation.destinations[:repository_releases]}
         source_destination={@presentation.destinations[:source]}
+        draft_version_form={to_form(@presentation.draft_version, as: :release)}
+        set_draft_version_event={@presentation.set_draft_version_event}
+        publish_event={@presentation.publish_event}
       />
     </Layouts.app>
     """
@@ -125,6 +141,23 @@ defmodule HephaestusWebWeb.ReleaseLive do
         start_async(socket, {:release_effect, generation}, fn ->
           ReleaseState.execute(effect, identity)
         end)
+
+      {:set_draft_version, generation, _release_id, _version} = effect, socket ->
+        identity = socket.assigns.current_identity
+
+        start_async(socket, {:release_effect, generation}, fn ->
+          ReleaseState.execute(effect, identity)
+        end)
+
+      {:publish_release, generation, _release_id} = effect, socket ->
+        identity = socket.assigns.current_identity
+
+        start_async(socket, {:release_effect, generation}, fn ->
+          ReleaseState.execute(effect, identity)
+        end)
+
+      {:flash, kind, message}, socket ->
+        put_flash(socket, kind, message)
 
       :snapshot, socket ->
         PageStream.start_snapshot(socket, ReleaseState)

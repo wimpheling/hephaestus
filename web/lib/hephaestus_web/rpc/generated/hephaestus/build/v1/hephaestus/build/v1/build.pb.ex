@@ -31,6 +31,37 @@ defmodule Hephaestus.Build.V1.Build do
   field(:metrics, 6, repeated: true, type: Hephaestus.Common.V1.RuntimeMetric)
   field(:created_at, 7, type: Google.Protobuf.Timestamp, json_name: "createdAt")
   field(:updated_at, 8, type: Google.Protobuf.Timestamp, json_name: "updatedAt")
+  field(:source_commit, 9, type: :string, json_name: "sourceCommit")
+  field(:source_ref, 10, type: :string, json_name: "sourceRef")
+  field(:build_definition_hash, 11, type: :string, json_name: "buildDefinitionHash")
+  field(:repository_id, 12, type: Hephaestus.Common.V1.OpaqueId, json_name: "repositoryId")
+  field(:release_id, 13, type: Hephaestus.Common.V1.OpaqueId, json_name: "releaseId")
+  field(:release_state, 14, type: :string, json_name: "releaseState")
+  field(:artifact_count, 15, type: :uint32, json_name: "artifactCount")
+end
+
+defmodule Hephaestus.Build.V1.ListBuildsRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.build.v1.ListBuildsRequest",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:repository_id, 1, type: Hephaestus.Common.V1.OpaqueId, json_name: "repositoryId")
+  field(:page, 2, type: Hephaestus.Common.V1.PageRequest)
+end
+
+defmodule Hephaestus.Build.V1.ListBuildsResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.build.v1.ListBuildsResponse",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:builds, 1, repeated: true, type: Hephaestus.Build.V1.Build)
+  field(:page, 2, type: Hephaestus.Common.V1.PageResponse)
 end
 
 defmodule Hephaestus.Build.V1.GetBuildRequest do
@@ -83,10 +114,190 @@ defmodule Hephaestus.Build.V1.RequestBuildResponse do
   field(:receipt, 3, type: Hephaestus.Common.V1.MutationReceipt)
 end
 
+defmodule Hephaestus.Build.V1.RetryBuildRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.build.v1.RetryBuildRequest",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:context, 1, type: Hephaestus.Common.V1.RequestContext)
+  field(:build_id, 2, type: Hephaestus.Common.V1.OpaqueId, json_name: "buildId")
+end
+
+defmodule Hephaestus.Build.V1.RetryBuildResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.build.v1.RetryBuildResponse",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:build_id, 1, type: Hephaestus.Common.V1.OpaqueId, json_name: "buildId")
+  field(:operation, 2, type: Hephaestus.Common.V1.Operation)
+  field(:receipt, 3, type: Hephaestus.Common.V1.MutationReceipt)
+end
+
+defmodule Hephaestus.Build.V1.RebuildForVerificationRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.build.v1.RebuildForVerificationRequest",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:context, 1, type: Hephaestus.Common.V1.RequestContext)
+  field(:build_id, 2, type: Hephaestus.Common.V1.OpaqueId, json_name: "buildId")
+end
+
+defmodule Hephaestus.Build.V1.RebuildForVerificationResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.build.v1.RebuildForVerificationResponse",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:build_id, 1, type: Hephaestus.Common.V1.OpaqueId, json_name: "buildId")
+  field(:operation, 2, type: Hephaestus.Common.V1.Operation)
+  field(:receipt, 3, type: Hephaestus.Common.V1.MutationReceipt)
+end
+
+defmodule Hephaestus.Build.V1.WatchBuildRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.build.v1.WatchBuildRequest",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:build_id, 1, type: Hephaestus.Common.V1.OpaqueId, json_name: "buildId")
+  field(:resume_cursor, 2, type: Hephaestus.Common.V1.Cursor, json_name: "resumeCursor")
+  field(:max_events, 3, type: :uint32, json_name: "maxEvents")
+  field(:max_total_bytes, 4, type: :uint64, json_name: "maxTotalBytes")
+end
+
+defmodule Hephaestus.Build.V1.WatchBuildResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.build.v1.WatchBuildResponse",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  oneof(:item, 0)
+
+  field(:sequence, 1, type: :uint64)
+  field(:committed_cursor, 2, type: Hephaestus.Common.V1.Cursor, json_name: "committedCursor")
+  field(:build, 3, type: Hephaestus.Build.V1.Build, oneof: 0)
+  field(:heartbeat, 4, type: :bool, oneof: 0)
+  field(:terminal, 5, type: :bool, oneof: 0)
+end
+
+defmodule Hephaestus.Build.V1.StreamBuildLogsRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.build.v1.StreamBuildLogsRequest",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:build_id, 1, type: Hephaestus.Common.V1.OpaqueId, json_name: "buildId")
+  field(:resume_cursor, 2, type: Hephaestus.Common.V1.Cursor, json_name: "resumeCursor")
+  field(:max_events, 3, type: :uint32, json_name: "maxEvents")
+  field(:max_total_bytes, 4, type: :uint64, json_name: "maxTotalBytes")
+  field(:max_chunk_bytes, 5, type: :uint64, json_name: "maxChunkBytes")
+end
+
+defmodule Hephaestus.Build.V1.StreamBuildLogsResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.build.v1.StreamBuildLogsResponse",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:sequence, 1, type: :uint64)
+  field(:committed_cursor, 2, type: Hephaestus.Common.V1.Cursor, json_name: "committedCursor")
+  field(:contents, 3, type: :string)
+  field(:heartbeat, 4, type: :bool)
+  field(:end_of_stream, 5, type: :bool, json_name: "endOfStream")
+  field(:truncated, 6, type: :bool)
+end
+
+defmodule Hephaestus.Build.V1.WatchRepositoryBuildsRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.build.v1.WatchRepositoryBuildsRequest",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:repository_id, 1, type: Hephaestus.Common.V1.OpaqueId, json_name: "repositoryId")
+  field(:resume_cursor, 2, type: Hephaestus.Common.V1.Cursor, json_name: "resumeCursor")
+  field(:max_events, 3, type: :uint32, json_name: "maxEvents")
+  field(:max_total_bytes, 4, type: :uint64, json_name: "maxTotalBytes")
+end
+
+defmodule Hephaestus.Build.V1.BuildChange do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.build.v1.BuildChange",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:event_id, 1, type: Hephaestus.Common.V1.OpaqueId, json_name: "eventId")
+  field(:cursor, 2, type: Hephaestus.Common.V1.Cursor)
+  field(:build_id, 3, type: Hephaestus.Common.V1.OpaqueId, json_name: "buildId")
+  field(:repository_id, 4, type: Hephaestus.Common.V1.OpaqueId, json_name: "repositoryId")
+  field(:aggregate_version, 5, type: :uint64, json_name: "aggregateVersion")
+  field(:change, 6, type: Hephaestus.Event.V1.ChangeKind, enum: true)
+  field(:state, 7, type: Hephaestus.Event.V1.LifecycleState, enum: true)
+  field(:occurred_at, 8, type: Google.Protobuf.Timestamp, json_name: "occurredAt")
+end
+
+defmodule Hephaestus.Build.V1.WatchRepositoryBuildsResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.build.v1.WatchRepositoryBuildsResponse",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  oneof(:item, 0)
+
+  field(:sequence, 1, type: :uint64)
+  field(:committed_cursor, 2, type: Hephaestus.Common.V1.Cursor, json_name: "committedCursor")
+
+  field(:snapshot_barrier, 10,
+    type: Hephaestus.Event.V1.ScopeSnapshotBarrier,
+    json_name: "snapshotBarrier",
+    oneof: 0
+  )
+
+  field(:event, 11, type: Hephaestus.Build.V1.BuildChange, oneof: 0)
+
+  field(:retention_gap, 12,
+    type: Hephaestus.Event.V1.RetentionGap,
+    json_name: "retentionGap",
+    oneof: 0
+  )
+
+  field(:access_revoked, 13,
+    type: Hephaestus.Event.V1.AccessRevoked,
+    json_name: "accessRevoked",
+    oneof: 0
+  )
+end
+
 defmodule Hephaestus.Build.V1.BuildService.Service do
   @moduledoc false
 
   use GRPC.Service, name: "hephaestus.build.v1.BuildService", protoc_gen_elixir_version: "0.17.0"
+
+  rpc(:ListBuilds, Hephaestus.Build.V1.ListBuildsRequest, Hephaestus.Build.V1.ListBuildsResponse)
 
   rpc(:GetBuild, Hephaestus.Build.V1.GetBuildRequest, Hephaestus.Build.V1.GetBuildResponse)
 
@@ -94,6 +305,32 @@ defmodule Hephaestus.Build.V1.BuildService.Service do
     :RequestBuild,
     Hephaestus.Build.V1.RequestBuildRequest,
     Hephaestus.Build.V1.RequestBuildResponse
+  )
+
+  rpc(:RetryBuild, Hephaestus.Build.V1.RetryBuildRequest, Hephaestus.Build.V1.RetryBuildResponse)
+
+  rpc(
+    :RebuildForVerification,
+    Hephaestus.Build.V1.RebuildForVerificationRequest,
+    Hephaestus.Build.V1.RebuildForVerificationResponse
+  )
+
+  rpc(
+    :WatchBuild,
+    Hephaestus.Build.V1.WatchBuildRequest,
+    stream(Hephaestus.Build.V1.WatchBuildResponse)
+  )
+
+  rpc(
+    :WatchRepositoryBuilds,
+    Hephaestus.Build.V1.WatchRepositoryBuildsRequest,
+    stream(Hephaestus.Build.V1.WatchRepositoryBuildsResponse)
+  )
+
+  rpc(
+    :StreamBuildLogs,
+    Hephaestus.Build.V1.StreamBuildLogsRequest,
+    stream(Hephaestus.Build.V1.StreamBuildLogsResponse)
   )
 end
 

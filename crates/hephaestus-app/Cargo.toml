@@ -14,6 +14,9 @@ sqlx_test_dependency = true
 
 [dependencies]
 agent-config = { path = "../agent-config" }
+builder-catalog-application = { path = "../builder-catalog-application" }
+builder-catalog-domain = { path = "../builder-catalog-domain" }
+builder-catalog-postgres = { path = "../builder-catalog-postgres" }
 async-nats.workspace = true
 async-trait.workspace = true
 authz-domain = { path = "../authz-domain" }

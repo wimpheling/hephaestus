@@ -4,9 +4,21 @@ package hephaestus.build.v1;
 
 import "google/protobuf/timestamp.proto";
 import "hephaestus/common/v1/common.proto";
+import "hephaestus/event/v1/event.proto";
 import "hephaestus/options/v1/options.proto";
 
 service BuildService {
+  rpc ListBuilds(ListBuildsRequest) returns (ListBuildsResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (hephaestus.options.v1.authorization) = {
+      permission: "build.list"
+      audience: "/hephaestus.build.v1.BuildService/ListBuilds"
+      actor_source: ACTOR_SOURCE_MEDIATOR_JWT_METADATA
+    };
+    option (hephaestus.options.v1.operation_kind) = OPERATION_KIND_QUERY;
+    option (hephaestus.options.v1.max_request_bytes) = 8192;
+    option (hephaestus.options.v1.max_response_bytes) = 4194304;
+  }
   rpc GetBuild(GetBuildRequest) returns (GetBuildResponse) {
     option idempotency_level = NO_SIDE_EFFECTS;
     option (hephaestus.options.v1.authorization) = {
@@ -28,6 +40,56 @@ service BuildService {
     option (hephaestus.options.v1.max_request_bytes) = 65536;
     option (hephaestus.options.v1.max_response_bytes) = 16384;
   }
+  rpc RetryBuild(RetryBuildRequest) returns (RetryBuildResponse) {
+    option (hephaestus.options.v1.authorization) = {
+      permission: "build.retry"
+      audience: "/hephaestus.build.v1.BuildService/RetryBuild"
+      actor_source: ACTOR_SOURCE_MEDIATOR_JWT_METADATA
+    };
+    option (hephaestus.options.v1.operation_kind) = OPERATION_KIND_MUTATION;
+    option (hephaestus.options.v1.max_request_bytes) = 4096;
+    option (hephaestus.options.v1.max_response_bytes) = 16384;
+  }
+  rpc RebuildForVerification(RebuildForVerificationRequest) returns (RebuildForVerificationResponse) {
+    option (hephaestus.options.v1.authorization) = {
+      permission: "build.verify"
+      audience: "/hephaestus.build.v1.BuildService/RebuildForVerification"
+      actor_source: ACTOR_SOURCE_MEDIATOR_JWT_METADATA
+    };
+    option (hephaestus.options.v1.operation_kind) = OPERATION_KIND_MUTATION;
+    option (hephaestus.options.v1.max_request_bytes) = 4096;
+    option (hephaestus.options.v1.max_response_bytes) = 16384;
+  }
+  rpc WatchBuild(WatchBuildRequest) returns (stream WatchBuildResponse) {
+    option (hephaestus.options.v1.authorization) = {
+      permission: "build.watch"
+      audience: "/hephaestus.build.v1.BuildService/WatchBuild"
+      actor_source: ACTOR_SOURCE_MEDIATOR_JWT_METADATA
+    };
+    option (hephaestus.options.v1.operation_kind) = OPERATION_KIND_SERVER_STREAM;
+    option (hephaestus.options.v1.max_request_bytes) = 8192;
+    option (hephaestus.options.v1.max_response_bytes) = 4194304;
+  }
+  rpc WatchRepositoryBuilds(WatchRepositoryBuildsRequest) returns (stream WatchRepositoryBuildsResponse) {
+    option (hephaestus.options.v1.authorization) = {
+      permission: "build.watch_repository"
+      audience: "/hephaestus.build.v1.BuildService/WatchRepositoryBuilds"
+      actor_source: ACTOR_SOURCE_MEDIATOR_JWT_METADATA
+    };
+    option (hephaestus.options.v1.operation_kind) = OPERATION_KIND_SERVER_STREAM;
+    option (hephaestus.options.v1.max_request_bytes) = 8192;
+    option (hephaestus.options.v1.max_response_bytes) = 4194304;
+  }
+  rpc StreamBuildLogs(StreamBuildLogsRequest) returns (stream StreamBuildLogsResponse) {
+    option (hephaestus.options.v1.authorization) = {
+      permission: "build.logs"
+      audience: "/hephaestus.build.v1.BuildService/StreamBuildLogs"
+      actor_source: ACTOR_SOURCE_MEDIATOR_JWT_METADATA
+    };
+    option (hephaestus.options.v1.operation_kind) = OPERATION_KIND_SERVER_STREAM;
+    option (hephaestus.options.v1.max_request_bytes) = 8192;
+    option (hephaestus.options.v1.max_response_bytes) = 4194304;
+  }
 }
 
 enum BuildState {
@@ -47,6 +109,21 @@ message Build {
   repeated hephaestus.common.v1.RuntimeMetric metrics = 6;
   google.protobuf.Timestamp created_at = 7;
   google.protobuf.Timestamp updated_at = 8;
+  string source_commit = 9;
+  string source_ref = 10;
+  string build_definition_hash = 11;
+  hephaestus.common.v1.OpaqueId repository_id = 12;
+  hephaestus.common.v1.OpaqueId release_id = 13;
+  string release_state = 14;
+  uint32 artifact_count = 15;
+}
+message ListBuildsRequest {
+  hephaestus.common.v1.OpaqueId repository_id = 1;
+  hephaestus.common.v1.PageRequest page = 2;
+}
+message ListBuildsResponse {
+  repeated Build builds = 1;
+  hephaestus.common.v1.PageResponse page = 2;
 }
 message GetBuildRequest {
   hephaestus.common.v1.OpaqueId build_id = 1;
@@ -65,4 +142,79 @@ message RequestBuildResponse {
   hephaestus.common.v1.OpaqueId build_id = 1;
   hephaestus.common.v1.Operation operation = 2;
   hephaestus.common.v1.MutationReceipt receipt = 3;
+}
+message RetryBuildRequest {
+  hephaestus.common.v1.RequestContext context = 1;
+  hephaestus.common.v1.OpaqueId build_id = 2;
+}
+message RetryBuildResponse {
+  hephaestus.common.v1.OpaqueId build_id = 1;
+  hephaestus.common.v1.Operation operation = 2;
+  hephaestus.common.v1.MutationReceipt receipt = 3;
+}
+message RebuildForVerificationRequest {
+  hephaestus.common.v1.RequestContext context = 1;
+  hephaestus.common.v1.OpaqueId build_id = 2;
+}
+message RebuildForVerificationResponse {
+  hephaestus.common.v1.OpaqueId build_id = 1;
+  hephaestus.common.v1.Operation operation = 2;
+  hephaestus.common.v1.MutationReceipt receipt = 3;
+}
+message WatchBuildRequest {
+  hephaestus.common.v1.OpaqueId build_id = 1;
+  hephaestus.common.v1.Cursor resume_cursor = 2;
+  uint32 max_events = 3;
+  uint64 max_total_bytes = 4;
+}
+message WatchBuildResponse {
+  uint64 sequence = 1;
+  hephaestus.common.v1.Cursor committed_cursor = 2;
+  oneof item {
+    Build build = 3;
+    bool heartbeat = 4;
+    bool terminal = 5;
+  }
+}
+message StreamBuildLogsRequest {
+  hephaestus.common.v1.OpaqueId build_id = 1;
+  hephaestus.common.v1.Cursor resume_cursor = 2;
+  uint32 max_events = 3;
+  uint64 max_total_bytes = 4;
+  uint64 max_chunk_bytes = 5;
+}
+message StreamBuildLogsResponse {
+  uint64 sequence = 1;
+  hephaestus.common.v1.Cursor committed_cursor = 2;
+  string contents = 3;
+  bool heartbeat = 4;
+  bool end_of_stream = 5;
+  bool truncated = 6;
+}
+
+message WatchRepositoryBuildsRequest {
+  hephaestus.common.v1.OpaqueId repository_id = 1;
+  hephaestus.common.v1.Cursor resume_cursor = 2;
+  uint32 max_events = 3;
+  uint64 max_total_bytes = 4;
+}
+message BuildChange {
+  hephaestus.common.v1.OpaqueId event_id = 1;
+  hephaestus.common.v1.Cursor cursor = 2;
+  hephaestus.common.v1.OpaqueId build_id = 3;
+  hephaestus.common.v1.OpaqueId repository_id = 4;
+  uint64 aggregate_version = 5;
+  hephaestus.event.v1.ChangeKind change = 6;
+  hephaestus.event.v1.LifecycleState state = 7;
+  google.protobuf.Timestamp occurred_at = 8;
+}
+message WatchRepositoryBuildsResponse {
+  uint64 sequence = 1;
+  hephaestus.common.v1.Cursor committed_cursor = 2;
+  oneof item {
+    hephaestus.event.v1.ScopeSnapshotBarrier snapshot_barrier = 10;
+    BuildChange event = 11;
+    hephaestus.event.v1.RetentionGap retention_gap = 12;
+    hephaestus.event.v1.AccessRevoked access_revoked = 13;
+  }
 }

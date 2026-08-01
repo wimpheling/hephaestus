@@ -81,6 +81,52 @@ defmodule HephaestusWebWeb.ReleaseState do
 
   def reduce(%__MODULE__{} = state, :watch_ended), do: ProductEventReducer.reconnect(state)
 
+  def reduce(%__MODULE__{} = state, {:set_draft_version, version}) do
+    generation = state.stream_generation + 1
+
+    {%{
+       state
+       | status: :submitting,
+         error: nil,
+         stream_generation: generation,
+         form: Map.put(state.form, :draft_version, %{"version" => version})
+     }, [{:set_draft_version, generation, state.data.release_id, version}]}
+  end
+
+  def reduce(%__MODULE__{} = state, :publish_release) do
+    generation = state.stream_generation + 1
+
+    {%{state | status: :submitting, error: nil, stream_generation: generation},
+     [{:publish_release, generation, state.data.release_id}]}
+  end
+
+  def reduce(%__MODULE__{stream_generation: generation} = state, {
+        :mutation,
+        generation,
+        {:ok, %{"release" => release}}
+      }) do
+    data =
+      Map.merge(state.data, %{
+        release: release,
+        artifacts: release["artifacts"] || [],
+        agents: release["agents"] || []
+      })
+
+    %{state | status: :ready, data: data, error: nil}
+    |> ProductEventReducer.snapshot_complete()
+  end
+
+  def reduce(%__MODULE__{stream_generation: generation} = state, {
+        :mutation,
+        generation,
+        {:error, _reason}
+      }) do
+    {%{state | status: :error, error: "The release change could not be saved."},
+     [{:flash, :error, "The release change could not be saved."}]}
+  end
+
+  def reduce(%__MODULE__{} = state, {:mutation, _stale_generation, _result}), do: {state, []}
+
   def reduce(%__MODULE__{stream_generation: generation} = state, {
         :loaded,
         generation,
@@ -118,6 +164,14 @@ defmodule HephaestusWebWeb.ReleaseState do
     {:loaded, generation, Client.get_release(identity, release_id)}
   end
 
+  def execute({:set_draft_version, generation, release_id, version}, identity) do
+    {:mutation, generation, Client.set_draft_version(identity, release_id, version)}
+  end
+
+  def execute({:publish_release, generation, release_id}, identity) do
+    {:mutation, generation, Client.publish_release(identity, release_id)}
+  end
+
   def execute(state, {:load, identity, generation}) do
     {:loaded, generation, Client.get_release(identity, state.data.release_id)}
   end
@@ -127,11 +181,17 @@ defmodule HephaestusWebWeb.ReleaseState do
   def present(%__MODULE__{} = state) do
     release = state.data[:release]
 
+    draft_version =
+      state.form[:draft_version] || %{"version" => (release && release["version"]) || ""}
+
     %{
       state: page_state(state.status),
       release: release,
       artifacts: state.data[:artifacts] || [],
       agents: state.data[:agents] || [],
+      draft_version: draft_version,
+      set_draft_version_event: "set-draft-version",
+      publish_event: "publish-release",
       error: state.error,
       destinations: release_destinations(release)
     }

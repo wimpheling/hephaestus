@@ -1,0 +1,26 @@
+[package]
+name = "builder-catalog-postgres"
+description = "PostgreSQL adapter for the platform-owned builder image catalog"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[package.metadata.hephaestus]
+layer = "adapter"
+context = "build"
+postgres_adapter = true
+database_context = "build"
+
+[dependencies]
+async-trait.workspace = true
+builder-catalog-application = { path = "../builder-catalog-application" }
+builder-catalog-domain = { path = "../builder-catalog-domain" }
+serde_json.workspace = true
+sqlx.workspace = true
+uuid.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }

@@ -192,7 +192,7 @@ async fn seed_release_catalog(
                 configuration_hash, manifest_hash, state,
                 publication_actor_id, published_at)
                VALUES ($1, $2, $3, $4, 'refs/heads/main', $5, $6, $7,
-                       $8, $9, 'published', $10, now())",
+               $8, $9, 'draft', NULL, NULL)",
         )
         .bind(release_id)
         .bind(repository_id)
@@ -253,7 +253,11 @@ async fn seed_release_catalog(
                     Vec::<String>::new()
                 },
                 "timeout_seconds": 30,
-                "resources": {"vcpus": 1, "memory_mib": 128}
+                "resources": {
+                    "vcpus": 1,
+                    "memory_mib": 128,
+                    "network": "broker_only"
+                }
             }))
         };
         sqlx::query(

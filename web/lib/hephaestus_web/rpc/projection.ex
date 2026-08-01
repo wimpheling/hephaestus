@@ -48,6 +48,9 @@ defmodule HephaestusWeb.RPC.Projection do
     AGGREGATE_TYPE_
     CHANGE_KIND_
     LIFECYCLE_STATE_
+    PREPARATION_STATE_
+    AVAILABILITY_STATE_
+    DEPENDENCY_POLICY_
   )
 
   @spec to_value(term()) :: term()

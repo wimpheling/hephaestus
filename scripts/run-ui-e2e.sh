@@ -169,7 +169,8 @@ mkdir -p \
     "${fixture_root}/artifacts" \
     "${fixture_root}/runtime" \
     "${fixture_root}/root-image" \
-    "${fixture_root}/secret-keys"
+    "${fixture_root}/secret-keys" \
+    "${fixture_root}/screenshots"
 chmod 0700 "${fixture_root}/secret-keys" "${secret_runtime_root}"
 umask 077
 head -c 32 /dev/zero | tr '\0' '\127' >"${fixture_root}/secret-keys/e2e-v1"
@@ -214,7 +215,7 @@ wait_for_url "${oidc_url}/.well-known/openid-configuration" \
     "${fixture_root}/oidc.log"
 
 cd "${repo_root}"
-cargo build -p hephaestus-app --bins
+cargo build -p hephaestus-app --bins -p bootstrap-postgres --bin hephaestus-e2e-seed
 HEPHAESTUS_DATABASE_URL="${database_url}" \
 HEPHAESTUS_REPOSITORY_ROOT="${fixture_root}/repositories" \
 HEPHAESTUS_ARTIFACT_ROOT="${fixture_root}/artifacts" \
@@ -240,7 +241,7 @@ export HEPHAESTUS_SECRET_KEY_DIRECTORY="${fixture_root}/secret-keys"
 export HEPHAESTUS_SECRET_KEY_REFERENCE="e2e-v1"
 export HEPHAESTUS_RPC_MEDIATOR_SECRET="e2e-rpc-mediator-secret-with-sufficient-entropy"
 export HEPHAESTUS_ROOT_IMAGE_PATH="${fixture_root}/root-image"
-export HEPHAESTUS_ROOT_IMAGE_REFERENCE="fixture-root@sha256:e2e"
+export HEPHAESTUS_ROOT_IMAGE_REFERENCE="fixture-root@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 export HEPHAESTUS_VM_BACKEND="fixture"
 export HEPHAESTUS_HOST_ID="browser-e2e"
 export HEPHAESTUS_MKFS_EXT4="$(command -v mkfs.ext4)"
@@ -283,6 +284,7 @@ HEPHAESTUS_REPOSITORY_ROOT="${fixture_root}/repositories" \
 HEPHAESTUS_GIT_URL="${daemon_url}" \
 HEPHAESTUS_WEB_URL="${web_url}" \
 HEPHAESTUS_OIDC_URL="${oidc_url}" \
+HEPHAESTUS_E2E_EVIDENCE_DIR="${fixture_root}/screenshots" \
     npm test
 
 podman logs "${web_container}" >"${fixture_root}/web.log" 2>&1

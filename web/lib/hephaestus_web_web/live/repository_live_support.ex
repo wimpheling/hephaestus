@@ -15,6 +15,7 @@ defmodule HephaestusWebWeb.RepositoryLiveSupport do
       socket
       |> stream(:commits, [], dom_id: &"commit-#{&1.id}")
       |> stream(:branches, [], dom_id: &"branch-#{tree_id(&1.ref)}")
+      |> stream(:builds, [], dom_id: &"build-#{&1["id"]}")
       |> stream(:releases, [], dom_id: &"release-#{&1["id"]}")
       |> stream(:attached_instances, [], dom_id: &"attachment-#{&1["id"]}")
       |> assign(:page_state, state)
@@ -75,6 +76,9 @@ defmodule HephaestusWebWeb.RepositoryLiveSupport do
       {:load, _generation, _action, _repository_id, _params, _uri} = effect, socket ->
         start_effect(socket, state_module, effect)
 
+      {:request_build, _repository_id, _attributes} = effect, socket ->
+        start_effect(socket, state_module, effect)
+
       :snapshot, socket ->
         PageStream.start_snapshot(socket, state_module)
 
@@ -103,6 +107,7 @@ defmodule HephaestusWebWeb.RepositoryLiveSupport do
     |> assign(:page_title, page_title(presentation))
     |> stream(:commits, presentation.commits, reset: true)
     |> stream(:branches, presentation.branches, reset: true)
+    |> stream(:builds, presentation.builds, reset: true)
     |> stream(:releases, presentation.releases, reset: true)
     |> stream(:attached_instances, presentation.attached_instances, reset: true)
   end
@@ -121,6 +126,7 @@ defmodule HephaestusWebWeb.RepositoryLiveSupport do
   defp tab_name(:files), do: "Files"
   defp tab_name(:commits), do: "Commits"
   defp tab_name(:branches), do: "Branches"
+  defp tab_name(:builds), do: "Builds"
   defp tab_name(:releases), do: "Releases"
   defp tab_name(:agents), do: "Agents"
 

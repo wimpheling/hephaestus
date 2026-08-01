@@ -41,6 +41,27 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.ReleasePageTest do
     assert html =~ ~s(href="/repositories/repository-1/commits?ref=refs%2Fheads%2Fmain")
   end
 
+  test "renders draft review and explicit publication controls" do
+    draft_assigns = assigns()
+
+    html =
+      render_component(
+        &ReleasePage.release/1,
+        draft_assigns
+        |> Map.put(:release, Map.put(draft_assigns.release, "state", "draft"))
+        |> Map.put(
+          :draft_version_form,
+          Phoenix.Component.to_form(%{"version" => ""}, as: :release)
+        )
+        |> Map.put(:set_draft_version_event, "set-draft-version")
+        |> Map.put(:publish_event, "publish-release")
+      )
+
+    assert html =~ "Review draft"
+    assert html =~ "Release version"
+    assert html =~ "Publish release"
+  end
+
   defp assigns do
     %{
       state: :ready,

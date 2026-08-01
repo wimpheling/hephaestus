@@ -76,7 +76,28 @@ impl PgForgeRepository {
         organization_id: OrganizationId,
         name: &str,
     ) -> Result<Project, ForgeRepositoryError> {
+        self.create_project_with_description(identity, organization_id, name, "")
+            .await
+    }
+
+    /// Creates a durable project with an optional human-readable description
+    /// after checking the owning organization.
+    ///
+    /// The description is stored in the existing project settings JSON object
+    /// so this additive metadata does not require a schema migration.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for denial, invalid metadata, or persistence failure.
+    pub async fn create_project_with_description(
+        &self,
+        identity: &AuthenticatedIdentity,
+        organization_id: OrganizationId,
+        name: &str,
+        description: &str,
+    ) -> Result<Project, ForgeRepositoryError> {
         validate_name(name, "project name must contain 1 to 200 characters")?;
+        validate_description(description)?;
         let authorizer = self
             .authorizer
             .as_ref()
@@ -110,12 +131,14 @@ impl PgForgeRepository {
         }
         let id = ProjectId::new();
         let row = sqlx::query_as::<_, ProjectRow>(
-            "INSERT INTO projects (id, organization_id, name) VALUES ($1, $2, $3)
+            "INSERT INTO projects (id, organization_id, name, settings)
+             VALUES ($1, $2, $3, $4)
              RETURNING id, organization_id, name, created_at",
         )
         .bind(id.as_uuid())
         .bind(organization_id.as_uuid())
         .bind(name)
+        .bind(json!({"description": description}))
         .fetch_one(&mut *transaction)
         .await
         .map_err(storage)?;
@@ -135,15 +158,34 @@ impl PgForgeRepository {
         organization_id: OrganizationId,
         name: &str,
     ) -> Result<Project, ForgeRepositoryError> {
+        self.create_project_trusted_with_description(organization_id, name, "")
+            .await
+    }
+
+    /// Creates a project with a description from trusted bootstrap or test
+    /// code.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid metadata or persistence failure.
+    pub async fn create_project_trusted_with_description(
+        &self,
+        organization_id: OrganizationId,
+        name: &str,
+        description: &str,
+    ) -> Result<Project, ForgeRepositoryError> {
         validate_name(name, "project name must contain 1 to 200 characters")?;
+        validate_description(description)?;
         let id = ProjectId::new();
         let row = sqlx::query_as::<_, ProjectRow>(
-            "INSERT INTO projects (id, organization_id, name) VALUES ($1, $2, $3)
+            "INSERT INTO projects (id, organization_id, name, settings)
+             VALUES ($1, $2, $3, $4)
              RETURNING id, organization_id, name, created_at",
         )
         .bind(id.as_uuid())
         .bind(organization_id.as_uuid())
         .bind(name)
+        .bind(json!({"description": description}))
         .fetch_one(&self.pool)
         .await
         .map_err(storage)?;
@@ -581,6 +623,7 @@ impl PgForgeRepository {
                         &item.git_ref,
                         &item.commit,
                         build,
+                        config.agent.key.as_deref(),
                         parsed.normalized_hash.as_ref().ok_or(
                             ForgeRepositoryError::InvalidStoredData(
                                 "valid reusable configuration normalized hash",
@@ -714,6 +757,16 @@ impl PgForgeRepository {
 fn validate_name(name: &str, message: &'static str) -> Result<(), ForgeRepositoryError> {
     if name.trim().is_empty() || name.len() > 200 {
         Err(ForgeRepositoryError::InvalidMetadata(message))
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_description(description: &str) -> Result<(), ForgeRepositoryError> {
+    if description.chars().count() > 2_000 {
+        Err(ForgeRepositoryError::InvalidMetadata(
+            "project description must contain at most 2000 characters",
+        ))
     } else {
         Ok(())
     }
@@ -872,18 +925,32 @@ async fn persist_build_request(
     git_ref: &GitRef,
     commit: &CommitSha,
     build: &agent_config::BuildConfig,
+    agent_key: Option<&str>,
     normalized_hash: &ConfigHash,
     now: OffsetDateTime,
 ) -> Result<BuildRequestId, ForgeRepositoryError> {
     let build_definition =
         serde_json::to_vec(build).map_err(ForgeRepositoryError::Serialization)?;
+    let build_declaration =
+        serde_json::to_value(build).map_err(ForgeRepositoryError::Serialization)?;
+    let build_policy = json!({
+        "resources": build.resources,
+        "network": build.network,
+    });
+    let declared_artifacts =
+        serde_json::to_value(&build.artifacts).map_err(ForgeRepositoryError::Serialization)?;
     let build_definition_hash: [u8; 32] = Sha256::digest(&build_definition).into();
     let requested_id = BuildRequestId::new();
     let stored_id: Uuid = sqlx::query_scalar(
         "INSERT INTO build_requests
          (id, repository_id, source_commit, source_ref, origin_receive_id,
-          build_definition_hash, state, created_by, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, 'queued', $7, $8)
+          build_definition_hash, state, created_by, created_at, build_trigger,
+          agent_key, builder_image_id, builder_image_key, builder_image_reference,
+          configuration_hash, build_declaration, build_policy, declared_artifacts)
+         VALUES ($1, $2, $3, $4, $5, $6, 'queued', $7, $8, 'push', $9,
+                 (SELECT id FROM builder_images WHERE image_reference = $10),
+                 (SELECT key FROM builder_images WHERE image_reference = $10),
+                 $10, decode($11, 'hex'), $12, $13, $14)
          ON CONFLICT (
              repository_id, source_commit, source_ref, build_definition_hash
          ) DO UPDATE SET repository_id = EXCLUDED.repository_id
@@ -897,6 +964,12 @@ async fn persist_build_request(
     .bind(build_definition_hash.as_slice())
     .bind(identity.map(|value| value.user_id.as_uuid()))
     .bind(now)
+    .bind(agent_key)
+    .bind(&build.root_image)
+    .bind(normalized_hash.as_str())
+    .bind(build_declaration)
+    .bind(build_policy)
+    .bind(declared_artifacts)
     .fetch_one(&mut **transaction)
     .await
     .map_err(storage)?;

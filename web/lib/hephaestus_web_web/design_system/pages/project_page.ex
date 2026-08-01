@@ -89,6 +89,13 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.ProjectPage do
     >
       <:actions>
         <.tag>{@item_count} visible</.tag>
+        <.action
+          id="create-repository-link"
+          destination={"/projects/#{@project_id}/repositories/new"}
+          variant={:secondary}
+        >
+          <.glyph name="hero-plus" /> Create repository
+        </.action>
       </:actions>
     </.page_heading>
     <.tab_navigation id="project-tabs" label="Project" active={@active} items={tabs(@project_id)} />

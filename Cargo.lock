@@ -424,6 +424,8 @@ version = "0.1.0"
 dependencies = [
  "agent-config",
  "async-trait",
+ "builder-catalog-application",
+ "builder-catalog-domain",
  "release-artifact-store",
  "release-domain",
  "release-postgres",
@@ -465,6 +467,39 @@ dependencies = [
  "tokio",
  "uuid",
  "vm-trait",
+]
+
+[[package]]
+name = "builder-catalog-application"
+version = "0.1.0"
+dependencies = [
+ "agent-config",
+ "async-trait",
+ "builder-catalog-domain",
+ "thiserror 2.0.19",
+ "tokio",
+]
+
+[[package]]
+name = "builder-catalog-domain"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror 2.0.19",
+ "uuid",
+]
+
+[[package]]
+name = "builder-catalog-postgres"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "builder-catalog-application",
+ "builder-catalog-domain",
+ "serde_json",
+ "sqlx",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -2081,6 +2116,9 @@ dependencies = [
  "buffa-types",
  "build-orchestrator",
  "build-postgres",
+ "builder-catalog-application",
+ "builder-catalog-domain",
+ "builder-catalog-postgres",
  "connectrpc",
  "connectrpc-reflection",
  "control-plane-postgres",
