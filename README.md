@@ -141,6 +141,11 @@ resource. State mutation refuses to run while the foreground supervisor is
 active. The host must satisfy the
 [libkrun backend contract](docs/vm-libkrun.md).
 
+For a disposable parallel state environment, set `HEPHAESTUS_LOCAL_ROOT`,
+`HEPHAESTUS_LOCAL_NAMESPACE`, and (when the default port is occupied)
+`HEPHAESTUS_LOCAL_POSTGRES_PORT`. The namespace isolates Podman containers and
+volumes; the root and port settings isolate filesystem and PostgreSQL state.
+
 On a prepared Fedora host, run the real KVM/libkrun smoke test without root:
 
 ```sh

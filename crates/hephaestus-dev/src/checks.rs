@@ -188,6 +188,8 @@ mod tests {
             local_root: PathBuf::from("/work/hephaestus/.local"),
             runtime_root: PathBuf::from("/tmp/hephaestus-runtime-test"),
             secret_runtime_root: PathBuf::from("/dev/shm/hephaestus-runtime-test"),
+            namespace: String::from("hephaestus-local"),
+            postgres_port: 55432,
         };
         let command = web_mix_command(&context, "mix hephaestus.architecture --family ui");
         assert_eq!(command.get_program(), OsStr::new("podman"));
@@ -221,6 +223,8 @@ mod tests {
             local_root: PathBuf::from("/work/hephaestus/.local"),
             runtime_root: PathBuf::from("/tmp/hephaestus-runtime-test"),
             secret_runtime_root: PathBuf::from("/dev/shm/hephaestus-runtime-test"),
+            namespace: String::from("hephaestus-local"),
+            postgres_port: 55432,
         };
         let command = web_mix_command(&context, UI_CHECKS);
         let script = command

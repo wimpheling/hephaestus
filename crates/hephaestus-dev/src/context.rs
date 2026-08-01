@@ -4,12 +4,6 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub const POSTGRES_CONTAINER: &str = "hephaestus-local-postgres";
-pub const NATS_CONTAINER: &str = "hephaestus-local-nats";
-pub const WEB_CONTAINER: &str = "hephaestus-local-web";
-pub const ROOTFS_CONTAINER: &str = "hephaestus-local-rootfs";
-pub const POSTGRES_VOLUME: &str = "hephaestus-local-postgres-data";
-pub const NATS_VOLUME: &str = "hephaestus-local-nats-data";
 pub const POSTGRES_IMAGE: &str = "docker.io/library/postgres:17-alpine";
 pub const NATS_IMAGE: &str = "docker.io/library/nats:2.11-alpine";
 pub const ELIXIR_IMAGE: &str =
@@ -26,6 +20,8 @@ pub struct DevContext {
     pub local_root: PathBuf,
     pub runtime_root: PathBuf,
     pub secret_runtime_root: PathBuf,
+    pub namespace: String,
+    pub postgres_port: u16,
 }
 
 impl DevContext {
@@ -47,12 +43,60 @@ impl DevContext {
             || PathBuf::from(format!("/dev/shm/hephaestus-secret-runtime-{uid}")),
             PathBuf::from,
         );
+        let namespace = env::var("HEPHAESTUS_LOCAL_NAMESPACE")
+            .unwrap_or_else(|_| String::from("hephaestus-local"));
+        if namespace.is_empty()
+            || !namespace
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        {
+            return Err(DevError::Invalid(
+                "HEPHAESTUS_LOCAL_NAMESPACE must contain lowercase letters, digits, and hyphens"
+                    .into(),
+            ));
+        }
+        let postgres_port = env::var("HEPHAESTUS_LOCAL_POSTGRES_PORT")
+            .map_or(Ok(55432), |value| value.parse::<u16>())
+            .map_err(|_| {
+                DevError::Invalid("HEPHAESTUS_LOCAL_POSTGRES_PORT must be a valid TCP port".into())
+            })?;
+        if postgres_port < 1024 {
+            return Err(DevError::Invalid(
+                "HEPHAESTUS_LOCAL_POSTGRES_PORT must be between 1024 and 65535".into(),
+            ));
+        }
         Ok(Self {
             repository_root,
             local_root,
             runtime_root,
             secret_runtime_root,
+            namespace,
+            postgres_port,
         })
+    }
+
+    pub fn postgres_container(&self) -> String {
+        format!("{}-postgres", self.namespace)
+    }
+
+    pub fn nats_container(&self) -> String {
+        format!("{}-nats", self.namespace)
+    }
+
+    pub fn web_container(&self) -> String {
+        format!("{}-web", self.namespace)
+    }
+
+    pub fn rootfs_container(&self) -> String {
+        format!("{}-rootfs", self.namespace)
+    }
+
+    pub fn postgres_volume(&self) -> String {
+        format!("{}-postgres-data", self.namespace)
+    }
+
+    pub fn nats_volume(&self) -> String {
+        format!("{}-nats-data", self.namespace)
     }
 
     pub fn root_image(&self) -> PathBuf {

@@ -1,6 +1,6 @@
 use crate::{
     cli::{LogArgs, LogComponent},
-    context::{DevContext, NATS_CONTAINER, POSTGRES_CONTAINER, WEB_CONTAINER},
+    context::DevContext,
     process::{DevError, Result, command_exists, output, run, run_quiet},
     state,
 };
@@ -111,10 +111,14 @@ pub fn status(context: &DevContext) -> Result<()> {
             ],
         )?,
     );
-    for container in [POSTGRES_CONTAINER, NATS_CONTAINER, WEB_CONTAINER] {
+    for container in [
+        context.postgres_container(),
+        context.nats_container(),
+        context.web_container(),
+    ] {
         let running = run_quiet(
             "podman",
-            &["inspect", "--format", "{{.State.Running}}", container],
+            &["inspect", "--format", "{{.State.Running}}", &container],
         )?;
         println!(
             "{container:16} {}",

@@ -26,12 +26,22 @@ readonly secret_key_directory="${local_root}/secret-keys"
 readonly secret_key_reference="local-v1"
 readonly internal_command_token="development-internal-command-token"
 
-readonly postgres_container="hephaestus-local-postgres"
-readonly nats_container="hephaestus-local-nats"
-readonly web_container="hephaestus-local-web"
-readonly rootfs_container="hephaestus-local-rootfs"
-readonly postgres_volume="hephaestus-local-postgres-data"
-readonly nats_volume="hephaestus-local-nats-data"
+readonly local_namespace="${HEPHAESTUS_LOCAL_NAMESPACE:-hephaestus-local}"
+if [[ ! "${local_namespace}" =~ ^[a-z0-9-]+$ ]]; then
+    printf 'HEPHAESTUS_LOCAL_NAMESPACE must contain lowercase letters, digits, and hyphens\n' >&2
+    exit 1
+fi
+readonly postgres_container="${local_namespace}-postgres"
+readonly nats_container="${local_namespace}-nats"
+readonly web_container="${local_namespace}-web"
+readonly rootfs_container="${local_namespace}-rootfs"
+readonly postgres_volume="${local_namespace}-postgres-data"
+readonly nats_volume="${local_namespace}-nats-data"
+readonly local_postgres_port="${HEPHAESTUS_LOCAL_POSTGRES_PORT:-55432}"
+if [[ ! "${local_postgres_port}" =~ ^[0-9]+$ ]] || (( local_postgres_port < 1024 || local_postgres_port > 65535 )); then
+    printf 'HEPHAESTUS_LOCAL_POSTGRES_PORT must be between 1024 and 65535\n' >&2
+    exit 1
+fi
 readonly supervisor_pid_file="${local_root}/run-local.pid"
 readonly oidc_pid_file="${local_root}/oidc.pid"
 readonly daemon_pid_file="${local_root}/daemon.pid"
@@ -320,7 +330,7 @@ podman run --detach --rm \
     --name "${postgres_container}" \
     --env POSTGRES_PASSWORD=postgres \
     --env POSTGRES_DB=hephaestus \
-    --publish 127.0.0.1:55432:5432 \
+    --publish "127.0.0.1:${local_postgres_port}:5432" \
     --volume "${postgres_volume}:/var/lib/postgresql/data" \
     "${POSTGRES_IMAGE}" >/dev/null
 podman run --detach --rm \
@@ -352,7 +362,7 @@ wait_for_url \
 cd "${repo_root}"
 cargo build -p hephaestus-app --bins
 
-readonly database_url="postgres://postgres:postgres@127.0.0.1:55432/hephaestus?sslmode=disable"
+readonly database_url="postgres://postgres:postgres@127.0.0.1:${local_postgres_port}/hephaestus?sslmode=disable"
 HEPHAESTUS_DATABASE_URL="${database_url}" \
 HEPHAESTUS_REPOSITORY_ROOT="${local_root}/repositories" \
 HEPHAESTUS_ARTIFACT_ROOT="${local_root}/artifacts" \

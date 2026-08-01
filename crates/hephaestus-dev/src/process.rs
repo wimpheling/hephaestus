@@ -65,13 +65,40 @@ pub fn command_exists(program: &str) -> bool {
 pub fn remove_path(path: &Path) -> Result<()> {
     match path.symlink_metadata() {
         Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
-            std::fs::remove_dir_all(path)?;
+            if let Err(error) = std::fs::remove_dir_all(path) {
+                remove_podman_owned_path(path, error)?;
+            }
         }
-        Ok(_) => std::fs::remove_file(path)?,
+        Ok(_) => {
+            if let Err(error) = std::fs::remove_file(path) {
+                remove_podman_owned_path(path, error)?;
+            }
+        }
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(error) => return Err(error.into()),
     }
     Ok(())
+}
+
+fn remove_podman_owned_path(path: &Path, error: io::Error) -> Result<()> {
+    if error.kind() != io::ErrorKind::PermissionDenied {
+        return Err(error.into());
+    }
+    // Rootfs exports retain container-root ownership; Podman's user namespace
+    // is the narrow cleanup boundary that can remove those files safely.
+    let status = Command::new("podman")
+        .args(["unshare", "find"])
+        .arg(path)
+        .args(["-depth", "-delete"])
+        .status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(DevError::Command {
+            program: "podman".into(),
+            status,
+        })
+    }
 }
 
 pub fn directory_size(path: &Path) -> u64 {

@@ -723,7 +723,7 @@ The migration affects at least:
     local/browser runners, and container mounts found no unsupported target
     path (the documented release and command JSON adapters are intentional).
 
-- [ ] **Final verification — BLOCKED by the three explicitly marked environment/E2E checks below**
+- [ ] **Final verification — BLOCKED by the restart/reconnect follow-up below**
   - [x] Run `buf format` in check mode.
   - [x] Run `buf lint`.
   - [x] Run the configured Buf breaking-change check against the accepted
@@ -746,11 +746,10 @@ The migration affects at least:
     revocation, and restart tests.
   - [x] Run all PostgreSQL adapter, RLS, outbox, idempotency, concurrency, and
     recovery integration tests.
-  - [ ] Run the browser E2E journey with Phoenix denied PostgreSQL, NATS,
-    repository-root, and artifact-root access. **BLOCKED:** the isolated
-    journey reaches the secret form, but the existing
-    `SecretApplication::list_organization_secrets` PostgreSQL adapter stub
-    returns `UNAVAILABLE` (1 failed, 3 skipped).
+  - [x] Run the browser E2E journey with Phoenix denied PostgreSQL, NATS,
+    repository-root, and artifact-root access. The authorized secret metadata
+    adapters now provide bounded organization/project secret, grant, and
+    authority pages; the isolated journey passes all four Playwright tests.
   - [x] Run the real libkrun build/run integration suite through the new API and
     event contracts. Phase 1B run/update persistence and the daemon golden
     build/run path both pass; the latter now aliases the launch-contract
@@ -759,12 +758,14 @@ The migration affects at least:
   - [x] Run the complete secret sentinel/non-disclosure scan.
   - [ ] Stop and restart the complete development environment, reconnect an
     active browser stream from its cursor, and verify no duplicate visible
-    transition or side effect. **BLOCKED:** no isolated restart/reconnect
-    harness exists and the populated local state cannot be destructively
-    reset as part of this run.
-  - [ ] Verify all documented development commands from a clean state.
-    **BLOCKED:** the non-destructive command audit passes, but the clean-state
-    sequence requires resetting the populated local state.
+    transition or side effect. **BLOCKED:** the isolated namespace support is
+    now available, but no restart/reconnect harness exists yet. Follow-up:
+    [verify browser reconnect and restart semantics](verify-browser-reconnect-and-restart.md).
+  - [x] Verify all documented development commands from a clean state. An
+    isolated `HEPHAESTUS_LOCAL_ROOT` and `HEPHAESTUS_LOCAL_NAMESPACE` were
+    cleaned, initialized, listed, diagnosed, and cleaned again successfully;
+    the namespaced PostgreSQL volume/container and rootfs cleanup completed
+    without touching the populated local environment.
 
 ## Completion evidence
 
@@ -787,15 +788,14 @@ Record before moving this task to `tasks/done/`:
 - development-environment command audit: `cargo dev doctor`, `status`,
   `logs`, `state list`, `cache list`, and all subcommand `--help` invocations
   completed successfully. The
-  destructive clean-state sequence and restart/reconnect proof remain
-  deferred because the current local state is populated. The real libkrun
+  restart/reconnect proof remains deferred to
+  [verify browser reconnect and restart semantics](verify-browser-reconnect-and-restart.md)
+  because the current local state is populated. The real libkrun
   Phase 1B and daemon golden suites pass, including result persistence and
   cgroup cleanup. The browser E2E now
-  completes OIDC callback and the denied-access isolation checks, then reaches
-  the secret form; `SecretApplication::list_organization_secrets` is still an
-  intentional PostgreSQL adapter stub returning `UNAVAILABLE`, so the journey
-  remains blocked (1 failed, 3 skipped; artifact:
-  `/tmp/tmp.bpR3RIG9C8/web.log`).
+  completes OIDC callback and the denied-access isolation checks, and all four
+  Playwright tests pass. The clean-state command proof uses a disposable
+  namespace and local root, leaving the populated developer state unchanged.
 - sentinel/non-disclosure results; and
 - any deliberately deferred work split into independently deliverable todo
   tasks with links from this document.

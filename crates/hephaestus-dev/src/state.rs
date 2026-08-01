@@ -2,10 +2,7 @@ use crate::{
     build,
     cache::format_bytes,
     cli::{BuildSelection, STATE_RESOURCES, StateResource, StateSelection},
-    context::{
-        DevContext, FEDORA_IMAGE, NATS_VOLUME, POSTGRES_CONTAINER, POSTGRES_IMAGE, POSTGRES_VOLUME,
-        ROOTFS_CONTAINER,
-    },
+    context::{DevContext, FEDORA_IMAGE, POSTGRES_IMAGE},
     process::{
         DevError, Result, directory_size, path_argument, remove_path, run, run_quiet, run_silent,
     },
@@ -23,8 +20,8 @@ use std::{
 pub fn list(context: &DevContext) -> Result<()> {
     for resource in STATE_RESOURCES {
         match resource {
-            StateResource::Postgresql => print_volume("postgresql", POSTGRES_VOLUME)?,
-            StateResource::Nats => print_volume("nats", NATS_VOLUME)?,
+            StateResource::Postgresql => print_volume("postgresql", &context.postgres_volume())?,
+            StateResource::Nats => print_volume("nats", &context.nats_volume())?,
             StateResource::Runtime => {
                 print_path("VM runtime", &context.runtime_root);
                 print_path("secret runtime", &context.secret_runtime_root);
@@ -42,10 +39,10 @@ pub fn init(context: &DevContext, selection: &StateSelection) -> Result<()> {
     ensure_supervisor_inactive(context)?;
     let fixtures = selection.selected(StateResource::Fixtures);
     if selection.selected(StateResource::Postgresql) || fixtures {
-        create_volume(POSTGRES_VOLUME)?;
+        create_volume(&context.postgres_volume())?;
     }
     if selection.selected(StateResource::Nats) {
-        create_volume(NATS_VOLUME)?;
+        create_volume(&context.nats_volume())?;
     }
     for resource in [
         StateResource::Repositories,
@@ -80,17 +77,17 @@ pub fn clean(context: &DevContext, selection: &StateSelection) -> Result<()> {
     ensure_supervisor_inactive(context)?;
     let fixtures = selection.selected(StateResource::Fixtures);
     if selection.selected(StateResource::Postgresql) || fixtures {
-        let _ignored =
-            run_silent(Command::new("podman").args(["rm", "--force", POSTGRES_CONTAINER]));
-        remove_volume(POSTGRES_VOLUME)?;
-    }
-    if selection.selected(StateResource::Nats) {
         let _ignored = run_silent(Command::new("podman").args([
             "rm",
             "--force",
-            crate::context::NATS_CONTAINER,
+            &context.postgres_container(),
         ]));
-        remove_volume(NATS_VOLUME)?;
+        remove_volume(&context.postgres_volume())?;
+    }
+    if selection.selected(StateResource::Nats) {
+        let _ignored =
+            run_silent(Command::new("podman").args(["rm", "--force", &context.nats_container()]));
+        remove_volume(&context.nats_volume())?;
     }
     for resource in [
         StateResource::Repositories,
@@ -106,7 +103,8 @@ pub fn clean(context: &DevContext, selection: &StateSelection) -> Result<()> {
         remove_path(&resource_path(context, StateResource::SecretKeys))?;
     }
     if selection.selected(StateResource::Rootfs) {
-        let _ignored = run_silent(Command::new("podman").args(["rm", "--force", ROOTFS_CONTAINER]));
+        let _ignored =
+            run_silent(Command::new("podman").args(["rm", "--force", &context.rootfs_container()]));
         remove_path(&resource_path(context, StateResource::Rootfs))?;
     }
     if selection.selected(StateResource::Runtime) {
@@ -302,12 +300,12 @@ fn initialize_rootfs(context: &DevContext) -> Result<()> {
     build::build(context, &BuildSelection::runtime_only())?;
     let root_image = context.root_image();
     if !root_image.join(".hephaestus-image").is_file() {
-        import_rootfs(&root_image)?;
+        import_rootfs(context, &root_image)?;
     }
     build::install_guest_bootstrap(context)
 }
 
-fn import_rootfs(destination: &Path) -> Result<()> {
+fn import_rootfs(context: &DevContext, destination: &Path) -> Result<()> {
     let parent = destination
         .parent()
         .ok_or_else(|| DevError::Invalid("root image has no parent".into()))?;
@@ -316,22 +314,24 @@ fn import_rootfs(destination: &Path) -> Result<()> {
     remove_path(&staging)?;
     fs::create_dir(&staging)?;
     run(Command::new("podman").args(["pull", FEDORA_IMAGE]))?;
-    let _ignored = run_silent(Command::new("podman").args(["rm", "--force", ROOTFS_CONTAINER]));
+    let _ignored =
+        run_silent(Command::new("podman").args(["rm", "--force", &context.rootfs_container()]));
     run_silent(Command::new("podman").args([
         "create",
         "--name",
-        ROOTFS_CONTAINER,
+        &context.rootfs_container(),
         FEDORA_IMAGE,
         "/bin/true",
     ]))?;
-    let import_result = export_container(ROOTFS_CONTAINER, &staging)
+    let import_result = export_container(&context.rootfs_container(), &staging)
         .and_then(|()| configure_guest_identity(&staging))
         .and_then(|()| {
             fs::write(staging.join(".hephaestus-image"), FEDORA_IMAGE)?;
             fs::rename(&staging, destination)?;
             Ok(())
         });
-    let _ignored = run_silent(Command::new("podman").args(["rm", "--force", ROOTFS_CONTAINER]));
+    let _ignored =
+        run_silent(Command::new("podman").args(["rm", "--force", &context.rootfs_container()]));
     if import_result.is_err() {
         let _ignored = remove_path(&staging);
     }
@@ -404,39 +404,41 @@ fn initialize_fixtures(context: &DevContext) -> Result<()> {
 }
 
 fn initialize_database(context: &DevContext, schema_only: bool) -> Result<()> {
-    create_volume(POSTGRES_VOLUME)?;
-    let _ignored = run_silent(Command::new("podman").args(["rm", "--force", POSTGRES_CONTAINER]));
-    let volume = format!("{POSTGRES_VOLUME}:/var/lib/postgresql/data");
+    create_volume(&context.postgres_volume())?;
+    let _ignored =
+        run_silent(Command::new("podman").args(["rm", "--force", &context.postgres_container()]));
+    let volume = format!("{}:/var/lib/postgresql/data", context.postgres_volume());
     run_silent(Command::new("podman").args([
         "run",
         "--detach",
         "--rm",
         "--name",
-        POSTGRES_CONTAINER,
+        &context.postgres_container(),
         "--env",
         "POSTGRES_PASSWORD=postgres",
         "--env",
         "POSTGRES_DB=hephaestus",
         "--publish",
-        "127.0.0.1:55432:5432",
+        &format!("127.0.0.1:{}:5432", context.postgres_port),
         "--volume",
         &volume,
         POSTGRES_IMAGE,
     ]))?;
-    let result = wait_for_postgres()
+    let result = wait_for_postgres(context)
         .and_then(|()| build::build(context, &BuildSelection::daemon_only()))
         .and_then(|()| run_seed(context, schema_only));
-    let _ignored = run_silent(Command::new("podman").args(["rm", "--force", POSTGRES_CONTAINER]));
+    let _ignored =
+        run_silent(Command::new("podman").args(["rm", "--force", &context.postgres_container()]));
     result
 }
 
-fn wait_for_postgres() -> Result<()> {
+fn wait_for_postgres(context: &DevContext) -> Result<()> {
     for _attempt in 0..600 {
         if run_quiet(
             "podman",
             &[
                 "exec",
-                POSTGRES_CONTAINER,
+                &context.postgres_container(),
                 "pg_isready",
                 "--quiet",
                 "--username",
@@ -455,7 +457,10 @@ fn wait_for_postgres() -> Result<()> {
 }
 
 fn run_seed(context: &DevContext, schema_only: bool) -> Result<()> {
-    let database_url = "postgres://postgres:postgres@127.0.0.1:55432/hephaestus?sslmode=disable";
+    let database_url = format!(
+        "postgres://postgres:postgres@127.0.0.1:{}/hephaestus?sslmode=disable",
+        context.postgres_port
+    );
     let mut command = Command::new(
         context
             .repository_root
