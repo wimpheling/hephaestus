@@ -93,12 +93,12 @@ cancellation, after which normal destroy-before-mount-cleanup ordering applies.
 Broker-only sessions are denied live without requiring guest cancellation.
 
 Secret creation, rotation, grants, import acceptance, binding, runtime
-authority issuance, revocation reconciliation, and purge each append a
-versioned `hephaestus.secret.*.v1` outbox record in the same transaction as the
-authoritative state change. The daemon publishes those rows to the
-`HEPHAESTUS_SECRET_EVENTS` JetStream stream and uses the outbox UUID as
-`Nats-Msg-Id`, so retry after acknowledgement loss does not duplicate a
-lifecycle message. The payloads contain stable IDs and bounded policy only.
+authority issuance, revocation reconciliation, and purge update the canonical
+application-event journal in the same transaction as the authoritative state
+change. Typed, authorization-scoped product-event watches deliver those
+changes to the UI. The superseded `hephaestus.secret.*.v1` JSON outbox records
+and the undocumented `HEPHAESTUS_SECRET_EVENTS` stream are retired; secret
+values and reusable credentials are never placed in a transport payload.
 
 ## Raw delivery
 

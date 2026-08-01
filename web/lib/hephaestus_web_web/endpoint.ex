@@ -33,8 +33,6 @@ defmodule HephaestusWebWeb.Endpoint do
     socket "/phoenix/live_reload/socket", Phoenix.LiveReloader.Socket
     plug Phoenix.LiveReloader
     plug Phoenix.CodeReloader
-    # The Rust workspace owns and applies the shared SQLx migrations.
-    # Phoenix must never create a parallel Ecto migration ledger.
   end
 
   plug Phoenix.LiveDashboard.RequestLogger,

@@ -43,6 +43,8 @@ pub enum Command {
         #[command(subcommand)]
         command: CheckCommand,
     },
+    /// Run the complete repository quality gate (generated code, Rust, Phoenix, and UI).
+    Quality,
 }
 
 #[derive(Clone, Copy, Debug, Subcommand)]
@@ -376,5 +378,9 @@ mod tests {
                 command: CheckCommand::Architecture
             })
         ));
+
+        let cli =
+            Cli::try_parse_from(["cargo-dev", "quality"]).expect("valid complete quality command");
+        assert!(matches!(cli.command, Some(Command::Quality)));
     }
 }

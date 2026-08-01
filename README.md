@@ -94,12 +94,10 @@ implementations:
 
 ## Development
 
-The Rust workspace requires Rust 1.85 or newer.
+The Rust workspace requires Rust 1.88 or newer.
 
 ```sh
-cargo check --workspace
-cargo clippy --workspace --all-targets --all-features
-cargo test --workspace
+cargo dev quality
 ```
 
 For a persistent manual-smoke environment using real libkrun/KVM microVMs,
@@ -126,7 +124,15 @@ cargo dev state list
 cargo dev state reinit --postgresql --nats --fixtures
 cargo dev state clean --all
 cargo dev cache clean --rust
+# Run the complete repository quality gate.
+cargo dev quality
 ```
+
+`cargo dev quality` is the single handoff command for repository changes. It
+runs deterministic generated-code and Buf checks, architecture rules, Rust
+formatting/Clippy/tests/docs, Phoenix checks, UI checks, and their focused
+integration tests. Individual `cargo dev check <family>` commands remain useful
+for fast iteration.
 
 State selectors cover PostgreSQL, NATS, repositories, artifacts, agent
 volumes, workspaces, secret keys, rootfs, fixtures, runtime files, and logs.

@@ -21,3 +21,12 @@
   cargo doc --workspace --all-features --no-deps
   ```
 
+For the repository-wide handoff gate, run `cargo dev quality`; it composes
+generated-code/Buf validation, architecture, Rust, Phoenix, UI, and focused
+integration checks in one command.
+
+Common architecture violations have direct remediations: keep SQLx and SQL in
+declared PostgreSQL adapters, convert generated RPC types at the transport
+boundary, publish product events only through committed outboxes, and mark
+request-only plaintext with the protobuf sensitive-field option. The linked
+architecture rule index is the source of truth for diagnostics and exceptions.

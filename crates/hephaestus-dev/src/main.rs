@@ -49,5 +49,6 @@ fn execute() -> process::Result<()> {
             CacheCommand::Clean(selection) => cache::clean(&context, &selection),
         },
         Some(Command::Check { command }) => checks::run(&context, command),
+        Some(Command::Quality) => checks::quality(&context),
     }
 }

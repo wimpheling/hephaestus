@@ -8,6 +8,7 @@ use std::{path::Path, process::Command};
 mod architecture;
 
 const UI_CHECKS: &str = "mix hephaestus.architecture --family ui && mix test test/mix/tasks/hephaestus_architecture_test.exs test/hephaestus_web_web/components test/hephaestus_web_web/design_system";
+const QUALITY_FAMILIES: [&str; 5] = ["protobuf", "architecture", "rust", "phoenix", "ui"];
 
 pub fn run(context: &DevContext, command: CheckCommand) -> Result<()> {
     match command {
@@ -18,6 +19,11 @@ pub fn run(context: &DevContext, command: CheckCommand) -> Result<()> {
         CheckCommand::Ui => ui(context),
         CheckCommand::Full => full(context),
     }
+}
+
+/// Run the complete repository quality gate through one stable command.
+pub fn quality(context: &DevContext) -> Result<()> {
+    full(context)
 }
 
 fn protobuf(context: &DevContext) -> Result<()> {
@@ -100,7 +106,8 @@ fn ui(context: &DevContext) -> Result<()> {
 }
 
 fn full(context: &DevContext) -> Result<()> {
-    println!("enabled check families: architecture, Rust, Phoenix, UI");
+    println!("repository quality gate: generated code, architecture, Rust, Phoenix, UI");
+    println!("quality phases: {}", QUALITY_FAMILIES.join(", "));
     println!("migration-gated check families are reported explicitly by their commands");
     architecture::run(context)?;
     protobuf(context)?;
@@ -149,6 +156,19 @@ fn web_mix_command(context: &DevContext, checks: &str) -> Command {
         ])
         .current_dir(&context.repository_root);
     command
+}
+
+#[cfg(test)]
+mod quality_tests {
+    use super::QUALITY_FAMILIES;
+
+    #[test]
+    fn quality_gate_covers_every_repository_family() {
+        assert_eq!(
+            QUALITY_FAMILIES,
+            ["protobuf", "architecture", "rust", "phoenix", "ui"]
+        );
+    }
 }
 
 fn phase(name: &str) {

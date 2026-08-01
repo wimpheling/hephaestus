@@ -417,12 +417,15 @@ An invariant has one or more of these classifications:
 - **integration**: behavior is proved at an actual process or persistence
   boundary.
 
-The development CLI is the stable entry point. The target commands are
+The development CLI is the stable entry point. The focused commands are
 `cargo dev check architecture`, `cargo dev check protobuf`, `cargo dev check rust`,
-`cargo dev check phoenix`, `cargo dev check ui`, and `cargo dev check full`. The rule index names
-the focused command even while its state is **planned**. `cargo dev check full`
-eventually composes all active checks; it must not silently run planned rules as
-hard failures. Diagnostic form is:
+`cargo dev check phoenix`, and `cargo dev check ui`. `cargo dev quality` is the
+single repository handoff command: it composes generated-code/Buf checks,
+architecture, Rust formatting/Clippy/tests/docs, Phoenix, UI, and focused
+integration tests. `cargo dev check full` remains a compatibility alias. The
+rule index names the focused command even while its state is **planned**; the
+quality gate must not silently run planned rules as hard failures. Diagnostic
+form is:
 
 ```text
 <RULE-ID> <path-or-package>: <problem>; see ARCHITECTURE.md#<rule-anchor>;

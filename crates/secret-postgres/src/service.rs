@@ -164,21 +164,6 @@ impl<K: KeyProvider + Send + Sync> SecretService<K> {
         )
         .await
         .map_err(|_| SecretServiceError::Persistence)?;
-        append_event(
-            &mut tx,
-            command.secret_id.as_uuid(),
-            "hephaestus.secret.created.v1",
-            "secret.created.v1",
-            json!({
-                "schema_version": 1,
-                "secret_id": command.secret_id,
-                "secret_version_id": command.version_id,
-                "owner_type": owner_type.as_str(),
-                "owner_id": owner_id,
-            }),
-        )
-        .await
-        .map_err(|_| SecretServiceError::Persistence)?;
         tx.commit()
             .await
             .map_err(|_| SecretServiceError::Persistence)?;
@@ -309,21 +294,6 @@ impl<K: KeyProvider + Send + Sync> SecretService<K> {
         )
         .await
         .map_err(|_| SecretServiceError::Persistence)?;
-        append_event(
-            &mut tx,
-            command.secret_id.as_uuid(),
-            "hephaestus.secret.rotated.v1",
-            "secret.rotated.v1",
-            json!({
-                "schema_version": 1,
-                "secret_id": command.secret_id,
-                "previous_version_id": command.expected_active_version_id,
-                "active_version_id": command.new_version_id,
-                "sequence": sequence,
-            }),
-        )
-        .await
-        .map_err(|_| SecretServiceError::Persistence)?;
         tx.commit()
             .await
             .map_err(|_| SecretServiceError::Persistence)?;
@@ -444,21 +414,6 @@ impl<K: KeyProvider + Send + Sync> SecretService<K> {
         )
         .await
         .map_err(|_| SecretServiceError::Persistence)?;
-        append_event(
-            &mut tx,
-            command.grant_id.as_uuid(),
-            "hephaestus.secret.granted.v1",
-            "secret.granted.v1",
-            json!({
-                "schema_version": 1,
-                "grant_id": command.grant_id,
-                "secret_id": command.secret_id,
-                "target_kind": target.kind,
-                "target_id": target.id,
-            }),
-        )
-        .await
-        .map_err(|_| SecretServiceError::Persistence)?;
         tx.commit()
             .await
             .map_err(|_| SecretServiceError::Persistence)?;
@@ -559,22 +514,6 @@ impl<K: KeyProvider + Send + Sync> SecretService<K> {
             Some(command.grant_id),
             Some(command.import_id),
             "accepted",
-        )
-        .await
-        .map_err(|_| SecretServiceError::Persistence)?;
-        append_event(
-            &mut tx,
-            command.import_id.as_uuid(),
-            "hephaestus.secret.imported.v1",
-            "secret.imported.v1",
-            json!({
-                "schema_version": 1,
-                "import_id": command.import_id,
-                "grant_id": command.grant_id,
-                "target_kind": target.kind,
-                "target_id": target.id,
-                "alias": command.alias,
-            }),
         )
         .await
         .map_err(|_| SecretServiceError::Persistence)?;
@@ -739,37 +678,6 @@ impl<K: KeyProvider + Send + Sync> SecretService<K> {
             Some(command.grant_id),
             Some(command.import_id),
             "accepted_atomically",
-        )
-        .await
-        .map_err(|_| SecretServiceError::Persistence)?;
-        append_event(
-            &mut tx,
-            command.grant_id.as_uuid(),
-            "hephaestus.secret.granted.v1",
-            "secret.granted.v1",
-            json!({
-                "schema_version": 1,
-                "grant_id": command.grant_id,
-                "secret_id": command.secret_id,
-                "target_kind": target.kind,
-                "target_id": target.id,
-            }),
-        )
-        .await
-        .map_err(|_| SecretServiceError::Persistence)?;
-        append_event(
-            &mut tx,
-            command.import_id.as_uuid(),
-            "hephaestus.secret.imported.v1",
-            "secret.imported.v1",
-            json!({
-                "schema_version": 1,
-                "import_id": command.import_id,
-                "grant_id": command.grant_id,
-                "target_kind": target.kind,
-                "target_id": target.id,
-                "alias": command.alias,
-            }),
         )
         .await
         .map_err(|_| SecretServiceError::Persistence)?;
@@ -1044,24 +952,6 @@ impl<K: KeyProvider + Send + Sync> SecretService<K> {
             Some(SecretGrantId::from_uuid(import.grant_id)),
             Some(command.import_id),
             "revision_activated",
-        )
-        .await
-        .map_err(|_| SecretServiceError::Persistence)?;
-        append_event(
-            &mut tx,
-            command.binding_id.as_uuid(),
-            "hephaestus.secret.bound.v1",
-            "secret.bound.v1",
-            json!({
-                "schema_version": 1,
-                "binding_id": command.binding_id,
-                "import_id": command.import_id,
-                "instance_id": command.instance_id,
-                "instance_revision_id": command.new_revision_id,
-                "slot": command.slot,
-                "delivery_mode": mode_name(command.mode),
-                "runnable": runnable,
-            }),
         )
         .await
         .map_err(|_| SecretServiceError::Persistence)?;
@@ -1460,25 +1350,6 @@ impl<K: KeyProvider + Send + Sync> SecretService<K> {
         )
         .await
         .map_err(|_| SecretServiceError::Persistence)?;
-        append_event(
-            &mut tx,
-            command.session_id.as_uuid(),
-            "hephaestus.secret.runtime_authority_issued.v1",
-            "secret.runtime_authority_issued.v1",
-            json!({
-                "schema_version": 1,
-                "session_id": command.session_id,
-                "run_id": command.run_id,
-                "instance_id": command.instance_id,
-                "instance_revision_id": command.instance_revision_id,
-                "attachment_id": command.attachment_id,
-                "phase": phase_name(command.phase),
-                "lease_count": leases.len(),
-                "expires_at": command.expires_at,
-            }),
-        )
-        .await
-        .map_err(|_| SecretServiceError::Persistence)?;
         tx.commit()
             .await
             .map_err(|_| SecretServiceError::Persistence)?;
@@ -1581,27 +1452,6 @@ impl<K: KeyProvider + Send + Sync> SecretService<K> {
             } else {
                 "later_resolution_disabled"
             },
-        )
-        .await
-        .map_err(|_| SecretServiceError::Persistence)?;
-        append_event(
-            &mut tx,
-            secret_id.as_uuid(),
-            if enabled {
-                "hephaestus.secret.enabled.v1"
-            } else {
-                "hephaestus.secret.disabled.v1"
-            },
-            if enabled {
-                "secret.enabled.v1"
-            } else {
-                "secret.disabled.v1"
-            },
-            json!({
-                "schema_version": 1,
-                "secret_id": secret_id,
-                "status": next,
-            }),
         )
         .await
         .map_err(|_| SecretServiceError::Persistence)?;
@@ -1752,20 +1602,6 @@ impl<K: KeyProvider + Send + Sync> SecretService<K> {
         )
         .await
         .map_err(|_| SecretServiceError::Persistence)?;
-        append_event(
-            &mut tx,
-            secret_id.as_uuid(),
-            "hephaestus.secret.reconcile_revocation.v1",
-            "secret.reconcile_revocation.v1",
-            json!({
-                "schema_version": 1,
-                "secret_id": secret_id,
-                "cancel_affected_raw_guests": true,
-                "stop_broker_leases": true,
-            }),
-        )
-        .await
-        .map_err(|_| SecretServiceError::Persistence)?;
         tx.commit()
             .await
             .map_err(|_| SecretServiceError::Persistence)?;
@@ -1891,15 +1727,6 @@ impl<K: KeyProvider + Send + Sync> SecretService<K> {
             None,
             None,
             "cryptographic_material_purged",
-        )
-        .await
-        .map_err(|_| SecretServiceError::Persistence)?;
-        append_event(
-            &mut tx,
-            secret_id.as_uuid(),
-            "hephaestus.secret.purged.v1",
-            "secret.purged.v1",
-            json!({"schema_version": 1, "secret_id": secret_id}),
         )
         .await
         .map_err(|_| SecretServiceError::Persistence)?;
@@ -3073,30 +2900,6 @@ async fn audit(
     .bind(outcome)
     .bind(identity.request_id.as_uuid())
     .bind(AUTHORIZATION_MODEL_VERSION)
-    .execute(&mut **tx)
-    .await
-    .map_err(|_| SecretServiceError::Persistence)?;
-    Ok(())
-}
-
-async fn append_event(
-    tx: &mut Transaction<'_, Postgres>,
-    aggregate_id: Uuid,
-    subject: &str,
-    event_type: &str,
-    payload: serde_json::Value,
-) -> Result<(), SecretServiceError> {
-    sqlx::query(
-        "INSERT INTO outbox
-           (id, aggregate_type, aggregate_id, subject, event_type,
-            payload, occurred_at)
-           VALUES ($1, 'secret', $2, $3, $4, $5, now())",
-    )
-    .bind(Uuid::new_v4())
-    .bind(aggregate_id)
-    .bind(subject)
-    .bind(event_type)
-    .bind(payload)
     .execute(&mut **tx)
     .await
     .map_err(|_| SecretServiceError::Persistence)?;

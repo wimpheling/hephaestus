@@ -80,6 +80,16 @@ changes the writable workspace, and waits for the persisted
 parent, and imported tree. No receive, outbox, NATS, or orchestrator shortcut
 is exposed by the test harness.
 
+The browser and local-smoke seed command
+(`crates/bootstrap-postgres/src/bin/hephaestus-e2e-seed.rs`) is a deliberately
+trusted bootstrap boundary, not a second application API. It creates the
+project and repository through the forge's `*_trusted` operations, then seeds
+only deterministic fixture relations and release rows that have no public
+interactive equivalent. The resulting release contracts use the same
+validated runtime, mount, result, and secret-slot shapes consumed by the
+production launch path; fixture code must be updated when those contracts
+change.
+
 Normal CI injects a hardware-independent result guest that exercises the same
 provider-neutral VM contract. Setting
 `HEPHAESTUS_APP_LIBKRUN_E2E=1` with the same libkrun host fixture variables

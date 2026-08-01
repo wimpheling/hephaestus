@@ -15,10 +15,6 @@ defmodule HephaestusWebWeb.Router do
     plug HephaestusWebWeb.UserAuth, :require_authenticated
   end
 
-  pipeline :api do
-    plug :accepts, ["json"]
-  end
-
   scope "/", HephaestusWebWeb do
     pipe_through :browser
 
@@ -62,11 +58,6 @@ defmodule HephaestusWebWeb.Router do
       live "/runs/:run_id", RunLive
     end
   end
-
-  # Other scopes may use custom stacks.
-  # scope "/api", HephaestusWebWeb do
-  #   pipe_through :api
-  # end
 
   # Enable LiveDashboard in development
   if Application.compile_env(:hephaestus_web, :dev_routes) do

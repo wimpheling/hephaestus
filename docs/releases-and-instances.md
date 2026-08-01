@@ -154,12 +154,17 @@ rows. A revoked release remains readable through historical foreign keys but
 the VM specification factory rejects it for a new guest.
 
 State changes and their canonical `ProductEvent` rows share one PostgreSQL
-transaction. Build, release, and agent-instance lifecycle changes are delivered
-only through the durable product-event log and its scoped watch API; they are
-not duplicated as informational JSON subjects in the internal outbox.
+transaction. Build, release, and agent-instance lifecycle changes for the UI
+are delivered through the durable product-event log and its scoped watch API;
+that watch transport is not duplicated by an informational JSON UI subject.
 
-The legacy outbox is restricted to actionable internal commands. This workflow
-retains `hephaestus.build.requested.v1`,
+The typed product-event watch is distinct from the durable adapter streams. The
+release-owned outbox still serializes its bounded, non-sensitive lifecycle
+records to `HEPHAESTUS_RELEASE_EVENTS`, while forge, review, build, and run
+outboxes serialize actionable internal command envelopes. These JSON adapter
+contracts are consumed only by their trusted infrastructure boundaries; they
+are not alternate UI event payloads or public request/response types. The
+command workflow retains `hephaestus.build.requested.v1`,
 `hephaestus.instance.run.requested.v1`, and `hephaestus.run.start`. Its publisher
 uses the outbox UUID as `Nats-Msg-Id`, making acknowledgement-loss retries
 deduplicated by JetStream. Command payloads carry only the bounded execution

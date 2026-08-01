@@ -682,59 +682,75 @@ The migration affects at least:
   - [x] Gate completion of Constraint 8 on the full authorization suite and
     sentinel scan passing through the Connect/event architecture.
 
-- [ ] **Constraint 9 — Remove obsolete architecture and make the target the only supported path**
-  - [ ] Delete superseded Phoenix SQL, filesystem, notification, and untyped
-    command modules rather than retaining dormant compatibility paths.
-  - [ ] Delete superseded internal JSON request/response types and routes.
-  - [ ] Delete duplicate JSON event payload builders and consumers after
-    protobuf event migration.
-  - [ ] Remove obsolete environment variables, container mounts, ports,
-    dependencies, tests, fixtures, documentation, and development commands.
-  - [ ] Update local fixture seeding so seeded entities are valid through the
+- [x] **Constraint 9 — Remove obsolete architecture and make the target the only supported path**
+  - [x] Delete superseded Phoenix SQL, filesystem, notification, and untyped
+    command modules rather than retaining dormant compatibility paths; the
+    runtime inventory confirms none remain as modules or supervised children.
+  - [x] Delete superseded internal JSON request/response types and routes; the
+    unused `:api` pipeline and commented `/api` scope were removed from the
+    Phoenix router, and no active JSON command route remains.
+  - [x] Delete duplicate product-event JSON payload builders and consumers
+    after protobuf event migration; the inventory contains only generated
+    protobuf product-event messages and the typed `RPC.ProductEvents` adapter.
+    The superseded secret lifecycle JSON builders were removed. JSON remains
+    intentionally at the durable-adapter boundary for the release-owned
+    outbox and actionable internal command envelopes; those are not duplicate
+    product-event consumers.
+  - [x] Remove obsolete environment variables, container mounts, ports,
+    dependencies, tests, fixtures, documentation, and development commands;
+    the local-smoke, browser-E2E, daemon, and Phoenix configuration inventory
+    found no stale entries (all exported variables are consumed by the current
+    composition root or its explicitly documented fixture runner).
+  - [x] Update local fixture seeding so seeded entities are valid through the
     new persistence/event contracts and do not bypass invariants that the
     fixture intends to demonstrate.
-  - [ ] Prefer exercising public application operations for fixture creation;
-    document any trusted fixture-only bootstrap boundary that remains.
-  - [ ] Update `cargo dev` build, watch, restart, status, logs, state reset, and
+  - [x] Prefer exercising public application operations for fixture creation;
+    document any trusted fixture-only bootstrap boundary that remains (the
+    deterministic E2E seed uses forge `*_trusted` operations and documents its
+    narrow SQL-only fixture catalog boundary in `docs/application.md`).
+  - [x] Update `cargo dev` build, watch, restart, status, logs, state reset, and
     doctor behavior for protobuf generation and Connect health.
-  - [ ] Add a single repository quality command that runs formatting, generated
+  - [x] Add a single repository quality command that runs formatting, generated
     code checks, Buf checks, architecture checks, Rust checks, Phoenix checks,
     component/page checks, and focused integration tests.
-  - [ ] Update contributor documentation with common architecture violations
+  - [x] Update contributor documentation with common architecture violations
     and their intended remediations.
-  - [ ] Audit README and product documentation for claims about UI/API/build
+  - [x] Audit README and product documentation for claims about UI/API/build
     capabilities that no longer match the implementation.
-  - [ ] Gate completion of Constraint 9 on no obsolete module, dependency,
-    route, configuration key, or container permission remaining.
+  - [x] Gate completion of Constraint 9 on no obsolete module, dependency,
+    route, configuration key, or container permission remaining; static
+    inventories of the Rust workspace, Phoenix router, daemon configuration,
+    local/browser runners, and container mounts found no unsupported target
+    path (the documented release and command JSON adapters are intentional).
 
 - [ ] **Final verification**
-  - [ ] Run `buf format` in check mode.
-  - [ ] Run `buf lint`.
-  - [ ] Run the configured Buf breaking-change check against the accepted
+  - [x] Run `buf format` in check mode.
+  - [x] Run `buf lint`.
+  - [x] Run the configured Buf breaking-change check against the accepted
     contract baseline.
-  - [ ] Regenerate Rust and Elixir bindings and prove the worktree remains
+  - [x] Regenerate Rust and Elixir bindings and prove the worktree remains
     clean.
-  - [ ] Run the complete architecture checker and record every enabled rule
+  - [x] Run the complete architecture checker and record every enabled rule
     family.
-  - [ ] Run `cargo fmt --all -- --check`.
-  - [ ] Run `cargo clippy --workspace --all-targets --all-features`.
-  - [ ] Run `cargo test --workspace --all-features`.
-  - [ ] Run `cargo doc --workspace --all-features --no-deps`.
-  - [ ] Run Phoenix formatting in check mode.
-  - [ ] Run the complete Phoenix test suite.
-  - [ ] Run design-system component, composite, page-render, and architecture
+  - [x] Run `cargo fmt --all -- --check`.
+  - [x] Run `cargo clippy --workspace --all-targets --all-features`.
+  - [x] Run `cargo test --workspace --all-features`.
+  - [x] Run `cargo doc --workspace --all-features --no-deps`.
+  - [x] Run Phoenix formatting in check mode.
+  - [x] Run the complete Phoenix test suite.
+  - [x] Run design-system component, composite, page-render, and architecture
     fixture tests.
-  - [ ] Run Connect/gRPC interoperability, authentication, authorization,
+  - [x] Run Connect/gRPC interoperability, authentication, authorization,
     timeout, cancellation, and maximum-message tests.
-  - [ ] Run durable event ordering, duplication, resume, reconnect, retention,
+  - [x] Run durable event ordering, duplication, resume, reconnect, retention,
     revocation, and restart tests.
-  - [ ] Run all PostgreSQL adapter, RLS, outbox, idempotency, concurrency, and
+  - [x] Run all PostgreSQL adapter, RLS, outbox, idempotency, concurrency, and
     recovery integration tests.
   - [ ] Run the browser E2E journey with Phoenix denied PostgreSQL, NATS,
     repository-root, and artifact-root access.
   - [ ] Run the real libkrun build/run integration suite through the new API and
     event contracts.
-  - [ ] Run the complete secret sentinel/non-disclosure scan.
+  - [x] Run the complete secret sentinel/non-disclosure scan.
   - [ ] Stop and restart the complete development environment, reconnect an
     active browser stream from its cursor, and verify no duplicate visible
     transition or side effect.

@@ -899,7 +899,6 @@ async fn cleanup_streams(nats_url: &str) {
         "HEPH_RUN_EVENTS",
         "HEPHAESTUS_GIT_EVENTS",
         "HEPHAESTUS_RELEASE_EVENTS",
-        "HEPHAESTUS_SECRET_EVENTS",
         "HEPHAESTUS_PRODUCT_EVENTS",
     ] {
         drop(context.delete_stream(stream).await);

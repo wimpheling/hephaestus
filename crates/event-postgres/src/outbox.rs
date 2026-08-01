@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 const RELEASE_EVENT_STREAM: &str = "HEPHAESTUS_RELEASE_EVENTS";
 
-/// Creates the durable stream for informational release lifecycle events.
+/// Creates the durable stream for bounded, non-UI release lifecycle records.
 ///
 /// Actionable run and instance-trigger subjects are owned by their existing
 /// command streams and are intentionally excluded here.
