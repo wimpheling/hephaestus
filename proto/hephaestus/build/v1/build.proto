@@ -116,6 +116,41 @@ message Build {
   hephaestus.common.v1.OpaqueId release_id = 13;
   string release_state = 14;
   uint32 artifact_count = 15;
+  string trigger = 16;
+  string agent_key = 17;
+  hephaestus.common.v1.OpaqueId builder_image_id = 18;
+  string builder_image_key = 19;
+  string builder_image_reference = 20;
+  string configuration_hash = 21;
+  string parsed_declaration_json = 22;
+  string build_policy_json = 23;
+  google.protobuf.Timestamp started_at = 24;
+  google.protobuf.Timestamp completed_at = 25;
+  int64 duration_milliseconds = 26;
+  repeated BuildTimelineEntry timeline = 27;
+  repeated DeclaredArtifact declared_artifacts = 28;
+  repeated ProducedArtifact produced_artifacts = 29;
+  string artifact_manifest_json = 30;
+  string release_version = 31;
+}
+message BuildTimelineEntry {
+  string from_state = 1;
+  string to_state = 2;
+  string reason = 3;
+  google.protobuf.Timestamp occurred_at = 4;
+}
+message DeclaredArtifact {
+  string path = 1;
+  string kind = 2;
+  string media_type = 3;
+}
+message ProducedArtifact {
+  string path = 1;
+  string kind = 2;
+  uint32 mode = 3;
+  string sha256 = 4;
+  uint64 size_bytes = 5;
+  string media_type = 6;
 }
 message ListBuildsRequest {
   hephaestus.common.v1.OpaqueId repository_id = 1;

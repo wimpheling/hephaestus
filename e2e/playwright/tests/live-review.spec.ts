@@ -40,7 +40,7 @@ test.describe.serial("release, instance, secret, and live-review product journey
     const projectId = page.url().split("/").at(-1)!;
     await waitForLiveView(page);
 
-    await page.getByTestId("create-repository-link").click();
+    await page.locator("#create-repository-link").click();
     await waitForLiveView(page);
     await page
       .locator("#create-repository-form")
@@ -67,7 +67,7 @@ test.describe.serial("release, instance, secret, and live-review product journey
     await waitForLiveView(page);
     await expect(page.getByText("Agent release build", {exact: true})).toBeVisible();
     await expect(page.locator("#build-provenance")).toContainText(sourceCommit);
-    await expect(page.getByRole("main").getByText("succeeded", {exact: true})).toBeVisible();
+    await expect(page.getByRole("main").getByText("succeeded", {exact: true}).first()).toBeVisible();
     await captureJourneyScreenshot(page, "01-build-detail.png");
 
     await page.goto(`/repositories/${repositoryId}/releases/${release.id}`);
@@ -139,7 +139,7 @@ test.describe.serial("release, instance, secret, and live-review product journey
     await waitForLiveView(page);
     await expect(page.getByText("Agent release build", {exact: true})).toBeVisible();
     await expect(page.locator("#build-provenance")).toContainText("refs/heads/main");
-    await expect(page.getByRole("main").getByText("succeeded", {exact: true})).toBeVisible();
+    await expect(page.getByRole("main").getByText("succeeded", {exact: true}).first()).toBeVisible();
     await expect(page.locator("#build-logs")).toContainText("No logs were returned.");
 
     await page.goto(`/repositories/${fixture.repositoryId}/releases`);
@@ -716,7 +716,7 @@ working_directory = "/workspace/work"
 vcpus = 1
 memory_mib = 128
 [root_image]
-reference = "fixture-root@sha256:e2e"
+reference = "fixture-root@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 [workspace]
 mount = true
 path = "/workspace/repo"
@@ -745,6 +745,11 @@ arguments = ["-c", "mkdir -p /workspace/output/reports && printf 'built browser 
 working_directory = "/workspace/source"
 root_image = "fixture-root@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 triggers = ["refs/heads/main"]
+[build.resources]
+vcpus = 1
+memory_mib = 128
+[build.network]
+profile = "disabled"
 [[build.artifacts]]
 path = "reports/result.txt"
 kind = "file"
@@ -792,7 +797,7 @@ async function waitForBuild(repositoryId: string, sourceCommit: string) {
       },
       {timeout: 90_000, intervals: [250, 500, 1_000, 2_000]}
     )
-    .toEqual(expect.objectContaining({state: "drafted"}));
+    .toEqual(expect.objectContaining({state: "succeeded"}));
 
   const client = new pg.Client({connectionString: databaseUrl});
   await client.connect();

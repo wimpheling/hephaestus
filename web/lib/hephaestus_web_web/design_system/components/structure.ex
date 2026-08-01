@@ -189,7 +189,9 @@ defmodule HephaestusWebWeb.DesignSystem.Components.Structure do
       "set-attachment",
       "set-secret-enabled",
       "set-draft-version",
-      "publish-release"
+      "publish-release",
+      "retry-build",
+      "verification-rebuild"
     ]
 
   attr :value, :string, default: nil

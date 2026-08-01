@@ -1,7 +1,7 @@
 defmodule HephaestusWebWeb.BuildState do
   @moduledoc "State, reducer, presentation, and typed effects for a build detail."
 
-  alias HephaestusWeb.RPC.{Client, ProductEvents}
+  alias HephaestusWeb.RPC.{Client, Error, ProductEvents}
   alias HephaestusWebWeb.ProductEventReducer
 
   @statuses [
@@ -54,14 +54,51 @@ defmodule HephaestusWebWeb.BuildState do
 
   def reduce(state, :watch_ended), do: ProductEventReducer.reconnect(state)
 
+  def reduce(
+        %{data: %{build_id: build_id, build: %{"state" => state}}, stream_generation: generation} =
+          page_state,
+        :retry_attempt
+      )
+      when state in ["failed", "cancelled"],
+      do: action_requested(page_state, generation, :retry, build_id)
+
   def reduce(state, :retry_attempt),
-    do: unavailable_action(state, "BuildService.RetryBuild")
+    do: unavailable_action(state, "BuildService.RetryBuild is not allowed for this state")
+
+  def reduce(
+        %{
+          data: %{build_id: build_id, build: %{"state" => "succeeded"}},
+          stream_generation: generation
+        } = page_state,
+        :rebuild_for_verification
+      ),
+      do: action_requested(page_state, generation, :verification, build_id)
 
   def reduce(state, :rebuild_for_verification),
-    do: unavailable_action(state, "BuildService.RebuildForVerification")
+    do:
+      unavailable_action(
+        state,
+        "BuildService.RebuildForVerification is not allowed for this state"
+      )
 
   def reduce(state, {:build_another_commit, _commit}),
     do: unavailable_action(state, "BuildService.RequestBuild for another commit")
+
+  def reduce(
+        %{stream_generation: generation} = state,
+        {:action_result, generation, kind, {:ok, _result}}
+      ) do
+    message = if kind == :retry, do: "Build retry queued.", else: "Verification rebuild queued."
+    {%{state | status: :ready, error: nil}, [{:flash, :info, message}, :snapshot]}
+  end
+
+  def reduce(
+        %{stream_generation: generation} = state,
+        {:action_result, generation, _kind, {:error, reason}}
+      ) do
+    {%{state | status: :error, error: Error.present(reason)},
+     [{:flash, :error, "Build action was rejected."}]}
+  end
 
   def reduce(%{stream_generation: generation} = state, {:loaded, generation, {:ok, data}}) do
     data = normalize_loaded(data)
@@ -97,6 +134,9 @@ defmodule HephaestusWebWeb.BuildState do
       declared_artifacts: (build && build["declared_artifacts"]) || [],
       produced_artifacts: (build && build["produced_artifacts"]) || [],
       artifact_manifest: (build && build["artifact_manifest"]) || [],
+      retry_event: retry_event(build),
+      verification_rebuild_event: verification_event(build),
+      another_commit_event: nil,
       destinations: destinations(repository, state.data.repository_id, build),
       error: state.error
     }
@@ -105,6 +145,14 @@ defmodule HephaestusWebWeb.BuildState do
   def execute({:load, generation, repository_id, build_id}, identity) do
     {:loaded, generation, load(identity, repository_id, build_id)}
   end
+
+  def execute({:action, generation, :retry, build_id}, identity),
+    do: {:action_result, generation, :retry, Client.retry_build(identity, build_id)}
+
+  def execute({:action, generation, :verification, build_id}, identity),
+    do:
+      {:action_result, generation, :verification,
+       Client.rebuild_for_verification(identity, build_id)}
 
   def execute(state, {:load, identity, generation}) do
     execute(
@@ -169,6 +217,15 @@ defmodule HephaestusWebWeb.BuildState do
       _item -> :cont
     end
   end
+
+  defp retry_event(%{"state" => state}) when state in ["failed", "cancelled"], do: "retry-build"
+  defp retry_event(_build), do: nil
+
+  defp verification_event(%{"state" => "succeeded"}), do: "verification-rebuild"
+  defp verification_event(_build), do: nil
+
+  defp action_requested(state, generation, kind, build_id),
+    do: {%{state | status: :submitting, error: nil}, [{:action, generation, kind, build_id}]}
 
   defp unavailable_action(state, operation) do
     message = "#{operation} is not present in the generated BuildService client."

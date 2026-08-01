@@ -43,7 +43,7 @@ defmodule HephaestusWebWeb.BuildStateTest do
     assert presentation.destinations.repository == "/repositories/repository-1/builds"
   end
 
-  test "maps reconnect, denied access, and the distinct unsupported actions" do
+  test "maps reconnect, denied access, and the distinct build actions" do
     state = BuildState.new("repository-1", "build-1")
     {reconnecting, []} = BuildState.reduce(state, :disconnected)
     assert BuildState.present(reconnecting).state == :reconnecting
@@ -55,13 +55,24 @@ defmodule HephaestusWebWeb.BuildStateTest do
 
     for {event, operation} <- [
           {:retry_attempt, "BuildService.RetryBuild"},
-          {:rebuild_for_verification, "BuildService.RebuildForVerification"},
           {{:build_another_commit, "commit-2"}, "BuildService.RequestBuild for another commit"}
         ] do
       {failed, [{:flash, :error, message}]} = BuildState.reduce(ready_state(), event)
       assert failed.status == :error
       assert message =~ operation
     end
+
+    {verification, [{:action, _, :verification, "build-1"}]} =
+      BuildState.reduce(ready_state(), :rebuild_for_verification)
+
+    assert verification.status == :submitting
+  end
+
+  test "queues retry only for a failed build" do
+    state = ready_state()
+    failed = put_in(state.data.build["state"], "failed")
+    {submitting, [{:action, _, :retry, "build-1"}]} = BuildState.reduce(failed, :retry_attempt)
+    assert submitting.status == :submitting
   end
 
   defp ready_state do

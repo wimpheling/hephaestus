@@ -146,6 +146,11 @@ defmodule HephaestusWebWeb.ProductEventReducer do
   @spec reconnect(struct()) :: {struct(), [effect()]}
   def reconnect(%{status: :access_revoked} = state), do: {state, []}
 
+  def reconnect(%{status: :ready} = state) do
+    state = %{state | stream_generation: state.stream_generation + 1}
+    {state, [:replace_watch]}
+  end
+
   def reconnect(state) do
     state = %{state | status: :reconnecting, stream_generation: state.stream_generation + 1}
     {state, [:replace_watch]}

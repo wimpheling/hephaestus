@@ -108,7 +108,9 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.BuildPageTest do
       organization_destination: "/organizations/organization-1",
       project_destination: "/projects/project-1",
       repository_destination: "/repositories/repository-1/builds",
-      release_destination: nil
+      release_destination: nil,
+      retry_event: "retry-build",
+      verification_rebuild_event: "verification-rebuild"
     }
   end
 end

@@ -33,6 +33,9 @@ pub mod __buffa {
     /// Register this package's `Any` type entries and extension entries.
     pub fn register_types(reg: &mut ::buffa::type_registry::TypeRegistry) {
         reg.register_json_any(super::__BUILD_JSON_ANY);
+        reg.register_json_any(super::__BUILD_TIMELINE_ENTRY_JSON_ANY);
+        reg.register_json_any(super::__DECLARED_ARTIFACT_JSON_ANY);
+        reg.register_json_any(super::__PRODUCED_ARTIFACT_JSON_ANY);
         reg.register_json_any(super::__LIST_BUILDS_REQUEST_JSON_ANY);
         reg.register_json_any(super::__LIST_BUILDS_RESPONSE_JSON_ANY);
         reg.register_json_any(super::__GET_BUILD_REQUEST_JSON_ANY);
@@ -56,6 +59,18 @@ pub mod __buffa {
 pub use self::__buffa::view::BuildView;
 #[doc(inline)]
 pub use self::__buffa::view::BuildOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::BuildTimelineEntryView;
+#[doc(inline)]
+pub use self::__buffa::view::BuildTimelineEntryOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::DeclaredArtifactView;
+#[doc(inline)]
+pub use self::__buffa::view::DeclaredArtifactOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::ProducedArtifactView;
+#[doc(inline)]
+pub use self::__buffa::view::ProducedArtifactOwnedView;
 #[doc(inline)]
 pub use self::__buffa::view::ListBuildsRequestView;
 #[doc(inline)]

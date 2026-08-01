@@ -8,10 +8,12 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use sqlx::{FromRow, PgPool};
 use std::collections::BTreeMap;
-use time::OffsetDateTime;
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use uuid::Uuid;
 
 const BUILD_REQUESTED_SUBJECT: &str = "hephaestus.build.requested.v1";
+const BUILD_RETRY_REQUESTED_SUBJECT: &str = "hephaestus.build.retry.requested.v1";
+const BUILD_VERIFY_REQUESTED_SUBJECT: &str = "hephaestus.build.verify.requested.v1";
 
 /// Transport-neutral build lifecycle state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -171,7 +173,7 @@ pub enum BuildError {
     #[error("build persistence failed")]
     Persistence(#[source] sqlx::Error),
     /// Stored configuration could not be decoded.
-    #[error("stored build configuration is invalid")]
+    #[error("stored build configuration is invalid: {0}")]
     Serialization(#[source] serde_json::Error),
 }
 
@@ -356,26 +358,77 @@ impl BuildApplication {
 
     /// Revalidates the build before reporting whether retry is possible.
     ///
-    /// The application role intentionally cannot reset `build_executions`,
-    /// and the current schema has no attempt history. Returning a typed
-    /// service error keeps callers from pretending that a retry was queued.
+    /// Queues a retry through the committed forge outbox. The trusted build
+    /// worker owns execution reset and records the archived attempt.
     pub async fn retry_build(
         &self,
         identity: &AuthenticatedIdentity,
         id: Uuid,
     ) -> Result<RequestedBuild, BuildActionError> {
-        let build = self
-            .get_build(identity, id)
+        let mut transaction = begin_actor_transaction(&self.pool, identity)
             .await
-            .map_err(BuildActionError::Application)?;
-        if !matches!(build.state, BuildState::Failed | BuildState::Cancelled) {
+            .map_err(|error| BuildActionError::Application(BuildError::Persistence(error)))?;
+        let row: Option<(Uuid, String, OffsetDateTime)> = sqlx::query_as(
+            "SELECT id, state, created_at
+               FROM build_requests
+              WHERE id = $1
+              FOR UPDATE",
+        )
+        .bind(id)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|error| BuildActionError::Application(BuildError::Persistence(error)))?;
+        let Some((id, state, created_at)) = row else {
+            return Err(BuildActionError::Application(BuildError::NotFound));
+        };
+        if !matches!(state.as_str(), "failed" | "cancelled") {
             return Err(BuildActionError::RetryNotAllowed);
         }
-        Err(BuildActionError::RetryUnavailable)
+        let now = OffsetDateTime::now_utc();
+        sqlx::query(
+            "UPDATE build_requests
+                SET state = 'queued', started_at = NULL, completed_at = NULL,
+                    diagnostics = '[]'::jsonb
+              WHERE id = $1",
+        )
+        .bind(id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|error| BuildActionError::Application(BuildError::Persistence(error)))?;
+        let event_id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO outbox
+                (id, aggregate_type, aggregate_id, subject, event_type, payload,
+                 occurred_at)
+             VALUES ($1, 'forge', $2, $3, 'build.retry_requested.v1', $4, $5)",
+        )
+        .bind(event_id)
+        .bind(id)
+        .bind(BUILD_RETRY_REQUESTED_SUBJECT)
+        .bind(json!({
+            "schema_version": 1,
+            "message_id": event_id,
+            "idempotency_key": event_id,
+            "request_id": identity.request_id,
+            "build_request_id": id,
+        }))
+        .bind(now)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|error| BuildActionError::Application(BuildError::Persistence(error)))?;
+        transaction
+            .commit()
+            .await
+            .map_err(|error| BuildActionError::Application(BuildError::Persistence(error)))?;
+        Ok(RequestedBuild {
+            id,
+            state: BuildState::Queued,
+            created_at,
+            updated_at: now,
+        })
     }
 
-    /// Authorizes a verification request before rejecting the unsupported
-    /// operation without creating a second, indistinguishable build row.
+    /// Queues a verification rebuild over the same immutable build inputs.
     pub async fn rebuild_for_verification(
         &self,
         identity: &AuthenticatedIdentity,
@@ -388,7 +441,41 @@ impl BuildApplication {
         if build.state != BuildState::Succeeded {
             return Err(BuildActionError::VerificationNotAllowed);
         }
-        Err(BuildActionError::VerificationUnavailable)
+        let mut transaction = begin_actor_transaction(&self.pool, identity)
+            .await
+            .map_err(|error| BuildActionError::Application(BuildError::Persistence(error)))?;
+        let event_id = Uuid::new_v4();
+        let now = OffsetDateTime::now_utc();
+        sqlx::query(
+            "INSERT INTO outbox
+                (id, aggregate_type, aggregate_id, subject, event_type, payload,
+                 occurred_at)
+             VALUES ($1, 'forge', $2, $3, 'build.verify_requested.v1', $4, $5)",
+        )
+        .bind(event_id)
+        .bind(id)
+        .bind(BUILD_VERIFY_REQUESTED_SUBJECT)
+        .bind(json!({
+            "schema_version": 1,
+            "message_id": event_id,
+            "idempotency_key": event_id,
+            "request_id": identity.request_id,
+            "build_request_id": id,
+        }))
+        .bind(now)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|error| BuildActionError::Application(BuildError::Persistence(error)))?;
+        transaction
+            .commit()
+            .await
+            .map_err(|error| BuildActionError::Application(BuildError::Persistence(error)))?;
+        Ok(RequestedBuild {
+            id: build.id,
+            state: build.state,
+            created_at: build.created_at,
+            updated_at: now,
+        })
     }
 
     // The transaction intentionally keeps validation, durable request creation,
@@ -596,7 +683,7 @@ struct StoredTimelineEntry {
     from_state: Option<String>,
     to_state: String,
     reason: String,
-    occurred_at: OffsetDateTime,
+    occurred_at: String,
 }
 
 impl TryFrom<StoredTimelineEntry> for BuildTimelineEntry {
@@ -606,11 +693,13 @@ impl TryFrom<StoredTimelineEntry> for BuildTimelineEntry {
         if value.to_state.is_empty() || value.reason.is_empty() {
             return Err(BuildError::InvalidStoredData);
         }
+        let occurred_at = OffsetDateTime::parse(&value.occurred_at, &Rfc3339)
+            .map_err(|_| BuildError::InvalidStoredData)?;
         Ok(Self {
             from_state: value.from_state,
             to_state: value.to_state,
             reason: value.reason,
-            occurred_at: value.occurred_at,
+            occurred_at,
         })
     }
 }

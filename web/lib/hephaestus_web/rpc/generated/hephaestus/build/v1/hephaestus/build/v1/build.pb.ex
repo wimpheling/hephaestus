@@ -38,6 +38,76 @@ defmodule Hephaestus.Build.V1.Build do
   field(:release_id, 13, type: Hephaestus.Common.V1.OpaqueId, json_name: "releaseId")
   field(:release_state, 14, type: :string, json_name: "releaseState")
   field(:artifact_count, 15, type: :uint32, json_name: "artifactCount")
+  field(:trigger, 16, type: :string)
+  field(:agent_key, 17, type: :string, json_name: "agentKey")
+  field(:builder_image_id, 18, type: Hephaestus.Common.V1.OpaqueId, json_name: "builderImageId")
+  field(:builder_image_key, 19, type: :string, json_name: "builderImageKey")
+  field(:builder_image_reference, 20, type: :string, json_name: "builderImageReference")
+  field(:configuration_hash, 21, type: :string, json_name: "configurationHash")
+  field(:parsed_declaration_json, 22, type: :string, json_name: "parsedDeclarationJson")
+  field(:build_policy_json, 23, type: :string, json_name: "buildPolicyJson")
+  field(:started_at, 24, type: Google.Protobuf.Timestamp, json_name: "startedAt")
+  field(:completed_at, 25, type: Google.Protobuf.Timestamp, json_name: "completedAt")
+  field(:duration_milliseconds, 26, type: :int64, json_name: "durationMilliseconds")
+  field(:timeline, 27, repeated: true, type: Hephaestus.Build.V1.BuildTimelineEntry)
+
+  field(:declared_artifacts, 28,
+    repeated: true,
+    type: Hephaestus.Build.V1.DeclaredArtifact,
+    json_name: "declaredArtifacts"
+  )
+
+  field(:produced_artifacts, 29,
+    repeated: true,
+    type: Hephaestus.Build.V1.ProducedArtifact,
+    json_name: "producedArtifacts"
+  )
+
+  field(:artifact_manifest_json, 30, type: :string, json_name: "artifactManifestJson")
+  field(:release_version, 31, type: :string, json_name: "releaseVersion")
+end
+
+defmodule Hephaestus.Build.V1.BuildTimelineEntry do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.build.v1.BuildTimelineEntry",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:from_state, 1, type: :string, json_name: "fromState")
+  field(:to_state, 2, type: :string, json_name: "toState")
+  field(:reason, 3, type: :string)
+  field(:occurred_at, 4, type: Google.Protobuf.Timestamp, json_name: "occurredAt")
+end
+
+defmodule Hephaestus.Build.V1.DeclaredArtifact do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.build.v1.DeclaredArtifact",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:path, 1, type: :string)
+  field(:kind, 2, type: :string)
+  field(:media_type, 3, type: :string, json_name: "mediaType")
+end
+
+defmodule Hephaestus.Build.V1.ProducedArtifact do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.build.v1.ProducedArtifact",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:path, 1, type: :string)
+  field(:kind, 2, type: :string)
+  field(:mode, 3, type: :uint32)
+  field(:sha256, 4, type: :string)
+  field(:size_bytes, 5, type: :uint64, json_name: "sizeBytes")
+  field(:media_type, 6, type: :string, json_name: "mediaType")
 end
 
 defmodule Hephaestus.Build.V1.ListBuildsRequest do

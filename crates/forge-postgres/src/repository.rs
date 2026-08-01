@@ -142,6 +142,12 @@ impl PgForgeRepository {
         .fetch_one(&mut *transaction)
         .await
         .map_err(storage)?;
+        sqlx::query("SELECT ensure_project_maintainer($1, $2)")
+            .bind(row.id)
+            .bind(identity.user_id.as_uuid())
+            .execute(&mut *transaction)
+            .await
+            .map_err(storage)?;
         transaction.commit().await.map_err(storage)?;
         Ok(row.into())
     }

@@ -219,14 +219,30 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.BuildPage do
       <.frame as="section" id="build-actions" variant={:panel}>
         <.page_heading eyebrow="Build controls" title="Distinct actions" level="h2" />
         <.frame variant={:resource_controls}>
-          <.text as="span">
-            Retry attempt — unavailable: BuildService.RetryBuild is not present.
+          <.action
+            :if={@retry_event}
+            interaction={:event}
+            event={@retry_event}
+            variant={:secondary}
+            disable_with="Queueing retry…"
+          >
+            Retry attempt
+          </.action>
+          <.action
+            :if={@verification_rebuild_event}
+            interaction={:event}
+            event={@verification_rebuild_event}
+            variant={:secondary}
+            confirm="Run the immutable build inputs again for verification?"
+            disable_with="Queueing verification…"
+          >
+            Rebuild for verification
+          </.action>
+          <.text :if={!@retry_event && !@verification_rebuild_event} as="span" variant={:muted}>
+            No lifecycle action is available for the current build state.
           </.text>
           <.text as="span">
-            Rebuild for verification — unavailable: BuildService.RebuildForVerification is not present.
-          </.text>
-          <.text as="span">
-            Build another commit — use RequestBuild above; no separate another-commit API is present.
+            Build another commit — request a build for a different source commit.
           </.text>
         </.frame>
       </.frame>

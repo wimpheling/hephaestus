@@ -296,6 +296,129 @@ pub struct Build {
         skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_u32"
     )]
     pub artifact_count: u32,
+    /// Field 16: `trigger`
+    #[serde(
+        rename = "trigger",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub trigger: ::buffa::alloc::string::String,
+    /// Field 17: `agent_key`
+    #[serde(
+        rename = "agentKey",
+        alias = "agent_key",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub agent_key: ::buffa::alloc::string::String,
+    /// Field 18: `builder_image_id`
+    #[serde(
+        rename = "builderImageId",
+        alias = "builder_image_id",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub builder_image_id: ::buffa::MessageField<super::super::common::v1::OpaqueId>,
+    /// Field 19: `builder_image_key`
+    #[serde(
+        rename = "builderImageKey",
+        alias = "builder_image_key",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub builder_image_key: ::buffa::alloc::string::String,
+    /// Field 20: `builder_image_reference`
+    #[serde(
+        rename = "builderImageReference",
+        alias = "builder_image_reference",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub builder_image_reference: ::buffa::alloc::string::String,
+    /// Field 21: `configuration_hash`
+    #[serde(
+        rename = "configurationHash",
+        alias = "configuration_hash",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub configuration_hash: ::buffa::alloc::string::String,
+    /// Field 22: `parsed_declaration_json`
+    #[serde(
+        rename = "parsedDeclarationJson",
+        alias = "parsed_declaration_json",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub parsed_declaration_json: ::buffa::alloc::string::String,
+    /// Field 23: `build_policy_json`
+    #[serde(
+        rename = "buildPolicyJson",
+        alias = "build_policy_json",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub build_policy_json: ::buffa::alloc::string::String,
+    /// Field 24: `started_at`
+    #[serde(
+        rename = "startedAt",
+        alias = "started_at",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub started_at: ::buffa::MessageField<::buffa_types::google::protobuf::Timestamp>,
+    /// Field 25: `completed_at`
+    #[serde(
+        rename = "completedAt",
+        alias = "completed_at",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub completed_at: ::buffa::MessageField<::buffa_types::google::protobuf::Timestamp>,
+    /// Field 26: `duration_milliseconds`
+    #[serde(
+        rename = "durationMilliseconds",
+        alias = "duration_milliseconds",
+        with = "::buffa::json_helpers::int64",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_i64"
+    )]
+    pub duration_milliseconds: i64,
+    /// Field 27: `timeline`
+    #[serde(
+        rename = "timeline",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_vec",
+        deserialize_with = "::buffa::json_helpers::null_as_default"
+    )]
+    pub timeline: ::buffa::alloc::vec::Vec<BuildTimelineEntry>,
+    /// Field 28: `declared_artifacts`
+    #[serde(
+        rename = "declaredArtifacts",
+        alias = "declared_artifacts",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_vec",
+        deserialize_with = "::buffa::json_helpers::null_as_default"
+    )]
+    pub declared_artifacts: ::buffa::alloc::vec::Vec<DeclaredArtifact>,
+    /// Field 29: `produced_artifacts`
+    #[serde(
+        rename = "producedArtifacts",
+        alias = "produced_artifacts",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_vec",
+        deserialize_with = "::buffa::json_helpers::null_as_default"
+    )]
+    pub produced_artifacts: ::buffa::alloc::vec::Vec<ProducedArtifact>,
+    /// Field 30: `artifact_manifest_json`
+    #[serde(
+        rename = "artifactManifestJson",
+        alias = "artifact_manifest_json",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub artifact_manifest_json: ::buffa::alloc::string::String,
+    /// Field 31: `release_version`
+    #[serde(
+        rename = "releaseVersion",
+        alias = "release_version",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub release_version: ::buffa::alloc::string::String,
     #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
@@ -318,6 +441,22 @@ impl ::core::fmt::Debug for Build {
             .field("release_id", &self.release_id)
             .field("release_state", &self.release_state)
             .field("artifact_count", &self.artifact_count)
+            .field("trigger", &self.trigger)
+            .field("agent_key", &self.agent_key)
+            .field("builder_image_id", &self.builder_image_id)
+            .field("builder_image_key", &self.builder_image_key)
+            .field("builder_image_reference", &self.builder_image_reference)
+            .field("configuration_hash", &self.configuration_hash)
+            .field("parsed_declaration_json", &self.parsed_declaration_json)
+            .field("build_policy_json", &self.build_policy_json)
+            .field("started_at", &self.started_at)
+            .field("completed_at", &self.completed_at)
+            .field("duration_milliseconds", &self.duration_milliseconds)
+            .field("timeline", &self.timeline)
+            .field("declared_artifacts", &self.declared_artifacts)
+            .field("produced_artifacts", &self.produced_artifacts)
+            .field("artifact_manifest_json", &self.artifact_manifest_json)
+            .field("release_version", &self.release_version)
             .finish()
     }
 }
@@ -439,6 +578,105 @@ impl ::buffa::Message for Build {
             size
                 += 1u32 + ::buffa::types::uint32_encoded_len(self.artifact_count) as u32;
         }
+        if !self.trigger.is_empty() {
+            size += 2u32 + ::buffa::types::string_encoded_len(&self.trigger) as u32;
+        }
+        if !self.agent_key.is_empty() {
+            size += 2u32 + ::buffa::types::string_encoded_len(&self.agent_key) as u32;
+        }
+        if self.builder_image_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.builder_image_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 2u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if !self.builder_image_key.is_empty() {
+            size
+                += 2u32
+                    + ::buffa::types::string_encoded_len(&self.builder_image_key) as u32;
+        }
+        if !self.builder_image_reference.is_empty() {
+            size
+                += 2u32
+                    + ::buffa::types::string_encoded_len(&self.builder_image_reference)
+                        as u32;
+        }
+        if !self.configuration_hash.is_empty() {
+            size
+                += 2u32
+                    + ::buffa::types::string_encoded_len(&self.configuration_hash)
+                        as u32;
+        }
+        if !self.parsed_declaration_json.is_empty() {
+            size
+                += 2u32
+                    + ::buffa::types::string_encoded_len(&self.parsed_declaration_json)
+                        as u32;
+        }
+        if !self.build_policy_json.is_empty() {
+            size
+                += 2u32
+                    + ::buffa::types::string_encoded_len(&self.build_policy_json) as u32;
+        }
+        if self.started_at.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.started_at.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 2u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.completed_at.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.completed_at.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 2u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.duration_milliseconds != 0i64 {
+            size
+                += 2u32
+                    + ::buffa::types::int64_encoded_len(self.duration_milliseconds)
+                        as u32;
+        }
+        for v in &self.timeline {
+            let __slot = __cache.reserve();
+            let inner_size = v.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 2u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        for v in &self.declared_artifacts {
+            let __slot = __cache.reserve();
+            let inner_size = v.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 2u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        for v in &self.produced_artifacts {
+            let __slot = __cache.reserve();
+            let inner_size = v.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 2u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if !self.artifact_manifest_json.is_empty() {
+            size
+                += 2u32
+                    + ::buffa::types::string_encoded_len(&self.artifact_manifest_json)
+                        as u32;
+        }
+        if !self.release_version.is_empty() {
+            size
+                += 2u32
+                    + ::buffa::types::string_encoded_len(&self.release_version) as u32;
+        }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
         size
     }
@@ -502,6 +740,60 @@ impl ::buffa::Message for Build {
         }
         if self.artifact_count != 0u32 {
             ::buffa::types::put_uint32_field(15u32, self.artifact_count, buf);
+        }
+        if !self.trigger.is_empty() {
+            ::buffa::types::put_string_field(16u32, &self.trigger, buf);
+        }
+        if !self.agent_key.is_empty() {
+            ::buffa::types::put_string_field(17u32, &self.agent_key, buf);
+        }
+        if self.builder_image_id.is_set() {
+            ::buffa::types::put_len_delimited_header(18u32, __cache.consume_next(), buf);
+            self.builder_image_id.write_to(__cache, buf);
+        }
+        if !self.builder_image_key.is_empty() {
+            ::buffa::types::put_string_field(19u32, &self.builder_image_key, buf);
+        }
+        if !self.builder_image_reference.is_empty() {
+            ::buffa::types::put_string_field(20u32, &self.builder_image_reference, buf);
+        }
+        if !self.configuration_hash.is_empty() {
+            ::buffa::types::put_string_field(21u32, &self.configuration_hash, buf);
+        }
+        if !self.parsed_declaration_json.is_empty() {
+            ::buffa::types::put_string_field(22u32, &self.parsed_declaration_json, buf);
+        }
+        if !self.build_policy_json.is_empty() {
+            ::buffa::types::put_string_field(23u32, &self.build_policy_json, buf);
+        }
+        if self.started_at.is_set() {
+            ::buffa::types::put_len_delimited_header(24u32, __cache.consume_next(), buf);
+            self.started_at.write_to(__cache, buf);
+        }
+        if self.completed_at.is_set() {
+            ::buffa::types::put_len_delimited_header(25u32, __cache.consume_next(), buf);
+            self.completed_at.write_to(__cache, buf);
+        }
+        if self.duration_milliseconds != 0i64 {
+            ::buffa::types::put_int64_field(26u32, self.duration_milliseconds, buf);
+        }
+        for v in &self.timeline {
+            ::buffa::types::put_len_delimited_header(27u32, __cache.consume_next(), buf);
+            v.write_to(__cache, buf);
+        }
+        for v in &self.declared_artifacts {
+            ::buffa::types::put_len_delimited_header(28u32, __cache.consume_next(), buf);
+            v.write_to(__cache, buf);
+        }
+        for v in &self.produced_artifacts {
+            ::buffa::types::put_len_delimited_header(29u32, __cache.consume_next(), buf);
+            v.write_to(__cache, buf);
+        }
+        if !self.artifact_manifest_json.is_empty() {
+            ::buffa::types::put_string_field(30u32, &self.artifact_manifest_json, buf);
+        }
+        if !self.release_version.is_empty() {
+            ::buffa::types::put_string_field(31u32, &self.release_version, buf);
         }
         self.__buffa_unknown_fields.write_to(buf);
     }
@@ -647,6 +939,136 @@ impl ::buffa::Message for Build {
                 )?;
                 self.artifact_count = ::buffa::types::decode_uint32(buf)?;
             }
+            16u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.trigger, buf)?;
+            }
+            17u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.agent_key, buf)?;
+            }
+            18u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.builder_image_id.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            19u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.builder_image_key, buf)?;
+            }
+            20u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.builder_image_reference, buf)?;
+            }
+            21u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.configuration_hash, buf)?;
+            }
+            22u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.parsed_declaration_json, buf)?;
+            }
+            23u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.build_policy_json, buf)?;
+            }
+            24u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.started_at.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            25u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.completed_at.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            26u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.duration_milliseconds = ::buffa::types::decode_int64(buf)?;
+            }
+            27u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                let mut elem = ::core::default::Default::default();
+                ::buffa::Message::merge_length_delimited(&mut elem, buf, ctx)?;
+                self.timeline.push(elem);
+            }
+            28u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                let mut elem = ::core::default::Default::default();
+                ::buffa::Message::merge_length_delimited(&mut elem, buf, ctx)?;
+                self.declared_artifacts.push(elem);
+            }
+            29u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                let mut elem = ::core::default::Default::default();
+                ::buffa::Message::merge_length_delimited(&mut elem, buf, ctx)?;
+                self.produced_artifacts.push(elem);
+            }
+            30u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.artifact_manifest_json, buf)?;
+            }
+            31u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.release_version, buf)?;
+            }
             _ => {
                 self.__buffa_unknown_fields
                     .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
@@ -670,6 +1092,22 @@ impl ::buffa::Message for Build {
         self.release_id = ::buffa::MessageField::none();
         self.release_state.clear();
         self.artifact_count = 0u32;
+        self.trigger.clear();
+        self.agent_key.clear();
+        self.builder_image_id = ::buffa::MessageField::none();
+        self.builder_image_key.clear();
+        self.builder_image_reference.clear();
+        self.configuration_hash.clear();
+        self.parsed_declaration_json.clear();
+        self.build_policy_json.clear();
+        self.started_at = ::buffa::MessageField::none();
+        self.completed_at = ::buffa::MessageField::none();
+        self.duration_milliseconds = 0i64;
+        self.timeline.clear();
+        self.declared_artifacts.clear();
+        self.produced_artifacts.clear();
+        self.artifact_manifest_json.clear();
+        self.release_version.clear();
         self.__buffa_unknown_fields.clear();
     }
 }
@@ -700,6 +1138,613 @@ pub const __BUILD_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type
     type_url: "type.googleapis.com/hephaestus.build.v1.Build",
     to_json: ::buffa::type_registry::any_to_json::<Build>,
     from_json: ::buffa::type_registry::any_from_json::<Build>,
+    is_wkt: false,
+};
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct BuildTimelineEntry {
+    /// Field 1: `from_state`
+    #[serde(
+        rename = "fromState",
+        alias = "from_state",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub from_state: ::buffa::alloc::string::String,
+    /// Field 2: `to_state`
+    #[serde(
+        rename = "toState",
+        alias = "to_state",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub to_state: ::buffa::alloc::string::String,
+    /// Field 3: `reason`
+    #[serde(
+        rename = "reason",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub reason: ::buffa::alloc::string::String,
+    /// Field 4: `occurred_at`
+    #[serde(
+        rename = "occurredAt",
+        alias = "occurred_at",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub occurred_at: ::buffa::MessageField<::buffa_types::google::protobuf::Timestamp>,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for BuildTimelineEntry {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("BuildTimelineEntry")
+            .field("from_state", &self.from_state)
+            .field("to_state", &self.to_state)
+            .field("reason", &self.reason)
+            .field("occurred_at", &self.occurred_at)
+            .finish()
+    }
+}
+impl BuildTimelineEntry {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.build.v1.BuildTimelineEntry";
+}
+::buffa::impl_default_instance!(BuildTimelineEntry);
+impl ::buffa::MessageName for BuildTimelineEntry {
+    const PACKAGE: &'static str = "hephaestus.build.v1";
+    const NAME: &'static str = "BuildTimelineEntry";
+    const FULL_NAME: &'static str = "hephaestus.build.v1.BuildTimelineEntry";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.build.v1.BuildTimelineEntry";
+}
+impl ::buffa::Message for BuildTimelineEntry {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if !self.from_state.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.from_state) as u32;
+        }
+        if !self.to_state.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.to_state) as u32;
+        }
+        if !self.reason.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.reason) as u32;
+        }
+        if self.occurred_at.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.occurred_at.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        __cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if !self.from_state.is_empty() {
+            ::buffa::types::put_string_field(1u32, &self.from_state, buf);
+        }
+        if !self.to_state.is_empty() {
+            ::buffa::types::put_string_field(2u32, &self.to_state, buf);
+        }
+        if !self.reason.is_empty() {
+            ::buffa::types::put_string_field(3u32, &self.reason, buf);
+        }
+        if self.occurred_at.is_set() {
+            ::buffa::types::put_len_delimited_header(4u32, __cache.consume_next(), buf);
+            self.occurred_at.write_to(__cache, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.from_state, buf)?;
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.to_state, buf)?;
+            }
+            3u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.reason, buf)?;
+            }
+            4u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.occurred_at.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.from_state.clear();
+        self.to_state.clear();
+        self.reason.clear();
+        self.occurred_at = ::buffa::MessageField::none();
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for BuildTimelineEntry {
+    const PROTO_FQN: &'static str = "hephaestus.build.v1.BuildTimelineEntry";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for BuildTimelineEntry {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __BUILD_TIMELINE_ENTRY_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/hephaestus.build.v1.BuildTimelineEntry",
+    to_json: ::buffa::type_registry::any_to_json::<BuildTimelineEntry>,
+    from_json: ::buffa::type_registry::any_from_json::<BuildTimelineEntry>,
+    is_wkt: false,
+};
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct DeclaredArtifact {
+    /// Field 1: `path`
+    #[serde(
+        rename = "path",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub path: ::buffa::alloc::string::String,
+    /// Field 2: `kind`
+    #[serde(
+        rename = "kind",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub kind: ::buffa::alloc::string::String,
+    /// Field 3: `media_type`
+    #[serde(
+        rename = "mediaType",
+        alias = "media_type",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub media_type: ::buffa::alloc::string::String,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for DeclaredArtifact {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("DeclaredArtifact")
+            .field("path", &self.path)
+            .field("kind", &self.kind)
+            .field("media_type", &self.media_type)
+            .finish()
+    }
+}
+impl DeclaredArtifact {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.build.v1.DeclaredArtifact";
+}
+::buffa::impl_default_instance!(DeclaredArtifact);
+impl ::buffa::MessageName for DeclaredArtifact {
+    const PACKAGE: &'static str = "hephaestus.build.v1";
+    const NAME: &'static str = "DeclaredArtifact";
+    const FULL_NAME: &'static str = "hephaestus.build.v1.DeclaredArtifact";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.build.v1.DeclaredArtifact";
+}
+impl ::buffa::Message for DeclaredArtifact {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, _cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if !self.path.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.path) as u32;
+        }
+        if !self.kind.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.kind) as u32;
+        }
+        if !self.media_type.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.media_type) as u32;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        _cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if !self.path.is_empty() {
+            ::buffa::types::put_string_field(1u32, &self.path, buf);
+        }
+        if !self.kind.is_empty() {
+            ::buffa::types::put_string_field(2u32, &self.kind, buf);
+        }
+        if !self.media_type.is_empty() {
+            ::buffa::types::put_string_field(3u32, &self.media_type, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.path, buf)?;
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.kind, buf)?;
+            }
+            3u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.media_type, buf)?;
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.path.clear();
+        self.kind.clear();
+        self.media_type.clear();
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for DeclaredArtifact {
+    const PROTO_FQN: &'static str = "hephaestus.build.v1.DeclaredArtifact";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for DeclaredArtifact {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __DECLARED_ARTIFACT_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/hephaestus.build.v1.DeclaredArtifact",
+    to_json: ::buffa::type_registry::any_to_json::<DeclaredArtifact>,
+    from_json: ::buffa::type_registry::any_from_json::<DeclaredArtifact>,
+    is_wkt: false,
+};
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct ProducedArtifact {
+    /// Field 1: `path`
+    #[serde(
+        rename = "path",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub path: ::buffa::alloc::string::String,
+    /// Field 2: `kind`
+    #[serde(
+        rename = "kind",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub kind: ::buffa::alloc::string::String,
+    /// Field 3: `mode`
+    #[serde(
+        rename = "mode",
+        with = "::buffa::json_helpers::uint32",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_u32"
+    )]
+    pub mode: u32,
+    /// Field 4: `sha256`
+    #[serde(
+        rename = "sha256",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub sha256: ::buffa::alloc::string::String,
+    /// Field 5: `size_bytes`
+    #[serde(
+        rename = "sizeBytes",
+        alias = "size_bytes",
+        with = "::buffa::json_helpers::uint64",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_u64"
+    )]
+    pub size_bytes: u64,
+    /// Field 6: `media_type`
+    #[serde(
+        rename = "mediaType",
+        alias = "media_type",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub media_type: ::buffa::alloc::string::String,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for ProducedArtifact {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("ProducedArtifact")
+            .field("path", &self.path)
+            .field("kind", &self.kind)
+            .field("mode", &self.mode)
+            .field("sha256", &self.sha256)
+            .field("size_bytes", &self.size_bytes)
+            .field("media_type", &self.media_type)
+            .finish()
+    }
+}
+impl ProducedArtifact {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.build.v1.ProducedArtifact";
+}
+::buffa::impl_default_instance!(ProducedArtifact);
+impl ::buffa::MessageName for ProducedArtifact {
+    const PACKAGE: &'static str = "hephaestus.build.v1";
+    const NAME: &'static str = "ProducedArtifact";
+    const FULL_NAME: &'static str = "hephaestus.build.v1.ProducedArtifact";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.build.v1.ProducedArtifact";
+}
+impl ::buffa::Message for ProducedArtifact {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, _cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if !self.path.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.path) as u32;
+        }
+        if !self.kind.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.kind) as u32;
+        }
+        if self.mode != 0u32 {
+            size += 1u32 + ::buffa::types::uint32_encoded_len(self.mode) as u32;
+        }
+        if !self.sha256.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.sha256) as u32;
+        }
+        if self.size_bytes != 0u64 {
+            size += 1u32 + ::buffa::types::uint64_encoded_len(self.size_bytes) as u32;
+        }
+        if !self.media_type.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.media_type) as u32;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        _cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if !self.path.is_empty() {
+            ::buffa::types::put_string_field(1u32, &self.path, buf);
+        }
+        if !self.kind.is_empty() {
+            ::buffa::types::put_string_field(2u32, &self.kind, buf);
+        }
+        if self.mode != 0u32 {
+            ::buffa::types::put_uint32_field(3u32, self.mode, buf);
+        }
+        if !self.sha256.is_empty() {
+            ::buffa::types::put_string_field(4u32, &self.sha256, buf);
+        }
+        if self.size_bytes != 0u64 {
+            ::buffa::types::put_uint64_field(5u32, self.size_bytes, buf);
+        }
+        if !self.media_type.is_empty() {
+            ::buffa::types::put_string_field(6u32, &self.media_type, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.path, buf)?;
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.kind, buf)?;
+            }
+            3u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.mode = ::buffa::types::decode_uint32(buf)?;
+            }
+            4u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.sha256, buf)?;
+            }
+            5u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.size_bytes = ::buffa::types::decode_uint64(buf)?;
+            }
+            6u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.media_type, buf)?;
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.path.clear();
+        self.kind.clear();
+        self.mode = 0u32;
+        self.sha256.clear();
+        self.size_bytes = 0u64;
+        self.media_type.clear();
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for ProducedArtifact {
+    const PROTO_FQN: &'static str = "hephaestus.build.v1.ProducedArtifact";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for ProducedArtifact {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __PRODUCED_ARTIFACT_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/hephaestus.build.v1.ProducedArtifact",
+    to_json: ::buffa::type_registry::any_to_json::<ProducedArtifact>,
+    from_json: ::buffa::type_registry::any_from_json::<ProducedArtifact>,
     is_wkt: false,
 };
 #[derive(Clone, PartialEq, Default)]

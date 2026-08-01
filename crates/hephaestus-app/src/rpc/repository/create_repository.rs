@@ -27,8 +27,13 @@ pub(super) async fn handle(
         .value
         .parse::<ProjectId>()
         .map_err(|_| into_connect_error(RpcError::InvalidArgument))?;
-    let default_branch = GitRef::parse(request.default_branch)
-        .map_err(|_| into_connect_error(RpcError::InvalidArgument))?;
+    let default_branch = if request.default_branch.starts_with("refs/") {
+        request.default_branch
+    } else {
+        format!("refs/heads/{}", request.default_branch)
+    };
+    let default_branch =
+        GitRef::parse(default_branch).map_err(|_| into_connect_error(RpcError::InvalidArgument))?;
     let repository = service
         .forge
         .create_repository(

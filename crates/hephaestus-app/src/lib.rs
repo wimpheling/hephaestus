@@ -20,8 +20,8 @@ use control_plane_postgres::{
 use event_postgres::{ReleaseOutboxPublisher, ensure_release_jetstream_topology};
 use forge_postgres::PgForgeRepository;
 use forge_service::{
-    BUILD_REQUESTED_SUBJECT, ForgeNatsOutboxPublisher, GitStorage, ensure_build_consumer,
-    ensure_forge_jetstream_topology,
+    BUILD_REQUESTED_SUBJECT, BUILD_RETRY_REQUESTED_SUBJECT, BUILD_VERIFY_REQUESTED_SUBJECT,
+    ForgeNatsOutboxPublisher, GitStorage, ensure_build_consumer, ensure_forge_jetstream_topology,
 };
 use futures_util::StreamExt;
 use git_http::{GitHttpLimits, GitHttpService, OidcGitAuthenticator, PostgresGitAuthorizer};
@@ -77,7 +77,7 @@ use workspace_local::{LocalWorkspaceConfig, LocalWorkspaceManager};
 use workspace_postgres::PgWorkspaceMetadataRepository;
 
 /// Ordered database migration expected by this application version.
-pub const EXPECTED_DATABASE_MIGRATION: i64 = 11;
+pub const EXPECTED_DATABASE_MIGRATION: i64 = 15;
 
 /// OIDC issuer configuration used for bearer-token authentication.
 pub struct OidcConfig {
@@ -1027,7 +1027,9 @@ async fn handle_build_message(
     executor: &BuildExecutor,
     message: &async_nats::jetstream::Message,
 ) -> Result<(), String> {
-    if message.message.subject.as_str() != BUILD_REQUESTED_SUBJECT {
+    let retry = message.message.subject.as_str() == BUILD_RETRY_REQUESTED_SUBJECT;
+    let verify = message.message.subject.as_str() == BUILD_VERIFY_REQUESTED_SUBJECT;
+    if message.message.subject.as_str() != BUILD_REQUESTED_SUBJECT && !retry && !verify {
         message
             .ack_with(async_nats::jetstream::AckKind::Term)
             .await
@@ -1044,7 +1046,23 @@ async fn handle_build_message(
             return Err(error.to_string());
         }
     };
-    let operation = executor.execute(BuildRequestId::from_uuid(payload.build_request_id));
+    let operation = async {
+        if verify {
+            executor
+                .verify(BuildRequestId::from_uuid(payload.build_request_id))
+                .await
+        } else if retry {
+            executor
+                .retry(BuildRequestId::from_uuid(payload.build_request_id))
+                .await
+                .map(|_| ())
+        } else {
+            executor
+                .execute(BuildRequestId::from_uuid(payload.build_request_id))
+                .await
+                .map(|_| ())
+        }
+    };
     tokio::pin!(operation);
     let mut progress = tokio::time::interval(Duration::from_secs(10));
     progress.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -1052,7 +1070,7 @@ async fn handle_build_message(
         tokio::select! {
             result = &mut operation => {
                 match result {
-                    Ok(_) => {
+                    Ok(()) => {
                         message.double_ack().await.map_err(|error| error.to_string())?;
                         return Ok(());
                     }
@@ -1560,6 +1578,7 @@ impl VmProvider for ResultFixtureProvider {
 struct ResultFixtureInstance {
     id: VmId,
     work: Option<PathBuf>,
+    output: Option<PathBuf>,
     exit_code: i32,
     uncertain_exit: bool,
     events: broadcast::Sender<VmEvent>,
@@ -1600,6 +1619,11 @@ impl ResultFixtureInstance {
                 ));
             }
         };
+        let output = spec
+            .mounts
+            .iter()
+            .find(|mount| mount.tag == "build-output")
+            .map(|mount| mount.host_path.clone());
         let exit_code = if spec.command.args.iter().any(|value| value == "fail") {
             23
         } else {
@@ -1611,6 +1635,7 @@ impl ResultFixtureInstance {
         Ok(Self {
             id: spec.id,
             work,
+            output,
             exit_code,
             uncertain_exit,
             events,
@@ -1642,6 +1667,15 @@ impl VmInstance for ResultFixtureInstance {
                 .await
                 .map_err(fixture_vm_error)?;
             tokio::fs::write(reports.join("result.txt"), "durable browser E2E report\n")
+                .await
+                .map_err(fixture_vm_error)?;
+        }
+        if let Some(output) = &self.output {
+            let reports = output.join("reports");
+            tokio::fs::create_dir_all(&reports)
+                .await
+                .map_err(fixture_vm_error)?;
+            tokio::fs::write(reports.join("result.txt"), "built browser artifact\n")
                 .await
                 .map_err(fixture_vm_error)?;
         }

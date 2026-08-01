@@ -1,6 +1,9 @@
 use crate::application::build::{BuildActionError, BuildError, BuildMetric, BuildState, BuildView};
 use rpc_proto::messages::hephaestus::{
-    build::v1::{Build, BuildState as ProtoBuildState},
+    build::v1::{
+        Build, BuildState as ProtoBuildState, BuildTimelineEntry, DeclaredArtifact,
+        ProducedArtifact,
+    },
     common::v1::{MetricLabel, OpaqueId, RuntimeMetric},
 };
 use time::OffsetDateTime;
@@ -23,6 +26,62 @@ pub(in crate::rpc) fn build(value: BuildView) -> Build {
         release_id: value.release_id.map(opaque).into(),
         release_state: value.release_state.unwrap_or_default(),
         artifact_count: value.artifact_count,
+        trigger: value.trigger,
+        agent_key: value.agent_key.unwrap_or_default(),
+        builder_image_id: value.builder_image_id.map(opaque).into(),
+        builder_image_key: value.builder_image_key.unwrap_or_default(),
+        builder_image_reference: value.builder_image_reference.unwrap_or_default(),
+        configuration_hash: value.configuration_hash.unwrap_or_default(),
+        parsed_declaration_json: serde_json::to_string(&value.parsed_declaration)
+            .unwrap_or_default(),
+        build_policy_json: serde_json::to_string(&value.build_policy).unwrap_or_default(),
+        started_at: value.started_at.map(timestamp).into(),
+        completed_at: value.completed_at.map(timestamp).into(),
+        duration_milliseconds: value.duration_milliseconds.unwrap_or_default(),
+        timeline: value.timeline.into_iter().map(timeline).collect(),
+        declared_artifacts: value
+            .declared_artifacts
+            .into_iter()
+            .map(declared_artifact)
+            .collect(),
+        produced_artifacts: value
+            .produced_artifacts
+            .into_iter()
+            .map(produced_artifact)
+            .collect(),
+        artifact_manifest_json: serde_json::to_string(&value.artifact_manifest).unwrap_or_default(),
+        release_version: value.release_version.unwrap_or_default(),
+        ..Default::default()
+    }
+}
+
+fn timeline(value: crate::application::build::BuildTimelineEntry) -> BuildTimelineEntry {
+    BuildTimelineEntry {
+        from_state: value.from_state.unwrap_or_default(),
+        to_state: value.to_state,
+        reason: value.reason,
+        occurred_at: timestamp(value.occurred_at).into(),
+        ..Default::default()
+    }
+}
+
+fn declared_artifact(value: crate::application::build::DeclaredArtifactView) -> DeclaredArtifact {
+    DeclaredArtifact {
+        path: value.path,
+        kind: value.kind,
+        media_type: value.media_type.unwrap_or_default(),
+        ..Default::default()
+    }
+}
+
+fn produced_artifact(value: crate::application::build::ProducedArtifactView) -> ProducedArtifact {
+    ProducedArtifact {
+        path: value.path,
+        kind: value.kind,
+        mode: value.mode,
+        sha256: value.sha256,
+        size_bytes: value.size_bytes,
+        media_type: value.media_type,
         ..Default::default()
     }
 }

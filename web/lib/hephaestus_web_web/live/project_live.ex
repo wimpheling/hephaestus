@@ -20,7 +20,12 @@ defmodule HephaestusWebWeb.ProjectLive do
       |> assign(:snapshot_task, nil)
       |> assign(:page_title, "Repositories")
 
-    if connected?(socket), do: {:ok, start_watch(socket)}, else: {:ok, socket}
+    if connected?(socket) do
+      socket = start_watch(socket)
+      {:ok, start_snapshot(socket)}
+    else
+      {:ok, socket}
+    end
   end
 
   @impl true

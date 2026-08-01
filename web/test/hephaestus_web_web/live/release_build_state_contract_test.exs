@@ -37,7 +37,7 @@ defmodule HephaestusWebWeb.ReleaseBuildStateContractTest do
     ready = build_ready_state(state_module)
 
     for {event, status} <- [
-          {:retry_attempt, :error},
+          {:retry_attempt, :submitting},
           {:rebuild_for_verification, :error},
           {{:build_another_commit, "commit-2"}, :error}
         ] do

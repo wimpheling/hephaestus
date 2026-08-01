@@ -26,6 +26,8 @@ defmodule HephaestusWeb.RPC.Client do
     BuildService,
     GetBuildRequest,
     ListBuildsRequest,
+    RebuildForVerificationRequest,
+    RetryBuildRequest,
     RequestBuildRequest
   }
 
@@ -428,6 +430,26 @@ defmodule HephaestusWeb.RPC.Client do
           ],
           &BuildService.Stub.request_build/3
         )
+
+  def retry_build(identity, build_id),
+    do:
+      mutation(
+        identity,
+        "/hephaestus.build.v1.BuildService/RetryBuild",
+        RetryBuildRequest,
+        [build_id: id(build_id)],
+        &BuildService.Stub.retry_build/3
+      )
+
+  def rebuild_for_verification(identity, build_id),
+    do:
+      mutation(
+        identity,
+        "/hephaestus.build.v1.BuildService/RebuildForVerification",
+        RebuildForVerificationRequest,
+        [build_id: id(build_id)],
+        &BuildService.Stub.rebuild_for_verification/3
+      )
 
   def list_repository_releases(identity, repository_id),
     do:

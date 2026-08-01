@@ -293,6 +293,114 @@ impl BuildExecutor {
         self.finish_release(claimed, release_inputs).await
     }
 
+    /// Resets one failed execution through the trusted worker boundary and
+    /// runs the next durable attempt with the same immutable inputs.
+    ///
+    /// # Errors
+    ///
+    /// Returns a durable repository, execution, or release-finalization
+    /// failure.
+    pub async fn retry(
+        &self,
+        build_request_id: BuildRequestId,
+    ) -> Result<BuildExecutionResult, BuildExecutionError> {
+        self.repository.reset_for_retry(build_request_id).await?;
+        self.execute(build_request_id).await
+    }
+
+    /// Re-executes immutable build inputs and compares the produced manifest
+    /// with the original draft release without mutating that release.
+    ///
+    /// # Errors
+    ///
+    /// Returns a durable repository, VM, artifact, or verification failure.
+    #[allow(clippy::too_many_lines)]
+    pub async fn verify(
+        &self,
+        build_request_id: BuildRequestId,
+    ) -> Result<(), BuildExecutionError> {
+        let claimed = self.repository.claim_verification(build_request_id).await?;
+        let workspace = self.active_path(build_request_id);
+        let materializer = self.config.clone();
+        let input = claimed.input.clone();
+        let prepared = tokio::task::spawn_blocking(move || {
+            prepare_workspace(&materializer, &input, &workspace)
+        })
+        .await
+        .map_err(|_| BuildExecutionError::WorkerJoin)?;
+        let workspace = match prepared {
+            Ok(workspace) => workspace,
+            Err(error) => {
+                self.repository
+                    .fail_verification(build_request_id, "source_materialization")
+                    .await?;
+                return Err(error);
+            }
+        };
+        let spec = match self.vm_spec(&claimed, &workspace).await {
+            Ok(spec) => spec,
+            Err(error) => {
+                self.repository
+                    .fail_verification(build_request_id, "invalid_build_contract")
+                    .await?;
+                cleanup_workspace(&workspace.root)?;
+                return Err(error);
+            }
+        };
+        let Ok(instance) = self.provider.provision(spec).await else {
+            self.repository
+                .fail_verification(build_request_id, "vm_provision")
+                .await?;
+            cleanup_workspace(&workspace.root)?;
+            return Err(BuildExecutionError::Vm);
+        };
+        let mut events = instance.subscribe_events();
+        if instance.start().await.is_err() {
+            drop(instance.destroy().await);
+            self.repository
+                .fail_verification(build_request_id, "vm_start")
+                .await?;
+            cleanup_workspace(&workspace.root)?;
+            return Err(BuildExecutionError::Vm);
+        }
+        let (exit, _logs, _metrics, timed_out) =
+            collect_execution(&instance, &mut events, self.config.timeout).await;
+        if timed_out {
+            drop(instance.stop(StopMode::Force).await);
+        }
+        if instance.destroy().await.is_err() {
+            self.repository
+                .fail_verification(build_request_id, "vm_destroy")
+                .await?;
+            cleanup_workspace(&workspace.root)?;
+            return Err(BuildExecutionError::VmCleanup);
+        }
+        let exit = exit.ok_or(BuildExecutionError::Vm)?;
+        if timed_out || exit.code != Some(0) || exit.signal.is_some() {
+            self.repository
+                .fail_verification(build_request_id, "guest_failed")
+                .await?;
+            cleanup_workspace(&workspace.root)?;
+            return Err(BuildExecutionError::GuestFailed);
+        }
+        seal_output(&workspace.output)?;
+        let imported = self
+            .artifacts
+            .import_for(build_request_id.as_uuid(), &workspace.output)?;
+        validate_declared_outputs(&claimed.input.build, &imported)?;
+        let artifacts = release_inputs(build_request_id, &claimed.input.build, &imported)?;
+        let matches = self
+            .repository
+            .complete_verification(build_request_id, &artifact_manifest(&artifacts))
+            .await?;
+        cleanup_workspace(&workspace.root)?;
+        if matches {
+            Ok(())
+        } else {
+            Err(BuildExecutionError::VerificationMismatch)
+        }
+    }
+
     /// Reaps build VMs abandoned before the one-way sealed-output boundary.
     ///
     /// The durable release and execution identities are retained. Once
@@ -497,23 +605,12 @@ impl BuildExecutor {
         id: BuildRequestId,
         artifacts: &[ReleaseArtifactInput],
     ) -> Result<(), BuildExecutionError> {
-        let manifest = artifacts
-            .iter()
-            .map(|artifact| {
-                json!({
-                    "id": artifact.id,
-                    "path": artifact.path,
-                    "kind": artifact_kind(artifact.kind),
-                    "mode": artifact.mode,
-                    "content_hash": artifact.content_hash,
-                    "size_bytes": artifact.size_bytes,
-                    "media_type": artifact.media_type,
-                    "storage_key": artifact.storage_key,
-                })
-            })
-            .collect::<Vec<_>>();
+        let manifest = artifact_manifest(artifacts);
+        let manifest = manifest
+            .as_array()
+            .ok_or(BuildExecutionError::StoredState)?;
         self.repository
-            .mark_imported(id, &manifest)
+            .mark_imported(id, manifest)
             .await
             .map_err(Into::into)
     }
@@ -889,6 +986,26 @@ fn release_inputs(
         .collect()
 }
 
+fn artifact_manifest(artifacts: &[ReleaseArtifactInput]) -> Value {
+    Value::Array(
+        artifacts
+            .iter()
+            .map(|artifact| {
+                json!({
+                    "id": artifact.id,
+                    "path": artifact.path,
+                    "kind": artifact_kind(artifact.kind),
+                    "mode": artifact.mode,
+                    "content_hash": artifact.content_hash,
+                    "size_bytes": artifact.size_bytes,
+                    "media_type": artifact.media_type,
+                    "storage_key": artifact.storage_key,
+                })
+            })
+            .collect(),
+    )
+}
+
 fn stable_artifact_id(build_request_id: BuildRequestId, path: &str) -> ReleaseArtifactId {
     let mut digest = Sha256::new();
     digest.update(b"hephaestus.release-artifact-id.v1");
@@ -1041,6 +1158,9 @@ pub enum BuildExecutionError {
     /// Guest exited unsuccessfully or timed out.
     #[error("isolated build guest failed")]
     GuestFailed,
+    /// A verification rebuild produced a different artifact manifest.
+    #[error("verification rebuild produced a different artifact manifest")]
+    VerificationMismatch,
     /// Sealed output includes an unsafe object.
     #[error("isolated build output is unsafe")]
     UnsafeOutput,

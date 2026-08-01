@@ -61,7 +61,15 @@ defmodule HephaestusWebWeb.ProjectState do
     %{state | data: data} |> ProductEventReducer.snapshot_complete()
   end
 
-  def reduce(state, {:loaded, _generation, _project, _repositories}), do: {state, []}
+  # A snapshot already in flight may finish after a transient watch reconnect.
+  # Keep the stale-generation guard for ordinary loads, but do not discard that
+  # initial snapshot while the page is recovering its stream.
+  def reduce(%{status: :reconnecting} = state, {:loaded, _generation, project, repositories}) do
+    data = %{state.data | project: project, repositories: repositories}
+    %{state | data: data} |> ProductEventReducer.snapshot_complete()
+  end
+
+  def reduce(state, {:loaded, _stale_generation, _project, _repositories}), do: {state, []}
 
   def reduce(state, {:access_revoked, _reason}),
     do:
