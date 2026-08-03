@@ -124,9 +124,123 @@ impl BuilderImageReference {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// Returns the immutable digest embedded in this reference.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BuilderCatalogValueError::InvalidOciDigest`] if a value was
+    /// deserialized without going through [`Self::parse`].
+    pub fn digest(&self) -> Result<OciDigest, BuilderCatalogValueError> {
+        let (repository, digest) = self
+            .0
+            .rsplit_once('@')
+            .ok_or(BuilderCatalogValueError::InvalidOciDigest)?;
+        if repository.is_empty()
+            || repository
+                .bytes()
+                .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
+        {
+            return Err(BuilderCatalogValueError::InvalidOciDigest);
+        }
+        OciDigest::parse(digest)
+    }
 }
 
 impl fmt::Display for BuilderImageReference {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+/// An immutable OCI SHA-256 digest.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct OciDigest(String);
+
+impl OciDigest {
+    /// Parses a lowercase `sha256:` digest.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BuilderCatalogValueError::InvalidOciDigest`] for a malformed
+    /// digest.
+    pub fn parse(value: impl Into<String>) -> Result<Self, BuilderCatalogValueError> {
+        let value = value.into();
+        let Some(hex) = value.strip_prefix("sha256:") else {
+            return Err(BuilderCatalogValueError::InvalidOciDigest);
+        };
+        if hex.len() == 64
+            && hex
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        {
+            Ok(Self(value))
+        } else {
+            Err(BuilderCatalogValueError::InvalidOciDigest)
+        }
+    }
+
+    /// Returns the canonical digest string.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for OciDigest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+impl FromStr for OciDigest {
+    type Err = BuilderCatalogValueError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Self::parse(value)
+    }
+}
+
+/// A repository-relative Dockerfile or build-context path.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct BuilderSourcePath(String);
+
+impl BuilderSourcePath {
+    /// Parses a safe repository-relative POSIX path.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BuilderCatalogValueError::InvalidSourcePath`] for absolute,
+    /// parent-traversing, control-containing, or oversized paths.
+    pub fn parse(value: impl Into<String>) -> Result<Self, BuilderCatalogValueError> {
+        let value = value.into();
+        let valid = !value.is_empty()
+            && value.len() <= 1024
+            && value == value.trim()
+            && !value.starts_with('/')
+            && !value.contains('\\')
+            && !value
+                .bytes()
+                .any(|byte| byte.is_ascii_control() || byte == 0)
+            && (value == "."
+                || value.split('/').all(|component| {
+                    !component.is_empty() && component != "." && component != ".."
+                }));
+        valid
+            .then_some(Self(value))
+            .ok_or(BuilderCatalogValueError::InvalidSourcePath)
+    }
+
+    /// Returns the validated repository-relative path.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for BuilderSourcePath {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(formatter)
     }
@@ -214,6 +328,403 @@ pub struct BuilderProvenance {
     pub signature: Option<String>,
     /// Optional SBOM reference.
     pub sbom: Option<String>,
+}
+
+/// Stable identity for one project-owned builder definition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ProjectBuilderId(Uuid);
+
+impl ProjectBuilderId {
+    /// Creates a new project builder identity.
+    #[must_use]
+    pub fn new() -> Self {
+        Self(Uuid::new_v4())
+    }
+
+    /// Creates an identity from its UUID representation.
+    #[must_use]
+    pub const fn from_uuid(value: Uuid) -> Self {
+        Self(value)
+    }
+
+    /// Returns the UUID representation.
+    #[must_use]
+    pub const fn as_uuid(self) -> Uuid {
+        self.0
+    }
+}
+
+impl Default for ProjectBuilderId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl fmt::Display for ProjectBuilderId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+/// Lifecycle state for a project-owned OCI builder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectBuilderStatus {
+    /// Definition is immutable source configuration awaiting preparation.
+    Draft,
+    /// An external, policy-controlled builder is preparing the OCI image.
+    Preparing,
+    /// The OCI image has an immutable digest and verified provenance.
+    Ready,
+    /// Preparation failed and can be retried without changing the source.
+    Failed,
+    /// Definition is retained for history but cannot be selected.
+    Retired,
+}
+
+/// Provenance recorded for a completed project-owned OCI builder.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectBuilderProvenance {
+    /// Immutable source revision used for the build.
+    pub source_revision: String,
+    /// Immutable digest of the submitted build context.
+    pub context_digest: OciDigest,
+    /// Reference to the external build attestation or audit record.
+    pub attestation_reference: String,
+    /// Optional SBOM or equivalent dependency inventory reference.
+    pub sbom_reference: Option<String>,
+}
+
+impl ProjectBuilderProvenance {
+    /// Validates provenance fields supplied by an external preparation worker.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BuilderCatalogValueError::InvalidProvenance`] when required
+    /// attestation or source metadata is missing.
+    pub fn validate(&self) -> Result<(), BuilderCatalogValueError> {
+        OciDigest::parse(self.context_digest.as_str().to_owned())?;
+        if !valid_source_revision(&self.source_revision)
+            || self.attestation_reference.trim().is_empty()
+            || self.attestation_reference.len() > 2048
+        {
+            return Err(BuilderCatalogValueError::InvalidProvenance);
+        }
+        if let Some(reference) = &self.sbom_reference
+            && (reference.trim().is_empty() || reference.len() > 2048)
+        {
+            return Err(BuilderCatalogValueError::InvalidProvenance);
+        }
+        Ok(())
+    }
+}
+
+/// Validated source and policy metadata for creating a project builder.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewProjectBuilder {
+    /// Stable project builder identity.
+    pub id: ProjectBuilderId,
+    /// Owning project identity.
+    pub project_id: Uuid,
+    /// Project-local builder key.
+    pub key: BuilderKey,
+    /// Human-readable builder name.
+    pub display_name: String,
+    /// Repository containing the Dockerfile and context.
+    pub source_repository_id: Uuid,
+    /// Immutable source revision containing the definition.
+    pub source_revision: String,
+    /// Repository-relative Dockerfile path.
+    pub dockerfile_path: BuilderSourcePath,
+    /// Repository-relative build context path.
+    pub context_path: BuilderSourcePath,
+    /// Immutable digest of the submitted context.
+    pub context_digest: OciDigest,
+    /// Exact digest-pinned platform image allowed as the base.
+    pub approved_base_image: BuilderImageReference,
+}
+
+impl NewProjectBuilder {
+    /// Validates metadata before it crosses the persistence boundary.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable value error for malformed or incomplete source data.
+    pub fn validate(&self) -> Result<(), BuilderCatalogValueError> {
+        if self.id.as_uuid().is_nil()
+            || self.project_id.is_nil()
+            || self.source_repository_id.is_nil()
+        {
+            return Err(BuilderCatalogValueError::InvalidProjectBuilderId);
+        }
+        if self.display_name.trim().is_empty() || self.display_name.len() > 200 {
+            return Err(BuilderCatalogValueError::InvalidDisplayName);
+        }
+        BuilderKey::parse(self.key.as_str().to_owned())?;
+        if !valid_source_revision(&self.source_revision) {
+            return Err(BuilderCatalogValueError::InvalidSourceRevision);
+        }
+        BuilderSourcePath::parse(self.dockerfile_path.as_str().to_owned())?;
+        BuilderSourcePath::parse(self.context_path.as_str().to_owned())?;
+        OciDigest::parse(self.context_digest.as_str().to_owned())?;
+        BuilderImageReference::parse(self.approved_base_image.as_str().to_owned())?;
+        Ok(())
+    }
+}
+
+/// Persisted project-owned builder definition and lifecycle metadata.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectBuilderDefinition {
+    /// Stable project builder identity.
+    pub id: ProjectBuilderId,
+    /// Owning project identity.
+    pub project_id: Uuid,
+    /// Project-local builder key.
+    pub key: BuilderKey,
+    /// Human-readable builder name.
+    pub display_name: String,
+    /// Repository containing the Dockerfile and context.
+    pub source_repository_id: Uuid,
+    /// Immutable source revision containing the definition.
+    pub source_revision: String,
+    /// Repository-relative Dockerfile path.
+    pub dockerfile_path: BuilderSourcePath,
+    /// Repository-relative build context path.
+    pub context_path: BuilderSourcePath,
+    /// Immutable digest of the submitted context.
+    pub context_digest: OciDigest,
+    /// Exact digest-pinned platform image allowed as the base.
+    pub approved_base_image: BuilderImageReference,
+    /// Current durable lifecycle state.
+    pub status: ProjectBuilderStatus,
+    /// Immutable digest-pinned output image reference after completion.
+    pub oci_image_reference: Option<BuilderImageReference>,
+    /// Output image digest copied from the immutable reference.
+    pub oci_image_digest: Option<OciDigest>,
+    /// Attestation and source provenance after completion.
+    pub provenance: Option<ProjectBuilderProvenance>,
+    /// Operator-visible preparation failure, if any.
+    pub failure_reason: Option<String>,
+    /// Creation timestamp.
+    pub created_at: time::OffsetDateTime,
+    /// Last lifecycle update timestamp.
+    pub updated_at: time::OffsetDateTime,
+}
+
+impl ProjectBuilderDefinition {
+    /// Validates all durable lifecycle invariants.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable value error for malformed metadata or an inconsistent
+    /// lifecycle projection.
+    pub fn validate(&self) -> Result<(), BuilderCatalogValueError> {
+        NewProjectBuilder {
+            id: self.id,
+            project_id: self.project_id,
+            key: self.key.clone(),
+            display_name: self.display_name.clone(),
+            source_repository_id: self.source_repository_id,
+            source_revision: self.source_revision.clone(),
+            dockerfile_path: self.dockerfile_path.clone(),
+            context_path: self.context_path.clone(),
+            context_digest: self.context_digest.clone(),
+            approved_base_image: self.approved_base_image.clone(),
+        }
+        .validate()?;
+
+        match self.status {
+            ProjectBuilderStatus::Ready => {
+                let output_reference = self
+                    .oci_image_reference
+                    .as_ref()
+                    .ok_or(BuilderCatalogValueError::InvalidProjectBuilderState)?;
+                let output_digest = self
+                    .oci_image_digest
+                    .as_ref()
+                    .ok_or(BuilderCatalogValueError::InvalidProjectBuilderState)?;
+                if output_reference.digest()? != *output_digest {
+                    return Err(BuilderCatalogValueError::InvalidProjectBuilderState);
+                }
+                let provenance = self
+                    .provenance
+                    .as_ref()
+                    .ok_or(BuilderCatalogValueError::InvalidProjectBuilderState)?;
+                provenance.validate()?;
+                if provenance.source_revision != self.source_revision
+                    || provenance.context_digest != self.context_digest
+                {
+                    return Err(BuilderCatalogValueError::InvalidProjectBuilderState);
+                }
+                if self.failure_reason.is_some() {
+                    return Err(BuilderCatalogValueError::InvalidProjectBuilderState);
+                }
+            }
+            ProjectBuilderStatus::Failed => {
+                if self.failure_reason.as_deref().is_none_or(str::is_empty)
+                    || self
+                        .failure_reason
+                        .as_ref()
+                        .is_some_and(|reason| reason.len() > 2048)
+                    || self.oci_image_reference.is_some()
+                    || self.oci_image_digest.is_some()
+                    || self.provenance.is_some()
+                {
+                    return Err(BuilderCatalogValueError::InvalidProjectBuilderState);
+                }
+            }
+            ProjectBuilderStatus::Draft | ProjectBuilderStatus::Preparing => {
+                if self.failure_reason.is_some()
+                    || self.oci_image_reference.is_some()
+                    || self.oci_image_digest.is_some()
+                    || self.provenance.is_some()
+                {
+                    return Err(BuilderCatalogValueError::InvalidProjectBuilderState);
+                }
+            }
+            ProjectBuilderStatus::Retired => {
+                if let (Some(output_reference), Some(output_digest), Some(provenance)) = (
+                    self.oci_image_reference.as_ref(),
+                    self.oci_image_digest.as_ref(),
+                    self.provenance.as_ref(),
+                ) {
+                    if output_reference.digest()? != *output_digest
+                        || provenance.source_revision != self.source_revision
+                        || provenance.context_digest != self.context_digest
+                        || self.failure_reason.is_some()
+                    {
+                        return Err(BuilderCatalogValueError::InvalidProjectBuilderState);
+                    }
+                    provenance.validate()?;
+                } else if self.oci_image_reference.is_some()
+                    || self.oci_image_digest.is_some()
+                    || self.provenance.is_some()
+                    || self
+                        .failure_reason
+                        .as_ref()
+                        .is_some_and(|reason| reason.trim().is_empty() || reason.len() > 2048)
+                {
+                    return Err(BuilderCatalogValueError::InvalidProjectBuilderState);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Transitions a draft or failed definition into preparation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProjectBuilderLifecycleError::InvalidTransition`] when the
+    /// definition is not retryable.
+    pub fn begin_preparation(mut self) -> Result<Self, ProjectBuilderLifecycleError> {
+        match self.status {
+            ProjectBuilderStatus::Draft | ProjectBuilderStatus::Failed => {
+                self.status = ProjectBuilderStatus::Preparing;
+                self.failure_reason = None;
+                Ok(self)
+            }
+            ProjectBuilderStatus::Preparing
+            | ProjectBuilderStatus::Ready
+            | ProjectBuilderStatus::Retired => Err(ProjectBuilderLifecycleError::InvalidTransition),
+        }
+    }
+
+    /// Completes preparation with an immutable output and matching provenance.
+    ///
+    /// # Errors
+    ///
+    /// Returns a lifecycle or value error if the definition is not preparing,
+    /// or if output provenance does not match its immutable source.
+    pub fn complete(
+        mut self,
+        output_reference: BuilderImageReference,
+        output_digest: OciDigest,
+        provenance: ProjectBuilderProvenance,
+    ) -> Result<Self, ProjectBuilderLifecycleError> {
+        if self.status != ProjectBuilderStatus::Preparing {
+            return Err(ProjectBuilderLifecycleError::InvalidTransition);
+        }
+        if output_reference
+            .digest()
+            .map_err(ProjectBuilderLifecycleError::InvalidValue)?
+            != output_digest
+        {
+            return Err(ProjectBuilderLifecycleError::InvalidValue(
+                BuilderCatalogValueError::InvalidProjectBuilderState,
+            ));
+        }
+        provenance
+            .validate()
+            .map_err(ProjectBuilderLifecycleError::InvalidValue)?;
+        if provenance.source_revision != self.source_revision
+            || provenance.context_digest != self.context_digest
+        {
+            return Err(ProjectBuilderLifecycleError::InvalidValue(
+                BuilderCatalogValueError::InvalidProvenance,
+            ));
+        }
+        self.status = ProjectBuilderStatus::Ready;
+        self.oci_image_reference = Some(output_reference);
+        self.oci_image_digest = Some(output_digest);
+        self.provenance = Some(provenance);
+        self.failure_reason = None;
+        Ok(self)
+    }
+
+    /// Records a preparation failure without changing immutable source data.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProjectBuilderLifecycleError::InvalidTransition`] when the
+    /// definition is not currently preparing.
+    pub fn fail(mut self, reason: impl Into<String>) -> Result<Self, ProjectBuilderLifecycleError> {
+        if self.status != ProjectBuilderStatus::Preparing {
+            return Err(ProjectBuilderLifecycleError::InvalidTransition);
+        }
+        let reason = reason.into();
+        if reason.trim().is_empty() || reason.len() > 2048 {
+            return Err(ProjectBuilderLifecycleError::InvalidValue(
+                BuilderCatalogValueError::InvalidFailureReason,
+            ));
+        }
+        self.status = ProjectBuilderStatus::Failed;
+        self.failure_reason = Some(reason);
+        Ok(self)
+    }
+
+    /// Retires a definition while retaining its historical metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProjectBuilderLifecycleError::InvalidTransition`] if it is
+    /// already retired.
+    pub fn retire(mut self) -> Result<Self, ProjectBuilderLifecycleError> {
+        if self.status == ProjectBuilderStatus::Retired {
+            return Err(ProjectBuilderLifecycleError::InvalidTransition);
+        }
+        self.status = ProjectBuilderStatus::Retired;
+        Ok(self)
+    }
+}
+
+/// Invalid project-builder lifecycle transition.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ProjectBuilderLifecycleError {
+    /// The requested operation is not valid for the current state.
+    #[error("project builder lifecycle transition is invalid")]
+    InvalidTransition,
+    /// The lifecycle payload violates a domain invariant.
+    #[error("project builder lifecycle payload is invalid: {0}")]
+    InvalidValue(#[source] BuilderCatalogValueError),
+}
+
+fn valid_source_revision(value: &str) -> bool {
+    (value.len() == 40 || value.len() == 64)
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }
 
 /// One platform-owned, digest-pinned builder image.
@@ -382,6 +893,29 @@ pub enum BuilderCatalogValueError {
     /// Stored lifecycle or policy text is not recognized.
     #[error("builder catalog contains an unknown lifecycle or policy value")]
     InvalidStoredValue,
+    /// A project builder identity is missing or nil.
+    #[error("project builder identifiers must be non-nil")]
+    InvalidProjectBuilderId,
+    /// A project builder source revision is not an immutable commit digest.
+    #[error(
+        "project builder source revision must be a lowercase 40- or 64-character commit digest"
+    )]
+    InvalidSourceRevision,
+    /// A Dockerfile or context path escapes the repository.
+    #[error("project builder source path must be repository-relative and safe")]
+    InvalidSourcePath,
+    /// An OCI output or context digest is malformed.
+    #[error("OCI digest must be a lowercase sha256 digest")]
+    InvalidOciDigest,
+    /// A project builder lifecycle projection is inconsistent.
+    #[error("project builder lifecycle projection is inconsistent")]
+    InvalidProjectBuilderState,
+    /// A project builder completion lacks valid provenance.
+    #[error("project builder provenance is invalid")]
+    InvalidProvenance,
+    /// A project builder failure reason is missing or too large.
+    #[error("project builder failure reason is invalid")]
+    InvalidFailureReason,
 }
 
 /// Failure when selecting an image for one source build.
@@ -476,5 +1010,90 @@ mod tests {
             image.validate_selection(BuildNetworkPolicy::Disabled, 3, 128),
             Err(BuilderSelectionError::ResourceCeilingExceeded)
         );
+    }
+
+    fn project_builder() -> ProjectBuilderDefinition {
+        ProjectBuilderDefinition {
+            id: ProjectBuilderId::new(),
+            project_id: Uuid::new_v4(),
+            key: BuilderKey::parse("custom").expect("key"),
+            display_name: String::from("Custom builder"),
+            source_repository_id: Uuid::new_v4(),
+            source_revision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
+            dockerfile_path: BuilderSourcePath::parse("builders/Dockerfile").expect("path"),
+            context_path: BuilderSourcePath::parse(".").expect("context"),
+            context_digest: OciDigest::parse(
+                "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            )
+            .expect("context digest"),
+            approved_base_image: BuilderImageReference::parse(
+                "registry.example/ubuntu@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            )
+            .expect("base image"),
+            status: ProjectBuilderStatus::Draft,
+            oci_image_reference: None,
+            oci_image_digest: None,
+            provenance: None,
+            failure_reason: None,
+            created_at: time::OffsetDateTime::UNIX_EPOCH,
+            updated_at: time::OffsetDateTime::UNIX_EPOCH,
+        }
+    }
+
+    #[test]
+    fn project_builder_lifecycle_preserves_immutable_output_provenance() {
+        let draft = project_builder();
+        draft.validate().expect("valid draft");
+        let preparing = draft.begin_preparation().expect("preparing");
+        let output_digest = OciDigest::parse(
+            "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        )
+        .expect("output digest");
+        let ready = preparing
+            .complete(
+                BuilderImageReference::parse(format!("registry.example/custom@{output_digest}"))
+                    .expect("output reference"),
+                output_digest.clone(),
+                ProjectBuilderProvenance {
+                    source_revision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
+                    context_digest: OciDigest::parse(
+                        "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                    )
+                    .expect("context digest"),
+                    attestation_reference: String::from("attestation://test-build"),
+                    sbom_reference: None,
+                },
+            )
+            .expect("ready");
+        ready.validate().expect("valid ready");
+        assert_eq!(ready.oci_image_digest, Some(output_digest));
+        let retired = ready.retire().expect("retired");
+        retired.validate().expect("valid retired");
+        assert!(retired.oci_image_reference.is_some());
+        assert!(retired.provenance.is_some());
+    }
+
+    #[test]
+    fn failed_project_builder_can_retry_without_changing_source() {
+        let draft = project_builder();
+        let preparing = draft.begin_preparation().expect("preparing");
+        let failed = preparing.fail("OCI preparation failed").expect("failed");
+        failed.validate().expect("valid failed state");
+        let retried = failed.begin_preparation().expect("retry");
+        assert_eq!(retried.status, ProjectBuilderStatus::Preparing);
+        assert_eq!(
+            retried.source_revision,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert!(retried.failure_reason.is_none());
+    }
+
+    #[test]
+    fn source_paths_cannot_escape_the_repository() {
+        assert!(BuilderSourcePath::parse(".").is_ok());
+        assert!(BuilderSourcePath::parse("builders/Dockerfile").is_ok());
+        assert!(BuilderSourcePath::parse("../Dockerfile").is_err());
+        assert!(BuilderSourcePath::parse("/tmp/Dockerfile").is_err());
+        assert!(BuilderSourcePath::parse("builders\\Dockerfile").is_err());
     }
 }

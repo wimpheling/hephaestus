@@ -14,6 +14,7 @@ forge-domain = { path = "../forge-domain" }
 serde.workspace = true
 sha2.workspace = true
 toml.workspace = true
+uuid.workspace = true
 
 [lints]
 workspace = true

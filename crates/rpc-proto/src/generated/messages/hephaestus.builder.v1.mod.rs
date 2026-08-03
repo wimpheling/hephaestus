@@ -31,6 +31,26 @@ pub mod __buffa {
         reg.register_json_any(super::__GET_BUILDER_IMAGE_RESPONSE_JSON_ANY);
         reg.register_json_any(super::__VALIDATE_AGENT_CONFIG_REQUEST_JSON_ANY);
         reg.register_json_any(super::__VALIDATE_AGENT_CONFIG_RESPONSE_JSON_ANY);
+        reg.register_json_any(super::__PROJECT_BUILDER_PROVENANCE_JSON_ANY);
+        reg.register_json_any(super::__PROJECT_BUILDER_JSON_ANY);
+        reg.register_json_any(super::__CREATE_PROJECT_BUILDER_REQUEST_JSON_ANY);
+        reg.register_json_any(super::__CREATE_PROJECT_BUILDER_RESPONSE_JSON_ANY);
+        reg.register_json_any(super::__LIST_PROJECT_BUILDERS_REQUEST_JSON_ANY);
+        reg.register_json_any(super::__LIST_PROJECT_BUILDERS_RESPONSE_JSON_ANY);
+        reg.register_json_any(super::__GET_PROJECT_BUILDER_REQUEST_JSON_ANY);
+        reg.register_json_any(super::__GET_PROJECT_BUILDER_RESPONSE_JSON_ANY);
+        reg.register_json_any(
+            super::__REQUEST_PROJECT_BUILDER_PREPARATION_REQUEST_JSON_ANY,
+        );
+        reg.register_json_any(
+            super::__REQUEST_PROJECT_BUILDER_PREPARATION_RESPONSE_JSON_ANY,
+        );
+        reg.register_json_any(
+            super::__COMPLETE_PROJECT_BUILDER_PREPARATION_REQUEST_JSON_ANY,
+        );
+        reg.register_json_any(
+            super::__COMPLETE_PROJECT_BUILDER_PREPARATION_RESPONSE_JSON_ANY,
+        );
     }
 }
 #[doc(inline)]
@@ -69,5 +89,53 @@ pub use self::__buffa::view::ValidateAgentConfigRequestOwnedView;
 pub use self::__buffa::view::ValidateAgentConfigResponseView;
 #[doc(inline)]
 pub use self::__buffa::view::ValidateAgentConfigResponseOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::ProjectBuilderProvenanceView;
+#[doc(inline)]
+pub use self::__buffa::view::ProjectBuilderProvenanceOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::ProjectBuilderView;
+#[doc(inline)]
+pub use self::__buffa::view::ProjectBuilderOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::CreateProjectBuilderRequestView;
+#[doc(inline)]
+pub use self::__buffa::view::CreateProjectBuilderRequestOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::CreateProjectBuilderResponseView;
+#[doc(inline)]
+pub use self::__buffa::view::CreateProjectBuilderResponseOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::ListProjectBuildersRequestView;
+#[doc(inline)]
+pub use self::__buffa::view::ListProjectBuildersRequestOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::ListProjectBuildersResponseView;
+#[doc(inline)]
+pub use self::__buffa::view::ListProjectBuildersResponseOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::GetProjectBuilderRequestView;
+#[doc(inline)]
+pub use self::__buffa::view::GetProjectBuilderRequestOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::GetProjectBuilderResponseView;
+#[doc(inline)]
+pub use self::__buffa::view::GetProjectBuilderResponseOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::RequestProjectBuilderPreparationRequestView;
+#[doc(inline)]
+pub use self::__buffa::view::RequestProjectBuilderPreparationRequestOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::RequestProjectBuilderPreparationResponseView;
+#[doc(inline)]
+pub use self::__buffa::view::RequestProjectBuilderPreparationResponseOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::CompleteProjectBuilderPreparationRequestView;
+#[doc(inline)]
+pub use self::__buffa::view::CompleteProjectBuilderPreparationRequestOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::CompleteProjectBuilderPreparationResponseView;
+#[doc(inline)]
+pub use self::__buffa::view::CompleteProjectBuilderPreparationResponseOwnedView;
 #[doc(inline)]
 pub use self::__buffa::register_types;

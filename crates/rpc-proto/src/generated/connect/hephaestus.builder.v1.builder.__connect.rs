@@ -34,6 +34,66 @@ pub type OwnedValidateAgentConfigResponseView = ::buffa::view::OwnedView<
         'static,
     >,
 >;
+///Shorthand for `OwnedView<CreateProjectBuilderRequestView<'static>>`.
+pub type OwnedCreateProjectBuilderRequestView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::builder::v1::__buffa::view::CreateProjectBuilderRequestView<
+        'static,
+    >,
+>;
+///Shorthand for `OwnedView<CreateProjectBuilderResponseView<'static>>`.
+pub type OwnedCreateProjectBuilderResponseView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::builder::v1::__buffa::view::CreateProjectBuilderResponseView<
+        'static,
+    >,
+>;
+///Shorthand for `OwnedView<ListProjectBuildersRequestView<'static>>`.
+pub type OwnedListProjectBuildersRequestView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::builder::v1::__buffa::view::ListProjectBuildersRequestView<
+        'static,
+    >,
+>;
+///Shorthand for `OwnedView<ListProjectBuildersResponseView<'static>>`.
+pub type OwnedListProjectBuildersResponseView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::builder::v1::__buffa::view::ListProjectBuildersResponseView<
+        'static,
+    >,
+>;
+///Shorthand for `OwnedView<GetProjectBuilderRequestView<'static>>`.
+pub type OwnedGetProjectBuilderRequestView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::builder::v1::__buffa::view::GetProjectBuilderRequestView<
+        'static,
+    >,
+>;
+///Shorthand for `OwnedView<GetProjectBuilderResponseView<'static>>`.
+pub type OwnedGetProjectBuilderResponseView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::builder::v1::__buffa::view::GetProjectBuilderResponseView<
+        'static,
+    >,
+>;
+///Shorthand for `OwnedView<RequestProjectBuilderPreparationRequestView<'static>>`.
+pub type OwnedRequestProjectBuilderPreparationRequestView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::builder::v1::__buffa::view::RequestProjectBuilderPreparationRequestView<
+        'static,
+    >,
+>;
+///Shorthand for `OwnedView<RequestProjectBuilderPreparationResponseView<'static>>`.
+pub type OwnedRequestProjectBuilderPreparationResponseView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::builder::v1::__buffa::view::RequestProjectBuilderPreparationResponseView<
+        'static,
+    >,
+>;
+///Shorthand for `OwnedView<CompleteProjectBuilderPreparationRequestView<'static>>`.
+pub type OwnedCompleteProjectBuilderPreparationRequestView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::builder::v1::__buffa::view::CompleteProjectBuilderPreparationRequestView<
+        'static,
+    >,
+>;
+///Shorthand for `OwnedView<CompleteProjectBuilderPreparationResponseView<'static>>`.
+pub type OwnedCompleteProjectBuilderPreparationResponseView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::builder::v1::__buffa::view::CompleteProjectBuilderPreparationResponseView<
+        'static,
+    >,
+>;
 impl ::connectrpc::Encodable<
     crate::messages::hephaestus::builder::v1::ListBuilderImagesResponse,
 >
@@ -118,6 +178,146 @@ for ::buffa::view::OwnedView<
         ::connectrpc::__codegen::encode_view_body(self.reborrow(), codec)
     }
 }
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::builder::v1::CreateProjectBuilderResponse,
+>
+for crate::messages::hephaestus::builder::v1::__buffa::view::CreateProjectBuilderResponseView<
+    '_,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self, codec)
+    }
+}
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::builder::v1::CreateProjectBuilderResponse,
+>
+for ::buffa::view::OwnedView<
+    crate::messages::hephaestus::builder::v1::__buffa::view::CreateProjectBuilderResponseView<
+        'static,
+    >,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self.reborrow(), codec)
+    }
+}
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::builder::v1::ListProjectBuildersResponse,
+>
+for crate::messages::hephaestus::builder::v1::__buffa::view::ListProjectBuildersResponseView<
+    '_,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self, codec)
+    }
+}
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::builder::v1::ListProjectBuildersResponse,
+>
+for ::buffa::view::OwnedView<
+    crate::messages::hephaestus::builder::v1::__buffa::view::ListProjectBuildersResponseView<
+        'static,
+    >,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self.reborrow(), codec)
+    }
+}
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::builder::v1::GetProjectBuilderResponse,
+>
+for crate::messages::hephaestus::builder::v1::__buffa::view::GetProjectBuilderResponseView<
+    '_,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self, codec)
+    }
+}
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::builder::v1::GetProjectBuilderResponse,
+>
+for ::buffa::view::OwnedView<
+    crate::messages::hephaestus::builder::v1::__buffa::view::GetProjectBuilderResponseView<
+        'static,
+    >,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self.reborrow(), codec)
+    }
+}
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::builder::v1::RequestProjectBuilderPreparationResponse,
+>
+for crate::messages::hephaestus::builder::v1::__buffa::view::RequestProjectBuilderPreparationResponseView<
+    '_,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self, codec)
+    }
+}
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::builder::v1::RequestProjectBuilderPreparationResponse,
+>
+for ::buffa::view::OwnedView<
+    crate::messages::hephaestus::builder::v1::__buffa::view::RequestProjectBuilderPreparationResponseView<
+        'static,
+    >,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self.reborrow(), codec)
+    }
+}
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::builder::v1::CompleteProjectBuilderPreparationResponse,
+>
+for crate::messages::hephaestus::builder::v1::__buffa::view::CompleteProjectBuilderPreparationResponseView<
+    '_,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self, codec)
+    }
+}
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::builder::v1::CompleteProjectBuilderPreparationResponse,
+>
+for ::buffa::view::OwnedView<
+    crate::messages::hephaestus::builder::v1::__buffa::view::CompleteProjectBuilderPreparationResponseView<
+        'static,
+    >,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self.reborrow(), codec)
+    }
+}
 /// Full service name for this service.
 pub const BUILDER_CATALOG_SERVICE_SERVICE_NAME: &str = "hephaestus.builder.v1.BuilderCatalogService";
 /// Static [`Spec`](::connectrpc::Spec) for the server-side `ListBuilderImages` RPC.
@@ -147,6 +347,51 @@ pub const BUILDER_CATALOG_SERVICE_VALIDATE_AGENT_CONFIG_SPEC: ::connectrpc::Spec
         ::connectrpc::StreamType::Unary,
     )
     .with_idempotency_level(::connectrpc::IdempotencyLevel::NoSideEffects);
+/// Static [`Spec`](::connectrpc::Spec) for the server-side `CreateProjectBuilder` RPC.
+///
+/// The dispatcher surfaces this on
+/// [`RequestContext::spec`](::connectrpc::RequestContext::spec).
+pub const BUILDER_CATALOG_SERVICE_CREATE_PROJECT_BUILDER_SPEC: ::connectrpc::Spec = ::connectrpc::Spec::server(
+        "/hephaestus.builder.v1.BuilderCatalogService/CreateProjectBuilder",
+        ::connectrpc::StreamType::Unary,
+    )
+    .with_idempotency_level(::connectrpc::IdempotencyLevel::Unknown);
+/// Static [`Spec`](::connectrpc::Spec) for the server-side `ListProjectBuilders` RPC.
+///
+/// The dispatcher surfaces this on
+/// [`RequestContext::spec`](::connectrpc::RequestContext::spec).
+pub const BUILDER_CATALOG_SERVICE_LIST_PROJECT_BUILDERS_SPEC: ::connectrpc::Spec = ::connectrpc::Spec::server(
+        "/hephaestus.builder.v1.BuilderCatalogService/ListProjectBuilders",
+        ::connectrpc::StreamType::Unary,
+    )
+    .with_idempotency_level(::connectrpc::IdempotencyLevel::NoSideEffects);
+/// Static [`Spec`](::connectrpc::Spec) for the server-side `GetProjectBuilder` RPC.
+///
+/// The dispatcher surfaces this on
+/// [`RequestContext::spec`](::connectrpc::RequestContext::spec).
+pub const BUILDER_CATALOG_SERVICE_GET_PROJECT_BUILDER_SPEC: ::connectrpc::Spec = ::connectrpc::Spec::server(
+        "/hephaestus.builder.v1.BuilderCatalogService/GetProjectBuilder",
+        ::connectrpc::StreamType::Unary,
+    )
+    .with_idempotency_level(::connectrpc::IdempotencyLevel::NoSideEffects);
+/// Static [`Spec`](::connectrpc::Spec) for the server-side `RequestProjectBuilderPreparation` RPC.
+///
+/// The dispatcher surfaces this on
+/// [`RequestContext::spec`](::connectrpc::RequestContext::spec).
+pub const BUILDER_CATALOG_SERVICE_REQUEST_PROJECT_BUILDER_PREPARATION_SPEC: ::connectrpc::Spec = ::connectrpc::Spec::server(
+        "/hephaestus.builder.v1.BuilderCatalogService/RequestProjectBuilderPreparation",
+        ::connectrpc::StreamType::Unary,
+    )
+    .with_idempotency_level(::connectrpc::IdempotencyLevel::Unknown);
+/// Static [`Spec`](::connectrpc::Spec) for the server-side `CompleteProjectBuilderPreparation` RPC.
+///
+/// The dispatcher surfaces this on
+/// [`RequestContext::spec`](::connectrpc::RequestContext::spec).
+pub const BUILDER_CATALOG_SERVICE_COMPLETE_PROJECT_BUILDER_PREPARATION_SPEC: ::connectrpc::Spec = ::connectrpc::Spec::server(
+        "/hephaestus.builder.v1.BuilderCatalogService/CompleteProjectBuilderPreparation",
+        ::connectrpc::StreamType::Unary,
+    )
+    .with_idempotency_level(::connectrpc::IdempotencyLevel::Unknown);
 /// Server trait for BuilderCatalogService.
 ///
 /// # Implementing handlers
@@ -264,6 +509,121 @@ pub trait BuilderCatalogService: Send + Sync + 'static {
         Output = ::connectrpc::ServiceResult<
             impl ::connectrpc::Encodable<
                 crate::messages::hephaestus::builder::v1::ValidateAgentConfigResponse,
+            > + Send + use<'a, Self>,
+        >,
+    > + Send;
+    /// Handle the CreateProjectBuilder RPC.
+    ///
+    /// `'a` lets the response body borrow from `&self` (e.g. server-resident state).
+    ///
+    /// `request` is borrowed from the request body and is valid for the
+    /// duration of the call; message fields are read directly on it
+    /// (zero-copy). The response cannot borrow from `request` — use
+    /// `.to_owned_message()` (or copy the specific fields) for anything
+    /// returned, stored, or moved into `tokio::spawn`.
+    fn create_project_builder<'a>(
+        &'a self,
+        ctx: ::connectrpc::RequestContext,
+        request: ::connectrpc::ServiceRequest<
+            '_,
+            crate::messages::hephaestus::builder::v1::CreateProjectBuilderRequest,
+        >,
+    ) -> impl ::std::future::Future<
+        Output = ::connectrpc::ServiceResult<
+            impl ::connectrpc::Encodable<
+                crate::messages::hephaestus::builder::v1::CreateProjectBuilderResponse,
+            > + Send + use<'a, Self>,
+        >,
+    > + Send;
+    /// Handle the ListProjectBuilders RPC.
+    ///
+    /// `'a` lets the response body borrow from `&self` (e.g. server-resident state).
+    ///
+    /// `request` is borrowed from the request body and is valid for the
+    /// duration of the call; message fields are read directly on it
+    /// (zero-copy). The response cannot borrow from `request` — use
+    /// `.to_owned_message()` (or copy the specific fields) for anything
+    /// returned, stored, or moved into `tokio::spawn`.
+    fn list_project_builders<'a>(
+        &'a self,
+        ctx: ::connectrpc::RequestContext,
+        request: ::connectrpc::ServiceRequest<
+            '_,
+            crate::messages::hephaestus::builder::v1::ListProjectBuildersRequest,
+        >,
+    ) -> impl ::std::future::Future<
+        Output = ::connectrpc::ServiceResult<
+            impl ::connectrpc::Encodable<
+                crate::messages::hephaestus::builder::v1::ListProjectBuildersResponse,
+            > + Send + use<'a, Self>,
+        >,
+    > + Send;
+    /// Handle the GetProjectBuilder RPC.
+    ///
+    /// `'a` lets the response body borrow from `&self` (e.g. server-resident state).
+    ///
+    /// `request` is borrowed from the request body and is valid for the
+    /// duration of the call; message fields are read directly on it
+    /// (zero-copy). The response cannot borrow from `request` — use
+    /// `.to_owned_message()` (or copy the specific fields) for anything
+    /// returned, stored, or moved into `tokio::spawn`.
+    fn get_project_builder<'a>(
+        &'a self,
+        ctx: ::connectrpc::RequestContext,
+        request: ::connectrpc::ServiceRequest<
+            '_,
+            crate::messages::hephaestus::builder::v1::GetProjectBuilderRequest,
+        >,
+    ) -> impl ::std::future::Future<
+        Output = ::connectrpc::ServiceResult<
+            impl ::connectrpc::Encodable<
+                crate::messages::hephaestus::builder::v1::GetProjectBuilderResponse,
+            > + Send + use<'a, Self>,
+        >,
+    > + Send;
+    /// Handle the RequestProjectBuilderPreparation RPC.
+    ///
+    /// `'a` lets the response body borrow from `&self` (e.g. server-resident state).
+    ///
+    /// `request` is borrowed from the request body and is valid for the
+    /// duration of the call; message fields are read directly on it
+    /// (zero-copy). The response cannot borrow from `request` — use
+    /// `.to_owned_message()` (or copy the specific fields) for anything
+    /// returned, stored, or moved into `tokio::spawn`.
+    fn request_project_builder_preparation<'a>(
+        &'a self,
+        ctx: ::connectrpc::RequestContext,
+        request: ::connectrpc::ServiceRequest<
+            '_,
+            crate::messages::hephaestus::builder::v1::RequestProjectBuilderPreparationRequest,
+        >,
+    ) -> impl ::std::future::Future<
+        Output = ::connectrpc::ServiceResult<
+            impl ::connectrpc::Encodable<
+                crate::messages::hephaestus::builder::v1::RequestProjectBuilderPreparationResponse,
+            > + Send + use<'a, Self>,
+        >,
+    > + Send;
+    /// Handle the CompleteProjectBuilderPreparation RPC.
+    ///
+    /// `'a` lets the response body borrow from `&self` (e.g. server-resident state).
+    ///
+    /// `request` is borrowed from the request body and is valid for the
+    /// duration of the call; message fields are read directly on it
+    /// (zero-copy). The response cannot borrow from `request` — use
+    /// `.to_owned_message()` (or copy the specific fields) for anything
+    /// returned, stored, or moved into `tokio::spawn`.
+    fn complete_project_builder_preparation<'a>(
+        &'a self,
+        ctx: ::connectrpc::RequestContext,
+        request: ::connectrpc::ServiceRequest<
+            '_,
+            crate::messages::hephaestus::builder::v1::CompleteProjectBuilderPreparationRequest,
+        >,
+    ) -> impl ::std::future::Future<
+        Output = ::connectrpc::ServiceResult<
+            impl ::connectrpc::Encodable<
+                crate::messages::hephaestus::builder::v1::CompleteProjectBuilderPreparationResponse,
             > + Send + use<'a, Self>,
         >,
     > + Send;
@@ -386,6 +746,151 @@ impl<S: BuilderCatalogService> BuilderCatalogServiceExt for S {
                 },
             )
             .with_spec(BUILDER_CATALOG_SERVICE_VALIDATE_AGENT_CONFIG_SPEC)
+            .route_view(
+                BUILDER_CATALOG_SERVICE_SERVICE_NAME,
+                "CreateProjectBuilder",
+                {
+                    let svc = ::std::sync::Arc::clone(&self);
+                    ::connectrpc::view_handler_fn(move |
+                        ctx,
+                        req: ::buffa::view::OwnedView<
+                            crate::messages::hephaestus::builder::v1::__buffa::view::CreateProjectBuilderRequestView<
+                                'static,
+                            >,
+                        >,
+                        format|
+                    {
+                        let svc = ::std::sync::Arc::clone(&svc);
+                        async move {
+                            let sreq = ::connectrpc::ServiceRequest::<
+                                crate::messages::hephaestus::builder::v1::CreateProjectBuilderRequest,
+                            >::from_parts(req.reborrow(), req.bytes());
+                            svc.create_project_builder(ctx, sreq)
+                                .await?
+                                .encode::<
+                                    crate::messages::hephaestus::builder::v1::CreateProjectBuilderResponse,
+                                >(format)
+                        }
+                    })
+                },
+            )
+            .with_spec(BUILDER_CATALOG_SERVICE_CREATE_PROJECT_BUILDER_SPEC)
+            .route_view_idempotent(
+                BUILDER_CATALOG_SERVICE_SERVICE_NAME,
+                "ListProjectBuilders",
+                {
+                    let svc = ::std::sync::Arc::clone(&self);
+                    ::connectrpc::view_handler_fn(move |
+                        ctx,
+                        req: ::buffa::view::OwnedView<
+                            crate::messages::hephaestus::builder::v1::__buffa::view::ListProjectBuildersRequestView<
+                                'static,
+                            >,
+                        >,
+                        format|
+                    {
+                        let svc = ::std::sync::Arc::clone(&svc);
+                        async move {
+                            let sreq = ::connectrpc::ServiceRequest::<
+                                crate::messages::hephaestus::builder::v1::ListProjectBuildersRequest,
+                            >::from_parts(req.reborrow(), req.bytes());
+                            svc.list_project_builders(ctx, sreq)
+                                .await?
+                                .encode::<
+                                    crate::messages::hephaestus::builder::v1::ListProjectBuildersResponse,
+                                >(format)
+                        }
+                    })
+                },
+            )
+            .with_spec(BUILDER_CATALOG_SERVICE_LIST_PROJECT_BUILDERS_SPEC)
+            .route_view_idempotent(
+                BUILDER_CATALOG_SERVICE_SERVICE_NAME,
+                "GetProjectBuilder",
+                {
+                    let svc = ::std::sync::Arc::clone(&self);
+                    ::connectrpc::view_handler_fn(move |
+                        ctx,
+                        req: ::buffa::view::OwnedView<
+                            crate::messages::hephaestus::builder::v1::__buffa::view::GetProjectBuilderRequestView<
+                                'static,
+                            >,
+                        >,
+                        format|
+                    {
+                        let svc = ::std::sync::Arc::clone(&svc);
+                        async move {
+                            let sreq = ::connectrpc::ServiceRequest::<
+                                crate::messages::hephaestus::builder::v1::GetProjectBuilderRequest,
+                            >::from_parts(req.reborrow(), req.bytes());
+                            svc.get_project_builder(ctx, sreq)
+                                .await?
+                                .encode::<
+                                    crate::messages::hephaestus::builder::v1::GetProjectBuilderResponse,
+                                >(format)
+                        }
+                    })
+                },
+            )
+            .with_spec(BUILDER_CATALOG_SERVICE_GET_PROJECT_BUILDER_SPEC)
+            .route_view(
+                BUILDER_CATALOG_SERVICE_SERVICE_NAME,
+                "RequestProjectBuilderPreparation",
+                {
+                    let svc = ::std::sync::Arc::clone(&self);
+                    ::connectrpc::view_handler_fn(move |
+                        ctx,
+                        req: ::buffa::view::OwnedView<
+                            crate::messages::hephaestus::builder::v1::__buffa::view::RequestProjectBuilderPreparationRequestView<
+                                'static,
+                            >,
+                        >,
+                        format|
+                    {
+                        let svc = ::std::sync::Arc::clone(&svc);
+                        async move {
+                            let sreq = ::connectrpc::ServiceRequest::<
+                                crate::messages::hephaestus::builder::v1::RequestProjectBuilderPreparationRequest,
+                            >::from_parts(req.reborrow(), req.bytes());
+                            svc.request_project_builder_preparation(ctx, sreq)
+                                .await?
+                                .encode::<
+                                    crate::messages::hephaestus::builder::v1::RequestProjectBuilderPreparationResponse,
+                                >(format)
+                        }
+                    })
+                },
+            )
+            .with_spec(BUILDER_CATALOG_SERVICE_REQUEST_PROJECT_BUILDER_PREPARATION_SPEC)
+            .route_view(
+                BUILDER_CATALOG_SERVICE_SERVICE_NAME,
+                "CompleteProjectBuilderPreparation",
+                {
+                    let svc = ::std::sync::Arc::clone(&self);
+                    ::connectrpc::view_handler_fn(move |
+                        ctx,
+                        req: ::buffa::view::OwnedView<
+                            crate::messages::hephaestus::builder::v1::__buffa::view::CompleteProjectBuilderPreparationRequestView<
+                                'static,
+                            >,
+                        >,
+                        format|
+                    {
+                        let svc = ::std::sync::Arc::clone(&svc);
+                        async move {
+                            let sreq = ::connectrpc::ServiceRequest::<
+                                crate::messages::hephaestus::builder::v1::CompleteProjectBuilderPreparationRequest,
+                            >::from_parts(req.reborrow(), req.bytes());
+                            svc.complete_project_builder_preparation(ctx, sreq)
+                                .await?
+                                .encode::<
+                                    crate::messages::hephaestus::builder::v1::CompleteProjectBuilderPreparationResponse,
+                                >(format)
+                        }
+                    })
+                },
+            )
+            .with_spec(BUILDER_CATALOG_SERVICE_COMPLETE_PROJECT_BUILDER_PREPARATION_SPEC)
     }
 }
 /// Type-inference marker used by [`Router::add_service`](::connectrpc::Router::add_service).
@@ -459,6 +964,40 @@ for BuilderCatalogServiceServer<T> {
                 Some(
                     ::connectrpc::dispatcher::codegen::MethodDescriptor::unary(true)
                         .with_spec(BUILDER_CATALOG_SERVICE_VALIDATE_AGENT_CONFIG_SPEC),
+                )
+            }
+            "CreateProjectBuilder" => {
+                Some(
+                    ::connectrpc::dispatcher::codegen::MethodDescriptor::unary(false)
+                        .with_spec(BUILDER_CATALOG_SERVICE_CREATE_PROJECT_BUILDER_SPEC),
+                )
+            }
+            "ListProjectBuilders" => {
+                Some(
+                    ::connectrpc::dispatcher::codegen::MethodDescriptor::unary(true)
+                        .with_spec(BUILDER_CATALOG_SERVICE_LIST_PROJECT_BUILDERS_SPEC),
+                )
+            }
+            "GetProjectBuilder" => {
+                Some(
+                    ::connectrpc::dispatcher::codegen::MethodDescriptor::unary(true)
+                        .with_spec(BUILDER_CATALOG_SERVICE_GET_PROJECT_BUILDER_SPEC),
+                )
+            }
+            "RequestProjectBuilderPreparation" => {
+                Some(
+                    ::connectrpc::dispatcher::codegen::MethodDescriptor::unary(false)
+                        .with_spec(
+                            BUILDER_CATALOG_SERVICE_REQUEST_PROJECT_BUILDER_PREPARATION_SPEC,
+                        ),
+                )
+            }
+            "CompleteProjectBuilderPreparation" => {
+                Some(
+                    ::connectrpc::dispatcher::codegen::MethodDescriptor::unary(false)
+                        .with_spec(
+                            BUILDER_CATALOG_SERVICE_COMPLETE_PROJECT_BUILDER_PREPARATION_SPEC,
+                        ),
                 )
             }
             _ => None,
@@ -537,6 +1076,111 @@ for BuilderCatalogServiceServer<T> {
                         .await?
                         .encode::<
                             crate::messages::hephaestus::builder::v1::ValidateAgentConfigResponse,
+                        >(format)
+                })
+            }
+            "CreateProjectBuilder" => {
+                let svc = ::std::sync::Arc::clone(&self.inner);
+                Box::pin(async move {
+                    let body = ::connectrpc::dispatcher::codegen::request_proto_bytes::<
+                        crate::messages::hephaestus::builder::v1::CreateProjectBuilderRequest,
+                    >(request.encoded()?, format)?;
+                    let req: crate::messages::hephaestus::builder::v1::__buffa::view::CreateProjectBuilderRequestView<
+                        '_,
+                    > = ::connectrpc::dispatcher::codegen::decode_borrowed_request_view(
+                        &body,
+                    )?;
+                    let req = ::connectrpc::ServiceRequest::<
+                        crate::messages::hephaestus::builder::v1::CreateProjectBuilderRequest,
+                    >::from_parts(&req, &body);
+                    svc.create_project_builder(ctx, req)
+                        .await?
+                        .encode::<
+                            crate::messages::hephaestus::builder::v1::CreateProjectBuilderResponse,
+                        >(format)
+                })
+            }
+            "ListProjectBuilders" => {
+                let svc = ::std::sync::Arc::clone(&self.inner);
+                Box::pin(async move {
+                    let body = ::connectrpc::dispatcher::codegen::request_proto_bytes::<
+                        crate::messages::hephaestus::builder::v1::ListProjectBuildersRequest,
+                    >(request.encoded()?, format)?;
+                    let req: crate::messages::hephaestus::builder::v1::__buffa::view::ListProjectBuildersRequestView<
+                        '_,
+                    > = ::connectrpc::dispatcher::codegen::decode_borrowed_request_view(
+                        &body,
+                    )?;
+                    let req = ::connectrpc::ServiceRequest::<
+                        crate::messages::hephaestus::builder::v1::ListProjectBuildersRequest,
+                    >::from_parts(&req, &body);
+                    svc.list_project_builders(ctx, req)
+                        .await?
+                        .encode::<
+                            crate::messages::hephaestus::builder::v1::ListProjectBuildersResponse,
+                        >(format)
+                })
+            }
+            "GetProjectBuilder" => {
+                let svc = ::std::sync::Arc::clone(&self.inner);
+                Box::pin(async move {
+                    let body = ::connectrpc::dispatcher::codegen::request_proto_bytes::<
+                        crate::messages::hephaestus::builder::v1::GetProjectBuilderRequest,
+                    >(request.encoded()?, format)?;
+                    let req: crate::messages::hephaestus::builder::v1::__buffa::view::GetProjectBuilderRequestView<
+                        '_,
+                    > = ::connectrpc::dispatcher::codegen::decode_borrowed_request_view(
+                        &body,
+                    )?;
+                    let req = ::connectrpc::ServiceRequest::<
+                        crate::messages::hephaestus::builder::v1::GetProjectBuilderRequest,
+                    >::from_parts(&req, &body);
+                    svc.get_project_builder(ctx, req)
+                        .await?
+                        .encode::<
+                            crate::messages::hephaestus::builder::v1::GetProjectBuilderResponse,
+                        >(format)
+                })
+            }
+            "RequestProjectBuilderPreparation" => {
+                let svc = ::std::sync::Arc::clone(&self.inner);
+                Box::pin(async move {
+                    let body = ::connectrpc::dispatcher::codegen::request_proto_bytes::<
+                        crate::messages::hephaestus::builder::v1::RequestProjectBuilderPreparationRequest,
+                    >(request.encoded()?, format)?;
+                    let req: crate::messages::hephaestus::builder::v1::__buffa::view::RequestProjectBuilderPreparationRequestView<
+                        '_,
+                    > = ::connectrpc::dispatcher::codegen::decode_borrowed_request_view(
+                        &body,
+                    )?;
+                    let req = ::connectrpc::ServiceRequest::<
+                        crate::messages::hephaestus::builder::v1::RequestProjectBuilderPreparationRequest,
+                    >::from_parts(&req, &body);
+                    svc.request_project_builder_preparation(ctx, req)
+                        .await?
+                        .encode::<
+                            crate::messages::hephaestus::builder::v1::RequestProjectBuilderPreparationResponse,
+                        >(format)
+                })
+            }
+            "CompleteProjectBuilderPreparation" => {
+                let svc = ::std::sync::Arc::clone(&self.inner);
+                Box::pin(async move {
+                    let body = ::connectrpc::dispatcher::codegen::request_proto_bytes::<
+                        crate::messages::hephaestus::builder::v1::CompleteProjectBuilderPreparationRequest,
+                    >(request.encoded()?, format)?;
+                    let req: crate::messages::hephaestus::builder::v1::__buffa::view::CompleteProjectBuilderPreparationRequestView<
+                        '_,
+                    > = ::connectrpc::dispatcher::codegen::decode_borrowed_request_view(
+                        &body,
+                    )?;
+                    let req = ::connectrpc::ServiceRequest::<
+                        crate::messages::hephaestus::builder::v1::CompleteProjectBuilderPreparationRequest,
+                    >::from_parts(&req, &body);
+                    svc.complete_project_builder_preparation(ctx, req)
+                        .await?
+                        .encode::<
+                            crate::messages::hephaestus::builder::v1::CompleteProjectBuilderPreparationResponse,
                         >(format)
                 })
             }
@@ -803,6 +1447,231 @@ where
                 &self.config,
                 BUILDER_CATALOG_SERVICE_SERVICE_NAME,
                 "ValidateAgentConfig",
+                request,
+                options,
+            )
+            .await
+    }
+    /// Call the CreateProjectBuilder RPC. Sends a request to /hephaestus.builder.v1.BuilderCatalogService/CreateProjectBuilder.
+    pub async fn create_project_builder(
+        &self,
+        request: crate::messages::hephaestus::builder::v1::CreateProjectBuilderRequest,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::builder::v1::__buffa::view::CreateProjectBuilderResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        self.create_project_builder_with_options(
+                request,
+                ::connectrpc::client::CallOptions::default(),
+            )
+            .await
+    }
+    /// Call the CreateProjectBuilder RPC with explicit per-call options. Options override [`ClientConfig`](::connectrpc::client::ClientConfig) defaults.
+    pub async fn create_project_builder_with_options(
+        &self,
+        request: crate::messages::hephaestus::builder::v1::CreateProjectBuilderRequest,
+        options: ::connectrpc::client::CallOptions,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::builder::v1::__buffa::view::CreateProjectBuilderResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        ::connectrpc::client::call_unary(
+                &self.transport,
+                &self.config,
+                BUILDER_CATALOG_SERVICE_SERVICE_NAME,
+                "CreateProjectBuilder",
+                request,
+                options,
+            )
+            .await
+    }
+    /// Call the ListProjectBuilders RPC. Sends a request to /hephaestus.builder.v1.BuilderCatalogService/ListProjectBuilders.
+    pub async fn list_project_builders(
+        &self,
+        request: crate::messages::hephaestus::builder::v1::ListProjectBuildersRequest,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::builder::v1::__buffa::view::ListProjectBuildersResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        self.list_project_builders_with_options(
+                request,
+                ::connectrpc::client::CallOptions::default(),
+            )
+            .await
+    }
+    /// Call the ListProjectBuilders RPC with explicit per-call options. Options override [`ClientConfig`](::connectrpc::client::ClientConfig) defaults.
+    pub async fn list_project_builders_with_options(
+        &self,
+        request: crate::messages::hephaestus::builder::v1::ListProjectBuildersRequest,
+        options: ::connectrpc::client::CallOptions,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::builder::v1::__buffa::view::ListProjectBuildersResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        ::connectrpc::client::call_unary(
+                &self.transport,
+                &self.config,
+                BUILDER_CATALOG_SERVICE_SERVICE_NAME,
+                "ListProjectBuilders",
+                request,
+                options,
+            )
+            .await
+    }
+    /// Call the GetProjectBuilder RPC. Sends a request to /hephaestus.builder.v1.BuilderCatalogService/GetProjectBuilder.
+    pub async fn get_project_builder(
+        &self,
+        request: crate::messages::hephaestus::builder::v1::GetProjectBuilderRequest,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::builder::v1::__buffa::view::GetProjectBuilderResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        self.get_project_builder_with_options(
+                request,
+                ::connectrpc::client::CallOptions::default(),
+            )
+            .await
+    }
+    /// Call the GetProjectBuilder RPC with explicit per-call options. Options override [`ClientConfig`](::connectrpc::client::ClientConfig) defaults.
+    pub async fn get_project_builder_with_options(
+        &self,
+        request: crate::messages::hephaestus::builder::v1::GetProjectBuilderRequest,
+        options: ::connectrpc::client::CallOptions,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::builder::v1::__buffa::view::GetProjectBuilderResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        ::connectrpc::client::call_unary(
+                &self.transport,
+                &self.config,
+                BUILDER_CATALOG_SERVICE_SERVICE_NAME,
+                "GetProjectBuilder",
+                request,
+                options,
+            )
+            .await
+    }
+    /// Call the RequestProjectBuilderPreparation RPC. Sends a request to /hephaestus.builder.v1.BuilderCatalogService/RequestProjectBuilderPreparation.
+    pub async fn request_project_builder_preparation(
+        &self,
+        request: crate::messages::hephaestus::builder::v1::RequestProjectBuilderPreparationRequest,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::builder::v1::__buffa::view::RequestProjectBuilderPreparationResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        self.request_project_builder_preparation_with_options(
+                request,
+                ::connectrpc::client::CallOptions::default(),
+            )
+            .await
+    }
+    /// Call the RequestProjectBuilderPreparation RPC with explicit per-call options. Options override [`ClientConfig`](::connectrpc::client::ClientConfig) defaults.
+    pub async fn request_project_builder_preparation_with_options(
+        &self,
+        request: crate::messages::hephaestus::builder::v1::RequestProjectBuilderPreparationRequest,
+        options: ::connectrpc::client::CallOptions,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::builder::v1::__buffa::view::RequestProjectBuilderPreparationResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        ::connectrpc::client::call_unary(
+                &self.transport,
+                &self.config,
+                BUILDER_CATALOG_SERVICE_SERVICE_NAME,
+                "RequestProjectBuilderPreparation",
+                request,
+                options,
+            )
+            .await
+    }
+    /// Call the CompleteProjectBuilderPreparation RPC. Sends a request to /hephaestus.builder.v1.BuilderCatalogService/CompleteProjectBuilderPreparation.
+    pub async fn complete_project_builder_preparation(
+        &self,
+        request: crate::messages::hephaestus::builder::v1::CompleteProjectBuilderPreparationRequest,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::builder::v1::__buffa::view::CompleteProjectBuilderPreparationResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        self.complete_project_builder_preparation_with_options(
+                request,
+                ::connectrpc::client::CallOptions::default(),
+            )
+            .await
+    }
+    /// Call the CompleteProjectBuilderPreparation RPC with explicit per-call options. Options override [`ClientConfig`](::connectrpc::client::ClientConfig) defaults.
+    pub async fn complete_project_builder_preparation_with_options(
+        &self,
+        request: crate::messages::hephaestus::builder::v1::CompleteProjectBuilderPreparationRequest,
+        options: ::connectrpc::client::CallOptions,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::builder::v1::__buffa::view::CompleteProjectBuilderPreparationResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        ::connectrpc::client::call_unary(
+                &self.transport,
+                &self.config,
+                BUILDER_CATALOG_SERVICE_SERVICE_NAME,
+                "CompleteProjectBuilderPreparation",
                 request,
                 options,
             )

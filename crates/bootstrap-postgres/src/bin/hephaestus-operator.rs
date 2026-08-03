@@ -5,9 +5,9 @@ use authz_postgres::{PostgresMelangeAuthorizer, audit_decision, begin_actor_tran
 use identity_domain::{AuthenticatedIdentity, RequestId, UserId};
 use release_domain::{AgentUpdateId, BuildRequestId, ReleaseCommandKey};
 use release_postgres::{RecoverInstanceUpdate, ReleaseService, UpdateRecoveryAction};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use sqlx::{PgPool, postgres::PgPoolOptions};
-use std::{env, error::Error, str::FromStr, sync::Arc};
+use std::{collections::HashSet, env, error::Error, fs, path::Path, str::FromStr, sync::Arc};
 use uuid::Uuid;
 
 #[tokio::main]
@@ -46,8 +46,450 @@ async fn execute(pool: &PgPool, arguments: &[String]) -> Result<Value, Box<dyn E
         }
         "recover-update" => recover_update(pool, arguments).await,
         "abandon-build" => abandon_build(pool, arguments).await,
+        "provision-builder-catalog" => provision_builder_catalog(pool, arguments).await,
         _ => Err(usage().into()),
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BuilderCatalogRecord {
+    id: Uuid,
+    key: String,
+    display_name: String,
+    image_reference: String,
+    toolchains: Value,
+    architectures: Vec<String>,
+    preparation_state: String,
+    availability_state: String,
+    network_ceiling: String,
+    max_vcpus: i64,
+    max_memory_mib: i64,
+    dependency_policy: String,
+    provenance: Value,
+    signature_reference: Option<String>,
+    sbom_reference: Option<String>,
+    platform_policy_version: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BuilderCatalogManifest {
+    schema_version: u64,
+    images: Vec<BuilderCatalogRecord>,
+}
+
+async fn provision_builder_catalog(
+    pool: &PgPool,
+    arguments: &[String],
+) -> Result<Value, Box<dyn Error>> {
+    let manifest_path = argument(arguments, 1)?;
+    let dry_run = arguments[2..]
+        .iter()
+        .try_fold(false, |dry_run, flag| match flag.as_str() {
+            "--dry-run" if !dry_run => Ok(true),
+            "--dry-run" => Err("--dry-run may only be supplied once"),
+            _ => Err("unknown provision-builder-catalog option"),
+        })?;
+    let contents = fs::read_to_string(manifest_path)?;
+    let manifest = parse_builder_catalog_manifest(&contents, Path::new(manifest_path))?;
+
+    if dry_run {
+        return Ok(json!({
+            "mode": "dry_run",
+            "schema_version": manifest.schema_version,
+            "images": manifest.images.iter().map(|image| json!({
+                "id": image.id,
+                "key": image.key,
+                "image_reference": image.image_reference,
+                "preparation_state": image.preparation_state,
+                "availability_state": image.availability_state,
+            })).collect::<Vec<_>>(),
+        }));
+    }
+
+    let mut transaction = pool.begin().await?;
+    for image in &manifest.images {
+        let changed = sqlx::query(
+            "INSERT INTO builder_images
+               (id, key, display_name, image_reference, toolchains,
+                architectures, preparation_state, availability_state,
+                network_ceiling, max_vcpus, max_memory_mib, dependency_policy,
+                provenance, signature_reference, sbom_reference,
+                platform_policy_version)
+             VALUES
+               ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+                $15, $16)
+             ON CONFLICT (key) DO UPDATE SET
+               display_name = EXCLUDED.display_name,
+               image_reference = EXCLUDED.image_reference,
+               toolchains = EXCLUDED.toolchains,
+               architectures = EXCLUDED.architectures,
+               preparation_state = EXCLUDED.preparation_state,
+               availability_state = EXCLUDED.availability_state,
+               network_ceiling = EXCLUDED.network_ceiling,
+               max_vcpus = EXCLUDED.max_vcpus,
+               max_memory_mib = EXCLUDED.max_memory_mib,
+               dependency_policy = EXCLUDED.dependency_policy,
+               provenance = EXCLUDED.provenance,
+               signature_reference = EXCLUDED.signature_reference,
+               sbom_reference = EXCLUDED.sbom_reference,
+               platform_policy_version = EXCLUDED.platform_policy_version,
+               updated_at = now()
+             WHERE builder_images.id = EXCLUDED.id",
+        )
+        .bind(image.id)
+        .bind(&image.key)
+        .bind(&image.display_name)
+        .bind(&image.image_reference)
+        .bind(&image.toolchains)
+        .bind(&image.architectures)
+        .bind(&image.preparation_state)
+        .bind(&image.availability_state)
+        .bind(&image.network_ceiling)
+        .bind(image.max_vcpus)
+        .bind(image.max_memory_mib)
+        .bind(&image.dependency_policy)
+        .bind(&image.provenance)
+        .bind(image.signature_reference.as_deref())
+        .bind(image.sbom_reference.as_deref())
+        .bind(&image.platform_policy_version)
+        .execute(&mut *transaction)
+        .await?;
+        if changed.rows_affected() != 1 {
+            return Err(format!(
+                "catalog key {} exists with a different stable id; refusing to replace it",
+                image.key
+            )
+            .into());
+        }
+    }
+    transaction.commit().await?;
+
+    Ok(json!({
+        "mode": "upsert",
+        "schema_version": manifest.schema_version,
+        "upserted": manifest.images.len(),
+        "keys": manifest.images.iter().map(|image| image.key.as_str()).collect::<Vec<_>>(),
+    }))
+}
+
+fn parse_builder_catalog_manifest(
+    contents: &str,
+    path: &Path,
+) -> Result<BuilderCatalogManifest, Box<dyn Error>> {
+    let document = serde_json::from_str::<Value>(contents)
+        .map_err(|error| format!("{} is not valid JSON: {error}", path.display()))?;
+    let object = document
+        .as_object()
+        .ok_or_else(|| manifest_error("builder catalog manifest must be a JSON object"))?;
+    let schema_version = required_u64(object, "schema_version")?;
+    if schema_version != 1 {
+        return Err(manifest_error(format!(
+            "unsupported builder catalog manifest schema_version {schema_version}; expected 1"
+        )));
+    }
+    let images = required_array(object, "images")?;
+    if images.is_empty() {
+        return Err(manifest_error(
+            "builder catalog manifest must contain at least one image",
+        ));
+    }
+
+    let mut records = Vec::with_capacity(images.len());
+    let mut ids = HashSet::with_capacity(images.len());
+    let mut keys = HashSet::with_capacity(images.len());
+    let mut references = HashSet::with_capacity(images.len());
+    for (index, image) in images.iter().enumerate() {
+        let record = parse_builder_catalog_record(image, index)?;
+        if !ids.insert(record.id) {
+            return Err(manifest_error(format!(
+                "images[{index}] duplicates stable id {}",
+                record.id
+            )));
+        }
+        if !keys.insert(record.key.clone()) {
+            return Err(manifest_error(format!(
+                "images[{index}] duplicates key {}",
+                record.key
+            )));
+        }
+        if !references.insert(record.image_reference.clone()) {
+            return Err(manifest_error(format!(
+                "images[{index}] duplicates image reference {}",
+                record.image_reference
+            )));
+        }
+        records.push(record);
+    }
+    Ok(BuilderCatalogManifest {
+        schema_version,
+        images: records,
+    })
+}
+
+// Keep all field validation in one reviewable record parser so malformed
+// catalog entries cannot bypass a validation branch by taking another path.
+#[allow(clippy::too_many_lines)]
+fn parse_builder_catalog_record(
+    value: &Value,
+    index: usize,
+) -> Result<BuilderCatalogRecord, Box<dyn Error>> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| manifest_error(format!("images[{index}] must be a JSON object")))?;
+    let id = Uuid::parse_str(required_string(object, "id")?.as_str())
+        .map_err(|error| manifest_error(format!("images[{index}].id is invalid: {error}")))?;
+    let key = required_string(object, "key")?;
+    validate_key(&key, index)?;
+    let display_name = required_string(object, "display_name")?;
+    if display_name.trim().is_empty() || display_name.len() > 200 {
+        return Err(manifest_error(format!(
+            "images[{index}].display_name must contain 1..=200 non-whitespace bytes"
+        )));
+    }
+    let image_reference = required_string(object, "image_reference")?;
+    validate_image_reference(&image_reference, index)?;
+    let toolchains = required_value(object, "toolchains")?.clone();
+    validate_toolchains(&toolchains, index)?;
+    let architectures = string_array(object, "architectures", index)?;
+    if architectures.is_empty()
+        || architectures.iter().any(|architecture| {
+            architecture.is_empty()
+                || architecture.len() > 32
+                || architecture
+                    .bytes()
+                    .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
+        })
+    {
+        return Err(manifest_error(format!(
+            "images[{index}].architectures must contain non-empty, bounded values"
+        )));
+    }
+    let preparation_state = required_string(object, "preparation_state")?;
+    if !matches!(preparation_state.as_str(), "ready" | "preparing" | "failed") {
+        return Err(manifest_error(format!(
+            "images[{index}].preparation_state is invalid"
+        )));
+    }
+    let availability_state = required_string(object, "availability_state")?;
+    if !matches!(
+        availability_state.as_str(),
+        "available" | "unavailable" | "retired"
+    ) {
+        return Err(manifest_error(format!(
+            "images[{index}].availability_state is invalid"
+        )));
+    }
+    let network_ceiling = required_string(object, "network_ceiling")?;
+    if !matches!(
+        network_ceiling.as_str(),
+        "disabled" | "broker_only" | "egress"
+    ) {
+        return Err(manifest_error(format!(
+            "images[{index}].network_ceiling is invalid"
+        )));
+    }
+    let max_vcpus = required_i64(object, "max_vcpus", index)?;
+    if !(1..=64).contains(&max_vcpus) {
+        return Err(manifest_error(format!(
+            "images[{index}].max_vcpus must be between 1 and 64"
+        )));
+    }
+    let max_memory_mib = required_i64(object, "max_memory_mib", index)?;
+    if !(128..=1_048_576).contains(&max_memory_mib) {
+        return Err(manifest_error(format!(
+            "images[{index}].max_memory_mib must be between 128 and 1048576"
+        )));
+    }
+    let dependency_policy = required_string(object, "dependency_policy")?;
+    if !matches!(
+        dependency_policy.as_str(),
+        "vendored_offline" | "read_only_platform_cache" | "constrained_registry_egress"
+    ) {
+        return Err(manifest_error(format!(
+            "images[{index}].dependency_policy is invalid"
+        )));
+    }
+    let provenance = required_value(object, "provenance")?.clone();
+    let provenance_object = provenance.as_object().ok_or_else(|| {
+        manifest_error(format!("images[{index}].provenance must be a JSON object"))
+    })?;
+    let source = required_string(provenance_object, "source")?;
+    if source.trim().is_empty() {
+        return Err(manifest_error(format!(
+            "images[{index}].provenance.source must not be empty"
+        )));
+    }
+    let signature_reference = optional_string(provenance_object, "signature")?;
+    let sbom_reference = optional_string(provenance_object, "sbom")?;
+    let platform_policy_version = required_string(object, "platform_policy_version")?;
+    if platform_policy_version.trim().is_empty() || platform_policy_version.len() > 128 {
+        return Err(manifest_error(format!(
+            "images[{index}].platform_policy_version must contain 1..=128 bytes"
+        )));
+    }
+
+    Ok(BuilderCatalogRecord {
+        id,
+        key,
+        display_name,
+        image_reference,
+        toolchains,
+        architectures,
+        preparation_state,
+        availability_state,
+        network_ceiling,
+        max_vcpus,
+        max_memory_mib,
+        dependency_policy,
+        provenance,
+        signature_reference,
+        sbom_reference,
+        platform_policy_version,
+    })
+}
+
+fn validate_key(value: &str, index: usize) -> Result<(), Box<dyn Error>> {
+    let valid = (1..=64).contains(&value.len())
+        && value.bytes().enumerate().all(|(position, byte)| {
+            byte.is_ascii_lowercase()
+                || byte.is_ascii_digit()
+                || ((byte == b'_' || byte == b'-') && position > 0)
+        });
+    valid.then_some(()).ok_or_else(|| {
+        manifest_error(format!(
+            "images[{index}].key must be a lowercase catalog identifier"
+        ))
+    })
+}
+
+fn validate_image_reference(value: &str, index: usize) -> Result<(), Box<dyn Error>> {
+    let Some((repository, digest)) = value.rsplit_once("@sha256:") else {
+        return Err(manifest_error(format!(
+            "images[{index}].image_reference must be digest-pinned"
+        )));
+    };
+    let valid_repository = !repository.is_empty()
+        && repository == repository.trim()
+        && !repository
+            .bytes()
+            .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace());
+    let valid_digest = digest.len() == 64
+        && digest
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase());
+    if valid_repository && valid_digest {
+        Ok(())
+    } else {
+        Err(manifest_error(format!(
+            "images[{index}].image_reference must end in a lowercase 64-character sha256 digest"
+        )))
+    }
+}
+
+fn validate_toolchains(value: &Value, index: usize) -> Result<(), Box<dyn Error>> {
+    let toolchains = value
+        .as_array()
+        .ok_or_else(|| manifest_error(format!("images[{index}].toolchains must be an array")))?;
+    if toolchains.is_empty() {
+        return Err(manifest_error(format!(
+            "images[{index}].toolchains must contain at least one toolchain"
+        )));
+    }
+    for (toolchain_index, toolchain) in toolchains.iter().enumerate() {
+        let object = toolchain.as_object().ok_or_else(|| {
+            manifest_error(format!(
+                "images[{index}].toolchains[{toolchain_index}] must be an object"
+            ))
+        })?;
+        let name = required_string(object, "name")?;
+        let version = required_string(object, "version")?;
+        if name.trim().is_empty()
+            || name.len() > 64
+            || version.trim().is_empty()
+            || version.len() > 128
+        {
+            return Err(manifest_error(format!(
+                "images[{index}].toolchains[{toolchain_index}] has invalid name or version"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn required_value<'a>(
+    object: &'a Map<String, Value>,
+    key: &str,
+) -> Result<&'a Value, Box<dyn Error>> {
+    object
+        .get(key)
+        .ok_or_else(|| manifest_error(format!("missing required field {key}")))
+}
+
+fn required_string(object: &Map<String, Value>, key: &str) -> Result<String, Box<dyn Error>> {
+    required_value(object, key)?
+        .as_str()
+        .map(String::from)
+        .ok_or_else(|| manifest_error(format!("field {key} must be a string")))
+}
+
+fn optional_string(
+    object: &Map<String, Value>,
+    key: &str,
+) -> Result<Option<String>, Box<dyn Error>> {
+    match object.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => value
+            .as_str()
+            .map(|value| Some(String::from(value)))
+            .ok_or_else(|| manifest_error(format!("field {key} must be a string or null"))),
+    }
+}
+
+fn required_u64(object: &Map<String, Value>, key: &str) -> Result<u64, Box<dyn Error>> {
+    required_value(object, key)?
+        .as_u64()
+        .ok_or_else(|| manifest_error(format!("field {key} must be a positive integer")))
+}
+
+fn required_i64(
+    object: &Map<String, Value>,
+    key: &str,
+    index: usize,
+) -> Result<i64, Box<dyn Error>> {
+    required_value(object, key)?
+        .as_i64()
+        .ok_or_else(|| manifest_error(format!("images[{index}].{key} must be an integer")))
+}
+
+fn required_array<'a>(
+    object: &'a Map<String, Value>,
+    key: &str,
+) -> Result<&'a Vec<Value>, Box<dyn Error>> {
+    required_value(object, key)?
+        .as_array()
+        .ok_or_else(|| manifest_error(format!("field {key} must be an array")))
+}
+
+fn string_array(
+    object: &Map<String, Value>,
+    key: &str,
+    index: usize,
+) -> Result<Vec<String>, Box<dyn Error>> {
+    required_array(object, key)?
+        .iter()
+        .enumerate()
+        .map(|(array_index, value)| {
+            value.as_str().map(String::from).ok_or_else(|| {
+                manifest_error(format!(
+                    "images[{index}].{key}[{array_index}] must be a string"
+                ))
+            })
+        })
+        .collect()
+}
+
+fn manifest_error(message: impl Into<String>) -> Box<dyn Error> {
+    message.into().into()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -340,12 +782,16 @@ const fn usage() -> &'static str {
        hephaestus-operator metrics <actor-uuid> [request-uuid]\n\
        hephaestus-operator recover-update <actor-uuid> <update-uuid> \
        <retry|reject|resume> [request-uuid]\n\
-       hephaestus-operator abandon-build <actor-uuid> <build-uuid> [request-uuid]"
+       hephaestus-operator abandon-build <actor-uuid> <build-uuid> [request-uuid]\n\
+       hephaestus-operator provision-builder-catalog <manifest.json> [--dry-run]"
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{InspectionTarget, ObjectType, Permission};
+    use super::{InspectionTarget, ObjectType, Permission, parse_builder_catalog_manifest};
+    use std::path::Path;
+
+    const TEST_DIGEST: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
     #[test]
     fn inspection_targets_have_closed_authorization_policies() {
@@ -364,5 +810,45 @@ mod tests {
             InspectionTarget::Secret.permission(),
             Permission::InspectMetadata
         );
+    }
+
+    fn manifest_json(reference: &str) -> String {
+        r#"{
+                "schema_version": 1,
+                "images": [{
+                    "id": "20000000-0000-4000-8000-000000000010",
+                    "key": "ubuntu-native",
+                    "display_name": "Ubuntu native builder",
+                    "image_reference": "__REFERENCE__",
+                    "toolchains": [{"name":"shell","version":"ubuntu-24.04"}],
+                    "architectures": ["x86_64"],
+                    "preparation_state": "ready",
+                    "availability_state": "available",
+                    "network_ceiling": "disabled",
+                    "max_vcpus": 4,
+                    "max_memory_mib": 1024,
+                    "dependency_policy": "vendored_offline",
+                    "provenance": {"source":"attestation://test/ubuntu-native"},
+                    "platform_policy_version": "builder/v1"
+                }]
+            }"#
+        .replace("__REFERENCE__", reference)
+    }
+
+    #[test]
+    fn catalog_manifest_requires_explicit_digest_pinned_records() {
+        let reference = format!("registry.example/ubuntu@sha256:{TEST_DIGEST}");
+        let manifest = manifest_json(&reference);
+        let parsed = parse_builder_catalog_manifest(&manifest, Path::new("test.json"))
+            .expect("manifest should be valid");
+        assert_eq!(parsed.schema_version, 1);
+        assert_eq!(parsed.images[0].key, "ubuntu-native");
+        assert_eq!(parsed.images[0].image_reference, reference);
+    }
+
+    #[test]
+    fn catalog_manifest_rejects_unpinned_references() {
+        let tagged = manifest_json("registry.example/ubuntu:24.04");
+        assert!(parse_builder_catalog_manifest(&tagged, Path::new("test.json")).is_err());
     }
 }

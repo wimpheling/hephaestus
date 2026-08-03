@@ -17,6 +17,7 @@ builder-catalog-application = { path = "../builder-catalog-application" }
 builder-catalog-domain = { path = "../builder-catalog-domain" }
 serde_json.workspace = true
 sqlx.workspace = true
+time.workspace = true
 uuid.workspace = true
 
 [lints]

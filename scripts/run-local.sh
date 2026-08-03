@@ -8,8 +8,8 @@ set -Eeuo pipefail
 readonly POSTGRES_IMAGE="${HEPHAESTUS_POSTGRES_IMAGE:-docker.io/library/postgres:17-alpine}"
 readonly NATS_IMAGE="${HEPHAESTUS_NATS_IMAGE:-docker.io/library/nats:2.11-alpine}"
 readonly ELIXIR_IMAGE="${HEPHAESTUS_ELIXIR_IMAGE:-docker.io/hexpm/elixir:1.18.4-erlang-27.3.4-debian-bookworm-20250428-slim}"
-readonly FEDORA_IMAGE="${HEPHAESTUS_LIBKRUN_FEDORA_IMAGE:-registry.fedoraproject.org/fedora-minimal@sha256:8f42d200f04990b41081322d1c260ddf23b124b3b92538665ef4cc3064537249}"
-readonly ROOT_IMAGE_REFERENCE="fedora-minimal@sha256:8f42d200f04990b41081322d1c260ddf23b124b3b92538665ef4cc3064537249"
+readonly UBUNTU_IMAGE="${HEPHAESTUS_LIBKRUN_UBUNTU_IMAGE:-docker.io/library/ubuntu@sha256:52df9b1ee71626e0088f7d400d5c6b5f7bb916f8f0c82b474289a4ece6cf3faf}"
+readonly ROOT_IMAGE_REFERENCE="ubuntu@sha256:52df9b1ee71626e0088f7d400d5c6b5f7bb916f8f0c82b474289a4ece6cf3faf"
 readonly GUEST_TARGET="x86_64-unknown-linux-musl"
 readonly REQUIRED_CONTROLLERS=(cpu io memory pids)
 
@@ -19,7 +19,8 @@ repo_root="$(cd -- "${script_dir}/.." && pwd -P)"
 readonly repo_root
 local_root="${HEPHAESTUS_LOCAL_ROOT:-${repo_root}/.local/hephaestus}"
 readonly local_root
-readonly root_image_path="${local_root}/root-images/fedora-minimal-8f42d200"
+readonly root_image_path="${local_root}/root-images/ubuntu-52df9b1e"
+readonly root_image_manifest="${local_root}/root-images/manifest.json"
 readonly runtime_root="${HEPHAESTUS_LOCAL_RUNTIME_ROOT:-/tmp/hephaestus-runtime-$(id -u)}"
 readonly secret_runtime_root="${HEPHAESTUS_LOCAL_SECRET_RUNTIME_ROOT:-/dev/shm/hephaestus-secret-runtime-$(id -u)}"
 readonly secret_key_directory="${local_root}/secret-keys"
@@ -296,9 +297,9 @@ cargo build \
     --bin hephaestus-vm-libkrun-worker
 
 if [[ ! -f "${root_image_path}/.hephaestus-image" ]]; then
-    root_image_staging="$(mktemp -d "${local_root}/root-images/.fedora-minimal.XXXXXX")"
-    podman pull "${FEDORA_IMAGE}"
-    podman create --name "${rootfs_container}" "${FEDORA_IMAGE}" /bin/true >/dev/null
+    root_image_staging="$(mktemp -d "${local_root}/root-images/.ubuntu.XXXXXX")"
+    podman pull "${UBUNTU_IMAGE}"
+    podman create --name "${rootfs_container}" "${UBUNTU_IMAGE}" /bin/true >/dev/null
     podman export "${rootfs_container}" | tar -C "${root_image_staging}" -xf -
     podman rm "${rootfs_container}" >/dev/null
     if grep -qE '(^|:)10001:' "${root_image_staging}/etc/passwd"; then
@@ -312,12 +313,18 @@ if [[ ! -f "${root_image_path}/.hephaestus-image" ]]; then
     printf 'heph-agent:x:10001:10001:Hephaestus agent:/nonexistent:/sbin/nologin\n' \
         >>"${root_image_staging}/etc/passwd"
     printf 'heph-agent:x:10001:\n' >>"${root_image_staging}/etc/group"
-    printf '%s\n' "${FEDORA_IMAGE}" >"${root_image_staging}/.hephaestus-image"
+    printf '%s\n' "${UBUNTU_IMAGE}" >"${root_image_staging}/.hephaestus-image"
     mv -- "${root_image_staging}" "${root_image_path}"
 fi
 install -D -m 0755 \
     "${repo_root}/target/${GUEST_TARGET}/release/heph-init" \
     "${root_image_path}/usr/libexec/hephaestus/heph-init"
+
+escaped_root_image_path="${root_image_path//\\/\\\\}"
+escaped_root_image_path="${escaped_root_image_path//\"/\\\"}"
+printf '{"version":1,"roots":{"%s":{"kind":"directory","path":"%s"}}}\n' \
+    "${ROOT_IMAGE_REFERENCE}" "${escaped_root_image_path}" \
+    >"${root_image_manifest}"
 
 cgroup_parent="$(discover_cgroup_parent)"
 readonly cgroup_parent
@@ -387,8 +394,8 @@ export HEPHAESTUS_SECRET_RUNTIME_ROOT="${secret_runtime_root}"
 export HEPHAESTUS_SECRET_KEY_DIRECTORY="${secret_key_directory}"
 export HEPHAESTUS_SECRET_KEY_REFERENCE="${secret_key_reference}"
 export HEPHAESTUS_RPC_MEDIATOR_SECRET="${internal_command_token}"
-export HEPHAESTUS_ROOT_IMAGE_PATH="${root_image_path}"
-export HEPHAESTUS_ROOT_IMAGE_REFERENCE="${ROOT_IMAGE_REFERENCE}"
+unset HEPHAESTUS_ROOT_IMAGE_PATH HEPHAESTUS_ROOT_IMAGE_REFERENCE
+export HEPHAESTUS_ROOT_IMAGE_MANIFEST="${root_image_manifest}"
 export HEPHAESTUS_VM_BACKEND="libkrun"
 export HEPHAESTUS_LIBKRUN_WORKER="${repo_root}/target/debug/hephaestus-vm-libkrun-worker"
 export HEPHAESTUS_CGROUP_ROOT="${cgroup_root}"

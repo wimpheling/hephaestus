@@ -240,8 +240,11 @@ export HEPHAESTUS_SECRET_RUNTIME_ROOT="${secret_runtime_root}"
 export HEPHAESTUS_SECRET_KEY_DIRECTORY="${fixture_root}/secret-keys"
 export HEPHAESTUS_SECRET_KEY_REFERENCE="e2e-v1"
 export HEPHAESTUS_RPC_MEDIATOR_SECRET="e2e-rpc-mediator-secret-with-sufficient-entropy"
-export HEPHAESTUS_ROOT_IMAGE_PATH="${fixture_root}/root-image"
-export HEPHAESTUS_ROOT_IMAGE_REFERENCE="fixture-root@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+readonly root_image_manifest="${fixture_root}/root-image-manifest.json"
+printf '{"version":1,"roots":{"fixture-root@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa":{"kind":"directory","path":"%s"}}}\n' \
+    "${fixture_root}/root-image" >"${root_image_manifest}"
+unset HEPHAESTUS_ROOT_IMAGE_PATH HEPHAESTUS_ROOT_IMAGE_REFERENCE
+export HEPHAESTUS_ROOT_IMAGE_MANIFEST="${root_image_manifest}"
 export HEPHAESTUS_VM_BACKEND="fixture"
 export HEPHAESTUS_HOST_ID="browser-e2e"
 export HEPHAESTUS_MKFS_EXT4="$(command -v mkfs.ext4)"

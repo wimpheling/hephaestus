@@ -529,7 +529,12 @@ impl BuildExecutor {
             None => self
                 .config
                 .root_images
-                .get(&build.root_image)
+                .get(
+                    build
+                        .root_image
+                        .as_deref()
+                        .ok_or(BuildExecutionError::RootImageDenied)?,
+                )
                 .cloned()
                 .ok_or(BuildExecutionError::RootImageDenied)?,
         };
@@ -1248,7 +1253,10 @@ refs = []
             .build
             .expect("build config");
         let root = tempfile::tempdir().expect("root directory");
-        let reference = build.root_image.clone();
+        let reference = build
+            .root_image
+            .clone()
+            .expect("test build config has a resolved root image");
         let resolver = CatalogBuilderImageResolver::new(
             Arc::new(FixtureCatalog {
                 image: Some(builder_image(AvailabilityState::Available)),
@@ -1268,9 +1276,9 @@ refs = []
         }
 
         let mut unavailable = build;
-        unavailable.root_image = String::from(
+        unavailable.root_image = Some(String::from(
             "build@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-        );
+        ));
         assert!(resolver.resolve(&unavailable).await.is_err());
     }
 

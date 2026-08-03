@@ -47,7 +47,7 @@ Repository push
 | Publication | Explicit human publication of a successful draft release. |
 | Draft version | The publisher chooses the release version while the release is still a draft. |
 | Build actions | Retry an attempt, rebuild immutable inputs for verification, and build another commit are distinct actions in both the API and UI. |
-| Builder images | Platform-curated and digest-pinned catalog. |
+| Builder images | Platform-curated and digest-pinned catalog, with project-owned OCI builders based on approved platform images. |
 | Dependencies | Begin with vendored/offline dependencies and curated toolchain images. |
 | Fixtures | Exercise the real application workflow instead of seeding final releases directly. |
 
@@ -189,9 +189,15 @@ explicit platform policy.
   - [x] Add browser coverage from publication through import and initial agent
     inspection.
 
-- [x] **8. Provide the builder-image catalog**
+- [ ] **8. Provide the builder-image catalog**
   - [x] Replace the daemon environment-variable map with a platform-owned
     catalog exposed through the appropriate UI and service boundary.
+  - [x] Configure workers with a versioned, explicit digest-to-rootfs manifest;
+    validate every reference, materialization path, and filesystem kind before
+    starting the daemon.
+  - [x] Keep the legacy single-root environment pair available only for the
+    fixture VM backend so existing deterministic fixtures remain usable without
+    weakening production configuration.
   - [x] Show each builder image's stable ID and display name.
   - [x] Show its immutable digest-pinned reference.
   - [x] Show toolchains and versions.
@@ -203,10 +209,35 @@ explicit platform policy.
   - [x] Resolve `agent.toml` builder selection through a catalog identity or
     immutable reference.
   - [x] Reject arbitrary unapproved image pulls and execution.
-  - [ ] Add the initial catalog entries:
-    - [ ] Fedora minimal for shell/native fixture builds.
-    - [ ] Rust builder with pinned Rust and Cargo toolchains.
-    - [ ] Node builder with pinned Node and package manager.
+  - [ ] Add the initial catalog entries through a reviewed provisioning process:
+    - [ ] Register the initial platform keys: `ubuntu-native`, `rust-ubuntu`,
+      `typescript-node-ubuntu`, and `python-ubuntu`.
+    - [ ] Ubuntu minimal for shell/native builds.
+    - [ ] Rust builder on Ubuntu with pinned Rust and Cargo toolchains.
+    - [ ] TypeScript/Node builder on Ubuntu with pinned Node, package manager,
+      TypeScript, and bundler versions.
+    - [ ] Python builder on Ubuntu with pinned CPython and package tooling.
+  - [x] Use Ubuntu-based images as the initial compatibility-oriented default;
+    reserve Alpine/musl images for a later explicit target rather than making
+    them the universal builder.
+  - [x] Provision platform defaults through the active bootstrap operator using
+    a reviewed, explicit OCI manifest; the command is transactional, preserves
+    stable catalog IDs, supports dry-run validation, and does not run at
+    application startup or in a schema migration. See
+    `docs/builder-catalog-provisioning.md`.
+  - [x] Allow a project to define a custom builder from a committed Dockerfile
+    and OCI build configuration.
+    - [x] Restrict custom-builder base images to approved digest-pinned
+      platform builders.
+    - [ ] Build custom OCI images in an isolated image-builder job with the
+      project policy for resources, network, dependencies, and secrets.
+    - [ ] Record the resulting immutable OCI digest, provenance, scan result,
+      and preparation state under the owning project.
+    - [ ] Materialize only prepared custom digests as VM builder roots.
+  - [x] Let `agent.toml` select either a platform builder key or an immutable
+    project-owned builder identity; persist the resolved digest on each build.
+  - [x] Keep builder-root selection separate from the agent runtime image
+    contract.
   - [x] Keep network access disabled by default.
   - [x] Define and expose the dependency policy:
     - [x] Vendored/offline dependencies.
@@ -262,7 +293,39 @@ explicit platform policy.
   - [x] Document the dependency, network, image provenance, and publication
     policies.
   - [x] Run `cargo dev quality`.
-  - [x] Run `git diff --check`.
+- [x] Run `git diff --check`.
+
+## CODING SESSION INTERRUPTED
+
+This session implemented the declarative builder path and stopped before the
+external OCI preparation worker could be completed:
+
+- `agent.toml` can select a platform key (`build.builder.kind = "platform"`)
+  or a project builder UUID (`build.builder.kind = "project"`). Legacy
+  digest-pinned `build.root_image` remains supported.
+- Receive and manual-build request paths resolve either selector transactionally
+  against approved, ready catalog records and persist the immutable resolved
+  digest in `build_requests.builder_image_reference`.
+- Claimed worker input replaces the selector with that resolved digest, so VM
+  execution remains digest-only and separate from the agent runtime image.
+- Project Dockerfile/OCI definitions now have durable lifecycle state, project
+  authorization, RLS-backed persistence, product-event outbox publication,
+  typed RPCs, Phoenix client methods, and a project builders UI route.
+- Local libkrun fixtures now use a pinned Ubuntu root image; Fedora remains a
+  host/documentation concern rather than the product default.
+
+Still deliberately open:
+
+- A production image-builder worker must fetch the committed context, enforce
+  resource/network/dependency/secret policy in an isolated VM job, build and
+  scan the OCI image, record attestation/SBOM metadata, and complete the
+  lifecycle. The current typed completion RPC is the trusted handoff boundary,
+  but no worker should be implied by manually calling it.
+- Prepared custom OCI outputs still need worker-side rootfs materialization and
+  inclusion in the daemon's explicit digest-to-root manifest.
+- The four initial platform catalog rows require reviewed real OCI artifacts,
+  toolchain metadata, provenance, and operator approval; no fake digests were
+  added to the repository.
 
 ## Required UI and service surface
 

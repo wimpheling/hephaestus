@@ -211,7 +211,7 @@ published command/event messages. The local launcher stores its persistent
 development data beneath `.local/hephaestus` and in its named Podman volumes.
 
 Build the authorization-aware operator CLI with
-`cargo build -p hephaestus-app --bin hephaestus-operator`. It accepts:
+`cargo build -p bootstrap-postgres --bin hephaestus-operator`. It accepts:
 
 ```text
 inspect-release <actor> <release> [request]
@@ -221,6 +221,13 @@ metrics <actor> [request]
 recover-update <actor> <update> <retry|reject|resume> [request]
 abandon-build <actor> <build> [request]
 ```
+
+Platform builder catalog records are provisioned separately by the same
+operator binary. Use
+`provision-builder-catalog <manifest.json> [--dry-run]` with an explicitly
+reviewed manifest containing real digest-pinned OCI references; application
+startup and schema migrations do not seed default builder rows. See
+`docs/builder-catalog-provisioning.md` for the manifest contract.
 
 Every command uses `HEPHAESTUS_DATABASE_URL`. Inspections reauthorize and read
 only RLS-filtered metadata; secret inspection uses the metadata-only version

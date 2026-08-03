@@ -15,8 +15,10 @@ agent-config = { path = "../agent-config" }
 async-trait.workspace = true
 builder-catalog-domain = { path = "../builder-catalog-domain" }
 thiserror.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
+time.workspace = true
 tokio = { workspace = true, features = ["macros", "rt"] }
 
 [lints]

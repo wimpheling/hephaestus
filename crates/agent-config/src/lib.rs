@@ -83,8 +83,14 @@ pub struct BuildConfig {
     pub arguments: Vec<String>,
     /// Absolute directory inside the build guest.
     pub working_directory: String,
-    /// Digest-pinned build root image.
-    pub root_image: String,
+    /// Legacy digest-pinned build root image. New configurations should use
+    /// [`BuilderSelection`] so the platform resolves the digest from its
+    /// approved catalog at build-request time.
+    #[serde(default)]
+    pub root_image: Option<String>,
+    /// Catalog identity for the build root image.
+    #[serde(default)]
+    pub builder: Option<BuilderSelection>,
     /// Build-specific resource limits.
     pub resources: ResourceLimits,
     /// Build network ceiling.
@@ -94,6 +100,23 @@ pub struct BuildConfig {
     /// Refs whose accepted updates request builds.
     #[serde(default)]
     pub triggers: Vec<String>,
+}
+
+/// A declarative builder identity resolved by the owning project and platform
+/// catalog before a VM is started.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum BuilderSelection {
+    /// A platform-curated builder key.
+    Platform {
+        /// Stable platform catalog key.
+        key: String,
+    },
+    /// A project-owned prepared builder identity.
+    Project {
+        /// Opaque UUID of the project-owned builder definition.
+        id: String,
+    },
 }
 
 /// One declared build output.
@@ -593,13 +616,46 @@ fn validate_v2(config: &AgentConfig, diagnostics: &mut Vec<Diagnostic>) {
         &build.working_directory,
         "invalid_build_working_directory",
     );
-    if !valid_digest(&build.root_image) {
-        diagnostic(
+    match (&build.root_image, &build.builder) {
+        (Some(root_image), None) if !valid_digest(root_image) => diagnostic(
             diagnostics,
             "unpinned_build_root_image",
             "build.root_image",
             "build root image must end in a lowercase sha256 digest",
-        );
+        ),
+        (Some(_), None) => {}
+        (Some(_), Some(_)) => diagnostic(
+            diagnostics,
+            "ambiguous_build_builder",
+            "build",
+            "configure either build.root_image or build.builder, not both",
+        ),
+        (None, None) => diagnostic(
+            diagnostics,
+            "missing_build_builder",
+            "build",
+            "configure a digest-pinned build.root_image or a catalog build.builder",
+        ),
+        (None, Some(BuilderSelection::Platform { key })) => {
+            if !valid_key(key, 64) {
+                diagnostic(
+                    diagnostics,
+                    "invalid_builder_key",
+                    "build.builder.key",
+                    "platform builder keys must be lowercase and at most 64 characters",
+                );
+            }
+        }
+        (None, Some(BuilderSelection::Project { id })) => {
+            if uuid::Uuid::parse_str(id).is_err() {
+                diagnostic(
+                    diagnostics,
+                    "invalid_project_builder_id",
+                    "build.builder.id",
+                    "project builder id must be a UUID",
+                );
+            }
+        }
     }
     if build.artifacts.is_empty() || build.artifacts.len() > 128 {
         diagnostic(

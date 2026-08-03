@@ -71,7 +71,7 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.ProjectPage do
   attr :project, :map, required: true
   attr :project_id, :string, required: true
   attr :item_count, :integer, required: true
-  attr :active, :atom, required: true, values: [:repositories, :agents, :runs, :settings]
+  attr :active, :atom, required: true, values: [:repositories, :agents, :builders, :runs, :settings]
   attr :organization_index_destination, :string, required: true
   attr :organization_destination, :string, required: true
 
@@ -115,6 +115,12 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.ProjectPage do
         label: "Agents",
         icon: "hero-cpu-chip",
         destination: "/projects/#{project_id}/agents"
+      },
+      %{
+        key: :builders,
+        label: "Builders",
+        icon: "hero-cube",
+        destination: "/projects/#{project_id}/builders"
       },
       %{
         key: :runs,

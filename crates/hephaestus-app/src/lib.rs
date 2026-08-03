@@ -11,6 +11,7 @@ use build_orchestrator::{
     BuildExecutionError, BuildExecutor, BuildExecutorConfig, CatalogBuilderImageResolver,
 };
 use build_postgres::PgBuildRepository;
+use builder_catalog_domain::BuilderImageReference;
 use builder_catalog_postgres::PgBuilderCatalog;
 use control_plane_postgres::launch::PgRunLaunchAuthorizer;
 use control_plane_postgres::{
@@ -213,6 +214,42 @@ impl AppConfig {
             return Err(AppError::Configuration(String::from(
                 "at least one root image mapping is required",
             )));
+        }
+        for (reference, root) in &self.root_images {
+            BuilderImageReference::parse(reference.clone()).map_err(|error| {
+                AppError::Configuration(format!(
+                    "root image reference {reference:?} is not digest-pinned: {error}"
+                ))
+            })?;
+            let (path, expected_directory) = match root {
+                RootFilesystem::Directory { host_path } => (host_path, true),
+                RootFilesystem::Disk { host_path, .. } => (host_path, false),
+                _ => {
+                    return Err(AppError::Configuration(format!(
+                        "root image {reference:?} uses an unsupported filesystem variant"
+                    )));
+                }
+            };
+            if !path.is_absolute() {
+                return Err(AppError::Configuration(format!(
+                    "root image {reference:?} materialization path must be absolute"
+                )));
+            }
+            let metadata = std::fs::symlink_metadata(path).map_err(|error| {
+                AppError::Configuration(format!(
+                    "root image {reference:?} materialization path cannot be inspected: {error}"
+                ))
+            })?;
+            if metadata.file_type().is_symlink() || metadata.is_dir() != expected_directory {
+                let expected = if expected_directory {
+                    "a non-symlink directory"
+                } else {
+                    "a non-symlink disk file"
+                };
+                return Err(AppError::Configuration(format!(
+                    "root image {reference:?} materialization path must be {expected}"
+                )));
+            }
         }
         if self.runtime_policy.version.trim().is_empty()
             || self.runtime_policy.max_vcpus == 0

@@ -12,6 +12,7 @@ context = "build"
 [dependencies]
 serde.workspace = true
 thiserror.workspace = true
+time.workspace = true
 uuid.workspace = true
 
 [lints]

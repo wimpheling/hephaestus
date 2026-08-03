@@ -6,7 +6,7 @@ use identity_domain::AuthenticatedIdentity;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use sqlx::{FromRow, PgPool};
+use sqlx::{FromRow, PgPool, Postgres, Transaction};
 use std::collections::BTreeMap;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use uuid::Uuid;
@@ -522,6 +522,8 @@ impl BuildApplication {
             .build
             .as_ref()
             .ok_or(BuildError::FailedPrecondition)?;
+        let resolved_root_image =
+            resolve_build_root_image(&mut transaction, request.repository_id, build).await?;
         let build_declaration = serde_json::to_value(build).map_err(BuildError::Serialization)?;
         let build_policy = json!({
             "resources": build.resources,
@@ -558,7 +560,7 @@ impl BuildApplication {
         .bind(identity.user_id.as_uuid())
         .bind(now)
         .bind(agent_key)
-        .bind(&build.root_image)
+        .bind(&resolved_root_image)
         .bind(&configuration_hash)
         .bind(build_declaration)
         .bind(build_policy)
@@ -621,6 +623,86 @@ impl BuildApplication {
             updated_at: row.3,
         })
     }
+}
+
+#[derive(Debug, FromRow)]
+struct ResolvedBuilderRow {
+    image_reference: String,
+    max_vcpus: i16,
+    max_memory_mib: i32,
+    network_ceiling: String,
+}
+
+async fn resolve_build_root_image(
+    transaction: &mut Transaction<'_, Postgres>,
+    repository_id: Uuid,
+    build: &agent_config::BuildConfig,
+) -> Result<String, BuildError> {
+    let row = match (&build.root_image, &build.builder) {
+        (Some(reference), None) => sqlx::query_as::<_, ResolvedBuilderRow>(
+            "SELECT image_reference, max_vcpus, max_memory_mib, network_ceiling
+             FROM builder_images
+             WHERE image_reference = $1 AND preparation_state = 'ready'
+               AND availability_state = 'available'",
+        )
+        .bind(reference)
+        .fetch_optional(&mut **transaction)
+        .await
+        .map_err(BuildError::Persistence)?,
+        (None, Some(agent_config::BuilderSelection::Platform { key })) => {
+            sqlx::query_as::<_, ResolvedBuilderRow>(
+                "SELECT image_reference, max_vcpus, max_memory_mib, network_ceiling
+                 FROM builder_images
+                 WHERE key = $1 AND preparation_state = 'ready'
+                   AND availability_state = 'available'",
+            )
+            .bind(key)
+            .fetch_optional(&mut **transaction)
+            .await
+            .map_err(BuildError::Persistence)?
+        }
+        (None, Some(agent_config::BuilderSelection::Project { id })) => {
+            let builder_id = Uuid::parse_str(id).map_err(|_| BuildError::FailedPrecondition)?;
+            sqlx::query_as::<_, ResolvedBuilderRow>(
+                "SELECT project_builder.oci_image_reference AS image_reference,
+                        base.max_vcpus, base.max_memory_mib, base.network_ceiling
+                 FROM project_builder_definitions AS project_builder
+                 JOIN repositories AS repository
+                   ON repository.project_id = project_builder.project_id
+                 JOIN builder_images AS base
+                   ON base.image_reference = project_builder.approved_base_image_reference
+                 WHERE repository.id = $1 AND project_builder.id = $2
+                   AND project_builder.status = 'ready'
+                   AND base.preparation_state = 'ready'
+                   AND base.availability_state = 'available'",
+            )
+            .bind(repository_id)
+            .bind(builder_id)
+            .fetch_optional(&mut **transaction)
+            .await
+            .map_err(BuildError::Persistence)?
+        }
+        _ => None,
+    };
+    let row = row.ok_or(BuildError::FailedPrecondition)?;
+    let requested_network = match build.network.profile {
+        agent_config::NetworkProfile::Disabled => 0,
+        agent_config::NetworkProfile::BrokerOnly => 1,
+        agent_config::NetworkProfile::Egress => 2,
+    };
+    let permitted_network = match row.network_ceiling.as_str() {
+        "disabled" => 0,
+        "broker_only" => 1,
+        "egress" => 2,
+        _ => return Err(BuildError::InvalidStoredData),
+    };
+    if build.resources.vcpus > u8::try_from(row.max_vcpus).unwrap_or(0)
+        || i64::from(build.resources.memory_mib) > i64::from(row.max_memory_mib)
+        || requested_network > permitted_network
+    {
+        return Err(BuildError::FailedPrecondition);
+    }
+    Ok(row.image_reference)
 }
 
 #[derive(FromRow)]

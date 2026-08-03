@@ -946,6 +946,7 @@ async fn persist_build_request(
     let declared_artifacts =
         serde_json::to_value(&build.artifacts).map_err(ForgeRepositoryError::Serialization)?;
     let build_definition_hash: [u8; 32] = Sha256::digest(&build_definition).into();
+    let resolved_root_image = resolve_build_root_image(transaction, repository_id, build).await?;
     let requested_id = BuildRequestId::new();
     let stored_id: Uuid = sqlx::query_scalar(
         "INSERT INTO build_requests
@@ -971,7 +972,7 @@ async fn persist_build_request(
     .bind(identity.map(|value| value.user_id.as_uuid()))
     .bind(now)
     .bind(agent_key)
-    .bind(&build.root_image)
+    .bind(&resolved_root_image)
     .bind(normalized_hash.as_str())
     .bind(build_declaration)
     .bind(build_policy)
@@ -1012,6 +1013,95 @@ async fn persist_build_request(
     )
     .await?;
     Ok(BuildRequestId::from_uuid(stored_id))
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct ResolvedBuilderRow {
+    image_reference: String,
+    max_vcpus: i16,
+    max_memory_mib: i32,
+    network_ceiling: String,
+}
+
+async fn resolve_build_root_image(
+    transaction: &mut Transaction<'_, Postgres>,
+    repository_id: RepositoryId,
+    build: &agent_config::BuildConfig,
+) -> Result<String, ForgeRepositoryError> {
+    let row = match (&build.root_image, &build.builder) {
+        (Some(reference), None) => sqlx::query_as::<_, ResolvedBuilderRow>(
+            "SELECT image_reference, max_vcpus, max_memory_mib, network_ceiling
+             FROM builder_images
+             WHERE image_reference = $1 AND preparation_state = 'ready'
+               AND availability_state = 'available'",
+        )
+        .bind(reference)
+        .fetch_optional(&mut **transaction)
+        .await
+        .map_err(storage)?,
+        (None, Some(agent_config::BuilderSelection::Platform { key })) => {
+            sqlx::query_as::<_, ResolvedBuilderRow>(
+                "SELECT image_reference, max_vcpus, max_memory_mib, network_ceiling
+                 FROM builder_images
+                 WHERE key = $1 AND preparation_state = 'ready'
+                   AND availability_state = 'available'",
+            )
+            .bind(key)
+            .fetch_optional(&mut **transaction)
+            .await
+            .map_err(storage)?
+        }
+        (None, Some(agent_config::BuilderSelection::Project { id })) => {
+            let builder_id = Uuid::parse_str(id)
+                .map_err(|_| ForgeRepositoryError::InvalidMetadata("invalid project builder id"))?;
+            sqlx::query_as::<_, ResolvedBuilderRow>(
+                "SELECT project_builder.oci_image_reference AS image_reference,
+                        base.max_vcpus, base.max_memory_mib, base.network_ceiling
+                 FROM project_builder_definitions AS project_builder
+                 JOIN repositories AS repository
+                   ON repository.project_id = project_builder.project_id
+                 JOIN builder_images AS base
+                   ON base.image_reference = project_builder.approved_base_image_reference
+                 WHERE repository.id = $1 AND project_builder.id = $2
+                   AND project_builder.status = 'ready'
+                   AND base.preparation_state = 'ready'
+                   AND base.availability_state = 'available'",
+            )
+            .bind(repository_id.as_uuid())
+            .bind(builder_id)
+            .fetch_optional(&mut **transaction)
+            .await
+            .map_err(storage)?
+        }
+        _ => None,
+    };
+    let row = row.ok_or(ForgeRepositoryError::InvalidMetadata(
+        "builder selection is not approved or prepared",
+    ))?;
+    let requested_network = match build.network.profile {
+        agent_config::NetworkProfile::Disabled => 0,
+        agent_config::NetworkProfile::BrokerOnly => 1,
+        agent_config::NetworkProfile::Egress => 2,
+    };
+    let permitted_network = match row.network_ceiling.as_str() {
+        "disabled" => 0,
+        "broker_only" => 1,
+        "egress" => 2,
+        _ => {
+            return Err(ForgeRepositoryError::InvalidStoredData(
+                "unknown builder network ceiling",
+            ));
+        }
+    };
+    if build.resources.vcpus > u8::try_from(row.max_vcpus).unwrap_or(0)
+        || i64::from(build.resources.memory_mib) > i64::from(row.max_memory_mib)
+        || requested_network > permitted_network
+    {
+        return Err(ForgeRepositoryError::InvalidMetadata(
+            "build policy exceeds builder catalog limits",
+        ));
+    }
+    Ok(row.image_reference)
 }
 
 fn hex_digest(digest: &[u8; 32]) -> String {

@@ -1,14 +1,17 @@
 //! `PostgreSQL` adapter for the platform-owned builder image catalog.
 
 use async_trait::async_trait;
-use builder_catalog_application::{BuilderCatalog, BuilderCatalogError};
+use builder_catalog_application::{
+    BuilderCatalog, BuilderCatalogError, ProjectBuilderStore, ProjectBuilderStoreError,
+};
 use builder_catalog_domain::{
     AvailabilityState, BuildNetworkPolicy, BuilderCatalogValueError, BuilderImage, BuilderImageId,
-    BuilderImageReference, BuilderKey, BuilderProvenance, DependencyPolicy, PreparationState,
-    Toolchain,
+    BuilderImageReference, BuilderKey, BuilderProvenance, BuilderSourcePath, DependencyPolicy,
+    NewProjectBuilder, OciDigest, PreparationState, ProjectBuilderDefinition, ProjectBuilderId,
+    ProjectBuilderProvenance, ProjectBuilderStatus, Toolchain,
 };
 use serde_json::Value;
-use sqlx::{FromRow, PgPool};
+use sqlx::{FromRow, PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
 /// PostgreSQL-backed builder catalog.
@@ -83,6 +86,343 @@ impl BuilderCatalog for PgBuilderCatalog {
         .map_err(storage)?
         .ok_or(BuilderCatalogError::NotFound)?;
         row.try_into_domain()
+    }
+}
+
+#[async_trait]
+impl ProjectBuilderStore for PgBuilderCatalog {
+    async fn create_project_builder(
+        &self,
+        builder: NewProjectBuilder,
+    ) -> Result<ProjectBuilderDefinition, ProjectBuilderStoreError> {
+        builder
+            .validate()
+            .map_err(ProjectBuilderStoreError::InvalidData)?;
+        let project_id = builder.project_id;
+        let builder_id = builder.id;
+        let mut transaction = self.pool.begin().await.map_err(storage_project_builder)?;
+        let row = sqlx::query_as::<_, ProjectBuilderRow>(
+            "INSERT INTO project_builder_definitions
+                (id, project_id, source_repository_id, key, display_name,
+                 source_revision, dockerfile_path, context_path, context_digest,
+                 approved_base_image_reference, status)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'draft')
+             RETURNING id, project_id, source_repository_id, key, display_name,
+                 source_revision, dockerfile_path, context_path, context_digest,
+                 approved_base_image_reference, status, oci_image_reference,
+                 oci_image_digest, provenance, failure_reason, created_at, updated_at",
+        )
+        .bind(builder.id.as_uuid())
+        .bind(builder.project_id)
+        .bind(builder.source_repository_id)
+        .bind(builder.key.as_str())
+        .bind(builder.display_name)
+        .bind(builder.source_revision)
+        .bind(builder.dockerfile_path.as_str())
+        .bind(builder.context_path.as_str())
+        .bind(builder.context_digest.as_str())
+        .bind(builder.approved_base_image.as_str())
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(storage_project_builder)?;
+        append_project_builder_event(&mut transaction, project_id, builder_id, "created", "draft")
+            .await?;
+        transaction
+            .commit()
+            .await
+            .map_err(storage_project_builder)?;
+        row.try_into_domain()
+    }
+
+    async fn list_project_builders(
+        &self,
+        project_id: Uuid,
+    ) -> Result<Vec<ProjectBuilderDefinition>, ProjectBuilderStoreError> {
+        let rows = sqlx::query_as::<_, ProjectBuilderRow>(
+            "SELECT id, project_id, source_repository_id, key, display_name,
+                    source_revision, dockerfile_path, context_path, context_digest,
+                    approved_base_image_reference, status, oci_image_reference,
+                    oci_image_digest, provenance, failure_reason, created_at, updated_at
+             FROM project_builder_definitions
+             WHERE project_id = $1
+             ORDER BY key, id",
+        )
+        .bind(project_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(storage_project_builder)?;
+        rows.into_iter()
+            .map(ProjectBuilderRow::try_into_domain)
+            .collect()
+    }
+
+    async fn get_project_builder(
+        &self,
+        project_id: Uuid,
+        id: ProjectBuilderId,
+    ) -> Result<ProjectBuilderDefinition, ProjectBuilderStoreError> {
+        let mut transaction = self.pool.begin().await.map_err(storage_project_builder)?;
+        let row = sqlx::query_as::<_, ProjectBuilderRow>(
+            "SELECT id, project_id, source_repository_id, key, display_name,
+                    source_revision, dockerfile_path, context_path, context_digest,
+                    approved_base_image_reference, status, oci_image_reference,
+                    oci_image_digest, provenance, failure_reason, created_at, updated_at
+             FROM project_builder_definitions
+             WHERE project_id = $1 AND id = $2",
+        )
+        .bind(project_id)
+        .bind(id.as_uuid())
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(storage_project_builder)?
+        .ok_or(ProjectBuilderStoreError::NotFound)?;
+        row.try_into_domain()
+    }
+
+    async fn begin_project_builder_preparation(
+        &self,
+        project_id: Uuid,
+        id: ProjectBuilderId,
+    ) -> Result<ProjectBuilderDefinition, ProjectBuilderStoreError> {
+        let mut transaction = self.pool.begin().await.map_err(storage_project_builder)?;
+        let row = sqlx::query_as::<_, ProjectBuilderRow>(
+            "UPDATE project_builder_definitions
+             SET status = 'preparing', failure_reason = NULL, updated_at = now()
+             WHERE project_id = $1 AND id = $2 AND status IN ('draft', 'failed')
+             RETURNING id, project_id, source_repository_id, key, display_name,
+                 source_revision, dockerfile_path, context_path, context_digest,
+                 approved_base_image_reference, status, oci_image_reference,
+                 oci_image_digest, provenance, failure_reason, created_at, updated_at",
+        )
+        .bind(project_id)
+        .bind(id.as_uuid())
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(storage_project_builder)?;
+        self.lifecycle_row_or_error(transaction, row, project_id, id, "preparing")
+            .await
+    }
+
+    async fn complete_project_builder(
+        &self,
+        project_id: Uuid,
+        id: ProjectBuilderId,
+        output_reference: BuilderImageReference,
+        output_digest: OciDigest,
+        provenance: ProjectBuilderProvenance,
+    ) -> Result<ProjectBuilderDefinition, ProjectBuilderStoreError> {
+        let reference_digest = output_reference
+            .digest()
+            .map_err(ProjectBuilderStoreError::InvalidData)?;
+        if reference_digest != output_digest {
+            return Err(ProjectBuilderStoreError::InvalidData(
+                BuilderCatalogValueError::InvalidProjectBuilderState,
+            ));
+        }
+        provenance
+            .validate()
+            .map_err(ProjectBuilderStoreError::InvalidData)?;
+        let provenance = serde_json::to_value(provenance).map_err(storage_project_builder)?;
+        let mut transaction = self.pool.begin().await.map_err(storage_project_builder)?;
+        let row = sqlx::query_as::<_, ProjectBuilderRow>(
+            "UPDATE project_builder_definitions
+             SET status = 'ready', oci_image_reference = $3, oci_image_digest = $4,
+                 provenance = $5, failure_reason = NULL, updated_at = now()
+             WHERE project_id = $1 AND id = $2 AND status = 'preparing'
+             RETURNING id, project_id, source_repository_id, key, display_name,
+                 source_revision, dockerfile_path, context_path, context_digest,
+                 approved_base_image_reference, status, oci_image_reference,
+                 oci_image_digest, provenance, failure_reason, created_at, updated_at",
+        )
+        .bind(project_id)
+        .bind(id.as_uuid())
+        .bind(output_reference.as_str())
+        .bind(output_digest.as_str())
+        .bind(provenance)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(storage_project_builder)?;
+        self.lifecycle_row_or_error(transaction, row, project_id, id, "ready")
+            .await
+    }
+
+    async fn fail_project_builder(
+        &self,
+        project_id: Uuid,
+        id: ProjectBuilderId,
+        reason: String,
+    ) -> Result<ProjectBuilderDefinition, ProjectBuilderStoreError> {
+        if reason.trim().is_empty() || reason.len() > 2048 {
+            return Err(ProjectBuilderStoreError::InvalidData(
+                BuilderCatalogValueError::InvalidFailureReason,
+            ));
+        }
+        let mut transaction = self.pool.begin().await.map_err(storage_project_builder)?;
+        let row = sqlx::query_as::<_, ProjectBuilderRow>(
+            "UPDATE project_builder_definitions
+             SET status = 'failed', failure_reason = $3, updated_at = now()
+             WHERE project_id = $1 AND id = $2 AND status = 'preparing'
+             RETURNING id, project_id, source_repository_id, key, display_name,
+                 source_revision, dockerfile_path, context_path, context_digest,
+                 approved_base_image_reference, status, oci_image_reference,
+                 oci_image_digest, provenance, failure_reason, created_at, updated_at",
+        )
+        .bind(project_id)
+        .bind(id.as_uuid())
+        .bind(reason)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(storage_project_builder)?;
+        self.lifecycle_row_or_error(transaction, row, project_id, id, "failed")
+            .await
+    }
+
+    async fn retire_project_builder(
+        &self,
+        project_id: Uuid,
+        id: ProjectBuilderId,
+    ) -> Result<ProjectBuilderDefinition, ProjectBuilderStoreError> {
+        let mut transaction = self.pool.begin().await.map_err(storage_project_builder)?;
+        let row = sqlx::query_as::<_, ProjectBuilderRow>(
+            "UPDATE project_builder_definitions
+             SET status = 'retired', updated_at = now()
+             WHERE project_id = $1 AND id = $2 AND status <> 'retired'
+             RETURNING id, project_id, source_repository_id, key, display_name,
+                 source_revision, dockerfile_path, context_path, context_digest,
+                 approved_base_image_reference, status, oci_image_reference,
+                 oci_image_digest, provenance, failure_reason, created_at, updated_at",
+        )
+        .bind(project_id)
+        .bind(id.as_uuid())
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(storage_project_builder)?;
+        self.lifecycle_row_or_error(transaction, row, project_id, id, "retired")
+            .await
+    }
+}
+
+async fn append_project_builder_event(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    builder_id: ProjectBuilderId,
+    change_kind: &str,
+    status: &str,
+) -> Result<(), ProjectBuilderStoreError> {
+    sqlx::query(
+        "SELECT event_id FROM append_application_event(
+            gen_random_uuid(), 'project', $1, 'project', $1,
+            'project.changed', $2, $3, $4, NULL
+        )",
+    )
+    .bind(project_id)
+    .bind(change_kind)
+    .bind(status)
+    .bind(builder_id.as_uuid())
+    .execute(&mut **transaction)
+    .await
+    .map_err(storage_project_builder)?;
+    Ok(())
+}
+
+impl PgBuilderCatalog {
+    async fn lifecycle_row_or_error(
+        &self,
+        mut transaction: Transaction<'_, Postgres>,
+        row: Option<ProjectBuilderRow>,
+        project_id: Uuid,
+        id: ProjectBuilderId,
+        status: &str,
+    ) -> Result<ProjectBuilderDefinition, ProjectBuilderStoreError> {
+        if let Some(row) = row {
+            append_project_builder_event(&mut transaction, project_id, id, "state_changed", status)
+                .await?;
+            transaction
+                .commit()
+                .await
+                .map_err(storage_project_builder)?;
+            row.try_into_domain()
+        } else {
+            let exists: bool = sqlx::query_scalar(
+                "SELECT EXISTS(
+                    SELECT 1 FROM project_builder_definitions
+                    WHERE project_id = $1 AND id = $2
+                )",
+            )
+            .bind(project_id)
+            .bind(id.as_uuid())
+            .fetch_one(&mut *transaction)
+            .await
+            .map_err(storage_project_builder)?;
+            Err(if exists {
+                ProjectBuilderStoreError::Conflict
+            } else {
+                ProjectBuilderStoreError::NotFound
+            })
+        }
+    }
+}
+
+#[derive(Debug, FromRow)]
+struct ProjectBuilderRow {
+    id: Uuid,
+    project_id: Uuid,
+    source_repository_id: Uuid,
+    key: String,
+    display_name: String,
+    source_revision: String,
+    dockerfile_path: String,
+    context_path: String,
+    context_digest: String,
+    approved_base_image_reference: String,
+    status: String,
+    oci_image_reference: Option<String>,
+    oci_image_digest: Option<String>,
+    provenance: Option<Value>,
+    failure_reason: Option<String>,
+    created_at: time::OffsetDateTime,
+    updated_at: time::OffsetDateTime,
+}
+
+impl ProjectBuilderRow {
+    fn try_into_domain(self) -> Result<ProjectBuilderDefinition, ProjectBuilderStoreError> {
+        let builder = ProjectBuilderDefinition {
+            id: ProjectBuilderId::from_uuid(self.id),
+            project_id: self.project_id,
+            key: BuilderKey::parse(self.key).map_err(invalid_project_builder_data)?,
+            display_name: self.display_name,
+            source_repository_id: self.source_repository_id,
+            source_revision: self.source_revision,
+            dockerfile_path: BuilderSourcePath::parse(self.dockerfile_path)
+                .map_err(invalid_project_builder_data)?,
+            context_path: BuilderSourcePath::parse(self.context_path)
+                .map_err(invalid_project_builder_data)?,
+            context_digest: OciDigest::parse(self.context_digest)
+                .map_err(invalid_project_builder_data)?,
+            approved_base_image: BuilderImageReference::parse(self.approved_base_image_reference)
+                .map_err(invalid_project_builder_data)?,
+            status: project_builder_status(&self.status).map_err(invalid_project_builder_data)?,
+            oci_image_reference: self
+                .oci_image_reference
+                .map(BuilderImageReference::parse)
+                .transpose()
+                .map_err(invalid_project_builder_data)?,
+            oci_image_digest: self
+                .oci_image_digest
+                .map(OciDigest::parse)
+                .transpose()
+                .map_err(invalid_project_builder_data)?,
+            provenance: self
+                .provenance
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(storage_project_builder)?,
+            failure_reason: self.failure_reason,
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+        };
+        builder.validate().map_err(invalid_project_builder_data)?;
+        Ok(builder)
     }
 }
 
@@ -184,10 +524,94 @@ fn dependency_policy(value: &str) -> Result<DependencyPolicy, BuilderCatalogValu
     }
 }
 
+fn project_builder_status(value: &str) -> Result<ProjectBuilderStatus, BuilderCatalogValueError> {
+    match value {
+        "draft" => Ok(ProjectBuilderStatus::Draft),
+        "preparing" => Ok(ProjectBuilderStatus::Preparing),
+        "ready" => Ok(ProjectBuilderStatus::Ready),
+        "failed" => Ok(ProjectBuilderStatus::Failed),
+        "retired" => Ok(ProjectBuilderStatus::Retired),
+        _ => Err(BuilderCatalogValueError::InvalidStoredValue),
+    }
+}
+
 const fn invalid_data(error: BuilderCatalogValueError) -> BuilderCatalogError {
     BuilderCatalogError::InvalidData(error)
 }
 
 fn storage(error: impl std::error::Error + Send + Sync + 'static) -> BuilderCatalogError {
     BuilderCatalogError::Storage(Box::new(error))
+}
+
+const fn invalid_project_builder_data(error: BuilderCatalogValueError) -> ProjectBuilderStoreError {
+    ProjectBuilderStoreError::InvalidData(error)
+}
+
+fn storage_project_builder(
+    error: impl std::error::Error + Send + Sync + 'static,
+) -> ProjectBuilderStoreError {
+    ProjectBuilderStoreError::Storage(Box::new(error))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn draft_row() -> ProjectBuilderRow {
+        ProjectBuilderRow {
+            id: Uuid::new_v4(),
+            project_id: Uuid::new_v4(),
+            source_repository_id: Uuid::new_v4(),
+            key: String::from("custom"),
+            display_name: String::from("Custom builder"),
+            source_revision: String::from("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+            dockerfile_path: String::from("Dockerfile.builder"),
+            context_path: String::from("."),
+            context_digest: String::from(
+                "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            ),
+            approved_base_image_reference: String::from(
+                "registry.example/ubuntu@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            ),
+            status: String::from("draft"),
+            oci_image_reference: None,
+            oci_image_digest: None,
+            provenance: None,
+            failure_reason: None,
+            created_at: time::OffsetDateTime::UNIX_EPOCH,
+            updated_at: time::OffsetDateTime::UNIX_EPOCH,
+        }
+    }
+
+    #[test]
+    fn maps_valid_project_builder_rows() {
+        let builder = draft_row()
+            .try_into_domain()
+            .expect("valid project builder row");
+        assert_eq!(builder.status, ProjectBuilderStatus::Draft);
+        assert_eq!(builder.context_path.as_str(), ".");
+    }
+
+    #[test]
+    fn rejects_persisted_output_digest_mismatch() {
+        let mut row = draft_row();
+        row.status = String::from("ready");
+        row.oci_image_reference = Some(String::from(
+            "registry.example/custom@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        ));
+        row.oci_image_digest = Some(String::from(
+            "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        ));
+        row.provenance = Some(serde_json::json!({
+            "source_revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "context_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "attestation_reference": "attestation://test"
+        }));
+        assert!(matches!(
+            row.try_into_domain(),
+            Err(ProjectBuilderStoreError::InvalidData(
+                BuilderCatalogValueError::InvalidProjectBuilderState
+            ))
+        ));
+    }
 }

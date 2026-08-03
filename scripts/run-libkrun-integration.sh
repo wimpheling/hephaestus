@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 #
-# Build a pinned Fedora guest fixture and run a real, non-root libkrun
+# Build a pinned Ubuntu guest fixture and run a real, non-root libkrun
 # integration scenario. All generated files, containers, and cgroups are
 # removed on exit.
 
 set -Eeuo pipefail
 
-readonly DEFAULT_FEDORA_IMAGE="registry.fedoraproject.org/fedora-minimal@sha256:8f42d200f04990b41081322d1c260ddf23b124b3b92538665ef4cc3064537249"
+readonly DEFAULT_UBUNTU_IMAGE="docker.io/library/ubuntu@sha256:52df9b1ee71626e0088f7d400d5c6b5f7bb916f8f0c82b474289a4ece6cf3faf"
 readonly DEFAULT_POSTGRES_IMAGE="docker.io/library/postgres:17-alpine"
 readonly DEFAULT_NATS_IMAGE="docker.io/library/nats:2.11-alpine"
 readonly GUEST_TARGET="x86_64-unknown-linux-musl"
@@ -16,8 +16,8 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly script_dir
 repo_root="$(cd -- "${script_dir}/.." && pwd -P)"
 readonly repo_root
-fedora_image="${HEPHAESTUS_LIBKRUN_FEDORA_IMAGE:-${DEFAULT_FEDORA_IMAGE}}"
-readonly fedora_image
+ubuntu_image="${HEPHAESTUS_LIBKRUN_UBUNTU_IMAGE:-${DEFAULT_UBUNTU_IMAGE}}"
+readonly ubuntu_image
 postgres_image="${HEPHAESTUS_POSTGRES_TEST_IMAGE:-${DEFAULT_POSTGRES_IMAGE}}"
 readonly postgres_image
 nats_image="${HEPHAESTUS_NATS_TEST_IMAGE:-${DEFAULT_NATS_IMAGE}}"
@@ -258,8 +258,8 @@ mkdir -p \
 chmod 0700 "${fixture_root}/runtime"
 
 container_name="hephaestus-libkrun-fixture-$$"
-podman pull "${fedora_image}"
-podman create --name "${container_name}" "${fedora_image}" /bin/true >/dev/null
+podman pull "${ubuntu_image}"
+podman create --name "${container_name}" "${ubuntu_image}" /bin/true >/dev/null
 podman export "${container_name}" | tar -C "${fixture_root}/rootfs" -xf -
 podman rm "${container_name}" >/dev/null
 container_name=""
@@ -296,7 +296,7 @@ if command -v rpm >/dev/null 2>&1; then
     rpm -q libkrun libkrunfw
 fi
 if [[ "${HEPHAESTUS_APP_LIBKRUN_E2E:-0}" == "1" ]]; then
-    printf 'Running daemon golden E2E with pinned image %s\n' "${fedora_image}"
+    printf 'Running daemon golden E2E with pinned image %s\n' "${ubuntu_image}"
     start_golden_services
     cargo build \
         --manifest-path "${repo_root}/Cargo.toml" \
@@ -319,7 +319,7 @@ if [[ "${HEPHAESTUS_APP_LIBKRUN_E2E:-0}" == "1" ]]; then
         --test golden \
         -- --nocapture
 elif [[ "${HEPHAESTUS_PHASE1B_INTEGRATION:-0}" == "1" ]]; then
-    printf 'Running Phase 1B persistence test with pinned image %s\n' "${fedora_image}"
+    printf 'Running Phase 1B persistence test with pinned image %s\n' "${ubuntu_image}"
     [[ -n "${HEPHAESTUS_POSTGRES_TEST_URL:-}" ]] ||
         die "HEPHAESTUS_POSTGRES_TEST_URL is required for the Phase 1B scenario"
     cargo build \
@@ -340,7 +340,7 @@ elif [[ "${HEPHAESTUS_PHASE1B_INTEGRATION:-0}" == "1" ]]; then
         --test phase1b_libkrun \
         -- --nocapture
 else
-    printf 'Running libkrun smoke test with pinned image %s\n' "${fedora_image}"
+    printf 'Running libkrun smoke test with pinned image %s\n' "${ubuntu_image}"
     run_as_guest_owner env \
         HEPHAESTUS_LIBKRUN_INTEGRATION=1 \
         HEPHAESTUS_LIBKRUN_RUNTIME_ROOT="${fixture_root}/runtime" \

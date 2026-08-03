@@ -51,6 +51,7 @@ dependencies = [
  "serde",
  "sha2",
  "toml",
+ "uuid",
 ]
 
 [[package]]
@@ -477,7 +478,9 @@ dependencies = [
  "async-trait",
  "builder-catalog-domain",
  "thiserror 2.0.19",
+ "time",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -486,6 +489,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "thiserror 2.0.19",
+ "time",
  "uuid",
 ]
 
@@ -498,6 +502,7 @@ dependencies = [
  "builder-catalog-domain",
  "serde_json",
  "sqlx",
+ "time",
  "tokio",
  "uuid",
 ]
