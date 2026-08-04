@@ -42,6 +42,7 @@ defmodule Hephaestus.Event.V1.AggregateType do
   field(:AGGREGATE_TYPE_AGENT_SECRET_BINDING, 14)
   field(:AGGREGATE_TYPE_ARTIFACT, 15)
   field(:AGGREGATE_TYPE_IDENTITY_PROFILE, 16)
+  field(:AGGREGATE_TYPE_REGISTRY_PUBLICATION, 17)
 end
 
 defmodule Hephaestus.Event.V1.ChangeKind do
@@ -319,6 +320,18 @@ defmodule Hephaestus.Event.V1.ArtifactChanged do
   field(:state, 4, type: Hephaestus.Event.V1.LifecycleState, enum: true)
 end
 
+defmodule Hephaestus.Event.V1.RegistryPublicationChanged do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.event.v1.RegistryPublicationChanged",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:change, 1, type: Hephaestus.Event.V1.ChangeKind, enum: true)
+  field(:state, 2, type: Hephaestus.Event.V1.LifecycleState, enum: true)
+end
+
 defmodule Hephaestus.Event.V1.ProductEvent do
   @moduledoc false
 
@@ -434,6 +447,12 @@ defmodule Hephaestus.Event.V1.ProductEvent do
   field(:identity_profile_changed, 35,
     type: Hephaestus.Event.V1.IdentityProfileChanged,
     json_name: "identityProfileChanged",
+    oneof: 0
+  )
+
+  field(:registry_publication_changed, 36,
+    type: Hephaestus.Event.V1.RegistryPublicationChanged,
+    json_name: "registryPublicationChanged",
     oneof: 0
   )
 end

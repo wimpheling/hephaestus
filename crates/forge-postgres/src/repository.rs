@@ -564,6 +564,16 @@ impl PgForgeRepository {
         let mut build_requests = Vec::new();
         let mut invalid_configurations = 0;
         for item in inspected {
+            if let Some(builders) = item.repository_builders.as_deref() {
+                persist_repository_builder_revisions(
+                    &mut transaction,
+                    repository.id,
+                    repository.project_id,
+                    &item.commit,
+                    builders,
+                )
+                .await?;
+            }
             let Some(parsed) = item.parsed else {
                 continue;
             };
@@ -819,6 +829,17 @@ struct InspectedUpdate {
     git_ref: GitRef,
     commit: CommitSha,
     parsed: Option<ParsedConfig>,
+    repository_builders: Option<Vec<InspectedRepositoryBuilder>>,
+}
+
+#[derive(Debug)]
+struct InspectedRepositoryBuilder {
+    key: String,
+    display_name: String,
+    dockerfile_path: String,
+    context_path: String,
+    context_digest: String,
+    base_key: String,
 }
 
 fn inspect_updates(
@@ -845,14 +866,102 @@ fn inspect_updates(
                             .map_err(git)
                     })
                     .transpose()?;
+                let repository_builders = inspect_repository_builders(&tree)?;
                 Ok(InspectedUpdate {
                     git_ref: update.git_ref.clone(),
                     commit: commit.clone(),
                     parsed,
+                    repository_builders,
                 })
             })
         })
         .collect()
+}
+
+fn inspect_repository_builders(
+    tree: &gix::Tree<'_>,
+) -> Result<Option<Vec<InspectedRepositoryBuilder>>, ForgeRepositoryError> {
+    let Some(entry) = tree
+        .lookup_entry_by_path("heph.builders.toml")
+        .map_err(git)?
+    else {
+        return Ok(None);
+    };
+    if !entry.mode().is_blob() {
+        return Err(ForgeRepositoryError::InvalidMetadata(
+            "heph.builders.toml must be a regular file",
+        ));
+    }
+    let manifest = entry.object().map_err(git)?.try_into_blob().map_err(git)?;
+    let parsed = agent_config::parse_repository_builders(&manifest.data);
+    let Some(config) = parsed.config else {
+        return Ok(None);
+    };
+    config
+        .builders
+        .into_iter()
+        .map(|builder| inspect_repository_builder(tree, builder))
+        .collect::<Result<Vec<_>, _>>()
+        .map(Some)
+}
+
+fn inspect_repository_builder(
+    tree: &gix::Tree<'_>,
+    builder: agent_config::RepositoryBuilderConfig,
+) -> Result<InspectedRepositoryBuilder, ForgeRepositoryError> {
+    let dockerfile = tree
+        .lookup_entry_by_path(&builder.oci.dockerfile)
+        .map_err(git)?
+        .ok_or(ForgeRepositoryError::InvalidMetadata(
+            "repository builder Dockerfile does not exist in its source commit",
+        ))?;
+    if !dockerfile.mode().is_blob() {
+        return Err(ForgeRepositoryError::InvalidMetadata(
+            "repository builder Dockerfile must be a regular file, not a symlink",
+        ));
+    }
+    let context = if builder.oci.context == "." {
+        tree.clone()
+    } else {
+        let entry = tree
+            .lookup_entry_by_path(&builder.oci.context)
+            .map_err(git)?
+            .ok_or(ForgeRepositoryError::InvalidMetadata(
+                "repository builder context does not exist in its source commit",
+            ))?;
+        if !entry.mode().is_tree() {
+            return Err(ForgeRepositoryError::InvalidMetadata(
+                "repository builder context must be a directory, not a symlink",
+            ));
+        }
+        entry.object().map_err(git)?.try_into_tree().map_err(git)?
+    };
+    validate_repository_builder_context(&context)?;
+    let context_digest = format!("sha256:{:x}", Sha256::digest(&context.data));
+    Ok(InspectedRepositoryBuilder {
+        key: builder.key,
+        display_name: builder.display_name,
+        dockerfile_path: builder.oci.dockerfile,
+        context_path: builder.oci.context,
+        context_digest,
+        base_key: builder.oci.base,
+    })
+}
+
+fn validate_repository_builder_context(tree: &gix::Tree<'_>) -> Result<(), ForgeRepositoryError> {
+    for entry in tree.iter() {
+        let entry = entry.map_err(git)?;
+        if entry.mode().is_link() || entry.mode().is_commit() {
+            return Err(ForgeRepositoryError::InvalidMetadata(
+                "repository builder contexts may not contain symlinks or submodules",
+            ));
+        }
+        if entry.mode().is_tree() {
+            let child = entry.object().map_err(git)?.try_into_tree().map_err(git)?;
+            validate_repository_builder_context(&child)?;
+        }
+    }
+    Ok(())
 }
 
 async fn persist_revision(
@@ -908,6 +1017,60 @@ async fn persist_revision(
     Ok(AgentConfigRevisionId::from_uuid(row.id))
 }
 
+async fn persist_repository_builder_revisions(
+    transaction: &mut Transaction<'_, Postgres>,
+    repository_id: RepositoryId,
+    project_id: ProjectId,
+    source_commit: &CommitSha,
+    builders: &[InspectedRepositoryBuilder],
+) -> Result<(), ForgeRepositoryError> {
+    for builder in builders {
+        // Keeping the catalog read and revision insert in the receive
+        // transaction makes the selected base digest part of the immutable
+        // source revision, rather than resolving a mutable key later.
+        let base_reference: Option<String> = sqlx::query_scalar(
+            "SELECT image_reference
+             FROM builder_images
+             WHERE key = $1 AND preparation_state = 'ready'
+               AND availability_state = 'available'
+             FOR SHARE",
+        )
+        .bind(&builder.base_key)
+        .fetch_optional(&mut **transaction)
+        .await
+        .map_err(storage)?;
+        let base_reference = base_reference.ok_or(ForgeRepositoryError::InvalidMetadata(
+            "repository builder base is not an approved prepared platform image",
+        ))?;
+        let revision_id = Uuid::new_v4();
+        sqlx::query_scalar::<_, Uuid>(
+            "INSERT INTO project_builder_definitions
+                (id, project_id, source_repository_id, key, display_name,
+                 source_revision, dockerfile_path, context_path, context_digest,
+                 approved_base_image_reference, status)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'preparing')
+             ON CONFLICT (source_repository_id, key, source_revision,
+                          context_digest, approved_base_image_reference)
+             DO NOTHING
+             RETURNING id",
+        )
+        .bind(revision_id)
+        .bind(project_id.as_uuid())
+        .bind(repository_id.as_uuid())
+        .bind(&builder.key)
+        .bind(&builder.display_name)
+        .bind(source_commit.as_str())
+        .bind(&builder.dockerfile_path)
+        .bind(&builder.context_path)
+        .bind(&builder.context_digest)
+        .bind(base_reference)
+        .fetch_optional(&mut **transaction)
+        .await
+        .map_err(storage)?;
+    }
+    Ok(())
+}
+
 fn build_trigger_matches(patterns: &[String], git_ref: &GitRef) -> bool {
     patterns.iter().any(|pattern| {
         pattern.strip_suffix("/*").map_or_else(
@@ -946,7 +1109,8 @@ async fn persist_build_request(
     let declared_artifacts =
         serde_json::to_value(&build.artifacts).map_err(ForgeRepositoryError::Serialization)?;
     let build_definition_hash: [u8; 32] = Sha256::digest(&build_definition).into();
-    let resolved_root_image = resolve_build_root_image(transaction, repository_id, build).await?;
+    let resolved_root_image =
+        resolve_build_root_image(transaction, repository_id, commit.as_str(), build).await?;
     let requested_id = BuildRequestId::new();
     let stored_id: Uuid = sqlx::query_scalar(
         "INSERT INTO build_requests
@@ -1026,6 +1190,7 @@ struct ResolvedBuilderRow {
 async fn resolve_build_root_image(
     transaction: &mut Transaction<'_, Postgres>,
     repository_id: RepositoryId,
+    source_commit: &str,
     build: &agent_config::BuildConfig,
 ) -> Result<String, ForgeRepositoryError> {
     let row = match (&build.root_image, &build.builder) {
@@ -1069,6 +1234,29 @@ async fn resolve_build_root_image(
             )
             .bind(repository_id.as_uuid())
             .bind(builder_id)
+            .fetch_optional(&mut **transaction)
+            .await
+            .map_err(storage)?
+        }
+        (None, Some(agent_config::BuilderSelection::Repository { key })) => {
+            sqlx::query_as::<_, ResolvedBuilderRow>(
+                "SELECT project_builder.oci_image_reference AS image_reference,
+                        base.max_vcpus, base.max_memory_mib, base.network_ceiling
+                 FROM project_builder_definitions AS project_builder
+                 JOIN builder_images AS base
+                   ON base.image_reference = project_builder.approved_base_image_reference
+                 WHERE project_builder.source_repository_id = $1
+                   AND project_builder.key = $2
+                   AND project_builder.source_revision = $3
+                   AND project_builder.status = 'ready'
+                   AND base.preparation_state = 'ready'
+                   AND base.availability_state = 'available'
+                 ORDER BY project_builder.created_at DESC, project_builder.id DESC
+                 LIMIT 1",
+            )
+            .bind(repository_id.as_uuid())
+            .bind(key)
+            .bind(source_commit)
             .fetch_optional(&mut **transaction)
             .await
             .map_err(storage)?
@@ -1505,4 +1693,111 @@ fn git(error: impl std::fmt::Display) -> ForgeRepositoryError {
 
 const fn serialization(error: serde_json::Error) -> ForgeRepositoryError {
     ForgeRepositoryError::Serialization(error)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::inspect_updates;
+    use forge_domain::{CommitSha, GitRef, RefUpdate};
+    use std::{path::Path, process::Command};
+
+    #[test]
+    fn discovers_repository_builder_inputs_from_the_exact_received_commit() {
+        let temporary = tempfile::tempdir().expect("temporary repository");
+        let bare = temporary.path().join("source.git");
+        let worktree = temporary.path().join("source");
+        git(
+            temporary.path(),
+            &["init", "--bare", bare.to_str().expect("UTF-8 path")],
+        );
+        git(
+            temporary.path(),
+            &["init", worktree.to_str().expect("UTF-8 path")],
+        );
+        git(&worktree, &["config", "user.name", "Hephaestus Test"]);
+        git(
+            &worktree,
+            &["config", "user.email", "hephaestus@example.invalid"],
+        );
+        std::fs::create_dir_all(worktree.join("containers")).expect("containers directory");
+        std::fs::write(
+            worktree.join("heph.builders.toml"),
+            r#"
+version = 1
+
+[[builders]]
+key = "typescript-tools"
+display_name = "TypeScript tools"
+
+[builders.oci]
+dockerfile = "containers/Dockerfile"
+context = "."
+base = "typescript-node-ubuntu"
+"#,
+        )
+        .expect("manifest");
+        std::fs::write(
+            worktree.join("containers/Dockerfile"),
+            "FROM heph-base AS build\nRUN echo ready\n",
+        )
+        .expect("Dockerfile");
+        git(&worktree, &["add", "."]);
+        git(&worktree, &["commit", "-m", "repository builder"]);
+        let commit =
+            CommitSha::parse(git_output(&worktree, &["rev-parse", "HEAD"])).expect("commit ID");
+        git(
+            &worktree,
+            &[
+                "push",
+                bare.to_str().expect("UTF-8 path"),
+                "HEAD:refs/heads/main",
+            ],
+        );
+
+        let inspected = inspect_updates(
+            &bare,
+            &[RefUpdate {
+                git_ref: GitRef::parse("refs/heads/main").expect("Git ref"),
+                old_commit: None,
+                new_commit: Some(commit),
+            }],
+        )
+        .expect("inspect received commit");
+
+        let builders = inspected[0]
+            .repository_builders
+            .as_ref()
+            .expect("repository builder manifest");
+        assert_eq!(builders.len(), 1);
+        assert_eq!(builders[0].key, "typescript-tools");
+        assert_eq!(builders[0].dockerfile_path, "containers/Dockerfile");
+        assert_eq!(builders[0].context_digest.len(), 71);
+        assert!(builders[0].context_digest.starts_with("sha256:"));
+    }
+
+    fn git(directory: &Path, arguments: &[&str]) {
+        let output = Command::new("git")
+            .args(arguments)
+            .current_dir(directory)
+            .output()
+            .expect("run Git");
+        assert!(
+            output.status.success(),
+            "git {arguments:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn git_output(directory: &Path, arguments: &[&str]) -> String {
+        let output = Command::new("git")
+            .args(arguments)
+            .current_dir(directory)
+            .output()
+            .expect("run Git");
+        assert!(output.status.success(), "git {arguments:?} failed");
+        String::from_utf8(output.stdout)
+            .expect("UTF-8 Git output")
+            .trim()
+            .to_owned()
+    }
 }

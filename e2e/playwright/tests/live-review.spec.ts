@@ -1,10 +1,17 @@
 import {AxeBuilder} from "@axe-core/playwright";
 import {expect, test} from "@playwright/test";
 import {execFileSync} from "node:child_process";
+import {randomUUID} from "node:crypto";
 import {mkdtempSync, rmSync, writeFileSync, mkdirSync} from "node:fs";
 import {tmpdir} from "node:os";
 import path from "node:path";
 import pg from "pg";
+
+declare global {
+  interface Window {
+    liveSocket: {connect(): void; disconnect(): void};
+  }
+}
 
 const databaseUrl =
   process.env.HEPHAESTUS_E2E_DATABASE_URL ??
@@ -13,12 +20,27 @@ const repositoryRoot = process.env.HEPHAESTUS_REPOSITORY_ROOT;
 const gitUrl = process.env.HEPHAESTUS_GIT_URL ?? "http://127.0.0.1:8080";
 const oidcUrl = process.env.HEPHAESTUS_OIDC_URL ?? "http://127.0.0.1:5556";
 const secretSentinel = "HEPHAESTUS_BROWSER_SECRET_4d7ccf";
+const fixtureBuilderReference =
+  "registry.example/hephaestus/ubuntu-native@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const registryAuthority = "registry.e2e.invalid";
+const registryPrivateSentinel = "registry-private-callback-never-render";
+let browserJourneyBuild: {repositoryId: string; id: string} | undefined;
+let registryJourney:
+  | {
+      builderId: string;
+      projectId: string;
+      publicationId: string;
+      immutableReference: string;
+      evidenceReferences: string[];
+    }
+  | undefined;
 
 test.describe.serial("release, instance, secret, and live-review product journey", () => {
   test("creates a repository, pushes agent.toml, and publishes its built release", async ({
     page
   }) => {
     const fixture = await loadFixture();
+    await page.context().clearCookies();
     await signIn(page);
 
     const suffix = Date.now().toString(36);
@@ -52,6 +74,7 @@ test.describe.serial("release, instance, secret, and live-review product journey
 
     const sourceCommit = pushCommit(repositoryId, "build browser release", false, true);
     const build = await waitForBuild(repositoryId, sourceCommit);
+    browserJourneyBuild = {repositoryId, id: build.id};
     const release = await waitForDraftRelease(build.id);
     writeJourneyEvidence({
       organizationId: fixture.organizationId,
@@ -92,6 +115,121 @@ test.describe.serial("release, instance, secret, and live-review product journey
     await waitForLiveView(page);
     await expect(page.getByRole("main")).toContainText("browser-built-agent");
     await captureJourneyScreenshot(page, "03-imported-agent.png");
+  });
+
+  test("requires authentication for the catalog and project authorization for repository builders", async ({
+    page,
+    request
+  }) => {
+    const fixture = await loadFixture();
+    await signIn(page);
+    await ensureFixtureBuilderCatalogImage();
+    await page.goto("/builders");
+    await waitForLiveView(page);
+    await expect(page.getByRole("main")).toContainText("Browser fixture Ubuntu builder");
+    await page.goto(`/projects/${fixture.projectId}/builders`);
+    await waitForLiveView(page);
+    await expect(page.locator("#project-builder-list")).toContainText(
+      "No repository builders were discovered in committed configuration."
+    );
+
+    await page.context().clearCookies();
+    await signIn(page, "outsider");
+    await page.goto("/builders");
+    await waitForLiveView(page);
+    await expect(page.getByRole("main")).toContainText("Browser fixture Ubuntu builder");
+
+    await page.goto(`/projects/${fixture.projectId}/builders`);
+    await waitForLiveView(page);
+    await expect(page).toHaveURL(/\/organizations$/);
+
+    const anonymousCatalog = await request.get("/builders", {maxRedirects: 0});
+    expect(anonymousCatalog.status()).toBe(302);
+    expect(anonymousCatalog.headers().location).toBe("/login");
+  });
+
+  test("fixture-backed: shows an authorized verified registry publication without transport internals", async ({
+    page
+  }) => {
+    const fixture = await loadFixture();
+    registryJourney = await seedVerifiedRegistryJourney(fixture);
+
+    await signIn(page);
+    await page.goto(`/projects/${registryJourney.projectId}/builders`);
+    await waitForLiveView(page);
+
+    const builder = page.locator(`#project-builder-${registryJourney.builderId}`);
+    await expect(builder).toBeVisible();
+    await expect(builder).toContainText("Browser registry builder");
+    await expect(builder).toContainText("ready");
+    await expect(builder).toContainText("verified");
+    await expect(builder).toContainText("unavailable");
+    await expect(builder).toContainText(registryJourney.immutableReference);
+    await expect(builder).toContainText("amd64");
+    await expect(builder).toContainText("not_required");
+    for (const reference of registryJourney.evidenceReferences) {
+      await expect(builder).toContainText(reference);
+    }
+
+    // The browser only receives the registry's safe immutable projection, not
+    // preparation attestation internals or any publication transport material.
+    await expect(page.locator("body")).not.toContainText(registryPrivateSentinel);
+    await assertAccessible(page, "main");
+  });
+
+  test("fixture-backed: denies an outsider the project registry projection", async ({page}) => {
+    const journey = registryJourney;
+    expect(journey).toBeDefined();
+
+    await signIn(page, "outsider");
+    await page.goto(`/projects/${journey!.projectId}/builders`);
+    await waitForLiveView(page);
+
+    await expect(page).toHaveURL(/\/organizations$/);
+    await expect(page.locator("body")).not.toContainText(journey!.immutableReference);
+    for (const reference of journey!.evidenceReferences) {
+      await expect(page.locator("body")).not.toContainText(reference);
+    }
+  });
+
+  test("fixture-backed: refreshes approval and missing registry diagnostics across an event-stream reconnect", async ({
+    page
+  }) => {
+    const journey = registryJourney;
+    expect(journey).toBeDefined();
+
+    await signIn(page);
+    await page.goto(`/projects/${journey!.projectId}/builders`);
+    await waitForLiveView(page);
+    const builder = page.locator(`#project-builder-${journey!.builderId}`);
+    const eventsBeforeApproval = await countRegistryPublicationChangedEvents(
+      journey!.publicationId
+    );
+    await approveRegistryPublication(journey!.publicationId);
+    await expect
+      .poll(() => countRegistryPublicationChangedEvents(journey!.publicationId))
+      .toBe(eventsBeforeApproval + 1);
+    await expect(builder).toContainText("approved");
+    await expect(builder).toContainText("available");
+
+    // Commit the lifecycle change while the page's event stream is disconnected.
+    // Reconnecting must replay it from the durable product-event cursor and refresh
+    // the projection rather than relying on periodic UI polling.
+    const eventsBefore = await countRegistryPublicationChangedEvents(journey!.publicationId);
+    await page.evaluate(() => window.liveSocket.disconnect());
+    await markRegistryPublicationMissing(journey!.publicationId);
+    await expect
+      .poll(() => countRegistryPublicationChangedEvents(journey!.publicationId))
+      .toBe(eventsBefore + 1);
+    await page.evaluate(() => window.liveSocket.connect());
+    await waitForLiveView(page);
+
+    await expect(builder).toContainText("missing");
+    await expect(builder).toContainText("unavailable");
+    await expect(builder).toContainText(journey!.immutableReference);
+    for (const reference of journey!.evidenceReferences) {
+      await expect(builder).toContainText(reference);
+    }
   });
 
   test("reviews and publishes seeded draft releases through the durable UI workflow", async ({
@@ -154,6 +292,70 @@ test.describe.serial("release, instance, secret, and live-review product journey
     await expect(page.locator("#release-provenance")).toBeVisible();
     await expect(page.locator("#release-artifacts article")).toHaveCount(1);
     await expect(page.locator("#release-agents article")).toHaveCount(1);
+  });
+
+  test("shows a completed immutable-input verification mismatch", async ({page}) => {
+    const fixture = await loadFixture();
+    await signIn(page);
+
+    const successfulBuild = browserJourneyBuild ?? {
+      repositoryId: fixture.repositoryId,
+      id: await verifiableBuildId()
+    };
+    const eventCount = await countBuildChangedEvents(successfulBuild.id);
+    await seedVerificationMismatch(successfulBuild.id);
+    await expect.poll(() => countBuildChangedEvents(successfulBuild.id)).toBe(eventCount + 1);
+
+    await page.goto(`/repositories/${successfulBuild.repositoryId}/builds/${successfulBuild.id}`);
+    await waitForLiveView(page);
+    const verifications = page.locator("#build-verifications");
+    await expect(verifications).toContainText("Verification mismatch");
+    await expect(verifications).toContainText(
+      "The rebuilt artifact manifest differs from the immutable release manifest."
+    );
+    await expect(verifications).toContainText("expected/agent.wasm");
+    await expect(verifications).toContainText("actual/agent.wasm");
+  });
+
+  test("shows failed retries, verification requests, and LiveView reconnect recovery", async ({
+    page
+  }) => {
+    const fixture = await loadFixture();
+    const failedBuildId = await seedFailedBuild(fixture);
+    await signIn(page);
+
+    await page.goto(`/repositories/${fixture.repositoryId}/builds/${failedBuildId}`);
+    await waitForLiveView(page);
+    await expect(
+      page.getByRole("main").getByText("failed", {exact: true}).first()
+    ).toBeVisible();
+    await expect(page.locator("#build-provenance")).toContainText("fixture_build_failed");
+    await expect(page.getByRole("button", {name: "Retry attempt"})).toBeVisible();
+    await page.getByRole("button", {name: "Retry attempt"}).click();
+    await expect(page.getByText("Build retry queued.")).toBeVisible();
+    await expect.poll(() => countOutboxEvents(failedBuildId, "build.retry_requested.v1")).toBe(1);
+
+    const successfulBuild = browserJourneyBuild ?? {
+      repositoryId: fixture.repositoryId,
+      id: await verifiableBuildId()
+    };
+    await page.goto(`/repositories/${successfulBuild.repositoryId}/builds/${successfulBuild.id}`);
+    await waitForLiveView(page);
+    await expect(
+      page.getByRole("button", {name: "Rebuild for verification"})
+    ).toBeVisible();
+
+    page.once("dialog", dialog => dialog.accept());
+    await page.getByRole("button", {name: "Rebuild for verification"}).click();
+    await expect(page.getByText("Verification rebuild queued.")).toBeVisible();
+    await expect
+      .poll(() => countOutboxEvents(successfulBuild.id, "build.verify_requested.v1"))
+      .toBe(1);
+
+    await page.evaluate(() => window.liveSocket.disconnect());
+    await page.evaluate(() => window.liveSocket.connect());
+    await waitForLiveView(page);
+    await expect(page.locator("#build-provenance")).toContainText(successfulBuild.id);
   });
 
   test("ready, empty, form, and error states are accessible", async ({
@@ -372,10 +574,10 @@ test.describe.serial("release, instance, secret, and live-review product journey
   });
 });
 
-async function signIn(page: import("@playwright/test").Page) {
+async function signIn(page: import("@playwright/test").Page, account = "reviewer") {
   await page.goto("/");
   await page.getByTestId("oidc-login").click();
-  await page.locator('input[name="login"]').fill("reviewer");
+  await page.locator('input[name="login"]').fill(account);
   await page.getByRole("button", {name: "Continue as Ada Reviewer"}).click();
   await expect(page).toHaveURL(/\/organizations$/);
   await waitForLiveView(page);
@@ -427,15 +629,15 @@ async function loadFixture() {
     [result.rows[0].repository_id]
   );
   await releaseClient.end();
+  const builds = await queryBuilds(result.rows[0].repository_id);
   return {
     organizationId: result.rows[0].organization_id,
     projectId: result.rows[0].project_id,
     repositoryId: result.rows[0].repository_id,
     releaseIds: releases.rows.map(row => row.release_id),
     releaseAgents: releases.rows.map(row => row.id),
-    buildIds: (
-      await queryBuilds(result.rows[0].repository_id)
-    ).map(row => row.id)
+    buildIds: builds.map(row => row.id),
+    sourceCommit: builds[0].source_commit
   };
 }
 
@@ -443,14 +645,279 @@ async function queryBuilds(repositoryId: string) {
   const client = new pg.Client({connectionString: databaseUrl});
   await client.connect();
   const result = await client.query(
-    `SELECT id
+    `SELECT id, source_commit
      FROM build_requests
      WHERE repository_id = $1
      ORDER BY created_at, id`,
     [repositoryId]
   );
   await client.end();
-  return result.rows as Array<{id: string}>;
+  return result.rows as Array<{id: string; source_commit: string}>;
+}
+
+async function verifiableBuildId() {
+  const client = new pg.Client({connectionString: databaseUrl});
+  await client.connect();
+  const result = await client.query(
+    `SELECT request.id
+       FROM build_requests request
+       JOIN build_executions execution ON execution.build_request_id = request.id
+      WHERE request.state = 'succeeded' AND execution.state = 'drafted'
+      ORDER BY request.created_at DESC, request.id DESC
+      LIMIT 1`
+  );
+  await client.end();
+  expect(result.rows).toHaveLength(1);
+  return result.rows[0].id as string;
+}
+
+async function seedFailedBuild(fixture: Awaited<ReturnType<typeof loadFixture>>) {
+  const buildId = randomUUID();
+  const client = new pg.Client({connectionString: databaseUrl});
+  await client.connect();
+  await client.query(
+    `INSERT INTO build_requests
+       (id, repository_id, source_commit, source_ref, build_definition_hash,
+        state, build_trigger, agent_key, build_declaration, build_policy,
+        declared_artifacts, started_at, completed_at)
+     VALUES ($1, $2, $3, 'refs/heads/main', $4, 'failed', 'manual',
+             'browser-reviewer', '{}'::jsonb, '{}'::jsonb, '[]'::jsonb,
+             now() - interval '1 second', now())`,
+    [buildId, fixture.repositoryId, fixture.sourceCommit, Buffer.alloc(32, 17)]
+  );
+  await client.query(
+    `INSERT INTO build_executions
+       (build_request_id, vm_id, release_id, release_agent_id, release_version,
+        state, failure_code, logs, started_at, completed_at)
+     VALUES ($1, $2, $3, $4, 'fixture-failed', 'failed', 'fixture_build_failed',
+             '[{"stream":"stderr","text":"fixture build failed"}]'::jsonb,
+             now() - interval '1 second', now())`,
+    [buildId, `fixture-failed-${buildId}`, randomUUID(), randomUUID()]
+  );
+  await client.end();
+  return buildId;
+}
+
+async function seedVerificationMismatch(buildId: string) {
+  const client = new pg.Client({connectionString: databaseUrl});
+  await client.connect();
+  await client.query(
+    `INSERT INTO build_verifications
+       (id, build_request_id, state, expected_manifest, actual_manifest,
+        failure_code, created_at, completed_at)
+     VALUES ($1, $2, 'failed', $3::jsonb, $4::jsonb, 'manifest_mismatch',
+             now() - interval '1 second', now())`,
+    [
+      randomUUID(),
+      buildId,
+      JSON.stringify([{path: "expected/agent.wasm", content_hash: "expected"}]),
+      JSON.stringify([{path: "actual/agent.wasm", content_hash: "actual"}])
+    ]
+  );
+  await client.end();
+}
+
+async function seedVerifiedRegistryJourney(
+  fixture: Awaited<ReturnType<typeof loadFixture>>
+) {
+  // The normal UI/RPC/event path is real; only Zot's external OCI graph is
+  // represented here by already-verified control-plane evidence.
+  const builderId = randomUUID();
+  const namespaceId = randomUUID();
+  const publicationId = randomUUID();
+  const outputDigest = `sha256:${"b".repeat(64)}`;
+  const contextDigest = `sha256:${"c".repeat(64)}`;
+  const platformDigest = `sha256:${"d".repeat(64)}`;
+  const evidenceDigests = ["e", "f", "1"].map(character =>
+    `sha256:${character.repeat(64)}`
+  );
+  const repositoryPath =
+    `projects/${fixture.projectId}/repository-builders/${builderId}`;
+  const immutableReference = `${registryAuthority}/${repositoryPath}@${outputDigest}`;
+  const evidenceReferences = evidenceDigests.map(
+    digest => `${registryAuthority}/${repositoryPath}@${digest}`
+  );
+  const builderKey = `e2e-registry-${builderId.slice(0, 8)}`;
+  const client = new pg.Client({connectionString: databaseUrl});
+  await client.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(
+      `INSERT INTO project_builder_definitions
+         (id, project_id, source_repository_id, key, display_name, source_revision,
+          dockerfile_path, context_path, context_digest, approved_base_image_reference,
+          status, oci_image_reference, oci_image_digest, provenance)
+       VALUES ($1, $2, $3, $4, 'Browser registry builder', $5,
+               'builders/browser/Dockerfile', '.', $6, $7,
+               'ready', $8, $9, $10::jsonb)`,
+      [
+        builderId,
+        fixture.projectId,
+        fixture.repositoryId,
+        builderKey,
+        fixture.sourceCommit,
+        contextDigest,
+        "fixture-root@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        immutableReference,
+        outputDigest,
+        JSON.stringify({
+          source_revision: fixture.sourceCommit,
+          context_digest: contextDigest,
+          attestation_reference: registryPrivateSentinel,
+          sbom_reference: registryPrivateSentinel
+        })
+      ]
+    );
+    await client.query(
+      `INSERT INTO registry_namespaces
+         (id, repository_path, owner_kind, owner_id, project_id)
+       VALUES ($1, $2, 'repository_builder', $3, $4)`,
+      [namespaceId, repositoryPath, builderId, fixture.projectId]
+    );
+    await client.query(
+      `INSERT INTO registry_publications
+         (id, namespace_id, owner_kind, owner_id, project_id, registry_authority,
+          expected_digest, expected_media_type, expected_size, policy_version)
+       VALUES ($1, $2, 'repository_builder', $3, $4, $5,
+               $6, 'application/vnd.oci.image.index.v1+json', 1024, 'browser-e2e/v1')`,
+      [
+        publicationId,
+        namespaceId,
+        builderId,
+        fixture.projectId,
+        registryAuthority,
+        outputDigest
+      ]
+    );
+    await client.query(
+      `INSERT INTO registry_publication_platforms
+         (publication_id, digest, size, media_type, operating_system, architecture)
+       VALUES ($1, $2, 512, 'application/vnd.oci.image.manifest.v1+json', 'linux', 'amd64')`,
+      [publicationId, platformDigest]
+    );
+    for (const [index, kind] of ["sbom", "provenance", "scan"].entries()) {
+      await client.query(
+        `INSERT INTO registry_publication_evidence
+           (publication_id, kind, subject_digest, digest, size, media_type, artifact_type)
+         VALUES ($1, $2, $3, $4, 256, 'application/vnd.oci.artifact.manifest.v1+json', $5)`,
+        [
+          publicationId,
+          kind,
+          outputDigest,
+          evidenceDigests[index],
+          `application/vnd.hephaestus.${kind}.v1`
+        ]
+      );
+    }
+    await client.query(
+      "UPDATE registry_publications SET state = 'verified', verified_at = now() WHERE id = $1",
+      [publicationId]
+    );
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    await client.end();
+  }
+  return {
+    builderId,
+    projectId: fixture.projectId,
+    publicationId,
+    immutableReference,
+    evidenceReferences
+  };
+}
+
+async function approveRegistryPublication(publicationId: string) {
+  const client = new pg.Client({connectionString: databaseUrl});
+  await client.connect();
+  try {
+    const result = await client.query(
+      "UPDATE registry_publications SET state = 'approved', approved_at = now() WHERE id = $1 AND state = 'verified'",
+      [publicationId]
+    );
+    expect(result.rowCount).toBe(1);
+  } finally {
+    await client.end();
+  }
+}
+
+async function markRegistryPublicationMissing(publicationId: string) {
+  const client = new pg.Client({connectionString: databaseUrl});
+  await client.connect();
+  try {
+    const result = await client.query(
+      "UPDATE registry_publications SET state = 'missing' WHERE id = $1 AND state = 'approved'",
+      [publicationId]
+    );
+    expect(result.rowCount).toBe(1);
+  } finally {
+    await client.end();
+  }
+}
+
+async function countRegistryPublicationChangedEvents(publicationId: string) {
+  const client = new pg.Client({connectionString: databaseUrl});
+  await client.connect();
+  try {
+    const result = await client.query(
+      `SELECT count(*)::integer AS count
+         FROM application_events
+        WHERE aggregate_type = 'registry_publication'
+          AND aggregate_id = $1
+          AND event_type = 'registry.publication_changed'`,
+      [publicationId]
+    );
+    return result.rows[0].count as number;
+  } finally {
+    await client.end();
+  }
+}
+
+async function countOutboxEvents(buildId: string, eventType: string) {
+  const client = new pg.Client({connectionString: databaseUrl});
+  await client.connect();
+  const result = await client.query(
+    `SELECT count(*)::integer AS count
+       FROM outbox
+      WHERE aggregate_id = $1 AND event_type = $2`,
+    [buildId, eventType]
+  );
+  await client.end();
+  return result.rows[0].count as number;
+}
+
+async function countBuildChangedEvents(buildId: string) {
+  const client = new pg.Client({connectionString: databaseUrl});
+  await client.connect();
+  const result = await client.query(
+    `SELECT count(*)::integer AS count
+       FROM application_events
+      WHERE aggregate_type = 'build' AND aggregate_id = $1 AND event_type = 'build.changed'`,
+    [buildId]
+  );
+  await client.end();
+  return result.rows[0].count as number;
+}
+
+async function ensureFixtureBuilderCatalogImage() {
+  const client = new pg.Client({connectionString: databaseUrl});
+  await client.connect();
+  await client.query(
+    `INSERT INTO builder_images
+       (id, key, display_name, image_reference, toolchains, architectures,
+        preparation_state, availability_state, network_ceiling, max_vcpus,
+        max_memory_mib, dependency_policy, provenance, platform_policy_version)
+     VALUES ($1, 'e2e-ubuntu-native', 'Browser fixture Ubuntu builder', $2,
+             '[{"name":"shell","version":"fixture"}]'::jsonb,
+             ARRAY['amd64'], 'ready', 'available', 'disabled', 2, 512,
+             'vendored_offline', '{"source":"browser-fixture"}'::jsonb,
+             'browser-e2e/v1')
+     ON CONFLICT (key) DO NOTHING`,
+    [randomUUID(), fixtureBuilderReference]
+  );
+  await client.end();
 }
 
 async function latestInstanceId(projectId: string) {

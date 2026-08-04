@@ -50,6 +50,7 @@ pub mod __buffa {
         reg.register_json_any(super::__SECRET_IMPORT_CHANGED_JSON_ANY);
         reg.register_json_any(super::__AGENT_SECRET_BINDING_CHANGED_JSON_ANY);
         reg.register_json_any(super::__ARTIFACT_CHANGED_JSON_ANY);
+        reg.register_json_any(super::__REGISTRY_PUBLICATION_CHANGED_JSON_ANY);
         reg.register_json_any(super::__PRODUCT_EVENT_JSON_ANY);
         reg.register_json_any(super::__AGGREGATE_VERSION_REFERENCE_JSON_ANY);
         reg.register_json_any(super::__SCOPE_SNAPSHOT_BARRIER_JSON_ANY);
@@ -141,6 +142,10 @@ pub use self::__buffa::view::AgentSecretBindingChangedOwnedView;
 pub use self::__buffa::view::ArtifactChangedView;
 #[doc(inline)]
 pub use self::__buffa::view::ArtifactChangedOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::RegistryPublicationChangedView;
+#[doc(inline)]
+pub use self::__buffa::view::RegistryPublicationChangedOwnedView;
 #[doc(inline)]
 pub use self::__buffa::view::ProductEventView;
 #[doc(inline)]

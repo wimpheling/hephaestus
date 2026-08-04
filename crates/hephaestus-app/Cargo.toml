@@ -43,10 +43,22 @@ identity-postgres = { path = "../identity-postgres" }
 http.workspace = true
 hmac.workspace = true
 jsonwebtoken.workspace = true
+oci-builder-postgres = { path = "../oci-builder-postgres" }
+oci-builder-runtime-local = { path = "../oci-builder-runtime-local" }
+oci-builder-worker = { path = "../oci-builder-worker" }
 release-service = { path = "../release-service" }
 release-artifact-store = { path = "../release-artifact-store" }
 release-domain = { path = "../release-domain" }
 release-postgres = { path = "../release-postgres" }
+registry-http = { path = "../registry-http" }
+registry-domain = { path = "../registry-domain" }
+registry-notification = { path = "../registry-notification" }
+registry-notification-http = { path = "../registry-notification-http" }
+registry-postgres = { path = "../registry-postgres" }
+registry-publisher = { path = "../registry-publisher" }
+registry-reconciler = { path = "../registry-reconciler" }
+registry-token = { path = "../registry-token" }
+registry-zot = { path = "../registry-zot" }
 rpc-proto = { path = "../rpc-proto", default-features = false }
 review-domain = { path = "../review-domain" }
 review-postgres = { path = "../review-postgres" }
@@ -84,6 +96,7 @@ workspace-postgres = { path = "../workspace-postgres" }
 workspace-domain = { path = "../workspace-domain" }
 
 [dev-dependencies]
+registry-token = { path = "../registry-token" }
 rpc-proto = { path = "../rpc-proto", features = ["client"] }
 sqlx.workspace = true
 serial_test = "3"

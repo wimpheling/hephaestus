@@ -26,6 +26,7 @@ gix = { version = "0.72", default-features = false, features = ["revision"] }
 http = "1"
 hmac = "0.12"
 jsonwebtoken = "9"
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
 libloading = "0.8"
 libc = "0.2"
 rustix = { version = "1", features = ["fs", "process"] }

@@ -1,0 +1,36 @@
+[Unit]
+Description=Hephaestus forge OCI registry (Zot)
+Wants=network-online.target
+After=network-online.target
+
+[Container]
+# Zot v2.1.18 OCI index: linux/amd64 and linux/arm64 are supported deploy targets.
+# The digest, rather than the tag, is the deployment identity.
+Image=ghcr.io/project-zot/zot@sha256:6f7bf2b8e43437c7c3a121bc80214845c85f27321e66f2ff4be6bf4220775fd7
+ContainerName=hephaestus-zot
+Entrypoint=/usr/local/bin/zot-linux-{{ zot.architecture }}
+Exec=serve /etc/zot/config.json
+
+# Zot is reachable only through the local forge edge. The edge is responsible
+# for TLS and must forward only OCI Distribution paths to this listener.
+PublishPort=127.0.0.1:{{ zot.private_port }}:{{ zot.private_port }}
+
+# The service receives only its rendered configuration and the public token
+# verification certificate. It has no PostgreSQL, NATS, host-socket, or
+# Hephaestus signing-key mount.
+Volume={{ zot.config_host_path }}:/etc/zot/config.json:ro,Z
+Volume={{ zot.verification_cert_host_path }}:/etc/zot/verification.crt:ro,Z
+Volume={{ zot.storage_host_path }}:{{ zot.storage_root }}:rw,Z
+
+ReadOnly=true
+NoNewPrivileges=true
+DropCapability=all
+User={{ zot.uid }}:{{ zot.gid }}
+
+[Service]
+Restart=on-failure
+RestartSec=5s
+TimeoutStartSec=60s
+
+[Install]
+WantedBy=multi-user.target

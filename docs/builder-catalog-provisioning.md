@@ -64,7 +64,7 @@ repository does not claim or invent production image digests.
       "id": "REPLACE_WITH_REVIEWED_STABLE_UUID",
       "key": "ubuntu-native",
       "display_name": "Ubuntu native builder",
-      "image_reference": "registry.example/ubuntu@sha256:REPLACE_WITH_64_LOWERCASE_HEX_DIGEST",
+      "image_reference": "registry.forge.example/platform/builders/ubuntu-native@sha256:REPLACE_WITH_64_LOWERCASE_HEX_DIGEST",
       "toolchains": [
         { "name": "shell", "version": "REPLACE_WITH_IMAGE_VERSION" }
       ],
@@ -86,15 +86,34 @@ repository does not claim or invent production image digests.
 }
 ```
 
-The initial compatibility-oriented catalog is expected to contain separate
-reviewed records for `ubuntu-native`, `rust-ubuntu`, `typescript-node-ubuntu`,
-and `python-ubuntu`. The provisioning command supplies the installation path;
-the actual records remain an operational release decision until their OCI
-artifacts and toolchain metadata exist.
+The initial compatibility-oriented catalog release defines separate records
+for `ubuntu-native`, `rust-ubuntu`, `typescript-node-ubuntu`, and
+`python-ubuntu`. Their Ubuntu Dockerfiles, pinned upstream toolchains, scan,
+SBOM/provenance attestation, and digest-manifest generator live in
+[`platform/builders`](../platform/builders) and
+[`scripts/write-platform-builder-catalog.sh`](../scripts/write-platform-builder-catalog.sh).
+
+The images are published by the reviewed platform release operation into the
+forge-owned Zot namespace `platform/builders/<builder-key>`. The publisher
+uploads the exact image plus digest-pinned provenance, SBOM, scan, and optional
+signature referrers, then reads them back from Zot before producing
+`platform-builder-catalog.json`. A platform operator reviews that evidence and
+the generated manifest before applying it with `provision-builder-catalog`.
+GitHub Actions and GHCR are not part of this trust path. This checkout
+intentionally does not claim a production digest until the internal release
+operation has completed.
 
 This command only provisions platform-owned catalog rows. Project-owned
-Dockerfile/OCI definitions are created through the project-builder RPC/UI and
-remain draft/preparing until an isolated image-builder worker completes the
-policy-controlled OCI build, scan, provenance recording, and VM-root
-materialization handoff. The completion RPC is intentionally a typed handoff,
-not permission to treat an arbitrary caller-provided digest as prepared.
+Dockerfile/OCI definitions are discovered from a repository's committed
+`heph.builders.toml`; the receive transaction creates a new immutable revision
+in `preparing` and the queue insert commits atomically. The worker builds with
+`heph-base`, disabled networking, no ambient credentials, and no remote
+context; it then records a successful scan, provenance, and immutable digest
+before it can mark a definition ready.
+
+That terminal preparation transaction also creates a daemon-specific rootfs
+materialization job. A daemon manifest is generated only from successfully
+materialized rows, keyed by immutable digest-pinned references. A ready image
+without a materialized root therefore remains unavailable to a build worker.
+There is no completion RPC: database invariants require the matching
+worker-owned job output before a project builder can become ready.

@@ -6,6 +6,7 @@ use crate::{
     process::{
         DevError, Result, directory_size, path_argument, remove_path, run, run_quiet, run_silent,
     },
+    zot,
 };
 use std::{
     fs::{self, OpenOptions},
@@ -22,6 +23,7 @@ pub fn list(context: &DevContext) -> Result<()> {
         match resource {
             StateResource::Postgresql => print_volume("postgresql", &context.postgres_volume())?,
             StateResource::Nats => print_volume("nats", &context.nats_volume())?,
+            StateResource::Zot => print_path("Zot registry", &context.zot_root()),
             StateResource::Runtime => {
                 print_path("VM runtime", &context.runtime_root);
                 print_path("secret runtime", &context.secret_runtime_root);
@@ -43,6 +45,9 @@ pub fn init(context: &DevContext, selection: &StateSelection) -> Result<()> {
     }
     if selection.selected(StateResource::Nats) {
         create_volume(&context.nats_volume())?;
+    }
+    if selection.selected(StateResource::Zot) {
+        zot::initialize(context)?;
     }
     for resource in [
         StateResource::Repositories,
@@ -88,6 +93,9 @@ pub fn clean(context: &DevContext, selection: &StateSelection) -> Result<()> {
         let _ignored =
             run_silent(Command::new("podman").args(["rm", "--force", &context.nats_container()]));
         remove_volume(&context.nats_volume())?;
+    }
+    if selection.selected(StateResource::Zot) {
+        zot::clean(context)?;
     }
     for resource in [
         StateResource::Repositories,
@@ -158,6 +166,7 @@ const fn resource_name(resource: StateResource) -> &'static str {
     match resource {
         StateResource::Postgresql => "postgresql",
         StateResource::Nats => "nats",
+        StateResource::Zot => "Zot registry",
         StateResource::Repositories => "repositories",
         StateResource::Artifacts => "artifacts",
         StateResource::AgentVolumes => "agent volumes",
@@ -173,6 +182,7 @@ const fn resource_name(resource: StateResource) -> &'static str {
 fn resource_path(context: &DevContext, resource: StateResource) -> PathBuf {
     match resource {
         StateResource::Postgresql | StateResource::Nats => context.local_root.clone(),
+        StateResource::Zot => context.zot_root(),
         StateResource::Repositories => context.local_root.join("repositories"),
         StateResource::Artifacts => context.local_root.join("artifacts"),
         StateResource::AgentVolumes => context.local_root.join("volumes"),

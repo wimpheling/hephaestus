@@ -10,6 +10,7 @@ defmodule HephaestusWebWeb.ProductEventPageCoverageTest do
     OrganizationState,
     OrganizationWorkspaceState,
     ProjectAgentsState,
+    ProjectBuildersState,
     ProjectRunsState,
     ProjectSettingsState,
     ProjectState,
@@ -42,6 +43,7 @@ defmodule HephaestusWebWeb.ProductEventPageCoverageTest do
        :release_changed,
        :agent_instance_changed
      ]},
+    {ProjectBuildersState, [:registry_publication_changed]},
     {ProjectRunsState, [:project_changed, :run_changed]},
     {ProjectSettingsState,
      [
@@ -142,6 +144,7 @@ defmodule HephaestusWebWeb.ProductEventPageCoverageTest do
 
   defp new_state(ProjectState), do: ProjectState.new(%{project_id: "project-1"})
   defp new_state(ProjectAgentsState), do: ProjectAgentsState.new(%{project_id: "project-1"})
+  defp new_state(ProjectBuildersState), do: ProjectBuildersState.new(%{project_id: "project-1"})
   defp new_state(ProjectRunsState), do: ProjectRunsState.new(%{project_id: "project-1"})
 
   defp new_state(ProjectSettingsState),

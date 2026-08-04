@@ -3,10 +3,12 @@
 use authz_domain::{AuthorizationDecision, ObjectRef, ObjectType, Permission, Subject};
 use authz_postgres::{PostgresMelangeAuthorizer, audit_decision, begin_actor_transaction};
 use identity_domain::{AuthenticatedIdentity, RequestId, UserId};
+use registry_domain::{RegistryInventory, RegistryInventoryDocument, RegistryRetentionReport};
+use registry_postgres::PgRegistryStore;
 use release_domain::{AgentUpdateId, BuildRequestId, ReleaseCommandKey};
 use release_postgres::{RecoverInstanceUpdate, ReleaseService, UpdateRecoveryAction};
 use serde_json::{Map, Value, json};
-use sqlx::{PgPool, postgres::PgPoolOptions};
+use sqlx::{PgPool, Postgres, Transaction, postgres::PgPoolOptions};
 use std::{collections::HashSet, env, error::Error, fs, path::Path, str::FromStr, sync::Arc};
 use uuid::Uuid;
 
@@ -47,8 +49,36 @@ async fn execute(pool: &PgPool, arguments: &[String]) -> Result<Value, Box<dyn E
         "recover-update" => recover_update(pool, arguments).await,
         "abandon-build" => abandon_build(pool, arguments).await,
         "provision-builder-catalog" => provision_builder_catalog(pool, arguments).await,
+        "registry-retention-report" => registry_retention_report(pool, arguments).await,
         _ => Err(usage().into()),
     }
+}
+
+async fn registry_retention_report(
+    pool: &PgPool,
+    arguments: &[String],
+) -> Result<Value, Box<dyn Error>> {
+    if arguments.len() != 2 {
+        return Err(usage().into());
+    }
+    let inventory = load_registry_inventory(Path::new(argument(arguments, 1)?))?;
+    let store = PgRegistryStore::new(pool.clone());
+    let snapshot = store.retention_snapshot().await?;
+    Ok(serde_json::to_value(RegistryRetentionReport::evaluate(
+        snapshot, inventory,
+    ))?)
+}
+
+fn load_registry_inventory(path: &Path) -> Result<RegistryInventory, Box<dyn Error>> {
+    let contents = fs::read_to_string(path)?;
+    let document =
+        serde_json::from_str::<RegistryInventoryDocument>(&contents).map_err(|error| {
+            format!(
+                "{} is not a valid registry inventory document: {error}",
+                path.display()
+            )
+        })?;
+    RegistryInventory::try_from(document).map_err(Into::into)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -108,8 +138,47 @@ async fn provision_builder_catalog(
 
     let mut transaction = pool.begin().await?;
     for image in &manifest.images {
-        let changed = sqlx::query(
-            "INSERT INTO builder_images
+        provision_catalog_image(&mut transaction, image).await?;
+    }
+    transaction.commit().await?;
+
+    Ok(json!({
+        "mode": "upsert",
+        "schema_version": manifest.schema_version,
+        "upserted": manifest.images.len(),
+        "keys": manifest.images.iter().map(|image| image.key.as_str()).collect::<Vec<_>>(),
+    }))
+}
+
+async fn provision_catalog_image(
+    transaction: &mut Transaction<'_, Postgres>,
+    image: &BuilderCatalogRecord,
+) -> Result<(), Box<dyn Error>> {
+    let approved = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (
+                SELECT 1
+                FROM registry_publications publication
+                JOIN registry_namespaces namespace ON namespace.id = publication.namespace_id
+                WHERE publication.owner_kind = 'platform_builder'
+                  AND publication.platform_builder_key = $1
+                  AND publication.state = 'approved'
+                  AND publication.registry_authority || '/' || namespace.repository_path
+                      || '@' || publication.expected_digest = $2
+            )",
+    )
+    .bind(&image.key)
+    .bind(&image.image_reference)
+    .fetch_one(&mut **transaction)
+    .await?;
+    if !approved {
+        return Err(format!(
+            "catalog image {} does not match an approved forge registry publication",
+            image.key
+        )
+        .into());
+    }
+    let changed = sqlx::query(
+        "INSERT INTO builder_images
                (id, key, display_name, image_reference, toolchains,
                 architectures, preparation_state, availability_state,
                 network_ceiling, max_vcpus, max_memory_mib, dependency_policy,
@@ -135,41 +204,33 @@ async fn provision_builder_catalog(
                platform_policy_version = EXCLUDED.platform_policy_version,
                updated_at = now()
              WHERE builder_images.id = EXCLUDED.id",
+    )
+    .bind(image.id)
+    .bind(&image.key)
+    .bind(&image.display_name)
+    .bind(&image.image_reference)
+    .bind(&image.toolchains)
+    .bind(&image.architectures)
+    .bind(&image.preparation_state)
+    .bind(&image.availability_state)
+    .bind(&image.network_ceiling)
+    .bind(image.max_vcpus)
+    .bind(image.max_memory_mib)
+    .bind(&image.dependency_policy)
+    .bind(&image.provenance)
+    .bind(image.signature_reference.as_deref())
+    .bind(image.sbom_reference.as_deref())
+    .bind(&image.platform_policy_version)
+    .execute(&mut **transaction)
+    .await?;
+    if changed.rows_affected() != 1 {
+        return Err(format!(
+            "catalog key {} exists with a different stable id; refusing to replace it",
+            image.key
         )
-        .bind(image.id)
-        .bind(&image.key)
-        .bind(&image.display_name)
-        .bind(&image.image_reference)
-        .bind(&image.toolchains)
-        .bind(&image.architectures)
-        .bind(&image.preparation_state)
-        .bind(&image.availability_state)
-        .bind(&image.network_ceiling)
-        .bind(image.max_vcpus)
-        .bind(image.max_memory_mib)
-        .bind(&image.dependency_policy)
-        .bind(&image.provenance)
-        .bind(image.signature_reference.as_deref())
-        .bind(image.sbom_reference.as_deref())
-        .bind(&image.platform_policy_version)
-        .execute(&mut *transaction)
-        .await?;
-        if changed.rows_affected() != 1 {
-            return Err(format!(
-                "catalog key {} exists with a different stable id; refusing to replace it",
-                image.key
-            )
-            .into());
-        }
+        .into());
     }
-    transaction.commit().await?;
-
-    Ok(json!({
-        "mode": "upsert",
-        "schema_version": manifest.schema_version,
-        "upserted": manifest.images.len(),
-        "keys": manifest.images.iter().map(|image| image.key.as_str()).collect::<Vec<_>>(),
-    }))
+    Ok(())
 }
 
 fn parse_builder_catalog_manifest(
@@ -783,7 +844,8 @@ const fn usage() -> &'static str {
        hephaestus-operator recover-update <actor-uuid> <update-uuid> \
        <retry|reject|resume> [request-uuid]\n\
        hephaestus-operator abandon-build <actor-uuid> <build-uuid> [request-uuid]\n\
-       hephaestus-operator provision-builder-catalog <manifest.json> [--dry-run]"
+       hephaestus-operator provision-builder-catalog <manifest.json> [--dry-run]\n\
+       hephaestus-operator registry-retention-report <inventory.json>"
 }
 
 #[cfg(test)]

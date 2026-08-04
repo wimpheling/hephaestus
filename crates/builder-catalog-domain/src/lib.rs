@@ -298,6 +298,237 @@ pub enum AvailabilityState {
     Retired,
 }
 
+/// Forge registry lifecycle projected for a builder image.
+///
+/// This is a read model, not an OCI client state: the registry control plane
+/// remains the authority for all transitions and evidence verification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RegistryPublicationState {
+    /// No durable registry publication intent is associated with this builder.
+    NotRequested,
+    /// A durable intent exists and awaits a trusted publisher.
+    Pending,
+    /// A trusted publisher currently owns the narrow publication attempt.
+    Publishing,
+    /// Zot content and required evidence have been verified but are not approved.
+    Verified,
+    /// The immutable digest is approved for consumption.
+    Approved,
+    /// A previously approved digest is absent or inconsistent and must not run.
+    Missing,
+    /// Historical publication retained but prohibited for new use.
+    Retired,
+    /// Builder preparation failed before a registry publication became usable.
+    Failed,
+}
+
+/// Availability derived from a registry publication without inferring content
+/// existence from a source-builder status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RegistryAvailabilityState {
+    /// The approved immutable digest is available for the authorized consumer.
+    Available,
+    /// Content is pending, unapproved, missing, failed, or otherwise unusable.
+    Unavailable,
+    /// The publication is retained only for historical display.
+    Retired,
+}
+
+/// Verification state for one supply-chain evidence kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RegistryEvidenceState {
+    /// Verification has not produced evidence for this publication yet.
+    Pending,
+    /// The immutable evidence reference was verified against the subject digest.
+    Verified,
+    /// This evidence kind is not required by the bound policy.
+    NotRequired,
+}
+
+/// One safe digest-pinned OCI evidence projection.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RegistryEvidence {
+    /// Durable verification status.
+    pub state: RegistryEvidenceState,
+    /// Internal immutable OCI reference, present only after verification.
+    pub immutable_reference: Option<BuilderImageReference>,
+}
+
+impl RegistryEvidence {
+    /// Returns evidence that is still awaiting remote verification.
+    #[must_use]
+    pub const fn pending() -> Self {
+        Self {
+            state: RegistryEvidenceState::Pending,
+            immutable_reference: None,
+        }
+    }
+
+    /// Returns a verified immutable evidence reference.
+    #[must_use]
+    pub const fn verified(immutable_reference: BuilderImageReference) -> Self {
+        Self {
+            state: RegistryEvidenceState::Verified,
+            immutable_reference: Some(immutable_reference),
+        }
+    }
+
+    /// Returns an evidence kind excluded by the bound policy.
+    #[must_use]
+    pub const fn not_required() -> Self {
+        Self {
+            state: RegistryEvidenceState::NotRequired,
+            immutable_reference: None,
+        }
+    }
+}
+
+/// Safe registry publication projection for a platform or project builder.
+///
+/// It intentionally excludes registry credentials, notification bodies, blob
+/// storage locations, operational endpoints, and mutable tags.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RegistryPublication {
+    /// Durable control-plane state.
+    pub state: RegistryPublicationState,
+    /// Consumer-visible availability derived from the durable state.
+    pub availability: RegistryAvailabilityState,
+    /// Approved or expected immutable manifest reference when it is safe to expose.
+    pub immutable_reference: Option<BuilderImageReference>,
+    /// Verified target architectures, never inferred from a mutable tag.
+    pub architectures: Vec<String>,
+    /// SPDX or equivalent inventory evidence.
+    pub sbom: RegistryEvidence,
+    /// Build provenance evidence.
+    pub provenance: RegistryEvidence,
+    /// Vulnerability scan evidence.
+    pub scan: RegistryEvidence,
+    /// Optional signature or approval evidence.
+    pub signature: RegistryEvidence,
+}
+
+impl RegistryPublication {
+    /// Returns a builder with no registered publication intent.
+    #[must_use]
+    pub const fn not_requested() -> Self {
+        Self {
+            state: RegistryPublicationState::NotRequested,
+            availability: RegistryAvailabilityState::Unavailable,
+            immutable_reference: None,
+            architectures: Vec::new(),
+            sbom: RegistryEvidence::pending(),
+            provenance: RegistryEvidence::pending(),
+            scan: RegistryEvidence::pending(),
+            signature: RegistryEvidence::not_required(),
+        }
+    }
+
+    /// Returns the fail-closed projection for preparation that did not produce
+    /// an eligible publication.
+    #[must_use]
+    pub const fn failed() -> Self {
+        Self {
+            state: RegistryPublicationState::Failed,
+            availability: RegistryAvailabilityState::Unavailable,
+            immutable_reference: None,
+            architectures: Vec::new(),
+            sbom: RegistryEvidence::pending(),
+            provenance: RegistryEvidence::pending(),
+            scan: RegistryEvidence::pending(),
+            signature: RegistryEvidence::not_required(),
+        }
+    }
+
+    /// Validates the bounded, safe projection before it crosses an adapter
+    /// boundary.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BuilderCatalogValueError::InvalidRegistryPublication`] when
+    /// the projection contains malformed references, unsafe architecture data,
+    /// or state/evidence combinations that could claim unverified approval.
+    pub fn validate(&self) -> Result<(), BuilderCatalogValueError> {
+        if self.architectures.len() > 32
+            || self.architectures.iter().any(|architecture| {
+                architecture.is_empty()
+                    || architecture.len() > 64
+                    || architecture
+                        .bytes()
+                        .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
+            })
+        {
+            return Err(BuilderCatalogValueError::InvalidRegistryPublication);
+        }
+        for evidence in [&self.sbom, &self.provenance, &self.scan, &self.signature] {
+            if matches!(evidence.state, RegistryEvidenceState::Verified)
+                != evidence.immutable_reference.is_some()
+            {
+                return Err(BuilderCatalogValueError::InvalidRegistryPublication);
+            }
+        }
+        let available = matches!(self.state, RegistryPublicationState::Approved);
+        if available != matches!(self.availability, RegistryAvailabilityState::Available)
+            || matches!(self.state, RegistryPublicationState::Retired)
+                != matches!(self.availability, RegistryAvailabilityState::Retired)
+        {
+            return Err(BuilderCatalogValueError::InvalidRegistryPublication);
+        }
+        if matches!(self.state, RegistryPublicationState::Approved)
+            && (self.immutable_reference.is_none() || self.architectures.is_empty())
+        {
+            return Err(BuilderCatalogValueError::InvalidRegistryPublication);
+        }
+        Ok(())
+    }
+}
+
+/// One platform catalog row paired with its separate forge registry projection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BuilderImagePublication {
+    /// Existing catalog metadata.
+    pub image: BuilderImage,
+    /// Safe registry lifecycle and evidence metadata.
+    pub registry_publication: RegistryPublication,
+}
+
+impl BuilderImagePublication {
+    /// Validates both layers of the composition.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-data error for either malformed catalog or registry
+    /// presentation metadata.
+    pub fn validate(&self) -> Result<(), BuilderCatalogValueError> {
+        self.image.validate()?;
+        self.registry_publication.validate()
+    }
+}
+
+/// One project builder row and its separate forge registry projection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectBuilderPublication {
+    /// Existing repository builder configuration and preparation lifecycle.
+    pub builder: ProjectBuilderDefinition,
+    /// Safe registry lifecycle and evidence metadata.
+    pub registry_publication: RegistryPublication,
+}
+
+impl ProjectBuilderPublication {
+    /// Validates both layers of the composition.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-data error for either malformed builder or registry
+    /// presentation metadata.
+    pub fn validate(&self) -> Result<(), BuilderCatalogValueError> {
+        self.builder.validate()?;
+        self.registry_publication.validate()
+    }
+}
+
 /// Dependency acquisition contract owned by the platform.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -916,6 +1147,9 @@ pub enum BuilderCatalogValueError {
     /// A project builder failure reason is missing or too large.
     #[error("project builder failure reason is invalid")]
     InvalidFailureReason,
+    /// Registry publication metadata is not a safe, internally consistent projection.
+    #[error("registry publication metadata is invalid")]
+    InvalidRegistryPublication,
 }
 
 /// Failure when selecting an image for one source build.
@@ -1086,6 +1320,36 @@ mod tests {
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         );
         assert!(retried.failure_reason.is_none());
+    }
+
+    #[test]
+    fn registry_projection_is_fail_closed_until_an_approved_digest_is_verified() {
+        let reference = BuilderImageReference::parse(
+            "registry.example/projects/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa/repository-builders/bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        )
+        .expect("reference");
+        let mut publication = RegistryPublication {
+            state: RegistryPublicationState::Approved,
+            availability: RegistryAvailabilityState::Available,
+            immutable_reference: Some(reference.clone()),
+            architectures: vec![String::from("amd64")],
+            sbom: RegistryEvidence::verified(reference.clone()),
+            provenance: RegistryEvidence::verified(reference.clone()),
+            scan: RegistryEvidence::verified(reference),
+            signature: RegistryEvidence::not_required(),
+        };
+        publication.validate().expect("approved projection");
+
+        publication.state = RegistryPublicationState::Missing;
+        assert!(publication.validate().is_err());
+
+        publication.availability = RegistryAvailabilityState::Unavailable;
+        publication
+            .validate()
+            .expect("missing projection remains fail-closed");
+
+        assert!(RegistryPublication::not_requested().validate().is_ok());
+        assert!(RegistryPublication::failed().validate().is_ok());
     }
 
     #[test]

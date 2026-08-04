@@ -59,6 +59,10 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.BuilderCatalogPageTest do
     assert html =~ "Disabled"
     assert html =~ "attestation://rust"
     assert html =~ "available"
+    assert html =~ "Registry publication"
+    assert html =~ "approved"
+    assert html =~ "Verified registry architectures"
+    assert html =~ "scan@sha256:"
   end
 
   test "renders an explicit empty catalog state" do
@@ -90,7 +94,34 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.BuilderCatalogPageTest do
       "max_memory_mib" => 512,
       "dependency_policy" => "vendored_offline",
       "provenance" => %{"source" => "attestation://rust"},
-      "platform_policy_version" => "build/v1"
+      "platform_policy_version" => "build/v1",
+      "registry_publication" => registry_publication()
+    }
+  end
+
+  defp registry_publication do
+    %{
+      "state" => "approved",
+      "availability" => "available",
+      "immutable_reference" =>
+        "registry.example/platform/builders/rust@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "architectures" => ["amd64"],
+      "sbom" => %{
+        "state" => "verified",
+        "immutable_reference" =>
+          "registry.example/sbom@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "provenance" => %{
+        "state" => "verified",
+        "immutable_reference" =>
+          "registry.example/provenance@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "scan" => %{
+        "state" => "verified",
+        "immutable_reference" =>
+          "registry.example/scan@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "signature" => %{"state" => "not_required"}
     }
   end
 end

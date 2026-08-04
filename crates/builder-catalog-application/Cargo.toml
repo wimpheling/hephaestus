@@ -8,12 +8,13 @@ rust-version.workspace = true
 [package.metadata.hephaestus]
 layer = "application"
 context = "build"
-allow_cross_context_dependencies = ["agent-config"]
+allow_cross_context_dependencies = ["agent-config", "identity-domain"]
 
 [dependencies]
 agent-config = { path = "../agent-config" }
 async-trait.workspace = true
 builder-catalog-domain = { path = "../builder-catalog-domain" }
+identity-domain = { path = "../identity-domain" }
 thiserror.workspace = true
 uuid.workspace = true
 

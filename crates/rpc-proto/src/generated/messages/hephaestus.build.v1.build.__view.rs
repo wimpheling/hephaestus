@@ -93,6 +93,11 @@ pub struct BuildView<'a> {
     pub artifact_manifest_json: &'a str,
     /// Field 31: `release_version`
     pub release_version: &'a str,
+    /// Field 32: `verifications`
+    pub verifications: ::buffa::RepeatedView<
+        'a,
+        super::super::__buffa::view::BuildVerificationView<'a>,
+    >,
     pub __buffa_unknown_fields: ::buffa::UnknownFieldsView<'a>,
 }
 impl<'a> ::buffa::MessageView<'a> for BuildView<'a> {
@@ -485,6 +490,21 @@ impl<'a> ::buffa::MessageView<'a> for BuildView<'a> {
                         )?,
                     );
             }
+            32u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                let __sub_ctx = ctx.descend()?;
+                let sub = ::buffa::types::borrow_bytes(&mut cur)?;
+                view.verifications
+                    .push(
+                        <super::super::__buffa::view::BuildVerificationView as ::buffa::MessageView>::decode_view_ctx(
+                            sub,
+                            __sub_ctx,
+                        )?,
+                    );
+            }
             _ => {
                 ::buffa::encoding::skip_field_depth(tag, &mut cur, ctx.depth())?;
                 let span_len = before_tag.len() - cur.len();
@@ -610,6 +630,11 @@ impl<'a> ::buffa::MessageView<'a> for BuildView<'a> {
                 .collect::<::core::result::Result<_, ::buffa::DecodeError>>()?,
             artifact_manifest_json: self.artifact_manifest_json.to_string(),
             release_version: self.release_version.to_string(),
+            verifications: self
+                .verifications
+                .iter()
+                .map(|v| v.to_owned_from_source(__buffa_src))
+                .collect::<::core::result::Result<_, ::buffa::DecodeError>>()?,
             __buffa_unknown_fields: self.__buffa_unknown_fields.to_owned()?.into(),
             ..::core::default::Default::default()
         })
@@ -804,6 +829,14 @@ impl<'a> ::buffa::ViewEncode<'a> for BuildView<'a> {
                 += 2u32
                     + ::buffa::types::string_encoded_len(&self.release_version) as u32;
         }
+        for v in &self.verifications {
+            let __slot = __cache.reserve();
+            let inner_size = v.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 2u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
         size
     }
@@ -922,6 +955,10 @@ impl<'a> ::buffa::ViewEncode<'a> for BuildView<'a> {
         }
         if !self.release_version.is_empty() {
             ::buffa::types::put_string_field(31u32, &self.release_version, buf);
+        }
+        for v in &self.verifications {
+            ::buffa::types::put_len_delimited_header(32u32, __cache.consume_next(), buf);
+            v.write_to(__cache, buf);
         }
         self.__buffa_unknown_fields.write_to(buf);
     }
@@ -1063,6 +1100,9 @@ impl<'__a> ::serde::Serialize for BuildView<'__a> {
         }
         if !::buffa::json_helpers::skip_if::is_empty_str(self.release_version) {
             __map.serialize_entry("releaseVersion", self.release_version)?;
+        }
+        if !self.verifications.is_empty() {
+            __map.serialize_entry("verifications", &*self.verifications)?;
         }
         __map.end()
     }
@@ -1355,6 +1395,16 @@ impl BuildOwnedView {
     #[must_use]
     pub fn release_version(&self) -> &'_ str {
         self.0.reborrow().release_version
+    }
+    /// Field 32: `verifications`
+    #[must_use]
+    pub fn verifications(
+        &self,
+    ) -> &::buffa::RepeatedView<
+        '_,
+        super::super::__buffa::view::BuildVerificationView<'_>,
+    > {
+        &self.0.reborrow().verifications
     }
 }
 impl ::core::convert::From<::buffa::OwnedView<BuildView<'static>>> for BuildOwnedView {
@@ -2385,6 +2435,446 @@ impl ::buffa::HasMessageView for super::super::ProducedArtifact {
     type ViewHandle = ProducedArtifactOwnedView;
 }
 impl ::serde::Serialize for ProducedArtifactOwnedView {
+    fn serialize<__S: ::serde::Serializer>(
+        &self,
+        __s: __S,
+    ) -> ::core::result::Result<__S::Ok, __S::Error> {
+        ::serde::Serialize::serialize(&self.0, __s)
+    }
+}
+#[derive(Clone, Debug, Default)]
+pub struct BuildVerificationView<'a> {
+    /// Field 1: `state`
+    pub state: &'a str,
+    /// Field 2: `expected_manifest_json`
+    pub expected_manifest_json: &'a str,
+    /// Field 3: `actual_manifest_json`
+    pub actual_manifest_json: &'a str,
+    /// Field 4: `failure_code`
+    pub failure_code: &'a str,
+    /// Field 5: `created_at`
+    pub created_at: ::buffa::MessageFieldView<
+        ::buffa_types::google::protobuf::__buffa::view::TimestampView<'a>,
+    >,
+    /// Field 6: `completed_at`
+    pub completed_at: ::buffa::MessageFieldView<
+        ::buffa_types::google::protobuf::__buffa::view::TimestampView<'a>,
+    >,
+    pub __buffa_unknown_fields: ::buffa::UnknownFieldsView<'a>,
+}
+impl<'a> ::buffa::MessageView<'a> for BuildVerificationView<'a> {
+    type Owned = super::super::BuildVerification;
+    fn decode_view(buf: &'a [u8]) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        let __limit = ::core::cell::Cell::new(::buffa::DEFAULT_UNKNOWN_FIELD_LIMIT);
+        <Self as ::buffa::MessageView>::decode_view_ctx(
+            buf,
+            ::buffa::DecodeContext::new(::buffa::RECURSION_LIMIT, &__limit),
+        )
+    }
+    fn decode_view_with_ctx(
+        buf: &'a [u8],
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        <Self as ::buffa::MessageView>::decode_view_ctx(buf, ctx)
+    }
+    fn merge_view_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        cur: &'a [u8],
+        before_tag: &'a [u8],
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<&'a [u8], ::buffa::DecodeError> {
+        let _ = ctx;
+        #[allow(unused_variables)]
+        let view = self;
+        let mut cur = cur;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                view.state = ::buffa::types::borrow_str(&mut cur)?;
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                view.expected_manifest_json = ::buffa::types::borrow_str(&mut cur)?;
+            }
+            3u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                view.actual_manifest_json = ::buffa::types::borrow_str(&mut cur)?;
+            }
+            4u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                view.failure_code = ::buffa::types::borrow_str(&mut cur)?;
+            }
+            5u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                let __sub_ctx = ctx.descend()?;
+                let sub = ::buffa::types::borrow_bytes(&mut cur)?;
+                match view.created_at.as_mut() {
+                    Some(existing) => {
+                        ::buffa::MessageView::merge_into_view(existing, sub, __sub_ctx)?
+                    }
+                    None => {
+                        view.created_at = ::buffa::MessageFieldView::set(
+                            <::buffa_types::google::protobuf::__buffa::view::TimestampView as ::buffa::MessageView>::decode_view_ctx(
+                                sub,
+                                __sub_ctx,
+                            )?,
+                        );
+                    }
+                }
+            }
+            6u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                let __sub_ctx = ctx.descend()?;
+                let sub = ::buffa::types::borrow_bytes(&mut cur)?;
+                match view.completed_at.as_mut() {
+                    Some(existing) => {
+                        ::buffa::MessageView::merge_into_view(existing, sub, __sub_ctx)?
+                    }
+                    None => {
+                        view.completed_at = ::buffa::MessageFieldView::set(
+                            <::buffa_types::google::protobuf::__buffa::view::TimestampView as ::buffa::MessageView>::decode_view_ctx(
+                                sub,
+                                __sub_ctx,
+                            )?,
+                        );
+                    }
+                }
+            }
+            _ => {
+                ::buffa::encoding::skip_field_depth(tag, &mut cur, ctx.depth())?;
+                let span_len = before_tag.len() - cur.len();
+                view.__buffa_unknown_fields.push_record(before_tag, span_len, ctx)?;
+            }
+        }
+        ::core::result::Result::Ok(cur)
+    }
+    fn to_owned_message(
+        &self,
+    ) -> ::core::result::Result<super::super::BuildVerification, ::buffa::DecodeError> {
+        self.to_owned_from_source(None)
+    }
+    #[allow(clippy::useless_conversion, clippy::needless_update)]
+    fn to_owned_from_source(
+        &self,
+        __buffa_src: ::core::option::Option<&::buffa::bytes::Bytes>,
+    ) -> ::core::result::Result<super::super::BuildVerification, ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::alloc::string::ToString as _;
+        let _ = __buffa_src;
+        ::core::result::Result::Ok(super::super::BuildVerification {
+            state: self.state.to_string(),
+            expected_manifest_json: self.expected_manifest_json.to_string(),
+            actual_manifest_json: self.actual_manifest_json.to_string(),
+            failure_code: self.failure_code.to_string(),
+            created_at: match self.created_at.as_option() {
+                Some(v) => {
+                    ::buffa::MessageField::<
+                        ::buffa_types::google::protobuf::Timestamp,
+                    >::some(v.to_owned_from_source(__buffa_src)?)
+                }
+                None => ::buffa::MessageField::none(),
+            },
+            completed_at: match self.completed_at.as_option() {
+                Some(v) => {
+                    ::buffa::MessageField::<
+                        ::buffa_types::google::protobuf::Timestamp,
+                    >::some(v.to_owned_from_source(__buffa_src)?)
+                }
+                None => ::buffa::MessageField::none(),
+            },
+            __buffa_unknown_fields: self.__buffa_unknown_fields.to_owned()?.into(),
+            ..::core::default::Default::default()
+        })
+    }
+}
+impl<'a> ::buffa::ViewEncode<'a> for BuildVerificationView<'a> {
+    #[allow(clippy::needless_borrow, clippy::let_and_return)]
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if !self.state.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.state) as u32;
+        }
+        if !self.expected_manifest_json.is_empty() {
+            size
+                += 1u32
+                    + ::buffa::types::string_encoded_len(&self.expected_manifest_json)
+                        as u32;
+        }
+        if !self.actual_manifest_json.is_empty() {
+            size
+                += 1u32
+                    + ::buffa::types::string_encoded_len(&self.actual_manifest_json)
+                        as u32;
+        }
+        if !self.failure_code.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.failure_code) as u32;
+        }
+        if self.created_at.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.created_at.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.completed_at.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.completed_at.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    #[allow(clippy::needless_borrow)]
+    fn write_to(
+        &self,
+        __cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if !self.state.is_empty() {
+            ::buffa::types::put_string_field(1u32, &self.state, buf);
+        }
+        if !self.expected_manifest_json.is_empty() {
+            ::buffa::types::put_string_field(2u32, &self.expected_manifest_json, buf);
+        }
+        if !self.actual_manifest_json.is_empty() {
+            ::buffa::types::put_string_field(3u32, &self.actual_manifest_json, buf);
+        }
+        if !self.failure_code.is_empty() {
+            ::buffa::types::put_string_field(4u32, &self.failure_code, buf);
+        }
+        if self.created_at.is_set() {
+            ::buffa::types::put_len_delimited_header(5u32, __cache.consume_next(), buf);
+            self.created_at.write_to(__cache, buf);
+        }
+        if self.completed_at.is_set() {
+            ::buffa::types::put_len_delimited_header(6u32, __cache.consume_next(), buf);
+            self.completed_at.write_to(__cache, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+}
+/// Serializes this view as protobuf JSON.
+///
+/// Implicit-presence fields with default values are omitted, `required`
+/// fields are always emitted, explicit-presence (`optional`) fields are
+/// emitted only when set, bytes fields are base64-encoded, and enum
+/// values are their proto name strings.
+///
+/// This impl uses `serialize_map(None)` because the number of emitted
+/// fields depends on default-omission rules; serializers that require
+/// known map lengths (e.g. `bincode`) will return a runtime error.
+/// Use the owned message type for those formats.
+impl<'__a> ::serde::Serialize for BuildVerificationView<'__a> {
+    fn serialize<__S: ::serde::Serializer>(
+        &self,
+        __s: __S,
+    ) -> ::core::result::Result<__S::Ok, __S::Error> {
+        use ::serde::ser::SerializeMap as _;
+        let mut __map = __s.serialize_map(::core::option::Option::None)?;
+        if !::buffa::json_helpers::skip_if::is_empty_str(self.state) {
+            __map.serialize_entry("state", self.state)?;
+        }
+        if !::buffa::json_helpers::skip_if::is_empty_str(self.expected_manifest_json) {
+            __map.serialize_entry("expectedManifestJson", self.expected_manifest_json)?;
+        }
+        if !::buffa::json_helpers::skip_if::is_empty_str(self.actual_manifest_json) {
+            __map.serialize_entry("actualManifestJson", self.actual_manifest_json)?;
+        }
+        if !::buffa::json_helpers::skip_if::is_empty_str(self.failure_code) {
+            __map.serialize_entry("failureCode", self.failure_code)?;
+        }
+        {
+            if let ::core::option::Option::Some(__v) = self.created_at.as_option() {
+                __map.serialize_entry("createdAt", __v)?;
+            }
+        }
+        {
+            if let ::core::option::Option::Some(__v) = self.completed_at.as_option() {
+                __map.serialize_entry("completedAt", __v)?;
+            }
+        }
+        __map.end()
+    }
+}
+impl<'a> ::buffa::MessageName for BuildVerificationView<'a> {
+    const PACKAGE: &'static str = "hephaestus.build.v1";
+    const NAME: &'static str = "BuildVerification";
+    const FULL_NAME: &'static str = "hephaestus.build.v1.BuildVerification";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.build.v1.BuildVerification";
+}
+::buffa::impl_default_view_instance!(BuildVerificationView);
+::buffa::impl_view_reborrow!(BuildVerificationView);
+/** Self-contained, `'static` owned view of a `BuildVerification` message.
+
+ Wraps [`::buffa::OwnedView`]`<`[`BuildVerificationView`]`<'static>>`: the decoded view and the [`::buffa::bytes::Bytes`] buffer it borrows from travel together, so the handle is `'static` and `Send + Sync` — suitable for async handlers, spawned tasks, and anywhere a `'static` bound is required.
+
+ Field accessors return borrows tied to `&self`. Use [`Self::view`] to get the full [`BuildVerificationView`] when you need struct patterns, iteration helpers, or to pass the view to lifetime-parameterised code.*/
+#[derive(Clone, Debug)]
+pub struct BuildVerificationOwnedView(
+    ::buffa::OwnedView<BuildVerificationView<'static>>,
+);
+impl BuildVerificationOwnedView {
+    /// Decode an owned view from a [`::buffa::bytes::Bytes`] buffer.
+    ///
+    /// The view borrows directly from the buffer's data; the buffer is
+    /// retained inside the returned handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`::buffa::DecodeError`] if the buffer contains invalid
+    /// protobuf data.
+    pub fn decode(
+        bytes: ::buffa::bytes::Bytes,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        ::core::result::Result::Ok(
+            BuildVerificationOwnedView(::buffa::OwnedView::decode(bytes)?),
+        )
+    }
+    /// Decode with custom [`::buffa::DecodeOptions`] (recursion limit,
+    /// max message size).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`::buffa::DecodeError`] if the buffer is invalid or
+    /// exceeds the configured limits.
+    pub fn decode_with_options(
+        bytes: ::buffa::bytes::Bytes,
+        opts: &::buffa::DecodeOptions,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        ::core::result::Result::Ok(
+            BuildVerificationOwnedView(
+                ::buffa::OwnedView::decode_with_options(bytes, opts)?,
+            ),
+        )
+    }
+    /// Build from an owned message via an encode → decode round-trip.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`::buffa::DecodeError`] if the re-encoded bytes are
+    /// somehow invalid (should not happen for well-formed messages).
+    pub fn from_owned(
+        msg: &super::super::BuildVerification,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        ::core::result::Result::Ok(
+            BuildVerificationOwnedView(::buffa::OwnedView::from_owned(msg)?),
+        )
+    }
+    /// Borrow the full [`BuildVerificationView`] with its lifetime tied to `&self`.
+    #[must_use]
+    pub fn view(&self) -> &BuildVerificationView<'_> {
+        self.0.reborrow()
+    }
+    /// Convert to the owned message type.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if re-materializing preserved unknown fields
+    /// fails (e.g. the unknown-field limit is exceeded).
+    pub fn to_owned_message(
+        &self,
+    ) -> ::core::result::Result<super::super::BuildVerification, ::buffa::DecodeError> {
+        self.0.to_owned_message()
+    }
+    /// The underlying bytes buffer.
+    #[must_use]
+    pub fn bytes(&self) -> &::buffa::bytes::Bytes {
+        self.0.bytes()
+    }
+    /// Consume the handle, returning the underlying bytes buffer.
+    #[must_use]
+    pub fn into_bytes(self) -> ::buffa::bytes::Bytes {
+        self.0.into_bytes()
+    }
+    /// Field 1: `state`
+    #[must_use]
+    pub fn state(&self) -> &'_ str {
+        self.0.reborrow().state
+    }
+    /// Field 2: `expected_manifest_json`
+    #[must_use]
+    pub fn expected_manifest_json(&self) -> &'_ str {
+        self.0.reborrow().expected_manifest_json
+    }
+    /// Field 3: `actual_manifest_json`
+    #[must_use]
+    pub fn actual_manifest_json(&self) -> &'_ str {
+        self.0.reborrow().actual_manifest_json
+    }
+    /// Field 4: `failure_code`
+    #[must_use]
+    pub fn failure_code(&self) -> &'_ str {
+        self.0.reborrow().failure_code
+    }
+    /// Field 5: `created_at`
+    #[must_use]
+    pub fn created_at(
+        &self,
+    ) -> &::buffa::MessageFieldView<
+        ::buffa_types::google::protobuf::__buffa::view::TimestampView<'_>,
+    > {
+        &self.0.reborrow().created_at
+    }
+    /// Field 6: `completed_at`
+    #[must_use]
+    pub fn completed_at(
+        &self,
+    ) -> &::buffa::MessageFieldView<
+        ::buffa_types::google::protobuf::__buffa::view::TimestampView<'_>,
+    > {
+        &self.0.reborrow().completed_at
+    }
+}
+impl ::core::convert::From<::buffa::OwnedView<BuildVerificationView<'static>>>
+for BuildVerificationOwnedView {
+    fn from(inner: ::buffa::OwnedView<BuildVerificationView<'static>>) -> Self {
+        BuildVerificationOwnedView(inner)
+    }
+}
+impl ::core::convert::From<BuildVerificationOwnedView>
+for ::buffa::OwnedView<BuildVerificationView<'static>> {
+    fn from(wrapper: BuildVerificationOwnedView) -> Self {
+        wrapper.0
+    }
+}
+impl ::core::convert::AsRef<::buffa::OwnedView<BuildVerificationView<'static>>>
+for BuildVerificationOwnedView {
+    fn as_ref(&self) -> &::buffa::OwnedView<BuildVerificationView<'static>> {
+        &self.0
+    }
+}
+impl ::buffa::HasMessageView for super::super::BuildVerification {
+    type View<'a> = BuildVerificationView<'a>;
+    type ViewHandle = BuildVerificationOwnedView;
+}
+impl ::serde::Serialize for BuildVerificationOwnedView {
     fn serialize<__S: ::serde::Serializer>(
         &self,
         __s: __S,

@@ -1,0 +1,25 @@
+[package]
+name = "registry-publisher"
+description = "Controlled local OCI layout publisher and Zot verification adapter"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[package.metadata.hephaestus]
+layer = "adapter"
+context = "registry"
+
+[dependencies]
+registry-domain = { path = "../registry-domain" }
+registry-token = { path = "../registry-token" }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tempfile = "3"
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

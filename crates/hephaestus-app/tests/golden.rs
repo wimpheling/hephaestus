@@ -4,7 +4,9 @@ use async_trait::async_trait;
 use forge_domain::{GitRef, OrganizationId};
 use forge_postgres::PgForgeRepository;
 use forge_service::{CreateRepository, GitStorage};
-use hephaestus_app::{AppConfig, HephaestusApp, OidcConfig, RunEventKind, VmBackendConfig};
+use hephaestus_app::{
+    AppConfig, HephaestusApp, OidcConfig, RegistryConfig, RunEventKind, VmBackendConfig,
+};
 use identity_domain::UserId;
 use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use run_runtime_local::LocalRunRuntimeConfig;
@@ -182,6 +184,32 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             algorithm: Algorithm::HS256,
             decoding_key: jsonwebtoken::DecodingKey::from_secret(SIGNING_SECRET),
         },
+        registry: RegistryConfig {
+            token_issuer: Arc::new(registry_token::RegistryTokenIssuer::new(
+                "https://forge.golden.invalid/v1/registry/token"
+                    .parse()
+                    .expect("registry issuer"),
+                "registry.golden.invalid".parse().expect("registry service"),
+                registry_token::SigningKey::hs256(
+                    "golden-v1".parse().expect("registry key id"),
+                    SIGNING_SECRET,
+                )
+                .expect("registry signing key"),
+                registry_token::TokenLifetime::new(300).expect("registry token lifetime"),
+            )),
+            notification_callback: registry_notification::CallbackCredential::parse(
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            )
+            .expect("registry notification callback"),
+            zot: registry_zot::ZotClientConfig::new(
+                registry_domain::RegistryAuthority::parse("registry.golden.invalid")
+                    .expect("registry authority"),
+                "http://127.0.0.1:1/",
+            )
+            .expect("Zot client configuration"),
+            reconciliation_lease: Duration::from_secs(30),
+            reconciliation_interval: Duration::from_secs(30),
+        },
         volumes: LocalVolumeConfig {
             volume_root: backend_fixture.volume_root,
             transient_runtime_roots,
@@ -217,6 +245,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
                 host_path: backend_fixture.root_image,
             },
         )]),
+        oci_builder: None,
         runtime_policy: hephaestus_app::RuntimePolicy {
             version: String::from("golden/v1"),
             max_vcpus: 2,

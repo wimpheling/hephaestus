@@ -40,6 +40,16 @@ defmodule HephaestusWebWeb.BuildStateTest do
 
     assert presentation.declared_artifacts == [%{"path" => "declared/output"}]
     assert presentation.produced_artifacts == [%{"path" => "produced/output"}]
+
+    assert presentation.verifications == [
+             %{
+               "state" => "failed",
+               "failure_code" => "manifest_mismatch",
+               "expected_manifest" => [%{"path" => "declared/output"}],
+               "actual_manifest" => [%{"path" => "produced/output"}]
+             }
+           ]
+
     assert presentation.destinations.repository == "/repositories/repository-1/builds"
   end
 
@@ -97,7 +107,15 @@ defmodule HephaestusWebWeb.BuildStateTest do
       "updated_at" => ~U[2026-08-01 10:01:00Z],
       "timeline" => [%{"to_state" => "succeeded", "reason" => "draft_release_created"}],
       "declared_artifacts" => [%{"path" => "declared/output"}],
-      "produced_artifacts" => [%{"path" => "produced/output"}]
+      "produced_artifacts" => [%{"path" => "produced/output"}],
+      "verifications" => [
+        %{
+          "state" => "failed",
+          "failure_code" => "manifest_mismatch",
+          "expected_manifest" => [%{"path" => "declared/output"}],
+          "actual_manifest" => [%{"path" => "produced/output"}]
+        }
+      ]
     }
   end
 end

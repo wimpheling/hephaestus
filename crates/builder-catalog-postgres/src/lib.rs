@@ -3,13 +3,17 @@
 use async_trait::async_trait;
 use builder_catalog_application::{
     BuilderCatalog, BuilderCatalogError, ProjectBuilderStore, ProjectBuilderStoreError,
+    RegistryPublicationCatalog,
 };
 use builder_catalog_domain::{
     AvailabilityState, BuildNetworkPolicy, BuilderCatalogValueError, BuilderImage, BuilderImageId,
-    BuilderImageReference, BuilderKey, BuilderProvenance, BuilderSourcePath, DependencyPolicy,
-    NewProjectBuilder, OciDigest, PreparationState, ProjectBuilderDefinition, ProjectBuilderId,
-    ProjectBuilderProvenance, ProjectBuilderStatus, Toolchain,
+    BuilderImagePublication, BuilderImageReference, BuilderKey, BuilderProvenance,
+    BuilderSourcePath, DependencyPolicy, NewProjectBuilder, OciDigest, PreparationState,
+    ProjectBuilderDefinition, ProjectBuilderId, ProjectBuilderProvenance,
+    ProjectBuilderPublication, ProjectBuilderStatus, RegistryAvailabilityState, RegistryEvidence,
+    RegistryPublication, RegistryPublicationState, Toolchain,
 };
+use identity_domain::AuthenticatedIdentity;
 use serde_json::Value;
 use sqlx::{FromRow, PgPool, Postgres, Transaction};
 use uuid::Uuid;
@@ -25,6 +29,136 @@ impl PgBuilderCatalog {
     #[must_use]
     pub const fn new(pool: PgPool) -> Self {
         Self { pool }
+    }
+
+    async fn platform_publication(
+        &self,
+        identity: &AuthenticatedIdentity,
+        key: &BuilderKey,
+        reference: &BuilderImageReference,
+        preparation: PreparationState,
+    ) -> Result<RegistryPublication, BuilderCatalogError> {
+        let mut transaction = authz_postgres::begin_actor_transaction(&self.pool, identity)
+            .await
+            .map_err(storage)?;
+        let row = sqlx::query_as::<_, RegistryPublicationRow>(
+            "SELECT publication.state,
+                    publication.registry_authority || '/' || namespace.repository_path
+                        || '@' || publication.expected_digest AS immutable_reference,
+                    COALESCE(ARRAY(
+                        SELECT platform.architecture
+                        FROM registry_publication_platforms platform
+                        WHERE platform.publication_id = publication.id
+                        ORDER BY platform.architecture, platform.variant, platform.digest
+                    ), ARRAY[]::text[]) AS architectures,
+                    (SELECT publication.registry_authority || '/' || namespace.repository_path
+                        || '@' || evidence.digest
+                     FROM registry_publication_evidence evidence
+                     WHERE evidence.publication_id = publication.id AND evidence.kind = 'sbom')
+                        AS sbom_reference,
+                    (SELECT publication.registry_authority || '/' || namespace.repository_path
+                        || '@' || evidence.digest
+                     FROM registry_publication_evidence evidence
+                     WHERE evidence.publication_id = publication.id AND evidence.kind = 'provenance')
+                        AS provenance_reference,
+                    (SELECT publication.registry_authority || '/' || namespace.repository_path
+                        || '@' || evidence.digest
+                     FROM registry_publication_evidence evidence
+                     WHERE evidence.publication_id = publication.id AND evidence.kind = 'scan')
+                        AS scan_reference,
+                    (SELECT publication.registry_authority || '/' || namespace.repository_path
+                        || '@' || evidence.digest
+                     FROM registry_publication_evidence evidence
+                     WHERE evidence.publication_id = publication.id AND evidence.kind = 'signature')
+                        AS signature_reference,
+                    publication.signature_required
+             FROM registry_publications publication
+             JOIN registry_namespaces namespace ON namespace.id = publication.namespace_id
+             WHERE publication.owner_kind = 'platform_builder'
+               AND publication.platform_builder_key = $1
+               AND publication.registry_authority || '/' || namespace.repository_path
+                   || '@' || publication.expected_digest = $2
+             ORDER BY publication.created_at DESC, publication.id DESC
+             LIMIT 1",
+        )
+        .bind(key.as_str())
+        .bind(reference.as_str())
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(storage)?;
+        transaction.commit().await.map_err(storage)?;
+        row.map(RegistryPublicationRow::try_into_domain)
+            .transpose()
+            .map_err(invalid_data)
+            .map(|publication| {
+                publication.unwrap_or_else(|| fallback_platform_publication(preparation))
+            })
+    }
+
+    async fn project_publication(
+        &self,
+        identity: &AuthenticatedIdentity,
+        builder: &ProjectBuilderDefinition,
+    ) -> Result<RegistryPublication, ProjectBuilderStoreError> {
+        let mut transaction = authz_postgres::begin_actor_transaction(&self.pool, identity)
+            .await
+            .map_err(storage_project_builder)?;
+        let row = sqlx::query_as::<_, RegistryPublicationRow>(
+            "SELECT publication.state,
+                    publication.registry_authority || '/' || namespace.repository_path
+                        || '@' || publication.expected_digest AS immutable_reference,
+                    COALESCE(ARRAY(
+                        SELECT platform.architecture
+                        FROM registry_publication_platforms platform
+                        WHERE platform.publication_id = publication.id
+                        ORDER BY platform.architecture, platform.variant, platform.digest
+                    ), ARRAY[]::text[]) AS architectures,
+                    (SELECT publication.registry_authority || '/' || namespace.repository_path
+                        || '@' || evidence.digest
+                     FROM registry_publication_evidence evidence
+                     WHERE evidence.publication_id = publication.id AND evidence.kind = 'sbom')
+                        AS sbom_reference,
+                    (SELECT publication.registry_authority || '/' || namespace.repository_path
+                        || '@' || evidence.digest
+                     FROM registry_publication_evidence evidence
+                     WHERE evidence.publication_id = publication.id AND evidence.kind = 'provenance')
+                        AS provenance_reference,
+                    (SELECT publication.registry_authority || '/' || namespace.repository_path
+                        || '@' || evidence.digest
+                     FROM registry_publication_evidence evidence
+                     WHERE evidence.publication_id = publication.id AND evidence.kind = 'scan')
+                        AS scan_reference,
+                    (SELECT publication.registry_authority || '/' || namespace.repository_path
+                        || '@' || evidence.digest
+                     FROM registry_publication_evidence evidence
+                     WHERE evidence.publication_id = publication.id AND evidence.kind = 'signature')
+                        AS signature_reference,
+                    publication.signature_required
+             FROM registry_publications publication
+             JOIN registry_namespaces namespace ON namespace.id = publication.namespace_id
+             WHERE publication.owner_kind = 'repository_builder'
+               AND publication.project_id = $1 AND publication.owner_id = $2
+               AND ($3::text IS NULL OR publication.registry_authority || '/'
+                    || namespace.repository_path || '@' || publication.expected_digest = $3)
+             ORDER BY publication.created_at DESC, publication.id DESC
+             LIMIT 1",
+        )
+        .bind(builder.project_id)
+        .bind(builder.id.as_uuid())
+        .bind(builder.oci_image_reference.as_ref().map(BuilderImageReference::as_str))
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(storage_project_builder)?;
+        transaction
+            .commit()
+            .await
+            .map_err(storage_project_builder)?;
+        row.map(RegistryPublicationRow::try_into_domain)
+            .transpose()
+            .map_err(invalid_project_builder_data)
+            .map(|publication| {
+                publication.unwrap_or_else(|| fallback_project_publication(builder.status))
+            })
     }
 }
 
@@ -86,6 +220,83 @@ impl BuilderCatalog for PgBuilderCatalog {
         .map_err(storage)?
         .ok_or(BuilderCatalogError::NotFound)?;
         row.try_into_domain()
+    }
+}
+
+#[async_trait]
+impl RegistryPublicationCatalog for PgBuilderCatalog {
+    async fn list_builder_image_publications(
+        &self,
+        identity: &AuthenticatedIdentity,
+    ) -> Result<Vec<BuilderImagePublication>, BuilderCatalogError> {
+        let images = BuilderCatalog::list_builder_images(self).await?;
+        let mut publications = Vec::with_capacity(images.len());
+        for image in images {
+            let registry_publication = self
+                .platform_publication(
+                    identity,
+                    &image.key,
+                    &image.image_reference,
+                    image.preparation,
+                )
+                .await?;
+            publications.push(BuilderImagePublication {
+                image,
+                registry_publication,
+            });
+        }
+        Ok(publications)
+    }
+
+    async fn get_builder_image_publication(
+        &self,
+        identity: &AuthenticatedIdentity,
+        id: BuilderImageId,
+    ) -> Result<BuilderImagePublication, BuilderCatalogError> {
+        let image = BuilderCatalog::get_builder_image(self, id).await?;
+        let registry_publication = self
+            .platform_publication(
+                identity,
+                &image.key,
+                &image.image_reference,
+                image.preparation,
+            )
+            .await?;
+        Ok(BuilderImagePublication {
+            image,
+            registry_publication,
+        })
+    }
+
+    async fn list_project_builder_publications(
+        &self,
+        identity: &AuthenticatedIdentity,
+        project_id: Uuid,
+    ) -> Result<Vec<ProjectBuilderPublication>, ProjectBuilderStoreError> {
+        let builders = ProjectBuilderStore::list_project_builders(self, project_id).await?;
+        let mut publications = Vec::with_capacity(builders.len());
+        for builder in builders {
+            let registry_publication = self.project_publication(identity, &builder).await?;
+            publications.push(ProjectBuilderPublication {
+                builder,
+                registry_publication,
+            });
+        }
+        Ok(publications)
+    }
+
+    async fn get_project_builder_publication(
+        &self,
+        identity: &AuthenticatedIdentity,
+        project_id: Uuid,
+        id: ProjectBuilderId,
+    ) -> Result<ProjectBuilderPublication, ProjectBuilderStoreError> {
+        let builder = ProjectBuilderStore::get_project_builder(self, project_id, id).await?;
+        let registry_publication = self.project_publication(identity, &builder).await?;
+        Ok(ProjectBuilderPublication {
+            builder,
+            registry_publication,
+        })
     }
 }
 
@@ -173,6 +384,35 @@ impl ProjectBuilderStore for PgBuilderCatalog {
         .bind(project_id)
         .bind(id.as_uuid())
         .fetch_optional(&mut *transaction)
+        .await
+        .map_err(storage_project_builder)?
+        .ok_or(ProjectBuilderStoreError::NotFound)?;
+        row.try_into_domain()
+    }
+
+    async fn get_project_builder_by_repository_key(
+        &self,
+        project_id: Uuid,
+        source_repository_id: Uuid,
+        key: &str,
+        source_revision: &str,
+    ) -> Result<ProjectBuilderDefinition, ProjectBuilderStoreError> {
+        let row = sqlx::query_as::<_, ProjectBuilderRow>(
+            "SELECT id, project_id, source_repository_id, key, display_name,
+                    source_revision, dockerfile_path, context_path, context_digest,
+                    approved_base_image_reference, status, oci_image_reference,
+                    oci_image_digest, provenance, failure_reason, created_at, updated_at
+             FROM project_builder_definitions
+             WHERE project_id = $1 AND source_repository_id = $2 AND key = $3
+               AND source_revision = $4
+             ORDER BY created_at DESC, id DESC
+             LIMIT 1",
+        )
+        .bind(project_id)
+        .bind(source_repository_id)
+        .bind(key)
+        .bind(source_revision)
+        .fetch_optional(&self.pool)
         .await
         .map_err(storage_project_builder)?
         .ok_or(ProjectBuilderStoreError::NotFound)?;
@@ -486,6 +726,106 @@ impl BuilderImageRow {
         entry.validate().map_err(invalid_data)?;
         Ok(entry)
     }
+}
+
+#[derive(Debug, FromRow)]
+struct RegistryPublicationRow {
+    state: String,
+    immutable_reference: String,
+    architectures: Vec<String>,
+    sbom_reference: Option<String>,
+    provenance_reference: Option<String>,
+    scan_reference: Option<String>,
+    signature_reference: Option<String>,
+    signature_required: bool,
+}
+
+impl RegistryPublicationRow {
+    fn try_into_domain(self) -> Result<RegistryPublication, BuilderCatalogValueError> {
+        let state = registry_publication_state(&self.state)?;
+        let availability = registry_availability(state);
+        let immutable_reference = BuilderImageReference::parse(self.immutable_reference)?;
+        let sbom = registry_evidence(self.sbom_reference)?;
+        let provenance = registry_evidence(self.provenance_reference)?;
+        let scan = registry_evidence(self.scan_reference)?;
+        let signature = if self.signature_required {
+            registry_evidence(self.signature_reference)?
+        } else {
+            if self.signature_reference.is_some() {
+                return Err(BuilderCatalogValueError::InvalidRegistryPublication);
+            }
+            RegistryEvidence::not_required()
+        };
+        let publication = RegistryPublication {
+            state,
+            availability,
+            immutable_reference: Some(immutable_reference),
+            architectures: self.architectures,
+            sbom,
+            provenance,
+            scan,
+            signature,
+        };
+        publication.validate()?;
+        Ok(publication)
+    }
+}
+
+const fn fallback_platform_publication(preparation: PreparationState) -> RegistryPublication {
+    match preparation {
+        PreparationState::Failed => RegistryPublication::failed(),
+        PreparationState::Ready | PreparationState::Preparing => {
+            RegistryPublication::not_requested()
+        }
+    }
+}
+
+const fn fallback_project_publication(status: ProjectBuilderStatus) -> RegistryPublication {
+    match status {
+        ProjectBuilderStatus::Failed => RegistryPublication::failed(),
+        ProjectBuilderStatus::Draft
+        | ProjectBuilderStatus::Preparing
+        | ProjectBuilderStatus::Ready
+        | ProjectBuilderStatus::Retired => RegistryPublication::not_requested(),
+    }
+}
+
+fn registry_publication_state(
+    value: &str,
+) -> Result<RegistryPublicationState, BuilderCatalogValueError> {
+    match value {
+        "pending" => Ok(RegistryPublicationState::Pending),
+        "publishing" => Ok(RegistryPublicationState::Publishing),
+        "verified" => Ok(RegistryPublicationState::Verified),
+        "approved" => Ok(RegistryPublicationState::Approved),
+        "missing" => Ok(RegistryPublicationState::Missing),
+        "retired" => Ok(RegistryPublicationState::Retired),
+        _ => Err(BuilderCatalogValueError::InvalidRegistryPublication),
+    }
+}
+
+const fn registry_availability(state: RegistryPublicationState) -> RegistryAvailabilityState {
+    match state {
+        RegistryPublicationState::Approved => RegistryAvailabilityState::Available,
+        RegistryPublicationState::Retired => RegistryAvailabilityState::Retired,
+        RegistryPublicationState::NotRequested
+        | RegistryPublicationState::Pending
+        | RegistryPublicationState::Publishing
+        | RegistryPublicationState::Verified
+        | RegistryPublicationState::Missing
+        | RegistryPublicationState::Failed => RegistryAvailabilityState::Unavailable,
+    }
+}
+
+fn registry_evidence(
+    reference: Option<String>,
+) -> Result<RegistryEvidence, BuilderCatalogValueError> {
+    reference
+        .map(BuilderImageReference::parse)
+        .transpose()
+        .map(|reference| {
+            reference.map_or_else(RegistryEvidence::pending, RegistryEvidence::verified)
+        })
 }
 
 fn preparation_state(value: &str) -> Result<PreparationState, BuilderCatalogValueError> {

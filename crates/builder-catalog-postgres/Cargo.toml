@@ -10,11 +10,14 @@ layer = "adapter"
 context = "build"
 postgres_adapter = true
 database_context = "build"
+allow_cross_context_dependencies = ["authz-postgres", "identity-domain"]
 
 [dependencies]
 async-trait.workspace = true
+authz-postgres = { path = "../authz-postgres" }
 builder-catalog-application = { path = "../builder-catalog-application" }
 builder-catalog-domain = { path = "../builder-catalog-domain" }
+identity-domain = { path = "../identity-domain" }
 serde_json.workspace = true
 sqlx.workspace = true
 time.workspace = true

@@ -16,6 +16,17 @@ const {publicKey, privateKey} = await generateKeyPair("RS256");
 const publicJwk = await exportJWK(publicKey);
 Object.assign(publicJwk, {alg: "RS256", use: "sig", kid: "e2e-browser-key"});
 
+const accounts = {
+  reviewer: {
+    name: "Ada Reviewer",
+    email: "ada@example.invalid"
+  },
+  outsider: {
+    name: "Bea Outsider",
+    email: "bea@example.invalid"
+  }
+};
+
 const requests = new Map();
 const codes = new Map();
 const accessTokens = new Map();
@@ -41,17 +52,17 @@ const readForm = async (request) => {
   return new URLSearchParams(body);
 };
 
-const issueBrowserToken = async (authorization) => {
+const issueBrowserToken = async (authorization, subject, account) => {
   const now = Math.floor(Date.now() / 1000);
   return new SignJWT({
-    name: "Ada Reviewer",
-    email: "ada@example.invalid",
+    name: account.name,
+    email: account.email,
     email_verified: true,
     nonce: authorization.nonce
   })
     .setProtectedHeader({alg: "RS256", kid: "e2e-browser-key"})
     .setIssuer(issuer)
-    .setSubject("reviewer")
+    .setSubject(subject)
     .setAudience(clientId)
     .setIssuedAt(now)
     .setExpirationTime(now + 300)
@@ -128,12 +139,13 @@ const server = http.createServer(async (request, response) => {
   if (request.method === "POST" && url.pathname === "/authorize") {
     const form = await readForm(request);
     const authorization = requests.get(form.get("request_id"));
-    if (!authorization || form.get("login") !== "reviewer") {
+    const account = accounts[form.get("login")];
+    if (!authorization || !account) {
       return json(response, 400, {error: "access_denied"});
     }
     requests.delete(form.get("request_id"));
     const code = randomUUID();
-    codes.set(code, authorization);
+    codes.set(code, {authorization, login: form.get("login")});
     const callback = new URL(authorization.redirect_uri);
     callback.searchParams.set("code", code);
     callback.searchParams.set("state", authorization.state);
@@ -142,7 +154,9 @@ const server = http.createServer(async (request, response) => {
 
   if (request.method === "POST" && url.pathname === "/token") {
     const form = await readForm(request);
-    const authorization = codes.get(form.get("code"));
+    const pending = codes.get(form.get("code"));
+    const authorization = pending?.authorization;
+    const account = accounts[pending?.login];
     const basic = request.headers.authorization?.startsWith("Basic ")
       ? Buffer.from(request.headers.authorization.slice(6), "base64")
           .toString()
@@ -168,24 +182,25 @@ const server = http.createServer(async (request, response) => {
     }
     codes.delete(form.get("code"));
     const accessToken = randomUUID();
-    accessTokens.set(accessToken, "reviewer");
+    accessTokens.set(accessToken, pending.login);
     return json(response, 200, {
       access_token: accessToken,
       token_type: "Bearer",
       expires_in: 300,
-      id_token: await issueBrowserToken(authorization)
+      id_token: await issueBrowserToken(authorization, pending.login, account)
     });
   }
 
   if (request.method === "GET" && url.pathname === "/userinfo") {
     const token = request.headers.authorization?.replace(/^Bearer /, "");
-    if (accessTokens.get(token) !== "reviewer") {
+    const account = accounts[accessTokens.get(token)];
+    if (!account) {
       return json(response, 401, {error: "invalid_token"});
     }
     return json(response, 200, {
-      sub: "reviewer",
-      name: "Ada Reviewer",
-      email: "ada@example.invalid",
+      sub: accessTokens.get(token),
+      name: account.name,
+      email: account.email,
       email_verified: true
     });
   }

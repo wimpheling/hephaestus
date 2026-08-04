@@ -1,8 +1,10 @@
 defmodule HephaestusWebWeb.ProjectBuildersState do
   @moduledoc "State and effects for a project's owned OCI builders."
 
-  alias HephaestusWeb.RPC.Client
+  alias HephaestusWeb.RPC.{Client, ProductEvents}
+  alias HephaestusWebWeb.ProductEventReducer
 
+  @stream_mode :page_scoped
   @statuses [
     :initial,
     :loading,
@@ -18,37 +20,53 @@ defmodule HephaestusWebWeb.ProjectBuildersState do
             data: %{project_id: nil, builders: []},
             form: %{},
             error: nil,
+            cursor: nil,
             stream_generation: 0
 
   def statuses, do: @statuses
+  def stream_mode, do: @stream_mode
+  def begin_watch(state), do: ProductEventReducer.begin_watch(state)
+  def watch_scope(state), do: {:project, state.data.project_id}
 
   def new(%{project_id: project_id}),
     do: %__MODULE__{data: %{project_id: project_id, builders: []}}
+
+  def watch(identity, state, owner, generation) do
+    ProductEvents.watch(
+      identity,
+      watch_scope(state),
+      ProductEventReducer.committed_cursor(state.cursor),
+      &deliver_watch(&1, owner, generation)
+    )
+  end
+
+  def reduce(state, {:watch, response}) do
+    ProductEventReducer.reduce(state, response, [:registry_publication_changed])
+  end
+
+  def reduce(state, :watch_ended), do: ProductEventReducer.reconnect(state)
 
   def reduce(state, :load) do
     generation = state.stream_generation + 1
     {%{state | status: :loading, error: nil, stream_generation: generation}, [:load]}
   end
 
-  def reduce(state, {:loaded, generation, builders}) when generation == state.stream_generation,
-    do: {%{state | status: :ready, data: %{state.data | builders: builders}, error: nil}, []}
+  def reduce(state, {:loaded, generation, builders}) when generation == state.stream_generation do
+    state = %{state | data: %{state.data | builders: builders}, error: nil}
+    ProductEventReducer.snapshot_complete(state)
+  end
 
   def reduce(state, {:loaded, _generation, _builders}), do: {state, []}
 
   def reduce(state, {:failed, _reason}),
     do: {%{state | status: :error, error: "Project builders are unavailable."}, []}
 
-  def reduce(state, :stale), do: %{state | status: :stale}
-  def reduce(state, :reconnecting), do: %{state | status: :reconnecting}
-  def reduce(state, :submitting), do: {%{state | status: :submitting, error: nil}, []}
+  def reduce(state, :stale), do: {%{state | status: :stale}, [:snapshot]}
+  def reduce(state, :reconnecting), do: {%{state | status: :reconnecting}, []}
 
-  def reduce(state, {:created, builder}) do
-    {%{state | status: :ready, data: %{state.data | builders: [builder | state.data.builders]}}, []}
-  end
-
-  def reduce(state, {:prepared, builder}) do
-    builders = Enum.map(state.data.builders, fn item -> if item["id"] == builder["id"], do: builder, else: item end)
-    {%{state | status: :ready, data: %{state.data | builders: builders}}, []}
+  def reduce(state, {:access_revoked, _reason}) do
+    {%{state | status: :access_revoked, error: "Project access was revoked."},
+     [{:navigate, :organizations}]}
   end
 
   def present(state) do
@@ -61,33 +79,15 @@ defmodule HephaestusWebWeb.ProjectBuildersState do
     }
   end
 
-  def execute(state, {:load, identity}) do
-    generation = state.stream_generation
-
+  def execute(state, {:load, identity, generation}) do
     case Client.list_project_builders(identity, state.data.project_id) do
       {:ok, builders} -> {:loaded, generation, builders}
       {:error, reason} -> {:failed, reason}
     end
   end
 
-  def execute(state, {:create, identity, attributes}) do
-    case Client.create_project_builder(
-           identity,
-           state.data.project_id,
-           attributes["source_repository_id"],
-           attributes
-         ) do
-      {:ok, builder} -> {:created, builder}
-      {:error, reason} -> {:failed, reason}
-    end
-  end
-
-  def execute(state, {:prepare, identity, builder_id}) do
-    case Client.request_project_builder_preparation(identity, state.data.project_id, builder_id) do
-      {:ok, builder} -> {:prepared, builder}
-      {:error, reason} -> {:failed, reason}
-    end
-  end
+  def execute(state, {:load, identity}),
+    do: execute(state, {:load, identity, state.stream_generation})
 
   defp presentation_state(%{status: :ready}), do: :ready
 
@@ -96,4 +96,13 @@ defmodule HephaestusWebWeb.ProjectBuildersState do
 
   defp presentation_state(%{status: :error}), do: :error
   defp presentation_state(_state), do: :loading
+
+  defp deliver_watch(response, owner, generation) do
+    send(owner, {:page_watch, generation, response})
+
+    case response.item do
+      {kind, _value} when kind in [:retention_gap, :access_revoked] -> :halt
+      _item -> :cont
+    end
+  end
 end

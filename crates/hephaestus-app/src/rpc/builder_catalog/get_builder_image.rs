@@ -1,4 +1,4 @@
-use super::{BuilderCatalogRpc, GET_AUDIENCE, map_catalog_error, to_proto};
+use super::{BuilderCatalogRpc, GET_AUDIENCE, map_catalog_error, to_proto_with_registry};
 use crate::rpc::{into_connect_error, request};
 use connectrpc::{RequestContext, Response, ServiceRequest, ServiceResult};
 use rpc_proto::messages::hephaestus::builder::v1::{
@@ -12,7 +12,7 @@ pub(super) async fn handle(
     ctx: RequestContext,
     request_message: ServiceRequest<'_, GetBuilderImageRequest>,
 ) -> ServiceResult<GetBuilderImageResponse> {
-    let _identity = request::query_identity(&ctx, &service.authenticator, GET_AUDIENCE)
+    let identity = request::query_identity(&ctx, &service.authenticator, GET_AUDIENCE)
         .map_err(into_connect_error)?;
     let id = request_message
         .to_owned_message()
@@ -25,12 +25,15 @@ pub(super) async fn handle(
         .map_err(into_connect_error)?;
     let image = service
         .application
-        .get_builder_image(builder_catalog_domain::BuilderImageId::from_uuid(id))
+        .get_builder_image_publication(
+            &identity,
+            builder_catalog_domain::BuilderImageId::from_uuid(id),
+        )
         .await
         .map_err(map_catalog_error)
         .map_err(into_connect_error)?;
     Response::ok(GetBuilderImageResponse {
-        builder_image: to_proto(image).into(),
+        builder_image: to_proto_with_registry(image.image, image.registry_publication).into(),
         ..Default::default()
     })
 }

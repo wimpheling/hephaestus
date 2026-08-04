@@ -28,6 +28,56 @@ defmodule Hephaestus.Builder.V1.AvailabilityState do
   field(:AVAILABILITY_STATE_RETIRED, 3)
 end
 
+defmodule Hephaestus.Builder.V1.RegistryPublicationState do
+  @moduledoc false
+
+  use Protobuf,
+    enum: true,
+    full_name: "hephaestus.builder.v1.RegistryPublicationState",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:REGISTRY_PUBLICATION_STATE_UNSPECIFIED, 0)
+  field(:REGISTRY_PUBLICATION_STATE_NOT_REQUESTED, 1)
+  field(:REGISTRY_PUBLICATION_STATE_PENDING, 2)
+  field(:REGISTRY_PUBLICATION_STATE_PUBLISHING, 3)
+  field(:REGISTRY_PUBLICATION_STATE_VERIFIED, 4)
+  field(:REGISTRY_PUBLICATION_STATE_APPROVED, 5)
+  field(:REGISTRY_PUBLICATION_STATE_MISSING, 6)
+  field(:REGISTRY_PUBLICATION_STATE_RETIRED, 7)
+  field(:REGISTRY_PUBLICATION_STATE_FAILED, 8)
+end
+
+defmodule Hephaestus.Builder.V1.RegistryAvailabilityState do
+  @moduledoc false
+
+  use Protobuf,
+    enum: true,
+    full_name: "hephaestus.builder.v1.RegistryAvailabilityState",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:REGISTRY_AVAILABILITY_STATE_UNSPECIFIED, 0)
+  field(:REGISTRY_AVAILABILITY_STATE_AVAILABLE, 1)
+  field(:REGISTRY_AVAILABILITY_STATE_UNAVAILABLE, 2)
+  field(:REGISTRY_AVAILABILITY_STATE_RETIRED, 3)
+end
+
+defmodule Hephaestus.Builder.V1.RegistryEvidenceState do
+  @moduledoc false
+
+  use Protobuf,
+    enum: true,
+    full_name: "hephaestus.builder.v1.RegistryEvidenceState",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:REGISTRY_EVIDENCE_STATE_UNSPECIFIED, 0)
+  field(:REGISTRY_EVIDENCE_STATE_PENDING, 1)
+  field(:REGISTRY_EVIDENCE_STATE_VERIFIED, 2)
+  field(:REGISTRY_EVIDENCE_STATE_NOT_REQUIRED, 3)
+end
+
 defmodule Hephaestus.Builder.V1.DependencyPolicy do
   @moduledoc false
 
@@ -85,6 +135,47 @@ defmodule Hephaestus.Builder.V1.Provenance do
   field(:sbom, 3, proto3_optional: true, type: :string)
 end
 
+defmodule Hephaestus.Builder.V1.RegistryEvidence do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.builder.v1.RegistryEvidence",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:state, 1, type: Hephaestus.Builder.V1.RegistryEvidenceState, enum: true)
+
+  field(:immutable_reference, 2,
+    proto3_optional: true,
+    type: :string,
+    json_name: "immutableReference"
+  )
+end
+
+defmodule Hephaestus.Builder.V1.RegistryPublication do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.builder.v1.RegistryPublication",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:state, 1, type: Hephaestus.Builder.V1.RegistryPublicationState, enum: true)
+  field(:availability, 2, type: Hephaestus.Builder.V1.RegistryAvailabilityState, enum: true)
+
+  field(:immutable_reference, 3,
+    proto3_optional: true,
+    type: :string,
+    json_name: "immutableReference"
+  )
+
+  field(:architectures, 4, repeated: true, type: :string)
+  field(:sbom, 5, type: Hephaestus.Builder.V1.RegistryEvidence)
+  field(:provenance, 6, type: Hephaestus.Builder.V1.RegistryEvidence)
+  field(:scan, 7, type: Hephaestus.Builder.V1.RegistryEvidence)
+  field(:signature, 8, type: Hephaestus.Builder.V1.RegistryEvidence)
+end
+
 defmodule Hephaestus.Builder.V1.BuilderImage do
   @moduledoc false
 
@@ -119,6 +210,11 @@ defmodule Hephaestus.Builder.V1.BuilderImage do
 
   field(:provenance, 13, type: Hephaestus.Builder.V1.Provenance)
   field(:platform_policy_version, 14, type: :string, json_name: "platformPolicyVersion")
+
+  field(:registry_publication, 15,
+    type: Hephaestus.Builder.V1.RegistryPublication,
+    json_name: "registryPublication"
+  )
 end
 
 defmodule Hephaestus.Builder.V1.ListBuilderImagesRequest do
@@ -257,46 +353,11 @@ defmodule Hephaestus.Builder.V1.ProjectBuilder do
   field(:failure_reason, 15, proto3_optional: true, type: :string, json_name: "failureReason")
   field(:created_at, 16, type: Google.Protobuf.Timestamp, json_name: "createdAt")
   field(:updated_at, 17, type: Google.Protobuf.Timestamp, json_name: "updatedAt")
-end
 
-defmodule Hephaestus.Builder.V1.CreateProjectBuilderRequest do
-  @moduledoc false
-
-  use Protobuf,
-    full_name: "hephaestus.builder.v1.CreateProjectBuilderRequest",
-    protoc_gen_elixir_version: "0.17.0",
-    syntax: :proto3
-
-  field(:context, 1, type: Hephaestus.Common.V1.RequestContext)
-  field(:project_id, 2, type: Hephaestus.Common.V1.OpaqueId, json_name: "projectId")
-
-  field(:source_repository_id, 3,
-    type: Hephaestus.Common.V1.OpaqueId,
-    json_name: "sourceRepositoryId"
+  field(:registry_publication, 18,
+    type: Hephaestus.Builder.V1.RegistryPublication,
+    json_name: "registryPublication"
   )
-
-  field(:key, 4, type: :string)
-  field(:display_name, 5, type: :string, json_name: "displayName")
-  field(:source_revision, 6, type: :string, json_name: "sourceRevision")
-  field(:dockerfile_path, 7, type: :string, json_name: "dockerfilePath")
-  field(:context_path, 8, type: :string, json_name: "contextPath")
-  field(:context_digest, 9, type: :string, json_name: "contextDigest")
-
-  field(:approved_base_image_reference, 10,
-    type: :string,
-    json_name: "approvedBaseImageReference"
-  )
-end
-
-defmodule Hephaestus.Builder.V1.CreateProjectBuilderResponse do
-  @moduledoc false
-
-  use Protobuf,
-    full_name: "hephaestus.builder.v1.CreateProjectBuilderResponse",
-    protoc_gen_elixir_version: "0.17.0",
-    syntax: :proto3
-
-  field(:builder, 1, type: Hephaestus.Builder.V1.ProjectBuilder)
 end
 
 defmodule Hephaestus.Builder.V1.ListProjectBuildersRequest do
@@ -346,57 +407,6 @@ defmodule Hephaestus.Builder.V1.GetProjectBuilderResponse do
   field(:builder, 1, type: Hephaestus.Builder.V1.ProjectBuilder)
 end
 
-defmodule Hephaestus.Builder.V1.RequestProjectBuilderPreparationRequest do
-  @moduledoc false
-
-  use Protobuf,
-    full_name: "hephaestus.builder.v1.RequestProjectBuilderPreparationRequest",
-    protoc_gen_elixir_version: "0.17.0",
-    syntax: :proto3
-
-  field(:context, 1, type: Hephaestus.Common.V1.RequestContext)
-  field(:project_id, 2, type: Hephaestus.Common.V1.OpaqueId, json_name: "projectId")
-  field(:builder_id, 3, type: Hephaestus.Common.V1.OpaqueId, json_name: "builderId")
-end
-
-defmodule Hephaestus.Builder.V1.RequestProjectBuilderPreparationResponse do
-  @moduledoc false
-
-  use Protobuf,
-    full_name: "hephaestus.builder.v1.RequestProjectBuilderPreparationResponse",
-    protoc_gen_elixir_version: "0.17.0",
-    syntax: :proto3
-
-  field(:builder, 1, type: Hephaestus.Builder.V1.ProjectBuilder)
-end
-
-defmodule Hephaestus.Builder.V1.CompleteProjectBuilderPreparationRequest do
-  @moduledoc false
-
-  use Protobuf,
-    full_name: "hephaestus.builder.v1.CompleteProjectBuilderPreparationRequest",
-    protoc_gen_elixir_version: "0.17.0",
-    syntax: :proto3
-
-  field(:context, 1, type: Hephaestus.Common.V1.RequestContext)
-  field(:project_id, 2, type: Hephaestus.Common.V1.OpaqueId, json_name: "projectId")
-  field(:builder_id, 3, type: Hephaestus.Common.V1.OpaqueId, json_name: "builderId")
-  field(:oci_image_reference, 4, type: :string, json_name: "ociImageReference")
-  field(:oci_image_digest, 5, type: :string, json_name: "ociImageDigest")
-  field(:provenance, 6, type: Hephaestus.Builder.V1.ProjectBuilderProvenance)
-end
-
-defmodule Hephaestus.Builder.V1.CompleteProjectBuilderPreparationResponse do
-  @moduledoc false
-
-  use Protobuf,
-    full_name: "hephaestus.builder.v1.CompleteProjectBuilderPreparationResponse",
-    protoc_gen_elixir_version: "0.17.0",
-    syntax: :proto3
-
-  field(:builder, 1, type: Hephaestus.Builder.V1.ProjectBuilder)
-end
-
 defmodule Hephaestus.Builder.V1.BuilderCatalogService.Service do
   @moduledoc false
 
@@ -423,12 +433,6 @@ defmodule Hephaestus.Builder.V1.BuilderCatalogService.Service do
   )
 
   rpc(
-    :CreateProjectBuilder,
-    Hephaestus.Builder.V1.CreateProjectBuilderRequest,
-    Hephaestus.Builder.V1.CreateProjectBuilderResponse
-  )
-
-  rpc(
     :ListProjectBuilders,
     Hephaestus.Builder.V1.ListProjectBuildersRequest,
     Hephaestus.Builder.V1.ListProjectBuildersResponse
@@ -438,18 +442,6 @@ defmodule Hephaestus.Builder.V1.BuilderCatalogService.Service do
     :GetProjectBuilder,
     Hephaestus.Builder.V1.GetProjectBuilderRequest,
     Hephaestus.Builder.V1.GetProjectBuilderResponse
-  )
-
-  rpc(
-    :RequestProjectBuilderPreparation,
-    Hephaestus.Builder.V1.RequestProjectBuilderPreparationRequest,
-    Hephaestus.Builder.V1.RequestProjectBuilderPreparationResponse
-  )
-
-  rpc(
-    :CompleteProjectBuilderPreparation,
-    Hephaestus.Builder.V1.CompleteProjectBuilderPreparationRequest,
-    Hephaestus.Builder.V1.CompleteProjectBuilderPreparationResponse
   )
 end
 

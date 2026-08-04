@@ -325,6 +325,622 @@ impl ::buffa::Enumeration for AvailabilityState {
         ]
     }
 }
+/// Lifecycle owned by the forge registry control plane. This is deliberately
+/// distinct from a builder's source/preparation lifecycle: a completed build is
+/// not usable until its immutable registry publication is approved.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[repr(i32)]
+pub enum RegistryPublicationState {
+    REGISTRY_PUBLICATION_STATE_UNSPECIFIED = 0i32,
+    REGISTRY_PUBLICATION_STATE_NOT_REQUESTED = 1i32,
+    REGISTRY_PUBLICATION_STATE_PENDING = 2i32,
+    REGISTRY_PUBLICATION_STATE_PUBLISHING = 3i32,
+    REGISTRY_PUBLICATION_STATE_VERIFIED = 4i32,
+    REGISTRY_PUBLICATION_STATE_APPROVED = 5i32,
+    REGISTRY_PUBLICATION_STATE_MISSING = 6i32,
+    REGISTRY_PUBLICATION_STATE_RETIRED = 7i32,
+    REGISTRY_PUBLICATION_STATE_FAILED = 8i32,
+}
+impl RegistryPublicationState {
+    ///Idiomatic alias for [`Self::REGISTRY_PUBLICATION_STATE_UNSPECIFIED`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Unspecified: Self = Self::REGISTRY_PUBLICATION_STATE_UNSPECIFIED;
+    ///Idiomatic alias for [`Self::REGISTRY_PUBLICATION_STATE_NOT_REQUESTED`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const NotRequested: Self = Self::REGISTRY_PUBLICATION_STATE_NOT_REQUESTED;
+    ///Idiomatic alias for [`Self::REGISTRY_PUBLICATION_STATE_PENDING`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Pending: Self = Self::REGISTRY_PUBLICATION_STATE_PENDING;
+    ///Idiomatic alias for [`Self::REGISTRY_PUBLICATION_STATE_PUBLISHING`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Publishing: Self = Self::REGISTRY_PUBLICATION_STATE_PUBLISHING;
+    ///Idiomatic alias for [`Self::REGISTRY_PUBLICATION_STATE_VERIFIED`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Verified: Self = Self::REGISTRY_PUBLICATION_STATE_VERIFIED;
+    ///Idiomatic alias for [`Self::REGISTRY_PUBLICATION_STATE_APPROVED`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Approved: Self = Self::REGISTRY_PUBLICATION_STATE_APPROVED;
+    ///Idiomatic alias for [`Self::REGISTRY_PUBLICATION_STATE_MISSING`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Missing: Self = Self::REGISTRY_PUBLICATION_STATE_MISSING;
+    ///Idiomatic alias for [`Self::REGISTRY_PUBLICATION_STATE_RETIRED`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Retired: Self = Self::REGISTRY_PUBLICATION_STATE_RETIRED;
+    ///Idiomatic alias for [`Self::REGISTRY_PUBLICATION_STATE_FAILED`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Failed: Self = Self::REGISTRY_PUBLICATION_STATE_FAILED;
+}
+impl ::core::default::Default for RegistryPublicationState {
+    fn default() -> Self {
+        Self::REGISTRY_PUBLICATION_STATE_UNSPECIFIED
+    }
+}
+impl ::serde::Serialize for RegistryPublicationState {
+    fn serialize<S: ::serde::Serializer>(
+        &self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        s.serialize_str(::buffa::Enumeration::proto_name(self))
+    }
+}
+impl<'de> ::serde::Deserialize<'de> for RegistryPublicationState {
+    fn deserialize<D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        struct _V;
+        impl ::serde::de::Visitor<'_> for _V {
+            type Value = RegistryPublicationState;
+            fn expecting(
+                &self,
+                f: &mut ::core::fmt::Formatter<'_>,
+            ) -> ::core::fmt::Result {
+                f.write_str(
+                    concat!(
+                        "a string, integer, or null for ",
+                        stringify!(RegistryPublicationState)
+                    ),
+                )
+            }
+            fn visit_str<E: ::serde::de::Error>(
+                self,
+                v: &str,
+            ) -> ::core::result::Result<RegistryPublicationState, E> {
+                <RegistryPublicationState as ::buffa::Enumeration>::from_proto_name(v)
+                    .ok_or_else(|| { ::serde::de::Error::unknown_variant(v, &[]) })
+            }
+            fn visit_i64<E: ::serde::de::Error>(
+                self,
+                v: i64,
+            ) -> ::core::result::Result<RegistryPublicationState, E> {
+                let v32 = i32::try_from(v)
+                    .map_err(|_| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("enum value {v} out of i32 range"),
+                        )
+                    })?;
+                <RegistryPublicationState as ::buffa::Enumeration>::from_i32(v32)
+                    .ok_or_else(|| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("unknown enum value {v32}"),
+                        )
+                    })
+            }
+            fn visit_u64<E: ::serde::de::Error>(
+                self,
+                v: u64,
+            ) -> ::core::result::Result<RegistryPublicationState, E> {
+                let v32 = i32::try_from(v)
+                    .map_err(|_| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("enum value {v} out of i32 range"),
+                        )
+                    })?;
+                <RegistryPublicationState as ::buffa::Enumeration>::from_i32(v32)
+                    .ok_or_else(|| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("unknown enum value {v32}"),
+                        )
+                    })
+            }
+            fn visit_unit<E: ::serde::de::Error>(
+                self,
+            ) -> ::core::result::Result<RegistryPublicationState, E> {
+                ::core::result::Result::Ok(::core::default::Default::default())
+            }
+        }
+        d.deserialize_any(_V)
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for RegistryPublicationState {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+impl ::buffa::Enumeration for RegistryPublicationState {
+    fn from_i32(value: i32) -> ::core::option::Option<Self> {
+        match value {
+            0i32 => {
+                ::core::option::Option::Some(
+                    Self::REGISTRY_PUBLICATION_STATE_UNSPECIFIED,
+                )
+            }
+            1i32 => {
+                ::core::option::Option::Some(
+                    Self::REGISTRY_PUBLICATION_STATE_NOT_REQUESTED,
+                )
+            }
+            2i32 => {
+                ::core::option::Option::Some(Self::REGISTRY_PUBLICATION_STATE_PENDING)
+            }
+            3i32 => {
+                ::core::option::Option::Some(Self::REGISTRY_PUBLICATION_STATE_PUBLISHING)
+            }
+            4i32 => {
+                ::core::option::Option::Some(Self::REGISTRY_PUBLICATION_STATE_VERIFIED)
+            }
+            5i32 => {
+                ::core::option::Option::Some(Self::REGISTRY_PUBLICATION_STATE_APPROVED)
+            }
+            6i32 => {
+                ::core::option::Option::Some(Self::REGISTRY_PUBLICATION_STATE_MISSING)
+            }
+            7i32 => {
+                ::core::option::Option::Some(Self::REGISTRY_PUBLICATION_STATE_RETIRED)
+            }
+            8i32 => ::core::option::Option::Some(Self::REGISTRY_PUBLICATION_STATE_FAILED),
+            _ => ::core::option::Option::None,
+        }
+    }
+    fn to_i32(&self) -> i32 {
+        *self as i32
+    }
+    fn proto_name(&self) -> &'static str {
+        match self {
+            Self::REGISTRY_PUBLICATION_STATE_UNSPECIFIED => {
+                "REGISTRY_PUBLICATION_STATE_UNSPECIFIED"
+            }
+            Self::REGISTRY_PUBLICATION_STATE_NOT_REQUESTED => {
+                "REGISTRY_PUBLICATION_STATE_NOT_REQUESTED"
+            }
+            Self::REGISTRY_PUBLICATION_STATE_PENDING => {
+                "REGISTRY_PUBLICATION_STATE_PENDING"
+            }
+            Self::REGISTRY_PUBLICATION_STATE_PUBLISHING => {
+                "REGISTRY_PUBLICATION_STATE_PUBLISHING"
+            }
+            Self::REGISTRY_PUBLICATION_STATE_VERIFIED => {
+                "REGISTRY_PUBLICATION_STATE_VERIFIED"
+            }
+            Self::REGISTRY_PUBLICATION_STATE_APPROVED => {
+                "REGISTRY_PUBLICATION_STATE_APPROVED"
+            }
+            Self::REGISTRY_PUBLICATION_STATE_MISSING => {
+                "REGISTRY_PUBLICATION_STATE_MISSING"
+            }
+            Self::REGISTRY_PUBLICATION_STATE_RETIRED => {
+                "REGISTRY_PUBLICATION_STATE_RETIRED"
+            }
+            Self::REGISTRY_PUBLICATION_STATE_FAILED => {
+                "REGISTRY_PUBLICATION_STATE_FAILED"
+            }
+        }
+    }
+    fn from_proto_name(name: &str) -> ::core::option::Option<Self> {
+        match name {
+            "REGISTRY_PUBLICATION_STATE_UNSPECIFIED" => {
+                ::core::option::Option::Some(
+                    Self::REGISTRY_PUBLICATION_STATE_UNSPECIFIED,
+                )
+            }
+            "REGISTRY_PUBLICATION_STATE_NOT_REQUESTED" => {
+                ::core::option::Option::Some(
+                    Self::REGISTRY_PUBLICATION_STATE_NOT_REQUESTED,
+                )
+            }
+            "REGISTRY_PUBLICATION_STATE_PENDING" => {
+                ::core::option::Option::Some(Self::REGISTRY_PUBLICATION_STATE_PENDING)
+            }
+            "REGISTRY_PUBLICATION_STATE_PUBLISHING" => {
+                ::core::option::Option::Some(Self::REGISTRY_PUBLICATION_STATE_PUBLISHING)
+            }
+            "REGISTRY_PUBLICATION_STATE_VERIFIED" => {
+                ::core::option::Option::Some(Self::REGISTRY_PUBLICATION_STATE_VERIFIED)
+            }
+            "REGISTRY_PUBLICATION_STATE_APPROVED" => {
+                ::core::option::Option::Some(Self::REGISTRY_PUBLICATION_STATE_APPROVED)
+            }
+            "REGISTRY_PUBLICATION_STATE_MISSING" => {
+                ::core::option::Option::Some(Self::REGISTRY_PUBLICATION_STATE_MISSING)
+            }
+            "REGISTRY_PUBLICATION_STATE_RETIRED" => {
+                ::core::option::Option::Some(Self::REGISTRY_PUBLICATION_STATE_RETIRED)
+            }
+            "REGISTRY_PUBLICATION_STATE_FAILED" => {
+                ::core::option::Option::Some(Self::REGISTRY_PUBLICATION_STATE_FAILED)
+            }
+            _ => ::core::option::Option::None,
+        }
+    }
+    fn values() -> &'static [Self] {
+        &[
+            Self::REGISTRY_PUBLICATION_STATE_UNSPECIFIED,
+            Self::REGISTRY_PUBLICATION_STATE_NOT_REQUESTED,
+            Self::REGISTRY_PUBLICATION_STATE_PENDING,
+            Self::REGISTRY_PUBLICATION_STATE_PUBLISHING,
+            Self::REGISTRY_PUBLICATION_STATE_VERIFIED,
+            Self::REGISTRY_PUBLICATION_STATE_APPROVED,
+            Self::REGISTRY_PUBLICATION_STATE_MISSING,
+            Self::REGISTRY_PUBLICATION_STATE_RETIRED,
+            Self::REGISTRY_PUBLICATION_STATE_FAILED,
+        ]
+    }
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[repr(i32)]
+pub enum RegistryAvailabilityState {
+    REGISTRY_AVAILABILITY_STATE_UNSPECIFIED = 0i32,
+    REGISTRY_AVAILABILITY_STATE_AVAILABLE = 1i32,
+    REGISTRY_AVAILABILITY_STATE_UNAVAILABLE = 2i32,
+    REGISTRY_AVAILABILITY_STATE_RETIRED = 3i32,
+}
+impl RegistryAvailabilityState {
+    ///Idiomatic alias for [`Self::REGISTRY_AVAILABILITY_STATE_UNSPECIFIED`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Unspecified: Self = Self::REGISTRY_AVAILABILITY_STATE_UNSPECIFIED;
+    ///Idiomatic alias for [`Self::REGISTRY_AVAILABILITY_STATE_AVAILABLE`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Available: Self = Self::REGISTRY_AVAILABILITY_STATE_AVAILABLE;
+    ///Idiomatic alias for [`Self::REGISTRY_AVAILABILITY_STATE_UNAVAILABLE`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Unavailable: Self = Self::REGISTRY_AVAILABILITY_STATE_UNAVAILABLE;
+    ///Idiomatic alias for [`Self::REGISTRY_AVAILABILITY_STATE_RETIRED`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Retired: Self = Self::REGISTRY_AVAILABILITY_STATE_RETIRED;
+}
+impl ::core::default::Default for RegistryAvailabilityState {
+    fn default() -> Self {
+        Self::REGISTRY_AVAILABILITY_STATE_UNSPECIFIED
+    }
+}
+impl ::serde::Serialize for RegistryAvailabilityState {
+    fn serialize<S: ::serde::Serializer>(
+        &self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        s.serialize_str(::buffa::Enumeration::proto_name(self))
+    }
+}
+impl<'de> ::serde::Deserialize<'de> for RegistryAvailabilityState {
+    fn deserialize<D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        struct _V;
+        impl ::serde::de::Visitor<'_> for _V {
+            type Value = RegistryAvailabilityState;
+            fn expecting(
+                &self,
+                f: &mut ::core::fmt::Formatter<'_>,
+            ) -> ::core::fmt::Result {
+                f.write_str(
+                    concat!(
+                        "a string, integer, or null for ",
+                        stringify!(RegistryAvailabilityState)
+                    ),
+                )
+            }
+            fn visit_str<E: ::serde::de::Error>(
+                self,
+                v: &str,
+            ) -> ::core::result::Result<RegistryAvailabilityState, E> {
+                <RegistryAvailabilityState as ::buffa::Enumeration>::from_proto_name(v)
+                    .ok_or_else(|| { ::serde::de::Error::unknown_variant(v, &[]) })
+            }
+            fn visit_i64<E: ::serde::de::Error>(
+                self,
+                v: i64,
+            ) -> ::core::result::Result<RegistryAvailabilityState, E> {
+                let v32 = i32::try_from(v)
+                    .map_err(|_| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("enum value {v} out of i32 range"),
+                        )
+                    })?;
+                <RegistryAvailabilityState as ::buffa::Enumeration>::from_i32(v32)
+                    .ok_or_else(|| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("unknown enum value {v32}"),
+                        )
+                    })
+            }
+            fn visit_u64<E: ::serde::de::Error>(
+                self,
+                v: u64,
+            ) -> ::core::result::Result<RegistryAvailabilityState, E> {
+                let v32 = i32::try_from(v)
+                    .map_err(|_| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("enum value {v} out of i32 range"),
+                        )
+                    })?;
+                <RegistryAvailabilityState as ::buffa::Enumeration>::from_i32(v32)
+                    .ok_or_else(|| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("unknown enum value {v32}"),
+                        )
+                    })
+            }
+            fn visit_unit<E: ::serde::de::Error>(
+                self,
+            ) -> ::core::result::Result<RegistryAvailabilityState, E> {
+                ::core::result::Result::Ok(::core::default::Default::default())
+            }
+        }
+        d.deserialize_any(_V)
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for RegistryAvailabilityState {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+impl ::buffa::Enumeration for RegistryAvailabilityState {
+    fn from_i32(value: i32) -> ::core::option::Option<Self> {
+        match value {
+            0i32 => {
+                ::core::option::Option::Some(
+                    Self::REGISTRY_AVAILABILITY_STATE_UNSPECIFIED,
+                )
+            }
+            1i32 => {
+                ::core::option::Option::Some(Self::REGISTRY_AVAILABILITY_STATE_AVAILABLE)
+            }
+            2i32 => {
+                ::core::option::Option::Some(
+                    Self::REGISTRY_AVAILABILITY_STATE_UNAVAILABLE,
+                )
+            }
+            3i32 => {
+                ::core::option::Option::Some(Self::REGISTRY_AVAILABILITY_STATE_RETIRED)
+            }
+            _ => ::core::option::Option::None,
+        }
+    }
+    fn to_i32(&self) -> i32 {
+        *self as i32
+    }
+    fn proto_name(&self) -> &'static str {
+        match self {
+            Self::REGISTRY_AVAILABILITY_STATE_UNSPECIFIED => {
+                "REGISTRY_AVAILABILITY_STATE_UNSPECIFIED"
+            }
+            Self::REGISTRY_AVAILABILITY_STATE_AVAILABLE => {
+                "REGISTRY_AVAILABILITY_STATE_AVAILABLE"
+            }
+            Self::REGISTRY_AVAILABILITY_STATE_UNAVAILABLE => {
+                "REGISTRY_AVAILABILITY_STATE_UNAVAILABLE"
+            }
+            Self::REGISTRY_AVAILABILITY_STATE_RETIRED => {
+                "REGISTRY_AVAILABILITY_STATE_RETIRED"
+            }
+        }
+    }
+    fn from_proto_name(name: &str) -> ::core::option::Option<Self> {
+        match name {
+            "REGISTRY_AVAILABILITY_STATE_UNSPECIFIED" => {
+                ::core::option::Option::Some(
+                    Self::REGISTRY_AVAILABILITY_STATE_UNSPECIFIED,
+                )
+            }
+            "REGISTRY_AVAILABILITY_STATE_AVAILABLE" => {
+                ::core::option::Option::Some(Self::REGISTRY_AVAILABILITY_STATE_AVAILABLE)
+            }
+            "REGISTRY_AVAILABILITY_STATE_UNAVAILABLE" => {
+                ::core::option::Option::Some(
+                    Self::REGISTRY_AVAILABILITY_STATE_UNAVAILABLE,
+                )
+            }
+            "REGISTRY_AVAILABILITY_STATE_RETIRED" => {
+                ::core::option::Option::Some(Self::REGISTRY_AVAILABILITY_STATE_RETIRED)
+            }
+            _ => ::core::option::Option::None,
+        }
+    }
+    fn values() -> &'static [Self] {
+        &[
+            Self::REGISTRY_AVAILABILITY_STATE_UNSPECIFIED,
+            Self::REGISTRY_AVAILABILITY_STATE_AVAILABLE,
+            Self::REGISTRY_AVAILABILITY_STATE_UNAVAILABLE,
+            Self::REGISTRY_AVAILABILITY_STATE_RETIRED,
+        ]
+    }
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[repr(i32)]
+pub enum RegistryEvidenceState {
+    REGISTRY_EVIDENCE_STATE_UNSPECIFIED = 0i32,
+    REGISTRY_EVIDENCE_STATE_PENDING = 1i32,
+    REGISTRY_EVIDENCE_STATE_VERIFIED = 2i32,
+    REGISTRY_EVIDENCE_STATE_NOT_REQUIRED = 3i32,
+}
+impl RegistryEvidenceState {
+    ///Idiomatic alias for [`Self::REGISTRY_EVIDENCE_STATE_UNSPECIFIED`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Unspecified: Self = Self::REGISTRY_EVIDENCE_STATE_UNSPECIFIED;
+    ///Idiomatic alias for [`Self::REGISTRY_EVIDENCE_STATE_PENDING`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Pending: Self = Self::REGISTRY_EVIDENCE_STATE_PENDING;
+    ///Idiomatic alias for [`Self::REGISTRY_EVIDENCE_STATE_VERIFIED`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Verified: Self = Self::REGISTRY_EVIDENCE_STATE_VERIFIED;
+    ///Idiomatic alias for [`Self::REGISTRY_EVIDENCE_STATE_NOT_REQUIRED`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const NotRequired: Self = Self::REGISTRY_EVIDENCE_STATE_NOT_REQUIRED;
+}
+impl ::core::default::Default for RegistryEvidenceState {
+    fn default() -> Self {
+        Self::REGISTRY_EVIDENCE_STATE_UNSPECIFIED
+    }
+}
+impl ::serde::Serialize for RegistryEvidenceState {
+    fn serialize<S: ::serde::Serializer>(
+        &self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        s.serialize_str(::buffa::Enumeration::proto_name(self))
+    }
+}
+impl<'de> ::serde::Deserialize<'de> for RegistryEvidenceState {
+    fn deserialize<D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        struct _V;
+        impl ::serde::de::Visitor<'_> for _V {
+            type Value = RegistryEvidenceState;
+            fn expecting(
+                &self,
+                f: &mut ::core::fmt::Formatter<'_>,
+            ) -> ::core::fmt::Result {
+                f.write_str(
+                    concat!(
+                        "a string, integer, or null for ",
+                        stringify!(RegistryEvidenceState)
+                    ),
+                )
+            }
+            fn visit_str<E: ::serde::de::Error>(
+                self,
+                v: &str,
+            ) -> ::core::result::Result<RegistryEvidenceState, E> {
+                <RegistryEvidenceState as ::buffa::Enumeration>::from_proto_name(v)
+                    .ok_or_else(|| { ::serde::de::Error::unknown_variant(v, &[]) })
+            }
+            fn visit_i64<E: ::serde::de::Error>(
+                self,
+                v: i64,
+            ) -> ::core::result::Result<RegistryEvidenceState, E> {
+                let v32 = i32::try_from(v)
+                    .map_err(|_| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("enum value {v} out of i32 range"),
+                        )
+                    })?;
+                <RegistryEvidenceState as ::buffa::Enumeration>::from_i32(v32)
+                    .ok_or_else(|| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("unknown enum value {v32}"),
+                        )
+                    })
+            }
+            fn visit_u64<E: ::serde::de::Error>(
+                self,
+                v: u64,
+            ) -> ::core::result::Result<RegistryEvidenceState, E> {
+                let v32 = i32::try_from(v)
+                    .map_err(|_| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("enum value {v} out of i32 range"),
+                        )
+                    })?;
+                <RegistryEvidenceState as ::buffa::Enumeration>::from_i32(v32)
+                    .ok_or_else(|| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("unknown enum value {v32}"),
+                        )
+                    })
+            }
+            fn visit_unit<E: ::serde::de::Error>(
+                self,
+            ) -> ::core::result::Result<RegistryEvidenceState, E> {
+                ::core::result::Result::Ok(::core::default::Default::default())
+            }
+        }
+        d.deserialize_any(_V)
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for RegistryEvidenceState {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+impl ::buffa::Enumeration for RegistryEvidenceState {
+    fn from_i32(value: i32) -> ::core::option::Option<Self> {
+        match value {
+            0i32 => {
+                ::core::option::Option::Some(Self::REGISTRY_EVIDENCE_STATE_UNSPECIFIED)
+            }
+            1i32 => ::core::option::Option::Some(Self::REGISTRY_EVIDENCE_STATE_PENDING),
+            2i32 => ::core::option::Option::Some(Self::REGISTRY_EVIDENCE_STATE_VERIFIED),
+            3i32 => {
+                ::core::option::Option::Some(Self::REGISTRY_EVIDENCE_STATE_NOT_REQUIRED)
+            }
+            _ => ::core::option::Option::None,
+        }
+    }
+    fn to_i32(&self) -> i32 {
+        *self as i32
+    }
+    fn proto_name(&self) -> &'static str {
+        match self {
+            Self::REGISTRY_EVIDENCE_STATE_UNSPECIFIED => {
+                "REGISTRY_EVIDENCE_STATE_UNSPECIFIED"
+            }
+            Self::REGISTRY_EVIDENCE_STATE_PENDING => "REGISTRY_EVIDENCE_STATE_PENDING",
+            Self::REGISTRY_EVIDENCE_STATE_VERIFIED => "REGISTRY_EVIDENCE_STATE_VERIFIED",
+            Self::REGISTRY_EVIDENCE_STATE_NOT_REQUIRED => {
+                "REGISTRY_EVIDENCE_STATE_NOT_REQUIRED"
+            }
+        }
+    }
+    fn from_proto_name(name: &str) -> ::core::option::Option<Self> {
+        match name {
+            "REGISTRY_EVIDENCE_STATE_UNSPECIFIED" => {
+                ::core::option::Option::Some(Self::REGISTRY_EVIDENCE_STATE_UNSPECIFIED)
+            }
+            "REGISTRY_EVIDENCE_STATE_PENDING" => {
+                ::core::option::Option::Some(Self::REGISTRY_EVIDENCE_STATE_PENDING)
+            }
+            "REGISTRY_EVIDENCE_STATE_VERIFIED" => {
+                ::core::option::Option::Some(Self::REGISTRY_EVIDENCE_STATE_VERIFIED)
+            }
+            "REGISTRY_EVIDENCE_STATE_NOT_REQUIRED" => {
+                ::core::option::Option::Some(Self::REGISTRY_EVIDENCE_STATE_NOT_REQUIRED)
+            }
+            _ => ::core::option::Option::None,
+        }
+    }
+    fn values() -> &'static [Self] {
+        &[
+            Self::REGISTRY_EVIDENCE_STATE_UNSPECIFIED,
+            Self::REGISTRY_EVIDENCE_STATE_PENDING,
+            Self::REGISTRY_EVIDENCE_STATE_VERIFIED,
+            Self::REGISTRY_EVIDENCE_STATE_NOT_REQUIRED,
+        ]
+    }
+}
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 #[repr(i32)]
 pub enum DependencyPolicy {
@@ -1033,6 +1649,529 @@ pub const __PROVENANCE_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa:
     from_json: ::buffa::type_registry::any_from_json::<Provenance>,
     is_wkt: false,
 };
+/// A digest-pinned supply-chain referrer that has been verified by the forge.
+/// This exposes neither OCI credentials nor Zot implementation details.
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct RegistryEvidence {
+    /// Field 1: `state`
+    #[serde(
+        rename = "state",
+        with = "::buffa::json_helpers::proto_enum",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_default_enum_value"
+    )]
+    pub state: ::buffa::EnumValue<RegistryEvidenceState>,
+    /// Field 2: `immutable_reference`
+    #[serde(
+        rename = "immutableReference",
+        alias = "immutable_reference",
+        skip_serializing_if = "::core::option::Option::is_none"
+    )]
+    pub immutable_reference: ::core::option::Option<::buffa::alloc::string::String>,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for RegistryEvidence {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("RegistryEvidence")
+            .field("state", &self.state)
+            .field("immutable_reference", &self.immutable_reference)
+            .finish()
+    }
+}
+impl RegistryEvidence {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.builder.v1.RegistryEvidence";
+}
+impl RegistryEvidence {
+    #[must_use = "with_* setters return `self` by value; assign or chain the result"]
+    #[inline]
+    ///Sets [`Self::immutable_reference`] to `Some(value)`, consuming and returning `self`.
+    pub fn with_immutable_reference(
+        mut self,
+        value: impl Into<::buffa::alloc::string::String>,
+    ) -> Self {
+        self.immutable_reference = Some(value.into());
+        self
+    }
+}
+::buffa::impl_default_instance!(RegistryEvidence);
+impl ::buffa::MessageName for RegistryEvidence {
+    const PACKAGE: &'static str = "hephaestus.builder.v1";
+    const NAME: &'static str = "RegistryEvidence";
+    const FULL_NAME: &'static str = "hephaestus.builder.v1.RegistryEvidence";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.builder.v1.RegistryEvidence";
+}
+impl ::buffa::Message for RegistryEvidence {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, _cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        {
+            let val = self.state.to_i32();
+            if val != 0 {
+                size += 1u32 + ::buffa::types::int32_encoded_len(val) as u32;
+            }
+        }
+        if let Some(ref v) = self.immutable_reference {
+            size += 1u32 + ::buffa::types::string_encoded_len(v) as u32;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        _cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        {
+            let val = self.state.to_i32();
+            if val != 0 {
+                ::buffa::types::put_int32_field(1u32, val, buf);
+            }
+        }
+        if let Some(ref v) = self.immutable_reference {
+            ::buffa::types::put_string_field(2u32, v, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.state = ::buffa::EnumValue::from(
+                    ::buffa::types::decode_int32(buf)?,
+                );
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(
+                    self
+                        .immutable_reference
+                        .get_or_insert_with(::buffa::alloc::string::String::new),
+                    buf,
+                )?;
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.state = ::buffa::EnumValue::from(0);
+        self.immutable_reference = ::core::option::Option::None;
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for RegistryEvidence {
+    const PROTO_FQN: &'static str = "hephaestus.builder.v1.RegistryEvidence";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for RegistryEvidence {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __REGISTRY_EVIDENCE_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/hephaestus.builder.v1.RegistryEvidence",
+    to_json: ::buffa::type_registry::any_to_json::<RegistryEvidence>,
+    from_json: ::buffa::type_registry::any_from_json::<RegistryEvidence>,
+    is_wkt: false,
+};
+/// Safe, read-only registry control-plane projection for a builder image.
+/// `immutable_reference` is an internal authority/path@sha256 reference only;
+/// it is never a token, callback payload, storage location, or private endpoint.
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct RegistryPublication {
+    /// Field 1: `state`
+    #[serde(
+        rename = "state",
+        with = "::buffa::json_helpers::proto_enum",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_default_enum_value"
+    )]
+    pub state: ::buffa::EnumValue<RegistryPublicationState>,
+    /// Field 2: `availability`
+    #[serde(
+        rename = "availability",
+        with = "::buffa::json_helpers::proto_enum",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_default_enum_value"
+    )]
+    pub availability: ::buffa::EnumValue<RegistryAvailabilityState>,
+    /// Field 3: `immutable_reference`
+    #[serde(
+        rename = "immutableReference",
+        alias = "immutable_reference",
+        skip_serializing_if = "::core::option::Option::is_none"
+    )]
+    pub immutable_reference: ::core::option::Option<::buffa::alloc::string::String>,
+    /// Field 4: `architectures`
+    #[serde(
+        rename = "architectures",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_vec",
+        deserialize_with = "::buffa::json_helpers::null_as_default"
+    )]
+    pub architectures: ::buffa::alloc::vec::Vec<::buffa::alloc::string::String>,
+    /// Field 5: `sbom`
+    #[serde(
+        rename = "sbom",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub sbom: ::buffa::MessageField<RegistryEvidence>,
+    /// Field 6: `provenance`
+    #[serde(
+        rename = "provenance",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub provenance: ::buffa::MessageField<RegistryEvidence>,
+    /// Field 7: `scan`
+    #[serde(
+        rename = "scan",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub scan: ::buffa::MessageField<RegistryEvidence>,
+    /// Field 8: `signature`
+    #[serde(
+        rename = "signature",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub signature: ::buffa::MessageField<RegistryEvidence>,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for RegistryPublication {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("RegistryPublication")
+            .field("state", &self.state)
+            .field("availability", &self.availability)
+            .field("immutable_reference", &self.immutable_reference)
+            .field("architectures", &self.architectures)
+            .field("sbom", &self.sbom)
+            .field("provenance", &self.provenance)
+            .field("scan", &self.scan)
+            .field("signature", &self.signature)
+            .finish()
+    }
+}
+impl RegistryPublication {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.builder.v1.RegistryPublication";
+}
+impl RegistryPublication {
+    #[must_use = "with_* setters return `self` by value; assign or chain the result"]
+    #[inline]
+    ///Sets [`Self::immutable_reference`] to `Some(value)`, consuming and returning `self`.
+    pub fn with_immutable_reference(
+        mut self,
+        value: impl Into<::buffa::alloc::string::String>,
+    ) -> Self {
+        self.immutable_reference = Some(value.into());
+        self
+    }
+}
+::buffa::impl_default_instance!(RegistryPublication);
+impl ::buffa::MessageName for RegistryPublication {
+    const PACKAGE: &'static str = "hephaestus.builder.v1";
+    const NAME: &'static str = "RegistryPublication";
+    const FULL_NAME: &'static str = "hephaestus.builder.v1.RegistryPublication";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.builder.v1.RegistryPublication";
+}
+impl ::buffa::Message for RegistryPublication {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        {
+            let val = self.state.to_i32();
+            if val != 0 {
+                size += 1u32 + ::buffa::types::int32_encoded_len(val) as u32;
+            }
+        }
+        {
+            let val = self.availability.to_i32();
+            if val != 0 {
+                size += 1u32 + ::buffa::types::int32_encoded_len(val) as u32;
+            }
+        }
+        if let Some(ref v) = self.immutable_reference {
+            size += 1u32 + ::buffa::types::string_encoded_len(v) as u32;
+        }
+        for v in &self.architectures {
+            size += 1u32 + ::buffa::types::string_encoded_len(v) as u32;
+        }
+        if self.sbom.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.sbom.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.provenance.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.provenance.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.scan.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.scan.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.signature.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.signature.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        __cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        {
+            let val = self.state.to_i32();
+            if val != 0 {
+                ::buffa::types::put_int32_field(1u32, val, buf);
+            }
+        }
+        {
+            let val = self.availability.to_i32();
+            if val != 0 {
+                ::buffa::types::put_int32_field(2u32, val, buf);
+            }
+        }
+        if let Some(ref v) = self.immutable_reference {
+            ::buffa::types::put_string_field(3u32, v, buf);
+        }
+        for v in &self.architectures {
+            ::buffa::types::put_string_field(4u32, v, buf);
+        }
+        if self.sbom.is_set() {
+            ::buffa::types::put_len_delimited_header(5u32, __cache.consume_next(), buf);
+            self.sbom.write_to(__cache, buf);
+        }
+        if self.provenance.is_set() {
+            ::buffa::types::put_len_delimited_header(6u32, __cache.consume_next(), buf);
+            self.provenance.write_to(__cache, buf);
+        }
+        if self.scan.is_set() {
+            ::buffa::types::put_len_delimited_header(7u32, __cache.consume_next(), buf);
+            self.scan.write_to(__cache, buf);
+        }
+        if self.signature.is_set() {
+            ::buffa::types::put_len_delimited_header(8u32, __cache.consume_next(), buf);
+            self.signature.write_to(__cache, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.state = ::buffa::EnumValue::from(
+                    ::buffa::types::decode_int32(buf)?,
+                );
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.availability = ::buffa::EnumValue::from(
+                    ::buffa::types::decode_int32(buf)?,
+                );
+            }
+            3u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(
+                    self
+                        .immutable_reference
+                        .get_or_insert_with(::buffa::alloc::string::String::new),
+                    buf,
+                )?;
+            }
+            4u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                self.architectures.push(::buffa::types::decode_string(buf)?);
+            }
+            5u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.sbom.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            6u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.provenance.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            7u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.scan.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            8u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.signature.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.state = ::buffa::EnumValue::from(0);
+        self.availability = ::buffa::EnumValue::from(0);
+        self.immutable_reference = ::core::option::Option::None;
+        self.architectures.clear();
+        self.sbom = ::buffa::MessageField::none();
+        self.provenance = ::buffa::MessageField::none();
+        self.scan = ::buffa::MessageField::none();
+        self.signature = ::buffa::MessageField::none();
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for RegistryPublication {
+    const PROTO_FQN: &'static str = "hephaestus.builder.v1.RegistryPublication";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for RegistryPublication {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __REGISTRY_PUBLICATION_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/hephaestus.builder.v1.RegistryPublication",
+    to_json: ::buffa::type_registry::any_to_json::<RegistryPublication>,
+    from_json: ::buffa::type_registry::any_from_json::<RegistryPublication>,
+    is_wkt: false,
+};
 #[derive(Clone, PartialEq, Default)]
 #[derive(::serde::Serialize, ::serde::Deserialize)]
 #[serde(default)]
@@ -1140,6 +2279,13 @@ pub struct BuilderImage {
         skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
     )]
     pub platform_policy_version: ::buffa::alloc::string::String,
+    /// Field 15: `registry_publication`
+    #[serde(
+        rename = "registryPublication",
+        alias = "registry_publication",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub registry_publication: ::buffa::MessageField<RegistryPublication>,
     #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
@@ -1161,6 +2307,7 @@ impl ::core::fmt::Debug for BuilderImage {
             .field("dependency_policy", &self.dependency_policy)
             .field("provenance", &self.provenance)
             .field("platform_policy_version", &self.platform_policy_version)
+            .field("registry_publication", &self.registry_publication)
             .finish()
     }
 }
@@ -1264,6 +2411,14 @@ impl ::buffa::Message for BuilderImage {
                     + ::buffa::types::string_encoded_len(&self.platform_policy_version)
                         as u32;
         }
+        if self.registry_publication.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.registry_publication.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
         size
     }
@@ -1330,6 +2485,10 @@ impl ::buffa::Message for BuilderImage {
         }
         if !self.platform_policy_version.is_empty() {
             ::buffa::types::put_string_field(14u32, &self.platform_policy_version, buf);
+        }
+        if self.registry_publication.is_set() {
+            ::buffa::types::put_len_delimited_header(15u32, __cache.consume_next(), buf);
+            self.registry_publication.write_to(__cache, buf);
         }
         self.__buffa_unknown_fields.write_to(buf);
     }
@@ -1460,6 +2619,17 @@ impl ::buffa::Message for BuilderImage {
                 )?;
                 ::buffa::types::merge_string(&mut self.platform_policy_version, buf)?;
             }
+            15u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.registry_publication.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
             _ => {
                 self.__buffa_unknown_fields
                     .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
@@ -1482,6 +2652,7 @@ impl ::buffa::Message for BuilderImage {
         self.dependency_policy = ::buffa::EnumValue::from(0);
         self.provenance = ::buffa::MessageField::none();
         self.platform_policy_version.clear();
+        self.registry_publication = ::buffa::MessageField::none();
         self.__buffa_unknown_fields.clear();
     }
 }
@@ -2781,6 +3952,13 @@ pub struct ProjectBuilder {
         skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
     )]
     pub updated_at: ::buffa::MessageField<::buffa_types::google::protobuf::Timestamp>,
+    /// Field 18: `registry_publication`
+    #[serde(
+        rename = "registryPublication",
+        alias = "registry_publication",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub registry_publication: ::buffa::MessageField<RegistryPublication>,
     #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
@@ -2805,6 +3983,7 @@ impl ::core::fmt::Debug for ProjectBuilder {
             .field("failure_reason", &self.failure_reason)
             .field("created_at", &self.created_at)
             .field("updated_at", &self.updated_at)
+            .field("registry_publication", &self.registry_publication)
             .finish()
     }
 }
@@ -2959,6 +4138,14 @@ impl ::buffa::Message for ProjectBuilder {
                 += 2u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
                     + inner_size;
         }
+        if self.registry_publication.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.registry_publication.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 2u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
         size
     }
@@ -3032,6 +4219,10 @@ impl ::buffa::Message for ProjectBuilder {
         if self.updated_at.is_set() {
             ::buffa::types::put_len_delimited_header(17u32, __cache.consume_next(), buf);
             self.updated_at.write_to(__cache, buf);
+        }
+        if self.registry_publication.is_set() {
+            ::buffa::types::put_len_delimited_header(18u32, __cache.consume_next(), buf);
+            self.registry_publication.write_to(__cache, buf);
         }
         self.__buffa_unknown_fields.write_to(buf);
     }
@@ -3209,6 +4400,17 @@ impl ::buffa::Message for ProjectBuilder {
                     ctx,
                 )?;
             }
+            18u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.registry_publication.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
             _ => {
                 self.__buffa_unknown_fields
                     .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
@@ -3234,6 +4436,7 @@ impl ::buffa::Message for ProjectBuilder {
         self.failure_reason = ::core::option::Option::None;
         self.created_at = ::buffa::MessageField::none();
         self.updated_at = ::buffa::MessageField::none();
+        self.registry_publication = ::buffa::MessageField::none();
         self.__buffa_unknown_fields.clear();
     }
 }
@@ -3264,513 +4467,6 @@ pub const __PROJECT_BUILDER_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::b
     type_url: "type.googleapis.com/hephaestus.builder.v1.ProjectBuilder",
     to_json: ::buffa::type_registry::any_to_json::<ProjectBuilder>,
     from_json: ::buffa::type_registry::any_from_json::<ProjectBuilder>,
-    is_wkt: false,
-};
-#[derive(Clone, PartialEq, Default)]
-#[derive(::serde::Serialize, ::serde::Deserialize)]
-#[serde(default)]
-pub struct CreateProjectBuilderRequest {
-    /// Field 1: `context`
-    #[serde(
-        rename = "context",
-        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
-    )]
-    pub context: ::buffa::MessageField<super::super::common::v1::RequestContext>,
-    /// Field 2: `project_id`
-    #[serde(
-        rename = "projectId",
-        alias = "project_id",
-        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
-    )]
-    pub project_id: ::buffa::MessageField<super::super::common::v1::OpaqueId>,
-    /// Field 3: `source_repository_id`
-    #[serde(
-        rename = "sourceRepositoryId",
-        alias = "source_repository_id",
-        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
-    )]
-    pub source_repository_id: ::buffa::MessageField<super::super::common::v1::OpaqueId>,
-    /// Field 4: `key`
-    #[serde(
-        rename = "key",
-        with = "::buffa::json_helpers::proto_string",
-        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
-    )]
-    pub key: ::buffa::alloc::string::String,
-    /// Field 5: `display_name`
-    #[serde(
-        rename = "displayName",
-        alias = "display_name",
-        with = "::buffa::json_helpers::proto_string",
-        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
-    )]
-    pub display_name: ::buffa::alloc::string::String,
-    /// Field 6: `source_revision`
-    #[serde(
-        rename = "sourceRevision",
-        alias = "source_revision",
-        with = "::buffa::json_helpers::proto_string",
-        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
-    )]
-    pub source_revision: ::buffa::alloc::string::String,
-    /// Field 7: `dockerfile_path`
-    #[serde(
-        rename = "dockerfilePath",
-        alias = "dockerfile_path",
-        with = "::buffa::json_helpers::proto_string",
-        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
-    )]
-    pub dockerfile_path: ::buffa::alloc::string::String,
-    /// Field 8: `context_path`
-    #[serde(
-        rename = "contextPath",
-        alias = "context_path",
-        with = "::buffa::json_helpers::proto_string",
-        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
-    )]
-    pub context_path: ::buffa::alloc::string::String,
-    /// Field 9: `context_digest`
-    #[serde(
-        rename = "contextDigest",
-        alias = "context_digest",
-        with = "::buffa::json_helpers::proto_string",
-        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
-    )]
-    pub context_digest: ::buffa::alloc::string::String,
-    /// Field 10: `approved_base_image_reference`
-    #[serde(
-        rename = "approvedBaseImageReference",
-        alias = "approved_base_image_reference",
-        with = "::buffa::json_helpers::proto_string",
-        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
-    )]
-    pub approved_base_image_reference: ::buffa::alloc::string::String,
-    #[serde(skip)]
-    #[doc(hidden)]
-    pub __buffa_unknown_fields: ::buffa::UnknownFields,
-}
-impl ::core::fmt::Debug for CreateProjectBuilderRequest {
-    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
-        f.debug_struct("CreateProjectBuilderRequest")
-            .field("context", &self.context)
-            .field("project_id", &self.project_id)
-            .field("source_repository_id", &self.source_repository_id)
-            .field("key", &self.key)
-            .field("display_name", &self.display_name)
-            .field("source_revision", &self.source_revision)
-            .field("dockerfile_path", &self.dockerfile_path)
-            .field("context_path", &self.context_path)
-            .field("context_digest", &self.context_digest)
-            .field("approved_base_image_reference", &self.approved_base_image_reference)
-            .finish()
-    }
-}
-impl CreateProjectBuilderRequest {
-    /// Protobuf type URL for this message, for use with `Any::pack` and
-    /// `Any::unpack_if`.
-    ///
-    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
-    pub const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.builder.v1.CreateProjectBuilderRequest";
-}
-::buffa::impl_default_instance!(CreateProjectBuilderRequest);
-impl ::buffa::MessageName for CreateProjectBuilderRequest {
-    const PACKAGE: &'static str = "hephaestus.builder.v1";
-    const NAME: &'static str = "CreateProjectBuilderRequest";
-    const FULL_NAME: &'static str = "hephaestus.builder.v1.CreateProjectBuilderRequest";
-    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.builder.v1.CreateProjectBuilderRequest";
-}
-impl ::buffa::Message for CreateProjectBuilderRequest {
-    /// Returns the total encoded size in bytes.
-    ///
-    /// The result is a `u32`; the protobuf specification requires all
-    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
-    /// compliant message will never overflow this type.
-    #[allow(clippy::let_and_return)]
-    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
-        #[allow(unused_imports)]
-        use ::buffa::Enumeration as _;
-        let mut size = 0u32;
-        if self.context.is_set() {
-            let __slot = __cache.reserve();
-            let inner_size = self.context.compute_size(__cache);
-            __cache.set(__slot, inner_size);
-            size
-                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
-                    + inner_size;
-        }
-        if self.project_id.is_set() {
-            let __slot = __cache.reserve();
-            let inner_size = self.project_id.compute_size(__cache);
-            __cache.set(__slot, inner_size);
-            size
-                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
-                    + inner_size;
-        }
-        if self.source_repository_id.is_set() {
-            let __slot = __cache.reserve();
-            let inner_size = self.source_repository_id.compute_size(__cache);
-            __cache.set(__slot, inner_size);
-            size
-                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
-                    + inner_size;
-        }
-        if !self.key.is_empty() {
-            size += 1u32 + ::buffa::types::string_encoded_len(&self.key) as u32;
-        }
-        if !self.display_name.is_empty() {
-            size += 1u32 + ::buffa::types::string_encoded_len(&self.display_name) as u32;
-        }
-        if !self.source_revision.is_empty() {
-            size
-                += 1u32
-                    + ::buffa::types::string_encoded_len(&self.source_revision) as u32;
-        }
-        if !self.dockerfile_path.is_empty() {
-            size
-                += 1u32
-                    + ::buffa::types::string_encoded_len(&self.dockerfile_path) as u32;
-        }
-        if !self.context_path.is_empty() {
-            size += 1u32 + ::buffa::types::string_encoded_len(&self.context_path) as u32;
-        }
-        if !self.context_digest.is_empty() {
-            size
-                += 1u32
-                    + ::buffa::types::string_encoded_len(&self.context_digest) as u32;
-        }
-        if !self.approved_base_image_reference.is_empty() {
-            size
-                += 1u32
-                    + ::buffa::types::string_encoded_len(
-                        &self.approved_base_image_reference,
-                    ) as u32;
-        }
-        size += self.__buffa_unknown_fields.encoded_len() as u32;
-        size
-    }
-    fn write_to(
-        &self,
-        __cache: &mut ::buffa::SizeCache,
-        buf: &mut impl ::buffa::bytes::BufMut,
-    ) {
-        #[allow(unused_imports)]
-        use ::buffa::Enumeration as _;
-        if self.context.is_set() {
-            ::buffa::types::put_len_delimited_header(1u32, __cache.consume_next(), buf);
-            self.context.write_to(__cache, buf);
-        }
-        if self.project_id.is_set() {
-            ::buffa::types::put_len_delimited_header(2u32, __cache.consume_next(), buf);
-            self.project_id.write_to(__cache, buf);
-        }
-        if self.source_repository_id.is_set() {
-            ::buffa::types::put_len_delimited_header(3u32, __cache.consume_next(), buf);
-            self.source_repository_id.write_to(__cache, buf);
-        }
-        if !self.key.is_empty() {
-            ::buffa::types::put_string_field(4u32, &self.key, buf);
-        }
-        if !self.display_name.is_empty() {
-            ::buffa::types::put_string_field(5u32, &self.display_name, buf);
-        }
-        if !self.source_revision.is_empty() {
-            ::buffa::types::put_string_field(6u32, &self.source_revision, buf);
-        }
-        if !self.dockerfile_path.is_empty() {
-            ::buffa::types::put_string_field(7u32, &self.dockerfile_path, buf);
-        }
-        if !self.context_path.is_empty() {
-            ::buffa::types::put_string_field(8u32, &self.context_path, buf);
-        }
-        if !self.context_digest.is_empty() {
-            ::buffa::types::put_string_field(9u32, &self.context_digest, buf);
-        }
-        if !self.approved_base_image_reference.is_empty() {
-            ::buffa::types::put_string_field(
-                10u32,
-                &self.approved_base_image_reference,
-                buf,
-            );
-        }
-        self.__buffa_unknown_fields.write_to(buf);
-    }
-    fn merge_field(
-        &mut self,
-        tag: ::buffa::encoding::Tag,
-        buf: &mut impl ::buffa::bytes::Buf,
-        ctx: ::buffa::DecodeContext<'_>,
-    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
-        #[allow(unused_imports)]
-        use ::buffa::bytes::Buf as _;
-        #[allow(unused_imports)]
-        use ::buffa::Enumeration as _;
-        match tag.field_number() {
-            1u32 => {
-                ::buffa::encoding::check_wire_type(
-                    tag,
-                    ::buffa::encoding::WireType::LengthDelimited,
-                )?;
-                ::buffa::Message::merge_length_delimited(
-                    self.context.get_or_insert_default(),
-                    buf,
-                    ctx,
-                )?;
-            }
-            2u32 => {
-                ::buffa::encoding::check_wire_type(
-                    tag,
-                    ::buffa::encoding::WireType::LengthDelimited,
-                )?;
-                ::buffa::Message::merge_length_delimited(
-                    self.project_id.get_or_insert_default(),
-                    buf,
-                    ctx,
-                )?;
-            }
-            3u32 => {
-                ::buffa::encoding::check_wire_type(
-                    tag,
-                    ::buffa::encoding::WireType::LengthDelimited,
-                )?;
-                ::buffa::Message::merge_length_delimited(
-                    self.source_repository_id.get_or_insert_default(),
-                    buf,
-                    ctx,
-                )?;
-            }
-            4u32 => {
-                ::buffa::encoding::check_wire_type(
-                    tag,
-                    ::buffa::encoding::WireType::LengthDelimited,
-                )?;
-                ::buffa::types::merge_string(&mut self.key, buf)?;
-            }
-            5u32 => {
-                ::buffa::encoding::check_wire_type(
-                    tag,
-                    ::buffa::encoding::WireType::LengthDelimited,
-                )?;
-                ::buffa::types::merge_string(&mut self.display_name, buf)?;
-            }
-            6u32 => {
-                ::buffa::encoding::check_wire_type(
-                    tag,
-                    ::buffa::encoding::WireType::LengthDelimited,
-                )?;
-                ::buffa::types::merge_string(&mut self.source_revision, buf)?;
-            }
-            7u32 => {
-                ::buffa::encoding::check_wire_type(
-                    tag,
-                    ::buffa::encoding::WireType::LengthDelimited,
-                )?;
-                ::buffa::types::merge_string(&mut self.dockerfile_path, buf)?;
-            }
-            8u32 => {
-                ::buffa::encoding::check_wire_type(
-                    tag,
-                    ::buffa::encoding::WireType::LengthDelimited,
-                )?;
-                ::buffa::types::merge_string(&mut self.context_path, buf)?;
-            }
-            9u32 => {
-                ::buffa::encoding::check_wire_type(
-                    tag,
-                    ::buffa::encoding::WireType::LengthDelimited,
-                )?;
-                ::buffa::types::merge_string(&mut self.context_digest, buf)?;
-            }
-            10u32 => {
-                ::buffa::encoding::check_wire_type(
-                    tag,
-                    ::buffa::encoding::WireType::LengthDelimited,
-                )?;
-                ::buffa::types::merge_string(
-                    &mut self.approved_base_image_reference,
-                    buf,
-                )?;
-            }
-            _ => {
-                self.__buffa_unknown_fields
-                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
-            }
-        }
-        ::core::result::Result::Ok(())
-    }
-    fn clear(&mut self) {
-        self.context = ::buffa::MessageField::none();
-        self.project_id = ::buffa::MessageField::none();
-        self.source_repository_id = ::buffa::MessageField::none();
-        self.key.clear();
-        self.display_name.clear();
-        self.source_revision.clear();
-        self.dockerfile_path.clear();
-        self.context_path.clear();
-        self.context_digest.clear();
-        self.approved_base_image_reference.clear();
-        self.__buffa_unknown_fields.clear();
-    }
-}
-impl ::buffa::ExtensionSet for CreateProjectBuilderRequest {
-    const PROTO_FQN: &'static str = "hephaestus.builder.v1.CreateProjectBuilderRequest";
-    fn unknown_fields(&self) -> &::buffa::UnknownFields {
-        &self.__buffa_unknown_fields
-    }
-    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
-        &mut self.__buffa_unknown_fields
-    }
-}
-impl ::buffa::json_helpers::ProtoElemJson for CreateProjectBuilderRequest {
-    fn serialize_proto_json<S: ::serde::Serializer>(
-        v: &Self,
-        s: S,
-    ) -> ::core::result::Result<S::Ok, S::Error> {
-        ::serde::Serialize::serialize(v, s)
-    }
-    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
-        d: D,
-    ) -> ::core::result::Result<Self, D::Error> {
-        <Self as ::serde::Deserialize>::deserialize(d)
-    }
-}
-#[doc(hidden)]
-pub const __CREATE_PROJECT_BUILDER_REQUEST_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
-    type_url: "type.googleapis.com/hephaestus.builder.v1.CreateProjectBuilderRequest",
-    to_json: ::buffa::type_registry::any_to_json::<CreateProjectBuilderRequest>,
-    from_json: ::buffa::type_registry::any_from_json::<CreateProjectBuilderRequest>,
-    is_wkt: false,
-};
-#[derive(Clone, PartialEq, Default)]
-#[derive(::serde::Serialize, ::serde::Deserialize)]
-#[serde(default)]
-pub struct CreateProjectBuilderResponse {
-    /// Field 1: `builder`
-    #[serde(
-        rename = "builder",
-        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
-    )]
-    pub builder: ::buffa::MessageField<ProjectBuilder>,
-    #[serde(skip)]
-    #[doc(hidden)]
-    pub __buffa_unknown_fields: ::buffa::UnknownFields,
-}
-impl ::core::fmt::Debug for CreateProjectBuilderResponse {
-    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
-        f.debug_struct("CreateProjectBuilderResponse")
-            .field("builder", &self.builder)
-            .finish()
-    }
-}
-impl CreateProjectBuilderResponse {
-    /// Protobuf type URL for this message, for use with `Any::pack` and
-    /// `Any::unpack_if`.
-    ///
-    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
-    pub const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.builder.v1.CreateProjectBuilderResponse";
-}
-::buffa::impl_default_instance!(CreateProjectBuilderResponse);
-impl ::buffa::MessageName for CreateProjectBuilderResponse {
-    const PACKAGE: &'static str = "hephaestus.builder.v1";
-    const NAME: &'static str = "CreateProjectBuilderResponse";
-    const FULL_NAME: &'static str = "hephaestus.builder.v1.CreateProjectBuilderResponse";
-    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.builder.v1.CreateProjectBuilderResponse";
-}
-impl ::buffa::Message for CreateProjectBuilderResponse {
-    /// Returns the total encoded size in bytes.
-    ///
-    /// The result is a `u32`; the protobuf specification requires all
-    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
-    /// compliant message will never overflow this type.
-    #[allow(clippy::let_and_return)]
-    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
-        #[allow(unused_imports)]
-        use ::buffa::Enumeration as _;
-        let mut size = 0u32;
-        if self.builder.is_set() {
-            let __slot = __cache.reserve();
-            let inner_size = self.builder.compute_size(__cache);
-            __cache.set(__slot, inner_size);
-            size
-                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
-                    + inner_size;
-        }
-        size += self.__buffa_unknown_fields.encoded_len() as u32;
-        size
-    }
-    fn write_to(
-        &self,
-        __cache: &mut ::buffa::SizeCache,
-        buf: &mut impl ::buffa::bytes::BufMut,
-    ) {
-        #[allow(unused_imports)]
-        use ::buffa::Enumeration as _;
-        if self.builder.is_set() {
-            ::buffa::types::put_len_delimited_header(1u32, __cache.consume_next(), buf);
-            self.builder.write_to(__cache, buf);
-        }
-        self.__buffa_unknown_fields.write_to(buf);
-    }
-    fn merge_field(
-        &mut self,
-        tag: ::buffa::encoding::Tag,
-        buf: &mut impl ::buffa::bytes::Buf,
-        ctx: ::buffa::DecodeContext<'_>,
-    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
-        #[allow(unused_imports)]
-        use ::buffa::bytes::Buf as _;
-        #[allow(unused_imports)]
-        use ::buffa::Enumeration as _;
-        match tag.field_number() {
-            1u32 => {
-                ::buffa::encoding::check_wire_type(
-                    tag,
-                    ::buffa::encoding::WireType::LengthDelimited,
-                )?;
-                ::buffa::Message::merge_length_delimited(
-                    self.builder.get_or_insert_default(),
-                    buf,
-                    ctx,
-                )?;
-            }
-            _ => {
-                self.__buffa_unknown_fields
-                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
-            }
-        }
-        ::core::result::Result::Ok(())
-    }
-    fn clear(&mut self) {
-        self.builder = ::buffa::MessageField::none();
-        self.__buffa_unknown_fields.clear();
-    }
-}
-impl ::buffa::ExtensionSet for CreateProjectBuilderResponse {
-    const PROTO_FQN: &'static str = "hephaestus.builder.v1.CreateProjectBuilderResponse";
-    fn unknown_fields(&self) -> &::buffa::UnknownFields {
-        &self.__buffa_unknown_fields
-    }
-    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
-        &mut self.__buffa_unknown_fields
-    }
-}
-impl ::buffa::json_helpers::ProtoElemJson for CreateProjectBuilderResponse {
-    fn serialize_proto_json<S: ::serde::Serializer>(
-        v: &Self,
-        s: S,
-    ) -> ::core::result::Result<S::Ok, S::Error> {
-        ::serde::Serialize::serialize(v, s)
-    }
-    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
-        d: D,
-    ) -> ::core::result::Result<Self, D::Error> {
-        <Self as ::serde::Deserialize>::deserialize(d)
-    }
-}
-#[doc(hidden)]
-pub const __CREATE_PROJECT_BUILDER_RESPONSE_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
-    type_url: "type.googleapis.com/hephaestus.builder.v1.CreateProjectBuilderResponse",
-    to_json: ::buffa::type_registry::any_to_json::<CreateProjectBuilderResponse>,
-    from_json: ::buffa::type_registry::any_from_json::<CreateProjectBuilderResponse>,
     is_wkt: false,
 };
 #[derive(Clone, PartialEq, Default)]
@@ -4398,763 +5094,5 @@ pub const __GET_PROJECT_BUILDER_RESPONSE_JSON_ANY: ::buffa::type_registry::JsonA
     type_url: "type.googleapis.com/hephaestus.builder.v1.GetProjectBuilderResponse",
     to_json: ::buffa::type_registry::any_to_json::<GetProjectBuilderResponse>,
     from_json: ::buffa::type_registry::any_from_json::<GetProjectBuilderResponse>,
-    is_wkt: false,
-};
-#[derive(Clone, PartialEq, Default)]
-#[derive(::serde::Serialize, ::serde::Deserialize)]
-#[serde(default)]
-pub struct RequestProjectBuilderPreparationRequest {
-    /// Field 1: `context`
-    #[serde(
-        rename = "context",
-        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
-    )]
-    pub context: ::buffa::MessageField<super::super::common::v1::RequestContext>,
-    /// Field 2: `project_id`
-    #[serde(
-        rename = "projectId",
-        alias = "project_id",
-        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
-    )]
-    pub project_id: ::buffa::MessageField<super::super::common::v1::OpaqueId>,
-    /// Field 3: `builder_id`
-    #[serde(
-        rename = "builderId",
-        alias = "builder_id",
-        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
-    )]
-    pub builder_id: ::buffa::MessageField<super::super::common::v1::OpaqueId>,
-    #[serde(skip)]
-    #[doc(hidden)]
-    pub __buffa_unknown_fields: ::buffa::UnknownFields,
-}
-impl ::core::fmt::Debug for RequestProjectBuilderPreparationRequest {
-    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
-        f.debug_struct("RequestProjectBuilderPreparationRequest")
-            .field("context", &self.context)
-            .field("project_id", &self.project_id)
-            .field("builder_id", &self.builder_id)
-            .finish()
-    }
-}
-impl RequestProjectBuilderPreparationRequest {
-    /// Protobuf type URL for this message, for use with `Any::pack` and
-    /// `Any::unpack_if`.
-    ///
-    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
-    pub const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.builder.v1.RequestProjectBuilderPreparationRequest";
-}
-::buffa::impl_default_instance!(RequestProjectBuilderPreparationRequest);
-impl ::buffa::MessageName for RequestProjectBuilderPreparationRequest {
-    const PACKAGE: &'static str = "hephaestus.builder.v1";
-    const NAME: &'static str = "RequestProjectBuilderPreparationRequest";
-    const FULL_NAME: &'static str = "hephaestus.builder.v1.RequestProjectBuilderPreparationRequest";
-    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.builder.v1.RequestProjectBuilderPreparationRequest";
-}
-impl ::buffa::Message for RequestProjectBuilderPreparationRequest {
-    /// Returns the total encoded size in bytes.
-    ///
-    /// The result is a `u32`; the protobuf specification requires all
-    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
-    /// compliant message will never overflow this type.
-    #[allow(clippy::let_and_return)]
-    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
-        #[allow(unused_imports)]
-        use ::buffa::Enumeration as _;
-        let mut size = 0u32;
-        if self.context.is_set() {
-            let __slot = __cache.reserve();
-            let inner_size = self.context.compute_size(__cache);
-            __cache.set(__slot, inner_size);
-            size
-                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
-                    + inner_size;
-        }
-        if self.project_id.is_set() {
-            let __slot = __cache.reserve();
-            let inner_size = self.project_id.compute_size(__cache);
-            __cache.set(__slot, inner_size);
-            size
-                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
-                    + inner_size;
-        }
-        if self.builder_id.is_set() {
-            let __slot = __cache.reserve();
-            let inner_size = self.builder_id.compute_size(__cache);
-            __cache.set(__slot, inner_size);
-            size
-                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
-                    + inner_size;
-        }
-        size += self.__buffa_unknown_fields.encoded_len() as u32;
-        size
-    }
-    fn write_to(
-        &self,
-        __cache: &mut ::buffa::SizeCache,
-        buf: &mut impl ::buffa::bytes::BufMut,
-    ) {
-        #[allow(unused_imports)]
-        use ::buffa::Enumeration as _;
-        if self.context.is_set() {
-            ::buffa::types::put_len_delimited_header(1u32, __cache.consume_next(), buf);
-            self.context.write_to(__cache, buf);
-        }
-        if self.project_id.is_set() {
-            ::buffa::types::put_len_delimited_header(2u32, __cache.consume_next(), buf);
-            self.project_id.write_to(__cache, buf);
-        }
-        if self.builder_id.is_set() {
-            ::buffa::types::put_len_delimited_header(3u32, __cache.consume_next(), buf);
-            self.builder_id.write_to(__cache, buf);
-        }
-        self.__buffa_unknown_fields.write_to(buf);
-    }
-    fn merge_field(
-        &mut self,
-        tag: ::buffa::encoding::Tag,
-        buf: &mut impl ::buffa::bytes::Buf,
-        ctx: ::buffa::DecodeContext<'_>,
-    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
-        #[allow(unused_imports)]
-        use ::buffa::bytes::Buf as _;
-        #[allow(unused_imports)]
-        use ::buffa::Enumeration as _;
-        match tag.field_number() {
-            1u32 => {
-                ::buffa::encoding::check_wire_type(
-                    tag,
-                    ::buffa::encoding::WireType::LengthDelimited,
-                )?;
-                ::buffa::Message::merge_length_delimited(
-                    self.context.get_or_insert_default(),
-                    buf,
-                    ctx,
-                )?;
-            }
-            2u32 => {
-                ::buffa::encoding::check_wire_type(
-                    tag,
-                    ::buffa::encoding::WireType::LengthDelimited,
-                )?;
-                ::buffa::Message::merge_length_delimited(
-                    self.project_id.get_or_insert_default(),
-                    buf,
-                    ctx,
-                )?;
-            }
-            3u32 => {
-                ::buffa::encoding::check_wire_type(
-                    tag,
-                    ::buffa::encoding::WireType::LengthDelimited,
-                )?;
-                ::buffa::Message::merge_length_delimited(
-                    self.builder_id.get_or_insert_default(),
-                    buf,
-                    ctx,
-                )?;
-            }
-            _ => {
-                self.__buffa_unknown_fields
-                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
-            }
-        }
-        ::core::result::Result::Ok(())
-    }
-    fn clear(&mut self) {
-        self.context = ::buffa::MessageField::none();
-        self.project_id = ::buffa::MessageField::none();
-        self.builder_id = ::buffa::MessageField::none();
-        self.__buffa_unknown_fields.clear();
-    }
-}
-impl ::buffa::ExtensionSet for RequestProjectBuilderPreparationRequest {
-    const PROTO_FQN: &'static str = "hephaestus.builder.v1.RequestProjectBuilderPreparationRequest";
-    fn unknown_fields(&self) -> &::buffa::UnknownFields {
-        &self.__buffa_unknown_fields
-    }
-    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
-        &mut self.__buffa_unknown_fields
-    }
-}
-impl ::buffa::json_helpers::ProtoElemJson for RequestProjectBuilderPreparationRequest {
-    fn serialize_proto_json<S: ::serde::Serializer>(
-        v: &Self,
-        s: S,
-    ) -> ::core::result::Result<S::Ok, S::Error> {
-        ::serde::Serialize::serialize(v, s)
-    }
-    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
-        d: D,
-    ) -> ::core::result::Result<Self, D::Error> {
-        <Self as ::serde::Deserialize>::deserialize(d)
-    }
-}
-#[doc(hidden)]
-pub const __REQUEST_PROJECT_BUILDER_PREPARATION_REQUEST_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
-    type_url: "type.googleapis.com/hephaestus.builder.v1.RequestProjectBuilderPreparationRequest",
-    to_json: ::buffa::type_registry::any_to_json::<
-        RequestProjectBuilderPreparationRequest,
-    >,
-    from_json: ::buffa::type_registry::any_from_json::<
-        RequestProjectBuilderPreparationRequest,
-    >,
-    is_wkt: false,
-};
-#[derive(Clone, PartialEq, Default)]
-#[derive(::serde::Serialize, ::serde::Deserialize)]
-#[serde(default)]
-pub struct RequestProjectBuilderPreparationResponse {
-    /// Field 1: `builder`
-    #[serde(
-        rename = "builder",
-        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
-    )]
-    pub builder: ::buffa::MessageField<ProjectBuilder>,
-    #[serde(skip)]
-    #[doc(hidden)]
-    pub __buffa_unknown_fields: ::buffa::UnknownFields,
-}
-impl ::core::fmt::Debug for RequestProjectBuilderPreparationResponse {
-    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
-        f.debug_struct("RequestProjectBuilderPreparationResponse")
-            .field("builder", &self.builder)
-            .finish()
-    }
-}
-impl RequestProjectBuilderPreparationResponse {
-    /// Protobuf type URL for this message, for use with `Any::pack` and
-    /// `Any::unpack_if`.
-    ///
-    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
-    pub const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.builder.v1.RequestProjectBuilderPreparationResponse";
-}
-::buffa::impl_default_instance!(RequestProjectBuilderPreparationResponse);
-impl ::buffa::MessageName for RequestProjectBuilderPreparationResponse {
-    const PACKAGE: &'static str = "hephaestus.builder.v1";
-    const NAME: &'static str = "RequestProjectBuilderPreparationResponse";
-    const FULL_NAME: &'static str = "hephaestus.builder.v1.RequestProjectBuilderPreparationResponse";
-    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.builder.v1.RequestProjectBuilderPreparationResponse";
-}
-impl ::buffa::Message for RequestProjectBuilderPreparationResponse {
-    /// Returns the total encoded size in bytes.
-    ///
-    /// The result is a `u32`; the protobuf specification requires all
-    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
-    /// compliant message will never overflow this type.
-    #[allow(clippy::let_and_return)]
-    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
-        #[allow(unused_imports)]
-        use ::buffa::Enumeration as _;
-        let mut size = 0u32;
-        if self.builder.is_set() {
-            let __slot = __cache.reserve();
-            let inner_size = self.builder.compute_size(__cache);
-            __cache.set(__slot, inner_size);
-            size
-                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
-                    + inner_size;
-        }
-        size += self.__buffa_unknown_fields.encoded_len() as u32;
-        size
-    }
-    fn write_to(
-        &self,
-        __cache: &mut ::buffa::SizeCache,
-        buf: &mut impl ::buffa::bytes::BufMut,
-    ) {
-        #[allow(unused_imports)]
-        use ::buffa::Enumeration as _;
-        if self.builder.is_set() {
-            ::buffa::types::put_len_delimited_header(1u32, __cache.consume_next(), buf);
-            self.builder.write_to(__cache, buf);
-        }
-        self.__buffa_unknown_fields.write_to(buf);
-    }
-    fn merge_field(
-        &mut self,
-        tag: ::buffa::encoding::Tag,
-        buf: &mut impl ::buffa::bytes::Buf,
-        ctx: ::buffa::DecodeContext<'_>,
-    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
-        #[allow(unused_imports)]
-        use ::buffa::bytes::Buf as _;
-        #[allow(unused_imports)]
-        use ::buffa::Enumeration as _;
-        match tag.field_number() {
-            1u32 => {
-                ::buffa::encoding::check_wire_type(
-                    tag,
-                    ::buffa::encoding::WireType::LengthDelimited,
-                )?;
-                ::buffa::Message::merge_length_delimited(
-                    self.builder.get_or_insert_default(),
-                    buf,
-                    ctx,
-                )?;
-            }
-            _ => {
-                self.__buffa_unknown_fields
-                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
-            }
-        }
-        ::core::result::Result::Ok(())
-    }
-    fn clear(&mut self) {
-        self.builder = ::buffa::MessageField::none();
-        self.__buffa_unknown_fields.clear();
-    }
-}
-impl ::buffa::ExtensionSet for RequestProjectBuilderPreparationResponse {
-    const PROTO_FQN: &'static str = "hephaestus.builder.v1.RequestProjectBuilderPreparationResponse";
-    fn unknown_fields(&self) -> &::buffa::UnknownFields {
-        &self.__buffa_unknown_fields
-    }
-    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
-        &mut self.__buffa_unknown_fields
-    }
-}
-impl ::buffa::json_helpers::ProtoElemJson for RequestProjectBuilderPreparationResponse {
-    fn serialize_proto_json<S: ::serde::Serializer>(
-        v: &Self,
-        s: S,
-    ) -> ::core::result::Result<S::Ok, S::Error> {
-        ::serde::Serialize::serialize(v, s)
-    }
-    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
-        d: D,
-    ) -> ::core::result::Result<Self, D::Error> {
-        <Self as ::serde::Deserialize>::deserialize(d)
-    }
-}
-#[doc(hidden)]
-pub const __REQUEST_PROJECT_BUILDER_PREPARATION_RESPONSE_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
-    type_url: "type.googleapis.com/hephaestus.builder.v1.RequestProjectBuilderPreparationResponse",
-    to_json: ::buffa::type_registry::any_to_json::<
-        RequestProjectBuilderPreparationResponse,
-    >,
-    from_json: ::buffa::type_registry::any_from_json::<
-        RequestProjectBuilderPreparationResponse,
-    >,
-    is_wkt: false,
-};
-#[derive(Clone, PartialEq, Default)]
-#[derive(::serde::Serialize, ::serde::Deserialize)]
-#[serde(default)]
-pub struct CompleteProjectBuilderPreparationRequest {
-    /// Field 1: `context`
-    #[serde(
-        rename = "context",
-        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
-    )]
-    pub context: ::buffa::MessageField<super::super::common::v1::RequestContext>,
-    /// Field 2: `project_id`
-    #[serde(
-        rename = "projectId",
-        alias = "project_id",
-        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
-    )]
-    pub project_id: ::buffa::MessageField<super::super::common::v1::OpaqueId>,
-    /// Field 3: `builder_id`
-    #[serde(
-        rename = "builderId",
-        alias = "builder_id",
-        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
-    )]
-    pub builder_id: ::buffa::MessageField<super::super::common::v1::OpaqueId>,
-    /// Field 4: `oci_image_reference`
-    #[serde(
-        rename = "ociImageReference",
-        alias = "oci_image_reference",
-        with = "::buffa::json_helpers::proto_string",
-        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
-    )]
-    pub oci_image_reference: ::buffa::alloc::string::String,
-    /// Field 5: `oci_image_digest`
-    #[serde(
-        rename = "ociImageDigest",
-        alias = "oci_image_digest",
-        with = "::buffa::json_helpers::proto_string",
-        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
-    )]
-    pub oci_image_digest: ::buffa::alloc::string::String,
-    /// Field 6: `provenance`
-    #[serde(
-        rename = "provenance",
-        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
-    )]
-    pub provenance: ::buffa::MessageField<ProjectBuilderProvenance>,
-    #[serde(skip)]
-    #[doc(hidden)]
-    pub __buffa_unknown_fields: ::buffa::UnknownFields,
-}
-impl ::core::fmt::Debug for CompleteProjectBuilderPreparationRequest {
-    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
-        f.debug_struct("CompleteProjectBuilderPreparationRequest")
-            .field("context", &self.context)
-            .field("project_id", &self.project_id)
-            .field("builder_id", &self.builder_id)
-            .field("oci_image_reference", &self.oci_image_reference)
-            .field("oci_image_digest", &self.oci_image_digest)
-            .field("provenance", &self.provenance)
-            .finish()
-    }
-}
-impl CompleteProjectBuilderPreparationRequest {
-    /// Protobuf type URL for this message, for use with `Any::pack` and
-    /// `Any::unpack_if`.
-    ///
-    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
-    pub const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.builder.v1.CompleteProjectBuilderPreparationRequest";
-}
-::buffa::impl_default_instance!(CompleteProjectBuilderPreparationRequest);
-impl ::buffa::MessageName for CompleteProjectBuilderPreparationRequest {
-    const PACKAGE: &'static str = "hephaestus.builder.v1";
-    const NAME: &'static str = "CompleteProjectBuilderPreparationRequest";
-    const FULL_NAME: &'static str = "hephaestus.builder.v1.CompleteProjectBuilderPreparationRequest";
-    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.builder.v1.CompleteProjectBuilderPreparationRequest";
-}
-impl ::buffa::Message for CompleteProjectBuilderPreparationRequest {
-    /// Returns the total encoded size in bytes.
-    ///
-    /// The result is a `u32`; the protobuf specification requires all
-    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
-    /// compliant message will never overflow this type.
-    #[allow(clippy::let_and_return)]
-    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
-        #[allow(unused_imports)]
-        use ::buffa::Enumeration as _;
-        let mut size = 0u32;
-        if self.context.is_set() {
-            let __slot = __cache.reserve();
-            let inner_size = self.context.compute_size(__cache);
-            __cache.set(__slot, inner_size);
-            size
-                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
-                    + inner_size;
-        }
-        if self.project_id.is_set() {
-            let __slot = __cache.reserve();
-            let inner_size = self.project_id.compute_size(__cache);
-            __cache.set(__slot, inner_size);
-            size
-                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
-                    + inner_size;
-        }
-        if self.builder_id.is_set() {
-            let __slot = __cache.reserve();
-            let inner_size = self.builder_id.compute_size(__cache);
-            __cache.set(__slot, inner_size);
-            size
-                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
-                    + inner_size;
-        }
-        if !self.oci_image_reference.is_empty() {
-            size
-                += 1u32
-                    + ::buffa::types::string_encoded_len(&self.oci_image_reference)
-                        as u32;
-        }
-        if !self.oci_image_digest.is_empty() {
-            size
-                += 1u32
-                    + ::buffa::types::string_encoded_len(&self.oci_image_digest) as u32;
-        }
-        if self.provenance.is_set() {
-            let __slot = __cache.reserve();
-            let inner_size = self.provenance.compute_size(__cache);
-            __cache.set(__slot, inner_size);
-            size
-                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
-                    + inner_size;
-        }
-        size += self.__buffa_unknown_fields.encoded_len() as u32;
-        size
-    }
-    fn write_to(
-        &self,
-        __cache: &mut ::buffa::SizeCache,
-        buf: &mut impl ::buffa::bytes::BufMut,
-    ) {
-        #[allow(unused_imports)]
-        use ::buffa::Enumeration as _;
-        if self.context.is_set() {
-            ::buffa::types::put_len_delimited_header(1u32, __cache.consume_next(), buf);
-            self.context.write_to(__cache, buf);
-        }
-        if self.project_id.is_set() {
-            ::buffa::types::put_len_delimited_header(2u32, __cache.consume_next(), buf);
-            self.project_id.write_to(__cache, buf);
-        }
-        if self.builder_id.is_set() {
-            ::buffa::types::put_len_delimited_header(3u32, __cache.consume_next(), buf);
-            self.builder_id.write_to(__cache, buf);
-        }
-        if !self.oci_image_reference.is_empty() {
-            ::buffa::types::put_string_field(4u32, &self.oci_image_reference, buf);
-        }
-        if !self.oci_image_digest.is_empty() {
-            ::buffa::types::put_string_field(5u32, &self.oci_image_digest, buf);
-        }
-        if self.provenance.is_set() {
-            ::buffa::types::put_len_delimited_header(6u32, __cache.consume_next(), buf);
-            self.provenance.write_to(__cache, buf);
-        }
-        self.__buffa_unknown_fields.write_to(buf);
-    }
-    fn merge_field(
-        &mut self,
-        tag: ::buffa::encoding::Tag,
-        buf: &mut impl ::buffa::bytes::Buf,
-        ctx: ::buffa::DecodeContext<'_>,
-    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
-        #[allow(unused_imports)]
-        use ::buffa::bytes::Buf as _;
-        #[allow(unused_imports)]
-        use ::buffa::Enumeration as _;
-        match tag.field_number() {
-            1u32 => {
-                ::buffa::encoding::check_wire_type(
-                    tag,
-                    ::buffa::encoding::WireType::LengthDelimited,
-                )?;
-                ::buffa::Message::merge_length_delimited(
-                    self.context.get_or_insert_default(),
-                    buf,
-                    ctx,
-                )?;
-            }
-            2u32 => {
-                ::buffa::encoding::check_wire_type(
-                    tag,
-                    ::buffa::encoding::WireType::LengthDelimited,
-                )?;
-                ::buffa::Message::merge_length_delimited(
-                    self.project_id.get_or_insert_default(),
-                    buf,
-                    ctx,
-                )?;
-            }
-            3u32 => {
-                ::buffa::encoding::check_wire_type(
-                    tag,
-                    ::buffa::encoding::WireType::LengthDelimited,
-                )?;
-                ::buffa::Message::merge_length_delimited(
-                    self.builder_id.get_or_insert_default(),
-                    buf,
-                    ctx,
-                )?;
-            }
-            4u32 => {
-                ::buffa::encoding::check_wire_type(
-                    tag,
-                    ::buffa::encoding::WireType::LengthDelimited,
-                )?;
-                ::buffa::types::merge_string(&mut self.oci_image_reference, buf)?;
-            }
-            5u32 => {
-                ::buffa::encoding::check_wire_type(
-                    tag,
-                    ::buffa::encoding::WireType::LengthDelimited,
-                )?;
-                ::buffa::types::merge_string(&mut self.oci_image_digest, buf)?;
-            }
-            6u32 => {
-                ::buffa::encoding::check_wire_type(
-                    tag,
-                    ::buffa::encoding::WireType::LengthDelimited,
-                )?;
-                ::buffa::Message::merge_length_delimited(
-                    self.provenance.get_or_insert_default(),
-                    buf,
-                    ctx,
-                )?;
-            }
-            _ => {
-                self.__buffa_unknown_fields
-                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
-            }
-        }
-        ::core::result::Result::Ok(())
-    }
-    fn clear(&mut self) {
-        self.context = ::buffa::MessageField::none();
-        self.project_id = ::buffa::MessageField::none();
-        self.builder_id = ::buffa::MessageField::none();
-        self.oci_image_reference.clear();
-        self.oci_image_digest.clear();
-        self.provenance = ::buffa::MessageField::none();
-        self.__buffa_unknown_fields.clear();
-    }
-}
-impl ::buffa::ExtensionSet for CompleteProjectBuilderPreparationRequest {
-    const PROTO_FQN: &'static str = "hephaestus.builder.v1.CompleteProjectBuilderPreparationRequest";
-    fn unknown_fields(&self) -> &::buffa::UnknownFields {
-        &self.__buffa_unknown_fields
-    }
-    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
-        &mut self.__buffa_unknown_fields
-    }
-}
-impl ::buffa::json_helpers::ProtoElemJson for CompleteProjectBuilderPreparationRequest {
-    fn serialize_proto_json<S: ::serde::Serializer>(
-        v: &Self,
-        s: S,
-    ) -> ::core::result::Result<S::Ok, S::Error> {
-        ::serde::Serialize::serialize(v, s)
-    }
-    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
-        d: D,
-    ) -> ::core::result::Result<Self, D::Error> {
-        <Self as ::serde::Deserialize>::deserialize(d)
-    }
-}
-#[doc(hidden)]
-pub const __COMPLETE_PROJECT_BUILDER_PREPARATION_REQUEST_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
-    type_url: "type.googleapis.com/hephaestus.builder.v1.CompleteProjectBuilderPreparationRequest",
-    to_json: ::buffa::type_registry::any_to_json::<
-        CompleteProjectBuilderPreparationRequest,
-    >,
-    from_json: ::buffa::type_registry::any_from_json::<
-        CompleteProjectBuilderPreparationRequest,
-    >,
-    is_wkt: false,
-};
-#[derive(Clone, PartialEq, Default)]
-#[derive(::serde::Serialize, ::serde::Deserialize)]
-#[serde(default)]
-pub struct CompleteProjectBuilderPreparationResponse {
-    /// Field 1: `builder`
-    #[serde(
-        rename = "builder",
-        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
-    )]
-    pub builder: ::buffa::MessageField<ProjectBuilder>,
-    #[serde(skip)]
-    #[doc(hidden)]
-    pub __buffa_unknown_fields: ::buffa::UnknownFields,
-}
-impl ::core::fmt::Debug for CompleteProjectBuilderPreparationResponse {
-    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
-        f.debug_struct("CompleteProjectBuilderPreparationResponse")
-            .field("builder", &self.builder)
-            .finish()
-    }
-}
-impl CompleteProjectBuilderPreparationResponse {
-    /// Protobuf type URL for this message, for use with `Any::pack` and
-    /// `Any::unpack_if`.
-    ///
-    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
-    pub const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.builder.v1.CompleteProjectBuilderPreparationResponse";
-}
-::buffa::impl_default_instance!(CompleteProjectBuilderPreparationResponse);
-impl ::buffa::MessageName for CompleteProjectBuilderPreparationResponse {
-    const PACKAGE: &'static str = "hephaestus.builder.v1";
-    const NAME: &'static str = "CompleteProjectBuilderPreparationResponse";
-    const FULL_NAME: &'static str = "hephaestus.builder.v1.CompleteProjectBuilderPreparationResponse";
-    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.builder.v1.CompleteProjectBuilderPreparationResponse";
-}
-impl ::buffa::Message for CompleteProjectBuilderPreparationResponse {
-    /// Returns the total encoded size in bytes.
-    ///
-    /// The result is a `u32`; the protobuf specification requires all
-    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
-    /// compliant message will never overflow this type.
-    #[allow(clippy::let_and_return)]
-    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
-        #[allow(unused_imports)]
-        use ::buffa::Enumeration as _;
-        let mut size = 0u32;
-        if self.builder.is_set() {
-            let __slot = __cache.reserve();
-            let inner_size = self.builder.compute_size(__cache);
-            __cache.set(__slot, inner_size);
-            size
-                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
-                    + inner_size;
-        }
-        size += self.__buffa_unknown_fields.encoded_len() as u32;
-        size
-    }
-    fn write_to(
-        &self,
-        __cache: &mut ::buffa::SizeCache,
-        buf: &mut impl ::buffa::bytes::BufMut,
-    ) {
-        #[allow(unused_imports)]
-        use ::buffa::Enumeration as _;
-        if self.builder.is_set() {
-            ::buffa::types::put_len_delimited_header(1u32, __cache.consume_next(), buf);
-            self.builder.write_to(__cache, buf);
-        }
-        self.__buffa_unknown_fields.write_to(buf);
-    }
-    fn merge_field(
-        &mut self,
-        tag: ::buffa::encoding::Tag,
-        buf: &mut impl ::buffa::bytes::Buf,
-        ctx: ::buffa::DecodeContext<'_>,
-    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
-        #[allow(unused_imports)]
-        use ::buffa::bytes::Buf as _;
-        #[allow(unused_imports)]
-        use ::buffa::Enumeration as _;
-        match tag.field_number() {
-            1u32 => {
-                ::buffa::encoding::check_wire_type(
-                    tag,
-                    ::buffa::encoding::WireType::LengthDelimited,
-                )?;
-                ::buffa::Message::merge_length_delimited(
-                    self.builder.get_or_insert_default(),
-                    buf,
-                    ctx,
-                )?;
-            }
-            _ => {
-                self.__buffa_unknown_fields
-                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
-            }
-        }
-        ::core::result::Result::Ok(())
-    }
-    fn clear(&mut self) {
-        self.builder = ::buffa::MessageField::none();
-        self.__buffa_unknown_fields.clear();
-    }
-}
-impl ::buffa::ExtensionSet for CompleteProjectBuilderPreparationResponse {
-    const PROTO_FQN: &'static str = "hephaestus.builder.v1.CompleteProjectBuilderPreparationResponse";
-    fn unknown_fields(&self) -> &::buffa::UnknownFields {
-        &self.__buffa_unknown_fields
-    }
-    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
-        &mut self.__buffa_unknown_fields
-    }
-}
-impl ::buffa::json_helpers::ProtoElemJson for CompleteProjectBuilderPreparationResponse {
-    fn serialize_proto_json<S: ::serde::Serializer>(
-        v: &Self,
-        s: S,
-    ) -> ::core::result::Result<S::Ok, S::Error> {
-        ::serde::Serialize::serialize(v, s)
-    }
-    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
-        d: D,
-    ) -> ::core::result::Result<Self, D::Error> {
-        <Self as ::serde::Deserialize>::deserialize(d)
-    }
-}
-#[doc(hidden)]
-pub const __COMPLETE_PROJECT_BUILDER_PREPARATION_RESPONSE_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
-    type_url: "type.googleapis.com/hephaestus.builder.v1.CompleteProjectBuilderPreparationResponse",
-    to_json: ::buffa::type_registry::any_to_json::<
-        CompleteProjectBuilderPreparationResponse,
-    >,
-    from_json: ::buffa::type_registry::any_from_json::<
-        CompleteProjectBuilderPreparationResponse,
-    >,
     is_wkt: false,
 };

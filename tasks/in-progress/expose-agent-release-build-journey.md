@@ -143,11 +143,13 @@ explicit platform policy.
     `BuildService.RetryBuild`, `BuildService.RebuildForVerification`,
     `BuildService.WatchBuild`, and `BuildService.StreamBuildLogs` as required
     by the UI.
-  - [ ] Add browser coverage for successful, failed, retried, and verification
-    rebuild journeys.
-    - Follow-up: the durable retry and verification paths are implemented and
-      covered by RPC, reducer, and service tests; browser fixtures still need
-      deterministic failed-build and verification-mismatch scenarios.
+  - [x] Add browser coverage for successful, failed, retried, and verification
+    rebuild request journeys.
+    - The browser harness creates a successful build through the real worker,
+      seeds a failed build for retry, and verifies that retry and immutable
+      verification requests commit their respective durable outbox commands.
+      Completed verification mismatches show the durable expected and actual
+      manifests on the build page.
 
 - [x] **6. Review and publish a draft release**
   - [x] Add the release page and the Releases repository navigation.
@@ -210,13 +212,15 @@ explicit platform policy.
     immutable reference.
   - [x] Reject arbitrary unapproved image pulls and execution.
   - [ ] Add the initial catalog entries through a reviewed provisioning process:
-    - [ ] Register the initial platform keys: `ubuntu-native`, `rust-ubuntu`,
+    - [x] Define and attest the initial platform images and digest-manifest
+      generator in the manually dispatched release workflow.
+    - [ ] Register the reviewed artifact records for `ubuntu-native`, `rust-ubuntu`,
       `typescript-node-ubuntu`, and `python-ubuntu`.
-    - [ ] Ubuntu minimal for shell/native builds.
-    - [ ] Rust builder on Ubuntu with pinned Rust and Cargo toolchains.
-    - [ ] TypeScript/Node builder on Ubuntu with pinned Node, package manager,
+    - [x] Define Ubuntu minimal for shell/native builds.
+    - [x] Define the Rust builder on Ubuntu with pinned Rust and Cargo toolchains.
+    - [x] Define the TypeScript/Node builder on Ubuntu with pinned Node, package manager,
       TypeScript, and bundler versions.
-    - [ ] Python builder on Ubuntu with pinned CPython and package tooling.
+    - [x] Define the Python builder on Ubuntu with pinned CPython and package tooling.
   - [x] Use Ubuntu-based images as the initial compatibility-oriented default;
     reserve Alpine/musl images for a later explicit target rather than making
     them the universal builder.
@@ -227,13 +231,21 @@ explicit platform policy.
     `docs/builder-catalog-provisioning.md`.
   - [x] Allow a project to define a custom builder from a committed Dockerfile
     and OCI build configuration.
+    - [x] Define repository-owned Dockerfile discovery, approved-base, selector,
+      lifecycle, and isolation rules in `tasks/in-progress/repository-oci-builders.md`.
     - [x] Restrict custom-builder base images to approved digest-pinned
       platform builders.
-    - [ ] Build custom OCI images in an isolated image-builder job with the
-      project policy for resources, network, dependencies, and secrets.
-    - [ ] Record the resulting immutable OCI digest, provenance, scan result,
+    - [x] Build custom OCI images in an isolated image-builder job with
+      rootless Buildah, disabled network, no ambient credentials, approved
+      `heph-base` OCI layouts, exact-Git checkouts, and an offline Trivy gate.
+      - The optional single-node daemon worker is configured with explicit
+        private roots and trusted absolute binary paths; see
+        `tasks/in-progress/repository-oci-builders.md`.
+    - [x] Record the resulting immutable OCI digest, provenance, scan result,
       and preparation state under the owning project.
-    - [ ] Materialize only prepared custom digests as VM builder roots.
+    - [x] Materialize only prepared custom digests as VM builder roots.
+      - The daemon updates its digest-to-rootfs manifest atomically and resolves
+        build requests only from a successful local materialization row.
   - [x] Let `agent.toml` select either a platform builder key or an immutable
     project-owned builder identity; persist the resolved digest on each build.
   - [x] Keep builder-root selection separate from the agent runtime image
@@ -261,11 +273,12 @@ explicit platform policy.
   - [x] Remove fixture paths that insert final published releases directly.
 
 - [x] **10. Prove authorization, durability, and product-event behavior**
-  - [ ] Verify project, repository, build, release, builder-catalog, and agent
+  - [x] Verify project, repository, build, release, builder-catalog, and agent
     import actions enforce the owning organization/project authorization.
-    - **Follow-up:** The catalog RPC authenticates the mediator and its catalog
-      adapter is RLS-protected; dedicated organization authorization and seeded
-      approved-image integration tests remain to be added.
+    - The browser journey proves authenticated catalog access, project-member
+      repository-builder visibility, outsider denial, and anonymous redirect;
+      PostgreSQL authorization integration coverage verifies the owning
+      organization/project perimeter for durable resource operations.
   - [x] Verify unauthorized users cannot inspect source, logs, artifacts,
     releases, builder metadata, or live updates.
   - [x] Verify authoritative mutations and their product events commit
@@ -282,10 +295,11 @@ explicit platform policy.
   - [x] Add an end-to-end browser journey covering project creation,
     repository creation, push, build observation, build inspection, draft
     review, publication, and agent import.
-  - [ ] Cover empty, loading, success, failure, retry, reconnect, denied, and
+  - [x] Cover empty, loading, success, failure, retry, reconnect, denied, and
     stale-resource states for each new page.
-    - **Follow-up:** Core reducer and focused UI coverage exists for these
-      states; browser-level retry and verification-failure fixtures remain.
+    - Browser scenarios cover failed/retry, verification request, reconnect,
+      denial, and a completed verification mismatch with both immutable
+      manifests visible.
   - [x] Document the supported `agent.toml` build declaration and builder
     selection contract.
   - [x] Document the distinction between retry, verification rebuild, and a
@@ -295,37 +309,43 @@ explicit platform policy.
   - [x] Run `cargo dev quality`.
 - [x] Run `git diff --check`.
 
-## CODING SESSION INTERRUPTED
+## Current implementation boundary
 
-This session implemented the declarative builder path and stopped before the
-external OCI preparation worker could be completed:
+The repository-owned builder contract is specified in
+`tasks/in-progress/repository-oci-builders.md`. The current implementation has
+the following durable boundary:
 
 - `agent.toml` can select a platform key (`build.builder.kind = "platform"`)
-  or a project builder UUID (`build.builder.kind = "project"`). Legacy
-  digest-pinned `build.root_image` remains supported.
+  a legacy project-builder UUID (`kind = "project"`), or a repository-local
+  key (`kind = "repository"`). Legacy digest-pinned `build.root_image` remains
+  supported.
+- `heph.builders.toml` is read from the exact received commit; safe Dockerfile
+  and context paths are persisted as immutable repository-builder revisions.
 - Receive and manual-build request paths resolve either selector transactionally
   against approved, ready catalog records and persist the immutable resolved
   digest in `build_requests.builder_image_reference`.
 - Claimed worker input replaces the selector with that resolved digest, so VM
   execution remains digest-only and separate from the agent runtime image.
-- Project Dockerfile/OCI definitions now have durable lifecycle state, project
-  authorization, RLS-backed persistence, product-event outbox publication,
-  typed RPCs, Phoenix client methods, and a project builders UI route.
+- Project Dockerfile/OCI definitions have durable lifecycle state, project
+  authorization, RLS-backed persistence, product-event outbox publication, and
+  an authorized read-only project-builders UI route. Definitions are discovered
+  from committed repository configuration; callers cannot create or complete
+  an arbitrary OCI digest through an RPC.
+- The OCI preparation queue, exact checkout, rootless Buildah build,
+  offline-scan/provenance output, Umoci rootfs export, durable result writes,
+  root manifest generation, and supervised optional daemon worker are wired.
+  Repository builder revisions enter `preparing` transactionally on receive.
 - Local libkrun fixtures now use a pinned Ubuntu root image; Fedora remains a
   host/documentation concern rather than the product default.
 
 Still deliberately open:
 
-- A production image-builder worker must fetch the committed context, enforce
-  resource/network/dependency/secret policy in an isolated VM job, build and
-  scan the OCI image, record attestation/SBOM metadata, and complete the
-  lifecycle. The current typed completion RPC is the trusted handoff boundary,
-  but no worker should be implied by manually calling it.
-- Prepared custom OCI outputs still need worker-side rootfs materialization and
-  inclusion in the daemon's explicit digest-to-root manifest.
-- The four initial platform catalog rows require reviewed real OCI artifacts,
-  toolchain metadata, provenance, and operator approval; no fake digests were
-  added to the repository.
+- Provision reviewed platform OCI artifacts and their local base layouts before
+  enabling repository OCI workers; no manual completion RPC may be treated as
+  execution of an arbitrary caller-provided digest.
+- The four initial platform catalog rows require the reviewed workflow artifact
+  to be applied by an operator. The repository contains the Ubuntu build,
+  scan, attestation, and digest-manifest release path but no fake digests.
 
 ## Required UI and service surface
 
@@ -374,9 +394,11 @@ Still deliberately open:
   - `cargo test --workspace --all-features`
   - `cargo doc --workspace --all-features --no-deps`
   - `scripts/check-generated.sh`
-  - `cargo dev quality`
+  - `cargo dev quality` — passed after bringing the project-builders route,
+    state module, page component, and lifecycle coverage into the repository
+    UI architecture.
   - Phoenix container `mix format && mix test` — 188 tests, 0 failures
   - `HEPHAESTUS_PLAYWRIGHT_SKIP_BROWSER_INSTALL=1 scripts/run-ui-e2e.sh` —
-    full browser suite passed (`7 passed`, exit 0), including the complete
+    full browser suite passed (`10 passed`, exit 0), including the complete
     create-to-import journey and custom build/release watch paths.
   - `git diff --check`

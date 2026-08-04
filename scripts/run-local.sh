@@ -43,6 +43,21 @@ if [[ ! "${local_postgres_port}" =~ ^[0-9]+$ ]] || (( local_postgres_port < 1024
     printf 'HEPHAESTUS_LOCAL_POSTGRES_PORT must be between 1024 and 65535\n' >&2
     exit 1
 fi
+readonly local_zot_port="${HEPHAESTUS_LOCAL_ZOT_PORT:-55000}"
+if [[ ! "${local_zot_port}" =~ ^[0-9]+$ ]] || (( local_zot_port < 1024 || local_zot_port > 65535 || local_zot_port == local_postgres_port )); then
+    printf 'HEPHAESTUS_LOCAL_ZOT_PORT must be between 1024 and 65535 and differ from PostgreSQL\n' >&2
+    exit 1
+fi
+readonly registry_token_private_key="${local_root}/zot/secrets/registry-token-signing-key.pem"
+readonly registry_notification_callback_file="${local_root}/zot/secrets/notification-callback-token"
+if [[ ! -f "${registry_token_private_key}" ]]; then
+    printf 'local registry signing key is missing; run cargo dev state init --zot\n' >&2
+    exit 1
+fi
+if [[ ! -f "${registry_notification_callback_file}" ]]; then
+    printf 'local registry callback credential is missing; run cargo dev state init --zot\n' >&2
+    exit 1
+fi
 readonly supervisor_pid_file="${local_root}/run-local.pid"
 readonly oidc_pid_file="${local_root}/oidc.pid"
 readonly daemon_pid_file="${local_root}/daemon.pid"
@@ -394,6 +409,13 @@ export HEPHAESTUS_SECRET_RUNTIME_ROOT="${secret_runtime_root}"
 export HEPHAESTUS_SECRET_KEY_DIRECTORY="${secret_key_directory}"
 export HEPHAESTUS_SECRET_KEY_REFERENCE="${secret_key_reference}"
 export HEPHAESTUS_RPC_MEDIATOR_SECRET="${internal_command_token}"
+export HEPHAESTUS_REGISTRY_TOKEN_PRIVATE_KEY="${registry_token_private_key}"
+export HEPHAESTUS_REGISTRY_TOKEN_ISSUER="http://127.0.0.1:8080/v1/registry/token"
+export HEPHAESTUS_REGISTRY_SERVICE="localhost:${local_zot_port}"
+export HEPHAESTUS_REGISTRY_PRIVATE_ORIGIN="http://127.0.0.1:${local_zot_port}/"
+export HEPHAESTUS_REGISTRY_TOKEN_KEY_ID="local-v1"
+export HEPHAESTUS_REGISTRY_TOKEN_LIFETIME_SECONDS="300"
+export HEPHAESTUS_REGISTRY_NOTIFICATION_CALLBACK_TOKEN_FILE="${registry_notification_callback_file}"
 unset HEPHAESTUS_ROOT_IMAGE_PATH HEPHAESTUS_ROOT_IMAGE_REFERENCE
 export HEPHAESTUS_ROOT_IMAGE_MANIFEST="${root_image_manifest}"
 export HEPHAESTUS_VM_BACKEND="libkrun"

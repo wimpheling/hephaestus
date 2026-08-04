@@ -117,6 +117,49 @@ pub enum BuilderSelection {
         /// Opaque UUID of the project-owned builder definition.
         id: String,
     },
+    /// A repository-owned builder declared by the exact source commit.
+    Repository {
+        /// Stable key from the repository's `heph.builders.toml`.
+        key: String,
+    },
+}
+
+/// Schema version for a repository's OCI builder manifest.
+pub const REPOSITORY_BUILDERS_VERSION: u32 = 1;
+
+/// Repository-owned OCI builder definitions read from `heph.builders.toml`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RepositoryBuildersConfig {
+    /// Manifest schema version.
+    pub version: u32,
+    /// Builder definitions owned by this repository.
+    #[serde(default)]
+    pub builders: Vec<RepositoryBuilderConfig>,
+}
+
+/// One repository-local OCI builder definition.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RepositoryBuilderConfig {
+    /// Stable repository-local key.
+    pub key: String,
+    /// Human-readable non-secret display name.
+    pub display_name: String,
+    /// Isolated OCI build input.
+    pub oci: RepositoryBuilderOciConfig,
+}
+
+/// OCI inputs accepted from a repository manifest.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RepositoryBuilderOciConfig {
+    /// Repository-relative Dockerfile path.
+    pub dockerfile: String,
+    /// Repository-relative build-context path.
+    pub context: String,
+    /// Approved platform catalog key, never an OCI reference.
+    pub base: String,
 }
 
 /// One declared build output.
@@ -387,6 +430,17 @@ pub struct ParsedConfig {
     pub diagnostics: Vec<Diagnostic>,
 }
 
+/// Result of parsing one repository `heph.builders.toml` manifest.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedRepositoryBuilders {
+    /// Hash of the exact source bytes.
+    pub hash: ConfigHash,
+    /// Validated manifest, absent on failure.
+    pub config: Option<RepositoryBuildersConfig>,
+    /// Structured parser and validation diagnostics.
+    pub diagnostics: Vec<Diagnostic>,
+}
+
 /// Parses and validates `agent.toml`.
 #[must_use]
 pub fn parse(source: &[u8]) -> ParsedConfig {
@@ -447,6 +501,52 @@ pub fn parse(source: &[u8]) -> ParsedConfig {
     }
 }
 
+/// Parses and validates a repository's root-level `heph.builders.toml`.
+///
+/// This function only validates the declarative source contract. The receive
+/// workflow verifies the declared paths against the exact Git tree and resolves
+/// `oci.base` to an approved digest-pinned platform image transactionally.
+#[must_use]
+pub fn parse_repository_builders(source: &[u8]) -> ParsedRepositoryBuilders {
+    let source_hash = hash(source);
+    let text = match std::str::from_utf8(source) {
+        Ok(text) => text,
+        Err(error) => {
+            return ParsedRepositoryBuilders {
+                hash: source_hash,
+                config: None,
+                diagnostics: vec![Diagnostic {
+                    code: String::from("invalid_utf8"),
+                    path: None,
+                    message: error.to_string(),
+                }],
+            };
+        }
+    };
+    let config = match toml::from_str::<RepositoryBuildersConfig>(text) {
+        Ok(config) => config,
+        Err(error) => {
+            return ParsedRepositoryBuilders {
+                hash: source_hash,
+                config: None,
+                diagnostics: vec![Diagnostic {
+                    code: String::from("invalid_toml"),
+                    path: error
+                        .span()
+                        .map(|span| format!("bytes {}..{}", span.start, span.end)),
+                    message: error.message().to_owned(),
+                }],
+            };
+        }
+    };
+    let diagnostics = validate_repository_builders(&config);
+    ParsedRepositoryBuilders {
+        hash: source_hash,
+        config: diagnostics.is_empty().then_some(config),
+        diagnostics,
+    }
+}
+
 fn hash(source: &[u8]) -> ConfigHash {
     let digest = Sha256::digest(source);
     let mut value = String::with_capacity(64);
@@ -454,6 +554,88 @@ fn hash(source: &[u8]) -> ConfigHash {
         write!(&mut value, "{byte:02x}").expect("writing to a String cannot fail");
     }
     ConfigHash(value)
+}
+
+fn validate_repository_builders(config: &RepositoryBuildersConfig) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    if config.version != REPOSITORY_BUILDERS_VERSION {
+        diagnostic(
+            &mut diagnostics,
+            "unsupported_repository_builders_version",
+            "version",
+            format!(
+                "repository builder version {} is unsupported; expected {REPOSITORY_BUILDERS_VERSION}",
+                config.version
+            ),
+        );
+        return diagnostics;
+    }
+    if config.builders.len() > 64 {
+        diagnostic(
+            &mut diagnostics,
+            "too_many_repository_builders",
+            "builders",
+            "a repository may define at most 64 builders",
+        );
+    }
+    let mut keys = HashSet::new();
+    for (index, builder) in config.builders.iter().enumerate() {
+        if !valid_key(&builder.key, 64) {
+            diagnostic(
+                &mut diagnostics,
+                "invalid_repository_builder_key",
+                format!("builders[{index}].key"),
+                "builder keys must be lowercase and at most 64 characters",
+            );
+        } else if !keys.insert(&builder.key) {
+            diagnostic(
+                &mut diagnostics,
+                "duplicate_repository_builder_key",
+                format!("builders[{index}].key"),
+                "builder keys must be unique within a repository",
+            );
+        }
+        if builder.display_name.trim().is_empty() || builder.display_name.len() > 200 {
+            diagnostic(
+                &mut diagnostics,
+                "invalid_repository_builder_display_name",
+                format!("builders[{index}].display_name"),
+                "display names must contain 1 to 200 characters",
+            );
+        }
+        if !valid_repository_builder_path(&builder.oci.dockerfile, false) {
+            diagnostic(
+                &mut diagnostics,
+                "invalid_repository_builder_dockerfile",
+                format!("builders[{index}].oci.dockerfile"),
+                "dockerfile must be a safe repository-relative path",
+            );
+        }
+        if !valid_repository_builder_path(&builder.oci.context, true) {
+            diagnostic(
+                &mut diagnostics,
+                "invalid_repository_builder_context",
+                format!("builders[{index}].oci.context"),
+                "context must be a safe repository-relative path or .",
+            );
+        }
+        if !valid_key(&builder.oci.base, 64) {
+            diagnostic(
+                &mut diagnostics,
+                "invalid_repository_builder_base",
+                format!("builders[{index}].oci.base"),
+                "base must be a lowercase approved platform builder key",
+            );
+        }
+    }
+    diagnostics
+}
+
+fn valid_repository_builder_path(value: &str, permit_current_directory: bool) -> bool {
+    if permit_current_directory && value == "." {
+        return true;
+    }
+    valid_relative_path(value)
 }
 
 // Keeping the ordered checks together preserves stable diagnostic order.
@@ -653,6 +835,16 @@ fn validate_v2(config: &AgentConfig, diagnostics: &mut Vec<Diagnostic>) {
                     "invalid_project_builder_id",
                     "build.builder.id",
                     "project builder id must be a UUID",
+                );
+            }
+        }
+        (None, Some(BuilderSelection::Repository { key })) => {
+            if !valid_key(key, 64) {
+                diagnostic(
+                    diagnostics,
+                    "invalid_repository_builder_key",
+                    "build.builder.key",
+                    "repository builder keys must be lowercase and at most 64 characters",
                 );
             }
         }
@@ -908,7 +1100,10 @@ const fn default_true() -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{REUSABLE_RELEASE_VERSION, parse};
+    use super::{
+        BuilderSelection, REPOSITORY_BUILDERS_VERSION, REUSABLE_RELEASE_VERSION, parse,
+        parse_repository_builders,
+    };
     use forge_domain::GitRef;
 
     const VALID: &str = r#"
@@ -1180,6 +1375,88 @@ plaintext = "must-never-be-accepted"
         assert!(
             !format!("{:?}", parsed.diagnostics).contains("must-never-be-accepted"),
             "parser diagnostics must not echo rejected plaintext"
+        );
+    }
+
+    #[test]
+    fn parses_repository_builder_manifest() {
+        let manifest = format!(
+            r#"
+version = {REPOSITORY_BUILDERS_VERSION}
+
+[[builders]]
+key = "typescript-tools"
+display_name = "TypeScript tools"
+
+[builders.oci]
+dockerfile = "containers/typescript-tools.Dockerfile"
+context = "."
+base = "typescript-node-ubuntu"
+"#
+        );
+        let parsed = parse_repository_builders(manifest.as_bytes());
+        assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+        let builders = parsed.config.expect("valid repository builders");
+        assert_eq!(builders.builders.len(), 1);
+        assert_eq!(builders.builders[0].oci.base, "typescript-node-ubuntu");
+    }
+
+    #[test]
+    fn parses_repository_builder_selection_without_changing_runtime_root() {
+        let build_root = "root_image = \"registry.example/build@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"";
+        let source = VALID.replace(
+            build_root,
+            "builder = { kind = \"repository\", key = \"typescript-tools\" }",
+        );
+        let parsed = parse(source.as_bytes());
+        assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+        let config = parsed.config.expect("valid repository builder selection");
+        assert!(matches!(
+            config.build.as_ref().and_then(|build| build.builder.as_ref()),
+            Some(BuilderSelection::Repository { key }) if key == "typescript-tools"
+        ));
+        assert_eq!(
+            config.root_image.reference,
+            "registry.example/agent@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+    }
+
+    #[test]
+    fn rejects_unsafe_repository_builder_manifest_paths_and_duplicate_keys() {
+        let manifest = r#"
+version = 1
+
+[[builders]]
+key = "typescript-tools"
+display_name = "TypeScript tools"
+[builders.oci]
+dockerfile = "../Dockerfile"
+context = "."
+base = "typescript-node-ubuntu"
+
+[[builders]]
+key = "typescript-tools"
+display_name = "Duplicate"
+[builders.oci]
+dockerfile = "Dockerfile"
+context = "../../host"
+base = "node:latest"
+"#;
+        let parsed = parse_repository_builders(manifest.as_bytes());
+        assert!(parsed.config.is_none());
+        let codes = parsed
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            codes,
+            [
+                "invalid_repository_builder_dockerfile",
+                "duplicate_repository_builder_key",
+                "invalid_repository_builder_context",
+                "invalid_repository_builder_base",
+            ]
         );
     }
 }

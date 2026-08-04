@@ -419,6 +419,13 @@ pub struct Build {
         skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
     )]
     pub release_version: ::buffa::alloc::string::String,
+    /// Field 32: `verifications`
+    #[serde(
+        rename = "verifications",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_vec",
+        deserialize_with = "::buffa::json_helpers::null_as_default"
+    )]
+    pub verifications: ::buffa::alloc::vec::Vec<BuildVerification>,
     #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
@@ -457,6 +464,7 @@ impl ::core::fmt::Debug for Build {
             .field("produced_artifacts", &self.produced_artifacts)
             .field("artifact_manifest_json", &self.artifact_manifest_json)
             .field("release_version", &self.release_version)
+            .field("verifications", &self.verifications)
             .finish()
     }
 }
@@ -677,6 +685,14 @@ impl ::buffa::Message for Build {
                 += 2u32
                     + ::buffa::types::string_encoded_len(&self.release_version) as u32;
         }
+        for v in &self.verifications {
+            let __slot = __cache.reserve();
+            let inner_size = v.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 2u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
         size
     }
@@ -794,6 +810,10 @@ impl ::buffa::Message for Build {
         }
         if !self.release_version.is_empty() {
             ::buffa::types::put_string_field(31u32, &self.release_version, buf);
+        }
+        for v in &self.verifications {
+            ::buffa::types::put_len_delimited_header(32u32, __cache.consume_next(), buf);
+            v.write_to(__cache, buf);
         }
         self.__buffa_unknown_fields.write_to(buf);
     }
@@ -1069,6 +1089,15 @@ impl ::buffa::Message for Build {
                 )?;
                 ::buffa::types::merge_string(&mut self.release_version, buf)?;
             }
+            32u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                let mut elem = ::core::default::Default::default();
+                ::buffa::Message::merge_length_delimited(&mut elem, buf, ctx)?;
+                self.verifications.push(elem);
+            }
             _ => {
                 self.__buffa_unknown_fields
                     .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
@@ -1108,6 +1137,7 @@ impl ::buffa::Message for Build {
         self.produced_artifacts.clear();
         self.artifact_manifest_json.clear();
         self.release_version.clear();
+        self.verifications.clear();
         self.__buffa_unknown_fields.clear();
     }
 }
@@ -1745,6 +1775,269 @@ pub const __PRODUCED_ARTIFACT_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = :
     type_url: "type.googleapis.com/hephaestus.build.v1.ProducedArtifact",
     to_json: ::buffa::type_registry::any_to_json::<ProducedArtifact>,
     from_json: ::buffa::type_registry::any_from_json::<ProducedArtifact>,
+    is_wkt: false,
+};
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct BuildVerification {
+    /// Field 1: `state`
+    #[serde(
+        rename = "state",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub state: ::buffa::alloc::string::String,
+    /// Field 2: `expected_manifest_json`
+    #[serde(
+        rename = "expectedManifestJson",
+        alias = "expected_manifest_json",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub expected_manifest_json: ::buffa::alloc::string::String,
+    /// Field 3: `actual_manifest_json`
+    #[serde(
+        rename = "actualManifestJson",
+        alias = "actual_manifest_json",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub actual_manifest_json: ::buffa::alloc::string::String,
+    /// Field 4: `failure_code`
+    #[serde(
+        rename = "failureCode",
+        alias = "failure_code",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub failure_code: ::buffa::alloc::string::String,
+    /// Field 5: `created_at`
+    #[serde(
+        rename = "createdAt",
+        alias = "created_at",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub created_at: ::buffa::MessageField<::buffa_types::google::protobuf::Timestamp>,
+    /// Field 6: `completed_at`
+    #[serde(
+        rename = "completedAt",
+        alias = "completed_at",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub completed_at: ::buffa::MessageField<::buffa_types::google::protobuf::Timestamp>,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for BuildVerification {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("BuildVerification")
+            .field("state", &self.state)
+            .field("expected_manifest_json", &self.expected_manifest_json)
+            .field("actual_manifest_json", &self.actual_manifest_json)
+            .field("failure_code", &self.failure_code)
+            .field("created_at", &self.created_at)
+            .field("completed_at", &self.completed_at)
+            .finish()
+    }
+}
+impl BuildVerification {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.build.v1.BuildVerification";
+}
+::buffa::impl_default_instance!(BuildVerification);
+impl ::buffa::MessageName for BuildVerification {
+    const PACKAGE: &'static str = "hephaestus.build.v1";
+    const NAME: &'static str = "BuildVerification";
+    const FULL_NAME: &'static str = "hephaestus.build.v1.BuildVerification";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.build.v1.BuildVerification";
+}
+impl ::buffa::Message for BuildVerification {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if !self.state.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.state) as u32;
+        }
+        if !self.expected_manifest_json.is_empty() {
+            size
+                += 1u32
+                    + ::buffa::types::string_encoded_len(&self.expected_manifest_json)
+                        as u32;
+        }
+        if !self.actual_manifest_json.is_empty() {
+            size
+                += 1u32
+                    + ::buffa::types::string_encoded_len(&self.actual_manifest_json)
+                        as u32;
+        }
+        if !self.failure_code.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.failure_code) as u32;
+        }
+        if self.created_at.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.created_at.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.completed_at.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.completed_at.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        __cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if !self.state.is_empty() {
+            ::buffa::types::put_string_field(1u32, &self.state, buf);
+        }
+        if !self.expected_manifest_json.is_empty() {
+            ::buffa::types::put_string_field(2u32, &self.expected_manifest_json, buf);
+        }
+        if !self.actual_manifest_json.is_empty() {
+            ::buffa::types::put_string_field(3u32, &self.actual_manifest_json, buf);
+        }
+        if !self.failure_code.is_empty() {
+            ::buffa::types::put_string_field(4u32, &self.failure_code, buf);
+        }
+        if self.created_at.is_set() {
+            ::buffa::types::put_len_delimited_header(5u32, __cache.consume_next(), buf);
+            self.created_at.write_to(__cache, buf);
+        }
+        if self.completed_at.is_set() {
+            ::buffa::types::put_len_delimited_header(6u32, __cache.consume_next(), buf);
+            self.completed_at.write_to(__cache, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.state, buf)?;
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.expected_manifest_json, buf)?;
+            }
+            3u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.actual_manifest_json, buf)?;
+            }
+            4u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.failure_code, buf)?;
+            }
+            5u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.created_at.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            6u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.completed_at.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.state.clear();
+        self.expected_manifest_json.clear();
+        self.actual_manifest_json.clear();
+        self.failure_code.clear();
+        self.created_at = ::buffa::MessageField::none();
+        self.completed_at = ::buffa::MessageField::none();
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for BuildVerification {
+    const PROTO_FQN: &'static str = "hephaestus.build.v1.BuildVerification";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for BuildVerification {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __BUILD_VERIFICATION_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/hephaestus.build.v1.BuildVerification",
+    to_json: ::buffa::type_registry::any_to_json::<BuildVerification>,
+    from_json: ::buffa::type_registry::any_from_json::<BuildVerification>,
     is_wkt: false,
 };
 #[derive(Clone, PartialEq, Default)]

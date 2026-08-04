@@ -9,6 +9,7 @@ mod diagnostics;
 mod process;
 mod state;
 mod supervisor;
+mod zot;
 
 use clap::Parser;
 use cli::{CacheCommand, Cli, Command, StateCommand};

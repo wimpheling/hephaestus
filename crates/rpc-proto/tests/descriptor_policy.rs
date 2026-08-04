@@ -51,7 +51,7 @@ fn reflection_inventory_contains_every_application_service_and_method() {
             .iter()
             .map(|service| service.methods().len())
             .sum::<usize>(),
-        65
+        67
     );
 
     let reflector = connectrpc_reflection::Reflector::from_descriptor_pool(pool)
@@ -347,7 +347,7 @@ fn every_method_declares_auth_kind_limits_and_retry_policy() {
         }
     }
 
-    assert_eq!(methods, 65, "review the policy when adding an RPC method");
+    assert_eq!(methods, 67, "review the policy when adding an RPC method");
 }
 
 #[test]
@@ -422,6 +422,7 @@ fn product_event_scope_aggregate_and_change_enums_are_frozen() {
                 "AGGREGATE_TYPE_AGENT_SECRET_BINDING",
                 "AGGREGATE_TYPE_ARTIFACT",
                 "AGGREGATE_TYPE_IDENTITY_PROFILE",
+                "AGGREGATE_TYPE_REGISTRY_PUBLICATION",
             ][..],
         ),
         (
@@ -520,6 +521,10 @@ fn expected_payload_fields() -> BTreeMap<&'static str, BTreeSet<&'static str>> {
         ),
         (
             "identity_profile_changed",
+            BTreeSet::from(["change", "state"]),
+        ),
+        (
+            "registry_publication_changed",
             BTreeSet::from(["change", "state"]),
         ),
     ])
@@ -657,7 +662,7 @@ fn product_events_have_one_canonical_envelope_and_complete_reducer_manifest() {
         })
         .collect::<BTreeSet<_>>();
     assert_eq!(actual_variants, manifested);
-    assert_eq!(coverage.variants.len(), 16);
+    assert_eq!(coverage.variants.len(), 17);
 }
 
 #[test]

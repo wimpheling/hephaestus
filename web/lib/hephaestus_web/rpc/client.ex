@@ -17,14 +17,10 @@ defmodule HephaestusWeb.RPC.Client do
 
   alias Hephaestus.Builder.V1.{
     BuilderCatalogService,
-    CompleteProjectBuilderPreparationRequest,
-    CreateProjectBuilderRequest,
     GetBuilderImageRequest,
     GetProjectBuilderRequest,
     ListBuilderImagesRequest,
     ListProjectBuildersRequest,
-    ProjectBuilderProvenance,
-    RequestProjectBuilderPreparationRequest,
     ValidateAgentConfigRequest
   }
 
@@ -236,7 +232,7 @@ defmodule HephaestusWeb.RPC.Client do
         "/hephaestus.builder.v1.BuilderCatalogService/ListBuilderImages",
         %ListBuilderImagesRequest{},
         &BuilderCatalogService.Stub.list_builder_images/3,
-        nil,
+        :builder_images,
         maximum_response_bytes: 1_048_576
       )
 
@@ -263,26 +259,6 @@ defmodule HephaestusWeb.RPC.Client do
         maximum_response_bytes: 16_384
       )
 
-  def create_project_builder(identity, project_id, source_repository_id, attributes) do
-    mutation(
-      identity,
-      "/hephaestus.builder.v1.BuilderCatalogService/CreateProjectBuilder",
-      CreateProjectBuilderRequest,
-      [
-        project_id: id(project_id),
-        source_repository_id: id(source_repository_id),
-        key: Map.fetch!(attributes, "key"),
-        display_name: Map.fetch!(attributes, "display_name"),
-        source_revision: Map.fetch!(attributes, "source_revision"),
-        dockerfile_path: Map.fetch!(attributes, "dockerfile_path"),
-        context_path: Map.fetch!(attributes, "context_path"),
-        context_digest: Map.fetch!(attributes, "context_digest"),
-        approved_base_image_reference: Map.fetch!(attributes, "approved_base_image_reference")
-      ],
-      &BuilderCatalogService.Stub.create_project_builder/3
-    )
-  end
-
   def list_project_builders(identity, project_id),
     do:
       paged_by_id(
@@ -304,44 +280,6 @@ defmodule HephaestusWeb.RPC.Client do
         &BuilderCatalogService.Stub.get_project_builder/3,
         :builder
       )
-
-  def request_project_builder_preparation(identity, project_id, builder_id),
-    do:
-      mutation(
-        identity,
-        "/hephaestus.builder.v1.BuilderCatalogService/RequestProjectBuilderPreparation",
-        RequestProjectBuilderPreparationRequest,
-        [project_id: id(project_id), builder_id: id(builder_id)],
-        &BuilderCatalogService.Stub.request_project_builder_preparation/3
-      )
-
-  def complete_project_builder_preparation(
-        identity,
-        project_id,
-        builder_id,
-        output_reference,
-        output_digest,
-        provenance
-      ) do
-    mutation(
-      identity,
-      "/hephaestus.builder.v1.BuilderCatalogService/CompleteProjectBuilderPreparation",
-      CompleteProjectBuilderPreparationRequest,
-      [
-        project_id: id(project_id),
-        builder_id: id(builder_id),
-        oci_image_reference: output_reference,
-        oci_image_digest: output_digest,
-        provenance: %ProjectBuilderProvenance{
-          source_revision: Map.fetch!(provenance, "source_revision"),
-          context_digest: Map.fetch!(provenance, "context_digest"),
-          attestation_reference: Map.fetch!(provenance, "attestation_reference"),
-          sbom_reference: provenance["sbom_reference"]
-        }
-      ],
-      &BuilderCatalogService.Stub.complete_project_builder_preparation/3
-    )
-  end
 
   def create_project(identity, organization_id, name, description \\ ""),
     do:

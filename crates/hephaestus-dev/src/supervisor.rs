@@ -3,6 +3,7 @@ use crate::{
     cli::BuildSelection,
     context::DevContext,
     process::{DevError, Result, run_quiet},
+    zot,
 };
 use std::{
     fs,
@@ -25,17 +26,27 @@ pub fn run(context: &DevContext, watch: bool) -> Result<()> {
         interrupt_handler.store(true, Ordering::SeqCst);
     })
     .map_err(|error| DevError::Invalid(format!("could not install Ctrl-C handler: {error}")))?;
+    zot::start(context)?;
 
     let script = context.repository_root.join("scripts/run-local.sh");
-    let mut child = Command::new(script)
+    let mut child = match Command::new(script)
         .current_dir(&context.repository_root)
-        .spawn()?;
-    if watch {
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(error) => {
+            let _ignored = zot::stop(context);
+            return Err(error.into());
+        }
+    };
+    let result = if watch {
         println!("Rust watch mode enabled; Phoenix development watchers remain active");
         supervise_with_watch(context, &mut child, &interrupted)
     } else {
         supervise(context, &mut child, &interrupted)
-    }
+    };
+    let _ignored = zot::stop(context);
+    result
 }
 
 fn supervise(_context: &DevContext, child: &mut Child, interrupted: &AtomicBool) -> Result<()> {

@@ -71,7 +71,11 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.ProjectPage do
   attr :project, :map, required: true
   attr :project_id, :string, required: true
   attr :item_count, :integer, required: true
-  attr :active, :atom, required: true, values: [:repositories, :agents, :builders, :runs, :settings]
+
+  attr :active, :atom,
+    required: true,
+    values: [:repositories, :agents, :builders, :runs, :settings]
+
   attr :organization_index_destination, :string, required: true
   attr :organization_destination, :string, required: true
 

@@ -65,6 +65,7 @@ defmodule Hephaestus.Build.V1.Build do
 
   field(:artifact_manifest_json, 30, type: :string, json_name: "artifactManifestJson")
   field(:release_version, 31, type: :string, json_name: "releaseVersion")
+  field(:verifications, 32, repeated: true, type: Hephaestus.Build.V1.BuildVerification)
 end
 
 defmodule Hephaestus.Build.V1.BuildTimelineEntry do
@@ -108,6 +109,22 @@ defmodule Hephaestus.Build.V1.ProducedArtifact do
   field(:sha256, 4, type: :string)
   field(:size_bytes, 5, type: :uint64, json_name: "sizeBytes")
   field(:media_type, 6, type: :string, json_name: "mediaType")
+end
+
+defmodule Hephaestus.Build.V1.BuildVerification do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.build.v1.BuildVerification",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:state, 1, type: :string)
+  field(:expected_manifest_json, 2, type: :string, json_name: "expectedManifestJson")
+  field(:actual_manifest_json, 3, type: :string, json_name: "actualManifestJson")
+  field(:failure_code, 4, type: :string, json_name: "failureCode")
+  field(:created_at, 5, type: Google.Protobuf.Timestamp, json_name: "createdAt")
+  field(:completed_at, 6, type: Google.Protobuf.Timestamp, json_name: "completedAt")
 end
 
 defmodule Hephaestus.Build.V1.ListBuildsRequest do

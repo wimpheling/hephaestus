@@ -169,12 +169,23 @@ mkdir -p \
     "${fixture_root}/artifacts" \
     "${fixture_root}/runtime" \
     "${fixture_root}/root-image" \
+    "${fixture_root}/registry-credentials" \
     "${fixture_root}/secret-keys" \
     "${fixture_root}/screenshots"
-chmod 0700 "${fixture_root}/secret-keys" "${secret_runtime_root}"
+chmod 0700 \
+    "${fixture_root}/registry-credentials" \
+    "${fixture_root}/secret-keys" \
+    "${secret_runtime_root}"
 umask 077
 head -c 32 /dev/zero | tr '\0' '\127' >"${fixture_root}/secret-keys/e2e-v1"
 chmod 0400 "${fixture_root}/secret-keys/e2e-v1"
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 \
+    -out "${fixture_root}/registry-token-private.pem" >/dev/null 2>&1
+printf '%s\n' 'browser-e2e-notification-callback-token-0123456789abcdef' \
+    >"${fixture_root}/registry-notification-token"
+chmod 0400 \
+    "${fixture_root}/registry-token-private.pem" \
+    "${fixture_root}/registry-notification-token"
 
 podman run --detach --rm \
     --name "${postgres_container}" \
@@ -240,6 +251,15 @@ export HEPHAESTUS_SECRET_RUNTIME_ROOT="${secret_runtime_root}"
 export HEPHAESTUS_SECRET_KEY_DIRECTORY="${fixture_root}/secret-keys"
 export HEPHAESTUS_SECRET_KEY_REFERENCE="e2e-v1"
 export HEPHAESTUS_RPC_MEDIATOR_SECRET="e2e-rpc-mediator-secret-with-sufficient-entropy"
+export HEPHAESTUS_REGISTRY_TOKEN_PRIVATE_KEY="${fixture_root}/registry-token-private.pem"
+export HEPHAESTUS_REGISTRY_TOKEN_ISSUER="${daemon_url}/v1/registry/token"
+export HEPHAESTUS_REGISTRY_SERVICE="registry.browser.invalid"
+export HEPHAESTUS_REGISTRY_PRIVATE_ORIGIN="http://127.0.0.1:9/"
+export HEPHAESTUS_REGISTRY_TOKEN_KEY_ID="browser-e2e-v1"
+export HEPHAESTUS_REGISTRY_TOKEN_LIFETIME_SECONDS="300"
+export HEPHAESTUS_REGISTRY_NOTIFICATION_CALLBACK_TOKEN_FILE="${fixture_root}/registry-notification-token"
+export HEPHAESTUS_REGISTRY_RECONCILIATION_INTERVAL_MILLISECONDS="60000"
+export HEPHAESTUS_REGISTRY_CREDENTIAL_ROOT="${fixture_root}/registry-credentials"
 readonly root_image_manifest="${fixture_root}/root-image-manifest.json"
 printf '{"version":1,"roots":{"fixture-root@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa":{"kind":"directory","path":"%s"}}}\n' \
     "${fixture_root}/root-image" >"${root_image_manifest}"

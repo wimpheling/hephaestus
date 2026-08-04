@@ -1,8 +1,8 @@
 use crate::application::build::{BuildActionError, BuildError, BuildMetric, BuildState, BuildView};
 use rpc_proto::messages::hephaestus::{
     build::v1::{
-        Build, BuildState as ProtoBuildState, BuildTimelineEntry, DeclaredArtifact,
-        ProducedArtifact,
+        Build, BuildState as ProtoBuildState, BuildTimelineEntry, BuildVerification,
+        DeclaredArtifact, ProducedArtifact,
     },
     common::v1::{MetricLabel, OpaqueId, RuntimeMetric},
 };
@@ -51,6 +51,23 @@ pub(in crate::rpc) fn build(value: BuildView) -> Build {
             .collect(),
         artifact_manifest_json: serde_json::to_string(&value.artifact_manifest).unwrap_or_default(),
         release_version: value.release_version.unwrap_or_default(),
+        verifications: value.verifications.into_iter().map(verification).collect(),
+        ..Default::default()
+    }
+}
+
+fn verification(value: crate::application::build::BuildVerificationView) -> BuildVerification {
+    BuildVerification {
+        state: value.state,
+        expected_manifest_json: serde_json::to_string(&value.expected_manifest).unwrap_or_default(),
+        actual_manifest_json: value
+            .actual_manifest
+            .as_ref()
+            .and_then(|manifest| serde_json::to_string(manifest).ok())
+            .unwrap_or_default(),
+        failure_code: value.failure_code.unwrap_or_default(),
+        created_at: timestamp(value.created_at).into(),
+        completed_at: value.completed_at.map(timestamp).into(),
         ..Default::default()
     }
 }

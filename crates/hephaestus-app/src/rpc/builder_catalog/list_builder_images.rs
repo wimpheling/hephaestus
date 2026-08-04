@@ -1,4 +1,6 @@
-use super::{BuilderCatalogRpc, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, map_catalog_error, to_proto};
+use super::{
+    BuilderCatalogRpc, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, map_catalog_error, to_proto_with_registry,
+};
 use crate::rpc::{into_connect_error, request};
 use connectrpc::{RequestContext, Response, ServiceRequest, ServiceResult};
 use rpc_proto::messages::hephaestus::builder::v1::{
@@ -11,7 +13,7 @@ pub(super) async fn handle(
     ctx: RequestContext,
     request_message: ServiceRequest<'_, ListBuilderImagesRequest>,
 ) -> ServiceResult<ListBuilderImagesResponse> {
-    let _identity = request::query_identity(&ctx, &service.authenticator, super::LIST_AUDIENCE)
+    let identity = request::query_identity(&ctx, &service.authenticator, super::LIST_AUDIENCE)
         .map_err(into_connect_error)?;
     let request = request_message.to_owned_message();
     let page_size = request
@@ -33,7 +35,7 @@ pub(super) async fn handle(
         .map_err(into_connect_error)?;
     let images = service
         .application
-        .list_builder_images()
+        .list_builder_image_publications(&identity)
         .await
         .map_err(map_catalog_error)
         .map_err(into_connect_error)?;
@@ -44,7 +46,12 @@ pub(super) async fn handle(
         images.truncate(page_size);
     }
     Response::ok(ListBuilderImagesResponse {
-        builder_images: images.into_iter().map(to_proto).collect(),
+        builder_images: images
+            .into_iter()
+            .map(|publication| {
+                to_proto_with_registry(publication.image, publication.registry_publication)
+            })
+            .collect(),
         page: PageResponse {
             next_page_token: if has_more {
                 (offset + page_size).to_string()

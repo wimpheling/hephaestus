@@ -19,6 +19,7 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.BuildPage do
   attr :declared_artifacts, :list, default: []
   attr :produced_artifacts, :list, default: []
   attr :artifact_manifest, :any, default: []
+  attr :verifications, :list, default: []
   attr :retry_event, :string, default: nil
   attr :verification_rebuild_event, :string, default: nil
   attr :another_commit_event, :string, default: nil
@@ -204,6 +205,45 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.BuildPage do
         <.text as="pre" variant={:mono}>{inspect_value(@artifact_manifest)}</.text>
       </.frame>
 
+      <.frame as="section" id="build-verifications" variant={:panel}>
+        <.page_heading eyebrow="Immutable-input checks" title="Verification results" level="h2" />
+        <.text :if={@verifications == []} as="p" variant={:muted}>
+          No verification rebuild has completed for this build.
+        </.text>
+        <.frame
+          :for={{verification, index} <- Enum.with_index(@verifications)}
+          as="article"
+          id={"build-verification-#{index}"}
+          variant={:panel}
+        >
+          <.frame variant={:summary_header}>
+            <.text as="strong">{verification_heading(verification)}</.text>
+            <.tag tone={verification_tone(verification["state"])}>{verification["state"]}</.tag>
+          </.frame>
+          <.text :if={verification["failure_code"]} as="p" variant={:muted}>
+            Result: {verification_result(verification["failure_code"])}
+          </.text>
+          <.text as="small" variant={:muted}>
+            Started {display_time(verification["created_at"])}
+            <%= if verification["completed_at"] do %>
+              · completed {display_time(verification["completed_at"])}
+            <% end %>
+          </.text>
+          <.frame :if={verification["failure_code"] == "manifest_mismatch"} variant={:review_grid}>
+            <.frame variant={:panel}>
+              <.text as="strong">Expected manifest</.text>
+              <.text as="pre" variant={:mono}>
+                {inspect_value(verification["expected_manifest"])}
+              </.text>
+            </.frame>
+            <.frame variant={:panel}>
+              <.text as="strong">Verification manifest</.text>
+              <.text as="pre" variant={:mono}>{inspect_value(verification["actual_manifest"])}</.text>
+            </.frame>
+          </.frame>
+        </.frame>
+      </.frame>
+
       <.frame as="section" id="build-release" variant={:panel}>
         <.frame variant={:panel}>
           <.page_heading eyebrow="Draft release relation" title="Release result" level="h2" />
@@ -261,6 +301,23 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.BuildPage do
   defp state_tone("failed"), do: "danger"
   defp state_tone("running"), do: "warning"
   defp state_tone(_state), do: "neutral"
+
+  defp verification_tone("succeeded"), do: "success"
+  defp verification_tone("failed"), do: "danger"
+  defp verification_tone(_state), do: "neutral"
+
+  defp verification_heading(%{"state" => "succeeded"}), do: "Verification matched"
+
+  defp verification_heading(%{"state" => "failed", "failure_code" => "manifest_mismatch"}),
+    do: "Verification mismatch"
+
+  defp verification_heading(%{"state" => "failed"}), do: "Verification failed"
+  defp verification_heading(_verification), do: "Verification running"
+
+  defp verification_result("manifest_mismatch"),
+    do: "The rebuilt artifact manifest differs from the immutable release manifest."
+
+  defp verification_result(code), do: "Verification could not complete (#{code})."
   defp metric_value(metric), do: "#{metric["value"]} #{metric["unit"]}"
 
   defp metric(assigns) do

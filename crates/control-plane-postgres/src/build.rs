@@ -65,6 +65,7 @@ pub struct BuildView {
     pub declared_artifacts: Vec<DeclaredArtifactView>,
     pub produced_artifacts: Vec<ProducedArtifactView>,
     pub artifact_manifest: Value,
+    pub verifications: Vec<BuildVerificationView>,
 }
 
 /// One durable lifecycle observation for a build.
@@ -93,6 +94,17 @@ pub struct ProducedArtifactView {
     pub sha256: String,
     pub size_bytes: u64,
     pub media_type: String,
+}
+
+/// One immutable-input verification execution retained for a build.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BuildVerificationView {
+    pub state: String,
+    pub expected_manifest: Value,
+    pub actual_manifest: Option<Value>,
+    pub failure_code: Option<String>,
+    pub created_at: OffsetDateTime,
+    pub completed_at: Option<OffsetDateTime>,
 }
 
 #[derive(Clone, Copy)]
@@ -255,6 +267,17 @@ impl BuildApplication {
                         ) ORDER BY artifact.path, artifact.id
                     ) FROM release_artifacts artifact
                     WHERE artifact.release_id = release.id), '[]'::jsonb) AS produced_artifacts
+                    ,COALESCE((SELECT jsonb_agg(
+                        jsonb_build_object(
+                            'state', verification.state,
+                            'expected_manifest', verification.expected_manifest,
+                            'actual_manifest', verification.actual_manifest,
+                            'failure_code', verification.failure_code,
+                            'created_at', verification.created_at,
+                            'completed_at', verification.completed_at
+                        ) ORDER BY verification.created_at DESC, verification.id DESC
+                    ) FROM build_verifications verification
+                    WHERE verification.build_request_id = request.id), '[]'::jsonb) AS verifications
              FROM build_requests request
              LEFT JOIN build_executions execution
                ON execution.build_request_id = request.id
@@ -322,6 +345,17 @@ impl BuildApplication {
                         ) ORDER BY artifact.path, artifact.id
                     ) FROM release_artifacts artifact
                     WHERE artifact.release_id = release.id), '[]'::jsonb) AS produced_artifacts
+                    ,COALESCE((SELECT jsonb_agg(
+                        jsonb_build_object(
+                            'state', verification.state,
+                            'expected_manifest', verification.expected_manifest,
+                            'actual_manifest', verification.actual_manifest,
+                            'failure_code', verification.failure_code,
+                            'created_at', verification.created_at,
+                            'completed_at', verification.completed_at
+                        ) ORDER BY verification.created_at DESC, verification.id DESC
+                    ) FROM build_verifications verification
+                    WHERE verification.build_request_id = request.id), '[]'::jsonb) AS verifications
              FROM build_requests request
              LEFT JOIN build_executions execution
                ON execution.build_request_id = request.id
@@ -444,6 +478,20 @@ impl BuildApplication {
         let mut transaction = begin_actor_transaction(&self.pool, identity)
             .await
             .map_err(|error| BuildActionError::Application(BuildError::Persistence(error)))?;
+        // The verification command leaves the immutable build state unchanged,
+        // but clients still need a committed build event as the mutation
+        // receipt and LiveView invalidation. Touching diagnostics deliberately
+        // invokes the build-request application-event trigger without
+        // fabricating a lifecycle transition.
+        sqlx::query(
+            "UPDATE build_requests
+                SET diagnostics = diagnostics
+              WHERE id = $1",
+        )
+        .bind(id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|error| BuildActionError::Application(BuildError::Persistence(error)))?;
         let event_id = Uuid::new_v4();
         let now = OffsetDateTime::now_utc();
         sqlx::query(
@@ -522,8 +570,13 @@ impl BuildApplication {
             .build
             .as_ref()
             .ok_or(BuildError::FailedPrecondition)?;
-        let resolved_root_image =
-            resolve_build_root_image(&mut transaction, request.repository_id, build).await?;
+        let resolved_root_image = resolve_build_root_image(
+            &mut transaction,
+            request.repository_id,
+            &request.source_commit,
+            build,
+        )
+        .await?;
         let build_declaration = serde_json::to_value(build).map_err(BuildError::Serialization)?;
         let build_policy = json!({
             "resources": build.resources,
@@ -636,6 +689,7 @@ struct ResolvedBuilderRow {
 async fn resolve_build_root_image(
     transaction: &mut Transaction<'_, Postgres>,
     repository_id: Uuid,
+    source_commit: &str,
     build: &agent_config::BuildConfig,
 ) -> Result<String, BuildError> {
     let row = match (&build.root_image, &build.builder) {
@@ -678,6 +732,29 @@ async fn resolve_build_root_image(
             )
             .bind(repository_id)
             .bind(builder_id)
+            .fetch_optional(&mut **transaction)
+            .await
+            .map_err(BuildError::Persistence)?
+        }
+        (None, Some(agent_config::BuilderSelection::Repository { key })) => {
+            sqlx::query_as::<_, ResolvedBuilderRow>(
+                "SELECT project_builder.oci_image_reference AS image_reference,
+                        base.max_vcpus, base.max_memory_mib, base.network_ceiling
+                 FROM project_builder_definitions AS project_builder
+                 JOIN builder_images AS base
+                   ON base.image_reference = project_builder.approved_base_image_reference
+                 WHERE project_builder.source_repository_id = $1
+                   AND project_builder.key = $2
+                   AND project_builder.source_revision = $3
+                   AND project_builder.status = 'ready'
+                   AND base.preparation_state = 'ready'
+                   AND base.availability_state = 'available'
+                 ORDER BY project_builder.created_at DESC, project_builder.id DESC
+                 LIMIT 1",
+            )
+            .bind(repository_id)
+            .bind(key)
+            .bind(source_commit)
             .fetch_optional(&mut **transaction)
             .await
             .map_err(BuildError::Persistence)?
@@ -737,6 +814,7 @@ struct BuildRow {
     artifact_count: i64,
     timeline: Option<Value>,
     produced_artifacts: Option<Value>,
+    verifications: Option<Value>,
 }
 
 #[derive(FromRow)]
@@ -813,6 +891,45 @@ struct StoredProducedArtifact {
     media_type: String,
 }
 
+#[derive(Deserialize)]
+struct StoredVerification {
+    state: String,
+    expected_manifest: Value,
+    actual_manifest: Option<Value>,
+    failure_code: Option<String>,
+    created_at: String,
+    completed_at: Option<String>,
+}
+
+impl TryFrom<StoredVerification> for BuildVerificationView {
+    type Error = BuildError;
+
+    fn try_from(value: StoredVerification) -> Result<Self, Self::Error> {
+        let created_at = OffsetDateTime::parse(&value.created_at, &Rfc3339)
+            .map_err(|_| BuildError::InvalidStoredData)?;
+        let completed_at = value
+            .completed_at
+            .as_deref()
+            .map(|timestamp| OffsetDateTime::parse(timestamp, &Rfc3339))
+            .transpose()
+            .map_err(|_| BuildError::InvalidStoredData)?;
+        if !matches!(value.state.as_str(), "running" | "succeeded" | "failed") {
+            return Err(BuildError::InvalidStoredData);
+        }
+        if value.state == "failed" && value.failure_code.is_none() {
+            return Err(BuildError::InvalidStoredData);
+        }
+        Ok(Self {
+            state: value.state,
+            expected_manifest: value.expected_manifest,
+            actual_manifest: value.actual_manifest,
+            failure_code: value.failure_code,
+            created_at,
+            completed_at,
+        })
+    }
+}
+
 impl TryFrom<StoredProducedArtifact> for ProducedArtifactView {
     type Error = BuildError;
 
@@ -875,6 +992,14 @@ impl TryFrom<BuildRow> for BuildView {
         .into_iter()
         .map(ProducedArtifactView::try_from)
         .collect::<Result<Vec<_>, _>>()?;
+        let verifications = serde_json::from_value::<Vec<StoredVerification>>(
+            row.verifications
+                .unwrap_or_else(|| Value::Array(Vec::new())),
+        )
+        .map_err(BuildError::Serialization)?
+        .into_iter()
+        .map(BuildVerificationView::try_from)
+        .collect::<Result<Vec<_>, _>>()?;
         let duration_milliseconds = row.started_at.map(|started| {
             let milliseconds = row
                 .completed_at
@@ -923,6 +1048,7 @@ impl TryFrom<BuildRow> for BuildView {
             artifact_manifest: row
                 .artifact_manifest
                 .unwrap_or_else(|| Value::Array(Vec::new())),
+            verifications,
         })
     }
 }
@@ -973,8 +1099,8 @@ fn encode_hash(value: &[u8; 32]) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        BuildActionError, BuildState, BuildView, build_cursor, decode_cursor, decode_hash,
-        encode_cursor,
+        BuildActionError, BuildState, BuildVerificationView, BuildView, build_cursor,
+        decode_cursor, decode_hash, encode_cursor,
     };
     use time::OffsetDateTime;
     use uuid::Uuid;
@@ -1029,6 +1155,14 @@ mod tests {
             declared_artifacts: Vec::new(),
             produced_artifacts: Vec::new(),
             artifact_manifest: serde_json::json!([]),
+            verifications: vec![BuildVerificationView {
+                state: String::from("failed"),
+                expected_manifest: serde_json::json!([{"path": "expected"}]),
+                actual_manifest: Some(serde_json::json!([{"path": "actual"}])),
+                failure_code: Some(String::from("manifest_mismatch")),
+                created_at: OffsetDateTime::UNIX_EPOCH,
+                completed_at: Some(OffsetDateTime::UNIX_EPOCH),
+            }],
         };
         assert_eq!(build_cursor(&view), format!("v1:build:{id}:0:running:1"));
         assert!(!BuildState::Running.is_terminal());

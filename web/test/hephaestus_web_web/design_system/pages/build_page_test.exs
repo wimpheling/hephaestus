@@ -34,6 +34,9 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.BuildPageTest do
     assert html =~ "draft_release_created"
     assert html =~ "Retry attempt"
     assert html =~ "Rebuild for verification"
+    assert html =~ ~s(id="build-verifications")
+    assert html =~ "Verification mismatch"
+    assert html =~ "rebuilt artifact manifest differs"
     assert html =~ "Build another commit"
     refute html =~ "Rebuild</"
   end
@@ -90,7 +93,17 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.BuildPageTest do
         "produced_artifacts" => [
           %{"path" => "produced/output", "sha256" => "hash", "size_bytes" => 12}
         ],
-        "artifact_manifest" => [%{"path" => "produced/output"}]
+        "artifact_manifest" => [%{"path" => "produced/output"}],
+        "verifications" => [
+          %{
+            "state" => "failed",
+            "failure_code" => "manifest_mismatch",
+            "created_at" => ~U[2026-08-01 10:02:00Z],
+            "completed_at" => ~U[2026-08-01 10:03:00Z],
+            "expected_manifest" => [%{"path" => "declared/output"}],
+            "actual_manifest" => [%{"path" => "produced/output"}]
+          }
+        ]
       },
       logs: ["a bounded log line"],
       metrics: [%{"name" => "duration", "value" => 1.0, "unit" => "seconds"}],
@@ -104,6 +117,16 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.BuildPageTest do
       declared_artifacts: [%{"path" => "declared/output", "kind" => "file"}],
       produced_artifacts: [%{"path" => "produced/output", "sha256" => "hash", "size_bytes" => 12}],
       artifact_manifest: [%{"path" => "produced/output"}],
+      verifications: [
+        %{
+          "state" => "failed",
+          "failure_code" => "manifest_mismatch",
+          "created_at" => ~U[2026-08-01 10:02:00Z],
+          "completed_at" => ~U[2026-08-01 10:03:00Z],
+          "expected_manifest" => [%{"path" => "declared/output"}],
+          "actual_manifest" => [%{"path" => "produced/output"}]
+        }
+      ],
       organization_index_destination: "/organizations",
       organization_destination: "/organizations/organization-1",
       project_destination: "/projects/project-1",

@@ -134,6 +134,7 @@ defmodule HephaestusWebWeb.BuildState do
       declared_artifacts: (build && build["declared_artifacts"]) || [],
       produced_artifacts: (build && build["produced_artifacts"]) || [],
       artifact_manifest: (build && build["artifact_manifest"]) || [],
+      verifications: (build && build["verifications"]) || [],
       retry_event: retry_event(build),
       verification_rebuild_event: verification_event(build),
       another_commit_event: nil,

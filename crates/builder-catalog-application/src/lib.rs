@@ -4,10 +4,12 @@ use agent_config::{AgentConfig, NetworkProfile};
 use async_trait::async_trait;
 use builder_catalog_domain::{
     BuildNetworkPolicy, BuilderCatalogValueError, BuilderImage, BuilderImageId,
-    BuilderImageReference, BuilderSelectionError, NewProjectBuilder, OciDigest,
-    ProjectBuilderDefinition, ProjectBuilderId, ProjectBuilderLifecycleError,
-    ProjectBuilderProvenance, ProjectBuilderStatus, ValidatedBuilderSelection,
+    BuilderImagePublication, BuilderImageReference, BuilderSelectionError, NewProjectBuilder,
+    OciDigest, ProjectBuilderDefinition, ProjectBuilderId, ProjectBuilderLifecycleError,
+    ProjectBuilderProvenance, ProjectBuilderPublication, ProjectBuilderStatus,
+    ValidatedBuilderSelection,
 };
+use identity_domain::AuthenticatedIdentity;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -55,6 +57,43 @@ pub trait BuilderCatalog: Send + Sync + 'static {
             .find(|image| image.key.as_str() == key)
             .ok_or(BuilderCatalogError::NotFound)
     }
+}
+
+/// Persistence boundary for safe registry-publication projections associated
+/// with catalog and project-builder rows.
+///
+/// Implementations expose only immutable internal references and verified
+/// evidence metadata. Credentials, callback bodies, storage paths, mutable
+/// tags, and operational endpoints never cross this boundary.
+#[async_trait]
+pub trait RegistryPublicationCatalog: Send + Sync + 'static {
+    /// Lists platform builder images with registry control-plane state.
+    async fn list_builder_image_publications(
+        &self,
+        identity: &AuthenticatedIdentity,
+    ) -> Result<Vec<BuilderImagePublication>, BuilderCatalogError>;
+
+    /// Loads one platform builder image with registry control-plane state.
+    async fn get_builder_image_publication(
+        &self,
+        identity: &AuthenticatedIdentity,
+        id: BuilderImageId,
+    ) -> Result<BuilderImagePublication, BuilderCatalogError>;
+
+    /// Lists project builders with project-scoped registry state.
+    async fn list_project_builder_publications(
+        &self,
+        identity: &AuthenticatedIdentity,
+        project_id: Uuid,
+    ) -> Result<Vec<ProjectBuilderPublication>, ProjectBuilderStoreError>;
+
+    /// Loads one project builder with project-scoped registry state.
+    async fn get_project_builder_publication(
+        &self,
+        identity: &AuthenticatedIdentity,
+        project_id: Uuid,
+        id: ProjectBuilderId,
+    ) -> Result<ProjectBuilderPublication, ProjectBuilderStoreError>;
 }
 
 /// Application service exposing catalog reads and source-selection validation.
@@ -154,6 +193,55 @@ where
 
 impl<C> BuilderCatalogApplication<C>
 where
+    C: BuilderCatalog + RegistryPublicationCatalog,
+{
+    /// Lists platform catalog rows enriched with safe registry publication
+    /// state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an adapter failure or invalid persisted projection.
+    pub async fn list_builder_image_publications(
+        &self,
+        identity: &AuthenticatedIdentity,
+    ) -> Result<Vec<BuilderImagePublication>, BuilderCatalogError> {
+        self.catalog
+            .list_builder_image_publications(identity)
+            .await?
+            .into_iter()
+            .map(|publication| {
+                publication
+                    .validate()
+                    .map(|()| publication)
+                    .map_err(BuilderCatalogError::InvalidData)
+            })
+            .collect()
+    }
+
+    /// Loads one platform catalog row enriched with safe registry publication
+    /// state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an adapter failure or invalid persisted projection.
+    pub async fn get_builder_image_publication(
+        &self,
+        identity: &AuthenticatedIdentity,
+        id: BuilderImageId,
+    ) -> Result<BuilderImagePublication, BuilderCatalogError> {
+        let publication = self
+            .catalog
+            .get_builder_image_publication(identity, id)
+            .await?;
+        publication
+            .validate()
+            .map(|()| publication)
+            .map_err(BuilderCatalogError::InvalidData)
+    }
+}
+
+impl<C> BuilderCatalogApplication<C>
+where
     C: BuilderCatalog + ProjectBuilderStore,
 {
     /// Resolves a config that may select a project-owned prepared builder.
@@ -171,6 +259,46 @@ where
             .as_ref()
             .ok_or(BuilderSelectionError::MissingBuild)?;
         self.validate_build_config_for_project(build, project_id)
+            .await
+    }
+
+    /// Resolves a config for one repository at one exact source revision.
+    ///
+    /// Repository selectors are deliberately scoped to both the repository and
+    /// the source commit. Legacy platform, digest, and UUID project selectors
+    /// retain their existing behavior.
+    ///
+    /// # Errors
+    ///
+    /// Returns a selection, catalog, or project-builder persistence failure.
+    pub async fn validate_agent_config_for_repository(
+        &self,
+        config: &AgentConfig,
+        project_id: Uuid,
+        source_repository_id: Uuid,
+        source_revision: &str,
+    ) -> Result<ValidatedBuilderSelection, BuilderCatalogApplicationError> {
+        let build = config
+            .build
+            .as_ref()
+            .ok_or(BuilderSelectionError::MissingBuild)?;
+        let Some(agent_config::BuilderSelection::Repository { key }) = build.builder.as_ref()
+        else {
+            return self
+                .validate_build_config_for_project(build, project_id)
+                .await;
+        };
+        let builder = self
+            .catalog
+            .get_project_builder_by_repository_key(
+                project_id,
+                source_repository_id,
+                key,
+                source_revision,
+            )
+            .await
+            .map_err(BuilderCatalogApplicationError::ProjectStore)?;
+        self.validate_project_builder_selection(builder, build)
             .await
     }
 
@@ -200,6 +328,15 @@ where
             .get_project_builder(project_id, builder_id)
             .await
             .map_err(BuilderCatalogApplicationError::ProjectStore)?;
+        self.validate_project_builder_selection(builder, build)
+            .await
+    }
+
+    async fn validate_project_builder_selection(
+        &self,
+        builder: ProjectBuilderDefinition,
+        build: &agent_config::BuildConfig,
+    ) -> Result<ValidatedBuilderSelection, BuilderCatalogApplicationError> {
         let output = builder
             .status
             .eq(&ProjectBuilderStatus::Ready)
@@ -302,6 +439,16 @@ pub trait ProjectBuilderStore: Send + Sync + 'static {
         &self,
         project_id: Uuid,
         id: ProjectBuilderId,
+    ) -> Result<ProjectBuilderDefinition, ProjectBuilderStoreError>;
+
+    /// Loads one repository-local builder revision by its source commit and
+    /// stable repository key.
+    async fn get_project_builder_by_repository_key(
+        &self,
+        project_id: Uuid,
+        source_repository_id: Uuid,
+        key: &str,
+        source_revision: &str,
     ) -> Result<ProjectBuilderDefinition, ProjectBuilderStoreError>;
 
     /// Atomically moves a draft or failed definition into preparation.
@@ -580,6 +727,59 @@ where
     }
 }
 
+impl<C> ProjectBuilderApplication<C>
+where
+    C: BuilderCatalog + ProjectBuilderStore + RegistryPublicationCatalog,
+{
+    /// Lists project builders enriched with their safe project-scoped registry
+    /// control-plane state.
+    ///
+    /// # Errors
+    ///
+    /// Returns a persistence failure or invalid persisted projection.
+    pub async fn list_project_builder_publications(
+        &self,
+        identity: &AuthenticatedIdentity,
+        project_id: Uuid,
+    ) -> Result<Vec<ProjectBuilderPublication>, ProjectBuilderApplicationError> {
+        self.catalog
+            .list_project_builder_publications(identity, project_id)
+            .await
+            .map_err(ProjectBuilderApplicationError::Store)?
+            .into_iter()
+            .map(|publication| {
+                publication
+                    .validate()
+                    .map(|()| publication)
+                    .map_err(ProjectBuilderApplicationError::Invalid)
+            })
+            .collect()
+    }
+
+    /// Loads one project builder enriched with its safe project-scoped registry
+    /// control-plane state.
+    ///
+    /// # Errors
+    ///
+    /// Returns a persistence failure or invalid persisted projection.
+    pub async fn get_project_builder_publication(
+        &self,
+        identity: &AuthenticatedIdentity,
+        project_id: Uuid,
+        id: ProjectBuilderId,
+    ) -> Result<ProjectBuilderPublication, ProjectBuilderApplicationError> {
+        let publication = self
+            .catalog
+            .get_project_builder_publication(identity, project_id, id)
+            .await
+            .map_err(ProjectBuilderApplicationError::Store)?;
+        publication
+            .validate()
+            .map(|()| publication)
+            .map_err(ProjectBuilderApplicationError::Invalid)
+    }
+}
+
 /// Application-level project builder failure.
 #[derive(Debug, thiserror::Error)]
 pub enum ProjectBuilderApplicationError {
@@ -605,13 +805,15 @@ mod tests {
     use super::*;
     use builder_catalog_domain::{
         AvailabilityState, BuilderImageId, BuilderImageReference, BuilderKey, BuilderProvenance,
-        DependencyPolicy, NewProjectBuilder, OciDigest, PreparationState, ProjectBuilderDefinition,
-        ProjectBuilderId, ProjectBuilderProvenance, ProjectBuilderStatus, Toolchain,
+        BuilderSourcePath, DependencyPolicy, NewProjectBuilder, OciDigest, PreparationState,
+        ProjectBuilderDefinition, ProjectBuilderId, ProjectBuilderProvenance, ProjectBuilderStatus,
+        Toolchain,
     };
     use uuid::Uuid;
 
     struct FixtureCatalog {
         image: BuilderImage,
+        project_builder: Option<ProjectBuilderDefinition>,
     }
 
     #[async_trait]
@@ -676,10 +878,33 @@ mod tests {
 
         async fn get_project_builder(
             &self,
-            _project_id: Uuid,
-            _id: ProjectBuilderId,
+            project_id: Uuid,
+            id: ProjectBuilderId,
         ) -> Result<ProjectBuilderDefinition, ProjectBuilderStoreError> {
-            Err(unused_store())
+            self.project_builder
+                .as_ref()
+                .filter(|builder| builder.project_id == project_id && builder.id == id)
+                .cloned()
+                .ok_or(ProjectBuilderStoreError::NotFound)
+        }
+
+        async fn get_project_builder_by_repository_key(
+            &self,
+            project_id: Uuid,
+            source_repository_id: Uuid,
+            key: &str,
+            source_revision: &str,
+        ) -> Result<ProjectBuilderDefinition, ProjectBuilderStoreError> {
+            self.project_builder
+                .as_ref()
+                .filter(|builder| {
+                    builder.project_id == project_id
+                        && builder.source_repository_id == source_repository_id
+                        && builder.key.as_str() == key
+                        && builder.source_revision == source_revision
+                })
+                .cloned()
+                .ok_or(ProjectBuilderStoreError::NotFound)
         }
 
         async fn begin_project_builder_preparation(
@@ -795,10 +1020,48 @@ push = false
             .expect("fixture config is valid")
     }
 
+    fn ready_repository_builder(
+        image: &BuilderImage,
+        project_id: Uuid,
+        repository_id: Uuid,
+        source_revision: &str,
+    ) -> ProjectBuilderDefinition {
+        let digest = "b".repeat(64);
+        let context_digest = OciDigest::parse(format!("sha256:{digest}")).expect("digest");
+        ProjectBuilderDefinition {
+            id: ProjectBuilderId::new(),
+            project_id,
+            key: BuilderKey::parse("typescript-tools").expect("key"),
+            display_name: String::from("TypeScript tools"),
+            source_repository_id: repository_id,
+            source_revision: String::from(source_revision),
+            dockerfile_path: BuilderSourcePath::parse("containers/Dockerfile").expect("path"),
+            context_path: BuilderSourcePath::parse(".").expect("context"),
+            context_digest: context_digest.clone(),
+            approved_base_image: image.image_reference.clone(),
+            status: ProjectBuilderStatus::Ready,
+            oci_image_reference: Some(
+                BuilderImageReference::parse(format!("registry.example/project@sha256:{digest}"))
+                    .expect("output reference"),
+            ),
+            oci_image_digest: Some(context_digest.clone()),
+            provenance: Some(ProjectBuilderProvenance {
+                source_revision: String::from(source_revision),
+                context_digest,
+                attestation_reference: String::from("attestation://project"),
+                sbom_reference: None,
+            }),
+            failure_reason: None,
+            created_at: time::OffsetDateTime::UNIX_EPOCH,
+            updated_at: time::OffsetDateTime::UNIX_EPOCH,
+        }
+    }
+
     #[tokio::test]
     async fn validates_exact_digest_selection_and_policy() {
         let catalog = Arc::new(FixtureCatalog {
             image: image(BuildNetworkPolicy::Disabled),
+            project_builder: None,
         });
         let service = BuilderCatalogApplication::new(catalog);
         let selected = service
@@ -816,6 +1079,7 @@ push = false
     async fn rejects_unknown_reference_and_broader_network() {
         let catalog = Arc::new(FixtureCatalog {
             image: image(BuildNetworkPolicy::Disabled),
+            project_builder: None,
         });
         let service = BuilderCatalogApplication::new(catalog);
         assert!(matches!(
@@ -843,9 +1107,59 @@ push = false
     }
 
     #[tokio::test]
+    async fn resolves_ready_repository_builder_only_for_its_exact_commit() {
+        let image = image(BuildNetworkPolicy::Disabled);
+        let project_id = Uuid::new_v4();
+        let repository_id = Uuid::new_v4();
+        let revision = "a".repeat(40);
+        let catalog = Arc::new(FixtureCatalog {
+            project_builder: Some(ready_repository_builder(
+                &image,
+                project_id,
+                repository_id,
+                &revision,
+            )),
+            image,
+        });
+        let service = BuilderCatalogApplication::new(catalog);
+        let mut config = config(
+            "registry.example/rust@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "disabled",
+        );
+        let build = config.build.as_mut().expect("build");
+        build.root_image = None;
+        build.builder = Some(agent_config::BuilderSelection::Repository {
+            key: String::from("typescript-tools"),
+        });
+        let selected = service
+            .validate_agent_config_for_repository(&config, project_id, repository_id, &revision)
+            .await
+            .expect("ready repository builder");
+        assert_eq!(selected.key.as_str(), "typescript-tools");
+        assert_eq!(
+            selected.image_reference.as_str(),
+            "registry.example/project@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        );
+        assert!(matches!(
+            service
+                .validate_agent_config_for_repository(
+                    &config,
+                    project_id,
+                    repository_id,
+                    "c0ffee0000000000000000000000000000000000",
+                )
+                .await,
+            Err(BuilderCatalogApplicationError::ProjectStore(
+                ProjectBuilderStoreError::NotFound
+            ))
+        ));
+    }
+
+    #[tokio::test]
     async fn project_builder_requires_an_available_platform_base() {
         let catalog = Arc::new(FixtureCatalog {
             image: image(BuildNetworkPolicy::Disabled),
+            project_builder: None,
         });
         let service = ProjectBuilderApplication::new(catalog);
         let request = CreateProjectBuilderRequest {

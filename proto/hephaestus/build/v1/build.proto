@@ -132,6 +132,7 @@ message Build {
   repeated ProducedArtifact produced_artifacts = 29;
   string artifact_manifest_json = 30;
   string release_version = 31;
+  repeated BuildVerification verifications = 32;
 }
 message BuildTimelineEntry {
   string from_state = 1;
@@ -151,6 +152,14 @@ message ProducedArtifact {
   string sha256 = 4;
   uint64 size_bytes = 5;
   string media_type = 6;
+}
+message BuildVerification {
+  string state = 1;
+  string expected_manifest_json = 2;
+  string actual_manifest_json = 3;
+  string failure_code = 4;
+  google.protobuf.Timestamp created_at = 5;
+  google.protobuf.Timestamp completed_at = 6;
 }
 message ListBuildsRequest {
   hephaestus.common.v1.OpaqueId repository_id = 1;

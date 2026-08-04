@@ -13,6 +13,9 @@ use builder_catalog_application::{
 use builder_catalog_domain::{
     AvailabilityState, BuildNetworkPolicy, BuilderImage, BuilderSelectionError, DependencyPolicy,
     PreparationState, ProjectBuilderDefinition, ProjectBuilderProvenance, ProjectBuilderStatus,
+    RegistryAvailabilityState, RegistryEvidence, RegistryEvidenceState,
+    RegistryPublication as DomainRegistryPublication,
+    RegistryPublicationState as DomainRegistryPublicationState,
 };
 use builder_catalog_postgres::PgBuilderCatalog;
 use connectrpc::Router;
@@ -22,16 +25,18 @@ use rpc_proto::{
     messages::hephaestus::{
         builder::v1::{
             AvailabilityState as RpcAvailabilityState, BuilderImage as RpcBuilderImage,
-            CompleteProjectBuilderPreparationRequest, CompleteProjectBuilderPreparationResponse,
-            CreateProjectBuilderRequest, CreateProjectBuilderResponse,
             DependencyPolicy as RpcDependencyPolicy, GetBuilderImageRequest,
             GetBuilderImageResponse, GetProjectBuilderRequest, GetProjectBuilderResponse,
             ListBuilderImagesRequest, ListBuilderImagesResponse, ListProjectBuildersRequest,
             ListProjectBuildersResponse, PreparationState as RpcPreparationState,
             ProjectBuilder as RpcProjectBuilder,
             ProjectBuilderProvenance as RpcProjectBuilderProvenance, Provenance,
-            RequestProjectBuilderPreparationRequest, RequestProjectBuilderPreparationResponse,
-            Toolchain, ValidateAgentConfigRequest, ValidateAgentConfigResponse,
+            RegistryAvailabilityState as RpcRegistryAvailabilityState,
+            RegistryEvidence as RpcRegistryEvidence,
+            RegistryEvidenceState as RpcRegistryEvidenceState,
+            RegistryPublication as RpcRegistryPublication,
+            RegistryPublicationState as RpcRegistryPublicationState, Toolchain,
+            ValidateAgentConfigRequest, ValidateAgentConfigResponse,
         },
         common::v1::{NetworkPolicy, OpaqueId},
     },
@@ -42,16 +47,10 @@ use uuid::Uuid;
 const LIST_AUDIENCE: &str = "/hephaestus.builder.v1.BuilderCatalogService/ListBuilderImages";
 const GET_AUDIENCE: &str = "/hephaestus.builder.v1.BuilderCatalogService/GetBuilderImage";
 const VALIDATE_AUDIENCE: &str = "/hephaestus.builder.v1.BuilderCatalogService/ValidateAgentConfig";
-const CREATE_PROJECT_BUILDER_AUDIENCE: &str =
-    "/hephaestus.builder.v1.BuilderCatalogService/CreateProjectBuilder";
 const LIST_PROJECT_BUILDERS_AUDIENCE: &str =
     "/hephaestus.builder.v1.BuilderCatalogService/ListProjectBuilders";
 const GET_PROJECT_BUILDER_AUDIENCE: &str =
     "/hephaestus.builder.v1.BuilderCatalogService/GetProjectBuilder";
-const REQUEST_PROJECT_BUILDER_PREPARATION_AUDIENCE: &str =
-    "/hephaestus.builder.v1.BuilderCatalogService/RequestProjectBuilderPreparation";
-const COMPLETE_PROJECT_BUILDER_PREPARATION_AUDIENCE: &str =
-    "/hephaestus.builder.v1.BuilderCatalogService/CompleteProjectBuilderPreparation";
 const DEFAULT_PAGE_SIZE: u32 = 50;
 const MAX_PAGE_SIZE: u32 = 200;
 
@@ -108,14 +107,6 @@ impl BuilderCatalogService for BuilderCatalogRpc {
         validate_agent_config::handle(self, ctx, request).await
     }
 
-    async fn create_project_builder(
-        &self,
-        ctx: connectrpc::RequestContext,
-        request: connectrpc::ServiceRequest<'_, CreateProjectBuilderRequest>,
-    ) -> connectrpc::ServiceResult<CreateProjectBuilderResponse> {
-        project_builder::create(self, ctx, request).await
-    }
-
     async fn list_project_builders(
         &self,
         ctx: connectrpc::RequestContext,
@@ -130,22 +121,6 @@ impl BuilderCatalogService for BuilderCatalogRpc {
         request: connectrpc::ServiceRequest<'_, GetProjectBuilderRequest>,
     ) -> connectrpc::ServiceResult<GetProjectBuilderResponse> {
         project_builder::get(self, ctx, request).await
-    }
-
-    async fn request_project_builder_preparation(
-        &self,
-        ctx: connectrpc::RequestContext,
-        request: connectrpc::ServiceRequest<'_, RequestProjectBuilderPreparationRequest>,
-    ) -> connectrpc::ServiceResult<RequestProjectBuilderPreparationResponse> {
-        project_builder::request_preparation(self, ctx, request).await
-    }
-
-    async fn complete_project_builder_preparation(
-        &self,
-        ctx: connectrpc::RequestContext,
-        request: connectrpc::ServiceRequest<'_, CompleteProjectBuilderPreparationRequest>,
-    ) -> connectrpc::ServiceResult<CompleteProjectBuilderPreparationResponse> {
-        project_builder::complete_preparation(self, ctx, request).await
     }
 }
 
@@ -253,6 +228,15 @@ pub(super) fn to_project_builder(value: ProjectBuilderDefinition) -> RpcProjectB
     }
 }
 
+pub(super) fn to_project_builder_with_registry(
+    value: ProjectBuilderDefinition,
+    registry_publication: DomainRegistryPublication,
+) -> RpcProjectBuilder {
+    let mut builder = to_project_builder(value);
+    builder.registry_publication = to_registry_publication(registry_publication).into();
+    builder
+}
+
 fn to_project_provenance(value: ProjectBuilderProvenance) -> RpcProjectBuilderProvenance {
     RpcProjectBuilderProvenance {
         source_revision: value.source_revision,
@@ -326,6 +310,72 @@ pub(super) fn to_proto(image: BuilderImage) -> RpcBuilderImage {
         .into(),
         platform_policy_version: image.platform_policy_version,
         ..Default::default()
+    }
+}
+
+pub(super) fn to_proto_with_registry(
+    image: BuilderImage,
+    registry_publication: DomainRegistryPublication,
+) -> RpcBuilderImage {
+    let mut image = to_proto(image);
+    image.registry_publication = to_registry_publication(registry_publication).into();
+    image
+}
+
+fn to_registry_publication(value: DomainRegistryPublication) -> RpcRegistryPublication {
+    RpcRegistryPublication {
+        state: registry_publication_state(value.state).into(),
+        availability: registry_availability(value.availability).into(),
+        immutable_reference: value
+            .immutable_reference
+            .map(|reference| reference.to_string()),
+        architectures: value.architectures,
+        sbom: to_registry_evidence(value.sbom).into(),
+        provenance: to_registry_evidence(value.provenance).into(),
+        scan: to_registry_evidence(value.scan).into(),
+        signature: to_registry_evidence(value.signature).into(),
+        ..Default::default()
+    }
+}
+
+fn to_registry_evidence(value: RegistryEvidence) -> RpcRegistryEvidence {
+    RpcRegistryEvidence {
+        state: registry_evidence_state(value.state).into(),
+        immutable_reference: value
+            .immutable_reference
+            .map(|reference| reference.to_string()),
+        ..Default::default()
+    }
+}
+
+const fn registry_publication_state(
+    value: DomainRegistryPublicationState,
+) -> RpcRegistryPublicationState {
+    match value {
+        DomainRegistryPublicationState::NotRequested => RpcRegistryPublicationState::NotRequested,
+        DomainRegistryPublicationState::Pending => RpcRegistryPublicationState::Pending,
+        DomainRegistryPublicationState::Publishing => RpcRegistryPublicationState::Publishing,
+        DomainRegistryPublicationState::Verified => RpcRegistryPublicationState::Verified,
+        DomainRegistryPublicationState::Approved => RpcRegistryPublicationState::Approved,
+        DomainRegistryPublicationState::Missing => RpcRegistryPublicationState::Missing,
+        DomainRegistryPublicationState::Retired => RpcRegistryPublicationState::Retired,
+        DomainRegistryPublicationState::Failed => RpcRegistryPublicationState::Failed,
+    }
+}
+
+const fn registry_availability(value: RegistryAvailabilityState) -> RpcRegistryAvailabilityState {
+    match value {
+        RegistryAvailabilityState::Available => RpcRegistryAvailabilityState::Available,
+        RegistryAvailabilityState::Unavailable => RpcRegistryAvailabilityState::Unavailable,
+        RegistryAvailabilityState::Retired => RpcRegistryAvailabilityState::Retired,
+    }
+}
+
+const fn registry_evidence_state(value: RegistryEvidenceState) -> RpcRegistryEvidenceState {
+    match value {
+        RegistryEvidenceState::Pending => RpcRegistryEvidenceState::Pending,
+        RegistryEvidenceState::Verified => RpcRegistryEvidenceState::Verified,
+        RegistryEvidenceState::NotRequired => RpcRegistryEvidenceState::NotRequired,
     }
 }
 

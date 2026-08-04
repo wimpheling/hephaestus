@@ -1,8 +1,11 @@
 //! Hephaestus single-node forge and agent-runtime daemon.
 
 use builder_catalog_domain::BuilderImageReference;
-use hephaestus_app::{AppConfig, HephaestusApp, OidcConfig, VmBackendConfig};
+use hephaestus_app::{
+    AppConfig, HephaestusApp, OciBuilderWorkerConfig, OidcConfig, RegistryConfig, VmBackendConfig,
+};
 use jsonwebtoken::{Algorithm, DecodingKey};
+use oci_builder_runtime_local::LocalOciRuntimeConfig;
 use run_runtime_local::LocalRunRuntimeConfig;
 use secret_broker::DenyingBrokerAdapter;
 use secret_runtime::EphemeralSecretConfig;
@@ -54,6 +57,7 @@ fn environment_config() -> Result<AppConfig, Box<dyn Error>> {
         env::var("HEPHAESTUS_VM_BACKEND").unwrap_or_else(|_| String::from("libkrun"));
     let root_images = root_images_from_environment(&backend_name)?;
     let runtime_root = path("HEPHAESTUS_RUNTIME_ROOT")?;
+    let oci_builder = oci_builder_from_environment(&repository_root, &runtime_root)?;
     let secret_mount_root = path("HEPHAESTUS_SECRET_RUNTIME_ROOT")?;
     let secret_broker_socket = env::var_os("HEPHAESTUS_SECRET_BROKER_SOCKET")
         .map_or_else(|| runtime_root.join("secret-broker.sock"), PathBuf::from);
@@ -61,9 +65,13 @@ fn environment_config() -> Result<AppConfig, Box<dyn Error>> {
         "fake" => VmBackendConfig::Fake,
         "fixture" => VmBackendConfig::FixtureResult,
         "libkrun" => {
+            let mut image_roots: Vec<_> = root_images.values().map(root_filesystem_path).collect();
+            if let Some(worker) = &oci_builder {
+                image_roots.push(worker.rootfs_root.clone());
+            }
             let mut config = LibkrunConfig::new(
                 &runtime_root,
-                root_images.values().map(root_filesystem_path).collect(),
+                image_roots,
                 vec![volume_root.clone()],
                 vec![workspace_root.clone(), secret_mount_root.clone()],
                 path("HEPHAESTUS_LIBKRUN_WORKER")?,
@@ -99,6 +107,31 @@ fn environment_config() -> Result<AppConfig, Box<dyn Error>> {
         required("HEPHAESTUS_SECRET_KEY_REFERENCE")?,
     )?;
     let rpc_mediator_secret = required("HEPHAESTUS_RPC_MEDIATOR_SECRET")?;
+    let registry_private_key = Zeroizing::new(std::fs::read(path(
+        "HEPHAESTUS_REGISTRY_TOKEN_PRIVATE_KEY",
+    )?)?);
+    let registry_authority_text = required("HEPHAESTUS_REGISTRY_SERVICE")?;
+    let registry_authority =
+        registry_domain::RegistryAuthority::parse(registry_authority_text.clone())?;
+    let registry_token_issuer = registry_token::RegistryTokenIssuer::new(
+        required("HEPHAESTUS_REGISTRY_TOKEN_ISSUER")?.parse()?,
+        registry_authority_text.parse()?,
+        registry_token::SigningKey::rs256_pem(
+            required("HEPHAESTUS_REGISTRY_TOKEN_KEY_ID")?.parse()?,
+            &registry_private_key,
+        )?,
+        registry_token::TokenLifetime::new(optional_u64(
+            "HEPHAESTUS_REGISTRY_TOKEN_LIFETIME_SECONDS",
+            300,
+        )?)?,
+    );
+    let registry_notification_callback = Zeroizing::new(
+        std::fs::read_to_string(path(
+            "HEPHAESTUS_REGISTRY_NOTIFICATION_CALLBACK_TOKEN_FILE",
+        )?)?
+        .trim()
+        .to_owned(),
+    );
     Ok(AppConfig {
         database_url: required("HEPHAESTUS_DATABASE_URL")?,
         nats_url: required("HEPHAESTUS_NATS_URL")?,
@@ -114,6 +147,24 @@ fn environment_config() -> Result<AppConfig, Box<dyn Error>> {
             audience: required("HEPHAESTUS_OIDC_AUDIENCE")?,
             algorithm,
             decoding_key,
+        },
+        registry: RegistryConfig {
+            token_issuer: Arc::new(registry_token_issuer),
+            notification_callback: registry_notification::CallbackCredential::parse(
+                &*registry_notification_callback,
+            )?,
+            zot: registry_zot::ZotClientConfig::new(
+                registry_authority,
+                &required("HEPHAESTUS_REGISTRY_PRIVATE_ORIGIN")?,
+            )?,
+            reconciliation_lease: Duration::from_secs(optional_u64(
+                "HEPHAESTUS_REGISTRY_RECONCILIATION_LEASE_SECONDS",
+                30,
+            )?),
+            reconciliation_interval: Duration::from_millis(optional_u64(
+                "HEPHAESTUS_REGISTRY_RECONCILIATION_INTERVAL_MILLISECONDS",
+                5_000,
+            )?),
         },
         volumes: LocalVolumeConfig {
             volume_root,
@@ -148,6 +199,7 @@ fn environment_config() -> Result<AppConfig, Box<dyn Error>> {
         secret_broker_adapter: Arc::new(DenyingBrokerAdapter),
         vm_backend,
         root_images,
+        oci_builder,
         runtime_policy: hephaestus_app::RuntimePolicy {
             version: required("HEPHAESTUS_RUNTIME_POLICY_VERSION")?,
             max_vcpus: required("HEPHAESTUS_RUNTIME_MAX_VCPUS")?.parse()?,
@@ -170,6 +222,85 @@ fn required(name: &str) -> Result<String, Box<dyn Error>> {
 
 fn path(name: &str) -> Result<PathBuf, Box<dyn Error>> {
     Ok(PathBuf::from(required(name)?))
+}
+
+fn oci_builder_from_environment(
+    repository_root: &Path,
+    runtime_root: &Path,
+) -> Result<Option<OciBuilderWorkerConfig>, Box<dyn Error>> {
+    let Some(rootfs_root) = env::var_os("HEPHAESTUS_OCI_BUILDER_ROOTFS_ROOT") else {
+        return Ok(None);
+    };
+    let base_layout_manifest = path("HEPHAESTUS_OCI_BUILDER_BASE_LAYOUT_MANIFEST")?;
+    if !base_layout_manifest.is_absolute() {
+        return Err(String::from("OCI base-layout manifest path must be absolute").into());
+    }
+    let base_layouts: BTreeMap<String, PathBuf> =
+        serde_json::from_slice(&std::fs::read(base_layout_manifest)?)?;
+    if base_layouts.is_empty() {
+        return Err(String::from("OCI base-layout manifest must not be empty").into());
+    }
+    let host_id = required("HEPHAESTUS_HOST_ID")?;
+    let preparation_worker_name = env::var("HEPHAESTUS_OCI_BUILDER_PREPARATION_WORKER")
+        .unwrap_or_else(|_| format!("oci-preparation-{host_id}"));
+    let materialization_worker_name = env::var("HEPHAESTUS_OCI_BUILDER_MATERIALIZATION_WORKER")
+        .unwrap_or_else(|_| format!("oci-rootfs-{host_id}"));
+    let output_root = path("HEPHAESTUS_OCI_BUILDER_OUTPUT_ROOT")?;
+    let registry_authority =
+        registry_domain::RegistryAuthority::parse(required("HEPHAESTUS_REGISTRY_SERVICE")?)?;
+    let runtime = LocalOciRuntimeConfig {
+        repository_root: repository_root.to_path_buf(),
+        checkout_root: path("HEPHAESTUS_OCI_BUILDER_CHECKOUT_ROOT")?,
+        base_layouts,
+        output_root: output_root.clone(),
+        git_binary: path_or("HEPHAESTUS_GIT_BINARY", "/usr/bin/git"),
+        tar_binary: path_or("HEPHAESTUS_TAR_BINARY", "/usr/bin/tar"),
+        buildah_binary: path_or("HEPHAESTUS_BUILDAH_BINARY", "/usr/bin/buildah"),
+        trivy_binary: path_or("HEPHAESTUS_TRIVY_BINARY", "/usr/bin/trivy"),
+        umoci_binary: path_or("HEPHAESTUS_UMOCI_BINARY", "/usr/bin/umoci"),
+        buildah_output_prefix: env::var("HEPHAESTUS_OCI_BUILDER_OUTPUT_PREFIX")
+            .unwrap_or_else(|_| String::from("heph-builder")),
+    };
+    let publisher = registry_publisher::PublisherConfiguration::new(
+        registry_authority,
+        &output_root,
+        &path("HEPHAESTUS_REGISTRY_CREDENTIAL_ROOT")?,
+        &path_or("HEPHAESTUS_SKOPEO", "/usr/bin/skopeo"),
+        &path_or("HEPHAESTUS_ORAS", "/usr/bin/oras"),
+    )?;
+    Ok(Some(OciBuilderWorkerConfig {
+        runtime,
+        publication_tooling: oci_builder_runtime_local::ForgeZotPublicationConfig {
+            syft_binary: path_or("HEPHAESTUS_SYFT_BINARY", "/usr/bin/syft"),
+            syft_config: path("HEPHAESTUS_SYFT_CONFIG")?,
+        },
+        publisher,
+        publication_policy_version: registry_domain::PolicyVersion::parse(
+            env::var("HEPHAESTUS_REGISTRY_POLICY_VERSION")
+                .unwrap_or_else(|_| String::from("registry/v1")),
+        )?,
+        publication_policy: registry_domain::SupplyChainPolicy::without_signature(),
+        preparation_worker_name,
+        materialization_worker_name,
+        rootfs_root: PathBuf::from(rootfs_root),
+        root_manifest: env::var_os("HEPHAESTUS_OCI_BUILDER_ROOT_MANIFEST").map_or_else(
+            || runtime_root.join("repository-builder-roots.json"),
+            PathBuf::from,
+        ),
+        lease: Duration::from_secs(optional_u64("HEPHAESTUS_OCI_BUILDER_LEASE_SECONDS", 900)?),
+        poll_interval: Duration::from_millis(optional_u64(
+            "HEPHAESTUS_OCI_BUILDER_POLL_MILLISECONDS",
+            1_000,
+        )?),
+    }))
+}
+
+fn optional_u64(name: &str, default: u64) -> Result<u64, Box<dyn Error>> {
+    match env::var(name) {
+        Ok(value) => Ok(value.parse()?),
+        Err(env::VarError::NotPresent) => Ok(default),
+        Err(error) => Err(Box::new(error)),
+    }
 }
 
 const ROOT_IMAGE_MANIFEST_VERSION: u32 = 1;

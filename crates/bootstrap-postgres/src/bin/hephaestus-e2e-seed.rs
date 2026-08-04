@@ -13,6 +13,7 @@ use std::{env, error::Error, path::PathBuf, sync::Arc};
 use uuid::Uuid;
 
 const USER_ID: &str = "10000000-0000-4000-8000-000000000001";
+const OUTSIDER_USER_ID: &str = "10000000-0000-4000-8000-000000000003";
 const ORGANIZATION_ID: &str = "10000000-0000-4000-8000-000000000002";
 
 #[tokio::main]
@@ -35,6 +36,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 
     let user_id = UserId::from_uuid(Uuid::parse_str(USER_ID)?);
+    let outsider_user_id = UserId::from_uuid(Uuid::parse_str(OUTSIDER_USER_ID)?);
     let organization_id = OrganizationId::from_uuid(Uuid::parse_str(ORGANIZATION_ID)?);
     sqlx::query(
         "INSERT INTO users (id, display_name)
@@ -51,6 +53,24 @@ async fn main() -> Result<(), Box<dyn Error>> {
            ON CONFLICT (issuer, subject) DO NOTHING",
     )
     .bind(user_id.as_uuid())
+    .bind(&issuer)
+    .execute(&pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO users (id, display_name)
+           VALUES ($1, 'Bea Outsider')
+           ON CONFLICT (id) DO NOTHING",
+    )
+    .bind(outsider_user_id.as_uuid())
+    .execute(&pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO external_identities
+           (user_id, issuer, subject, provider_metadata)
+           VALUES ($1, $2, 'outsider', '{\"fixture\":true}'::jsonb)
+           ON CONFLICT (issuer, subject) DO NOTHING",
+    )
+    .bind(outsider_user_id.as_uuid())
     .bind(&issuer)
     .execute(&pool)
     .await?;

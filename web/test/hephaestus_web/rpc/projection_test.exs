@@ -13,6 +13,17 @@ defmodule HephaestusWeb.RPC.ProjectionTest do
 
   alias Hephaestus.Secret.V1.SecretSummary
   alias Hephaestus.Run.V1.{ResultProposal, Run, RunMetrics, RunResult}
+
+  alias Hephaestus.Builder.V1.{
+    ProjectBuilder,
+    ProjectBuilderStatus,
+    RegistryAvailabilityState,
+    RegistryEvidence,
+    RegistryEvidenceState,
+    RegistryPublication,
+    RegistryPublicationState
+  }
+
   alias HephaestusWeb.RPC.Projection
 
   test "projects parameter schema constraints, defaults, and sensitivity" do
@@ -83,5 +94,37 @@ defmodule HephaestusWeb.RPC.ProjectionTest do
              "target_ref" => "refs/heads/main",
              "proposal_version" => 2
            } = Projection.to_value(run)
+  end
+
+  test "projects safe registry publication metadata without transport secrets" do
+    publication = %RegistryPublication{
+      state: RegistryPublicationState.REGISTRY_PUBLICATION_STATE_APPROVED,
+      availability: RegistryAvailabilityState.REGISTRY_AVAILABILITY_STATE_AVAILABLE,
+      immutable_reference:
+        "registry.forge.example/projects/project/repository-builders/builder@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      architectures: ["amd64"],
+      sbom: %RegistryEvidence{
+        state: RegistryEvidenceState.REGISTRY_EVIDENCE_STATE_VERIFIED,
+        immutable_reference:
+          "registry.forge.example/projects/project/repository-builders/builder@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      }
+    }
+
+    assert %{
+             "state" => "approved",
+             "availability" => "available",
+             "architectures" => ["amd64"],
+             "sbom" => %{
+               "state" => "verified",
+               "immutable_reference" => "registry.forge.example/" <> _
+             }
+           } = Projection.to_value(publication)
+  end
+
+  test "projects repository-builder lifecycle enums into display values" do
+    assert %{"status" => "ready"} =
+             Projection.to_value(%ProjectBuilder{
+               status: ProjectBuilderStatus.PROJECT_BUILDER_STATUS_READY
+             })
   end
 end

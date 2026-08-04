@@ -132,6 +132,7 @@ defmodule HephaestusWebWeb.BuildLive do
         declared_artifacts={@presentation.declared_artifacts}
         produced_artifacts={@presentation.produced_artifacts}
         artifact_manifest={@presentation.artifact_manifest}
+        verifications={@presentation.verifications}
         retry_event={@presentation.retry_event}
         verification_rebuild_event={@presentation.verification_rebuild_event}
         another_commit_event={@presentation.another_commit_event}

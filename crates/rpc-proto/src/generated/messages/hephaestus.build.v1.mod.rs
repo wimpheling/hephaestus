@@ -36,6 +36,7 @@ pub mod __buffa {
         reg.register_json_any(super::__BUILD_TIMELINE_ENTRY_JSON_ANY);
         reg.register_json_any(super::__DECLARED_ARTIFACT_JSON_ANY);
         reg.register_json_any(super::__PRODUCED_ARTIFACT_JSON_ANY);
+        reg.register_json_any(super::__BUILD_VERIFICATION_JSON_ANY);
         reg.register_json_any(super::__LIST_BUILDS_REQUEST_JSON_ANY);
         reg.register_json_any(super::__LIST_BUILDS_RESPONSE_JSON_ANY);
         reg.register_json_any(super::__GET_BUILD_REQUEST_JSON_ANY);
@@ -71,6 +72,10 @@ pub use self::__buffa::view::DeclaredArtifactOwnedView;
 pub use self::__buffa::view::ProducedArtifactView;
 #[doc(inline)]
 pub use self::__buffa::view::ProducedArtifactOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::BuildVerificationView;
+#[doc(inline)]
+pub use self::__buffa::view::BuildVerificationOwnedView;
 #[doc(inline)]
 pub use self::__buffa::view::ListBuildsRequestView;
 #[doc(inline)]

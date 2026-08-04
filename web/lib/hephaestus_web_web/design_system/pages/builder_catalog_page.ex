@@ -95,6 +95,36 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.BuilderCatalogPage do
                 {get_in(builder, ["provenance", "sbom"]) || "Not supplied"}
               </.text>
             </.frame>
+            <.frame as="div" variant={:panel}>
+              <.text as="dt" variant={:muted}>Registry publication</.text>
+              <.text as="dd">{registry_value(builder, "state")}</.text>
+            </.frame>
+            <.frame as="div" variant={:panel}>
+              <.text as="dt" variant={:muted}>Registry availability</.text>
+              <.text as="dd">{registry_value(builder, "availability")}</.text>
+            </.frame>
+            <.frame as="div" variant={:panel}>
+              <.text as="dt" variant={:muted}>Registry digest</.text>
+              <.text as="dd" variant={:mono}>
+                {registry_value(builder, "immutable_reference")}
+              </.text>
+            </.frame>
+            <.frame as="div" variant={:panel}>
+              <.text as="dt" variant={:muted}>Verified registry architectures</.text>
+              <.text as="dd">
+                {Enum.join(get_in(builder, ["registry_publication", "architectures"]) || [], ", ")}
+              </.text>
+            </.frame>
+            <.frame
+              :for={kind <- ["sbom", "provenance", "scan", "signature"]}
+              as="div"
+              variant={:panel}
+            >
+              <.text as="dt" variant={:muted}>{String.upcase(kind)} verification</.text>
+              <.text as="dd" variant={:mono}>
+                {registry_evidence(builder, kind)}
+              </.text>
+            </.frame>
           </.frame>
         </.frame>
       </.frame>
@@ -111,5 +141,14 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.BuilderCatalogPage do
     Enum.map_join(toolchains, ", ", fn toolchain ->
       "#{toolchain["name"]} #{toolchain["version"]}"
     end)
+  end
+
+  defp registry_value(builder, key) do
+    get_in(builder, ["registry_publication", key]) || "Not requested"
+  end
+
+  defp registry_evidence(builder, kind) do
+    evidence = get_in(builder, ["registry_publication", kind]) || %{}
+    evidence["immutable_reference"] || evidence["state"] || "Pending"
   end
 end

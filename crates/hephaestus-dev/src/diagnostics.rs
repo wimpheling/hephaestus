@@ -2,7 +2,7 @@ use crate::{
     cli::{LogArgs, LogComponent},
     context::DevContext,
     process::{DevError, Result, command_exists, output, run, run_quiet},
-    state,
+    state, zot,
 };
 use std::{fs, os::unix::fs::PermissionsExt, process::Command};
 
@@ -111,10 +111,15 @@ pub fn status(context: &DevContext) -> Result<()> {
             ],
         )?,
     );
+    print_service(
+        "zot",
+        zot::running(context)? && zot::challenge_ready(context)?,
+    );
     for container in [
         context.postgres_container(),
         context.nats_container(),
         context.web_container(),
+        context.zot_container(),
     ] {
         let running = run_quiet(
             "podman",
@@ -133,7 +138,12 @@ pub fn logs(context: &DevContext, arguments: &LogArgs) -> Result<()> {
     if let Some(component) = arguments.component {
         return show_log(context, component, arguments.follow);
     }
-    for component in [LogComponent::Daemon, LogComponent::Oidc, LogComponent::Web] {
+    for component in [
+        LogComponent::Daemon,
+        LogComponent::Oidc,
+        LogComponent::Web,
+        LogComponent::Zot,
+    ] {
         println!("== {} ==", component_name(component));
         show_log(context, component, false)?;
     }
@@ -141,10 +151,14 @@ pub fn logs(context: &DevContext, arguments: &LogArgs) -> Result<()> {
 }
 
 fn show_log(context: &DevContext, component: LogComponent, follow: bool) -> Result<()> {
+    if matches!(component, LogComponent::Zot) {
+        return zot::show_logs(context, follow);
+    }
     let filename = match component {
         LogComponent::Web => "web.log",
         LogComponent::Daemon => "daemon.log",
         LogComponent::Oidc => "oidc.log",
+        LogComponent::Zot => unreachable!("Zot logs are provided by Podman"),
     };
     let path = context.logs().join(filename);
     if !path.exists() {
@@ -192,5 +206,6 @@ const fn component_name(component: LogComponent) -> &'static str {
         LogComponent::Web => "web",
         LogComponent::Daemon => "daemon",
         LogComponent::Oidc => "oidc",
+        LogComponent::Zot => "zot",
     }
 }
