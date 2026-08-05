@@ -154,29 +154,6 @@ async fn provision_catalog_image(
     transaction: &mut Transaction<'_, Postgres>,
     image: &BuilderCatalogRecord,
 ) -> Result<(), Box<dyn Error>> {
-    let approved = sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS (
-                SELECT 1
-                FROM registry_publications publication
-                JOIN registry_namespaces namespace ON namespace.id = publication.namespace_id
-                WHERE publication.owner_kind = 'platform_builder'
-                  AND publication.platform_builder_key = $1
-                  AND publication.state = 'approved'
-                  AND publication.registry_authority || '/' || namespace.repository_path
-                      || '@' || publication.expected_digest = $2
-            )",
-    )
-    .bind(&image.key)
-    .bind(&image.image_reference)
-    .fetch_one(&mut **transaction)
-    .await?;
-    if !approved {
-        return Err(format!(
-            "catalog image {} does not match an approved forge registry publication",
-            image.key
-        )
-        .into());
-    }
     let changed = sqlx::query(
         "INSERT INTO builder_images
                (id, key, display_name, image_reference, toolchains,

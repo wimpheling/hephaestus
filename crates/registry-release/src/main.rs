@@ -180,7 +180,16 @@ impl Runtime {
                 intent = self.store.retry(intent.id()).await?;
             }
             PublicationState::Pending => {}
-            PublicationState::Missing | PublicationState::Retired => {
+            PublicationState::Missing => {
+                let token = issue_publish_token(&self.issuer, intent.claim().namespace())?;
+                let verification = tokio::task::block_in_place(|| {
+                    self.publisher
+                        .verify_existing(&intent, &request.material, token.token())
+                })?;
+                intent = self.store.restore_verified(intent.id(), &verification).await?;
+                return release_output(&intent);
+            }
+            PublicationState::Retired => {
                 return Err("existing publication is not retryable".into());
             }
         }

@@ -502,6 +502,27 @@ where
         self.verify_remote(intent, token, signature_present)
     }
 
+    /// Re-verifies a publication marked missing without republishing it.
+    ///
+    /// The lifecycle store only restores `missing` content after the exact
+    /// immutable layout and its remote evidence graph have been checked again.
+    pub fn verify_existing(
+        &self,
+        intent: &PublicationIntent,
+        material: &PublicationMaterial,
+        token: &BearerToken,
+    ) -> Result<VerifiedPublication, PublisherError> {
+        if intent.state() != PublicationState::Missing {
+            return Err(PublisherError::NonRetryableIntent);
+        }
+        let local = self.validate_local_material(intent, material)?;
+        let signature_present = local
+            .evidence
+            .iter()
+            .any(|evidence| evidence.artifact_type == SIGNATURE_ARTIFACT_TYPE);
+        self.verify_remote(intent, token, signature_present)
+    }
+
     fn assert_intent(&self, intent: &PublicationIntent) -> Result<(), PublisherError> {
         if intent.reference().authority() != &self.configuration.authority {
             return Err(PublisherError::AuthorityMismatch);
@@ -1794,6 +1815,27 @@ mod tests {
             .publish(&intent, &material, issued.token())
             .expect("retry verification");
         assert_eq!(first, second);
+    }
+
+    #[test]
+    fn rechecks_missing_content_without_republishing() {
+        let (_root, config, material, intent) = setup();
+        let outputs = successful_outputs(&intent, &material);
+        let first = scripted_publisher(config.clone(), ScriptedRunner::with(outputs.clone()))
+            .publish(&intent, &material, token().token())
+            .expect("initial verification");
+        let missing = intent
+            .record_verified(first)
+            .expect("verified")
+            .approve()
+            .expect("approved")
+            .mark_missing()
+            .expect("missing");
+        let publisher = scripted_publisher(config, ScriptedRunner::with(outputs[4..].to_vec()));
+        let verified = publisher
+            .verify_existing(&missing, &material, token().token())
+            .expect("reverified");
+        assert_eq!(verified.manifest(), missing.expected_manifest());
     }
 
     #[cfg(unix)]
