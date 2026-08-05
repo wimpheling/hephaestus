@@ -36,6 +36,30 @@ let registryJourney:
   | undefined;
 
 test.describe.serial("release, instance, secret, and live-review product journey", () => {
+  test("loads a project repository once and opens it without an unavailable redirect", async ({
+    page
+  }) => {
+    const fixture = await loadFixture();
+    await signIn(page);
+
+    const projectStartedAt = Date.now();
+    await page.goto(`/projects/${fixture.projectId}`);
+    await waitForLiveView(page);
+    const repository = page.locator(`#project-repository-${fixture.repositoryId}`);
+    await expect(repository).toBeVisible();
+    await expect(repository).toContainText("agent-workbench");
+    await expect(page.locator("#resource-empty-project-repository-stream")).not.toBeVisible();
+    expect(Date.now() - projectStartedAt).toBeLessThan(3_000);
+
+    const repositoryStartedAt = Date.now();
+    await repository.click();
+    await expect(page).toHaveURL(`/repositories/${fixture.repositoryId}`);
+    await waitForLiveView(page);
+    await expect(page.getByRole("main")).toContainText("agent-workbench");
+    await expect(page.getByText("Repository unavailable")).toHaveCount(0);
+    expect(Date.now() - repositoryStartedAt).toBeLessThan(3_000);
+  });
+
   test("creates a repository, pushes agent.toml, and publishes its built release", async ({
     page
   }) => {
@@ -71,6 +95,8 @@ test.describe.serial("release, instance, secret, and live-review product journey
     await page.getByRole("button", {name: "Create repository"}).click();
     await expect(page).toHaveURL(/\/repositories\/[0-9a-f-]+$/);
     const repositoryId = page.url().split("/").at(-1)!;
+    await expect(page.locator("#repository-empty-push")).toBeVisible();
+    await expect(page.getByText("Repository unavailable")).toHaveCount(0);
 
     const sourceCommit = pushCommit(repositoryId, "build browser release", false, true);
     const build = await waitForBuild(repositoryId, sourceCommit);

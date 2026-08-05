@@ -61,6 +61,9 @@ defmodule HephaestusWebWeb.ProductEventReducer do
 
   @doc "Begins a replacement watch generation while preserving its exact resume cursor."
   @spec begin_watch(struct()) :: struct()
+  def begin_watch(%{status: :ready, cursor: nil} = state),
+    do: %{state | stream_generation: state.stream_generation + 1}
+
   def begin_watch(state) do
     status = if state.cursor, do: :reconnecting, else: :loading
     %{state | status: status, stream_generation: state.stream_generation + 1}

@@ -7,6 +7,9 @@ defmodule HephaestusWebWeb.OrganizationLiveTest do
   alias HephaestusWebWeb.{
     OrganizationSecretsLive,
     OrganizationSecretsState,
+    OrganizationState,
+    OrganizationWorkspaceLive,
+    OrganizationWorkspaceState,
     ProjectAgentsLive,
     ProjectAgentsState,
     ProjectLive,
@@ -36,6 +39,65 @@ defmodule HephaestusWebWeb.OrganizationLiveTest do
       assert %Phoenix.LiveView.LiveStream{} = mounted.assigns.streams[stream_name]
       assert Enum.empty?(mounted.assigns.streams[stream_name].inserts)
     end
+  end
+
+  test "ordinary browsing pages keep only their finite snapshot task" do
+    for {view, params} <- [
+          {OrganizationLive, %{}},
+          {OrganizationWorkspaceLive, %{"organization_id" => "organization-1"}},
+          {ProjectLive, %{"project_id" => "project-1"}},
+          {OrganizationSecretsLive, %{"organization_id" => "organization-1"}},
+          {ProjectSettingsLive, %{"project_id" => "project-1"}}
+        ] do
+      assert {:ok, mounted} = view.mount(params, %{}, disconnected_socket())
+      refute Map.has_key?(mounted.assigns, :watch_task)
+      assert mounted.assigns.snapshot_task == nil
+    end
+  end
+
+  test "ordinary browsing pages do not create a watch after their snapshot completes" do
+    organization = %{"id" => "organization-1", "name" => "Acme"}
+    project = %{"id" => "project-1", "name" => "Forge", "organization_id" => "organization-1"}
+
+    assert_snapshot_only(
+      OrganizationLive,
+      OrganizationState,
+      %{},
+      :load,
+      {:loaded, 0, [organization]}
+    )
+
+    assert_snapshot_only(
+      OrganizationWorkspaceLive,
+      OrganizationWorkspaceState,
+      %{"organization_id" => "organization-1"},
+      :load,
+      {:loaded, 1, organization, [project]}
+    )
+
+    assert_snapshot_only(
+      ProjectLive,
+      ProjectState,
+      %{"project_id" => "project-1"},
+      {:load, 1},
+      {:loaded, 1, project, [%{"id" => "repository-1"}]}
+    )
+
+    assert_snapshot_only(
+      OrganizationSecretsLive,
+      OrganizationSecretsState,
+      %{"organization_id" => "organization-1"},
+      {:load, 0},
+      {:loaded, 0, organization, [], []}
+    )
+
+    assert_snapshot_only(
+      ProjectSettingsLive,
+      ProjectSettingsState,
+      %{"project_id" => "project-1"},
+      {:load, 0},
+      {:loaded, 0, project, [], %{"grants" => [], "imports" => []}, []}
+    )
   end
 
   test "page-scoped task results transition every A-lane adapter to ready" do
@@ -136,6 +198,29 @@ defmodule HephaestusWebWeb.OrganizationLiveTest do
              view.handle_info({make_ref(), event}, ready_socket)
 
     assert unchanged_socket.assigns.page_state == ready_socket.assigns.page_state
+  end
+
+  defp assert_snapshot_only(view, state_module, params, load_event, loaded_event) do
+    assert {:ok, mounted} = view.mount(params, %{}, disconnected_socket())
+    {loading, [:load]} = state_module.reduce(mounted.assigns.page_state, load_event)
+    ref = make_ref()
+
+    task = %Task{
+      owner: self(),
+      pid: self(),
+      ref: ref,
+      mfa: {__MODULE__, :assert_snapshot_only, 5}
+    }
+
+    socket =
+      mounted
+      |> Phoenix.Component.assign(:page_state, loading)
+      |> Phoenix.Component.assign(:snapshot_task, task)
+
+    assert {:noreply, completed} = view.handle_info({ref, loaded_event}, socket)
+    assert completed.assigns.page_state.status == :ready
+    assert completed.assigns.snapshot_task == nil
+    refute Map.has_key?(completed.assigns, :watch_task)
   end
 
   defp disconnected_socket do

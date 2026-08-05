@@ -116,7 +116,10 @@ for key in "${builders[@]}"; do
     is_created "$created" || die "invalid created timestamp in release input for $key"
     declare -a release_arguments=(publish-platform-builder --key "$key" --layout "$layout")
     for kind in sbom provenance scan approval; do
-        path=$("$jq_binary" -er --arg kind "$kind" '.evidence[$kind].path // empty' "$metadata")
+        # An approval artifact is optional under the current policy. `jq -e`
+        # returns non-zero for its intentionally empty path, so do not let
+        # `set -e` turn that absence into a silent release failure.
+        path=$("$jq_binary" -er --arg kind "$kind" '.evidence[$kind].path // empty' "$metadata" || true)
         if [[ -z "$path" ]]; then
             [[ "$kind" == approval ]] || die "missing required $kind evidence for $key"
             continue

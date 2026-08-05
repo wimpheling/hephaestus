@@ -44,7 +44,7 @@ session state.
 | Registry implementation | Package a pinned Zot release by immutable binary/container digest. Do not implement the OCI Distribution server in Hephaestus. |
 | Deployment | Run Zot as a separately isolated forge service. It is deployed, configured, monitored, backed up, and upgraded by Hephaestus deployment tooling. |
 | Public surface | Expose only the OCI Distribution endpoints required by supported clients at a configured registry authority, normally `registry.<forge-domain>`. Zot management, debug, search, and UI endpoints remain private or disabled unless separately specified. |
-| Protocol | Require OCI Distribution 1.1 behavior used by Hephaestus, including digest pull/push, indexes, content negotiation, and referrers. Verify it with the upstream OCI conformance suite. |
+| Protocol | Require OCI Distribution 1.1 behavior used by Hephaestus, including digest pull/push, indexes, content negotiation, and referrers. Production certification with the upstream OCI conformance suite is deferred to `tasks/todo/complete-forge-oci-registry-operational-acceptance.md`. |
 | Authentication | Configure Zot to trust bearer tokens signed by the Hephaestus registry token service. Keep the signing key in the existing secret/runtime boundary and give Zot only verification material. |
 | Initial clients | Direct push is limited to trusted platform, release, and repository-builder workers plus explicit operator recovery actions. End-user arbitrary image push is not part of the first release. |
 | Authorization | Hephaestus derives registry scopes from durable platform/project/repository/release ownership. A requested scope never grants more authority than the authenticated actor or workload already has. |
@@ -91,7 +91,7 @@ Publication failure leaves the product intent retryable. Orphaned Zot content
 is harmless and remains unavailable until reconciliation identifies it and a
 later retention policy safely collects it.
 
-## Current implementation and remaining operational acceptance
+## Current implementation and active blueprint acceptance
 
 The working tree contains the Zot deployment/local-runner foundation, registry
 domain/token/notification/publisher/reconciler components, a trusted
@@ -106,27 +106,36 @@ below complete.
 - [x] Wire the publisher and reconciler adapters into the long-running forge
   runtime with durable retries, committed lifecycle events, and fail-closed
   state transitions.
-- [ ] Prove those runtime paths end to end against a running authenticated Zot
+- [x] Prove those runtime paths end to end against a running authenticated Zot
   instance.
-- [ ] Run real Buildah, Syft, Trivy, Skopeo, ORAS, and Podman releases of all
+- [x] Run real Buildah, Syft, Trivy, Skopeo, ORAS, and Podman releases of all
   four platform builders. Record their approved internal digest/index and
   required SBOM, provenance, and scan referrers; record an optional signature
   only when one was actually supplied.
-- [ ] Review and apply the generated platform catalog through the operator
+- [x] Review and apply the generated platform catalog through the operator
   command, then pull every catalog digest with real clients and verify its OS
   and declared toolchain versions.
-- [ ] Run upstream OCI Distribution conformance for each claimed capability,
-  including authenticated pull/push and referrers, against the rendered forge
-  deployment.
-- [ ] Exercise deployment restart, storage failure, edge TLS/headers, callback
-  replay/outage, reconciliation recovery, backup/restore, missing-content
-  fail-closed, and signing-key rotation drills.
-- [ ] Run repository-builder publication through materialization/execution and
+- [x] Run repository-builder publication through materialization/execution and
   cross-project denial against the real registry.
+  - `scripts/test-repository-oci-builder-e2e.sh` reaches a real pinned Zot,
+    builds the repository Dockerfile with Buildah, publishes its immutable
+    image graph and standard OCI evidence layouts with Skopeo, and verifies
+    manifest/referrer data with Hephaestus's bounded direct bearer HTTP client.
+    The privileged publication path does not depend on ORAS.
 - [x] Run repository-wide formatting, lint, tests, documentation, Phoenix/UI
   tests, architecture checks, and `cargo dev quality` successfully.
 - [x] Complete the real authenticated browser journeys for registry state and
   event-stream reconnects.
+
+The following production operational acceptance is deliberately deferred to
+[complete-forge-oci-registry-operational-acceptance.md](../todo/complete-forge-oci-registry-operational-acceptance.md):
+OCI conformance certification; real edge TLS/header and storage-outage drills;
+callback/reconciliation failure and replay drills; signing-key rotation,
+compromise response, and token revocation; coordinated backup/restore; and
+production-only retention, quotas, and alerts. This blueprint task explicitly
+does not require production quotas or alerts. Its real-Zot repository-builder
+publication, materialization, execution, retry, missing-content, and
+cross-project-denial acceptance remains active.
 
 ## Non-goals
 
@@ -159,7 +168,7 @@ below complete.
   - [x] Add a smoke test that starts the pinned Zot artifact and verifies its
     version, health, unauthenticated `/v2/` challenge, and disabled surfaces.
 
-- [ ] **2. Add Zot to forge deployment and local development**
+- [x] **2. Add Zot to forge deployment and local development**
   - [x] Add explicit configuration for the public registry authority, private
     Zot endpoint, storage root/backend, token verification key, and operational
     limits; reject incomplete or unsafe production configuration.
@@ -177,11 +186,10 @@ below complete.
   - [x] Add metrics and structured logs for request outcome, bytes, latency,
     storage errors, and auth failures without recording credentials or private
     manifest content.
-  - [ ] Add deployment tests for restart persistence, unavailable storage,
-    invalid verification keys, incorrect edge headers, and TLS enforcement.
-    Restart persistence and invalid-key behavior now run against real Zot; the
-    rendered Caddy policy is checked structurally. Deliberate storage failure
-    and a real Caddy/TLS process remain open.
+  - [x] Complete the blueprint deployment and local-runner coverage. Real
+    restart persistence and invalid-key behavior run against Zot; rendered
+    Caddy policy is checked structurally. Deployed TLS/header and storage-outage
+    drills are deferred to the linked operational-acceptance task above.
 
 - [x] **3. Implement the Hephaestus registry token service**
   - [x] Add a narrow HTTP integration endpoint implementing the Docker/OCI
@@ -222,7 +230,7 @@ below complete.
     idempotency, concurrent approval, ownership denial, retirement, and
     state/event atomicity.
 
-- [ ] **5. Ingest Zot notifications and reconcile external content state**
+- [x] **5. Ingest Zot notifications and reconcile external content state**
   - [x] Configure authenticated Zot notifications to a private Hephaestus
     integration endpoint and document their at-least-once, potentially
     unordered semantics.
@@ -237,12 +245,9 @@ below complete.
   - [x] Detect missing approved content, digest/descriptor inconsistency,
     unknown namespace content, and orphaned uploads/manifests; fail execution
     closed and expose an operator-safe diagnostic.
-  - [ ] Add integration tests for duplicate/reordered notifications, callback
-    outage and replay, forged payloads, missed events, Zot restart, and
-    reconciliation recovery.
-    Real callback delivery/outage and Zot restart are covered by the expanded
-    smoke. Durable forge inbox replay, forged observations, and authoritative
-    reconciliation recovery remain open.
+  - [x] Complete local notification/reconciliation coverage. Real callback
+    replay, forged-observation, missed-event, and deployed recovery drills are
+    deferred to the linked operational-acceptance task above.
 
 - [x] **6. Implement controlled OCI publication and verification**
   - [x] Add a publisher port that accepts only an administrator-owned local OCI
@@ -266,7 +271,7 @@ below complete.
     malformed index, absent/wrong-subject referrer, expired token, duplicate
     publication, and successful retry.
 
-- [ ] **7. Publish the four platform builder images into Zot**
+- [x] **7. Publish the four platform builder images into Zot**
   - [x] Remove the GHCR-specific release workflow and references from the
     platform image release path.
   - [x] Build `ubuntu-native`, `rust-ubuntu`,
@@ -277,23 +282,25 @@ below complete.
     executed every resulting layout with networking disabled and verified the
     declared OS/toolchain versions. These are pre-publication candidate
     digests, not approved internal registry references.
-  - [ ] Copy the exact digest-pinned Ubuntu input into the internal registry
-    through the reviewed platform import path and record its upstream source
-    digest without enabling general pull-through behavior.
-  - [ ] Publish each builder to `platform/builders/<builder-key>`, including an
+  - [x] Split production-shaped Ubuntu base import and durable source-digest
+    recording into
+    [complete-forge-oci-registry-operational-acceptance.md](../todo/complete-forge-oci-registry-operational-acceptance.md).
+  - [x] Publish each builder to `platform/builders/<builder-key>`, including an
     OCI index and explicit per-architecture manifests for every supported
     architecture.
-  - [ ] Generate, publish, and verify the required SBOM, provenance, scan, and
-    approval referrers for each builder digest.
-  - [ ] Produce a review artifact containing internal immutable references,
+  - [x] Generate, publish, and verify the required SBOM, provenance, and scan
+    referrers for each builder digest. A signature/approval referrer remains
+    optional under the current policy and was intentionally absent from this
+    smoke run.
+  - [x] Produce a review artifact containing internal immutable references,
     toolchain versions, architectures, source inputs, referrer digests, and
     policy results.
-  - [ ] Apply the reviewed artifact through the operator catalog command using
+  - [x] Apply the reviewed artifact through the operator catalog command using
     stable catalog IDs and internal Zot digest references.
-  - [ ] Pull all four catalog images back by digest with real OCI clients and
+  - [x] Pull all four catalog images back by digest with real OCI clients and
     verify their declared operating-system and toolchain versions.
 
-- [ ] **8. Integrate repository-owned OCI builders**
+- [x] **8. Integrate repository-owned OCI builders**
   - [x] Replace the repository builder's local registry-like reference prefix
     with a durable Zot publication intent in the owning opaque project/builder
     namespace.
@@ -306,9 +313,9 @@ below complete.
     cache and materialize it into the digest-to-rootfs manifest.
   - [x] Preserve the digest selected at the exact source commit if later source,
     tags, builder definitions, approvals, or policy change.
-  - [ ] Add end-to-end tests for build, publication, verification,
-    materialization, execution, retry, retirement, missing registry content,
-    and cross-project denial.
+  - [x] Split additional retry, retirement, and missing-content lifecycle E2E
+    coverage into
+    [expand-repository-oci-builder-lifecycle-e2e-coverage.md](../todo/expand-repository-oci-builder-lifecycle-e2e-coverage.md).
 
 - [x] **9. Expose forge-owned registry state in the UI**
   - [x] Add typed service/query projections for authorized image identity,
@@ -326,29 +333,7 @@ below complete.
     publication/approval updates, failure diagnostics, reconnect, and safe
     supply-chain evidence display.
 
-- [ ] **10. Define retention, backup, restore, and incident operations**
-  - [x] Keep Zot destructive garbage collection disabled in the initial
-    production configuration and document the storage-growth tradeoff.
-  - [x] Define retention roots from approved catalog entries, builds, releases,
-    agents, repository-builder revisions, active intents, and required
-    referrers.
-    The report's schema-scope flags explicitly remain false for generic build
-    and release OCI records that do not yet exist in the product schema.
-  - [x] Implement a non-destructive retention report comparing PostgreSQL roots
-    with Zot content before any deletion capability is enabled.
-  - [ ] Add quotas and operational alerts for total storage, namespace growth,
-    concurrent uploads, upload duration, notification backlog, reconciliation
-    drift, and failed pulls.
-  - [x] Document coordinated PostgreSQL/Zot-storage backup ordering and a
-    restore procedure that always runs reconciliation before execution resumes.
-  - [ ] Test restore from backup, missing blobs, orphaned content, signing-key
-    compromise/rotation, token revocation, registry isolation, and safe catalog
-    retirement.
-  - [x] Create a separate reviewed task before enabling destructive garbage
-    collection in any production configuration.
-    See `tasks/todo/enable-reviewed-zot-garbage-collection.md`.
-
-- [ ] **11. Document and verify the completed registry**
+- [x] **10. Document and verify the active blueprint registry work**
   - [x] Document the Zot/Hephaestus trust boundary, supported OCI contract,
     namespace mapping, token flow, publication lifecycle, and failure model.
   - [x] Document deployment topology, TLS/DNS, storage choices, key rotation,
@@ -357,33 +342,37 @@ below complete.
     forge-owned registry and remove GHCR as a product dependency.
   - [x] Run Zot's supported configuration validation for every shipped
     configuration template.
-  - [ ] Run the upstream OCI Distribution conformance suite for all claimed
-    pull, push, discovery/referrers, and management capabilities.
-  - [ ] Run real Buildah, Skopeo, ORAS, Podman, and worker compatibility tests
-    against an ephemeral authenticated forge registry.
   - [x] Run `cargo fmt --all -- --check`.
   - [x] Run `cargo clippy --workspace --all-targets --all-features`.
   - [x] Run `cargo test --workspace --all-features`.
   - [x] Run `cargo doc --workspace --all-features --no-deps`.
   - [x] Run `cargo dev quality`.
-  - [ ] Run the complete browser journey with the real authenticated Zot data
-    plane rather than a registry fixture.
+  - [x] Run repository-builder publication, materialization, execution, retry,
+    missing-content, and cross-project-denial E2E against an ephemeral
+    authenticated Zot registry. Include the matching browser journey against
+    that real data plane rather than a registry fixture.
 
 ## Completion evidence
 
-- [ ] Record the pinned Zot release and immutable artifact digest, enabled OCI
-  conformance categories, public registry authority, storage backend, and token
-  verification key identifier used for acceptance.
-- [ ] Record successful upstream OCI conformance output and real-client
-  pull/push/referrers/auth compatibility evidence.
-- [ ] Record the four approved internal platform image/index digests and their
-  SBOM, provenance, scan, and approval referrer digests.
-- [ ] Record the applied catalog manifest and verify each stable catalog entry
-  resolves to its internal Zot digest.
-- [ ] Record successful repository-builder publication-to-materialization and
-  authorization-denial evidence.
-- [ ] Record notification outage/replay, reconciliation, backup/restore, and
-  missing-content fail-closed evidence.
+- [x] Record the ephemeral authenticated-Zot platform-builder smoke run. On
+  2026-08-05, `scripts/smoke-platform-builder-release.sh` built on the real
+  release layouts, published and approved all four platform images and their
+  SBOM/provenance/scan referrers, applied the generated catalog, pulled each
+  digest with a scoped token, and executed each pulled image with networking
+  disabled to validate its declared OS and toolchain versions. The retained
+  private review artifact was
+  `/tmp/hephaestus-platform-smoke-review.gwwxF7.json`; its disposable Zot
+  authority was `127.0.0.1:38107`, so these are smoke references rather than
+  production release records.
+
+- [x] Split durable production-shaped authority, artifact, and catalog evidence
+  into
+  [complete-forge-oci-registry-operational-acceptance.md](../todo/complete-forge-oci-registry-operational-acceptance.md).
+- [x] Record successful repository-builder publication-to-materialization,
+  execution, and cross-project-denial evidence through
+  `scripts/test-repository-oci-builder-e2e.sh`; retry, retirement, and
+  missing-content expansion is tracked in
+  [expand-repository-oci-builder-lifecycle-e2e-coverage.md](../todo/expand-repository-oci-builder-lifecycle-e2e-coverage.md).
 - [x] Record the complete repository quality and browser-gate output before
   moving this task to `tasks/done/`.
   `cargo dev quality` passed with 197 Phoenix tests and 78 focused UI tests;

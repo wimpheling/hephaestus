@@ -31,6 +31,8 @@ use std::{
 };
 use tokio::process::Command;
 
+const TRUSTED_SYSTEM_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+
 /// Explicit absolute binaries and private roots used by the local OCI worker.
 #[derive(Debug, Clone)]
 pub struct LocalOciRuntimeConfig {
@@ -137,6 +139,9 @@ impl LocalOciRuntime {
     ) -> Result<(), OciWorkerError> {
         let status = Command::new(binary)
             .env_clear()
+            // OCI tools may invoke administrator-installed helpers. Keep the
+            // path fixed instead of inheriting caller-controlled state.
+            .env("PATH", TRUSTED_SYSTEM_PATH)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -321,6 +326,7 @@ impl SourceCheckoutProvider for LocalOciRuntime {
         let archive = checkout.join("source.tar");
         let archive_status = Command::new(&self.config.git_binary)
             .env_clear()
+            .env("PATH", TRUSTED_SYSTEM_PATH)
             .stdin(Stdio::null())
             .stdout(Stdio::from(
                 fs::File::create(&archive).map_err(OciWorkerError::Filesystem)?,
@@ -342,6 +348,7 @@ impl SourceCheckoutProvider for LocalOciRuntime {
         fs::create_dir(&source).map_err(OciWorkerError::Filesystem)?;
         let tar_status = Command::new(&self.config.tar_binary)
             .env_clear()
+            .env("PATH", TRUSTED_SYSTEM_PATH)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -460,10 +467,14 @@ where
                         return Err(error);
                     }
                 };
-                let verified = self
-                    .publisher
-                    .publish(&intent, &prepared.material, token.token())
-                    .map_err(|_| OciWorkerError::RegistryPublication);
+                // Skopeo and ORAS are synchronous trusted tools. Do not block
+                // the async runtime worker: Zot may need the daemon's token
+                // endpoint while this publication is in progress.
+                let verified = tokio::task::block_in_place(|| {
+                    self.publisher
+                        .publish(&intent, &prepared.material, token.token())
+                })
+                .map_err(|_| OciWorkerError::RegistryPublication);
                 let verification = match verified {
                     Ok(verification) => verification,
                     Err(error) => {

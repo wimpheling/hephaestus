@@ -46,7 +46,7 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.ProjectPage do
               :for={{dom_id, repository} <- @repositories}
               id={dom_id}
               destination={@repository_destination.(repository["id"])}
-              variant={:text}
+              variant={:resource_row}
             >
               <.frame variant={:resource_primary}>
                 <.glyph name="hero-command-line" />

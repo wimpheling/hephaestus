@@ -145,14 +145,33 @@ defmodule HephaestusWebWeb.RepositoryRouteModel do
         {
           :loaded,
           generation,
-          {:error, _reason}
+          {:error, %Error{kind: kind}}
         },
         _action
-      ) do
+      )
+      when kind in [:not_found, :permission_denied] do
     message = "Repository not found or access was revoked."
 
     {%{state | status: :access_revoked, error: message},
      [{:flash, :error, message}, {:navigate, "/organizations"}]}
+  end
+
+  def reduce(
+        %{stream_generation: generation} = state,
+        {:loaded, generation, {:error, %Error{} = reason}},
+        _action
+      ) do
+    message = Error.present(reason)
+    {%{state | status: :error, error: message}, [{:flash, :error, message}]}
+  end
+
+  def reduce(
+        %{stream_generation: generation} = state,
+        {:loaded, generation, {:error, _reason}},
+        _action
+      ) do
+    message = "Repository data is temporarily unavailable."
+    {%{state | status: :error, error: message}, [{:flash, :error, message}]}
   end
 
   def reduce(state, {:loaded, _stale_generation, _result}, _action), do: {state, []}
@@ -163,9 +182,18 @@ defmodule HephaestusWebWeb.RepositoryRouteModel do
   end
 
   def execute({:load, generation, action, repository_id, params, uri}, identity) do
+    # Repository identity and branch discovery are independent. Running them
+    # together keeps an empty repository to one local-RPC round instead of two
+    # serial channel/deadline rounds on every route entry.
+    repository_task = Task.async(fn -> Client.get_repository(identity, repository_id) end)
+    branches_task = Task.async(fn -> branches_for(identity, repository_id, action) end)
+
+    repository_result = Task.await(repository_task)
+    branches_result = Task.await(branches_task)
+
     result =
-      with {:ok, repository} <- Client.get_repository(identity, repository_id),
-           {:ok, branches} <- branches_for(identity, repository_id, action),
+      with {:ok, repository} <- repository_result,
+           {:ok, branches} <- branches_result,
            {:ok, selected_branch} <- select_branch(repository, branches, params["ref"]),
            {:ok, route_data} <-
              load_route(action, repository_id, selected_branch, params, identity) do

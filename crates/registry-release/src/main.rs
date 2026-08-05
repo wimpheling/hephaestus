@@ -91,37 +91,52 @@ struct Runtime {
     publisher: ControlledOciPublisher<SystemCommandRunner>,
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+fn main() -> Result<(), Box<dyn Error>> {
     let arguments = Arguments::parse();
-    let runtime = runtime().await?;
-    let output = match arguments.command {
-        Command::PublishPlatformBuilder {
-            key,
-            layout,
-            sbom,
-            provenance,
-            scan,
-            signature,
-            policy_version,
-        } => {
-            runtime
-                .publish_platform(PublishPlatform {
-                    key,
-                    material: PublicationMaterial {
-                        layout,
-                        evidence: PublicationEvidenceFiles {
-                            sbom,
-                            provenance,
-                            scan,
-                            signature,
+    // `reqwest::blocking::Client` owns an internal Tokio runtime. Construct it
+    // before entering our runtime so both construction and destruction remain
+    // outside async execution.
+    let authority = RegistryAuthority::parse(required("HEPHAESTUS_FORGE_REGISTRY_AUTHORITY")?)?;
+    let publisher_configuration = publisher_configuration(authority.clone())?;
+    let async_runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    // The publisher owns a synchronous HTTP client. Return it from the async
+    // scope and drop it after Tokio is gone; reqwest's blocking client must
+    // not be dropped on a runtime worker.
+    let (release_runtime, output) = async_runtime.block_on(async {
+        let release_runtime = runtime(authority, publisher_configuration).await?;
+        let output = match arguments.command {
+            Command::PublishPlatformBuilder {
+                key,
+                layout,
+                sbom,
+                provenance,
+                scan,
+                signature,
+                policy_version,
+            } => {
+                release_runtime
+                    .publish_platform(PublishPlatform {
+                        key,
+                        material: PublicationMaterial {
+                            layout,
+                            evidence: PublicationEvidenceFiles {
+                                sbom,
+                                provenance,
+                                scan,
+                                signature,
+                            },
                         },
-                    },
-                    policy_version,
-                })
-                .await?
-        }
-    };
+                        policy_version,
+                    })
+                    .await?
+            }
+        };
+        Ok::<_, Box<dyn Error>>((release_runtime, output))
+    })?;
+    drop(async_runtime);
+    drop(release_runtime);
     println!("{}", serde_json::to_string_pretty(&output)?);
     Ok(())
 }
@@ -171,10 +186,13 @@ impl Runtime {
         }
         intent = self.store.begin_publishing(intent.id()).await?;
         let token = issue_publish_token(&self.issuer, intent.claim().namespace())?;
-        let verification = match self
-            .publisher
-            .publish(&intent, &request.material, token.token())
-        {
+        // Publication invokes controlled subprocesses and a synchronous HTTP
+        // verifier. Move that bounded blocking work off Tokio's async context
+        // so the verifier can safely manage its own blocking runtime.
+        let verification = match tokio::task::block_in_place(|| {
+            self.publisher
+                .publish(&intent, &request.material, token.token())
+        }) {
             Ok(value) => value,
             Err(error) => {
                 let _ignored = self.store.retry(intent.id()).await;
@@ -255,8 +273,10 @@ fn layout_descriptor(layout: &std::path::Path) -> Result<OciDescriptor, Box<dyn 
     )?)
 }
 
-async fn runtime() -> Result<Runtime, Box<dyn Error>> {
-    let authority = RegistryAuthority::parse(required("HEPHAESTUS_FORGE_REGISTRY_AUTHORITY")?)?;
+async fn runtime(
+    authority: RegistryAuthority,
+    publisher_configuration: PublisherConfiguration,
+) -> Result<Runtime, Box<dyn Error>> {
     let service = required("HEPHAESTUS_REGISTRY_SERVICE")?.parse::<RegistryService>()?;
     if service.as_str() != authority.as_str() {
         return Err("registry service and authority must match".into());
@@ -279,19 +299,29 @@ async fn runtime() -> Result<Runtime, Box<dyn Error>> {
     ));
     let database_url = required("HEPHAESTUS_DATABASE_URL")?;
     let store = connect_registry(&database_url).await?;
-    let config = PublisherConfiguration::new(
-        authority.clone(),
+    Ok(Runtime {
+        authority,
+        issuer,
+        store,
+        publisher: ControlledOciPublisher::new(publisher_configuration, SystemCommandRunner),
+    })
+}
+
+fn publisher_configuration(
+    authority: RegistryAuthority,
+) -> Result<PublisherConfiguration, Box<dyn Error>> {
+    let configuration = PublisherConfiguration::new(
+        authority,
         &absolute_path("HEPHAESTUS_REGISTRY_LAYOUT_ROOT")?,
         &absolute_path("HEPHAESTUS_REGISTRY_CREDENTIAL_ROOT")?,
         &absolute_path("HEPHAESTUS_SKOPEO")?,
         &absolute_path("HEPHAESTUS_ORAS")?,
     )?;
-    Ok(Runtime {
-        authority,
-        issuer,
-        store,
-        publisher: ControlledOciPublisher::new(config, SystemCommandRunner),
-    })
+    match env::var("HEPHAESTUS_REGISTRY_PRIVATE_ORIGIN") {
+        Ok(origin) => Ok(configuration.with_registry_origin(&origin)?),
+        Err(env::VarError::NotPresent) => Ok(configuration),
+        Err(error) => Err(Box::new(error)),
+    }
 }
 
 fn required(name: &str) -> Result<String, Box<dyn Error>> {

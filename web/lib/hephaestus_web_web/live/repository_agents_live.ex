@@ -4,7 +4,8 @@ defmodule HephaestusWebWeb.RepositoryAgentsLive do
   alias HephaestusWebWeb.DesignSystem.Pages.RepositoryAgentsPage
   alias HephaestusWebWeb.{RepositoryAgentsState, RepositoryLiveSupport}
 
-  @stream_mode :page_scoped
+  # Attachment browsing does not need a durable product-event subscription.
+  @stream_mode :none
 
   @impl true
   def mount(%{"repository_id" => repository_id}, _session, socket) do

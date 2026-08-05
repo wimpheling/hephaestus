@@ -51,14 +51,7 @@ fn scan_sentinel_directory(root: &Path, directory: &Path, diagnostics: &mut Vec<
         let path = entry.path();
         let relative = path.strip_prefix(root).unwrap_or(&path);
         if path.is_dir() {
-            if relative.starts_with("target")
-                || relative.starts_with(".git")
-                || relative.starts_with("web/deps")
-                || relative.starts_with("web/_build")
-                || relative.starts_with("crates/hephaestus-dev")
-                || relative.starts_with("crates/rpc-proto/src/generated")
-                || is_test_path(relative)
-            {
+            if should_skip_sentinel_directory(relative) {
                 continue;
             }
             scan_sentinel_directory(root, &path, diagnostics);
@@ -69,6 +62,19 @@ fn scan_sentinel_directory(root: &Path, directory: &Path, diagnostics: &mut Vec<
             scan_sentinel_source(relative, &source, diagnostics);
         }
     }
+}
+
+fn should_skip_sentinel_directory(relative: &Path) -> bool {
+    relative.starts_with("target")
+        || relative.starts_with(".git")
+        // `.local` contains private generated runtime and release state, not
+        // repository source. Its evidence can legitimately quote scanner data.
+        || relative.starts_with(".local")
+        || relative.starts_with("web/deps")
+        || relative.starts_with("web/_build")
+        || relative.starts_with("crates/hephaestus-dev")
+        || relative.starts_with("crates/rpc-proto/src/generated")
+        || is_test_path(relative)
 }
 
 fn is_scannable_source(path: &Path) -> bool {
@@ -443,5 +449,13 @@ mod tests {
         );
         assert_eq!(invalid.len(), 1);
         assert_eq!(invalid[0].rule_id, "SEC-SENTINEL-NO-PLAINTEXT");
+    }
+
+    #[test]
+    fn sentinel_scan_skips_private_local_state() {
+        assert!(super::should_skip_sentinel_directory(Path::new(".local")));
+        assert!(!super::should_skip_sentinel_directory(Path::new(
+            "crates/example"
+        )));
     }
 }

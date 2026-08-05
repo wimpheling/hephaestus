@@ -35,4 +35,24 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.RepositoryCommitsPageTest do
 
     assert MapSet.new(Map.values(@status_visual_states)) == MapSet.new(@covered_states)
   end
+
+  test "keeps the empty commit page visible during background refreshes" do
+    model = RepositoryPageFixtures.model()
+    form = Phoenix.Component.to_form(model.browse_form, as: :browse)
+
+    for state <- [:loading, :reconnecting] do
+      html =
+        render_component(&RepositoryCommitsPage.repository_commits/1, %{
+          state: state,
+          model: model,
+          commits: [],
+          branch_form: form,
+          select_branch_event: "select-branch"
+        })
+
+      assert html =~ "repository-commits"
+      assert html =~ "No commits"
+      refute html =~ "Repository unavailable"
+    end
+  end
 end

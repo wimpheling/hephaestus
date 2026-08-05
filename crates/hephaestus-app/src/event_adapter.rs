@@ -108,7 +108,7 @@ impl EventPublisher {
                 Ok(product) => product,
                 Err(EventPublishError::Projection) => {
                     self.outbox
-                        .mark_failed(event_id, "projection failure")
+                        .dead_letter(event_id, "projection failure")
                         .await
                         .map_err(provider)?;
                     tracing::error!(%event_id, "dead-lettered invalid persisted product event");

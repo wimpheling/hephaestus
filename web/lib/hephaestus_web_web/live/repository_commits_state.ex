@@ -3,7 +3,7 @@ defmodule HephaestusWebWeb.RepositoryCommitsState do
 
   alias HephaestusWebWeb.RepositoryRouteModel
 
-  @stream_mode :page_scoped
+  @stream_mode :none
   @statuses [
     :initial,
     :loading,

@@ -646,20 +646,22 @@ async fn append_event(
     change_kind: &str,
     status: &str,
 ) -> Result<(), OciWorkerStoreError> {
-    sqlx::query(
-        "SELECT event_id FROM append_application_event(
+    let event_id = sqlx::query_scalar::<_, Uuid>(
+        "SELECT event.event_id
+         FROM project_builder_definitions AS definition
+         CROSS JOIN LATERAL append_application_event(
             gen_random_uuid(), 'project', definition.project_id, 'project', definition.project_id,
             'project.changed', $2, $3, $1, NULL
-        )
-        FROM project_builder_definitions AS definition WHERE definition.id = $1",
+         ) AS event
+         WHERE definition.id = $1",
     )
     .bind(builder_id)
     .bind(change_kind)
     .bind(status)
-    .execute(&mut **transaction)
+    .fetch_optional(&mut **transaction)
     .await
     .map_err(storage)?;
-    Ok(())
+    event_id.map(|_| ()).ok_or(OciWorkerStoreError::Conflict)
 }
 
 fn validate_output(

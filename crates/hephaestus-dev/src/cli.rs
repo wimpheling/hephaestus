@@ -38,6 +38,11 @@ pub enum Command {
         #[command(subcommand)]
         command: CacheCommand,
     },
+    /// Explicitly build and install reviewed platform builder images.
+    PlatformImages {
+        #[command(subcommand)]
+        command: PlatformImageCommand,
+    },
     /// Run repository quality and architecture checks.
     Check {
         #[command(subcommand)]
@@ -264,6 +269,45 @@ pub enum CacheCommand {
     List,
     /// Delete selected regenerable caches.
     Clean(CacheSelection),
+}
+
+#[derive(Debug, Subcommand)]
+pub enum PlatformImageCommand {
+    /// Show persisted local platform image release and installation state.
+    Status,
+    /// Build the four reviewed platform images into a fresh private local release directory.
+    Build(PlatformImageBuildArgs),
+    /// Publish one reviewed local release, approve it, and provision its catalog.
+    Publish(PlatformImagePublishArgs),
+    /// Remove one completed local platform-image installation receipt.
+    Clean(PlatformImageCleanArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct PlatformImageBuildArgs {
+    /// Immutable source URI recorded in the release provenance.
+    #[arg(long)]
+    pub source: String,
+    /// Exact lowercase source commit (40 or 64 hexadecimal characters).
+    #[arg(long)]
+    pub revision: String,
+    /// Exact UTC RFC3339 creation time recorded in the release provenance.
+    #[arg(long)]
+    pub created: String,
+}
+
+#[derive(Debug, Args)]
+pub struct PlatformImagePublishArgs {
+    /// Immutable release revision previously created by `platform-images build`.
+    #[arg(long)]
+    pub revision: String,
+}
+
+#[derive(Debug, Args)]
+pub struct PlatformImageCleanArgs {
+    /// Immutable release revision whose private installation receipt is removed.
+    #[arg(long)]
+    pub revision: String,
 }
 
 #[derive(Debug, Args)]

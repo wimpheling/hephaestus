@@ -23,7 +23,55 @@ resulting layout is then scanned without network access; untrusted repository
 builds are a different path and never receive this release operation's
 credentials.
 
-## Required tool configuration
+## Local containerized build
+
+For the supported local Hephaestus workflow, do not install Buildah, Skopeo,
+Syft, Trivy, ORAS, or jq on the host. `cargo dev platform-images build` builds
+the pinned `platform/build-tools/Dockerfile` with rootless Podman, then runs
+the reviewed release script inside that container. It creates private release
+layouts under `.local/hephaestus/platform-images/releases/<revision>` and
+persists only its Buildah storage and scanner cache in dedicated Podman named
+volumes. This is an explicit, heavy operation; it never runs during startup,
+migrations, or ordinary tests.
+
+The host prerequisites for this path are readable/writable `/dev/kvm` and
+rootless Podman. The outer Podman invocation remains rootless and
+non-privileged. `/dev/fuse` is passed only to the tool container for its
+rootless Buildah storage, while `BUILDAH_ISOLATION=chroot` avoids a nested OCI
+runtime mount. No Podman socket, registry credential, or signing-key mount is
+provided.
+
+```sh
+cargo dev doctor
+cargo dev platform-images build \
+  --source https://forge.example/hephaestus \
+  --revision 0123456789abcdef0123456789abcdef01234567 \
+  --created 2026-08-05T12:34:56Z
+cargo dev platform-images status
+```
+
+The revision and timestamp are immutable release inputs. A pre-existing
+release directory is rejected rather than overwritten. This operation builds
+and records private OCI layouts and evidence only. To install one reviewed
+release, start the local stack (for PostgreSQL), then explicitly publish it:
+
+```sh
+cargo dev platform-images publish \
+  --revision 0123456789abcdef0123456789abcdef01234567
+cargo dev platform-images status
+```
+
+`publish` starts local Zot, uses the pinned tool image to publish and read back
+the four immutable layouts, approves them, and applies the builder catalog.
+It writes the review, catalog, and catalog-application receipts beneath
+`.local/hephaestus/platform-images/installations/<revision>/`. It never runs
+automatically. `cargo dev platform-images clean --revision <revision>` removes
+only those private local receipts; it deliberately does not delete approved
+Zot content or catalog records. Platform builder images are OCI build bases,
+not VM rootfs images: repository-defined builder rootfs materialization is a
+separate runtime lifecycle.
+
+## Standalone operator tool configuration
 
 Every executable is an administrator-owned absolute, non-symlink path. Each
 version variable is an exact configured substring which the corresponding
@@ -70,6 +118,39 @@ export HEPHAESTUS_COSIGN_VERSION='GitVersion: v2.x.y'
 All private roots, database credentials, and signing-key files must have no
 group or other permissions.
 
+## Operator smoke release
+
+This is a manual operator smoke, not a commit-time test. It proves the four
+reviewed builder definitions can be built, scanned, published, verified,
+approved, and pulled through a real forge registry. Run it after changes to a
+platform Dockerfile, pinned input/toolchain, registry publication code, or the
+release tooling—not for ordinary application commits.
+
+Before starting, use a fresh private output root and a real, current Trivy
+database. The build itself runs offline scanning; refreshing the database is a
+separate, observable preparation step. Use the exact reviewed tool paths and
+versions from the configuration section, then run the build with a precise
+source revision and timestamp. Do not substitute test fixtures for Buildah,
+Syft, Trivy, the registry, or the signing key.
+
+After the build, run the publication command against either a disposable
+forge-shaped registry or the explicitly intended forge authority. Confirm all
+four entries in `review.json` are approved internal digest references with SBOM,
+provenance, and scan referrers. Review the generated catalog before applying
+it through the operator catalog command; then pull every catalog digest with a
+real OCI client and verify the declared OS/toolchain versions. Retain the
+release input, review artifact, and catalog as smoke evidence.
+
+For a disposable end-to-end operator smoke, use
+`scripts/smoke-platform-builder-release.sh`. It starts ephemeral PostgreSQL and
+authenticated Zot, migrates the schema, runs the trusted publisher against the
+already-built private layouts, provisions the generated catalog, and pulls all
+four approved digest references. It does not rebuild layouts and is never run
+by CI. By default it reads `/tmp/hephaestus-platform-smoke/layouts`; override
+that location with `HEPHAESTUS_PLATFORM_SMOKE_LAYOUT_ROOT`. The harness retains
+its review and catalog artifacts in fresh private `/tmp/hephaestus-platform-smoke-*.json`
+files after a successful run and prints their paths.
+
 ## Build, publish, review
 
 The release inputs are exact: a source URI, a lowercase 40- or 64-character
@@ -87,11 +168,10 @@ scripts/build-platform-builder-layouts.sh \
 Publication goes through `hephaestus-registry-release`, not through
 pre-issued token files. The command creates or resumes the durable publication
 intent, issues an internal short-lived RS256 token for exactly one
-`platform/builders/<key>` repository and `pull,push` actions, publishes through
-the controlled Skopeo/ORAS adapter, reads Zot back, verifies evidence, and
-commits approval. The token is written only to a private temporary OCI-client
-credential file by that trusted command; it must never be passed as an argument,
-saved as a release input, or written to the review/catalog output.
+`platform/builders/<key>` repository and `pull,push` actions, publishes the
+image and OCI evidence layouts through controlled Skopeo, reads Zot back with
+the bounded direct bearer client, verifies evidence, and commits approval. The
+token is never saved as a release input or written to the review/catalog output.
 
 The calling account is therefore a privileged forge release operator. It needs
 the database connection and registry signing-key access used by the command;

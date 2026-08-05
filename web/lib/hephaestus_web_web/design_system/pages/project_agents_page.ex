@@ -117,7 +117,7 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.ProjectAgentsPage do
               :for={{dom_id, instance} <- @instances}
               id={dom_id}
               destination={@instance_destination.(instance["id"])}
-              variant={:text}
+              variant={:resource_row}
             >
               <.text as="strong">{instance["name"]}</.text>
               <.tag>{instance["release_version"] || "unresolved"}</.tag>

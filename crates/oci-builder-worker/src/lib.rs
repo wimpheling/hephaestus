@@ -22,6 +22,8 @@ use std::{
 use tokio::process::Command;
 use uuid::Uuid;
 
+const TRUSTED_SYSTEM_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+
 /// A claimed durable preparation request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClaimedPreparationJob {
@@ -788,6 +790,9 @@ impl BuildahEngine {
         let mut command = Command::new(&self.binary);
         command
             .env_clear()
+            // Buildah invokes administrator-installed helpers such as newuidmap.
+            // A fixed path preserves isolation from the caller's environment.
+            .env("PATH", TRUSTED_SYSTEM_PATH)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -797,7 +802,7 @@ impl BuildahEngine {
             .arg("--isolation=rootless")
             .arg("--build-context")
             .arg(OsString::from(format!(
-                "heph-base={}",
+                "heph-base=container-image://oci:{}",
                 request.base_oci_layout.display()
             )))
             .arg("--file")
@@ -1194,7 +1199,8 @@ mod tests {
         let debug = format!("{command:?}");
         assert!(debug.contains("--network=none"));
         assert!(debug.contains("--pull=never"));
-        assert!(debug.contains("heph-base=/bases/ubuntu"));
+        assert!(debug.contains("heph-base=container-image://oci:/bases/ubuntu"));
+        assert!(debug.contains(TRUSTED_SYSTEM_PATH));
         assert!(!debug.contains("token"));
         assert!(!debug.contains("authfile"));
     }

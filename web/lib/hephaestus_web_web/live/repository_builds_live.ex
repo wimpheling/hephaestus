@@ -4,7 +4,8 @@ defmodule HephaestusWebWeb.RepositoryBuildsLive do
   alias HephaestusWebWeb.DesignSystem.Pages.RepositoryBuildsPage
   alias HephaestusWebWeb.{RepositoryBuildsState, RepositoryLiveSupport}
 
-  @stream_mode :page_scoped
+  # Build history is refreshed by an explicit request, not a durable page watch.
+  @stream_mode :none
 
   @impl true
   def mount(%{"repository_id" => repository_id}, _session, socket) do

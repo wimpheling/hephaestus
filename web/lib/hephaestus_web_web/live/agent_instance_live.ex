@@ -5,8 +5,6 @@ defmodule HephaestusWebWeb.AgentInstanceLive do
   alias HephaestusWebWeb.DesignSystem.Pages.AgentInstancePage
   alias HephaestusWebWeb.PageStream
 
-  @stream_mode :page_scoped
-
   @events [
     "create-attachment",
     "set-attachment",
@@ -32,37 +30,21 @@ defmodule HephaestusWebWeb.AgentInstanceLive do
       |> assign(:page_state, state)
       |> assign(:presentation, AgentInstanceState.present(state))
       |> assign(:effect_task, nil)
-      |> assign(:watch_task, nil)
       |> assign(:snapshot_task, nil)
       |> assign(:cursor, state.cursor)
       |> assign(:stream_generation, state.stream_generation)
-      |> assign(:stream_mode, @stream_mode)
 
-    if connected?(socket),
-      do: {:ok, PageStream.start_watch(socket, AgentInstanceState)},
-      else: {:ok, socket}
+    if connected?(socket) do
+      {state, [_effect]} = AgentInstanceState.reduce(state, :load)
+
+      {:ok,
+       socket
+       |> sync_state(state)
+       |> PageStream.start_snapshot(AgentInstanceState)}
+    else
+      {:ok, socket}
+    end
   end
-
-  @impl true
-  def handle_info(
-        {:page_watch, generation, response},
-        %{assigns: %{page_state: %{stream_generation: generation}}} = socket
-      ) do
-    {socket, effects} = PageStream.reduce_watch(socket, AgentInstanceState, response)
-    {:noreply, socket |> sync_state(socket.assigns.page_state) |> schedule_effects(effects)}
-  end
-
-  def handle_info(
-        {:page_watch_ended, generation, result},
-        %{assigns: %{page_state: %{stream_generation: generation}}} = socket
-      ) do
-    {socket, effects} = PageStream.reduce_ended(socket, AgentInstanceState, result)
-    {:noreply, socket |> sync_state(socket.assigns.page_state) |> schedule_effects(effects)}
-  end
-
-  def handle_info({kind, _generation, _value}, socket)
-      when kind in [:page_watch, :page_watch_ended],
-      do: {:noreply, socket}
 
   def handle_info({ref, event}, %{assigns: %{snapshot_task: %Task{ref: ref}}} = socket) do
     Process.demonitor(ref, [:flush])
@@ -84,6 +66,7 @@ defmodule HephaestusWebWeb.AgentInstanceLive do
   def handle_info({ref, event}, %{assigns: %{effect_task: %Task{ref: ref}}} = socket) do
     Process.demonitor(ref, [:flush])
     {state, effects} = AgentInstanceState.reduce(socket.assigns.page_state, event)
+    effects = snapshot_after_successful_command(effects, event)
 
     {:noreply,
      socket
@@ -121,7 +104,6 @@ defmodule HephaestusWebWeb.AgentInstanceLive do
   @impl true
   def terminate(_reason, socket) do
     cancel_effect(socket)
-    PageStream.cancel(socket.assigns[:watch_task])
     PageStream.cancel(socket.assigns[:snapshot_task])
     :ok
   end
@@ -176,9 +158,6 @@ defmodule HephaestusWebWeb.AgentInstanceLive do
       :snapshot, socket ->
         PageStream.start_snapshot(socket, AgentInstanceState)
 
-      :replace_watch, socket ->
-        PageStream.start_watch(socket, AgentInstanceState, false)
-
       {:flash, kind, message}, socket ->
         put_flash(socket, kind, message)
 
@@ -205,6 +184,16 @@ defmodule HephaestusWebWeb.AgentInstanceLive do
   end
 
   defp cancel_effect(socket), do: socket
+
+  # Commands return a committed receipt. Refresh the finite detail snapshot
+  # directly instead of waiting for a product-event watch to observe it.
+  defp snapshot_after_successful_command(
+         effects,
+         {:command_completed, _generation, {:ok, _receipt, _message}}
+       ),
+       do: effects ++ [:snapshot]
+
+  defp snapshot_after_successful_command(effects, _event), do: effects
 
   defp sync_state(socket, state) do
     presentation = AgentInstanceState.present(state)

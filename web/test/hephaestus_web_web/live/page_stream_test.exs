@@ -37,6 +37,28 @@ defmodule HephaestusWebWeb.PageStreamTest do
     assert_receive {:DOWN, ^replacement_ref, :process, ^replacement_pid, _reason}
   end
 
+  test "a delayed first watch reuses the generation established by its unary load" do
+    state = %PageStreamProbeState{
+      data: %{test_owner: self()},
+      status: :ready,
+      stream_generation: 1
+    }
+
+    socket = %Phoenix.LiveView.Socket{
+      assigns: %{__changed__: %{}, current_identity: :identity, page_state: state}
+    }
+
+    watched = PageStream.start_watch(socket, PageStreamProbeState, false)
+    watch_pid = watched.assigns.watch_task
+
+    assert watched.assigns.page_state.stream_generation == 1
+    assert_receive {:probe_watch_started, ^watch_pid, 1, nil}
+
+    watch_ref = Process.monitor(watch_pid)
+    PageStream.cancel(watch_pid)
+    assert_receive {:DOWN, ^watch_ref, :process, ^watch_pid, _reason}
+  end
+
   test "a denied exact-scope watch invokes the page's reviewed revocation behavior" do
     state = RunState.new("missing-run") |> RunState.begin_watch()
 

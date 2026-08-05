@@ -4,11 +4,8 @@ defmodule HephaestusWebWeb.ProjectLive do
   alias HephaestusWebWeb.DesignSystem.Pages.ProjectPage
   alias HephaestusWebWeb.ProjectState
 
-  @stream_mode :page_scoped
-
   @impl true
   def mount(%{"project_id" => project_id}, _session, socket) do
-    _stream_mode = @stream_mode
     state = ProjectState.new(%{project_id: project_id})
 
     socket =
@@ -16,12 +13,10 @@ defmodule HephaestusWebWeb.ProjectLive do
       |> stream_configure(:repositories, dom_id: &"project-repository-#{&1["id"]}")
       |> stream(:repositories, [])
       |> assign(:page_state, state)
-      |> assign(:watch_task, nil)
       |> assign(:snapshot_task, nil)
       |> assign(:page_title, "Repositories")
 
     if connected?(socket) do
-      socket = start_watch(socket)
       {:ok, start_snapshot(socket)}
     else
       {:ok, socket}
@@ -30,28 +25,6 @@ defmodule HephaestusWebWeb.ProjectLive do
 
   @impl true
   def handle_params(_params, _uri, socket), do: {:noreply, socket}
-
-  @impl true
-  def handle_info(
-        {:page_watch, generation, response},
-        %{assigns: %{page_state: %{stream_generation: generation}}} = socket
-      ) do
-    {state, effects} = ProjectState.reduce(socket.assigns.page_state, {:watch, response})
-    {:noreply, socket |> sync_state(state) |> apply_watch_effects(effects)}
-  end
-
-  def handle_info(
-        {:page_watch_ended, generation, _result},
-        %{assigns: %{page_state: %{stream_generation: generation}}} = socket
-      ) do
-    {state, effects} = ProjectState.reduce(socket.assigns.page_state, :watch_ended)
-
-    {:noreply,
-     socket |> assign(:watch_task, nil) |> sync_state(state) |> apply_watch_effects(effects)}
-  end
-
-  def handle_info({:page_watch, _stale_generation, _response}, socket), do: {:noreply, socket}
-  def handle_info({:page_watch_ended, _stale_generation, _result}, socket), do: {:noreply, socket}
 
   def handle_info(
         {ref, event},
@@ -65,7 +38,7 @@ defmodule HephaestusWebWeb.ProjectLive do
      |> assign(:snapshot_task, nil)
      |> sync_state(state)
      |> stream(:repositories, state.data.repositories, reset: true)
-     |> apply_watch_effects(effects)}
+     |> apply_state_effects(effects)}
   end
 
   def handle_info(
@@ -81,7 +54,6 @@ defmodule HephaestusWebWeb.ProjectLive do
   def terminate(_reason, socket),
     do:
       (
-        cancel_task(socket.assigns[:watch_task])
         cancel_task(socket.assigns[:snapshot_task])
         :ok
       )
@@ -98,37 +70,20 @@ defmodule HephaestusWebWeb.ProjectLive do
       organizations_destination={~p"/organizations"}
       logout_destination={~p"/logout"}
     >
-      <ProjectPage.project_page
-        state={@presentation.status}
-        project={@presentation.project}
-        project_id={@presentation.project_id}
-        item_count={@presentation.item_count}
-        repositories={@streams.repositories}
-        organization_index_destination={~p"/organizations"}
-        organization_destination={organization_destination(@presentation.project)}
-        repository_destination={fn id -> ~p"/repositories/#{id}" end}
-      />
+      <div id="project-live-root">
+        <ProjectPage.project_page
+          state={@presentation.status}
+          project={@presentation.project}
+          project_id={@presentation.project_id}
+          item_count={@presentation.item_count}
+          repositories={@streams.repositories}
+          organization_index_destination={~p"/organizations"}
+          organization_destination={organization_destination(@presentation.project)}
+          repository_destination={fn id -> ~p"/repositories/#{id}" end}
+        />
+      </div>
     </Layouts.app>
     """
-  end
-
-  defp start_watch(socket, increment? \\ true) do
-    cancel_task(socket.assigns[:watch_task])
-    state = socket.assigns.page_state
-    state = if increment?, do: ProjectState.begin_watch(state), else: state
-    identity = socket.assigns.current_identity
-    generation = state.stream_generation
-    # Resume from the last committed backend cursor, never from rendered UI state.
-    _committed_cursor = state.cursor
-    owner = self()
-
-    {:ok, task} =
-      Task.Supervisor.start_child(HephaestusWeb.PageTaskSupervisor, fn ->
-        result = ProjectState.watch(identity, state, owner, generation)
-        send(owner, {:page_watch_ended, generation, result})
-      end)
-
-    socket |> sync_state(state) |> assign(:watch_task, task)
   end
 
   defp start_snapshot(socket) do
@@ -137,18 +92,16 @@ defmodule HephaestusWebWeb.ProjectLive do
     identity = socket.assigns.current_identity
     generation = state.stream_generation
 
-    task =
-      Task.Supervisor.async_nolink(HephaestusWeb.PageTaskSupervisor, fn ->
-        ProjectState.execute(state, {:load, identity, generation})
-      end)
+    # This short snapshot must not queue behind page-owned event watches in the
+    # shared task supervisor. Its monitor is owned by this LiveView and is
+    # cleaned up by the existing result/DOWN handlers below.
+    task = Task.async(fn -> ProjectState.execute(state, {:load, identity, generation}) end)
 
     assign(socket, :snapshot_task, task)
   end
 
-  defp apply_watch_effects(socket, effects) do
+  defp apply_state_effects(socket, effects) do
     Enum.reduce(effects, socket, fn
-      :snapshot, socket -> start_snapshot(socket)
-      :replace_watch, socket -> start_watch(socket, false)
       {:navigate, :organizations}, socket -> maybe_revoke_access(socket)
     end)
   end

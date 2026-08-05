@@ -84,12 +84,36 @@ defmodule HephaestusWeb.RPC.InvokeTest do
     assert {:ok, %Google.Protobuf.Empty{}} =
              Invoke.unary(identity(), @audience, %Google.Protobuf.Empty{}, stub,
                channel_provider: channel_provider(),
-               channel_reset: fn -> :ok end,
+               channel_reset: fn -> send(test_process, :channel_reset) end,
                retry: :safe_query
              )
 
+    assert_receive :channel_reset
     assert_receive {:attempt, 0, %Google.Protobuf.Empty{}}
     assert_receive {:attempt, 1, %Google.Protobuf.Empty{}}
+  end
+
+  test "invalidates an unavailable mutation channel without retrying it" do
+    test_process = self()
+
+    stub = fn _channel, _request, _options ->
+      send(test_process, :mutation_attempt)
+      {:error, GRPC.RPCError.exception(status: :unavailable)}
+    end
+
+    assert {:error, %Error{kind: :unavailable}} =
+             Invoke.unary(
+               identity(),
+               "/hephaestus.projects.v1.ProjectService/UpdateProject",
+               %Google.Protobuf.Empty{},
+               stub,
+               channel_provider: channel_provider(),
+               channel_reset: fn -> send(test_process, :channel_reset) end
+             )
+
+    assert_receive :mutation_attempt
+    assert_receive :channel_reset
+    refute_receive :mutation_attempt
   end
 
   test "maps an unavailable channel to a typed error without calling the stub" do

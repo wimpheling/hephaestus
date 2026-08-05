@@ -4,7 +4,7 @@ defmodule HephaestusWebWeb.RepositoryBuildsState do
   alias HephaestusWebWeb.RepositoryRouteModel
   alias HephaestusWeb.RPC.Client
 
-  @stream_mode :page_scoped
+  @stream_mode :none
   @statuses [
     :initial,
     :loading,

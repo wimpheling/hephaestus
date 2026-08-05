@@ -30,6 +30,7 @@ defmodule HephaestusWebWeb.DesignSystem.Components.Structure do
       :resource_empty,
       :resource_row,
       :page_state,
+      :loading_page_state,
       :summary,
       :summary_header,
       :summary_body,
@@ -351,6 +352,7 @@ defmodule HephaestusWebWeb.DesignSystem.Components.Structure do
   defp frame_classes(:resource_empty, _layout), do: "resource-list-empty empty-copy"
   defp frame_classes(:resource_row, _layout), do: "resource-list-row"
   defp frame_classes(:page_state, _layout), do: "empty-state"
+  defp frame_classes(:loading_page_state, _layout), do: "empty-state delayed-loading-state"
   defp frame_classes(:summary, _layout), do: "panel"
   defp frame_classes(:summary_header, _layout), do: "panel-heading"
   defp frame_classes(:summary_body, _layout), do: nil

@@ -1,10 +1,9 @@
 defmodule HephaestusWebWeb.ProjectBuildersState do
   @moduledoc "State and effects for a project's owned OCI builders."
 
-  alias HephaestusWeb.RPC.{Client, ProductEvents}
-  alias HephaestusWebWeb.ProductEventReducer
+  alias HephaestusWeb.RPC.Client
 
-  @stream_mode :page_scoped
+  @stream_mode :none
   @statuses [
     :initial,
     :loading,
@@ -25,26 +24,8 @@ defmodule HephaestusWebWeb.ProjectBuildersState do
 
   def statuses, do: @statuses
   def stream_mode, do: @stream_mode
-  def begin_watch(state), do: ProductEventReducer.begin_watch(state)
-  def watch_scope(state), do: {:project, state.data.project_id}
-
   def new(%{project_id: project_id}),
     do: %__MODULE__{data: %{project_id: project_id, builders: []}}
-
-  def watch(identity, state, owner, generation) do
-    ProductEvents.watch(
-      identity,
-      watch_scope(state),
-      ProductEventReducer.committed_cursor(state.cursor),
-      &deliver_watch(&1, owner, generation)
-    )
-  end
-
-  def reduce(state, {:watch, response}) do
-    ProductEventReducer.reduce(state, response, [:registry_publication_changed])
-  end
-
-  def reduce(state, :watch_ended), do: ProductEventReducer.reconnect(state)
 
   def reduce(state, :load) do
     generation = state.stream_generation + 1
@@ -53,16 +34,13 @@ defmodule HephaestusWebWeb.ProjectBuildersState do
 
   def reduce(state, {:loaded, generation, builders}) when generation == state.stream_generation do
     state = %{state | data: %{state.data | builders: builders}, error: nil}
-    ProductEventReducer.snapshot_complete(state)
+    {%{state | status: :ready}, []}
   end
 
   def reduce(state, {:loaded, _generation, _builders}), do: {state, []}
 
   def reduce(state, {:failed, _reason}),
     do: {%{state | status: :error, error: "Project builders are unavailable."}, []}
-
-  def reduce(state, :stale), do: {%{state | status: :stale}, [:snapshot]}
-  def reduce(state, :reconnecting), do: {%{state | status: :reconnecting}, []}
 
   def reduce(state, {:access_revoked, _reason}) do
     {%{state | status: :access_revoked, error: "Project access was revoked."},
@@ -97,12 +75,4 @@ defmodule HephaestusWebWeb.ProjectBuildersState do
   defp presentation_state(%{status: :error}), do: :error
   defp presentation_state(_state), do: :loading
 
-  defp deliver_watch(response, owner, generation) do
-    send(owner, {:page_watch, generation, response})
-
-    case response.item do
-      {kind, _value} when kind in [:retention_gap, :access_revoked] -> :halt
-      _item -> :cont
-    end
-  end
 end

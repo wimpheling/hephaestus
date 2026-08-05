@@ -50,6 +50,15 @@ pub fn doctor(_context: &DevContext) -> Result<()> {
     );
     report(
         &mut failures,
+        "rootless Podman".into(),
+        output(
+            "podman",
+            &["info", "--format", "{{.Host.Security.Rootless}}"],
+        )
+        .is_ok_and(|value| value == "true"),
+    );
+    report(
+        &mut failures,
         "/usr/bin/passt executable".into(),
         fs::metadata("/usr/bin/passt")
             .is_ok_and(|metadata| metadata.permissions().mode() & 0o111 != 0),

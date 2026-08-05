@@ -57,4 +57,24 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.RepositoryFilesPageTest do
     assert html =~ "agent.toml"
     refute html =~ "Bearer ey"
   end
+
+  test "keeps first-push instructions visible while the watch refreshes" do
+    model =
+      RepositoryPageFixtures.model()
+      |> Map.put(:remote_url, "https://forge.example/repository-1")
+      |> Map.put(:default_branch, "trunk")
+
+    for state <- [:loading, :reconnecting] do
+      html =
+        render_component(&RepositoryFilesPage.repository_files/1, %{
+          state: state,
+          model: model,
+          branch_form: Phoenix.Component.to_form(model.browse_form, as: :browse),
+          select_branch_event: "select-branch"
+        })
+
+      assert html =~ "repository-empty-push"
+      refute html =~ "Repository unavailable"
+    end
+  end
 end

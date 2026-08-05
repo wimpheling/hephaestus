@@ -4,18 +4,14 @@ defmodule HephaestusWebWeb.BuildLive do
   alias HephaestusWebWeb.DesignSystem.Pages.BuildPage
   alias HephaestusWebWeb.{BuildState, PageStream}
 
-  @stream_mode :page_scoped
-
   @impl true
   def mount(%{"repository_id" => repository_id, "build_id" => build_id}, _session, socket) do
-    _stream_mode = @stream_mode
     state = BuildState.new(repository_id, build_id)
 
     socket =
       socket
       |> assign(:page_state, state)
       |> assign(:presentation, BuildState.present(state))
-      |> assign(:watch_task, nil)
       |> assign(:snapshot_task, nil)
       |> assign(:action_task, nil)
       |> assign(:action_kind, nil)
@@ -25,30 +21,15 @@ defmodule HephaestusWebWeb.BuildLive do
 
   @impl true
   def handle_params(_params, _uri, socket) do
-    {state, effects} = BuildState.reduce(socket.assigns.page_state, :load)
-
-    {:noreply, socket |> sync_state(state) |> schedule_effects(effects)}
+    if connected?(socket) do
+      {state, effects} = BuildState.reduce(socket.assigns.page_state, :load)
+      {:noreply, socket |> sync_state(state) |> schedule_effects(effects)}
+    else
+      # The disconnected render has no LiveView process to receive the finite
+      # snapshot task result. The connected mount starts the one real load.
+      {:noreply, socket}
+    end
   end
-
-  @impl true
-  def handle_info(
-        {:page_watch, generation, response},
-        %{assigns: %{page_state: %{stream_generation: generation}}} = socket
-      ) do
-    {state, effects} = BuildState.reduce(socket.assigns.page_state, {:watch, response})
-    {:noreply, socket |> sync_state(state) |> schedule_effects(effects)}
-  end
-
-  def handle_info(
-        {:page_watch_ended, generation, result},
-        %{assigns: %{page_state: %{stream_generation: generation}}} = socket
-      ) do
-    {state, effects} = PageStream.reduce_ended(socket, BuildState, result)
-    {:noreply, socket |> sync_state(state.assigns.page_state) |> schedule_effects(effects)}
-  end
-
-  def handle_info({:page_watch, _generation, _response}, socket), do: {:noreply, socket}
-  def handle_info({:page_watch_ended, _generation, _result}, socket), do: {:noreply, socket}
 
   def handle_info({ref, event}, %{assigns: %{snapshot_task: %Task{ref: ref}}} = socket) do
     Process.demonitor(ref, [:flush])
@@ -108,7 +89,6 @@ defmodule HephaestusWebWeb.BuildLive do
 
   @impl true
   def terminate(_reason, socket) do
-    PageStream.cancel(socket.assigns[:watch_task])
     PageStream.cancel(socket.assigns[:snapshot_task])
     :ok
   end
@@ -163,9 +143,6 @@ defmodule HephaestusWebWeb.BuildLive do
 
       :snapshot, socket ->
         PageStream.start_snapshot(socket, BuildState)
-
-      :replace_watch, socket ->
-        PageStream.start_watch(socket, BuildState, false)
 
       {:flash, kind, message}, socket ->
         put_flash(socket, kind, message)

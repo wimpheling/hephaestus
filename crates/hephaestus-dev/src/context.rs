@@ -127,6 +127,25 @@ impl DevContext {
             .join(ROOT_IMAGE_DIRECTORY)
     }
 
+    /// Private release evidence and OCI layouts created by explicit platform
+    /// image operations. This is intentionally separate from VM root files.
+    pub fn platform_image_releases(&self) -> PathBuf {
+        self.local_root.join("platform-images/releases")
+    }
+
+    /// Durable records produced only after a reviewed local image publication.
+    pub fn platform_image_installations(&self) -> PathBuf {
+        self.local_root.join("platform-images/installations")
+    }
+
+    pub fn platform_image_tool_storage_volume(&self) -> String {
+        format!("{}-platform-image-tool-storage", self.namespace)
+    }
+
+    pub fn platform_image_tool_cache_volume(&self) -> String {
+        format!("{}-platform-image-tool-cache", self.namespace)
+    }
+
     pub fn seed_file(&self) -> PathBuf {
         self.local_root.join("seed.json")
     }

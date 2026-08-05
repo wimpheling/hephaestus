@@ -1,6 +1,8 @@
 import topbar from "../../../vendor/topbar"
 
-const progressDelay = 300
+// Navigation that resolves within this threshold should feel instant, not
+// briefly flash a progress indicator. Slow navigation still gets feedback.
+const progressDelay = 450
 const progressColorToken = "--ember"
 const shadowColorToken = "--ink"
 

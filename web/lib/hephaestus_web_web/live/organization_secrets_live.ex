@@ -5,7 +5,7 @@ defmodule HephaestusWebWeb.OrganizationSecretsLive do
   alias HephaestusWebWeb.OrganizationSecretsState
   alias HephaestusWebWeb.PageStream
 
-  @stream_mode :page_scoped
+  @stream_mode :none
 
   @impl true
   def mount(%{"organization_id" => organization_id}, _session, socket) do
@@ -15,37 +15,20 @@ defmodule HephaestusWebWeb.OrganizationSecretsLive do
     socket =
       socket
       |> assign(:page_state, state)
-      |> assign(:watch_task, nil)
       |> assign(:snapshot_task, nil)
       |> assign(:page_title, "Secrets")
 
     if connected?(socket) do
-      {:ok, PageStream.start_watch(socket, OrganizationSecretsState)}
+      {state, [:load]} = OrganizationSecretsState.reduce(socket.assigns.page_state, {:load, 0})
+
+      {:ok,
+       socket
+       |> assign(:page_state, state)
+       |> PageStream.start_snapshot(OrganizationSecretsState)}
     else
       {:ok, socket}
     end
   end
-
-  @impl true
-  def handle_info(
-        {:page_watch, generation, response},
-        %{assigns: %{page_state: %{stream_generation: generation}}} = socket
-      ) do
-    {socket, effects} = PageStream.reduce_watch(socket, OrganizationSecretsState, response)
-    {:noreply, PageStream.apply_effects(socket, OrganizationSecretsState, effects)}
-  end
-
-  def handle_info(
-        {:page_watch_ended, generation, result},
-        %{assigns: %{page_state: %{stream_generation: generation}}} = socket
-      ) do
-    {socket, effects} = PageStream.reduce_ended(socket, OrganizationSecretsState, result)
-    {:noreply, PageStream.apply_effects(socket, OrganizationSecretsState, effects)}
-  end
-
-  def handle_info({kind, _generation, _value}, socket)
-      when kind in [:page_watch, :page_watch_ended],
-      do: {:noreply, socket}
 
   def handle_info({ref, event}, %{assigns: %{snapshot_task: %Task{ref: ref}}} = socket) do
     Process.demonitor(ref, [:flush])
@@ -97,7 +80,6 @@ defmodule HephaestusWebWeb.OrganizationSecretsLive do
 
   @impl true
   def terminate(_reason, socket) do
-    PageStream.cancel(socket.assigns[:watch_task])
     PageStream.cancel(socket.assigns[:snapshot_task])
     :ok
   end

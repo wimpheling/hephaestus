@@ -4,11 +4,9 @@ defmodule HephaestusWebWeb.ReleaseLive do
   alias HephaestusWebWeb.DesignSystem.Pages.ReleasePage
   alias HephaestusWebWeb.{PageStream, ReleaseState}
 
-  @stream_mode :page_scoped
-
   @impl true
   def mount(%{"release_id" => release_id}, _session, socket) do
-    {state, effects} = release_id |> ReleaseState.new() |> ReleaseState.reduce(:load)
+    state = ReleaseState.new(release_id)
 
     socket =
       socket
@@ -18,18 +16,22 @@ defmodule HephaestusWebWeb.ReleaseLive do
       |> stream(:agents, [])
       |> assign(:page_state, state)
       |> assign(:presentation, ReleaseState.present(state))
-      |> assign(:watch_task, nil)
       |> assign(:snapshot_task, nil)
-      |> assign(:stream_mode, @stream_mode)
 
-    {:ok, schedule_effects(socket, effects)}
+    if connected?(socket) do
+      {state, effects} = ReleaseState.reduce(state, :load)
+      {:ok, socket |> sync_state(state) |> schedule_effects(effects)}
+    else
+      {:ok, socket}
+    end
   end
 
   @impl true
   def handle_async({:release_effect, _generation}, {:ok, event}, socket) do
     {state, effects} = ReleaseState.reduce(socket.assigns.page_state, event)
 
-    socket = socket |> sync_state(state) |> schedule_effects(effects) |> maybe_start_watch()
+    effects = snapshot_after_successful_mutation(effects, event)
+    socket = socket |> sync_state(state) |> schedule_effects(effects)
     {:noreply, socket}
   end
 
@@ -50,26 +52,6 @@ defmodule HephaestusWebWeb.ReleaseLive do
     {state, effects} = ReleaseState.reduce(socket.assigns.page_state, :publish_release)
     {:noreply, socket |> sync_state(state) |> schedule_effects(effects)}
   end
-
-  @impl true
-  def handle_info(
-        {:page_watch, generation, response},
-        %{assigns: %{page_state: %{stream_generation: generation}}} = socket
-      ) do
-    {socket, effects} = PageStream.reduce_watch(socket, ReleaseState, response)
-    {:noreply, socket |> sync_state(socket.assigns.page_state) |> schedule_effects(effects)}
-  end
-
-  def handle_info(
-        {:page_watch_ended, generation, result},
-        %{assigns: %{page_state: %{stream_generation: generation}}} = socket
-      ) do
-    {socket, effects} = PageStream.reduce_ended(socket, ReleaseState, result)
-    {:noreply, socket |> sync_state(socket.assigns.page_state) |> schedule_effects(effects)}
-  end
-
-  def handle_info({:page_watch, _generation, _response}, socket), do: {:noreply, socket}
-  def handle_info({:page_watch_ended, _generation, _result}, socket), do: {:noreply, socket}
 
   def handle_info({ref, event}, %{assigns: %{snapshot_task: %Task{ref: ref}}} = socket) do
     Process.demonitor(ref, [:flush])
@@ -101,7 +83,6 @@ defmodule HephaestusWebWeb.ReleaseLive do
 
   @impl true
   def terminate(_reason, socket) do
-    PageStream.cancel(socket.assigns[:watch_task])
     PageStream.cancel(socket.assigns[:snapshot_task])
     :ok
   end
@@ -162,9 +143,6 @@ defmodule HephaestusWebWeb.ReleaseLive do
       :snapshot, socket ->
         PageStream.start_snapshot(socket, ReleaseState)
 
-      :replace_watch, socket ->
-        PageStream.start_watch(socket, ReleaseState, false)
-
       {:navigate, :organizations}, socket ->
         socket
         |> put_flash(:error, socket.assigns.page_state.error)
@@ -188,15 +166,12 @@ defmodule HephaestusWebWeb.ReleaseLive do
     |> stream(:agents, presentation.agents, reset: true)
   end
 
-  defp maybe_start_watch(
-         %{assigns: %{watch_task: nil, page_state: %{status: :ready, data: %{release: release}}}} =
-           socket
-       )
-       when not is_nil(release) do
-    PageStream.start_watch(socket, ReleaseState)
-  end
+  # Release mutations return an updated release, but a unary read keeps the
+  # detail page authoritative without requiring a durable product-event watch.
+  defp snapshot_after_successful_mutation(effects, {:mutation, _generation, {:ok, _release}}),
+    do: effects ++ [:snapshot]
 
-  defp maybe_start_watch(socket), do: socket
+  defp snapshot_after_successful_mutation(effects, _event), do: effects
 
   defp page_title(nil), do: "Release"
   defp page_title(release), do: "#{release["version"]} · Release"

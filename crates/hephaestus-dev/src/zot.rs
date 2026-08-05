@@ -25,7 +25,12 @@ pub fn initialize(context: &DevContext) -> Result<()> {
     fs::create_dir_all(context.zot_root())?;
     fs::set_permissions(context.zot_root(), fs::Permissions::from_mode(0o700))?;
     fs::create_dir_all(context.zot_storage())?;
-    fs::set_permissions(context.zot_storage(), fs::Permissions::from_mode(0o700))?;
+    // Zot's image storage is non-secret content. The capability-free Zot
+    // process can run under a remapped UID in rootless Podman, so the bind
+    // mount itself must be writable independently of that mapping. The
+    // enclosing local-state directory remains private and all credentials
+    // remain in the separate 0700 secrets directory.
+    fs::set_permissions(context.zot_storage(), fs::Permissions::from_mode(0o777))?;
     ensure_verification_certificate(context)?;
     ensure_notification_callback_token(context)?;
     render_configuration(context)?;
@@ -49,7 +54,10 @@ pub fn start(context: &DevContext) -> Result<()> {
         context.zot_verification_certificate().display()
     );
     let storage = format!(
-        "{}:{ZOT_STORAGE_ROOT}:rw,Z",
+        // Persistent storage must survive container replacement. Use Podman's
+        // shared SELinux label so each fresh local Zot container can access
+        // the same rootless bind mount without an MCS-label mismatch.
+        "{}:{ZOT_STORAGE_ROOT}:rw,z",
         context.zot_storage().display()
     );
     let binary = zot_binary()?;
@@ -60,9 +68,16 @@ pub fn start(context: &DevContext) -> Result<()> {
             .args(["--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,nodev"])
             .args(["--cap-drop", "all"])
             .args(["--security-opt", "no-new-privileges"])
-            // Rootless Podman maps the invoking developer rather than running
-            // as root, while still keeping the service off the host network.
-            .args(["--userns", "keep-id"])
+            // Rootless Podman cannot reliably retain an MCS label across this
+            // persistent bind mount. The mount is already inside private
+            // local state, and this container receives only the three
+            // explicitly declared mounts, so disable label separation for
+            // this local-only service rather than making Zot storage flaky.
+            .args(["--security-opt", "label=disable"])
+            // Keep the image's default service user. `keep-id` would make the
+            // process use the developer UID, which does not match Zot's
+            // storage access model under a rootless user namespace. Container
+            // root is still mapped to the invoking developer on the host.
             .args(["--volume", &config])
             .args(["--volume", &certificate])
             .args(["--volume", &storage])

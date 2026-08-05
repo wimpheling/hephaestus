@@ -1112,8 +1112,11 @@ fn owner_fields(owner: &RegistryOwner) -> (&'static str, Option<&str>, Option<Uu
 }
 
 fn same_intent_identity(left: &PublicationIntent, right: &PublicationIntent) -> bool {
-    left.id() == right.id()
-        && left.claim() == right.claim()
+    // The caller creates a fresh ID for each submission. When the unique
+    // durable identity already exists, `create_intent` must return that row
+    // so an interrupted publication can be retried; the generated request ID
+    // is deliberately not part of the idempotency comparison.
+    left.claim() == right.claim()
         && left.reference() == right.reference()
         && left.expected_manifest() == right.expected_manifest()
         && left.policy_version() == right.policy_version()
