@@ -506,6 +506,11 @@ where
     ///
     /// The lifecycle store only restores `missing` content after the exact
     /// immutable layout and its remote evidence graph have been checked again.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the intent is not retryable or the exact
+    /// immutable publication cannot be verified.
     pub fn verify_existing(
         &self,
         intent: &PublicationIntent,
@@ -1317,7 +1322,7 @@ pub enum PublisherError {
 mod tests {
     use super::*;
     use registry_domain::{
-        NamespaceClaim, PlatformBuilderKey, PolicyVersion, PublicationIntentId, RegistryNamespace,
+        NamespaceClaim, PlatformImageKey, PolicyVersion, PublicationIntentId, RegistryNamespace,
         RegistryOwner,
     };
     use registry_token::{
@@ -1440,8 +1445,8 @@ mod tests {
     }
 
     fn intent(expected: OciDescriptor) -> PublicationIntent {
-        let owner = RegistryOwner::PlatformBuilder {
-            builder_key: PlatformBuilderKey::parse("rust-ubuntu").expect("key"),
+        let owner = RegistryOwner::PlatformImage {
+            image_key: PlatformImageKey::parse("rust-ubuntu").expect("key"),
         };
         let namespace = RegistryNamespace::for_owner(owner.clone());
         let reference =
@@ -1461,7 +1466,7 @@ mod tests {
         let service: RegistryService = authority().to_string().parse().expect("service");
         let mut grants = AuthorizationDecision::deny_all();
         grants.grant(
-            "platform/builders/rust-ubuntu"
+            "platform/images/rust-ubuntu"
                 .parse::<RepositoryName>()
                 .expect("repository"),
             RepositoryActions::pull_push(),
@@ -1479,7 +1484,7 @@ mod tests {
             "publisher-worker".parse::<TokenSubject>().expect("subject"),
             &ScopeRequest::parse(
                 service.as_str(),
-                "repository:platform/builders/rust-ubuntu:pull,push",
+                "repository:platform/images/rust-ubuntu:pull,push",
             )
             .expect("scope"),
             &grants,

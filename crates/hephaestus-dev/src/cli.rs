@@ -178,7 +178,7 @@ pub struct StateSelection {
     /// Local secret-wrapping keyring.
     #[arg(long)]
     pub secret_keys: bool,
-    /// Pinned Fedora guest root filesystem and guest bootstrap.
+    /// Configured immutable OCI images and their guest bootstrap.
     #[arg(long)]
     pub rootfs: bool,
     /// Seeded identity, organization, repository, release, and metadata fixture.

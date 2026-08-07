@@ -89,11 +89,11 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.BuildPage do
           </.text>
         </.frame>
         <.frame as="article" variant={:table_row}>
-          <.text as="strong">Builder</.text><.text as="code" variant={:mono}>
-            {@build["builder_image_key"] || @build["builder_image_reference"] || "—"}
+          <.text as="strong">Build image</.text><.text as="code" variant={:mono}>
+            {@build["image_key"] || @build["image_reference"] || "—"}
           </.text>
-          <.text as="strong">Builder digest</.text><.text as="code" variant={:mono}>
-            {@build["builder_image_reference"] || "—"}
+          <.text as="strong">Image digest</.text><.text as="code" variant={:mono}>
+            {@build["image_reference"] || "—"}
           </.text>
         </.frame>
         <.frame as="article" variant={:table_row}>

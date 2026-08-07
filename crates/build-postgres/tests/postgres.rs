@@ -33,9 +33,9 @@ version = 2
 name = "isolated-builder"
 key = "isolated-builder"
 [build]
+image = { key = "build" }
 command = "/usr/bin/fake-build"
 working_directory = "/workspace/source"
-root_image = "build@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 triggers = ["refs/heads/main"]
 [build.resources]
 vcpus = 1
@@ -47,13 +47,12 @@ path = "bin/agent"
 kind = "executable"
 media_type = "application/x-hephaestus-test"
 [guest]
+image = { key = "run" }
 command = "bin/agent"
 working_directory = "bin"
 [resources]
 vcpus = 1
 memory_mib = 128
-[root_image]
-reference = "run@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 [workspace]
 mount = true
 path = "/workspace/repo"
@@ -119,7 +118,7 @@ async fn exact_guest_output_becomes_one_immutable_draft() {
             workspace_root,
             repository_root,
             git_binary: fs::canonicalize("/usr/bin/git").expect("Git binary"),
-            root_images: BTreeMap::from([(
+            image_filesystems: BTreeMap::from([(
                 String::from(
                     "build@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 ),
@@ -320,8 +319,22 @@ async fn copy_build_request(
     .execute(pool)
     .await
     .expect("copy build request");
+    sqlx::query(
+        "INSERT INTO build_request_images
+         (build_request_id, execution_context, image_id, image_key, image_reference)
+         SELECT $1, execution_context, image_id, image_key, image_reference
+           FROM build_request_images WHERE build_request_id = $2",
+    )
+    .bind(destination.as_uuid())
+    .bind(source.as_uuid())
+    .execute(pool)
+    .await
+    .expect("copy image snapshots");
 }
 
+// One explicit fixture keeps the complete immutable build and image snapshot
+// provenance visible to this integration test.
+#[allow(clippy::too_many_lines)]
 async fn seed(pool: &sqlx::PgPool, repository_id: Uuid, commit: &str) -> BuildRequestId {
     let user = Uuid::new_v4();
     let organization = Uuid::new_v4();
@@ -372,6 +385,30 @@ async fn seed(pool: &sqlx::PgPool, repository_id: Uuid, commit: &str) -> BuildRe
     .execute(pool)
     .await
     .expect("repository");
+    for (key, reference) in [
+        (
+            "build",
+            "build@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ),
+        (
+            "run",
+            "run@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        ),
+    ] {
+        sqlx::query(
+            "INSERT INTO oci_images
+             (id, key, display_name, image_reference, toolchains, architectures,
+              availability_state, provenance, platform_policy_version)
+             VALUES ($1, $2, $2, $3, '[]'::jsonb, ARRAY['x86_64'],
+                     'available', '{}'::jsonb, 'test/v1')",
+        )
+        .bind(Uuid::new_v4())
+        .bind(key)
+        .bind(reference)
+        .execute(pool)
+        .await
+        .expect("OCI image");
+    }
     sqlx::query(
         "INSERT INTO git_receives
          (id, repository_id, actor_id, principal, status, accepted_at)
@@ -416,6 +453,18 @@ async fn seed(pool: &sqlx::PgPool, repository_id: Uuid, commit: &str) -> BuildRe
     .execute(pool)
     .await
     .expect("build request");
+    sqlx::query(
+        "INSERT INTO build_request_images
+         (build_request_id, execution_context, image_id, image_key, image_reference)
+         SELECT $1, context.execution_context, image.id, image.key, image.image_reference
+           FROM (VALUES ('build'::text, 'build'::text), ('guest', 'run'))
+                    AS context(execution_context, image_key)
+           JOIN oci_images AS image ON image.key = context.image_key",
+    )
+    .bind(build.as_uuid())
+    .execute(pool)
+    .await
+    .expect("build image snapshots");
     build
 }
 

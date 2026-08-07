@@ -66,9 +66,14 @@ impl ReleaseService {
             return Ok(ReleaseId::from_uuid(id.0));
         }
         let build: BuildRow = sqlx::query_as(
-            "SELECT repository_id, source_commit, source_ref,
-                    build_definition_hash, state
-             FROM build_requests WHERE id = $1 FOR UPDATE",
+            "SELECT request.repository_id, request.source_commit, request.source_ref,
+                    request.build_definition_hash, selected.image_reference AS guest_image_reference,
+                    request.state
+             FROM build_requests AS request
+             JOIN build_request_images AS selected
+               ON selected.build_request_id = request.id
+              AND selected.execution_context = 'guest'
+             WHERE request.id = $1 FOR UPDATE OF request",
         )
         .bind(command.build_request_id.as_uuid())
         .fetch_optional(&mut *tx)
@@ -91,6 +96,10 @@ impl ReleaseService {
         .await?
         .ok_or(ReleaseServiceError::ReusableConfigurationMissing)?;
         let config: AgentConfig = serde_json::from_value(config_row.0.clone())?;
+        let guest_image_reference = build
+            .guest_image_reference
+            .clone()
+            .ok_or(ReleaseServiceError::ReusableConfigurationMissing)?;
         let agent_key = AgentKey::parse(
             config
                 .agent
@@ -169,7 +178,7 @@ impl ReleaseService {
             "executable": executable,
             "arguments": config.guest.arguments,
             "working_directory": working_directory,
-            "root_image_digest": config.root_image.reference,
+            "image_reference": guest_image_reference,
             "requires_state": config.state_volume.enabled,
             "policy_ceiling": policy,
             "workspace": {
@@ -1980,6 +1989,7 @@ struct BuildRow {
     source_commit: String,
     source_ref: String,
     build_definition_hash: Vec<u8>,
+    guest_image_reference: Option<String>,
     state: String,
 }
 

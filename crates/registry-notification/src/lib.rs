@@ -724,7 +724,7 @@ mod tests {
 
     fn image_updated_body() -> String {
         format!(
-            r#"{{"name":"platform/builders/rust-ubuntu","reference":"latest","digest":"{DIGEST}","mediaType":"application/vnd.oci.image.manifest.v1+json","manifest":"{{}}","actor":{{"name":"worker"}},"request":{{"addr":"10.0.0.2:1234","method":"PUT","useragent":"skopeo"}}}}"#
+            r#"{{"name":"platform/images/rust-ubuntu","reference":"latest","digest":"{DIGEST}","mediaType":"application/vnd.oci.image.manifest.v1+json","manifest":"{{}}","actor":{{"name":"worker"}},"request":{{"addr":"10.0.0.2:1234","method":"PUT","useragent":"skopeo"}}}}"#
         )
     }
 
@@ -750,7 +750,7 @@ mod tests {
         assert_eq!(observation.event_type(), ZotEventType::ImageUpdated);
         assert_eq!(
             observation.repository().as_str(),
-            "platform/builders/rust-ubuntu"
+            "platform/images/rust-ubuntu"
         );
         assert!(observation.repository().known_namespace().is_some());
         assert_eq!(observation.reference(), Some("latest"));
@@ -797,15 +797,15 @@ mod tests {
     #[test]
     fn accepts_unknown_but_canonical_paths_for_safe_reconciliation_diagnostics() {
         let body = image_updated_body().replace(
-            "platform/builders/rust-ubuntu",
-            "projects/unknown/repository-builders/orphan",
+            "platform/images/rust-ubuntu",
+            "projects/unknown/repository-images/orphan",
         );
         let observation = parse(&body).expect("bounded unknown namespace is observable");
 
         assert!(observation.repository().known_namespace().is_none());
         assert_eq!(
             observation.repository().as_str(),
-            "projects/unknown/repository-builders/orphan"
+            "projects/unknown/repository-images/orphan"
         );
     }
 

@@ -118,9 +118,9 @@ message Build {
   uint32 artifact_count = 15;
   string trigger = 16;
   string agent_key = 17;
-  hephaestus.common.v1.OpaqueId builder_image_id = 18;
-  string builder_image_key = 19;
-  string builder_image_reference = 20;
+  hephaestus.common.v1.OpaqueId image_id = 18;
+  string image_key = 19;
+  string image_reference = 20;
   string configuration_hash = 21;
   string parsed_declaration_json = 22;
   string build_policy_json = 23;

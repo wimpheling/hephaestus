@@ -15,13 +15,10 @@ defmodule HephaestusWeb.RPC.Client do
 
   alias Hephaestus.Identity.V1.{IdentityService, ResolveIdentityRequest}
 
-  alias Hephaestus.Builder.V1.{
-    BuilderCatalogService,
-    GetBuilderImageRequest,
-    GetProjectBuilderRequest,
-    ListBuilderImagesRequest,
-    ListProjectBuildersRequest,
-    ValidateAgentConfigRequest
+  alias Hephaestus.Image.V1.{
+    GetImageRequest,
+    ImageCatalogService,
+    ListImagesRequest
   }
 
   alias Hephaestus.Build.V1.{
@@ -225,60 +222,26 @@ defmodule HephaestusWeb.RPC.Client do
         :project
       )
 
-  def list_builder_images(identity),
+  def list_images(identity),
     do:
       unary_projected(
         identity,
-        "/hephaestus.builder.v1.BuilderCatalogService/ListBuilderImages",
-        %ListBuilderImagesRequest{},
-        &BuilderCatalogService.Stub.list_builder_images/3,
-        :builder_images,
+        "/hephaestus.image.v1.ImageCatalogService/ListImages",
+        %ListImagesRequest{},
+        &ImageCatalogService.Stub.list_images/3,
+        :images,
         maximum_response_bytes: 1_048_576
       )
 
-  def get_builder_image(identity, builder_image_id),
+  def get_image(identity, image_id),
     do:
       unary_projected(
         identity,
-        "/hephaestus.builder.v1.BuilderCatalogService/GetBuilderImage",
-        %GetBuilderImageRequest{builder_image_id: id(builder_image_id)},
-        &BuilderCatalogService.Stub.get_builder_image/3,
-        :builder_image,
+        "/hephaestus.image.v1.ImageCatalogService/GetImage",
+        %GetImageRequest{image_id: id(image_id)},
+        &ImageCatalogService.Stub.get_image/3,
+        :image,
         maximum_response_bytes: 65_536
-      )
-
-  def validate_agent_config(identity, agent_toml) when is_binary(agent_toml),
-    do:
-      unary_projected(
-        identity,
-        "/hephaestus.builder.v1.BuilderCatalogService/ValidateAgentConfig",
-        %ValidateAgentConfigRequest{agent_toml: agent_toml},
-        &BuilderCatalogService.Stub.validate_agent_config/3,
-        nil,
-        maximum_request_bytes: 65_536,
-        maximum_response_bytes: 16_384
-      )
-
-  def list_project_builders(identity, project_id),
-    do:
-      paged_by_id(
-        identity,
-        "/hephaestus.builder.v1.BuilderCatalogService/ListProjectBuilders",
-        ListProjectBuildersRequest,
-        :project_id,
-        project_id,
-        &BuilderCatalogService.Stub.list_project_builders/3,
-        :builders
-      )
-
-  def get_project_builder(identity, project_id, builder_id),
-    do:
-      unary_projected(
-        identity,
-        "/hephaestus.builder.v1.BuilderCatalogService/GetProjectBuilder",
-        %GetProjectBuilderRequest{project_id: id(project_id), builder_id: id(builder_id)},
-        &BuilderCatalogService.Stub.get_project_builder/3,
-        :builder
       )
 
   def create_project(identity, organization_id, name, description \\ ""),

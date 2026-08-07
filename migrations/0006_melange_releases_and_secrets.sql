@@ -1,5 +1,5 @@
 -- Authoritative tuple projection for authorization model v2.
-CREATE OR REPLACE VIEW melange_tuples (
+CREATE OR REPLACE VIEW melange_base_tuples (
     subject_type, subject_id, relation, object_type, object_id
 ) AS
 SELECT
@@ -186,6 +186,12 @@ FROM secret_leases
 WHERE secret_leases.status = 'active'
   AND secret_leases.expires_at > now();
 
+CREATE OR REPLACE VIEW melange_tuples (
+    subject_type, subject_id, relation, object_type, object_id
+) AS
+SELECT subject_type, subject_id, relation, object_type, object_id
+FROM melange_base_tuples;
+
 DROP FUNCTION IF EXISTS "public"."check_agent_can_execute" CASCADE;
 DROP FUNCTION IF EXISTS "public"."check_agent_can_execute_nw" CASCADE;
 DROP FUNCTION IF EXISTS "public"."check_agent_can_manage" CASCADE;
@@ -225,11 +231,11 @@ DROP FUNCTION IF EXISTS "public"."list_state_volume_agent_sub" CASCADE;
 
 -- Melange Migration (UP)
 -- Melange version: 0.8.5
--- Schema checksum: 76e7043ed8a534103adff658f24be57485646163ab73a8e33c2dc6d56c91d298
+-- Schema checksum: 9b7a9b211e804d498d7bb9f106f3a79471c42dc2b9a654f10f234454d239189a
 -- Codegen version: 0.8.5
 
 -- ============================================================
--- Check Functions (109 functions)
+-- Check Functions (113 functions)
 -- ============================================================
 
 -- Generated check function for agent_attachment.instance
@@ -1133,6 +1139,44 @@ BEGIN
     SELECT 1
     FROM melange_tuples
     WHERE (object_type = 'repository' AND relation IN ('secret_manager') AND object_id = p_object_id AND subject_type IN ('user') AND subject_type = p_subject_type AND (subject_id = p_subject_id AND NOT (subject_id = '*')))
+    LIMIT 1
+    ) THEN
+        RETURN 1;
+    ELSE
+        RETURN 0;
+    END IF;
+END;
+$$ LANGUAGE plpgsql STABLE
+SET search_path = 'public';
+
+
+-- Generated check function for repository_oci_image.project
+-- Features: Direct
+CREATE OR REPLACE FUNCTION "public"."check_repository_oci_image_project"(
+    p_subject_type TEXT,
+    p_subject_id TEXT,
+    p_object_id TEXT,
+    p_visited TEXT [] DEFAULT ARRAY[]::TEXT[]
+) RETURNS INTEGER AS $$
+DECLARE
+    v_userset_check INTEGER := 0;
+BEGIN
+    -- Userset subject handling
+    IF position('#' in p_subject_id) > 0 THEN
+        -- Case 1: Self-referential userset check
+        IF (p_subject_type = 'repository_oci_image' AND substring(p_subject_id from 1 for position('#' in p_subject_id) - 1) = p_object_id) THEN
+        SELECT INTO v_userset_check 1
+    WHERE substring(p_subject_id from position('#' in p_subject_id) + 1) IN ('project')
+    LIMIT 1;
+        IF v_userset_check = 1 THEN
+        RETURN 1;
+    END IF;
+    END IF;
+    END IF;
+    IF EXISTS (
+    SELECT 1
+    FROM melange_tuples
+    WHERE (object_type = 'repository_oci_image' AND relation IN ('project') AND object_id = p_object_id AND subject_type IN ('project') AND subject_type = p_subject_type AND (subject_id = p_subject_id AND NOT (subject_id = '*')))
     LIMIT 1
     ) THEN
         RETURN 1;
@@ -2848,6 +2892,58 @@ $$ LANGUAGE plpgsql STABLE COST 1000
 SET search_path = 'public';
 
 
+-- Generated check function for repository_oci_image.can_manage
+-- Features: Recursive
+CREATE OR REPLACE FUNCTION "public"."check_repository_oci_image_can_manage"(
+    p_subject_type TEXT,
+    p_subject_id TEXT,
+    p_object_id TEXT,
+    p_visited TEXT [] DEFAULT ARRAY[]::TEXT[]
+) RETURNS INTEGER AS $$
+DECLARE
+    v_has_access BOOLEAN := FALSE;
+    v_key TEXT := 'repository_oci_image:' || p_object_id || ':can_manage';
+    v_userset_check INTEGER := 0;
+BEGIN
+    -- Cycle detection
+    IF v_key = ANY(p_visited) THEN
+        RETURN 0;
+    END IF;
+    IF array_length(p_visited, 1) >= 25 THEN
+        RAISE EXCEPTION 'resolution too complex' USING ERRCODE = 'M2002';
+    END IF;
+    v_has_access := FALSE;
+    -- Userset subject handling
+    IF position('#' in p_subject_id) > 0 THEN
+        -- Case 1: Self-referential userset check
+        IF (p_subject_type = 'repository_oci_image' AND substring(p_subject_id from 1 for position('#' in p_subject_id) - 1) = p_object_id) THEN
+        SELECT INTO v_userset_check 1
+    WHERE substring(p_subject_id from position('#' in p_subject_id) + 1) IN ('can_manage')
+    LIMIT 1;
+        IF v_userset_check = 1 THEN
+        RETURN 1;
+    END IF;
+    END IF;
+    END IF;
+    IF NOT (v_has_access) THEN
+        -- Recursive access path via project -> can_manage
+        IF EXISTS (
+    SELECT 1
+    FROM melange_tuples AS link
+    WHERE (link.object_type = 'repository_oci_image' AND link.relation IN ('project') AND link.object_id = p_object_id AND "public"."check_permission_internal"(p_subject_type, p_subject_id, 'can_manage', link.subject_type, link.subject_id, p_visited || ARRAY[v_key]) = 1 AND link.subject_type IN ('project'))
+    ) THEN
+        v_has_access := TRUE;
+    END IF;
+    END IF;
+    IF v_has_access THEN
+        RETURN 1;
+    END IF;
+    RETURN 0;
+END;
+$$ LANGUAGE plpgsql STABLE COST 1000
+SET search_path = 'public';
+
+
 -- Generated check function for agent_instance.can_execute
 -- Features: Recursive
 CREATE OR REPLACE FUNCTION "public"."check_agent_instance_can_execute"(
@@ -2948,6 +3044,58 @@ BEGIN
     SELECT 1
     FROM melange_tuples AS link
     WHERE (link.object_type = 'repository' AND link.relation IN ('project') AND link.object_id = p_object_id AND "public"."check_permission_internal"(p_subject_type, p_subject_id, 'can_write', link.subject_type, link.subject_id, p_visited || ARRAY[v_key]) = 1 AND link.subject_type IN ('project'))
+    ) THEN
+        v_has_access := TRUE;
+    END IF;
+    END IF;
+    IF v_has_access THEN
+        RETURN 1;
+    END IF;
+    RETURN 0;
+END;
+$$ LANGUAGE plpgsql STABLE COST 1000
+SET search_path = 'public';
+
+
+-- Generated check function for repository_oci_image.can_write
+-- Features: Recursive
+CREATE OR REPLACE FUNCTION "public"."check_repository_oci_image_can_write"(
+    p_subject_type TEXT,
+    p_subject_id TEXT,
+    p_object_id TEXT,
+    p_visited TEXT [] DEFAULT ARRAY[]::TEXT[]
+) RETURNS INTEGER AS $$
+DECLARE
+    v_has_access BOOLEAN := FALSE;
+    v_key TEXT := 'repository_oci_image:' || p_object_id || ':can_write';
+    v_userset_check INTEGER := 0;
+BEGIN
+    -- Cycle detection
+    IF v_key = ANY(p_visited) THEN
+        RETURN 0;
+    END IF;
+    IF array_length(p_visited, 1) >= 25 THEN
+        RAISE EXCEPTION 'resolution too complex' USING ERRCODE = 'M2002';
+    END IF;
+    v_has_access := FALSE;
+    -- Userset subject handling
+    IF position('#' in p_subject_id) > 0 THEN
+        -- Case 1: Self-referential userset check
+        IF (p_subject_type = 'repository_oci_image' AND substring(p_subject_id from 1 for position('#' in p_subject_id) - 1) = p_object_id) THEN
+        SELECT INTO v_userset_check 1
+    WHERE substring(p_subject_id from position('#' in p_subject_id) + 1) IN ('can_write')
+    LIMIT 1;
+        IF v_userset_check = 1 THEN
+        RETURN 1;
+    END IF;
+    END IF;
+    END IF;
+    IF NOT (v_has_access) THEN
+        -- Recursive access path via project -> can_write
+        IF EXISTS (
+    SELECT 1
+    FROM melange_tuples AS link
+    WHERE (link.object_type = 'repository_oci_image' AND link.relation IN ('project') AND link.object_id = p_object_id AND "public"."check_permission_internal"(p_subject_type, p_subject_id, 'can_write', link.subject_type, link.subject_id, p_visited || ARRAY[v_key]) = 1 AND link.subject_type IN ('project'))
     ) THEN
         v_has_access := TRUE;
     END IF;
@@ -4483,6 +4631,58 @@ $$ LANGUAGE plpgsql STABLE COST 1000
 SET search_path = 'public';
 
 
+-- Generated check function for repository_oci_image.can_read
+-- Features: Recursive
+CREATE OR REPLACE FUNCTION "public"."check_repository_oci_image_can_read"(
+    p_subject_type TEXT,
+    p_subject_id TEXT,
+    p_object_id TEXT,
+    p_visited TEXT [] DEFAULT ARRAY[]::TEXT[]
+) RETURNS INTEGER AS $$
+DECLARE
+    v_has_access BOOLEAN := FALSE;
+    v_key TEXT := 'repository_oci_image:' || p_object_id || ':can_read';
+    v_userset_check INTEGER := 0;
+BEGIN
+    -- Cycle detection
+    IF v_key = ANY(p_visited) THEN
+        RETURN 0;
+    END IF;
+    IF array_length(p_visited, 1) >= 25 THEN
+        RAISE EXCEPTION 'resolution too complex' USING ERRCODE = 'M2002';
+    END IF;
+    v_has_access := FALSE;
+    -- Userset subject handling
+    IF position('#' in p_subject_id) > 0 THEN
+        -- Case 1: Self-referential userset check
+        IF (p_subject_type = 'repository_oci_image' AND substring(p_subject_id from 1 for position('#' in p_subject_id) - 1) = p_object_id) THEN
+        SELECT INTO v_userset_check 1
+    WHERE substring(p_subject_id from position('#' in p_subject_id) + 1) IN ('can_read')
+    LIMIT 1;
+        IF v_userset_check = 1 THEN
+        RETURN 1;
+    END IF;
+    END IF;
+    END IF;
+    IF NOT (v_has_access) THEN
+        -- Recursive access path via project -> can_read
+        IF EXISTS (
+    SELECT 1
+    FROM melange_tuples AS link
+    WHERE (link.object_type = 'repository_oci_image' AND link.relation IN ('project') AND link.object_id = p_object_id AND "public"."check_permission_internal"(p_subject_type, p_subject_id, 'can_read', link.subject_type, link.subject_id, p_visited || ARRAY[v_key]) = 1 AND link.subject_type IN ('project'))
+    ) THEN
+        v_has_access := TRUE;
+    END IF;
+    END IF;
+    IF v_has_access THEN
+        RETURN 1;
+    END IF;
+    RETURN 0;
+END;
+$$ LANGUAGE plpgsql STABLE COST 1000
+SET search_path = 'public';
+
+
 -- Generated check function for agent_attachment.can_read
 -- Features: Recursive
 CREATE OR REPLACE FUNCTION "public"."check_agent_attachment_can_read"(
@@ -5056,7 +5256,7 @@ SET search_path = 'public';
 
 
 -- ============================================================
--- No-Wildcard Check Functions (109 functions)
+-- No-Wildcard Check Functions (113 functions)
 -- ============================================================
 
 -- Generated check function for agent_attachment.instance
@@ -5960,6 +6160,44 @@ BEGIN
     SELECT 1
     FROM melange_tuples
     WHERE (object_type = 'repository' AND relation IN ('secret_manager') AND object_id = p_object_id AND subject_type IN ('user') AND subject_type = p_subject_type AND (subject_id = p_subject_id AND NOT (subject_id = '*')))
+    LIMIT 1
+    ) THEN
+        RETURN 1;
+    ELSE
+        RETURN 0;
+    END IF;
+END;
+$$ LANGUAGE plpgsql STABLE
+SET search_path = 'public';
+
+
+-- Generated check function for repository_oci_image.project
+-- Features: Direct
+CREATE OR REPLACE FUNCTION "public"."check_repository_oci_image_project_nw"(
+    p_subject_type TEXT,
+    p_subject_id TEXT,
+    p_object_id TEXT,
+    p_visited TEXT [] DEFAULT ARRAY[]::TEXT[]
+) RETURNS INTEGER AS $$
+DECLARE
+    v_userset_check INTEGER := 0;
+BEGIN
+    -- Userset subject handling
+    IF position('#' in p_subject_id) > 0 THEN
+        -- Case 1: Self-referential userset check
+        IF (p_subject_type = 'repository_oci_image' AND substring(p_subject_id from 1 for position('#' in p_subject_id) - 1) = p_object_id) THEN
+        SELECT INTO v_userset_check 1
+    WHERE substring(p_subject_id from position('#' in p_subject_id) + 1) IN ('project')
+    LIMIT 1;
+        IF v_userset_check = 1 THEN
+        RETURN 1;
+    END IF;
+    END IF;
+    END IF;
+    IF EXISTS (
+    SELECT 1
+    FROM melange_tuples
+    WHERE (object_type = 'repository_oci_image' AND relation IN ('project') AND object_id = p_object_id AND subject_type IN ('project') AND subject_type = p_subject_type AND (subject_id = p_subject_id AND NOT (subject_id = '*')))
     LIMIT 1
     ) THEN
         RETURN 1;
@@ -7675,6 +7913,58 @@ $$ LANGUAGE plpgsql STABLE COST 1000
 SET search_path = 'public';
 
 
+-- Generated check function for repository_oci_image.can_manage
+-- Features: Recursive
+CREATE OR REPLACE FUNCTION "public"."check_repository_oci_image_can_manage_nw"(
+    p_subject_type TEXT,
+    p_subject_id TEXT,
+    p_object_id TEXT,
+    p_visited TEXT [] DEFAULT ARRAY[]::TEXT[]
+) RETURNS INTEGER AS $$
+DECLARE
+    v_has_access BOOLEAN := FALSE;
+    v_key TEXT := 'repository_oci_image:' || p_object_id || ':can_manage';
+    v_userset_check INTEGER := 0;
+BEGIN
+    -- Cycle detection
+    IF v_key = ANY(p_visited) THEN
+        RETURN 0;
+    END IF;
+    IF array_length(p_visited, 1) >= 25 THEN
+        RAISE EXCEPTION 'resolution too complex' USING ERRCODE = 'M2002';
+    END IF;
+    v_has_access := FALSE;
+    -- Userset subject handling
+    IF position('#' in p_subject_id) > 0 THEN
+        -- Case 1: Self-referential userset check
+        IF (p_subject_type = 'repository_oci_image' AND substring(p_subject_id from 1 for position('#' in p_subject_id) - 1) = p_object_id) THEN
+        SELECT INTO v_userset_check 1
+    WHERE substring(p_subject_id from position('#' in p_subject_id) + 1) IN ('can_manage')
+    LIMIT 1;
+        IF v_userset_check = 1 THEN
+        RETURN 1;
+    END IF;
+    END IF;
+    END IF;
+    IF NOT (v_has_access) THEN
+        -- Recursive access path via project -> can_manage
+        IF EXISTS (
+    SELECT 1
+    FROM melange_tuples AS link
+    WHERE (link.object_type = 'repository_oci_image' AND link.relation IN ('project') AND link.object_id = p_object_id AND "public"."check_permission_internal"(p_subject_type, p_subject_id, 'can_manage', link.subject_type, link.subject_id, p_visited || ARRAY[v_key]) = 1 AND link.subject_type IN ('project'))
+    ) THEN
+        v_has_access := TRUE;
+    END IF;
+    END IF;
+    IF v_has_access THEN
+        RETURN 1;
+    END IF;
+    RETURN 0;
+END;
+$$ LANGUAGE plpgsql STABLE COST 1000
+SET search_path = 'public';
+
+
 -- Generated check function for agent_instance.can_execute
 -- Features: Recursive
 CREATE OR REPLACE FUNCTION "public"."check_agent_instance_can_execute_nw"(
@@ -7775,6 +8065,58 @@ BEGIN
     SELECT 1
     FROM melange_tuples AS link
     WHERE (link.object_type = 'repository' AND link.relation IN ('project') AND link.object_id = p_object_id AND "public"."check_permission_internal"(p_subject_type, p_subject_id, 'can_write', link.subject_type, link.subject_id, p_visited || ARRAY[v_key]) = 1 AND link.subject_type IN ('project'))
+    ) THEN
+        v_has_access := TRUE;
+    END IF;
+    END IF;
+    IF v_has_access THEN
+        RETURN 1;
+    END IF;
+    RETURN 0;
+END;
+$$ LANGUAGE plpgsql STABLE COST 1000
+SET search_path = 'public';
+
+
+-- Generated check function for repository_oci_image.can_write
+-- Features: Recursive
+CREATE OR REPLACE FUNCTION "public"."check_repository_oci_image_can_write_nw"(
+    p_subject_type TEXT,
+    p_subject_id TEXT,
+    p_object_id TEXT,
+    p_visited TEXT [] DEFAULT ARRAY[]::TEXT[]
+) RETURNS INTEGER AS $$
+DECLARE
+    v_has_access BOOLEAN := FALSE;
+    v_key TEXT := 'repository_oci_image:' || p_object_id || ':can_write';
+    v_userset_check INTEGER := 0;
+BEGIN
+    -- Cycle detection
+    IF v_key = ANY(p_visited) THEN
+        RETURN 0;
+    END IF;
+    IF array_length(p_visited, 1) >= 25 THEN
+        RAISE EXCEPTION 'resolution too complex' USING ERRCODE = 'M2002';
+    END IF;
+    v_has_access := FALSE;
+    -- Userset subject handling
+    IF position('#' in p_subject_id) > 0 THEN
+        -- Case 1: Self-referential userset check
+        IF (p_subject_type = 'repository_oci_image' AND substring(p_subject_id from 1 for position('#' in p_subject_id) - 1) = p_object_id) THEN
+        SELECT INTO v_userset_check 1
+    WHERE substring(p_subject_id from position('#' in p_subject_id) + 1) IN ('can_write')
+    LIMIT 1;
+        IF v_userset_check = 1 THEN
+        RETURN 1;
+    END IF;
+    END IF;
+    END IF;
+    IF NOT (v_has_access) THEN
+        -- Recursive access path via project -> can_write
+        IF EXISTS (
+    SELECT 1
+    FROM melange_tuples AS link
+    WHERE (link.object_type = 'repository_oci_image' AND link.relation IN ('project') AND link.object_id = p_object_id AND "public"."check_permission_internal"(p_subject_type, p_subject_id, 'can_write', link.subject_type, link.subject_id, p_visited || ARRAY[v_key]) = 1 AND link.subject_type IN ('project'))
     ) THEN
         v_has_access := TRUE;
     END IF;
@@ -9310,6 +9652,58 @@ $$ LANGUAGE plpgsql STABLE COST 1000
 SET search_path = 'public';
 
 
+-- Generated check function for repository_oci_image.can_read
+-- Features: Recursive
+CREATE OR REPLACE FUNCTION "public"."check_repository_oci_image_can_read_nw"(
+    p_subject_type TEXT,
+    p_subject_id TEXT,
+    p_object_id TEXT,
+    p_visited TEXT [] DEFAULT ARRAY[]::TEXT[]
+) RETURNS INTEGER AS $$
+DECLARE
+    v_has_access BOOLEAN := FALSE;
+    v_key TEXT := 'repository_oci_image:' || p_object_id || ':can_read';
+    v_userset_check INTEGER := 0;
+BEGIN
+    -- Cycle detection
+    IF v_key = ANY(p_visited) THEN
+        RETURN 0;
+    END IF;
+    IF array_length(p_visited, 1) >= 25 THEN
+        RAISE EXCEPTION 'resolution too complex' USING ERRCODE = 'M2002';
+    END IF;
+    v_has_access := FALSE;
+    -- Userset subject handling
+    IF position('#' in p_subject_id) > 0 THEN
+        -- Case 1: Self-referential userset check
+        IF (p_subject_type = 'repository_oci_image' AND substring(p_subject_id from 1 for position('#' in p_subject_id) - 1) = p_object_id) THEN
+        SELECT INTO v_userset_check 1
+    WHERE substring(p_subject_id from position('#' in p_subject_id) + 1) IN ('can_read')
+    LIMIT 1;
+        IF v_userset_check = 1 THEN
+        RETURN 1;
+    END IF;
+    END IF;
+    END IF;
+    IF NOT (v_has_access) THEN
+        -- Recursive access path via project -> can_read
+        IF EXISTS (
+    SELECT 1
+    FROM melange_tuples AS link
+    WHERE (link.object_type = 'repository_oci_image' AND link.relation IN ('project') AND link.object_id = p_object_id AND "public"."check_permission_internal"(p_subject_type, p_subject_id, 'can_read', link.subject_type, link.subject_id, p_visited || ARRAY[v_key]) = 1 AND link.subject_type IN ('project'))
+    ) THEN
+        v_has_access := TRUE;
+    END IF;
+    END IF;
+    IF v_has_access THEN
+        RETURN 1;
+    END IF;
+    RETURN 0;
+END;
+$$ LANGUAGE plpgsql STABLE COST 1000
+SET search_path = 'public';
+
+
 -- Generated check function for agent_attachment.can_read
 -- Features: Recursive
 CREATE OR REPLACE FUNCTION "public"."check_agent_attachment_can_read_nw"(
@@ -9883,7 +10277,7 @@ SET search_path = 'public';
 
 
 -- ============================================================
--- Explain Functions (109 functions)
+-- Explain Functions (113 functions)
 -- ============================================================
 
 -- Generated explain function for agent_attachment.instance
@@ -12468,6 +12862,114 @@ BEGIN
     RETURN jsonb_build_object(
         'object', ('repository' || ':' || p_object_id),
         'relation', 'secret_manager',
+        'subject', (p_subject_type || ':' || p_subject_id),
+        'result', false,
+        'root', v_root,
+        'truncated', v_truncated,
+        'node_count', v_node_count);
+END;
+$$ LANGUAGE plpgsql STABLE
+SET search_path = 'public';
+
+
+-- Generated explain function for repository_oci_image.project
+-- Features: Direct
+CREATE OR REPLACE FUNCTION "public"."explain_repository_oci_image_project"(
+    p_subject_type TEXT,
+    p_subject_id TEXT,
+    p_object_id TEXT,
+    p_visited TEXT [] DEFAULT ARRAY[]::TEXT[],
+    p_max_nodes INTEGER DEFAULT NULL
+) RETURNS JSONB AS $$
+DECLARE
+    v_key TEXT := 'repository_oci_image:' || p_object_id || ':project';
+    v_node_count INTEGER := 0;
+    v_evidence_tuple RECORD;
+    v_root JSONB;
+    v_attempts JSONB := '[]'::JSONB;
+    v_userset_check INTEGER := 0;
+    v_max_nodes INTEGER := COALESCE(p_max_nodes, current_setting('melange.max_explain_nodes', true)::INTEGER, 100);
+    v_truncated BOOLEAN := FALSE;
+BEGIN
+    -- Cycle detection
+    IF v_key = ANY(p_visited) THEN
+        v_root := jsonb_build_object('type', 'cycle', 'label', v_key);
+        v_node_count := v_node_count + 1;
+        RETURN jsonb_build_object(
+        'object', ('repository_oci_image' || ':' || p_object_id),
+        'relation', 'project',
+        'subject', (p_subject_type || ':' || p_subject_id),
+        'result', false,
+        'root', v_root,
+        'truncated', v_truncated,
+        'node_count', v_node_count);
+    END IF;
+    IF array_length(p_visited, 1) >= 25 THEN
+        RAISE EXCEPTION 'resolution too complex' USING ERRCODE = 'M2002';
+    END IF;
+    IF v_node_count >= v_max_nodes THEN
+        v_root := jsonb_build_object('type', 'truncated');
+        v_node_count := v_node_count + 1;
+        v_truncated := TRUE;
+        RETURN jsonb_build_object(
+        'object', ('repository_oci_image' || ':' || p_object_id),
+        'relation', 'project',
+        'subject', (p_subject_type || ':' || p_subject_id),
+        'result', false,
+        'root', v_root,
+        'truncated', v_truncated,
+        'node_count', v_node_count);
+    END IF;
+    -- Userset subject handling (subject is itself a userset reference)
+    IF position('#' in p_subject_id) > 0 THEN
+        -- Case 1: self-referential userset (subject's userset resolves to this object)
+        IF (p_subject_type = 'repository_oci_image' AND split_part(p_subject_id, '#', 1) = p_object_id) THEN
+        SELECT INTO v_userset_check 1
+    WHERE substring(p_subject_id from position('#' in p_subject_id) + 1) IN ('project')
+    LIMIT 1;
+        IF v_userset_check = 1 THEN
+        v_root := jsonb_build_object('type', 'userset', 'label', 'self-referential userset matches relation closure', 'result', true);
+        v_node_count := v_node_count + 1;
+        RETURN jsonb_build_object(
+        'object', ('repository_oci_image' || ':' || p_object_id),
+        'relation', 'project',
+        'subject', (p_subject_type || ':' || p_subject_id),
+        'result', true,
+        'root', v_root,
+        'truncated', v_truncated,
+        'node_count', v_node_count);
+    END IF;
+    END IF;
+    END IF;
+    -- Direct/Implied grant attempt
+    SELECT INTO v_evidence_tuple t.subject_type, t.subject_id, t.relation, t.object_type, t.object_id
+    FROM melange_tuples AS t
+    WHERE (t.object_type = 'repository_oci_image' AND t.relation IN ('project') AND t.object_id = p_object_id AND t.subject_type = p_subject_type AND (t.subject_id = p_subject_id AND NOT (t.subject_id = '*')) AND t.subject_type IN ('project'))
+    LIMIT 1;
+    IF FOUND THEN
+        v_root := (CASE WHEN v_evidence_tuple.subject_id = '*' THEN jsonb_build_object('type', 'wildcard', 'users', jsonb_build_array(jsonb_build_object('type', v_evidence_tuple.subject_type, 'id', '*')), 'result', true) ELSE jsonb_build_object('type', 'direct', 'label', 'direct grant', 'evidence', jsonb_build_array(jsonb_build_object('subject_type', v_evidence_tuple.subject_type, 'subject_id', v_evidence_tuple.subject_id, 'relation', v_evidence_tuple.relation, 'object_type', v_evidence_tuple.object_type, 'object_id', v_evidence_tuple.object_id)), 'result', true) END);
+        v_node_count := v_node_count + 1;
+        RETURN jsonb_build_object(
+        'object', ('repository_oci_image' || ':' || p_object_id),
+        'relation', 'project',
+        'subject', (p_subject_type || ':' || p_subject_id),
+        'result', true,
+        'root', v_root,
+        'truncated', v_truncated,
+        'node_count', v_node_count);
+    ELSE
+        v_node_count := v_node_count + 1;
+        v_attempts := v_attempts || jsonb_build_array(jsonb_build_object('type', 'direct', 'label', 'no direct grant', 'result', false));
+    END IF;
+    IF v_node_count >= v_max_nodes THEN
+        v_truncated := TRUE;
+    END IF;
+    -- All recorded attempts failed
+    v_root := jsonb_build_object('type', 'union', 'children', v_attempts, 'result', false);
+    v_node_count := v_node_count + 1;
+    RETURN jsonb_build_object(
+        'object', ('repository_oci_image' || ':' || p_object_id),
+        'relation', 'project',
         'subject', (p_subject_type || ':' || p_subject_id),
         'result', false,
         'root', v_root,
@@ -17217,6 +17719,133 @@ $$ LANGUAGE plpgsql STABLE COST 1000
 SET search_path = 'public';
 
 
+-- Generated explain function for repository_oci_image.can_manage
+-- Features: Recursive
+CREATE OR REPLACE FUNCTION "public"."explain_repository_oci_image_can_manage"(
+    p_subject_type TEXT,
+    p_subject_id TEXT,
+    p_object_id TEXT,
+    p_visited TEXT [] DEFAULT ARRAY[]::TEXT[],
+    p_max_nodes INTEGER DEFAULT NULL
+) RETURNS JSONB AS $$
+DECLARE
+    v_key TEXT := 'repository_oci_image:' || p_object_id || ':can_manage';
+    v_node_count INTEGER := 0;
+    v_evidence_tuple RECORD;
+    v_root JSONB;
+    v_attempts JSONB := '[]'::JSONB;
+    v_userset_check INTEGER := 0;
+    v_max_nodes INTEGER := COALESCE(p_max_nodes, current_setting('melange.max_explain_nodes', true)::INTEGER, 100);
+    v_truncated BOOLEAN := FALSE;
+    v_child_trace JSONB;
+    v_parent_link RECORD;
+BEGIN
+    -- Cycle detection
+    IF v_key = ANY(p_visited) THEN
+        v_root := jsonb_build_object('type', 'cycle', 'label', v_key);
+        v_node_count := v_node_count + 1;
+        RETURN jsonb_build_object(
+        'object', ('repository_oci_image' || ':' || p_object_id),
+        'relation', 'can_manage',
+        'subject', (p_subject_type || ':' || p_subject_id),
+        'result', false,
+        'root', v_root,
+        'truncated', v_truncated,
+        'node_count', v_node_count);
+    END IF;
+    IF array_length(p_visited, 1) >= 25 THEN
+        RAISE EXCEPTION 'resolution too complex' USING ERRCODE = 'M2002';
+    END IF;
+    IF v_node_count >= v_max_nodes THEN
+        v_root := jsonb_build_object('type', 'truncated');
+        v_node_count := v_node_count + 1;
+        v_truncated := TRUE;
+        RETURN jsonb_build_object(
+        'object', ('repository_oci_image' || ':' || p_object_id),
+        'relation', 'can_manage',
+        'subject', (p_subject_type || ':' || p_subject_id),
+        'result', false,
+        'root', v_root,
+        'truncated', v_truncated,
+        'node_count', v_node_count);
+    END IF;
+    -- Userset subject handling (subject is itself a userset reference)
+    IF position('#' in p_subject_id) > 0 THEN
+        -- Case 1: self-referential userset (subject's userset resolves to this object)
+        IF (p_subject_type = 'repository_oci_image' AND split_part(p_subject_id, '#', 1) = p_object_id) THEN
+        SELECT INTO v_userset_check 1
+    WHERE substring(p_subject_id from position('#' in p_subject_id) + 1) IN ('can_manage')
+    LIMIT 1;
+        IF v_userset_check = 1 THEN
+        v_root := jsonb_build_object('type', 'userset', 'label', 'self-referential userset matches relation closure', 'result', true);
+        v_node_count := v_node_count + 1;
+        RETURN jsonb_build_object(
+        'object', ('repository_oci_image' || ':' || p_object_id),
+        'relation', 'can_manage',
+        'subject', (p_subject_type || ':' || p_subject_id),
+        'result', true,
+        'root', v_root,
+        'truncated', v_truncated,
+        'node_count', v_node_count);
+    END IF;
+    END IF;
+    END IF;
+    -- TTU / parent-relation attempts
+    FOR v_parent_link IN
+        SELECT link.subject_type AS parent_type, link.subject_id AS parent_id
+    FROM melange_tuples AS link
+    WHERE (link.object_type = 'repository_oci_image' AND link.relation IN ('project') AND link.object_id = p_object_id AND link.subject_type IN ('project'))
+    LOOP
+        v_child_trace := COALESCE("public"."explain_permission_internal"(p_subject_type, p_subject_id, 'can_manage', v_parent_link.parent_type, v_parent_link.parent_id, p_visited || ARRAY[v_key], p_max_nodes), '{}'::jsonb);
+        v_node_count := v_node_count + COALESCE((v_child_trace->>'node_count')::INTEGER, 0);
+        IF v_node_count >= v_max_nodes THEN
+        v_root := jsonb_build_object('type', 'truncated');
+        v_node_count := v_node_count + 1;
+        v_truncated := TRUE;
+        RETURN jsonb_build_object(
+        'object', ('repository_oci_image' || ':' || p_object_id),
+        'relation', 'can_manage',
+        'subject', (p_subject_type || ':' || p_subject_id),
+        'result', false,
+        'root', v_root,
+        'truncated', v_truncated,
+        'node_count', v_node_count);
+    END IF;
+        IF COALESCE((v_child_trace->>'result')::boolean, FALSE) THEN
+        v_root := jsonb_build_object('type', 'ttu', 'label', ('via project → ' || v_parent_link.parent_type || ':' || v_parent_link.parent_id || ' ⇒ can_manage'), 'children', jsonb_build_array(v_child_trace->'root'), 'result', true);
+        v_node_count := v_node_count + 1;
+        RETURN jsonb_build_object(
+        'object', ('repository_oci_image' || ':' || p_object_id),
+        'relation', 'can_manage',
+        'subject', (p_subject_type || ':' || p_subject_id),
+        'result', true,
+        'root', v_root,
+        'truncated', v_truncated,
+        'node_count', v_node_count);
+    ELSE
+        v_node_count := v_node_count + 1;
+        v_attempts := v_attempts || jsonb_build_array(jsonb_build_object('type', 'ttu', 'label', ('via project → ' || v_parent_link.parent_type || ':' || v_parent_link.parent_id || ' ⇒ can_manage'), 'children', jsonb_build_array(v_child_trace->'root'), 'result', false));
+    END IF;
+    END LOOP;
+    IF v_node_count >= v_max_nodes THEN
+        v_truncated := TRUE;
+    END IF;
+    -- All recorded attempts failed
+    v_root := jsonb_build_object('type', 'union', 'children', v_attempts, 'result', false);
+    v_node_count := v_node_count + 1;
+    RETURN jsonb_build_object(
+        'object', ('repository_oci_image' || ':' || p_object_id),
+        'relation', 'can_manage',
+        'subject', (p_subject_type || ':' || p_subject_id),
+        'result', false,
+        'root', v_root,
+        'truncated', v_truncated,
+        'node_count', v_node_count);
+END;
+$$ LANGUAGE plpgsql STABLE COST 1000
+SET search_path = 'public';
+
+
 -- Generated explain function for agent_instance.can_execute
 -- Features: Recursive
 CREATE OR REPLACE FUNCTION "public"."explain_agent_instance_can_execute"(
@@ -17480,6 +18109,133 @@ BEGIN
     v_node_count := v_node_count + 1;
     RETURN jsonb_build_object(
         'object', ('repository' || ':' || p_object_id),
+        'relation', 'can_write',
+        'subject', (p_subject_type || ':' || p_subject_id),
+        'result', false,
+        'root', v_root,
+        'truncated', v_truncated,
+        'node_count', v_node_count);
+END;
+$$ LANGUAGE plpgsql STABLE COST 1000
+SET search_path = 'public';
+
+
+-- Generated explain function for repository_oci_image.can_write
+-- Features: Recursive
+CREATE OR REPLACE FUNCTION "public"."explain_repository_oci_image_can_write"(
+    p_subject_type TEXT,
+    p_subject_id TEXT,
+    p_object_id TEXT,
+    p_visited TEXT [] DEFAULT ARRAY[]::TEXT[],
+    p_max_nodes INTEGER DEFAULT NULL
+) RETURNS JSONB AS $$
+DECLARE
+    v_key TEXT := 'repository_oci_image:' || p_object_id || ':can_write';
+    v_node_count INTEGER := 0;
+    v_evidence_tuple RECORD;
+    v_root JSONB;
+    v_attempts JSONB := '[]'::JSONB;
+    v_userset_check INTEGER := 0;
+    v_max_nodes INTEGER := COALESCE(p_max_nodes, current_setting('melange.max_explain_nodes', true)::INTEGER, 100);
+    v_truncated BOOLEAN := FALSE;
+    v_child_trace JSONB;
+    v_parent_link RECORD;
+BEGIN
+    -- Cycle detection
+    IF v_key = ANY(p_visited) THEN
+        v_root := jsonb_build_object('type', 'cycle', 'label', v_key);
+        v_node_count := v_node_count + 1;
+        RETURN jsonb_build_object(
+        'object', ('repository_oci_image' || ':' || p_object_id),
+        'relation', 'can_write',
+        'subject', (p_subject_type || ':' || p_subject_id),
+        'result', false,
+        'root', v_root,
+        'truncated', v_truncated,
+        'node_count', v_node_count);
+    END IF;
+    IF array_length(p_visited, 1) >= 25 THEN
+        RAISE EXCEPTION 'resolution too complex' USING ERRCODE = 'M2002';
+    END IF;
+    IF v_node_count >= v_max_nodes THEN
+        v_root := jsonb_build_object('type', 'truncated');
+        v_node_count := v_node_count + 1;
+        v_truncated := TRUE;
+        RETURN jsonb_build_object(
+        'object', ('repository_oci_image' || ':' || p_object_id),
+        'relation', 'can_write',
+        'subject', (p_subject_type || ':' || p_subject_id),
+        'result', false,
+        'root', v_root,
+        'truncated', v_truncated,
+        'node_count', v_node_count);
+    END IF;
+    -- Userset subject handling (subject is itself a userset reference)
+    IF position('#' in p_subject_id) > 0 THEN
+        -- Case 1: self-referential userset (subject's userset resolves to this object)
+        IF (p_subject_type = 'repository_oci_image' AND split_part(p_subject_id, '#', 1) = p_object_id) THEN
+        SELECT INTO v_userset_check 1
+    WHERE substring(p_subject_id from position('#' in p_subject_id) + 1) IN ('can_write')
+    LIMIT 1;
+        IF v_userset_check = 1 THEN
+        v_root := jsonb_build_object('type', 'userset', 'label', 'self-referential userset matches relation closure', 'result', true);
+        v_node_count := v_node_count + 1;
+        RETURN jsonb_build_object(
+        'object', ('repository_oci_image' || ':' || p_object_id),
+        'relation', 'can_write',
+        'subject', (p_subject_type || ':' || p_subject_id),
+        'result', true,
+        'root', v_root,
+        'truncated', v_truncated,
+        'node_count', v_node_count);
+    END IF;
+    END IF;
+    END IF;
+    -- TTU / parent-relation attempts
+    FOR v_parent_link IN
+        SELECT link.subject_type AS parent_type, link.subject_id AS parent_id
+    FROM melange_tuples AS link
+    WHERE (link.object_type = 'repository_oci_image' AND link.relation IN ('project') AND link.object_id = p_object_id AND link.subject_type IN ('project'))
+    LOOP
+        v_child_trace := COALESCE("public"."explain_permission_internal"(p_subject_type, p_subject_id, 'can_write', v_parent_link.parent_type, v_parent_link.parent_id, p_visited || ARRAY[v_key], p_max_nodes), '{}'::jsonb);
+        v_node_count := v_node_count + COALESCE((v_child_trace->>'node_count')::INTEGER, 0);
+        IF v_node_count >= v_max_nodes THEN
+        v_root := jsonb_build_object('type', 'truncated');
+        v_node_count := v_node_count + 1;
+        v_truncated := TRUE;
+        RETURN jsonb_build_object(
+        'object', ('repository_oci_image' || ':' || p_object_id),
+        'relation', 'can_write',
+        'subject', (p_subject_type || ':' || p_subject_id),
+        'result', false,
+        'root', v_root,
+        'truncated', v_truncated,
+        'node_count', v_node_count);
+    END IF;
+        IF COALESCE((v_child_trace->>'result')::boolean, FALSE) THEN
+        v_root := jsonb_build_object('type', 'ttu', 'label', ('via project → ' || v_parent_link.parent_type || ':' || v_parent_link.parent_id || ' ⇒ can_write'), 'children', jsonb_build_array(v_child_trace->'root'), 'result', true);
+        v_node_count := v_node_count + 1;
+        RETURN jsonb_build_object(
+        'object', ('repository_oci_image' || ':' || p_object_id),
+        'relation', 'can_write',
+        'subject', (p_subject_type || ':' || p_subject_id),
+        'result', true,
+        'root', v_root,
+        'truncated', v_truncated,
+        'node_count', v_node_count);
+    ELSE
+        v_node_count := v_node_count + 1;
+        v_attempts := v_attempts || jsonb_build_array(jsonb_build_object('type', 'ttu', 'label', ('via project → ' || v_parent_link.parent_type || ':' || v_parent_link.parent_id || ' ⇒ can_write'), 'children', jsonb_build_array(v_child_trace->'root'), 'result', false));
+    END IF;
+    END LOOP;
+    IF v_node_count >= v_max_nodes THEN
+        v_truncated := TRUE;
+    END IF;
+    -- All recorded attempts failed
+    v_root := jsonb_build_object('type', 'union', 'children', v_attempts, 'result', false);
+    v_node_count := v_node_count + 1;
+    RETURN jsonb_build_object(
+        'object', ('repository_oci_image' || ':' || p_object_id),
         'relation', 'can_write',
         'subject', (p_subject_type || ':' || p_subject_id),
         'result', false,
@@ -21231,6 +21987,133 @@ $$ LANGUAGE plpgsql STABLE COST 1000
 SET search_path = 'public';
 
 
+-- Generated explain function for repository_oci_image.can_read
+-- Features: Recursive
+CREATE OR REPLACE FUNCTION "public"."explain_repository_oci_image_can_read"(
+    p_subject_type TEXT,
+    p_subject_id TEXT,
+    p_object_id TEXT,
+    p_visited TEXT [] DEFAULT ARRAY[]::TEXT[],
+    p_max_nodes INTEGER DEFAULT NULL
+) RETURNS JSONB AS $$
+DECLARE
+    v_key TEXT := 'repository_oci_image:' || p_object_id || ':can_read';
+    v_node_count INTEGER := 0;
+    v_evidence_tuple RECORD;
+    v_root JSONB;
+    v_attempts JSONB := '[]'::JSONB;
+    v_userset_check INTEGER := 0;
+    v_max_nodes INTEGER := COALESCE(p_max_nodes, current_setting('melange.max_explain_nodes', true)::INTEGER, 100);
+    v_truncated BOOLEAN := FALSE;
+    v_child_trace JSONB;
+    v_parent_link RECORD;
+BEGIN
+    -- Cycle detection
+    IF v_key = ANY(p_visited) THEN
+        v_root := jsonb_build_object('type', 'cycle', 'label', v_key);
+        v_node_count := v_node_count + 1;
+        RETURN jsonb_build_object(
+        'object', ('repository_oci_image' || ':' || p_object_id),
+        'relation', 'can_read',
+        'subject', (p_subject_type || ':' || p_subject_id),
+        'result', false,
+        'root', v_root,
+        'truncated', v_truncated,
+        'node_count', v_node_count);
+    END IF;
+    IF array_length(p_visited, 1) >= 25 THEN
+        RAISE EXCEPTION 'resolution too complex' USING ERRCODE = 'M2002';
+    END IF;
+    IF v_node_count >= v_max_nodes THEN
+        v_root := jsonb_build_object('type', 'truncated');
+        v_node_count := v_node_count + 1;
+        v_truncated := TRUE;
+        RETURN jsonb_build_object(
+        'object', ('repository_oci_image' || ':' || p_object_id),
+        'relation', 'can_read',
+        'subject', (p_subject_type || ':' || p_subject_id),
+        'result', false,
+        'root', v_root,
+        'truncated', v_truncated,
+        'node_count', v_node_count);
+    END IF;
+    -- Userset subject handling (subject is itself a userset reference)
+    IF position('#' in p_subject_id) > 0 THEN
+        -- Case 1: self-referential userset (subject's userset resolves to this object)
+        IF (p_subject_type = 'repository_oci_image' AND split_part(p_subject_id, '#', 1) = p_object_id) THEN
+        SELECT INTO v_userset_check 1
+    WHERE substring(p_subject_id from position('#' in p_subject_id) + 1) IN ('can_read')
+    LIMIT 1;
+        IF v_userset_check = 1 THEN
+        v_root := jsonb_build_object('type', 'userset', 'label', 'self-referential userset matches relation closure', 'result', true);
+        v_node_count := v_node_count + 1;
+        RETURN jsonb_build_object(
+        'object', ('repository_oci_image' || ':' || p_object_id),
+        'relation', 'can_read',
+        'subject', (p_subject_type || ':' || p_subject_id),
+        'result', true,
+        'root', v_root,
+        'truncated', v_truncated,
+        'node_count', v_node_count);
+    END IF;
+    END IF;
+    END IF;
+    -- TTU / parent-relation attempts
+    FOR v_parent_link IN
+        SELECT link.subject_type AS parent_type, link.subject_id AS parent_id
+    FROM melange_tuples AS link
+    WHERE (link.object_type = 'repository_oci_image' AND link.relation IN ('project') AND link.object_id = p_object_id AND link.subject_type IN ('project'))
+    LOOP
+        v_child_trace := COALESCE("public"."explain_permission_internal"(p_subject_type, p_subject_id, 'can_read', v_parent_link.parent_type, v_parent_link.parent_id, p_visited || ARRAY[v_key], p_max_nodes), '{}'::jsonb);
+        v_node_count := v_node_count + COALESCE((v_child_trace->>'node_count')::INTEGER, 0);
+        IF v_node_count >= v_max_nodes THEN
+        v_root := jsonb_build_object('type', 'truncated');
+        v_node_count := v_node_count + 1;
+        v_truncated := TRUE;
+        RETURN jsonb_build_object(
+        'object', ('repository_oci_image' || ':' || p_object_id),
+        'relation', 'can_read',
+        'subject', (p_subject_type || ':' || p_subject_id),
+        'result', false,
+        'root', v_root,
+        'truncated', v_truncated,
+        'node_count', v_node_count);
+    END IF;
+        IF COALESCE((v_child_trace->>'result')::boolean, FALSE) THEN
+        v_root := jsonb_build_object('type', 'ttu', 'label', ('via project → ' || v_parent_link.parent_type || ':' || v_parent_link.parent_id || ' ⇒ can_read'), 'children', jsonb_build_array(v_child_trace->'root'), 'result', true);
+        v_node_count := v_node_count + 1;
+        RETURN jsonb_build_object(
+        'object', ('repository_oci_image' || ':' || p_object_id),
+        'relation', 'can_read',
+        'subject', (p_subject_type || ':' || p_subject_id),
+        'result', true,
+        'root', v_root,
+        'truncated', v_truncated,
+        'node_count', v_node_count);
+    ELSE
+        v_node_count := v_node_count + 1;
+        v_attempts := v_attempts || jsonb_build_array(jsonb_build_object('type', 'ttu', 'label', ('via project → ' || v_parent_link.parent_type || ':' || v_parent_link.parent_id || ' ⇒ can_read'), 'children', jsonb_build_array(v_child_trace->'root'), 'result', false));
+    END IF;
+    END LOOP;
+    IF v_node_count >= v_max_nodes THEN
+        v_truncated := TRUE;
+    END IF;
+    -- All recorded attempts failed
+    v_root := jsonb_build_object('type', 'union', 'children', v_attempts, 'result', false);
+    v_node_count := v_node_count + 1;
+    RETURN jsonb_build_object(
+        'object', ('repository_oci_image' || ':' || p_object_id),
+        'relation', 'can_read',
+        'subject', (p_subject_type || ':' || p_subject_id),
+        'result', false,
+        'root', v_root,
+        'truncated', v_truncated,
+        'node_count', v_node_count);
+END;
+$$ LANGUAGE plpgsql STABLE COST 1000
+SET search_path = 'public';
+
+
 -- Generated explain function for agent_attachment.can_read
 -- Features: Recursive
 CREATE OR REPLACE FUNCTION "public"."explain_agent_attachment_can_read"(
@@ -22629,7 +23512,7 @@ SET search_path = 'public';
 
 
 -- ============================================================
--- Expand Functions (109 functions)
+-- Expand Functions (113 functions)
 -- ============================================================
 
 -- Generated expand function for agent_attachment.instance
@@ -23011,6 +23894,22 @@ CREATE OR REPLACE FUNCTION "public"."expand_repository_secret_manager"(
 ) RETURNS JSONB AS $$
 BEGIN
     RETURN jsonb_build_object('root', jsonb_build_object('name', ('repository' || ':' || p_object_id || '#secret_manager')) || jsonb_build_object('leaf', jsonb_build_object('users', (jsonb_build_object('users', COALESCE((SELECT jsonb_agg(u) FROM (SELECT subject_type || ':' || subject_id AS u FROM "public"."melange_tuples" WHERE object_type = 'repository' AND object_id = p_object_id AND relation = 'secret_manager' AND subject_type IN ('user') AND (p_subject_type IS NULL OR subject_type = p_subject_type) ORDER BY subject_type, subject_id LIMIT p_max_leaf) capped), '[]'::jsonb)) || CASE WHEN (p_max_leaf IS NOT NULL AND EXISTS (SELECT 1 FROM "public"."melange_tuples" WHERE object_type = 'repository' AND object_id = p_object_id AND relation = 'secret_manager' AND subject_type IN ('user') AND (p_subject_type IS NULL OR subject_type = p_subject_type) OFFSET p_max_leaf)) THEN jsonb_build_object('users_truncated', true) ELSE '{}'::jsonb END))));
+END;
+$$ LANGUAGE plpgsql STABLE
+SET search_path = 'public';
+
+
+-- Generated expand function for repository_oci_image.project
+-- Returns OpenFGA-shaped UsersetTree JSONB. Shallow by default — computed
+-- rewrites surface as Leaf.Computed pointers; callers chase them with
+-- follow-up Expand calls or use Checker.ExpandRecursive.
+CREATE OR REPLACE FUNCTION "public"."expand_repository_oci_image_project"(
+    p_object_id TEXT,
+    p_subject_type TEXT DEFAULT NULL,
+    p_max_leaf INTEGER DEFAULT NULL
+) RETURNS JSONB AS $$
+BEGIN
+    RETURN jsonb_build_object('root', jsonb_build_object('name', ('repository_oci_image' || ':' || p_object_id || '#project')) || jsonb_build_object('leaf', jsonb_build_object('users', (jsonb_build_object('users', COALESCE((SELECT jsonb_agg(u) FROM (SELECT subject_type || ':' || subject_id AS u FROM "public"."melange_tuples" WHERE object_type = 'repository_oci_image' AND object_id = p_object_id AND relation = 'project' AND subject_type IN ('project') AND (p_subject_type IS NULL OR subject_type = p_subject_type) ORDER BY subject_type, subject_id LIMIT p_max_leaf) capped), '[]'::jsonb)) || CASE WHEN (p_max_leaf IS NOT NULL AND EXISTS (SELECT 1 FROM "public"."melange_tuples" WHERE object_type = 'repository_oci_image' AND object_id = p_object_id AND relation = 'project' AND subject_type IN ('project') AND (p_subject_type IS NULL OR subject_type = p_subject_type) OFFSET p_max_leaf)) THEN jsonb_build_object('users_truncated', true) ELSE '{}'::jsonb END))));
 END;
 $$ LANGUAGE plpgsql STABLE
 SET search_path = 'public';
@@ -23704,6 +24603,22 @@ $$ LANGUAGE plpgsql STABLE
 SET search_path = 'public';
 
 
+-- Generated expand function for repository_oci_image.can_manage
+-- Returns OpenFGA-shaped UsersetTree JSONB. Shallow by default — computed
+-- rewrites surface as Leaf.Computed pointers; callers chase them with
+-- follow-up Expand calls or use Checker.ExpandRecursive.
+CREATE OR REPLACE FUNCTION "public"."expand_repository_oci_image_can_manage"(
+    p_object_id TEXT,
+    p_subject_type TEXT DEFAULT NULL,
+    p_max_leaf INTEGER DEFAULT NULL
+) RETURNS JSONB AS $$
+BEGIN
+    RETURN jsonb_build_object('root', jsonb_build_object('name', ('repository_oci_image' || ':' || p_object_id || '#can_manage')) || jsonb_build_object('leaf', jsonb_build_object('tuple_to_userset', jsonb_build_object('tupleset', ('repository_oci_image' || ':' || p_object_id || '#project'), 'computed', COALESCE((SELECT jsonb_agg(jsonb_build_object('userset', subject_type || ':' || subject_id || '#can_manage') ORDER BY subject_type, subject_id) FROM "public"."melange_tuples" WHERE object_type = 'repository_oci_image' AND object_id = p_object_id AND relation = 'project' AND subject_type IN ('project')), '[]'::jsonb)))));
+END;
+$$ LANGUAGE plpgsql STABLE
+SET search_path = 'public';
+
+
 -- Generated expand function for agent_instance.can_execute
 -- Returns OpenFGA-shaped UsersetTree JSONB. Shallow by default — computed
 -- rewrites surface as Leaf.Computed pointers; callers chase them with
@@ -23731,6 +24646,22 @@ CREATE OR REPLACE FUNCTION "public"."expand_repository_can_write"(
 ) RETURNS JSONB AS $$
 BEGIN
     RETURN jsonb_build_object('root', jsonb_build_object('name', ('repository' || ':' || p_object_id || '#can_write')) || jsonb_build_object('union', jsonb_build_object('nodes', jsonb_build_array(jsonb_build_object('name', ('repository' || ':' || p_object_id || '#can_write')) || jsonb_build_object('leaf', jsonb_build_object('computed', jsonb_build_object('userset', ('repository' || ':' || p_object_id || '#manager')))), jsonb_build_object('name', ('repository' || ':' || p_object_id || '#can_write')) || jsonb_build_object('leaf', jsonb_build_object('tuple_to_userset', jsonb_build_object('tupleset', ('repository' || ':' || p_object_id || '#project'), 'computed', COALESCE((SELECT jsonb_agg(jsonb_build_object('userset', subject_type || ':' || subject_id || '#can_write') ORDER BY subject_type, subject_id) FROM "public"."melange_tuples" WHERE object_type = 'repository' AND object_id = p_object_id AND relation = 'project' AND subject_type IN ('project')), '[]'::jsonb))))))));
+END;
+$$ LANGUAGE plpgsql STABLE
+SET search_path = 'public';
+
+
+-- Generated expand function for repository_oci_image.can_write
+-- Returns OpenFGA-shaped UsersetTree JSONB. Shallow by default — computed
+-- rewrites surface as Leaf.Computed pointers; callers chase them with
+-- follow-up Expand calls or use Checker.ExpandRecursive.
+CREATE OR REPLACE FUNCTION "public"."expand_repository_oci_image_can_write"(
+    p_object_id TEXT,
+    p_subject_type TEXT DEFAULT NULL,
+    p_max_leaf INTEGER DEFAULT NULL
+) RETURNS JSONB AS $$
+BEGIN
+    RETURN jsonb_build_object('root', jsonb_build_object('name', ('repository_oci_image' || ':' || p_object_id || '#can_write')) || jsonb_build_object('leaf', jsonb_build_object('tuple_to_userset', jsonb_build_object('tupleset', ('repository_oci_image' || ':' || p_object_id || '#project'), 'computed', COALESCE((SELECT jsonb_agg(jsonb_build_object('userset', subject_type || ':' || subject_id || '#can_write') ORDER BY subject_type, subject_id) FROM "public"."melange_tuples" WHERE object_type = 'repository_oci_image' AND object_id = p_object_id AND relation = 'project' AND subject_type IN ('project')), '[]'::jsonb)))));
 END;
 $$ LANGUAGE plpgsql STABLE
 SET search_path = 'public';
@@ -24200,6 +25131,22 @@ $$ LANGUAGE plpgsql STABLE
 SET search_path = 'public';
 
 
+-- Generated expand function for repository_oci_image.can_read
+-- Returns OpenFGA-shaped UsersetTree JSONB. Shallow by default — computed
+-- rewrites surface as Leaf.Computed pointers; callers chase them with
+-- follow-up Expand calls or use Checker.ExpandRecursive.
+CREATE OR REPLACE FUNCTION "public"."expand_repository_oci_image_can_read"(
+    p_object_id TEXT,
+    p_subject_type TEXT DEFAULT NULL,
+    p_max_leaf INTEGER DEFAULT NULL
+) RETURNS JSONB AS $$
+BEGIN
+    RETURN jsonb_build_object('root', jsonb_build_object('name', ('repository_oci_image' || ':' || p_object_id || '#can_read')) || jsonb_build_object('leaf', jsonb_build_object('tuple_to_userset', jsonb_build_object('tupleset', ('repository_oci_image' || ':' || p_object_id || '#project'), 'computed', COALESCE((SELECT jsonb_agg(jsonb_build_object('userset', subject_type || ':' || subject_id || '#can_read') ORDER BY subject_type, subject_id) FROM "public"."melange_tuples" WHERE object_type = 'repository_oci_image' AND object_id = p_object_id AND relation = 'project' AND subject_type IN ('project')), '[]'::jsonb)))));
+END;
+$$ LANGUAGE plpgsql STABLE
+SET search_path = 'public';
+
+
 -- Generated expand function for agent_attachment.can_read
 -- Returns OpenFGA-shaped UsersetTree JSONB. Shallow by default — computed
 -- rewrites surface as Leaf.Computed pointers; callers chase them with
@@ -24377,7 +25324,7 @@ SET search_path = 'public';
 
 
 -- ============================================================
--- List Objects Functions (109 functions)
+-- List Objects Functions (113 functions)
 -- ============================================================
 
 -- Generated list_objects function for agent_attachment.instance
@@ -25412,6 +26359,50 @@ BEGIN
                 -- Self-candidate: subject is userset on same object type
                 SELECT split_part(p_subject_id, '#', 1)
                 WHERE (position('#' in p_subject_id) > 0 AND p_subject_type = 'repository' AND substring(p_subject_id from position('#' in p_subject_id) + 1) IN ('secret_manager'))
+        ),
+        paged AS (
+            SELECT br.object_id
+            FROM base_results br
+            WHERE (p_after IS NULL OR br.object_id > p_after)
+            ORDER BY br.object_id
+            LIMIT CASE WHEN p_limit IS NULL THEN NULL ELSE p_limit + 1 END
+        ),
+        returned AS (
+            SELECT p.object_id FROM paged p ORDER BY p.object_id LIMIT p_limit
+        ),
+        next AS (
+            SELECT CASE
+                WHEN p_limit IS NOT NULL AND (SELECT count(*) FROM paged) > p_limit
+                THEN (SELECT max(r.object_id) FROM returned r)
+            END AS next_cursor
+        )
+        SELECT r.object_id, n.next_cursor
+        FROM returned r
+        CROSS JOIN next n;
+END;
+$$ LANGUAGE plpgsql STABLE
+SET search_path = 'public';
+
+-- Generated list_objects function for repository_oci_image.project
+-- Features: Direct
+CREATE OR REPLACE FUNCTION "public"."list_repository_oci_image_project_obj"(
+    p_subject_type TEXT,
+    p_subject_id TEXT,
+    p_limit INT DEFAULT NULL,
+    p_after TEXT DEFAULT NULL
+) RETURNS TABLE(object_id TEXT, next_cursor TEXT) ROWS 100 AS $$
+BEGIN
+    RETURN QUERY
+        WITH base_results AS (
+            -- Direct tuple lookup with simple closure relations
+                -- Type guard: only return results if subject type is in allowed subject types
+                SELECT DISTINCT t.object_id
+                FROM melange_tuples AS t
+                WHERE (t.object_type = 'repository_oci_image' AND t.relation IN ('project') AND t.subject_type = p_subject_type AND p_subject_type IN ('project') AND (t.subject_id = p_subject_id AND NOT (t.subject_id = '*')))
+                UNION
+                -- Self-candidate: subject is userset on same object type
+                SELECT split_part(p_subject_id, '#', 1)
+                WHERE (position('#' in p_subject_id) > 0 AND p_subject_type = 'repository_oci_image' AND substring(p_subject_id from position('#' in p_subject_id) + 1) IN ('project'))
         ),
         paged AS (
             SELECT br.object_id
@@ -27488,6 +28479,82 @@ END;
 $$ LANGUAGE plpgsql STABLE
 SET search_path = 'public';
 
+-- Generated list_objects function for repository_oci_image.can_manage
+-- Features: Recursive
+-- Indirect anchor: project.can_manage via ttu
+CREATE OR REPLACE FUNCTION "public"."list_repository_oci_image_can_manage_obj"(
+    p_subject_type TEXT,
+    p_subject_id TEXT,
+    p_limit INT DEFAULT NULL,
+    p_after TEXT DEFAULT NULL
+) RETURNS TABLE(object_id TEXT, next_cursor TEXT) ROWS 100 AS $$
+BEGIN
+    -- Self-candidate check: when subject is a userset on the same object type
+    IF EXISTS (
+    SELECT split_part(p_subject_id, '#', 1) AS object_id
+    WHERE (p_subject_type = 'repository_oci_image' AND position('#' in p_subject_id) > 0 AND substring(p_subject_id from position('#' in p_subject_id) + 1) IN ('can_manage'))
+    ) THEN
+        RETURN QUERY
+        WITH base_results AS (
+            SELECT split_part(p_subject_id, '#', 1) AS object_id
+            WHERE (p_subject_type = 'repository_oci_image' AND position('#' in p_subject_id) > 0 AND substring(p_subject_id from position('#' in p_subject_id) + 1) IN ('can_manage'))
+        ),
+        paged AS (
+            SELECT br.object_id
+            FROM base_results br
+            WHERE (p_after IS NULL OR br.object_id > p_after)
+            ORDER BY br.object_id
+            LIMIT CASE WHEN p_limit IS NULL THEN NULL ELSE p_limit + 1 END
+        ),
+        returned AS (
+            SELECT p.object_id FROM paged p ORDER BY p.object_id LIMIT p_limit
+        ),
+        next AS (
+            SELECT CASE
+                WHEN p_limit IS NOT NULL AND (SELECT count(*) FROM paged) > p_limit
+                THEN (SELECT max(r.object_id) FROM returned r)
+            END AS next_cursor
+        )
+        SELECT r.object_id, n.next_cursor
+        FROM returned r
+        CROSS JOIN next n;
+        RETURN;
+    END IF;
+    -- Type guard: only return results if subject type is allowed
+    -- Skip the guard for userset subjects since composed inner calls handle userset subjects
+    IF (position('#' in p_subject_id) = 0 AND p_subject_type NOT IN ('user')) THEN
+        RETURN;
+    END IF;
+    RETURN QUERY
+        WITH base_results AS (
+            -- TTU composition: project -> project
+                SELECT DISTINCT t.object_id
+                FROM melange_tuples AS t
+                WHERE (t.object_type = 'repository_oci_image' AND t.relation = 'project' AND t.subject_type = 'project' AND t.subject_id IN (SELECT obj.object_id FROM "public"."list_project_can_manage_obj"(p_subject_type, p_subject_id, NULL, NULL) obj))
+        ),
+        paged AS (
+            SELECT br.object_id
+            FROM base_results br
+            WHERE (p_after IS NULL OR br.object_id > p_after)
+            ORDER BY br.object_id
+            LIMIT CASE WHEN p_limit IS NULL THEN NULL ELSE p_limit + 1 END
+        ),
+        returned AS (
+            SELECT p.object_id FROM paged p ORDER BY p.object_id LIMIT p_limit
+        ),
+        next AS (
+            SELECT CASE
+                WHEN p_limit IS NOT NULL AND (SELECT count(*) FROM paged) > p_limit
+                THEN (SELECT max(r.object_id) FROM returned r)
+            END AS next_cursor
+        )
+        SELECT r.object_id, n.next_cursor
+        FROM returned r
+        CROSS JOIN next n;
+END;
+$$ LANGUAGE plpgsql STABLE
+SET search_path = 'public';
+
 -- Generated list_objects function for agent_instance.can_execute
 -- Features: Recursive
 -- Indirect anchor: project.can_write via ttu
@@ -27612,6 +28679,82 @@ BEGIN
                 UNION
             SELECT split_part(p_subject_id, '#', 1)
             WHERE (position('#' in p_subject_id) > 0 AND p_subject_type = 'repository' AND substring(p_subject_id from position('#' in p_subject_id) + 1) IN ('can_write', 'manager'))
+        ),
+        paged AS (
+            SELECT br.object_id
+            FROM base_results br
+            WHERE (p_after IS NULL OR br.object_id > p_after)
+            ORDER BY br.object_id
+            LIMIT CASE WHEN p_limit IS NULL THEN NULL ELSE p_limit + 1 END
+        ),
+        returned AS (
+            SELECT p.object_id FROM paged p ORDER BY p.object_id LIMIT p_limit
+        ),
+        next AS (
+            SELECT CASE
+                WHEN p_limit IS NOT NULL AND (SELECT count(*) FROM paged) > p_limit
+                THEN (SELECT max(r.object_id) FROM returned r)
+            END AS next_cursor
+        )
+        SELECT r.object_id, n.next_cursor
+        FROM returned r
+        CROSS JOIN next n;
+END;
+$$ LANGUAGE plpgsql STABLE
+SET search_path = 'public';
+
+-- Generated list_objects function for repository_oci_image.can_write
+-- Features: Recursive
+-- Indirect anchor: project.can_write via ttu
+CREATE OR REPLACE FUNCTION "public"."list_repository_oci_image_can_write_obj"(
+    p_subject_type TEXT,
+    p_subject_id TEXT,
+    p_limit INT DEFAULT NULL,
+    p_after TEXT DEFAULT NULL
+) RETURNS TABLE(object_id TEXT, next_cursor TEXT) ROWS 100 AS $$
+BEGIN
+    -- Self-candidate check: when subject is a userset on the same object type
+    IF EXISTS (
+    SELECT split_part(p_subject_id, '#', 1) AS object_id
+    WHERE (p_subject_type = 'repository_oci_image' AND position('#' in p_subject_id) > 0 AND substring(p_subject_id from position('#' in p_subject_id) + 1) IN ('can_write'))
+    ) THEN
+        RETURN QUERY
+        WITH base_results AS (
+            SELECT split_part(p_subject_id, '#', 1) AS object_id
+            WHERE (p_subject_type = 'repository_oci_image' AND position('#' in p_subject_id) > 0 AND substring(p_subject_id from position('#' in p_subject_id) + 1) IN ('can_write'))
+        ),
+        paged AS (
+            SELECT br.object_id
+            FROM base_results br
+            WHERE (p_after IS NULL OR br.object_id > p_after)
+            ORDER BY br.object_id
+            LIMIT CASE WHEN p_limit IS NULL THEN NULL ELSE p_limit + 1 END
+        ),
+        returned AS (
+            SELECT p.object_id FROM paged p ORDER BY p.object_id LIMIT p_limit
+        ),
+        next AS (
+            SELECT CASE
+                WHEN p_limit IS NOT NULL AND (SELECT count(*) FROM paged) > p_limit
+                THEN (SELECT max(r.object_id) FROM returned r)
+            END AS next_cursor
+        )
+        SELECT r.object_id, n.next_cursor
+        FROM returned r
+        CROSS JOIN next n;
+        RETURN;
+    END IF;
+    -- Type guard: only return results if subject type is allowed
+    -- Skip the guard for userset subjects since composed inner calls handle userset subjects
+    IF (position('#' in p_subject_id) = 0 AND p_subject_type NOT IN ('user')) THEN
+        RETURN;
+    END IF;
+    RETURN QUERY
+        WITH base_results AS (
+            -- TTU composition: project -> project
+                SELECT DISTINCT t.object_id
+                FROM melange_tuples AS t
+                WHERE (t.object_type = 'repository_oci_image' AND t.relation = 'project' AND t.subject_type = 'project' AND t.subject_id IN (SELECT obj.object_id FROM "public"."list_project_can_write_obj"(p_subject_type, p_subject_id, NULL, NULL) obj))
         ),
         paged AS (
             SELECT br.object_id
@@ -29850,6 +30993,82 @@ END;
 $$ LANGUAGE plpgsql STABLE
 SET search_path = 'public';
 
+-- Generated list_objects function for repository_oci_image.can_read
+-- Features: Recursive
+-- Indirect anchor: project.can_read via ttu
+CREATE OR REPLACE FUNCTION "public"."list_repository_oci_image_can_read_obj"(
+    p_subject_type TEXT,
+    p_subject_id TEXT,
+    p_limit INT DEFAULT NULL,
+    p_after TEXT DEFAULT NULL
+) RETURNS TABLE(object_id TEXT, next_cursor TEXT) ROWS 100 AS $$
+BEGIN
+    -- Self-candidate check: when subject is a userset on the same object type
+    IF EXISTS (
+    SELECT split_part(p_subject_id, '#', 1) AS object_id
+    WHERE (p_subject_type = 'repository_oci_image' AND position('#' in p_subject_id) > 0 AND substring(p_subject_id from position('#' in p_subject_id) + 1) IN ('can_read'))
+    ) THEN
+        RETURN QUERY
+        WITH base_results AS (
+            SELECT split_part(p_subject_id, '#', 1) AS object_id
+            WHERE (p_subject_type = 'repository_oci_image' AND position('#' in p_subject_id) > 0 AND substring(p_subject_id from position('#' in p_subject_id) + 1) IN ('can_read'))
+        ),
+        paged AS (
+            SELECT br.object_id
+            FROM base_results br
+            WHERE (p_after IS NULL OR br.object_id > p_after)
+            ORDER BY br.object_id
+            LIMIT CASE WHEN p_limit IS NULL THEN NULL ELSE p_limit + 1 END
+        ),
+        returned AS (
+            SELECT p.object_id FROM paged p ORDER BY p.object_id LIMIT p_limit
+        ),
+        next AS (
+            SELECT CASE
+                WHEN p_limit IS NOT NULL AND (SELECT count(*) FROM paged) > p_limit
+                THEN (SELECT max(r.object_id) FROM returned r)
+            END AS next_cursor
+        )
+        SELECT r.object_id, n.next_cursor
+        FROM returned r
+        CROSS JOIN next n;
+        RETURN;
+    END IF;
+    -- Type guard: only return results if subject type is allowed
+    -- Skip the guard for userset subjects since composed inner calls handle userset subjects
+    IF (position('#' in p_subject_id) = 0 AND p_subject_type NOT IN ('user')) THEN
+        RETURN;
+    END IF;
+    RETURN QUERY
+        WITH base_results AS (
+            -- TTU composition: project -> project
+                SELECT DISTINCT t.object_id
+                FROM melange_tuples AS t
+                WHERE (t.object_type = 'repository_oci_image' AND t.relation = 'project' AND t.subject_type = 'project' AND t.subject_id IN (SELECT obj.object_id FROM "public"."list_project_can_read_obj"(p_subject_type, p_subject_id, NULL, NULL) obj))
+        ),
+        paged AS (
+            SELECT br.object_id
+            FROM base_results br
+            WHERE (p_after IS NULL OR br.object_id > p_after)
+            ORDER BY br.object_id
+            LIMIT CASE WHEN p_limit IS NULL THEN NULL ELSE p_limit + 1 END
+        ),
+        returned AS (
+            SELECT p.object_id FROM paged p ORDER BY p.object_id LIMIT p_limit
+        ),
+        next AS (
+            SELECT CASE
+                WHEN p_limit IS NOT NULL AND (SELECT count(*) FROM paged) > p_limit
+                THEN (SELECT max(r.object_id) FROM returned r)
+            END AS next_cursor
+        )
+        SELECT r.object_id, n.next_cursor
+        FROM returned r
+        CROSS JOIN next n;
+END;
+$$ LANGUAGE plpgsql STABLE
+SET search_path = 'public';
+
 -- Generated list_objects function for agent_attachment.can_read
 -- Features: Recursive
 -- Indirect anchor: project.can_read via ttu
@@ -30687,7 +31906,7 @@ $$ LANGUAGE plpgsql STABLE
 SET search_path = 'public';
 
 -- ============================================================
--- List Subjects Functions (109 functions)
+-- List Subjects Functions (113 functions)
 -- ============================================================
 
 -- Generated list_subjects function for agent_attachment.instance
@@ -30710,8 +31929,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'agent_attachment' AND t.relation IN ('instance') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'agent_attachment' AND t.relation IN ('instance') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('agent_attachment', 'can_execute', 'can_execute'), ('agent_attachment', 'can_manage', 'can_manage'), ('agent_attachment', 'can_read', 'can_read'), ('agent_attachment', 'instance', 'instance'), ('agent_attachment', 'repository', 'repository'), ('agent_instance', 'can_execute', 'can_execute'), ('agent_instance', 'can_manage', 'can_manage'), ('agent_instance', 'can_read', 'can_read'), ('agent_instance', 'can_recover', 'can_recover'), ('agent_instance', 'can_update', 'can_update'), ('agent_instance', 'can_use_release', 'can_use_release'), ('agent_instance', 'project', 'project'), ('agent_instance', 'release_agent', 'release_agent')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -30721,7 +31940,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'agent_attachment' AND EXISTS (
+		WHERE (v_filter_type = 'agent_attachment' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('agent_attachment', 'can_execute', 'can_execute'), ('agent_attachment', 'can_manage', 'can_manage'), ('agent_attachment', 'can_read', 'can_read'), ('agent_attachment', 'instance', 'instance'), ('agent_attachment', 'repository', 'repository'), ('agent_instance', 'can_execute', 'can_execute'), ('agent_instance', 'can_manage', 'can_manage'), ('agent_instance', 'can_read', 'can_read'), ('agent_instance', 'can_recover', 'can_recover'), ('agent_instance', 'can_update', 'can_update'), ('agent_instance', 'can_use_release', 'can_use_release'), ('agent_instance', 'project', 'project'), ('agent_instance', 'release_agent', 'release_agent')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'agent_attachment' AND c.relation = 'instance' AND c.satisfying_relation = v_filter_relation)
@@ -30821,8 +32040,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'agent_attachment' AND t.relation IN ('repository') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'agent_attachment' AND t.relation IN ('repository') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('agent_attachment', 'can_execute', 'can_execute'), ('agent_attachment', 'can_manage', 'can_manage'), ('agent_attachment', 'can_read', 'can_read'), ('agent_attachment', 'instance', 'instance'), ('agent_attachment', 'repository', 'repository'), ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -30832,7 +32051,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'agent_attachment' AND EXISTS (
+		WHERE (v_filter_type = 'agent_attachment' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('agent_attachment', 'can_execute', 'can_execute'), ('agent_attachment', 'can_manage', 'can_manage'), ('agent_attachment', 'can_read', 'can_read'), ('agent_attachment', 'instance', 'instance'), ('agent_attachment', 'repository', 'repository'), ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'agent_attachment' AND c.relation = 'repository' AND c.satisfying_relation = v_filter_relation)
@@ -30932,8 +32151,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'agent_instance' AND t.relation IN ('project') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'agent_instance' AND t.relation IN ('project') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('agent_instance', 'can_execute', 'can_execute'), ('agent_instance', 'can_manage', 'can_manage'), ('agent_instance', 'can_read', 'can_read'), ('agent_instance', 'can_recover', 'can_recover'), ('agent_instance', 'can_update', 'can_update'), ('agent_instance', 'can_use_release', 'can_use_release'), ('agent_instance', 'project', 'project'), ('agent_instance', 'release_agent', 'release_agent'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -30943,7 +32162,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'agent_instance' AND EXISTS (
+		WHERE (v_filter_type = 'agent_instance' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('agent_instance', 'can_execute', 'can_execute'), ('agent_instance', 'can_manage', 'can_manage'), ('agent_instance', 'can_read', 'can_read'), ('agent_instance', 'can_recover', 'can_recover'), ('agent_instance', 'can_update', 'can_update'), ('agent_instance', 'can_use_release', 'can_use_release'), ('agent_instance', 'project', 'project'), ('agent_instance', 'release_agent', 'release_agent'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'agent_instance' AND c.relation = 'project' AND c.satisfying_relation = v_filter_relation)
@@ -31043,8 +32262,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'agent_instance' AND t.relation IN ('release_agent') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'agent_instance' AND t.relation IN ('release_agent') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('agent_instance', 'can_execute', 'can_execute'), ('agent_instance', 'can_manage', 'can_manage'), ('agent_instance', 'can_read', 'can_read'), ('agent_instance', 'can_recover', 'can_recover'), ('agent_instance', 'can_update', 'can_update'), ('agent_instance', 'can_use_release', 'can_use_release'), ('agent_instance', 'project', 'project'), ('agent_instance', 'release_agent', 'release_agent'), ('release_agent', 'can_read', 'can_read'), ('release_agent', 'can_use', 'can_use'), ('release_agent', 'release', 'release')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -31054,7 +32273,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'agent_instance' AND EXISTS (
+		WHERE (v_filter_type = 'agent_instance' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('agent_instance', 'can_execute', 'can_execute'), ('agent_instance', 'can_manage', 'can_manage'), ('agent_instance', 'can_read', 'can_read'), ('agent_instance', 'can_recover', 'can_recover'), ('agent_instance', 'can_update', 'can_update'), ('agent_instance', 'can_use_release', 'can_use_release'), ('agent_instance', 'project', 'project'), ('agent_instance', 'release_agent', 'release_agent'), ('release_agent', 'can_read', 'can_read'), ('release_agent', 'can_use', 'can_use'), ('release_agent', 'release', 'release')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'agent_instance' AND c.relation = 'release_agent' AND c.satisfying_relation = v_filter_relation)
@@ -31154,8 +32373,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'agent_secret_binding' AND t.relation IN ('instance') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'agent_secret_binding' AND t.relation IN ('instance') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('agent_instance', 'can_execute', 'can_execute'), ('agent_instance', 'can_manage', 'can_manage'), ('agent_instance', 'can_read', 'can_read'), ('agent_instance', 'can_recover', 'can_recover'), ('agent_instance', 'can_update', 'can_update'), ('agent_instance', 'can_use_release', 'can_use_release'), ('agent_instance', 'project', 'project'), ('agent_instance', 'release_agent', 'release_agent'), ('agent_secret_binding', 'bind_brokered', 'bind_brokered'), ('agent_secret_binding', 'bind_raw', 'bind_raw'), ('agent_secret_binding', 'can_manage', 'can_manage'), ('agent_secret_binding', 'can_read', 'can_read'), ('agent_secret_binding', 'instance', 'instance'), ('agent_secret_binding', 'secret_import', 'secret_import')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -31165,7 +32384,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'agent_secret_binding' AND EXISTS (
+		WHERE (v_filter_type = 'agent_secret_binding' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('agent_instance', 'can_execute', 'can_execute'), ('agent_instance', 'can_manage', 'can_manage'), ('agent_instance', 'can_read', 'can_read'), ('agent_instance', 'can_recover', 'can_recover'), ('agent_instance', 'can_update', 'can_update'), ('agent_instance', 'can_use_release', 'can_use_release'), ('agent_instance', 'project', 'project'), ('agent_instance', 'release_agent', 'release_agent'), ('agent_secret_binding', 'bind_brokered', 'bind_brokered'), ('agent_secret_binding', 'bind_raw', 'bind_raw'), ('agent_secret_binding', 'can_manage', 'can_manage'), ('agent_secret_binding', 'can_read', 'can_read'), ('agent_secret_binding', 'instance', 'instance'), ('agent_secret_binding', 'secret_import', 'secret_import')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'agent_secret_binding' AND c.relation = 'instance' AND c.satisfying_relation = v_filter_relation)
@@ -31265,8 +32484,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'agent_secret_binding' AND t.relation IN ('secret_import') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'agent_secret_binding' AND t.relation IN ('secret_import') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('agent_secret_binding', 'bind_brokered', 'bind_brokered'), ('agent_secret_binding', 'bind_raw', 'bind_raw'), ('agent_secret_binding', 'can_manage', 'can_manage'), ('agent_secret_binding', 'can_read', 'can_read'), ('agent_secret_binding', 'instance', 'instance'), ('agent_secret_binding', 'secret_import', 'secret_import'), ('secret_import', 'accept', 'accept'), ('secret_import', 'active_target', 'active_target'), ('secret_import', 'bind_brokered', 'bind_brokered'), ('secret_import', 'bind_raw', 'bind_raw'), ('secret_import', 'grant', 'grant'), ('secret_import', 'inspect_metadata', 'inspect_metadata'), ('secret_import', 'target', 'target')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -31276,7 +32495,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'agent_secret_binding' AND EXISTS (
+		WHERE (v_filter_type = 'agent_secret_binding' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('agent_secret_binding', 'bind_brokered', 'bind_brokered'), ('agent_secret_binding', 'bind_raw', 'bind_raw'), ('agent_secret_binding', 'can_manage', 'can_manage'), ('agent_secret_binding', 'can_read', 'can_read'), ('agent_secret_binding', 'instance', 'instance'), ('agent_secret_binding', 'secret_import', 'secret_import'), ('secret_import', 'accept', 'accept'), ('secret_import', 'active_target', 'active_target'), ('secret_import', 'bind_brokered', 'bind_brokered'), ('secret_import', 'bind_raw', 'bind_raw'), ('secret_import', 'grant', 'grant'), ('secret_import', 'inspect_metadata', 'inspect_metadata'), ('secret_import', 'target', 'target')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'agent_secret_binding' AND c.relation = 'secret_import' AND c.satisfying_relation = v_filter_relation)
@@ -31376,8 +32595,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'agent_update' AND t.relation IN ('instance') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'agent_update' AND t.relation IN ('instance') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('agent_instance', 'can_execute', 'can_execute'), ('agent_instance', 'can_manage', 'can_manage'), ('agent_instance', 'can_read', 'can_read'), ('agent_instance', 'can_recover', 'can_recover'), ('agent_instance', 'can_update', 'can_update'), ('agent_instance', 'can_use_release', 'can_use_release'), ('agent_instance', 'project', 'project'), ('agent_instance', 'release_agent', 'release_agent'), ('agent_update', 'can_read', 'can_read'), ('agent_update', 'can_recover', 'can_recover'), ('agent_update', 'can_start', 'can_start'), ('agent_update', 'instance', 'instance')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -31387,7 +32606,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'agent_update' AND EXISTS (
+		WHERE (v_filter_type = 'agent_update' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('agent_instance', 'can_execute', 'can_execute'), ('agent_instance', 'can_manage', 'can_manage'), ('agent_instance', 'can_read', 'can_read'), ('agent_instance', 'can_recover', 'can_recover'), ('agent_instance', 'can_update', 'can_update'), ('agent_instance', 'can_use_release', 'can_use_release'), ('agent_instance', 'project', 'project'), ('agent_instance', 'release_agent', 'release_agent'), ('agent_update', 'can_read', 'can_read'), ('agent_update', 'can_recover', 'can_recover'), ('agent_update', 'can_start', 'can_start'), ('agent_update', 'instance', 'instance')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'agent_update' AND c.relation = 'instance' AND c.satisfying_relation = v_filter_relation)
@@ -31487,8 +32706,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'build' AND t.relation IN ('repository') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'build' AND t.relation IN ('repository') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('build', 'can_cancel', 'can_cancel'), ('build', 'can_execute', 'can_execute'), ('build', 'can_read', 'can_read'), ('build', 'repository', 'repository'), ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -31498,7 +32717,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'build' AND EXISTS (
+		WHERE (v_filter_type = 'build' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('build', 'can_cancel', 'can_cancel'), ('build', 'can_execute', 'can_execute'), ('build', 'can_read', 'can_read'), ('build', 'repository', 'repository'), ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'build' AND c.relation = 'repository' AND c.satisfying_relation = v_filter_relation)
@@ -31598,8 +32817,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'organization' AND t.relation IN ('owner') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'organization' AND t.relation IN ('owner') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('organization', 'admin', 'admin'), ('organization', 'admin', 'owner'), ('organization', 'can_create_project', 'admin'), ('organization', 'can_create_project', 'can_create_project'), ('organization', 'can_create_project', 'owner'), ('organization', 'can_delete', 'can_delete'), ('organization', 'can_delete', 'owner'), ('organization', 'can_inspect_secrets', 'can_inspect_secrets'), ('organization', 'can_inspect_secrets', 'owner'), ('organization', 'can_inspect_secrets', 'secret_manager'), ('organization', 'can_manage', 'can_manage'), ('organization', 'can_manage', 'owner'), ('organization', 'can_manage_members', 'admin'), ('organization', 'can_manage_members', 'can_manage_members'), ('organization', 'can_manage_members', 'owner'), ('organization', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('organization', 'can_manage_secret_grants', 'owner'), ('organization', 'can_manage_secret_grants', 'secret_manager'), ('organization', 'can_purge_secrets', 'can_purge_secrets'), ('organization', 'can_purge_secrets', 'owner'), ('organization', 'can_purge_secrets', 'secret_manager'), ('organization', 'can_read', 'admin'), ('organization', 'can_read', 'can_read'), ('organization', 'can_read', 'member'), ('organization', 'can_read', 'owner'), ('organization', 'can_revoke_secrets', 'can_revoke_secrets'), ('organization', 'can_revoke_secrets', 'owner'), ('organization', 'can_revoke_secrets', 'secret_manager'), ('organization', 'can_rotate_secrets', 'can_rotate_secrets'), ('organization', 'can_rotate_secrets', 'owner'), ('organization', 'can_rotate_secrets', 'secret_manager'), ('organization', 'can_write_secret_value', 'can_write_secret_value'), ('organization', 'can_write_secret_value', 'owner'), ('organization', 'can_write_secret_value', 'secret_manager'), ('organization', 'member', 'admin'), ('organization', 'member', 'member'), ('organization', 'member', 'owner'), ('organization', 'owner', 'owner'), ('organization', 'secret_manager', 'secret_manager')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -31609,7 +32828,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'organization' AND EXISTS (
+		WHERE (v_filter_type = 'organization' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('organization', 'admin', 'admin'), ('organization', 'admin', 'owner'), ('organization', 'can_create_project', 'admin'), ('organization', 'can_create_project', 'can_create_project'), ('organization', 'can_create_project', 'owner'), ('organization', 'can_delete', 'can_delete'), ('organization', 'can_delete', 'owner'), ('organization', 'can_inspect_secrets', 'can_inspect_secrets'), ('organization', 'can_inspect_secrets', 'owner'), ('organization', 'can_inspect_secrets', 'secret_manager'), ('organization', 'can_manage', 'can_manage'), ('organization', 'can_manage', 'owner'), ('organization', 'can_manage_members', 'admin'), ('organization', 'can_manage_members', 'can_manage_members'), ('organization', 'can_manage_members', 'owner'), ('organization', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('organization', 'can_manage_secret_grants', 'owner'), ('organization', 'can_manage_secret_grants', 'secret_manager'), ('organization', 'can_purge_secrets', 'can_purge_secrets'), ('organization', 'can_purge_secrets', 'owner'), ('organization', 'can_purge_secrets', 'secret_manager'), ('organization', 'can_read', 'admin'), ('organization', 'can_read', 'can_read'), ('organization', 'can_read', 'member'), ('organization', 'can_read', 'owner'), ('organization', 'can_revoke_secrets', 'can_revoke_secrets'), ('organization', 'can_revoke_secrets', 'owner'), ('organization', 'can_revoke_secrets', 'secret_manager'), ('organization', 'can_rotate_secrets', 'can_rotate_secrets'), ('organization', 'can_rotate_secrets', 'owner'), ('organization', 'can_rotate_secrets', 'secret_manager'), ('organization', 'can_write_secret_value', 'can_write_secret_value'), ('organization', 'can_write_secret_value', 'owner'), ('organization', 'can_write_secret_value', 'secret_manager'), ('organization', 'member', 'admin'), ('organization', 'member', 'member'), ('organization', 'member', 'owner'), ('organization', 'owner', 'owner'), ('organization', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'organization' AND c.relation = 'owner' AND c.satisfying_relation = v_filter_relation)
@@ -31709,8 +32928,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'organization' AND t.relation IN ('secret_manager') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'organization' AND t.relation IN ('secret_manager') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('organization', 'admin', 'admin'), ('organization', 'admin', 'owner'), ('organization', 'can_create_project', 'admin'), ('organization', 'can_create_project', 'can_create_project'), ('organization', 'can_create_project', 'owner'), ('organization', 'can_delete', 'can_delete'), ('organization', 'can_delete', 'owner'), ('organization', 'can_inspect_secrets', 'can_inspect_secrets'), ('organization', 'can_inspect_secrets', 'owner'), ('organization', 'can_inspect_secrets', 'secret_manager'), ('organization', 'can_manage', 'can_manage'), ('organization', 'can_manage', 'owner'), ('organization', 'can_manage_members', 'admin'), ('organization', 'can_manage_members', 'can_manage_members'), ('organization', 'can_manage_members', 'owner'), ('organization', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('organization', 'can_manage_secret_grants', 'owner'), ('organization', 'can_manage_secret_grants', 'secret_manager'), ('organization', 'can_purge_secrets', 'can_purge_secrets'), ('organization', 'can_purge_secrets', 'owner'), ('organization', 'can_purge_secrets', 'secret_manager'), ('organization', 'can_read', 'admin'), ('organization', 'can_read', 'can_read'), ('organization', 'can_read', 'member'), ('organization', 'can_read', 'owner'), ('organization', 'can_revoke_secrets', 'can_revoke_secrets'), ('organization', 'can_revoke_secrets', 'owner'), ('organization', 'can_revoke_secrets', 'secret_manager'), ('organization', 'can_rotate_secrets', 'can_rotate_secrets'), ('organization', 'can_rotate_secrets', 'owner'), ('organization', 'can_rotate_secrets', 'secret_manager'), ('organization', 'can_write_secret_value', 'can_write_secret_value'), ('organization', 'can_write_secret_value', 'owner'), ('organization', 'can_write_secret_value', 'secret_manager'), ('organization', 'member', 'admin'), ('organization', 'member', 'member'), ('organization', 'member', 'owner'), ('organization', 'owner', 'owner'), ('organization', 'secret_manager', 'secret_manager')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -31720,7 +32939,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'organization' AND EXISTS (
+		WHERE (v_filter_type = 'organization' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('organization', 'admin', 'admin'), ('organization', 'admin', 'owner'), ('organization', 'can_create_project', 'admin'), ('organization', 'can_create_project', 'can_create_project'), ('organization', 'can_create_project', 'owner'), ('organization', 'can_delete', 'can_delete'), ('organization', 'can_delete', 'owner'), ('organization', 'can_inspect_secrets', 'can_inspect_secrets'), ('organization', 'can_inspect_secrets', 'owner'), ('organization', 'can_inspect_secrets', 'secret_manager'), ('organization', 'can_manage', 'can_manage'), ('organization', 'can_manage', 'owner'), ('organization', 'can_manage_members', 'admin'), ('organization', 'can_manage_members', 'can_manage_members'), ('organization', 'can_manage_members', 'owner'), ('organization', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('organization', 'can_manage_secret_grants', 'owner'), ('organization', 'can_manage_secret_grants', 'secret_manager'), ('organization', 'can_purge_secrets', 'can_purge_secrets'), ('organization', 'can_purge_secrets', 'owner'), ('organization', 'can_purge_secrets', 'secret_manager'), ('organization', 'can_read', 'admin'), ('organization', 'can_read', 'can_read'), ('organization', 'can_read', 'member'), ('organization', 'can_read', 'owner'), ('organization', 'can_revoke_secrets', 'can_revoke_secrets'), ('organization', 'can_revoke_secrets', 'owner'), ('organization', 'can_revoke_secrets', 'secret_manager'), ('organization', 'can_rotate_secrets', 'can_rotate_secrets'), ('organization', 'can_rotate_secrets', 'owner'), ('organization', 'can_rotate_secrets', 'secret_manager'), ('organization', 'can_write_secret_value', 'can_write_secret_value'), ('organization', 'can_write_secret_value', 'owner'), ('organization', 'can_write_secret_value', 'secret_manager'), ('organization', 'member', 'admin'), ('organization', 'member', 'member'), ('organization', 'member', 'owner'), ('organization', 'owner', 'owner'), ('organization', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'organization' AND c.relation = 'secret_manager' AND c.satisfying_relation = v_filter_relation)
@@ -31820,8 +33039,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'project' AND t.relation IN ('brokered_secret_binder') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'project' AND t.relation IN ('brokered_secret_binder') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -31831,7 +33050,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'project' AND EXISTS (
+		WHERE (v_filter_type = 'project' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'project' AND c.relation = 'brokered_secret_binder' AND c.satisfying_relation = v_filter_relation)
@@ -31931,8 +33150,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'project' AND t.relation IN ('maintainer') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'project' AND t.relation IN ('maintainer') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -31942,7 +33161,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'project' AND EXISTS (
+		WHERE (v_filter_type = 'project' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'project' AND c.relation = 'maintainer' AND c.satisfying_relation = v_filter_relation)
@@ -32042,8 +33261,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'project' AND t.relation IN ('organization') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'project' AND t.relation IN ('organization') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('organization', 'admin', 'admin'), ('organization', 'admin', 'owner'), ('organization', 'can_create_project', 'admin'), ('organization', 'can_create_project', 'can_create_project'), ('organization', 'can_create_project', 'owner'), ('organization', 'can_delete', 'can_delete'), ('organization', 'can_delete', 'owner'), ('organization', 'can_inspect_secrets', 'can_inspect_secrets'), ('organization', 'can_inspect_secrets', 'owner'), ('organization', 'can_inspect_secrets', 'secret_manager'), ('organization', 'can_manage', 'can_manage'), ('organization', 'can_manage', 'owner'), ('organization', 'can_manage_members', 'admin'), ('organization', 'can_manage_members', 'can_manage_members'), ('organization', 'can_manage_members', 'owner'), ('organization', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('organization', 'can_manage_secret_grants', 'owner'), ('organization', 'can_manage_secret_grants', 'secret_manager'), ('organization', 'can_purge_secrets', 'can_purge_secrets'), ('organization', 'can_purge_secrets', 'owner'), ('organization', 'can_purge_secrets', 'secret_manager'), ('organization', 'can_read', 'admin'), ('organization', 'can_read', 'can_read'), ('organization', 'can_read', 'member'), ('organization', 'can_read', 'owner'), ('organization', 'can_revoke_secrets', 'can_revoke_secrets'), ('organization', 'can_revoke_secrets', 'owner'), ('organization', 'can_revoke_secrets', 'secret_manager'), ('organization', 'can_rotate_secrets', 'can_rotate_secrets'), ('organization', 'can_rotate_secrets', 'owner'), ('organization', 'can_rotate_secrets', 'secret_manager'), ('organization', 'can_write_secret_value', 'can_write_secret_value'), ('organization', 'can_write_secret_value', 'owner'), ('organization', 'can_write_secret_value', 'secret_manager'), ('organization', 'member', 'admin'), ('organization', 'member', 'member'), ('organization', 'member', 'owner'), ('organization', 'owner', 'owner'), ('organization', 'secret_manager', 'secret_manager'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -32053,7 +33272,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'project' AND EXISTS (
+		WHERE (v_filter_type = 'project' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('organization', 'admin', 'admin'), ('organization', 'admin', 'owner'), ('organization', 'can_create_project', 'admin'), ('organization', 'can_create_project', 'can_create_project'), ('organization', 'can_create_project', 'owner'), ('organization', 'can_delete', 'can_delete'), ('organization', 'can_delete', 'owner'), ('organization', 'can_inspect_secrets', 'can_inspect_secrets'), ('organization', 'can_inspect_secrets', 'owner'), ('organization', 'can_inspect_secrets', 'secret_manager'), ('organization', 'can_manage', 'can_manage'), ('organization', 'can_manage', 'owner'), ('organization', 'can_manage_members', 'admin'), ('organization', 'can_manage_members', 'can_manage_members'), ('organization', 'can_manage_members', 'owner'), ('organization', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('organization', 'can_manage_secret_grants', 'owner'), ('organization', 'can_manage_secret_grants', 'secret_manager'), ('organization', 'can_purge_secrets', 'can_purge_secrets'), ('organization', 'can_purge_secrets', 'owner'), ('organization', 'can_purge_secrets', 'secret_manager'), ('organization', 'can_read', 'admin'), ('organization', 'can_read', 'can_read'), ('organization', 'can_read', 'member'), ('organization', 'can_read', 'owner'), ('organization', 'can_revoke_secrets', 'can_revoke_secrets'), ('organization', 'can_revoke_secrets', 'owner'), ('organization', 'can_revoke_secrets', 'secret_manager'), ('organization', 'can_rotate_secrets', 'can_rotate_secrets'), ('organization', 'can_rotate_secrets', 'owner'), ('organization', 'can_rotate_secrets', 'secret_manager'), ('organization', 'can_write_secret_value', 'can_write_secret_value'), ('organization', 'can_write_secret_value', 'owner'), ('organization', 'can_write_secret_value', 'secret_manager'), ('organization', 'member', 'admin'), ('organization', 'member', 'member'), ('organization', 'member', 'owner'), ('organization', 'owner', 'owner'), ('organization', 'secret_manager', 'secret_manager'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'project' AND c.relation = 'organization' AND c.satisfying_relation = v_filter_relation)
@@ -32153,8 +33372,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'project' AND t.relation IN ('raw_secret_binder') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'project' AND t.relation IN ('raw_secret_binder') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -32164,7 +33383,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'project' AND EXISTS (
+		WHERE (v_filter_type = 'project' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'project' AND c.relation = 'raw_secret_binder' AND c.satisfying_relation = v_filter_relation)
@@ -32264,8 +33483,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'project' AND t.relation IN ('secret_manager') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'project' AND t.relation IN ('secret_manager') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -32275,7 +33494,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'project' AND EXISTS (
+		WHERE (v_filter_type = 'project' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'project' AND c.relation = 'secret_manager' AND c.satisfying_relation = v_filter_relation)
@@ -32375,8 +33594,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'release' AND t.relation IN ('repository') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'release' AND t.relation IN ('repository') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('release', 'can_publish', 'can_publish'), ('release', 'can_read', 'can_read'), ('release', 'can_revoke', 'can_revoke'), ('release', 'can_use', 'can_use'), ('release', 'repository', 'repository'), ('release', 'usable_repository', 'usable_repository'), ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -32386,7 +33605,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'release' AND EXISTS (
+		WHERE (v_filter_type = 'release' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('release', 'can_publish', 'can_publish'), ('release', 'can_read', 'can_read'), ('release', 'can_revoke', 'can_revoke'), ('release', 'can_use', 'can_use'), ('release', 'repository', 'repository'), ('release', 'usable_repository', 'usable_repository'), ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'release' AND c.relation = 'repository' AND c.satisfying_relation = v_filter_relation)
@@ -32486,8 +33705,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'release' AND t.relation IN ('usable_repository') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'release' AND t.relation IN ('usable_repository') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('release', 'can_publish', 'can_publish'), ('release', 'can_read', 'can_read'), ('release', 'can_revoke', 'can_revoke'), ('release', 'can_use', 'can_use'), ('release', 'repository', 'repository'), ('release', 'usable_repository', 'usable_repository'), ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -32497,7 +33716,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'release' AND EXISTS (
+		WHERE (v_filter_type = 'release' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('release', 'can_publish', 'can_publish'), ('release', 'can_read', 'can_read'), ('release', 'can_revoke', 'can_revoke'), ('release', 'can_use', 'can_use'), ('release', 'repository', 'repository'), ('release', 'usable_repository', 'usable_repository'), ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'release' AND c.relation = 'usable_repository' AND c.satisfying_relation = v_filter_relation)
@@ -32597,8 +33816,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'release_agent' AND t.relation IN ('release') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'release_agent' AND t.relation IN ('release') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('release', 'can_publish', 'can_publish'), ('release', 'can_read', 'can_read'), ('release', 'can_revoke', 'can_revoke'), ('release', 'can_use', 'can_use'), ('release', 'repository', 'repository'), ('release', 'usable_repository', 'usable_repository'), ('release_agent', 'can_read', 'can_read'), ('release_agent', 'can_use', 'can_use'), ('release_agent', 'release', 'release')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -32608,7 +33827,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'release_agent' AND EXISTS (
+		WHERE (v_filter_type = 'release_agent' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('release', 'can_publish', 'can_publish'), ('release', 'can_read', 'can_read'), ('release', 'can_revoke', 'can_revoke'), ('release', 'can_use', 'can_use'), ('release', 'repository', 'repository'), ('release', 'usable_repository', 'usable_repository'), ('release_agent', 'can_read', 'can_read'), ('release_agent', 'can_use', 'can_use'), ('release_agent', 'release', 'release')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'release_agent' AND c.relation = 'release' AND c.satisfying_relation = v_filter_relation)
@@ -32708,8 +33927,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'repository' AND t.relation IN ('brokered_secret_binder') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'repository' AND t.relation IN ('brokered_secret_binder') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -32719,7 +33938,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'repository' AND EXISTS (
+		WHERE (v_filter_type = 'repository' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'repository' AND c.relation = 'brokered_secret_binder' AND c.satisfying_relation = v_filter_relation)
@@ -32819,8 +34038,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'repository' AND t.relation IN ('manager') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'repository' AND t.relation IN ('manager') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -32830,7 +34049,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'repository' AND EXISTS (
+		WHERE (v_filter_type = 'repository' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'repository' AND c.relation = 'manager' AND c.satisfying_relation = v_filter_relation)
@@ -32930,8 +34149,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'repository' AND t.relation IN ('project') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'repository' AND t.relation IN ('project') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -32941,7 +34160,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'repository' AND EXISTS (
+		WHERE (v_filter_type = 'repository' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'repository' AND c.relation = 'project' AND c.satisfying_relation = v_filter_relation)
@@ -33041,8 +34260,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'repository' AND t.relation IN ('public') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'repository' AND t.relation IN ('public') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -33052,7 +34271,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'repository' AND EXISTS (
+		WHERE (v_filter_type = 'repository' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'repository' AND c.relation = 'public' AND c.satisfying_relation = v_filter_relation)
@@ -33152,8 +34371,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'repository' AND t.relation IN ('raw_secret_binder') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'repository' AND t.relation IN ('raw_secret_binder') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -33163,7 +34382,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'repository' AND EXISTS (
+		WHERE (v_filter_type = 'repository' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'repository' AND c.relation = 'raw_secret_binder' AND c.satisfying_relation = v_filter_relation)
@@ -33263,8 +34482,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'repository' AND t.relation IN ('secret_manager') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'repository' AND t.relation IN ('secret_manager') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -33274,7 +34493,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'repository' AND EXISTS (
+		WHERE (v_filter_type = 'repository' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'repository' AND c.relation = 'secret_manager' AND c.satisfying_relation = v_filter_relation)
@@ -33354,6 +34573,117 @@ END;
 $$ LANGUAGE plpgsql STABLE
 SET search_path = 'public';
 
+-- Generated list_subjects function for repository_oci_image.project
+-- Features: Direct
+CREATE OR REPLACE FUNCTION "public"."list_repository_oci_image_project_sub"(
+    p_object_id TEXT,
+    p_subject_type TEXT,
+    p_limit INT DEFAULT NULL,
+    p_after TEXT DEFAULT NULL
+) RETURNS TABLE(subject_id TEXT, next_cursor TEXT) ROWS 100 AS $$
+DECLARE
+    v_filter_type TEXT;
+    v_filter_relation TEXT;
+BEGIN
+    -- Check if subject_type is a userset filter (e.g., "document#viewer")
+    IF position('#' in p_subject_type) > 0 THEN
+        v_filter_type := substring(p_subject_type from 1 for position('#' in p_subject_type) - 1);
+        v_filter_relation := substring(p_subject_type from position('#' in p_subject_type) + 1);
+        RETURN QUERY
+        WITH base_results AS (
+            -- Userset filter: find userset tuples that match and return normalized references
+                SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'repository_oci_image' AND t.relation IN ('project') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+                SELECT 1
+                FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('repository_oci_image', 'can_manage', 'can_manage'), ('repository_oci_image', 'can_read', 'can_read'), ('repository_oci_image', 'can_write', 'can_write'), ('repository_oci_image', 'project', 'project')) AS subj_c(object_type, relation, satisfying_relation)
+                WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
+                )) AND "public"."check_permission_internal"(v_filter_type, t.subject_id, 'project', 'repository_oci_image', p_object_id, ARRAY[]::TEXT[]) = 1)
+                UNION
+                -- Self-candidate: when filter type matches object type
+                -- e.g., querying document:1.viewer with filter document#writer
+                -- should return document:1#writer if writer satisfies the relation
+                SELECT p_object_id || '#' || v_filter_relation AS subject_id
+		WHERE (v_filter_type = 'repository_oci_image' AND EXISTS (
+                SELECT 1
+                FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('repository_oci_image', 'can_manage', 'can_manage'), ('repository_oci_image', 'can_read', 'can_read'), ('repository_oci_image', 'can_write', 'can_write'), ('repository_oci_image', 'project', 'project')) AS c(object_type, relation, satisfying_relation)
+                WHERE (c.object_type = 'repository_oci_image' AND c.relation = 'project' AND c.satisfying_relation = v_filter_relation)
+                ))
+        ),
+        paged AS (
+            SELECT br.subject_id
+            FROM base_results br
+            WHERE p_after IS NULL OR (
+                -- Compound comparison for wildcard-first ordering:
+                -- (is_not_wildcard, subject_id) > (cursor_is_not_wildcard, cursor)
+                (CASE WHEN br.subject_id = '*' THEN 0 ELSE 1 END, br.subject_id) >
+                (CASE WHEN p_after = '*' THEN 0 ELSE 1 END, p_after)
+            )
+            ORDER BY (CASE WHEN br.subject_id = '*' THEN 0 ELSE 1 END), br.subject_id
+            LIMIT CASE WHEN p_limit IS NULL THEN NULL ELSE p_limit + 1 END
+        ),
+        returned AS (
+            SELECT p.subject_id FROM paged p
+            ORDER BY (CASE WHEN p.subject_id = '*' THEN 0 ELSE 1 END), p.subject_id
+            LIMIT p_limit
+        ),
+        next AS (
+            SELECT CASE
+                WHEN p_limit IS NOT NULL AND (SELECT count(*) FROM paged) > p_limit
+                THEN (SELECT r.subject_id FROM returned r
+                      ORDER BY (CASE WHEN r.subject_id = '*' THEN 0 ELSE 1 END) DESC, r.subject_id DESC
+                      LIMIT 1)
+            END AS next_cursor
+        )
+        SELECT r.subject_id, n.next_cursor
+        FROM returned r
+        CROSS JOIN next n;
+    ELSE
+        -- Guard: return empty if subject type is not allowed by the model
+        IF p_subject_type NOT IN ('project') THEN
+        RETURN;
+    END IF;
+        -- Regular subject type (no userset filter)
+        RETURN QUERY
+        WITH base_results AS (
+            -- Path 1: Direct tuple lookup with simple closure relations
+                SELECT DISTINCT t.subject_id
+                FROM melange_tuples AS t
+                WHERE (t.object_type = 'repository_oci_image' AND t.relation IN ('project') AND t.object_id = p_object_id AND t.subject_type = p_subject_type AND position('#' in t.subject_id) = 0 AND t.subject_id <> '*')
+        ),
+        paged AS (
+            SELECT br.subject_id
+            FROM base_results br
+            WHERE p_after IS NULL OR (
+                -- Compound comparison for wildcard-first ordering:
+                -- (is_not_wildcard, subject_id) > (cursor_is_not_wildcard, cursor)
+                (CASE WHEN br.subject_id = '*' THEN 0 ELSE 1 END, br.subject_id) >
+                (CASE WHEN p_after = '*' THEN 0 ELSE 1 END, p_after)
+            )
+            ORDER BY (CASE WHEN br.subject_id = '*' THEN 0 ELSE 1 END), br.subject_id
+            LIMIT CASE WHEN p_limit IS NULL THEN NULL ELSE p_limit + 1 END
+        ),
+        returned AS (
+            SELECT p.subject_id FROM paged p
+            ORDER BY (CASE WHEN p.subject_id = '*' THEN 0 ELSE 1 END), p.subject_id
+            LIMIT p_limit
+        ),
+        next AS (
+            SELECT CASE
+                WHEN p_limit IS NOT NULL AND (SELECT count(*) FROM paged) > p_limit
+                THEN (SELECT r.subject_id FROM returned r
+                      ORDER BY (CASE WHEN r.subject_id = '*' THEN 0 ELSE 1 END) DESC, r.subject_id DESC
+                      LIMIT 1)
+            END AS next_cursor
+        )
+        SELECT r.subject_id, n.next_cursor
+        FROM returned r
+        CROSS JOIN next n;
+    END IF;
+END;
+$$ LANGUAGE plpgsql STABLE
+SET search_path = 'public';
+
 -- Generated list_subjects function for run.instance
 -- Features: Direct
 CREATE OR REPLACE FUNCTION "public"."list_run_instance_sub"(
@@ -33374,8 +34704,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'run' AND t.relation IN ('instance') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'run' AND t.relation IN ('instance') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('agent_instance', 'can_execute', 'can_execute'), ('agent_instance', 'can_manage', 'can_manage'), ('agent_instance', 'can_read', 'can_read'), ('agent_instance', 'can_recover', 'can_recover'), ('agent_instance', 'can_update', 'can_update'), ('agent_instance', 'can_use_release', 'can_use_release'), ('agent_instance', 'project', 'project'), ('agent_instance', 'release_agent', 'release_agent'), ('run', 'can_cancel', 'can_cancel'), ('run', 'can_read', 'can_read'), ('run', 'instance', 'instance')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -33385,7 +34715,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'run' AND EXISTS (
+		WHERE (v_filter_type = 'run' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('agent_instance', 'can_execute', 'can_execute'), ('agent_instance', 'can_manage', 'can_manage'), ('agent_instance', 'can_read', 'can_read'), ('agent_instance', 'can_recover', 'can_recover'), ('agent_instance', 'can_update', 'can_update'), ('agent_instance', 'can_use_release', 'can_use_release'), ('agent_instance', 'project', 'project'), ('agent_instance', 'release_agent', 'release_agent'), ('run', 'can_cancel', 'can_cancel'), ('run', 'can_read', 'can_read'), ('run', 'instance', 'instance')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'run' AND c.relation = 'instance' AND c.satisfying_relation = v_filter_relation)
@@ -33485,8 +34815,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'secret' AND t.relation IN ('owner') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'secret' AND t.relation IN ('owner') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('organization', 'admin', 'admin'), ('organization', 'admin', 'owner'), ('organization', 'can_create_project', 'admin'), ('organization', 'can_create_project', 'can_create_project'), ('organization', 'can_create_project', 'owner'), ('organization', 'can_delete', 'can_delete'), ('organization', 'can_delete', 'owner'), ('organization', 'can_inspect_secrets', 'can_inspect_secrets'), ('organization', 'can_inspect_secrets', 'owner'), ('organization', 'can_inspect_secrets', 'secret_manager'), ('organization', 'can_manage', 'can_manage'), ('organization', 'can_manage', 'owner'), ('organization', 'can_manage_members', 'admin'), ('organization', 'can_manage_members', 'can_manage_members'), ('organization', 'can_manage_members', 'owner'), ('organization', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('organization', 'can_manage_secret_grants', 'owner'), ('organization', 'can_manage_secret_grants', 'secret_manager'), ('organization', 'can_purge_secrets', 'can_purge_secrets'), ('organization', 'can_purge_secrets', 'owner'), ('organization', 'can_purge_secrets', 'secret_manager'), ('organization', 'can_read', 'admin'), ('organization', 'can_read', 'can_read'), ('organization', 'can_read', 'member'), ('organization', 'can_read', 'owner'), ('organization', 'can_revoke_secrets', 'can_revoke_secrets'), ('organization', 'can_revoke_secrets', 'owner'), ('organization', 'can_revoke_secrets', 'secret_manager'), ('organization', 'can_rotate_secrets', 'can_rotate_secrets'), ('organization', 'can_rotate_secrets', 'owner'), ('organization', 'can_rotate_secrets', 'secret_manager'), ('organization', 'can_write_secret_value', 'can_write_secret_value'), ('organization', 'can_write_secret_value', 'owner'), ('organization', 'can_write_secret_value', 'secret_manager'), ('organization', 'member', 'admin'), ('organization', 'member', 'member'), ('organization', 'member', 'owner'), ('organization', 'owner', 'owner'), ('organization', 'secret_manager', 'secret_manager'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('secret', 'inspect_metadata', 'inspect_metadata'), ('secret', 'manage_grants', 'manage_grants'), ('secret', 'owner', 'owner'), ('secret', 'purge', 'purge'), ('secret', 'revoke', 'revoke'), ('secret', 'rotate', 'rotate'), ('secret', 'write_value', 'write_value')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -33496,7 +34826,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'secret' AND EXISTS (
+		WHERE (v_filter_type = 'secret' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('organization', 'admin', 'admin'), ('organization', 'admin', 'owner'), ('organization', 'can_create_project', 'admin'), ('organization', 'can_create_project', 'can_create_project'), ('organization', 'can_create_project', 'owner'), ('organization', 'can_delete', 'can_delete'), ('organization', 'can_delete', 'owner'), ('organization', 'can_inspect_secrets', 'can_inspect_secrets'), ('organization', 'can_inspect_secrets', 'owner'), ('organization', 'can_inspect_secrets', 'secret_manager'), ('organization', 'can_manage', 'can_manage'), ('organization', 'can_manage', 'owner'), ('organization', 'can_manage_members', 'admin'), ('organization', 'can_manage_members', 'can_manage_members'), ('organization', 'can_manage_members', 'owner'), ('organization', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('organization', 'can_manage_secret_grants', 'owner'), ('organization', 'can_manage_secret_grants', 'secret_manager'), ('organization', 'can_purge_secrets', 'can_purge_secrets'), ('organization', 'can_purge_secrets', 'owner'), ('organization', 'can_purge_secrets', 'secret_manager'), ('organization', 'can_read', 'admin'), ('organization', 'can_read', 'can_read'), ('organization', 'can_read', 'member'), ('organization', 'can_read', 'owner'), ('organization', 'can_revoke_secrets', 'can_revoke_secrets'), ('organization', 'can_revoke_secrets', 'owner'), ('organization', 'can_revoke_secrets', 'secret_manager'), ('organization', 'can_rotate_secrets', 'can_rotate_secrets'), ('organization', 'can_rotate_secrets', 'owner'), ('organization', 'can_rotate_secrets', 'secret_manager'), ('organization', 'can_write_secret_value', 'can_write_secret_value'), ('organization', 'can_write_secret_value', 'owner'), ('organization', 'can_write_secret_value', 'secret_manager'), ('organization', 'member', 'admin'), ('organization', 'member', 'member'), ('organization', 'member', 'owner'), ('organization', 'owner', 'owner'), ('organization', 'secret_manager', 'secret_manager'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('secret', 'inspect_metadata', 'inspect_metadata'), ('secret', 'manage_grants', 'manage_grants'), ('secret', 'owner', 'owner'), ('secret', 'purge', 'purge'), ('secret', 'revoke', 'revoke'), ('secret', 'rotate', 'rotate'), ('secret', 'write_value', 'write_value')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'secret' AND c.relation = 'owner' AND c.satisfying_relation = v_filter_relation)
@@ -33596,8 +34926,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'secret_grant' AND t.relation IN ('secret') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'secret_grant' AND t.relation IN ('secret') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('secret', 'inspect_metadata', 'inspect_metadata'), ('secret', 'manage_grants', 'manage_grants'), ('secret', 'owner', 'owner'), ('secret', 'purge', 'purge'), ('secret', 'revoke', 'revoke'), ('secret', 'rotate', 'rotate'), ('secret', 'write_value', 'write_value'), ('secret_grant', 'inspect_metadata', 'inspect_metadata'), ('secret_grant', 'manage', 'manage'), ('secret_grant', 'secret', 'secret'), ('secret_grant', 'target', 'target')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -33607,7 +34937,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'secret_grant' AND EXISTS (
+		WHERE (v_filter_type = 'secret_grant' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('secret', 'inspect_metadata', 'inspect_metadata'), ('secret', 'manage_grants', 'manage_grants'), ('secret', 'owner', 'owner'), ('secret', 'purge', 'purge'), ('secret', 'revoke', 'revoke'), ('secret', 'rotate', 'rotate'), ('secret', 'write_value', 'write_value'), ('secret_grant', 'inspect_metadata', 'inspect_metadata'), ('secret_grant', 'manage', 'manage'), ('secret_grant', 'secret', 'secret'), ('secret_grant', 'target', 'target')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'secret_grant' AND c.relation = 'secret' AND c.satisfying_relation = v_filter_relation)
@@ -33707,8 +35037,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'secret_grant' AND t.relation IN ('target') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'secret_grant' AND t.relation IN ('target') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager'), ('secret_grant', 'inspect_metadata', 'inspect_metadata'), ('secret_grant', 'manage', 'manage'), ('secret_grant', 'secret', 'secret'), ('secret_grant', 'target', 'target')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -33718,7 +35048,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'secret_grant' AND EXISTS (
+		WHERE (v_filter_type = 'secret_grant' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager'), ('secret_grant', 'inspect_metadata', 'inspect_metadata'), ('secret_grant', 'manage', 'manage'), ('secret_grant', 'secret', 'secret'), ('secret_grant', 'target', 'target')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'secret_grant' AND c.relation = 'target' AND c.satisfying_relation = v_filter_relation)
@@ -33818,8 +35148,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'secret_import' AND t.relation IN ('active_target') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'secret_import' AND t.relation IN ('active_target') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager'), ('secret_import', 'accept', 'accept'), ('secret_import', 'active_target', 'active_target'), ('secret_import', 'bind_brokered', 'bind_brokered'), ('secret_import', 'bind_raw', 'bind_raw'), ('secret_import', 'grant', 'grant'), ('secret_import', 'inspect_metadata', 'inspect_metadata'), ('secret_import', 'target', 'target')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -33829,7 +35159,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'secret_import' AND EXISTS (
+		WHERE (v_filter_type = 'secret_import' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager'), ('secret_import', 'accept', 'accept'), ('secret_import', 'active_target', 'active_target'), ('secret_import', 'bind_brokered', 'bind_brokered'), ('secret_import', 'bind_raw', 'bind_raw'), ('secret_import', 'grant', 'grant'), ('secret_import', 'inspect_metadata', 'inspect_metadata'), ('secret_import', 'target', 'target')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'secret_import' AND c.relation = 'active_target' AND c.satisfying_relation = v_filter_relation)
@@ -33929,8 +35259,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'secret_import' AND t.relation IN ('grant') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'secret_import' AND t.relation IN ('grant') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('secret_grant', 'inspect_metadata', 'inspect_metadata'), ('secret_grant', 'manage', 'manage'), ('secret_grant', 'secret', 'secret'), ('secret_grant', 'target', 'target'), ('secret_import', 'accept', 'accept'), ('secret_import', 'active_target', 'active_target'), ('secret_import', 'bind_brokered', 'bind_brokered'), ('secret_import', 'bind_raw', 'bind_raw'), ('secret_import', 'grant', 'grant'), ('secret_import', 'inspect_metadata', 'inspect_metadata'), ('secret_import', 'target', 'target')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -33940,7 +35270,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'secret_import' AND EXISTS (
+		WHERE (v_filter_type = 'secret_import' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('secret_grant', 'inspect_metadata', 'inspect_metadata'), ('secret_grant', 'manage', 'manage'), ('secret_grant', 'secret', 'secret'), ('secret_grant', 'target', 'target'), ('secret_import', 'accept', 'accept'), ('secret_import', 'active_target', 'active_target'), ('secret_import', 'bind_brokered', 'bind_brokered'), ('secret_import', 'bind_raw', 'bind_raw'), ('secret_import', 'grant', 'grant'), ('secret_import', 'inspect_metadata', 'inspect_metadata'), ('secret_import', 'target', 'target')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'secret_import' AND c.relation = 'grant' AND c.satisfying_relation = v_filter_relation)
@@ -34040,8 +35370,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'secret_import' AND t.relation IN ('target') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'secret_import' AND t.relation IN ('target') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager'), ('secret_import', 'accept', 'accept'), ('secret_import', 'active_target', 'active_target'), ('secret_import', 'bind_brokered', 'bind_brokered'), ('secret_import', 'bind_raw', 'bind_raw'), ('secret_import', 'grant', 'grant'), ('secret_import', 'inspect_metadata', 'inspect_metadata'), ('secret_import', 'target', 'target')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -34051,7 +35381,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'secret_import' AND EXISTS (
+		WHERE (v_filter_type = 'secret_import' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager'), ('secret_import', 'accept', 'accept'), ('secret_import', 'active_target', 'active_target'), ('secret_import', 'bind_brokered', 'bind_brokered'), ('secret_import', 'bind_raw', 'bind_raw'), ('secret_import', 'grant', 'grant'), ('secret_import', 'inspect_metadata', 'inspect_metadata'), ('secret_import', 'target', 'target')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'secret_import' AND c.relation = 'target' AND c.satisfying_relation = v_filter_relation)
@@ -34151,8 +35481,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'secret_lease' AND t.relation IN ('binding') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'secret_lease' AND t.relation IN ('binding') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('agent_secret_binding', 'bind_brokered', 'bind_brokered'), ('agent_secret_binding', 'bind_raw', 'bind_raw'), ('agent_secret_binding', 'can_manage', 'can_manage'), ('agent_secret_binding', 'can_read', 'can_read'), ('agent_secret_binding', 'instance', 'instance'), ('agent_secret_binding', 'secret_import', 'secret_import'), ('secret_lease', 'binding', 'binding'), ('secret_lease', 'receive_raw', 'receive_raw'), ('secret_lease', 'run', 'run'), ('secret_lease', 'use_brokered', 'use_brokered')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -34162,7 +35492,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'secret_lease' AND EXISTS (
+		WHERE (v_filter_type = 'secret_lease' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('agent_secret_binding', 'bind_brokered', 'bind_brokered'), ('agent_secret_binding', 'bind_raw', 'bind_raw'), ('agent_secret_binding', 'can_manage', 'can_manage'), ('agent_secret_binding', 'can_read', 'can_read'), ('agent_secret_binding', 'instance', 'instance'), ('agent_secret_binding', 'secret_import', 'secret_import'), ('secret_lease', 'binding', 'binding'), ('secret_lease', 'receive_raw', 'receive_raw'), ('secret_lease', 'run', 'run'), ('secret_lease', 'use_brokered', 'use_brokered')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'secret_lease' AND c.relation = 'binding' AND c.satisfying_relation = v_filter_relation)
@@ -34262,8 +35592,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'secret_lease' AND t.relation IN ('receive_raw') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'secret_lease' AND t.relation IN ('receive_raw') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('run', 'can_cancel', 'can_cancel'), ('run', 'can_read', 'can_read'), ('run', 'instance', 'instance'), ('secret_lease', 'binding', 'binding'), ('secret_lease', 'receive_raw', 'receive_raw'), ('secret_lease', 'run', 'run'), ('secret_lease', 'use_brokered', 'use_brokered')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -34273,7 +35603,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'secret_lease' AND EXISTS (
+		WHERE (v_filter_type = 'secret_lease' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('run', 'can_cancel', 'can_cancel'), ('run', 'can_read', 'can_read'), ('run', 'instance', 'instance'), ('secret_lease', 'binding', 'binding'), ('secret_lease', 'receive_raw', 'receive_raw'), ('secret_lease', 'run', 'run'), ('secret_lease', 'use_brokered', 'use_brokered')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'secret_lease' AND c.relation = 'receive_raw' AND c.satisfying_relation = v_filter_relation)
@@ -34373,8 +35703,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'secret_lease' AND t.relation IN ('run') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'secret_lease' AND t.relation IN ('run') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('run', 'can_cancel', 'can_cancel'), ('run', 'can_read', 'can_read'), ('run', 'instance', 'instance'), ('secret_lease', 'binding', 'binding'), ('secret_lease', 'receive_raw', 'receive_raw'), ('secret_lease', 'run', 'run'), ('secret_lease', 'use_brokered', 'use_brokered')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -34384,7 +35714,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'secret_lease' AND EXISTS (
+		WHERE (v_filter_type = 'secret_lease' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('run', 'can_cancel', 'can_cancel'), ('run', 'can_read', 'can_read'), ('run', 'instance', 'instance'), ('secret_lease', 'binding', 'binding'), ('secret_lease', 'receive_raw', 'receive_raw'), ('secret_lease', 'run', 'run'), ('secret_lease', 'use_brokered', 'use_brokered')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'secret_lease' AND c.relation = 'run' AND c.satisfying_relation = v_filter_relation)
@@ -34484,8 +35814,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'secret_lease' AND t.relation IN ('use_brokered') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'secret_lease' AND t.relation IN ('use_brokered') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('run', 'can_cancel', 'can_cancel'), ('run', 'can_read', 'can_read'), ('run', 'instance', 'instance'), ('secret_lease', 'binding', 'binding'), ('secret_lease', 'receive_raw', 'receive_raw'), ('secret_lease', 'run', 'run'), ('secret_lease', 'use_brokered', 'use_brokered')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -34495,7 +35825,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'secret_lease' AND EXISTS (
+		WHERE (v_filter_type = 'secret_lease' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('run', 'can_cancel', 'can_cancel'), ('run', 'can_read', 'can_read'), ('run', 'instance', 'instance'), ('secret_lease', 'binding', 'binding'), ('secret_lease', 'receive_raw', 'receive_raw'), ('secret_lease', 'run', 'run'), ('secret_lease', 'use_brokered', 'use_brokered')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'secret_lease' AND c.relation = 'use_brokered' AND c.satisfying_relation = v_filter_relation)
@@ -34595,8 +35925,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'state_volume' AND t.relation IN ('instance') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'state_volume' AND t.relation IN ('instance') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('agent_instance', 'can_execute', 'can_execute'), ('agent_instance', 'can_manage', 'can_manage'), ('agent_instance', 'can_read', 'can_read'), ('agent_instance', 'can_recover', 'can_recover'), ('agent_instance', 'can_update', 'can_update'), ('agent_instance', 'can_use_release', 'can_use_release'), ('agent_instance', 'project', 'project'), ('agent_instance', 'release_agent', 'release_agent'), ('state_volume', 'can_attach', 'can_attach'), ('state_volume', 'can_manage', 'can_manage'), ('state_volume', 'can_read', 'can_read'), ('state_volume', 'can_restore', 'can_restore'), ('state_volume', 'instance', 'instance')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -34606,7 +35936,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'state_volume' AND EXISTS (
+		WHERE (v_filter_type = 'state_volume' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('agent_instance', 'can_execute', 'can_execute'), ('agent_instance', 'can_manage', 'can_manage'), ('agent_instance', 'can_read', 'can_read'), ('agent_instance', 'can_recover', 'can_recover'), ('agent_instance', 'can_update', 'can_update'), ('agent_instance', 'can_use_release', 'can_use_release'), ('agent_instance', 'project', 'project'), ('agent_instance', 'release_agent', 'release_agent'), ('state_volume', 'can_attach', 'can_attach'), ('state_volume', 'can_manage', 'can_manage'), ('state_volume', 'can_read', 'can_read'), ('state_volume', 'can_restore', 'can_restore'), ('state_volume', 'instance', 'instance')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'state_volume' AND c.relation = 'instance' AND c.satisfying_relation = v_filter_relation)
@@ -34706,8 +36036,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'organization' AND t.relation IN ('admin', 'owner') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'organization' AND t.relation IN ('admin', 'owner') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('organization', 'admin', 'admin'), ('organization', 'admin', 'owner'), ('organization', 'can_create_project', 'admin'), ('organization', 'can_create_project', 'can_create_project'), ('organization', 'can_create_project', 'owner'), ('organization', 'can_delete', 'can_delete'), ('organization', 'can_delete', 'owner'), ('organization', 'can_inspect_secrets', 'can_inspect_secrets'), ('organization', 'can_inspect_secrets', 'owner'), ('organization', 'can_inspect_secrets', 'secret_manager'), ('organization', 'can_manage', 'can_manage'), ('organization', 'can_manage', 'owner'), ('organization', 'can_manage_members', 'admin'), ('organization', 'can_manage_members', 'can_manage_members'), ('organization', 'can_manage_members', 'owner'), ('organization', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('organization', 'can_manage_secret_grants', 'owner'), ('organization', 'can_manage_secret_grants', 'secret_manager'), ('organization', 'can_purge_secrets', 'can_purge_secrets'), ('organization', 'can_purge_secrets', 'owner'), ('organization', 'can_purge_secrets', 'secret_manager'), ('organization', 'can_read', 'admin'), ('organization', 'can_read', 'can_read'), ('organization', 'can_read', 'member'), ('organization', 'can_read', 'owner'), ('organization', 'can_revoke_secrets', 'can_revoke_secrets'), ('organization', 'can_revoke_secrets', 'owner'), ('organization', 'can_revoke_secrets', 'secret_manager'), ('organization', 'can_rotate_secrets', 'can_rotate_secrets'), ('organization', 'can_rotate_secrets', 'owner'), ('organization', 'can_rotate_secrets', 'secret_manager'), ('organization', 'can_write_secret_value', 'can_write_secret_value'), ('organization', 'can_write_secret_value', 'owner'), ('organization', 'can_write_secret_value', 'secret_manager'), ('organization', 'member', 'admin'), ('organization', 'member', 'member'), ('organization', 'member', 'owner'), ('organization', 'owner', 'owner'), ('organization', 'secret_manager', 'secret_manager')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -34717,7 +36047,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'organization' AND EXISTS (
+		WHERE (v_filter_type = 'organization' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('organization', 'admin', 'admin'), ('organization', 'admin', 'owner'), ('organization', 'can_create_project', 'admin'), ('organization', 'can_create_project', 'can_create_project'), ('organization', 'can_create_project', 'owner'), ('organization', 'can_delete', 'can_delete'), ('organization', 'can_delete', 'owner'), ('organization', 'can_inspect_secrets', 'can_inspect_secrets'), ('organization', 'can_inspect_secrets', 'owner'), ('organization', 'can_inspect_secrets', 'secret_manager'), ('organization', 'can_manage', 'can_manage'), ('organization', 'can_manage', 'owner'), ('organization', 'can_manage_members', 'admin'), ('organization', 'can_manage_members', 'can_manage_members'), ('organization', 'can_manage_members', 'owner'), ('organization', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('organization', 'can_manage_secret_grants', 'owner'), ('organization', 'can_manage_secret_grants', 'secret_manager'), ('organization', 'can_purge_secrets', 'can_purge_secrets'), ('organization', 'can_purge_secrets', 'owner'), ('organization', 'can_purge_secrets', 'secret_manager'), ('organization', 'can_read', 'admin'), ('organization', 'can_read', 'can_read'), ('organization', 'can_read', 'member'), ('organization', 'can_read', 'owner'), ('organization', 'can_revoke_secrets', 'can_revoke_secrets'), ('organization', 'can_revoke_secrets', 'owner'), ('organization', 'can_revoke_secrets', 'secret_manager'), ('organization', 'can_rotate_secrets', 'can_rotate_secrets'), ('organization', 'can_rotate_secrets', 'owner'), ('organization', 'can_rotate_secrets', 'secret_manager'), ('organization', 'can_write_secret_value', 'can_write_secret_value'), ('organization', 'can_write_secret_value', 'owner'), ('organization', 'can_write_secret_value', 'secret_manager'), ('organization', 'member', 'admin'), ('organization', 'member', 'member'), ('organization', 'member', 'owner'), ('organization', 'owner', 'owner'), ('organization', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'organization' AND c.relation = 'admin' AND c.satisfying_relation = v_filter_relation)
@@ -34817,8 +36147,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'organization' AND t.relation IN ('can_delete', 'owner') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'organization' AND t.relation IN ('can_delete', 'owner') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('organization', 'admin', 'admin'), ('organization', 'admin', 'owner'), ('organization', 'can_create_project', 'admin'), ('organization', 'can_create_project', 'can_create_project'), ('organization', 'can_create_project', 'owner'), ('organization', 'can_delete', 'can_delete'), ('organization', 'can_delete', 'owner'), ('organization', 'can_inspect_secrets', 'can_inspect_secrets'), ('organization', 'can_inspect_secrets', 'owner'), ('organization', 'can_inspect_secrets', 'secret_manager'), ('organization', 'can_manage', 'can_manage'), ('organization', 'can_manage', 'owner'), ('organization', 'can_manage_members', 'admin'), ('organization', 'can_manage_members', 'can_manage_members'), ('organization', 'can_manage_members', 'owner'), ('organization', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('organization', 'can_manage_secret_grants', 'owner'), ('organization', 'can_manage_secret_grants', 'secret_manager'), ('organization', 'can_purge_secrets', 'can_purge_secrets'), ('organization', 'can_purge_secrets', 'owner'), ('organization', 'can_purge_secrets', 'secret_manager'), ('organization', 'can_read', 'admin'), ('organization', 'can_read', 'can_read'), ('organization', 'can_read', 'member'), ('organization', 'can_read', 'owner'), ('organization', 'can_revoke_secrets', 'can_revoke_secrets'), ('organization', 'can_revoke_secrets', 'owner'), ('organization', 'can_revoke_secrets', 'secret_manager'), ('organization', 'can_rotate_secrets', 'can_rotate_secrets'), ('organization', 'can_rotate_secrets', 'owner'), ('organization', 'can_rotate_secrets', 'secret_manager'), ('organization', 'can_write_secret_value', 'can_write_secret_value'), ('organization', 'can_write_secret_value', 'owner'), ('organization', 'can_write_secret_value', 'secret_manager'), ('organization', 'member', 'admin'), ('organization', 'member', 'member'), ('organization', 'member', 'owner'), ('organization', 'owner', 'owner'), ('organization', 'secret_manager', 'secret_manager')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -34828,7 +36158,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'organization' AND EXISTS (
+		WHERE (v_filter_type = 'organization' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('organization', 'admin', 'admin'), ('organization', 'admin', 'owner'), ('organization', 'can_create_project', 'admin'), ('organization', 'can_create_project', 'can_create_project'), ('organization', 'can_create_project', 'owner'), ('organization', 'can_delete', 'can_delete'), ('organization', 'can_delete', 'owner'), ('organization', 'can_inspect_secrets', 'can_inspect_secrets'), ('organization', 'can_inspect_secrets', 'owner'), ('organization', 'can_inspect_secrets', 'secret_manager'), ('organization', 'can_manage', 'can_manage'), ('organization', 'can_manage', 'owner'), ('organization', 'can_manage_members', 'admin'), ('organization', 'can_manage_members', 'can_manage_members'), ('organization', 'can_manage_members', 'owner'), ('organization', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('organization', 'can_manage_secret_grants', 'owner'), ('organization', 'can_manage_secret_grants', 'secret_manager'), ('organization', 'can_purge_secrets', 'can_purge_secrets'), ('organization', 'can_purge_secrets', 'owner'), ('organization', 'can_purge_secrets', 'secret_manager'), ('organization', 'can_read', 'admin'), ('organization', 'can_read', 'can_read'), ('organization', 'can_read', 'member'), ('organization', 'can_read', 'owner'), ('organization', 'can_revoke_secrets', 'can_revoke_secrets'), ('organization', 'can_revoke_secrets', 'owner'), ('organization', 'can_revoke_secrets', 'secret_manager'), ('organization', 'can_rotate_secrets', 'can_rotate_secrets'), ('organization', 'can_rotate_secrets', 'owner'), ('organization', 'can_rotate_secrets', 'secret_manager'), ('organization', 'can_write_secret_value', 'can_write_secret_value'), ('organization', 'can_write_secret_value', 'owner'), ('organization', 'can_write_secret_value', 'secret_manager'), ('organization', 'member', 'admin'), ('organization', 'member', 'member'), ('organization', 'member', 'owner'), ('organization', 'owner', 'owner'), ('organization', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'organization' AND c.relation = 'can_delete' AND c.satisfying_relation = v_filter_relation)
@@ -34928,8 +36258,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'organization' AND t.relation IN ('can_manage', 'owner') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'organization' AND t.relation IN ('can_manage', 'owner') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('organization', 'admin', 'admin'), ('organization', 'admin', 'owner'), ('organization', 'can_create_project', 'admin'), ('organization', 'can_create_project', 'can_create_project'), ('organization', 'can_create_project', 'owner'), ('organization', 'can_delete', 'can_delete'), ('organization', 'can_delete', 'owner'), ('organization', 'can_inspect_secrets', 'can_inspect_secrets'), ('organization', 'can_inspect_secrets', 'owner'), ('organization', 'can_inspect_secrets', 'secret_manager'), ('organization', 'can_manage', 'can_manage'), ('organization', 'can_manage', 'owner'), ('organization', 'can_manage_members', 'admin'), ('organization', 'can_manage_members', 'can_manage_members'), ('organization', 'can_manage_members', 'owner'), ('organization', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('organization', 'can_manage_secret_grants', 'owner'), ('organization', 'can_manage_secret_grants', 'secret_manager'), ('organization', 'can_purge_secrets', 'can_purge_secrets'), ('organization', 'can_purge_secrets', 'owner'), ('organization', 'can_purge_secrets', 'secret_manager'), ('organization', 'can_read', 'admin'), ('organization', 'can_read', 'can_read'), ('organization', 'can_read', 'member'), ('organization', 'can_read', 'owner'), ('organization', 'can_revoke_secrets', 'can_revoke_secrets'), ('organization', 'can_revoke_secrets', 'owner'), ('organization', 'can_revoke_secrets', 'secret_manager'), ('organization', 'can_rotate_secrets', 'can_rotate_secrets'), ('organization', 'can_rotate_secrets', 'owner'), ('organization', 'can_rotate_secrets', 'secret_manager'), ('organization', 'can_write_secret_value', 'can_write_secret_value'), ('organization', 'can_write_secret_value', 'owner'), ('organization', 'can_write_secret_value', 'secret_manager'), ('organization', 'member', 'admin'), ('organization', 'member', 'member'), ('organization', 'member', 'owner'), ('organization', 'owner', 'owner'), ('organization', 'secret_manager', 'secret_manager')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -34939,7 +36269,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'organization' AND EXISTS (
+		WHERE (v_filter_type = 'organization' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('organization', 'admin', 'admin'), ('organization', 'admin', 'owner'), ('organization', 'can_create_project', 'admin'), ('organization', 'can_create_project', 'can_create_project'), ('organization', 'can_create_project', 'owner'), ('organization', 'can_delete', 'can_delete'), ('organization', 'can_delete', 'owner'), ('organization', 'can_inspect_secrets', 'can_inspect_secrets'), ('organization', 'can_inspect_secrets', 'owner'), ('organization', 'can_inspect_secrets', 'secret_manager'), ('organization', 'can_manage', 'can_manage'), ('organization', 'can_manage', 'owner'), ('organization', 'can_manage_members', 'admin'), ('organization', 'can_manage_members', 'can_manage_members'), ('organization', 'can_manage_members', 'owner'), ('organization', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('organization', 'can_manage_secret_grants', 'owner'), ('organization', 'can_manage_secret_grants', 'secret_manager'), ('organization', 'can_purge_secrets', 'can_purge_secrets'), ('organization', 'can_purge_secrets', 'owner'), ('organization', 'can_purge_secrets', 'secret_manager'), ('organization', 'can_read', 'admin'), ('organization', 'can_read', 'can_read'), ('organization', 'can_read', 'member'), ('organization', 'can_read', 'owner'), ('organization', 'can_revoke_secrets', 'can_revoke_secrets'), ('organization', 'can_revoke_secrets', 'owner'), ('organization', 'can_revoke_secrets', 'secret_manager'), ('organization', 'can_rotate_secrets', 'can_rotate_secrets'), ('organization', 'can_rotate_secrets', 'owner'), ('organization', 'can_rotate_secrets', 'secret_manager'), ('organization', 'can_write_secret_value', 'can_write_secret_value'), ('organization', 'can_write_secret_value', 'owner'), ('organization', 'can_write_secret_value', 'secret_manager'), ('organization', 'member', 'admin'), ('organization', 'member', 'member'), ('organization', 'member', 'owner'), ('organization', 'owner', 'owner'), ('organization', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'organization' AND c.relation = 'can_manage' AND c.satisfying_relation = v_filter_relation)
@@ -35040,8 +36370,8 @@ BEGIN
         -- Self-candidate: when filter type matches object type
         IF v_filter_type = 'project' THEN
         IF EXISTS (
-    		SELECT p_object_id || '#' || v_filter_relation AS subject_id
-    		WHERE (v_filter_type = 'project' AND EXISTS (
+		SELECT p_object_id || '#' || v_filter_relation AS subject_id
+		WHERE (v_filter_type = 'project' AND EXISTS (
     SELECT 1
     FROM (VALUES ('organization', 'admin', 'admin'), ('organization', 'admin', 'owner'), ('organization', 'can_create_project', 'admin'), ('organization', 'can_create_project', 'can_create_project'), ('organization', 'can_create_project', 'owner'), ('organization', 'can_delete', 'can_delete'), ('organization', 'can_delete', 'owner'), ('organization', 'can_inspect_secrets', 'can_inspect_secrets'), ('organization', 'can_inspect_secrets', 'owner'), ('organization', 'can_inspect_secrets', 'secret_manager'), ('organization', 'can_manage', 'can_manage'), ('organization', 'can_manage', 'owner'), ('organization', 'can_manage_members', 'admin'), ('organization', 'can_manage_members', 'can_manage_members'), ('organization', 'can_manage_members', 'owner'), ('organization', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('organization', 'can_manage_secret_grants', 'owner'), ('organization', 'can_manage_secret_grants', 'secret_manager'), ('organization', 'can_purge_secrets', 'can_purge_secrets'), ('organization', 'can_purge_secrets', 'owner'), ('organization', 'can_purge_secrets', 'secret_manager'), ('organization', 'can_read', 'admin'), ('organization', 'can_read', 'can_read'), ('organization', 'can_read', 'member'), ('organization', 'can_read', 'owner'), ('organization', 'can_revoke_secrets', 'can_revoke_secrets'), ('organization', 'can_revoke_secrets', 'owner'), ('organization', 'can_revoke_secrets', 'secret_manager'), ('organization', 'can_rotate_secrets', 'can_rotate_secrets'), ('organization', 'can_rotate_secrets', 'owner'), ('organization', 'can_rotate_secrets', 'secret_manager'), ('organization', 'can_write_secret_value', 'can_write_secret_value'), ('organization', 'can_write_secret_value', 'owner'), ('organization', 'can_write_secret_value', 'secret_manager'), ('organization', 'member', 'admin'), ('organization', 'member', 'member'), ('organization', 'member', 'owner'), ('organization', 'owner', 'owner'), ('organization', 'secret_manager', 'secret_manager'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
     WHERE (c.object_type = 'project' AND c.relation = 'can_delete' AND c.satisfying_relation = v_filter_relation)
@@ -35050,7 +36380,7 @@ BEGIN
         RETURN QUERY
         WITH base_results AS (
             SELECT p_object_id || '#' || v_filter_relation AS subject_id
-            		WHERE (v_filter_type = 'project' AND EXISTS (
+		WHERE (v_filter_type = 'project' AND EXISTS (
             SELECT 1
             FROM (VALUES ('organization', 'admin', 'admin'), ('organization', 'admin', 'owner'), ('organization', 'can_create_project', 'admin'), ('organization', 'can_create_project', 'can_create_project'), ('organization', 'can_create_project', 'owner'), ('organization', 'can_delete', 'can_delete'), ('organization', 'can_delete', 'owner'), ('organization', 'can_inspect_secrets', 'can_inspect_secrets'), ('organization', 'can_inspect_secrets', 'owner'), ('organization', 'can_inspect_secrets', 'secret_manager'), ('organization', 'can_manage', 'can_manage'), ('organization', 'can_manage', 'owner'), ('organization', 'can_manage_members', 'admin'), ('organization', 'can_manage_members', 'can_manage_members'), ('organization', 'can_manage_members', 'owner'), ('organization', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('organization', 'can_manage_secret_grants', 'owner'), ('organization', 'can_manage_secret_grants', 'secret_manager'), ('organization', 'can_purge_secrets', 'can_purge_secrets'), ('organization', 'can_purge_secrets', 'owner'), ('organization', 'can_purge_secrets', 'secret_manager'), ('organization', 'can_read', 'admin'), ('organization', 'can_read', 'can_read'), ('organization', 'can_read', 'member'), ('organization', 'can_read', 'owner'), ('organization', 'can_revoke_secrets', 'can_revoke_secrets'), ('organization', 'can_revoke_secrets', 'owner'), ('organization', 'can_revoke_secrets', 'secret_manager'), ('organization', 'can_rotate_secrets', 'can_rotate_secrets'), ('organization', 'can_rotate_secrets', 'owner'), ('organization', 'can_rotate_secrets', 'secret_manager'), ('organization', 'can_write_secret_value', 'can_write_secret_value'), ('organization', 'can_write_secret_value', 'owner'), ('organization', 'can_write_secret_value', 'secret_manager'), ('organization', 'member', 'admin'), ('organization', 'member', 'member'), ('organization', 'member', 'owner'), ('organization', 'owner', 'owner'), ('organization', 'secret_manager', 'secret_manager'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
             WHERE (c.object_type = 'project' AND c.relation = 'can_delete' AND c.satisfying_relation = v_filter_relation)
@@ -35199,8 +36529,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'organization' AND t.relation IN ('can_inspect_secrets', 'owner', 'secret_manager') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'organization' AND t.relation IN ('can_inspect_secrets', 'owner', 'secret_manager') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('organization', 'admin', 'admin'), ('organization', 'admin', 'owner'), ('organization', 'can_create_project', 'admin'), ('organization', 'can_create_project', 'can_create_project'), ('organization', 'can_create_project', 'owner'), ('organization', 'can_delete', 'can_delete'), ('organization', 'can_delete', 'owner'), ('organization', 'can_inspect_secrets', 'can_inspect_secrets'), ('organization', 'can_inspect_secrets', 'owner'), ('organization', 'can_inspect_secrets', 'secret_manager'), ('organization', 'can_manage', 'can_manage'), ('organization', 'can_manage', 'owner'), ('organization', 'can_manage_members', 'admin'), ('organization', 'can_manage_members', 'can_manage_members'), ('organization', 'can_manage_members', 'owner'), ('organization', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('organization', 'can_manage_secret_grants', 'owner'), ('organization', 'can_manage_secret_grants', 'secret_manager'), ('organization', 'can_purge_secrets', 'can_purge_secrets'), ('organization', 'can_purge_secrets', 'owner'), ('organization', 'can_purge_secrets', 'secret_manager'), ('organization', 'can_read', 'admin'), ('organization', 'can_read', 'can_read'), ('organization', 'can_read', 'member'), ('organization', 'can_read', 'owner'), ('organization', 'can_revoke_secrets', 'can_revoke_secrets'), ('organization', 'can_revoke_secrets', 'owner'), ('organization', 'can_revoke_secrets', 'secret_manager'), ('organization', 'can_rotate_secrets', 'can_rotate_secrets'), ('organization', 'can_rotate_secrets', 'owner'), ('organization', 'can_rotate_secrets', 'secret_manager'), ('organization', 'can_write_secret_value', 'can_write_secret_value'), ('organization', 'can_write_secret_value', 'owner'), ('organization', 'can_write_secret_value', 'secret_manager'), ('organization', 'member', 'admin'), ('organization', 'member', 'member'), ('organization', 'member', 'owner'), ('organization', 'owner', 'owner'), ('organization', 'secret_manager', 'secret_manager')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -35210,7 +36540,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'organization' AND EXISTS (
+		WHERE (v_filter_type = 'organization' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('organization', 'admin', 'admin'), ('organization', 'admin', 'owner'), ('organization', 'can_create_project', 'admin'), ('organization', 'can_create_project', 'can_create_project'), ('organization', 'can_create_project', 'owner'), ('organization', 'can_delete', 'can_delete'), ('organization', 'can_delete', 'owner'), ('organization', 'can_inspect_secrets', 'can_inspect_secrets'), ('organization', 'can_inspect_secrets', 'owner'), ('organization', 'can_inspect_secrets', 'secret_manager'), ('organization', 'can_manage', 'can_manage'), ('organization', 'can_manage', 'owner'), ('organization', 'can_manage_members', 'admin'), ('organization', 'can_manage_members', 'can_manage_members'), ('organization', 'can_manage_members', 'owner'), ('organization', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('organization', 'can_manage_secret_grants', 'owner'), ('organization', 'can_manage_secret_grants', 'secret_manager'), ('organization', 'can_purge_secrets', 'can_purge_secrets'), ('organization', 'can_purge_secrets', 'owner'), ('organization', 'can_purge_secrets', 'secret_manager'), ('organization', 'can_read', 'admin'), ('organization', 'can_read', 'can_read'), ('organization', 'can_read', 'member'), ('organization', 'can_read', 'owner'), ('organization', 'can_revoke_secrets', 'can_revoke_secrets'), ('organization', 'can_revoke_secrets', 'owner'), ('organization', 'can_revoke_secrets', 'secret_manager'), ('organization', 'can_rotate_secrets', 'can_rotate_secrets'), ('organization', 'can_rotate_secrets', 'owner'), ('organization', 'can_rotate_secrets', 'secret_manager'), ('organization', 'can_write_secret_value', 'can_write_secret_value'), ('organization', 'can_write_secret_value', 'owner'), ('organization', 'can_write_secret_value', 'secret_manager'), ('organization', 'member', 'admin'), ('organization', 'member', 'member'), ('organization', 'member', 'owner'), ('organization', 'owner', 'owner'), ('organization', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'organization' AND c.relation = 'can_inspect_secrets' AND c.satisfying_relation = v_filter_relation)
@@ -35310,8 +36640,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'organization' AND t.relation IN ('can_manage_secret_grants', 'owner', 'secret_manager') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'organization' AND t.relation IN ('can_manage_secret_grants', 'owner', 'secret_manager') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('organization', 'admin', 'admin'), ('organization', 'admin', 'owner'), ('organization', 'can_create_project', 'admin'), ('organization', 'can_create_project', 'can_create_project'), ('organization', 'can_create_project', 'owner'), ('organization', 'can_delete', 'can_delete'), ('organization', 'can_delete', 'owner'), ('organization', 'can_inspect_secrets', 'can_inspect_secrets'), ('organization', 'can_inspect_secrets', 'owner'), ('organization', 'can_inspect_secrets', 'secret_manager'), ('organization', 'can_manage', 'can_manage'), ('organization', 'can_manage', 'owner'), ('organization', 'can_manage_members', 'admin'), ('organization', 'can_manage_members', 'can_manage_members'), ('organization', 'can_manage_members', 'owner'), ('organization', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('organization', 'can_manage_secret_grants', 'owner'), ('organization', 'can_manage_secret_grants', 'secret_manager'), ('organization', 'can_purge_secrets', 'can_purge_secrets'), ('organization', 'can_purge_secrets', 'owner'), ('organization', 'can_purge_secrets', 'secret_manager'), ('organization', 'can_read', 'admin'), ('organization', 'can_read', 'can_read'), ('organization', 'can_read', 'member'), ('organization', 'can_read', 'owner'), ('organization', 'can_revoke_secrets', 'can_revoke_secrets'), ('organization', 'can_revoke_secrets', 'owner'), ('organization', 'can_revoke_secrets', 'secret_manager'), ('organization', 'can_rotate_secrets', 'can_rotate_secrets'), ('organization', 'can_rotate_secrets', 'owner'), ('organization', 'can_rotate_secrets', 'secret_manager'), ('organization', 'can_write_secret_value', 'can_write_secret_value'), ('organization', 'can_write_secret_value', 'owner'), ('organization', 'can_write_secret_value', 'secret_manager'), ('organization', 'member', 'admin'), ('organization', 'member', 'member'), ('organization', 'member', 'owner'), ('organization', 'owner', 'owner'), ('organization', 'secret_manager', 'secret_manager')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -35321,7 +36651,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'organization' AND EXISTS (
+		WHERE (v_filter_type = 'organization' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('organization', 'admin', 'admin'), ('organization', 'admin', 'owner'), ('organization', 'can_create_project', 'admin'), ('organization', 'can_create_project', 'can_create_project'), ('organization', 'can_create_project', 'owner'), ('organization', 'can_delete', 'can_delete'), ('organization', 'can_delete', 'owner'), ('organization', 'can_inspect_secrets', 'can_inspect_secrets'), ('organization', 'can_inspect_secrets', 'owner'), ('organization', 'can_inspect_secrets', 'secret_manager'), ('organization', 'can_manage', 'can_manage'), ('organization', 'can_manage', 'owner'), ('organization', 'can_manage_members', 'admin'), ('organization', 'can_manage_members', 'can_manage_members'), ('organization', 'can_manage_members', 'owner'), ('organization', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('organization', 'can_manage_secret_grants', 'owner'), ('organization', 'can_manage_secret_grants', 'secret_manager'), ('organization', 'can_purge_secrets', 'can_purge_secrets'), ('organization', 'can_purge_secrets', 'owner'), ('organization', 'can_purge_secrets', 'secret_manager'), ('organization', 'can_read', 'admin'), ('organization', 'can_read', 'can_read'), ('organization', 'can_read', 'member'), ('organization', 'can_read', 'owner'), ('organization', 'can_revoke_secrets', 'can_revoke_secrets'), ('organization', 'can_revoke_secrets', 'owner'), ('organization', 'can_revoke_secrets', 'secret_manager'), ('organization', 'can_rotate_secrets', 'can_rotate_secrets'), ('organization', 'can_rotate_secrets', 'owner'), ('organization', 'can_rotate_secrets', 'secret_manager'), ('organization', 'can_write_secret_value', 'can_write_secret_value'), ('organization', 'can_write_secret_value', 'owner'), ('organization', 'can_write_secret_value', 'secret_manager'), ('organization', 'member', 'admin'), ('organization', 'member', 'member'), ('organization', 'member', 'owner'), ('organization', 'owner', 'owner'), ('organization', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'organization' AND c.relation = 'can_manage_secret_grants' AND c.satisfying_relation = v_filter_relation)
@@ -35421,8 +36751,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'organization' AND t.relation IN ('can_purge_secrets', 'owner', 'secret_manager') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'organization' AND t.relation IN ('can_purge_secrets', 'owner', 'secret_manager') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('organization', 'admin', 'admin'), ('organization', 'admin', 'owner'), ('organization', 'can_create_project', 'admin'), ('organization', 'can_create_project', 'can_create_project'), ('organization', 'can_create_project', 'owner'), ('organization', 'can_delete', 'can_delete'), ('organization', 'can_delete', 'owner'), ('organization', 'can_inspect_secrets', 'can_inspect_secrets'), ('organization', 'can_inspect_secrets', 'owner'), ('organization', 'can_inspect_secrets', 'secret_manager'), ('organization', 'can_manage', 'can_manage'), ('organization', 'can_manage', 'owner'), ('organization', 'can_manage_members', 'admin'), ('organization', 'can_manage_members', 'can_manage_members'), ('organization', 'can_manage_members', 'owner'), ('organization', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('organization', 'can_manage_secret_grants', 'owner'), ('organization', 'can_manage_secret_grants', 'secret_manager'), ('organization', 'can_purge_secrets', 'can_purge_secrets'), ('organization', 'can_purge_secrets', 'owner'), ('organization', 'can_purge_secrets', 'secret_manager'), ('organization', 'can_read', 'admin'), ('organization', 'can_read', 'can_read'), ('organization', 'can_read', 'member'), ('organization', 'can_read', 'owner'), ('organization', 'can_revoke_secrets', 'can_revoke_secrets'), ('organization', 'can_revoke_secrets', 'owner'), ('organization', 'can_revoke_secrets', 'secret_manager'), ('organization', 'can_rotate_secrets', 'can_rotate_secrets'), ('organization', 'can_rotate_secrets', 'owner'), ('organization', 'can_rotate_secrets', 'secret_manager'), ('organization', 'can_write_secret_value', 'can_write_secret_value'), ('organization', 'can_write_secret_value', 'owner'), ('organization', 'can_write_secret_value', 'secret_manager'), ('organization', 'member', 'admin'), ('organization', 'member', 'member'), ('organization', 'member', 'owner'), ('organization', 'owner', 'owner'), ('organization', 'secret_manager', 'secret_manager')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -35432,7 +36762,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'organization' AND EXISTS (
+		WHERE (v_filter_type = 'organization' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('organization', 'admin', 'admin'), ('organization', 'admin', 'owner'), ('organization', 'can_create_project', 'admin'), ('organization', 'can_create_project', 'can_create_project'), ('organization', 'can_create_project', 'owner'), ('organization', 'can_delete', 'can_delete'), ('organization', 'can_delete', 'owner'), ('organization', 'can_inspect_secrets', 'can_inspect_secrets'), ('organization', 'can_inspect_secrets', 'owner'), ('organization', 'can_inspect_secrets', 'secret_manager'), ('organization', 'can_manage', 'can_manage'), ('organization', 'can_manage', 'owner'), ('organization', 'can_manage_members', 'admin'), ('organization', 'can_manage_members', 'can_manage_members'), ('organization', 'can_manage_members', 'owner'), ('organization', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('organization', 'can_manage_secret_grants', 'owner'), ('organization', 'can_manage_secret_grants', 'secret_manager'), ('organization', 'can_purge_secrets', 'can_purge_secrets'), ('organization', 'can_purge_secrets', 'owner'), ('organization', 'can_purge_secrets', 'secret_manager'), ('organization', 'can_read', 'admin'), ('organization', 'can_read', 'can_read'), ('organization', 'can_read', 'member'), ('organization', 'can_read', 'owner'), ('organization', 'can_revoke_secrets', 'can_revoke_secrets'), ('organization', 'can_revoke_secrets', 'owner'), ('organization', 'can_revoke_secrets', 'secret_manager'), ('organization', 'can_rotate_secrets', 'can_rotate_secrets'), ('organization', 'can_rotate_secrets', 'owner'), ('organization', 'can_rotate_secrets', 'secret_manager'), ('organization', 'can_write_secret_value', 'can_write_secret_value'), ('organization', 'can_write_secret_value', 'owner'), ('organization', 'can_write_secret_value', 'secret_manager'), ('organization', 'member', 'admin'), ('organization', 'member', 'member'), ('organization', 'member', 'owner'), ('organization', 'owner', 'owner'), ('organization', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'organization' AND c.relation = 'can_purge_secrets' AND c.satisfying_relation = v_filter_relation)
@@ -35532,8 +36862,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'organization' AND t.relation IN ('can_revoke_secrets', 'owner', 'secret_manager') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'organization' AND t.relation IN ('can_revoke_secrets', 'owner', 'secret_manager') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('organization', 'admin', 'admin'), ('organization', 'admin', 'owner'), ('organization', 'can_create_project', 'admin'), ('organization', 'can_create_project', 'can_create_project'), ('organization', 'can_create_project', 'owner'), ('organization', 'can_delete', 'can_delete'), ('organization', 'can_delete', 'owner'), ('organization', 'can_inspect_secrets', 'can_inspect_secrets'), ('organization', 'can_inspect_secrets', 'owner'), ('organization', 'can_inspect_secrets', 'secret_manager'), ('organization', 'can_manage', 'can_manage'), ('organization', 'can_manage', 'owner'), ('organization', 'can_manage_members', 'admin'), ('organization', 'can_manage_members', 'can_manage_members'), ('organization', 'can_manage_members', 'owner'), ('organization', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('organization', 'can_manage_secret_grants', 'owner'), ('organization', 'can_manage_secret_grants', 'secret_manager'), ('organization', 'can_purge_secrets', 'can_purge_secrets'), ('organization', 'can_purge_secrets', 'owner'), ('organization', 'can_purge_secrets', 'secret_manager'), ('organization', 'can_read', 'admin'), ('organization', 'can_read', 'can_read'), ('organization', 'can_read', 'member'), ('organization', 'can_read', 'owner'), ('organization', 'can_revoke_secrets', 'can_revoke_secrets'), ('organization', 'can_revoke_secrets', 'owner'), ('organization', 'can_revoke_secrets', 'secret_manager'), ('organization', 'can_rotate_secrets', 'can_rotate_secrets'), ('organization', 'can_rotate_secrets', 'owner'), ('organization', 'can_rotate_secrets', 'secret_manager'), ('organization', 'can_write_secret_value', 'can_write_secret_value'), ('organization', 'can_write_secret_value', 'owner'), ('organization', 'can_write_secret_value', 'secret_manager'), ('organization', 'member', 'admin'), ('organization', 'member', 'member'), ('organization', 'member', 'owner'), ('organization', 'owner', 'owner'), ('organization', 'secret_manager', 'secret_manager')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -35543,7 +36873,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'organization' AND EXISTS (
+		WHERE (v_filter_type = 'organization' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('organization', 'admin', 'admin'), ('organization', 'admin', 'owner'), ('organization', 'can_create_project', 'admin'), ('organization', 'can_create_project', 'can_create_project'), ('organization', 'can_create_project', 'owner'), ('organization', 'can_delete', 'can_delete'), ('organization', 'can_delete', 'owner'), ('organization', 'can_inspect_secrets', 'can_inspect_secrets'), ('organization', 'can_inspect_secrets', 'owner'), ('organization', 'can_inspect_secrets', 'secret_manager'), ('organization', 'can_manage', 'can_manage'), ('organization', 'can_manage', 'owner'), ('organization', 'can_manage_members', 'admin'), ('organization', 'can_manage_members', 'can_manage_members'), ('organization', 'can_manage_members', 'owner'), ('organization', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('organization', 'can_manage_secret_grants', 'owner'), ('organization', 'can_manage_secret_grants', 'secret_manager'), ('organization', 'can_purge_secrets', 'can_purge_secrets'), ('organization', 'can_purge_secrets', 'owner'), ('organization', 'can_purge_secrets', 'secret_manager'), ('organization', 'can_read', 'admin'), ('organization', 'can_read', 'can_read'), ('organization', 'can_read', 'member'), ('organization', 'can_read', 'owner'), ('organization', 'can_revoke_secrets', 'can_revoke_secrets'), ('organization', 'can_revoke_secrets', 'owner'), ('organization', 'can_revoke_secrets', 'secret_manager'), ('organization', 'can_rotate_secrets', 'can_rotate_secrets'), ('organization', 'can_rotate_secrets', 'owner'), ('organization', 'can_rotate_secrets', 'secret_manager'), ('organization', 'can_write_secret_value', 'can_write_secret_value'), ('organization', 'can_write_secret_value', 'owner'), ('organization', 'can_write_secret_value', 'secret_manager'), ('organization', 'member', 'admin'), ('organization', 'member', 'member'), ('organization', 'member', 'owner'), ('organization', 'owner', 'owner'), ('organization', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'organization' AND c.relation = 'can_revoke_secrets' AND c.satisfying_relation = v_filter_relation)
@@ -35643,8 +36973,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'organization' AND t.relation IN ('can_rotate_secrets', 'owner', 'secret_manager') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'organization' AND t.relation IN ('can_rotate_secrets', 'owner', 'secret_manager') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('organization', 'admin', 'admin'), ('organization', 'admin', 'owner'), ('organization', 'can_create_project', 'admin'), ('organization', 'can_create_project', 'can_create_project'), ('organization', 'can_create_project', 'owner'), ('organization', 'can_delete', 'can_delete'), ('organization', 'can_delete', 'owner'), ('organization', 'can_inspect_secrets', 'can_inspect_secrets'), ('organization', 'can_inspect_secrets', 'owner'), ('organization', 'can_inspect_secrets', 'secret_manager'), ('organization', 'can_manage', 'can_manage'), ('organization', 'can_manage', 'owner'), ('organization', 'can_manage_members', 'admin'), ('organization', 'can_manage_members', 'can_manage_members'), ('organization', 'can_manage_members', 'owner'), ('organization', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('organization', 'can_manage_secret_grants', 'owner'), ('organization', 'can_manage_secret_grants', 'secret_manager'), ('organization', 'can_purge_secrets', 'can_purge_secrets'), ('organization', 'can_purge_secrets', 'owner'), ('organization', 'can_purge_secrets', 'secret_manager'), ('organization', 'can_read', 'admin'), ('organization', 'can_read', 'can_read'), ('organization', 'can_read', 'member'), ('organization', 'can_read', 'owner'), ('organization', 'can_revoke_secrets', 'can_revoke_secrets'), ('organization', 'can_revoke_secrets', 'owner'), ('organization', 'can_revoke_secrets', 'secret_manager'), ('organization', 'can_rotate_secrets', 'can_rotate_secrets'), ('organization', 'can_rotate_secrets', 'owner'), ('organization', 'can_rotate_secrets', 'secret_manager'), ('organization', 'can_write_secret_value', 'can_write_secret_value'), ('organization', 'can_write_secret_value', 'owner'), ('organization', 'can_write_secret_value', 'secret_manager'), ('organization', 'member', 'admin'), ('organization', 'member', 'member'), ('organization', 'member', 'owner'), ('organization', 'owner', 'owner'), ('organization', 'secret_manager', 'secret_manager')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -35654,7 +36984,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'organization' AND EXISTS (
+		WHERE (v_filter_type = 'organization' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('organization', 'admin', 'admin'), ('organization', 'admin', 'owner'), ('organization', 'can_create_project', 'admin'), ('organization', 'can_create_project', 'can_create_project'), ('organization', 'can_create_project', 'owner'), ('organization', 'can_delete', 'can_delete'), ('organization', 'can_delete', 'owner'), ('organization', 'can_inspect_secrets', 'can_inspect_secrets'), ('organization', 'can_inspect_secrets', 'owner'), ('organization', 'can_inspect_secrets', 'secret_manager'), ('organization', 'can_manage', 'can_manage'), ('organization', 'can_manage', 'owner'), ('organization', 'can_manage_members', 'admin'), ('organization', 'can_manage_members', 'can_manage_members'), ('organization', 'can_manage_members', 'owner'), ('organization', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('organization', 'can_manage_secret_grants', 'owner'), ('organization', 'can_manage_secret_grants', 'secret_manager'), ('organization', 'can_purge_secrets', 'can_purge_secrets'), ('organization', 'can_purge_secrets', 'owner'), ('organization', 'can_purge_secrets', 'secret_manager'), ('organization', 'can_read', 'admin'), ('organization', 'can_read', 'can_read'), ('organization', 'can_read', 'member'), ('organization', 'can_read', 'owner'), ('organization', 'can_revoke_secrets', 'can_revoke_secrets'), ('organization', 'can_revoke_secrets', 'owner'), ('organization', 'can_revoke_secrets', 'secret_manager'), ('organization', 'can_rotate_secrets', 'can_rotate_secrets'), ('organization', 'can_rotate_secrets', 'owner'), ('organization', 'can_rotate_secrets', 'secret_manager'), ('organization', 'can_write_secret_value', 'can_write_secret_value'), ('organization', 'can_write_secret_value', 'owner'), ('organization', 'can_write_secret_value', 'secret_manager'), ('organization', 'member', 'admin'), ('organization', 'member', 'member'), ('organization', 'member', 'owner'), ('organization', 'owner', 'owner'), ('organization', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'organization' AND c.relation = 'can_rotate_secrets' AND c.satisfying_relation = v_filter_relation)
@@ -35754,8 +37084,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'organization' AND t.relation IN ('can_write_secret_value', 'owner', 'secret_manager') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'organization' AND t.relation IN ('can_write_secret_value', 'owner', 'secret_manager') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('organization', 'admin', 'admin'), ('organization', 'admin', 'owner'), ('organization', 'can_create_project', 'admin'), ('organization', 'can_create_project', 'can_create_project'), ('organization', 'can_create_project', 'owner'), ('organization', 'can_delete', 'can_delete'), ('organization', 'can_delete', 'owner'), ('organization', 'can_inspect_secrets', 'can_inspect_secrets'), ('organization', 'can_inspect_secrets', 'owner'), ('organization', 'can_inspect_secrets', 'secret_manager'), ('organization', 'can_manage', 'can_manage'), ('organization', 'can_manage', 'owner'), ('organization', 'can_manage_members', 'admin'), ('organization', 'can_manage_members', 'can_manage_members'), ('organization', 'can_manage_members', 'owner'), ('organization', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('organization', 'can_manage_secret_grants', 'owner'), ('organization', 'can_manage_secret_grants', 'secret_manager'), ('organization', 'can_purge_secrets', 'can_purge_secrets'), ('organization', 'can_purge_secrets', 'owner'), ('organization', 'can_purge_secrets', 'secret_manager'), ('organization', 'can_read', 'admin'), ('organization', 'can_read', 'can_read'), ('organization', 'can_read', 'member'), ('organization', 'can_read', 'owner'), ('organization', 'can_revoke_secrets', 'can_revoke_secrets'), ('organization', 'can_revoke_secrets', 'owner'), ('organization', 'can_revoke_secrets', 'secret_manager'), ('organization', 'can_rotate_secrets', 'can_rotate_secrets'), ('organization', 'can_rotate_secrets', 'owner'), ('organization', 'can_rotate_secrets', 'secret_manager'), ('organization', 'can_write_secret_value', 'can_write_secret_value'), ('organization', 'can_write_secret_value', 'owner'), ('organization', 'can_write_secret_value', 'secret_manager'), ('organization', 'member', 'admin'), ('organization', 'member', 'member'), ('organization', 'member', 'owner'), ('organization', 'owner', 'owner'), ('organization', 'secret_manager', 'secret_manager')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -35765,7 +37095,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'organization' AND EXISTS (
+		WHERE (v_filter_type = 'organization' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('organization', 'admin', 'admin'), ('organization', 'admin', 'owner'), ('organization', 'can_create_project', 'admin'), ('organization', 'can_create_project', 'can_create_project'), ('organization', 'can_create_project', 'owner'), ('organization', 'can_delete', 'can_delete'), ('organization', 'can_delete', 'owner'), ('organization', 'can_inspect_secrets', 'can_inspect_secrets'), ('organization', 'can_inspect_secrets', 'owner'), ('organization', 'can_inspect_secrets', 'secret_manager'), ('organization', 'can_manage', 'can_manage'), ('organization', 'can_manage', 'owner'), ('organization', 'can_manage_members', 'admin'), ('organization', 'can_manage_members', 'can_manage_members'), ('organization', 'can_manage_members', 'owner'), ('organization', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('organization', 'can_manage_secret_grants', 'owner'), ('organization', 'can_manage_secret_grants', 'secret_manager'), ('organization', 'can_purge_secrets', 'can_purge_secrets'), ('organization', 'can_purge_secrets', 'owner'), ('organization', 'can_purge_secrets', 'secret_manager'), ('organization', 'can_read', 'admin'), ('organization', 'can_read', 'can_read'), ('organization', 'can_read', 'member'), ('organization', 'can_read', 'owner'), ('organization', 'can_revoke_secrets', 'can_revoke_secrets'), ('organization', 'can_revoke_secrets', 'owner'), ('organization', 'can_revoke_secrets', 'secret_manager'), ('organization', 'can_rotate_secrets', 'can_rotate_secrets'), ('organization', 'can_rotate_secrets', 'owner'), ('organization', 'can_rotate_secrets', 'secret_manager'), ('organization', 'can_write_secret_value', 'can_write_secret_value'), ('organization', 'can_write_secret_value', 'owner'), ('organization', 'can_write_secret_value', 'secret_manager'), ('organization', 'member', 'admin'), ('organization', 'member', 'member'), ('organization', 'member', 'owner'), ('organization', 'owner', 'owner'), ('organization', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'organization' AND c.relation = 'can_write_secret_value' AND c.satisfying_relation = v_filter_relation)
@@ -35865,8 +37195,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'project' AND t.relation IN ('can_manage', 'maintainer') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'project' AND t.relation IN ('can_manage', 'maintainer') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -35876,7 +37206,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'project' AND EXISTS (
+		WHERE (v_filter_type = 'project' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'project' AND c.relation = 'can_manage' AND c.satisfying_relation = v_filter_relation)
@@ -35976,8 +37306,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'project' AND t.relation IN ('can_write', 'maintainer') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'project' AND t.relation IN ('can_write', 'maintainer') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -35987,7 +37317,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'project' AND EXISTS (
+		WHERE (v_filter_type = 'project' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'project' AND c.relation = 'can_write' AND c.satisfying_relation = v_filter_relation)
@@ -36087,8 +37417,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'project' AND t.relation IN ('can_accept_secret_import', 'secret_manager') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'project' AND t.relation IN ('can_accept_secret_import', 'secret_manager') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -36098,7 +37428,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'project' AND EXISTS (
+		WHERE (v_filter_type = 'project' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'project' AND c.relation = 'can_accept_secret_import' AND c.satisfying_relation = v_filter_relation)
@@ -36198,8 +37528,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'project' AND t.relation IN ('brokered_secret_binder', 'can_bind_brokered_secret', 'secret_manager') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'project' AND t.relation IN ('brokered_secret_binder', 'can_bind_brokered_secret', 'secret_manager') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -36209,7 +37539,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'project' AND EXISTS (
+		WHERE (v_filter_type = 'project' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'project' AND c.relation = 'can_bind_brokered_secret' AND c.satisfying_relation = v_filter_relation)
@@ -36309,8 +37639,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'project' AND t.relation IN ('can_bind_raw_secret', 'raw_secret_binder', 'secret_manager') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'project' AND t.relation IN ('can_bind_raw_secret', 'raw_secret_binder', 'secret_manager') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -36320,7 +37650,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'project' AND EXISTS (
+		WHERE (v_filter_type = 'project' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'project' AND c.relation = 'can_bind_raw_secret' AND c.satisfying_relation = v_filter_relation)
@@ -36420,8 +37750,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'project' AND t.relation IN ('can_inspect_secrets', 'secret_manager') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'project' AND t.relation IN ('can_inspect_secrets', 'secret_manager') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -36431,7 +37761,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'project' AND EXISTS (
+		WHERE (v_filter_type = 'project' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'project' AND c.relation = 'can_inspect_secrets' AND c.satisfying_relation = v_filter_relation)
@@ -36531,8 +37861,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'project' AND t.relation IN ('can_manage_secret_grants', 'secret_manager') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'project' AND t.relation IN ('can_manage_secret_grants', 'secret_manager') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -36542,7 +37872,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'project' AND EXISTS (
+		WHERE (v_filter_type = 'project' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'project' AND c.relation = 'can_manage_secret_grants' AND c.satisfying_relation = v_filter_relation)
@@ -36642,8 +37972,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'project' AND t.relation IN ('can_purge_secrets', 'secret_manager') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'project' AND t.relation IN ('can_purge_secrets', 'secret_manager') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -36653,7 +37983,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'project' AND EXISTS (
+		WHERE (v_filter_type = 'project' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'project' AND c.relation = 'can_purge_secrets' AND c.satisfying_relation = v_filter_relation)
@@ -36753,8 +38083,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'project' AND t.relation IN ('can_revoke_secrets', 'secret_manager') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'project' AND t.relation IN ('can_revoke_secrets', 'secret_manager') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -36764,7 +38094,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'project' AND EXISTS (
+		WHERE (v_filter_type = 'project' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'project' AND c.relation = 'can_revoke_secrets' AND c.satisfying_relation = v_filter_relation)
@@ -36864,8 +38194,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'project' AND t.relation IN ('can_rotate_secrets', 'secret_manager') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'project' AND t.relation IN ('can_rotate_secrets', 'secret_manager') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -36875,7 +38205,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'project' AND EXISTS (
+		WHERE (v_filter_type = 'project' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'project' AND c.relation = 'can_rotate_secrets' AND c.satisfying_relation = v_filter_relation)
@@ -36975,8 +38305,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'project' AND t.relation IN ('can_write_secret_value', 'secret_manager') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'project' AND t.relation IN ('can_write_secret_value', 'secret_manager') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -36986,7 +38316,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'project' AND EXISTS (
+		WHERE (v_filter_type = 'project' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'project' AND c.relation = 'can_write_secret_value' AND c.satisfying_relation = v_filter_relation)
@@ -37086,8 +38416,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'repository' AND t.relation IN ('can_accept_secret_import', 'secret_manager') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'repository' AND t.relation IN ('can_accept_secret_import', 'secret_manager') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -37097,7 +38427,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'repository' AND EXISTS (
+		WHERE (v_filter_type = 'repository' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'repository' AND c.relation = 'can_accept_secret_import' AND c.satisfying_relation = v_filter_relation)
@@ -37197,8 +38527,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'repository' AND t.relation IN ('brokered_secret_binder', 'can_bind_brokered_secret', 'secret_manager') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'repository' AND t.relation IN ('brokered_secret_binder', 'can_bind_brokered_secret', 'secret_manager') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -37208,7 +38538,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'repository' AND EXISTS (
+		WHERE (v_filter_type = 'repository' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'repository' AND c.relation = 'can_bind_brokered_secret' AND c.satisfying_relation = v_filter_relation)
@@ -37308,8 +38638,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'repository' AND t.relation IN ('can_bind_raw_secret', 'raw_secret_binder', 'secret_manager') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'repository' AND t.relation IN ('can_bind_raw_secret', 'raw_secret_binder', 'secret_manager') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -37319,7 +38649,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'repository' AND EXISTS (
+		WHERE (v_filter_type = 'repository' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'repository' AND c.relation = 'can_bind_raw_secret' AND c.satisfying_relation = v_filter_relation)
@@ -37419,8 +38749,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'organization' AND t.relation IN ('admin', 'can_create_project', 'owner') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'organization' AND t.relation IN ('admin', 'can_create_project', 'owner') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('organization', 'admin', 'admin'), ('organization', 'admin', 'owner'), ('organization', 'can_create_project', 'admin'), ('organization', 'can_create_project', 'can_create_project'), ('organization', 'can_create_project', 'owner'), ('organization', 'can_delete', 'can_delete'), ('organization', 'can_delete', 'owner'), ('organization', 'can_inspect_secrets', 'can_inspect_secrets'), ('organization', 'can_inspect_secrets', 'owner'), ('organization', 'can_inspect_secrets', 'secret_manager'), ('organization', 'can_manage', 'can_manage'), ('organization', 'can_manage', 'owner'), ('organization', 'can_manage_members', 'admin'), ('organization', 'can_manage_members', 'can_manage_members'), ('organization', 'can_manage_members', 'owner'), ('organization', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('organization', 'can_manage_secret_grants', 'owner'), ('organization', 'can_manage_secret_grants', 'secret_manager'), ('organization', 'can_purge_secrets', 'can_purge_secrets'), ('organization', 'can_purge_secrets', 'owner'), ('organization', 'can_purge_secrets', 'secret_manager'), ('organization', 'can_read', 'admin'), ('organization', 'can_read', 'can_read'), ('organization', 'can_read', 'member'), ('organization', 'can_read', 'owner'), ('organization', 'can_revoke_secrets', 'can_revoke_secrets'), ('organization', 'can_revoke_secrets', 'owner'), ('organization', 'can_revoke_secrets', 'secret_manager'), ('organization', 'can_rotate_secrets', 'can_rotate_secrets'), ('organization', 'can_rotate_secrets', 'owner'), ('organization', 'can_rotate_secrets', 'secret_manager'), ('organization', 'can_write_secret_value', 'can_write_secret_value'), ('organization', 'can_write_secret_value', 'owner'), ('organization', 'can_write_secret_value', 'secret_manager'), ('organization', 'member', 'admin'), ('organization', 'member', 'member'), ('organization', 'member', 'owner'), ('organization', 'owner', 'owner'), ('organization', 'secret_manager', 'secret_manager')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -37430,7 +38760,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'organization' AND EXISTS (
+		WHERE (v_filter_type = 'organization' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('organization', 'admin', 'admin'), ('organization', 'admin', 'owner'), ('organization', 'can_create_project', 'admin'), ('organization', 'can_create_project', 'can_create_project'), ('organization', 'can_create_project', 'owner'), ('organization', 'can_delete', 'can_delete'), ('organization', 'can_delete', 'owner'), ('organization', 'can_inspect_secrets', 'can_inspect_secrets'), ('organization', 'can_inspect_secrets', 'owner'), ('organization', 'can_inspect_secrets', 'secret_manager'), ('organization', 'can_manage', 'can_manage'), ('organization', 'can_manage', 'owner'), ('organization', 'can_manage_members', 'admin'), ('organization', 'can_manage_members', 'can_manage_members'), ('organization', 'can_manage_members', 'owner'), ('organization', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('organization', 'can_manage_secret_grants', 'owner'), ('organization', 'can_manage_secret_grants', 'secret_manager'), ('organization', 'can_purge_secrets', 'can_purge_secrets'), ('organization', 'can_purge_secrets', 'owner'), ('organization', 'can_purge_secrets', 'secret_manager'), ('organization', 'can_read', 'admin'), ('organization', 'can_read', 'can_read'), ('organization', 'can_read', 'member'), ('organization', 'can_read', 'owner'), ('organization', 'can_revoke_secrets', 'can_revoke_secrets'), ('organization', 'can_revoke_secrets', 'owner'), ('organization', 'can_revoke_secrets', 'secret_manager'), ('organization', 'can_rotate_secrets', 'can_rotate_secrets'), ('organization', 'can_rotate_secrets', 'owner'), ('organization', 'can_rotate_secrets', 'secret_manager'), ('organization', 'can_write_secret_value', 'can_write_secret_value'), ('organization', 'can_write_secret_value', 'owner'), ('organization', 'can_write_secret_value', 'secret_manager'), ('organization', 'member', 'admin'), ('organization', 'member', 'member'), ('organization', 'member', 'owner'), ('organization', 'owner', 'owner'), ('organization', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'organization' AND c.relation = 'can_create_project' AND c.satisfying_relation = v_filter_relation)
@@ -37530,8 +38860,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'organization' AND t.relation IN ('admin', 'can_manage_members', 'owner') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'organization' AND t.relation IN ('admin', 'can_manage_members', 'owner') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('organization', 'admin', 'admin'), ('organization', 'admin', 'owner'), ('organization', 'can_create_project', 'admin'), ('organization', 'can_create_project', 'can_create_project'), ('organization', 'can_create_project', 'owner'), ('organization', 'can_delete', 'can_delete'), ('organization', 'can_delete', 'owner'), ('organization', 'can_inspect_secrets', 'can_inspect_secrets'), ('organization', 'can_inspect_secrets', 'owner'), ('organization', 'can_inspect_secrets', 'secret_manager'), ('organization', 'can_manage', 'can_manage'), ('organization', 'can_manage', 'owner'), ('organization', 'can_manage_members', 'admin'), ('organization', 'can_manage_members', 'can_manage_members'), ('organization', 'can_manage_members', 'owner'), ('organization', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('organization', 'can_manage_secret_grants', 'owner'), ('organization', 'can_manage_secret_grants', 'secret_manager'), ('organization', 'can_purge_secrets', 'can_purge_secrets'), ('organization', 'can_purge_secrets', 'owner'), ('organization', 'can_purge_secrets', 'secret_manager'), ('organization', 'can_read', 'admin'), ('organization', 'can_read', 'can_read'), ('organization', 'can_read', 'member'), ('organization', 'can_read', 'owner'), ('organization', 'can_revoke_secrets', 'can_revoke_secrets'), ('organization', 'can_revoke_secrets', 'owner'), ('organization', 'can_revoke_secrets', 'secret_manager'), ('organization', 'can_rotate_secrets', 'can_rotate_secrets'), ('organization', 'can_rotate_secrets', 'owner'), ('organization', 'can_rotate_secrets', 'secret_manager'), ('organization', 'can_write_secret_value', 'can_write_secret_value'), ('organization', 'can_write_secret_value', 'owner'), ('organization', 'can_write_secret_value', 'secret_manager'), ('organization', 'member', 'admin'), ('organization', 'member', 'member'), ('organization', 'member', 'owner'), ('organization', 'owner', 'owner'), ('organization', 'secret_manager', 'secret_manager')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -37541,7 +38871,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'organization' AND EXISTS (
+		WHERE (v_filter_type = 'organization' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('organization', 'admin', 'admin'), ('organization', 'admin', 'owner'), ('organization', 'can_create_project', 'admin'), ('organization', 'can_create_project', 'can_create_project'), ('organization', 'can_create_project', 'owner'), ('organization', 'can_delete', 'can_delete'), ('organization', 'can_delete', 'owner'), ('organization', 'can_inspect_secrets', 'can_inspect_secrets'), ('organization', 'can_inspect_secrets', 'owner'), ('organization', 'can_inspect_secrets', 'secret_manager'), ('organization', 'can_manage', 'can_manage'), ('organization', 'can_manage', 'owner'), ('organization', 'can_manage_members', 'admin'), ('organization', 'can_manage_members', 'can_manage_members'), ('organization', 'can_manage_members', 'owner'), ('organization', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('organization', 'can_manage_secret_grants', 'owner'), ('organization', 'can_manage_secret_grants', 'secret_manager'), ('organization', 'can_purge_secrets', 'can_purge_secrets'), ('organization', 'can_purge_secrets', 'owner'), ('organization', 'can_purge_secrets', 'secret_manager'), ('organization', 'can_read', 'admin'), ('organization', 'can_read', 'can_read'), ('organization', 'can_read', 'member'), ('organization', 'can_read', 'owner'), ('organization', 'can_revoke_secrets', 'can_revoke_secrets'), ('organization', 'can_revoke_secrets', 'owner'), ('organization', 'can_revoke_secrets', 'secret_manager'), ('organization', 'can_rotate_secrets', 'can_rotate_secrets'), ('organization', 'can_rotate_secrets', 'owner'), ('organization', 'can_rotate_secrets', 'secret_manager'), ('organization', 'can_write_secret_value', 'can_write_secret_value'), ('organization', 'can_write_secret_value', 'owner'), ('organization', 'can_write_secret_value', 'secret_manager'), ('organization', 'member', 'admin'), ('organization', 'member', 'member'), ('organization', 'member', 'owner'), ('organization', 'owner', 'owner'), ('organization', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'organization' AND c.relation = 'can_manage_members' AND c.satisfying_relation = v_filter_relation)
@@ -37641,8 +38971,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'organization' AND t.relation IN ('admin', 'member', 'owner') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'organization' AND t.relation IN ('admin', 'member', 'owner') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('organization', 'admin', 'admin'), ('organization', 'admin', 'owner'), ('organization', 'can_create_project', 'admin'), ('organization', 'can_create_project', 'can_create_project'), ('organization', 'can_create_project', 'owner'), ('organization', 'can_delete', 'can_delete'), ('organization', 'can_delete', 'owner'), ('organization', 'can_inspect_secrets', 'can_inspect_secrets'), ('organization', 'can_inspect_secrets', 'owner'), ('organization', 'can_inspect_secrets', 'secret_manager'), ('organization', 'can_manage', 'can_manage'), ('organization', 'can_manage', 'owner'), ('organization', 'can_manage_members', 'admin'), ('organization', 'can_manage_members', 'can_manage_members'), ('organization', 'can_manage_members', 'owner'), ('organization', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('organization', 'can_manage_secret_grants', 'owner'), ('organization', 'can_manage_secret_grants', 'secret_manager'), ('organization', 'can_purge_secrets', 'can_purge_secrets'), ('organization', 'can_purge_secrets', 'owner'), ('organization', 'can_purge_secrets', 'secret_manager'), ('organization', 'can_read', 'admin'), ('organization', 'can_read', 'can_read'), ('organization', 'can_read', 'member'), ('organization', 'can_read', 'owner'), ('organization', 'can_revoke_secrets', 'can_revoke_secrets'), ('organization', 'can_revoke_secrets', 'owner'), ('organization', 'can_revoke_secrets', 'secret_manager'), ('organization', 'can_rotate_secrets', 'can_rotate_secrets'), ('organization', 'can_rotate_secrets', 'owner'), ('organization', 'can_rotate_secrets', 'secret_manager'), ('organization', 'can_write_secret_value', 'can_write_secret_value'), ('organization', 'can_write_secret_value', 'owner'), ('organization', 'can_write_secret_value', 'secret_manager'), ('organization', 'member', 'admin'), ('organization', 'member', 'member'), ('organization', 'member', 'owner'), ('organization', 'owner', 'owner'), ('organization', 'secret_manager', 'secret_manager')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -37652,7 +38982,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'organization' AND EXISTS (
+		WHERE (v_filter_type = 'organization' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('organization', 'admin', 'admin'), ('organization', 'admin', 'owner'), ('organization', 'can_create_project', 'admin'), ('organization', 'can_create_project', 'can_create_project'), ('organization', 'can_create_project', 'owner'), ('organization', 'can_delete', 'can_delete'), ('organization', 'can_delete', 'owner'), ('organization', 'can_inspect_secrets', 'can_inspect_secrets'), ('organization', 'can_inspect_secrets', 'owner'), ('organization', 'can_inspect_secrets', 'secret_manager'), ('organization', 'can_manage', 'can_manage'), ('organization', 'can_manage', 'owner'), ('organization', 'can_manage_members', 'admin'), ('organization', 'can_manage_members', 'can_manage_members'), ('organization', 'can_manage_members', 'owner'), ('organization', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('organization', 'can_manage_secret_grants', 'owner'), ('organization', 'can_manage_secret_grants', 'secret_manager'), ('organization', 'can_purge_secrets', 'can_purge_secrets'), ('organization', 'can_purge_secrets', 'owner'), ('organization', 'can_purge_secrets', 'secret_manager'), ('organization', 'can_read', 'admin'), ('organization', 'can_read', 'can_read'), ('organization', 'can_read', 'member'), ('organization', 'can_read', 'owner'), ('organization', 'can_revoke_secrets', 'can_revoke_secrets'), ('organization', 'can_revoke_secrets', 'owner'), ('organization', 'can_revoke_secrets', 'secret_manager'), ('organization', 'can_rotate_secrets', 'can_rotate_secrets'), ('organization', 'can_rotate_secrets', 'owner'), ('organization', 'can_rotate_secrets', 'secret_manager'), ('organization', 'can_write_secret_value', 'can_write_secret_value'), ('organization', 'can_write_secret_value', 'owner'), ('organization', 'can_write_secret_value', 'secret_manager'), ('organization', 'member', 'admin'), ('organization', 'member', 'member'), ('organization', 'member', 'owner'), ('organization', 'owner', 'owner'), ('organization', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'organization' AND c.relation = 'member' AND c.satisfying_relation = v_filter_relation)
@@ -37753,8 +39083,8 @@ BEGIN
         -- Self-candidate: when filter type matches object type
         IF v_filter_type = 'repository' THEN
         IF EXISTS (
-    		SELECT p_object_id || '#' || v_filter_relation AS subject_id
-    		WHERE (v_filter_type = 'repository' AND EXISTS (
+		SELECT p_object_id || '#' || v_filter_relation AS subject_id
+		WHERE (v_filter_type = 'repository' AND EXISTS (
     SELECT 1
     FROM (VALUES ('organization', 'admin', 'admin'), ('organization', 'admin', 'owner'), ('organization', 'can_create_project', 'admin'), ('organization', 'can_create_project', 'can_create_project'), ('organization', 'can_create_project', 'owner'), ('organization', 'can_delete', 'can_delete'), ('organization', 'can_delete', 'owner'), ('organization', 'can_inspect_secrets', 'can_inspect_secrets'), ('organization', 'can_inspect_secrets', 'owner'), ('organization', 'can_inspect_secrets', 'secret_manager'), ('organization', 'can_manage', 'can_manage'), ('organization', 'can_manage', 'owner'), ('organization', 'can_manage_members', 'admin'), ('organization', 'can_manage_members', 'can_manage_members'), ('organization', 'can_manage_members', 'owner'), ('organization', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('organization', 'can_manage_secret_grants', 'owner'), ('organization', 'can_manage_secret_grants', 'secret_manager'), ('organization', 'can_purge_secrets', 'can_purge_secrets'), ('organization', 'can_purge_secrets', 'owner'), ('organization', 'can_purge_secrets', 'secret_manager'), ('organization', 'can_read', 'admin'), ('organization', 'can_read', 'can_read'), ('organization', 'can_read', 'member'), ('organization', 'can_read', 'owner'), ('organization', 'can_revoke_secrets', 'can_revoke_secrets'), ('organization', 'can_revoke_secrets', 'owner'), ('organization', 'can_revoke_secrets', 'secret_manager'), ('organization', 'can_rotate_secrets', 'can_rotate_secrets'), ('organization', 'can_rotate_secrets', 'owner'), ('organization', 'can_rotate_secrets', 'secret_manager'), ('organization', 'can_write_secret_value', 'can_write_secret_value'), ('organization', 'can_write_secret_value', 'owner'), ('organization', 'can_write_secret_value', 'secret_manager'), ('organization', 'member', 'admin'), ('organization', 'member', 'member'), ('organization', 'member', 'owner'), ('organization', 'owner', 'owner'), ('organization', 'secret_manager', 'secret_manager'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
     WHERE (c.object_type = 'repository' AND c.relation = 'can_delete' AND c.satisfying_relation = v_filter_relation)
@@ -37763,7 +39093,7 @@ BEGIN
         RETURN QUERY
         WITH base_results AS (
             SELECT p_object_id || '#' || v_filter_relation AS subject_id
-            		WHERE (v_filter_type = 'repository' AND EXISTS (
+		WHERE (v_filter_type = 'repository' AND EXISTS (
             SELECT 1
             FROM (VALUES ('organization', 'admin', 'admin'), ('organization', 'admin', 'owner'), ('organization', 'can_create_project', 'admin'), ('organization', 'can_create_project', 'can_create_project'), ('organization', 'can_create_project', 'owner'), ('organization', 'can_delete', 'can_delete'), ('organization', 'can_delete', 'owner'), ('organization', 'can_inspect_secrets', 'can_inspect_secrets'), ('organization', 'can_inspect_secrets', 'owner'), ('organization', 'can_inspect_secrets', 'secret_manager'), ('organization', 'can_manage', 'can_manage'), ('organization', 'can_manage', 'owner'), ('organization', 'can_manage_members', 'admin'), ('organization', 'can_manage_members', 'can_manage_members'), ('organization', 'can_manage_members', 'owner'), ('organization', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('organization', 'can_manage_secret_grants', 'owner'), ('organization', 'can_manage_secret_grants', 'secret_manager'), ('organization', 'can_purge_secrets', 'can_purge_secrets'), ('organization', 'can_purge_secrets', 'owner'), ('organization', 'can_purge_secrets', 'secret_manager'), ('organization', 'can_read', 'admin'), ('organization', 'can_read', 'can_read'), ('organization', 'can_read', 'member'), ('organization', 'can_read', 'owner'), ('organization', 'can_revoke_secrets', 'can_revoke_secrets'), ('organization', 'can_revoke_secrets', 'owner'), ('organization', 'can_revoke_secrets', 'secret_manager'), ('organization', 'can_rotate_secrets', 'can_rotate_secrets'), ('organization', 'can_rotate_secrets', 'owner'), ('organization', 'can_rotate_secrets', 'secret_manager'), ('organization', 'can_write_secret_value', 'can_write_secret_value'), ('organization', 'can_write_secret_value', 'owner'), ('organization', 'can_write_secret_value', 'secret_manager'), ('organization', 'member', 'admin'), ('organization', 'member', 'member'), ('organization', 'member', 'owner'), ('organization', 'owner', 'owner'), ('organization', 'secret_manager', 'secret_manager'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
             WHERE (c.object_type = 'repository' AND c.relation = 'can_delete' AND c.satisfying_relation = v_filter_relation)
@@ -37913,8 +39243,8 @@ BEGIN
         -- Self-candidate: when filter type matches object type
         IF v_filter_type = 'agent_instance' THEN
         IF EXISTS (
-    		SELECT p_object_id || '#' || v_filter_relation AS subject_id
-    		WHERE (v_filter_type = 'agent_instance' AND EXISTS (
+		SELECT p_object_id || '#' || v_filter_relation AS subject_id
+		WHERE (v_filter_type = 'agent_instance' AND EXISTS (
     SELECT 1
     FROM (VALUES ('agent_instance', 'can_execute', 'can_execute'), ('agent_instance', 'can_manage', 'can_manage'), ('agent_instance', 'can_read', 'can_read'), ('agent_instance', 'can_recover', 'can_recover'), ('agent_instance', 'can_update', 'can_update'), ('agent_instance', 'can_use_release', 'can_use_release'), ('agent_instance', 'project', 'project'), ('agent_instance', 'release_agent', 'release_agent'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
     WHERE (c.object_type = 'agent_instance' AND c.relation = 'can_manage' AND c.satisfying_relation = v_filter_relation)
@@ -37923,7 +39253,7 @@ BEGIN
         RETURN QUERY
         WITH base_results AS (
             SELECT p_object_id || '#' || v_filter_relation AS subject_id
-            		WHERE (v_filter_type = 'agent_instance' AND EXISTS (
+		WHERE (v_filter_type = 'agent_instance' AND EXISTS (
             SELECT 1
             FROM (VALUES ('agent_instance', 'can_execute', 'can_execute'), ('agent_instance', 'can_manage', 'can_manage'), ('agent_instance', 'can_read', 'can_read'), ('agent_instance', 'can_recover', 'can_recover'), ('agent_instance', 'can_update', 'can_update'), ('agent_instance', 'can_use_release', 'can_use_release'), ('agent_instance', 'project', 'project'), ('agent_instance', 'release_agent', 'release_agent'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
             WHERE (c.object_type = 'agent_instance' AND c.relation = 'can_manage' AND c.satisfying_relation = v_filter_relation)
@@ -38073,8 +39403,8 @@ BEGIN
         -- Self-candidate: when filter type matches object type
         IF v_filter_type = 'agent_instance' THEN
         IF EXISTS (
-    		SELECT p_object_id || '#' || v_filter_relation AS subject_id
-    		WHERE (v_filter_type = 'agent_instance' AND EXISTS (
+		SELECT p_object_id || '#' || v_filter_relation AS subject_id
+		WHERE (v_filter_type = 'agent_instance' AND EXISTS (
     SELECT 1
     FROM (VALUES ('agent_instance', 'can_execute', 'can_execute'), ('agent_instance', 'can_manage', 'can_manage'), ('agent_instance', 'can_read', 'can_read'), ('agent_instance', 'can_recover', 'can_recover'), ('agent_instance', 'can_update', 'can_update'), ('agent_instance', 'can_use_release', 'can_use_release'), ('agent_instance', 'project', 'project'), ('agent_instance', 'release_agent', 'release_agent'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
     WHERE (c.object_type = 'agent_instance' AND c.relation = 'can_recover' AND c.satisfying_relation = v_filter_relation)
@@ -38083,7 +39413,7 @@ BEGIN
         RETURN QUERY
         WITH base_results AS (
             SELECT p_object_id || '#' || v_filter_relation AS subject_id
-            		WHERE (v_filter_type = 'agent_instance' AND EXISTS (
+		WHERE (v_filter_type = 'agent_instance' AND EXISTS (
             SELECT 1
             FROM (VALUES ('agent_instance', 'can_execute', 'can_execute'), ('agent_instance', 'can_manage', 'can_manage'), ('agent_instance', 'can_read', 'can_read'), ('agent_instance', 'can_recover', 'can_recover'), ('agent_instance', 'can_update', 'can_update'), ('agent_instance', 'can_use_release', 'can_use_release'), ('agent_instance', 'project', 'project'), ('agent_instance', 'release_agent', 'release_agent'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
             WHERE (c.object_type = 'agent_instance' AND c.relation = 'can_recover' AND c.satisfying_relation = v_filter_relation)
@@ -38233,8 +39563,8 @@ BEGIN
         -- Self-candidate: when filter type matches object type
         IF v_filter_type = 'agent_instance' THEN
         IF EXISTS (
-    		SELECT p_object_id || '#' || v_filter_relation AS subject_id
-    		WHERE (v_filter_type = 'agent_instance' AND EXISTS (
+		SELECT p_object_id || '#' || v_filter_relation AS subject_id
+		WHERE (v_filter_type = 'agent_instance' AND EXISTS (
     SELECT 1
     FROM (VALUES ('agent_instance', 'can_execute', 'can_execute'), ('agent_instance', 'can_manage', 'can_manage'), ('agent_instance', 'can_read', 'can_read'), ('agent_instance', 'can_recover', 'can_recover'), ('agent_instance', 'can_update', 'can_update'), ('agent_instance', 'can_use_release', 'can_use_release'), ('agent_instance', 'project', 'project'), ('agent_instance', 'release_agent', 'release_agent'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
     WHERE (c.object_type = 'agent_instance' AND c.relation = 'can_update' AND c.satisfying_relation = v_filter_relation)
@@ -38243,7 +39573,7 @@ BEGIN
         RETURN QUERY
         WITH base_results AS (
             SELECT p_object_id || '#' || v_filter_relation AS subject_id
-            		WHERE (v_filter_type = 'agent_instance' AND EXISTS (
+		WHERE (v_filter_type = 'agent_instance' AND EXISTS (
             SELECT 1
             FROM (VALUES ('agent_instance', 'can_execute', 'can_execute'), ('agent_instance', 'can_manage', 'can_manage'), ('agent_instance', 'can_read', 'can_read'), ('agent_instance', 'can_recover', 'can_recover'), ('agent_instance', 'can_update', 'can_update'), ('agent_instance', 'can_use_release', 'can_use_release'), ('agent_instance', 'project', 'project'), ('agent_instance', 'release_agent', 'release_agent'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
             WHERE (c.object_type = 'agent_instance' AND c.relation = 'can_update' AND c.satisfying_relation = v_filter_relation)
@@ -38372,6 +39702,166 @@ END;
 $$ LANGUAGE plpgsql STABLE
 SET search_path = 'public';
 
+-- Generated list_subjects function for repository_oci_image.can_manage
+-- Features: Recursive
+-- Indirect anchor: project.can_manage via ttu
+CREATE OR REPLACE FUNCTION "public"."list_repository_oci_image_can_manage_sub"(
+    p_object_id TEXT,
+    p_subject_type TEXT,
+    p_limit INT DEFAULT NULL,
+    p_after TEXT DEFAULT NULL
+) RETURNS TABLE(subject_id TEXT, next_cursor TEXT) ROWS 100 AS $$
+DECLARE
+    v_is_userset_filter BOOLEAN;
+    v_filter_type TEXT;
+    v_filter_relation TEXT;
+BEGIN
+    v_is_userset_filter := position('#' in p_subject_type) > 0;
+    IF v_is_userset_filter THEN
+        v_filter_type := split_part(p_subject_type, '#', 1);
+        v_filter_relation := split_part(p_subject_type, '#', 2);
+        -- Self-candidate: when filter type matches object type
+        IF v_filter_type = 'repository_oci_image' THEN
+        IF EXISTS (
+		SELECT p_object_id || '#' || v_filter_relation AS subject_id
+		WHERE (v_filter_type = 'repository_oci_image' AND EXISTS (
+    SELECT 1
+    FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('repository_oci_image', 'can_manage', 'can_manage'), ('repository_oci_image', 'can_read', 'can_read'), ('repository_oci_image', 'can_write', 'can_write'), ('repository_oci_image', 'project', 'project')) AS c(object_type, relation, satisfying_relation)
+    WHERE (c.object_type = 'repository_oci_image' AND c.relation = 'can_manage' AND c.satisfying_relation = v_filter_relation)
+    ))
+    ) THEN
+        RETURN QUERY
+        WITH base_results AS (
+            SELECT p_object_id || '#' || v_filter_relation AS subject_id
+		WHERE (v_filter_type = 'repository_oci_image' AND EXISTS (
+            SELECT 1
+            FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('repository_oci_image', 'can_manage', 'can_manage'), ('repository_oci_image', 'can_read', 'can_read'), ('repository_oci_image', 'can_write', 'can_write'), ('repository_oci_image', 'project', 'project')) AS c(object_type, relation, satisfying_relation)
+            WHERE (c.object_type = 'repository_oci_image' AND c.relation = 'can_manage' AND c.satisfying_relation = v_filter_relation)
+            ))
+        ),
+        paged AS (
+            SELECT br.subject_id
+            FROM base_results br
+            WHERE p_after IS NULL OR (
+                -- Compound comparison for wildcard-first ordering:
+                -- (is_not_wildcard, subject_id) > (cursor_is_not_wildcard, cursor)
+                (CASE WHEN br.subject_id = '*' THEN 0 ELSE 1 END, br.subject_id) >
+                (CASE WHEN p_after = '*' THEN 0 ELSE 1 END, p_after)
+            )
+            ORDER BY (CASE WHEN br.subject_id = '*' THEN 0 ELSE 1 END), br.subject_id
+            LIMIT CASE WHEN p_limit IS NULL THEN NULL ELSE p_limit + 1 END
+        ),
+        returned AS (
+            SELECT p.subject_id FROM paged p
+            ORDER BY (CASE WHEN p.subject_id = '*' THEN 0 ELSE 1 END), p.subject_id
+            LIMIT p_limit
+        ),
+        next AS (
+            SELECT CASE
+                WHEN p_limit IS NOT NULL AND (SELECT count(*) FROM paged) > p_limit
+                THEN (SELECT r.subject_id FROM returned r
+                      ORDER BY (CASE WHEN r.subject_id = '*' THEN 0 ELSE 1 END) DESC, r.subject_id DESC
+                      LIMIT 1)
+            END AS next_cursor
+        )
+        SELECT r.subject_id, n.next_cursor
+        FROM returned r
+        CROSS JOIN next n;
+        RETURN;
+    END IF;
+    END IF;
+        -- Userset filter case
+        RETURN QUERY
+        WITH base_results AS (
+            WITH subject_candidates AS (
+                -- From project parents
+                    SELECT DISTINCT s.subject_id
+                    FROM melange_tuples AS link
+                    CROSS JOIN LATERAL "public"."list_project_can_manage_sub"(link.subject_id, p_subject_type) AS s
+                    WHERE (link.object_type = 'repository_oci_image' AND link.object_id = p_object_id AND link.relation = 'project' AND link.subject_type = 'project')
+            )
+            SELECT DISTINCT sc.subject_id
+            FROM subject_candidates AS sc
+            WHERE "public"."check_permission_internal"(v_filter_type, sc.subject_id, 'can_manage', 'repository_oci_image', p_object_id, ARRAY[]::TEXT[]) = 1
+        ),
+        paged AS (
+            SELECT br.subject_id
+            FROM base_results br
+            WHERE p_after IS NULL OR (
+                -- Compound comparison for wildcard-first ordering:
+                -- (is_not_wildcard, subject_id) > (cursor_is_not_wildcard, cursor)
+                (CASE WHEN br.subject_id = '*' THEN 0 ELSE 1 END, br.subject_id) >
+                (CASE WHEN p_after = '*' THEN 0 ELSE 1 END, p_after)
+            )
+            ORDER BY (CASE WHEN br.subject_id = '*' THEN 0 ELSE 1 END), br.subject_id
+            LIMIT CASE WHEN p_limit IS NULL THEN NULL ELSE p_limit + 1 END
+        ),
+        returned AS (
+            SELECT p.subject_id FROM paged p
+            ORDER BY (CASE WHEN p.subject_id = '*' THEN 0 ELSE 1 END), p.subject_id
+            LIMIT p_limit
+        ),
+        next AS (
+            SELECT CASE
+                WHEN p_limit IS NOT NULL AND (SELECT count(*) FROM paged) > p_limit
+                THEN (SELECT r.subject_id FROM returned r
+                      ORDER BY (CASE WHEN r.subject_id = '*' THEN 0 ELSE 1 END) DESC, r.subject_id DESC
+                      LIMIT 1)
+            END AS next_cursor
+        )
+        SELECT r.subject_id, n.next_cursor
+        FROM returned r
+        CROSS JOIN next n;
+    ELSE
+        -- Direct subject type case
+        IF p_subject_type NOT IN ('user') THEN
+        RETURN;
+    END IF;
+        RETURN QUERY
+        WITH base_results AS (
+            WITH subject_candidates AS (
+                -- From project parents
+                    SELECT DISTINCT s.subject_id
+                    FROM melange_tuples AS link
+                    CROSS JOIN LATERAL "public"."list_project_can_manage_sub"(link.subject_id, p_subject_type) AS s
+                    WHERE (link.object_type = 'repository_oci_image' AND link.object_id = p_object_id AND link.relation = 'project' AND link.subject_type = 'project')
+            )
+            SELECT DISTINCT sc.subject_id
+            FROM subject_candidates AS sc
+        ),
+        paged AS (
+            SELECT br.subject_id
+            FROM base_results br
+            WHERE p_after IS NULL OR (
+                -- Compound comparison for wildcard-first ordering:
+                -- (is_not_wildcard, subject_id) > (cursor_is_not_wildcard, cursor)
+                (CASE WHEN br.subject_id = '*' THEN 0 ELSE 1 END, br.subject_id) >
+                (CASE WHEN p_after = '*' THEN 0 ELSE 1 END, p_after)
+            )
+            ORDER BY (CASE WHEN br.subject_id = '*' THEN 0 ELSE 1 END), br.subject_id
+            LIMIT CASE WHEN p_limit IS NULL THEN NULL ELSE p_limit + 1 END
+        ),
+        returned AS (
+            SELECT p.subject_id FROM paged p
+            ORDER BY (CASE WHEN p.subject_id = '*' THEN 0 ELSE 1 END), p.subject_id
+            LIMIT p_limit
+        ),
+        next AS (
+            SELECT CASE
+                WHEN p_limit IS NOT NULL AND (SELECT count(*) FROM paged) > p_limit
+                THEN (SELECT r.subject_id FROM returned r
+                      ORDER BY (CASE WHEN r.subject_id = '*' THEN 0 ELSE 1 END) DESC, r.subject_id DESC
+                      LIMIT 1)
+            END AS next_cursor
+        )
+        SELECT r.subject_id, n.next_cursor
+        FROM returned r
+        CROSS JOIN next n;
+    END IF;
+END;
+$$ LANGUAGE plpgsql STABLE
+SET search_path = 'public';
+
 -- Generated list_subjects function for agent_instance.can_execute
 -- Features: Recursive
 -- Indirect anchor: project.can_write via ttu
@@ -38393,8 +39883,8 @@ BEGIN
         -- Self-candidate: when filter type matches object type
         IF v_filter_type = 'agent_instance' THEN
         IF EXISTS (
-    		SELECT p_object_id || '#' || v_filter_relation AS subject_id
-    		WHERE (v_filter_type = 'agent_instance' AND EXISTS (
+		SELECT p_object_id || '#' || v_filter_relation AS subject_id
+		WHERE (v_filter_type = 'agent_instance' AND EXISTS (
     SELECT 1
     FROM (VALUES ('agent_instance', 'can_execute', 'can_execute'), ('agent_instance', 'can_manage', 'can_manage'), ('agent_instance', 'can_read', 'can_read'), ('agent_instance', 'can_recover', 'can_recover'), ('agent_instance', 'can_update', 'can_update'), ('agent_instance', 'can_use_release', 'can_use_release'), ('agent_instance', 'project', 'project'), ('agent_instance', 'release_agent', 'release_agent'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
     WHERE (c.object_type = 'agent_instance' AND c.relation = 'can_execute' AND c.satisfying_relation = v_filter_relation)
@@ -38403,7 +39893,7 @@ BEGIN
         RETURN QUERY
         WITH base_results AS (
             SELECT p_object_id || '#' || v_filter_relation AS subject_id
-            		WHERE (v_filter_type = 'agent_instance' AND EXISTS (
+		WHERE (v_filter_type = 'agent_instance' AND EXISTS (
             SELECT 1
             FROM (VALUES ('agent_instance', 'can_execute', 'can_execute'), ('agent_instance', 'can_manage', 'can_manage'), ('agent_instance', 'can_read', 'can_read'), ('agent_instance', 'can_recover', 'can_recover'), ('agent_instance', 'can_update', 'can_update'), ('agent_instance', 'can_use_release', 'can_use_release'), ('agent_instance', 'project', 'project'), ('agent_instance', 'release_agent', 'release_agent'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
             WHERE (c.object_type = 'agent_instance' AND c.relation = 'can_execute' AND c.satisfying_relation = v_filter_relation)
@@ -38552,8 +40042,8 @@ BEGIN
         WITH base_results AS (
             -- Direct userset tuples
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'repository' AND t.object_id = p_object_id AND t.relation IN ('can_write', 'manager') AND position('#' in t.subject_id) > 0 AND t.subject_type = v_filter_type AND EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'repository' AND t.object_id = p_object_id AND t.relation IN ('can_write', 'manager') AND position('#' in t.subject_id) > 0 AND t.subject_type = v_filter_type AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = v_filter_type AND c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND c.satisfying_relation = v_filter_relation)
@@ -38561,11 +40051,11 @@ BEGIN
                 UNION
                 -- TTU userset: project -> can_write
                 SELECT DISTINCT substring(pt.subject_id from 1 for position('#' in pt.subject_id) - 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS link
-                		INNER JOIN melange_tuples AS pt ON (pt.object_type = link.subject_type AND pt.object_id = link.subject_id AND pt.relation IN (SELECT c.satisfying_relation
+		FROM melange_tuples AS link
+		INNER JOIN melange_tuples AS pt ON (pt.object_type = link.subject_type AND pt.object_id = link.subject_id AND pt.relation IN (SELECT c.satisfying_relation
                 FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = link.subject_type AND c.relation = 'can_write')))
-                		WHERE (link.object_type = 'repository' AND link.object_id = p_object_id AND link.relation = 'project' AND pt.subject_type = v_filter_type AND position('#' in pt.subject_id) > 0 AND (substring(pt.subject_id from position('#' in pt.subject_id) + 1) = v_filter_relation OR EXISTS (
+		WHERE (link.object_type = 'repository' AND link.object_id = p_object_id AND link.relation = 'project' AND pt.subject_type = v_filter_type AND position('#' in pt.subject_id) > 0 AND (substring(pt.subject_id from position('#' in pt.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(pt.subject_id from position('#' in pt.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -38573,8 +40063,8 @@ BEGIN
                 UNION
                 -- TTU intermediate: parent object as userset reference
                 SELECT DISTINCT link.subject_id || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS link
-                		WHERE (link.object_type = 'repository' AND link.object_id = p_object_id AND link.relation = 'project' AND link.subject_type = v_filter_type AND EXISTS (
+		FROM melange_tuples AS link
+		WHERE (link.object_type = 'repository' AND link.object_id = p_object_id AND link.relation = 'project' AND link.subject_type = v_filter_type AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = link.subject_type AND c.relation = 'can_write' AND c.satisfying_relation = v_filter_relation)
@@ -38590,7 +40080,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'repository' AND EXISTS (
+		WHERE (v_filter_type = 'repository' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'repository' AND c.relation = 'can_write' AND c.satisfying_relation = v_filter_relation)
@@ -38689,6 +40179,166 @@ END;
 $$ LANGUAGE plpgsql STABLE
 SET search_path = 'public';
 
+-- Generated list_subjects function for repository_oci_image.can_write
+-- Features: Recursive
+-- Indirect anchor: project.can_write via ttu
+CREATE OR REPLACE FUNCTION "public"."list_repository_oci_image_can_write_sub"(
+    p_object_id TEXT,
+    p_subject_type TEXT,
+    p_limit INT DEFAULT NULL,
+    p_after TEXT DEFAULT NULL
+) RETURNS TABLE(subject_id TEXT, next_cursor TEXT) ROWS 100 AS $$
+DECLARE
+    v_is_userset_filter BOOLEAN;
+    v_filter_type TEXT;
+    v_filter_relation TEXT;
+BEGIN
+    v_is_userset_filter := position('#' in p_subject_type) > 0;
+    IF v_is_userset_filter THEN
+        v_filter_type := split_part(p_subject_type, '#', 1);
+        v_filter_relation := split_part(p_subject_type, '#', 2);
+        -- Self-candidate: when filter type matches object type
+        IF v_filter_type = 'repository_oci_image' THEN
+        IF EXISTS (
+		SELECT p_object_id || '#' || v_filter_relation AS subject_id
+		WHERE (v_filter_type = 'repository_oci_image' AND EXISTS (
+    SELECT 1
+    FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('repository_oci_image', 'can_manage', 'can_manage'), ('repository_oci_image', 'can_read', 'can_read'), ('repository_oci_image', 'can_write', 'can_write'), ('repository_oci_image', 'project', 'project')) AS c(object_type, relation, satisfying_relation)
+    WHERE (c.object_type = 'repository_oci_image' AND c.relation = 'can_write' AND c.satisfying_relation = v_filter_relation)
+    ))
+    ) THEN
+        RETURN QUERY
+        WITH base_results AS (
+            SELECT p_object_id || '#' || v_filter_relation AS subject_id
+		WHERE (v_filter_type = 'repository_oci_image' AND EXISTS (
+            SELECT 1
+            FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('repository_oci_image', 'can_manage', 'can_manage'), ('repository_oci_image', 'can_read', 'can_read'), ('repository_oci_image', 'can_write', 'can_write'), ('repository_oci_image', 'project', 'project')) AS c(object_type, relation, satisfying_relation)
+            WHERE (c.object_type = 'repository_oci_image' AND c.relation = 'can_write' AND c.satisfying_relation = v_filter_relation)
+            ))
+        ),
+        paged AS (
+            SELECT br.subject_id
+            FROM base_results br
+            WHERE p_after IS NULL OR (
+                -- Compound comparison for wildcard-first ordering:
+                -- (is_not_wildcard, subject_id) > (cursor_is_not_wildcard, cursor)
+                (CASE WHEN br.subject_id = '*' THEN 0 ELSE 1 END, br.subject_id) >
+                (CASE WHEN p_after = '*' THEN 0 ELSE 1 END, p_after)
+            )
+            ORDER BY (CASE WHEN br.subject_id = '*' THEN 0 ELSE 1 END), br.subject_id
+            LIMIT CASE WHEN p_limit IS NULL THEN NULL ELSE p_limit + 1 END
+        ),
+        returned AS (
+            SELECT p.subject_id FROM paged p
+            ORDER BY (CASE WHEN p.subject_id = '*' THEN 0 ELSE 1 END), p.subject_id
+            LIMIT p_limit
+        ),
+        next AS (
+            SELECT CASE
+                WHEN p_limit IS NOT NULL AND (SELECT count(*) FROM paged) > p_limit
+                THEN (SELECT r.subject_id FROM returned r
+                      ORDER BY (CASE WHEN r.subject_id = '*' THEN 0 ELSE 1 END) DESC, r.subject_id DESC
+                      LIMIT 1)
+            END AS next_cursor
+        )
+        SELECT r.subject_id, n.next_cursor
+        FROM returned r
+        CROSS JOIN next n;
+        RETURN;
+    END IF;
+    END IF;
+        -- Userset filter case
+        RETURN QUERY
+        WITH base_results AS (
+            WITH subject_candidates AS (
+                -- From project parents
+                    SELECT DISTINCT s.subject_id
+                    FROM melange_tuples AS link
+                    CROSS JOIN LATERAL "public"."list_project_can_write_sub"(link.subject_id, p_subject_type) AS s
+                    WHERE (link.object_type = 'repository_oci_image' AND link.object_id = p_object_id AND link.relation = 'project' AND link.subject_type = 'project')
+            )
+            SELECT DISTINCT sc.subject_id
+            FROM subject_candidates AS sc
+            WHERE "public"."check_permission_internal"(v_filter_type, sc.subject_id, 'can_write', 'repository_oci_image', p_object_id, ARRAY[]::TEXT[]) = 1
+        ),
+        paged AS (
+            SELECT br.subject_id
+            FROM base_results br
+            WHERE p_after IS NULL OR (
+                -- Compound comparison for wildcard-first ordering:
+                -- (is_not_wildcard, subject_id) > (cursor_is_not_wildcard, cursor)
+                (CASE WHEN br.subject_id = '*' THEN 0 ELSE 1 END, br.subject_id) >
+                (CASE WHEN p_after = '*' THEN 0 ELSE 1 END, p_after)
+            )
+            ORDER BY (CASE WHEN br.subject_id = '*' THEN 0 ELSE 1 END), br.subject_id
+            LIMIT CASE WHEN p_limit IS NULL THEN NULL ELSE p_limit + 1 END
+        ),
+        returned AS (
+            SELECT p.subject_id FROM paged p
+            ORDER BY (CASE WHEN p.subject_id = '*' THEN 0 ELSE 1 END), p.subject_id
+            LIMIT p_limit
+        ),
+        next AS (
+            SELECT CASE
+                WHEN p_limit IS NOT NULL AND (SELECT count(*) FROM paged) > p_limit
+                THEN (SELECT r.subject_id FROM returned r
+                      ORDER BY (CASE WHEN r.subject_id = '*' THEN 0 ELSE 1 END) DESC, r.subject_id DESC
+                      LIMIT 1)
+            END AS next_cursor
+        )
+        SELECT r.subject_id, n.next_cursor
+        FROM returned r
+        CROSS JOIN next n;
+    ELSE
+        -- Direct subject type case
+        IF p_subject_type NOT IN ('user') THEN
+        RETURN;
+    END IF;
+        RETURN QUERY
+        WITH base_results AS (
+            WITH subject_candidates AS (
+                -- From project parents
+                    SELECT DISTINCT s.subject_id
+                    FROM melange_tuples AS link
+                    CROSS JOIN LATERAL "public"."list_project_can_write_sub"(link.subject_id, p_subject_type) AS s
+                    WHERE (link.object_type = 'repository_oci_image' AND link.object_id = p_object_id AND link.relation = 'project' AND link.subject_type = 'project')
+            )
+            SELECT DISTINCT sc.subject_id
+            FROM subject_candidates AS sc
+        ),
+        paged AS (
+            SELECT br.subject_id
+            FROM base_results br
+            WHERE p_after IS NULL OR (
+                -- Compound comparison for wildcard-first ordering:
+                -- (is_not_wildcard, subject_id) > (cursor_is_not_wildcard, cursor)
+                (CASE WHEN br.subject_id = '*' THEN 0 ELSE 1 END, br.subject_id) >
+                (CASE WHEN p_after = '*' THEN 0 ELSE 1 END, p_after)
+            )
+            ORDER BY (CASE WHEN br.subject_id = '*' THEN 0 ELSE 1 END), br.subject_id
+            LIMIT CASE WHEN p_limit IS NULL THEN NULL ELSE p_limit + 1 END
+        ),
+        returned AS (
+            SELECT p.subject_id FROM paged p
+            ORDER BY (CASE WHEN p.subject_id = '*' THEN 0 ELSE 1 END), p.subject_id
+            LIMIT p_limit
+        ),
+        next AS (
+            SELECT CASE
+                WHEN p_limit IS NOT NULL AND (SELECT count(*) FROM paged) > p_limit
+                THEN (SELECT r.subject_id FROM returned r
+                      ORDER BY (CASE WHEN r.subject_id = '*' THEN 0 ELSE 1 END) DESC, r.subject_id DESC
+                      LIMIT 1)
+            END AS next_cursor
+        )
+        SELECT r.subject_id, n.next_cursor
+        FROM returned r
+        CROSS JOIN next n;
+    END IF;
+END;
+$$ LANGUAGE plpgsql STABLE
+SET search_path = 'public';
+
 -- Generated list_subjects function for secret.inspect_metadata
 -- Features: Recursive
 -- Indirect anchor: organization.can_inspect_secrets via ttu
@@ -38710,8 +40360,8 @@ BEGIN
         -- Self-candidate: when filter type matches object type
         IF v_filter_type = 'secret' THEN
         IF EXISTS (
-    		SELECT p_object_id || '#' || v_filter_relation AS subject_id
-    		WHERE (v_filter_type = 'secret' AND EXISTS (
+		SELECT p_object_id || '#' || v_filter_relation AS subject_id
+		WHERE (v_filter_type = 'secret' AND EXISTS (
     SELECT 1
     FROM (VALUES ('organization', 'admin', 'admin'), ('organization', 'admin', 'owner'), ('organization', 'can_create_project', 'admin'), ('organization', 'can_create_project', 'can_create_project'), ('organization', 'can_create_project', 'owner'), ('organization', 'can_delete', 'can_delete'), ('organization', 'can_delete', 'owner'), ('organization', 'can_inspect_secrets', 'can_inspect_secrets'), ('organization', 'can_inspect_secrets', 'owner'), ('organization', 'can_inspect_secrets', 'secret_manager'), ('organization', 'can_manage', 'can_manage'), ('organization', 'can_manage', 'owner'), ('organization', 'can_manage_members', 'admin'), ('organization', 'can_manage_members', 'can_manage_members'), ('organization', 'can_manage_members', 'owner'), ('organization', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('organization', 'can_manage_secret_grants', 'owner'), ('organization', 'can_manage_secret_grants', 'secret_manager'), ('organization', 'can_purge_secrets', 'can_purge_secrets'), ('organization', 'can_purge_secrets', 'owner'), ('organization', 'can_purge_secrets', 'secret_manager'), ('organization', 'can_read', 'admin'), ('organization', 'can_read', 'can_read'), ('organization', 'can_read', 'member'), ('organization', 'can_read', 'owner'), ('organization', 'can_revoke_secrets', 'can_revoke_secrets'), ('organization', 'can_revoke_secrets', 'owner'), ('organization', 'can_revoke_secrets', 'secret_manager'), ('organization', 'can_rotate_secrets', 'can_rotate_secrets'), ('organization', 'can_rotate_secrets', 'owner'), ('organization', 'can_rotate_secrets', 'secret_manager'), ('organization', 'can_write_secret_value', 'can_write_secret_value'), ('organization', 'can_write_secret_value', 'owner'), ('organization', 'can_write_secret_value', 'secret_manager'), ('organization', 'member', 'admin'), ('organization', 'member', 'member'), ('organization', 'member', 'owner'), ('organization', 'owner', 'owner'), ('organization', 'secret_manager', 'secret_manager'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('secret', 'inspect_metadata', 'inspect_metadata'), ('secret', 'manage_grants', 'manage_grants'), ('secret', 'owner', 'owner'), ('secret', 'purge', 'purge'), ('secret', 'revoke', 'revoke'), ('secret', 'rotate', 'rotate'), ('secret', 'write_value', 'write_value')) AS c(object_type, relation, satisfying_relation)
     WHERE (c.object_type = 'secret' AND c.relation = 'inspect_metadata' AND c.satisfying_relation = v_filter_relation)
@@ -38720,7 +40370,7 @@ BEGIN
         RETURN QUERY
         WITH base_results AS (
             SELECT p_object_id || '#' || v_filter_relation AS subject_id
-            		WHERE (v_filter_type = 'secret' AND EXISTS (
+		WHERE (v_filter_type = 'secret' AND EXISTS (
             SELECT 1
             FROM (VALUES ('organization', 'admin', 'admin'), ('organization', 'admin', 'owner'), ('organization', 'can_create_project', 'admin'), ('organization', 'can_create_project', 'can_create_project'), ('organization', 'can_create_project', 'owner'), ('organization', 'can_delete', 'can_delete'), ('organization', 'can_delete', 'owner'), ('organization', 'can_inspect_secrets', 'can_inspect_secrets'), ('organization', 'can_inspect_secrets', 'owner'), ('organization', 'can_inspect_secrets', 'secret_manager'), ('organization', 'can_manage', 'can_manage'), ('organization', 'can_manage', 'owner'), ('organization', 'can_manage_members', 'admin'), ('organization', 'can_manage_members', 'can_manage_members'), ('organization', 'can_manage_members', 'owner'), ('organization', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('organization', 'can_manage_secret_grants', 'owner'), ('organization', 'can_manage_secret_grants', 'secret_manager'), ('organization', 'can_purge_secrets', 'can_purge_secrets'), ('organization', 'can_purge_secrets', 'owner'), ('organization', 'can_purge_secrets', 'secret_manager'), ('organization', 'can_read', 'admin'), ('organization', 'can_read', 'can_read'), ('organization', 'can_read', 'member'), ('organization', 'can_read', 'owner'), ('organization', 'can_revoke_secrets', 'can_revoke_secrets'), ('organization', 'can_revoke_secrets', 'owner'), ('organization', 'can_revoke_secrets', 'secret_manager'), ('organization', 'can_rotate_secrets', 'can_rotate_secrets'), ('organization', 'can_rotate_secrets', 'owner'), ('organization', 'can_rotate_secrets', 'secret_manager'), ('organization', 'can_write_secret_value', 'can_write_secret_value'), ('organization', 'can_write_secret_value', 'owner'), ('organization', 'can_write_secret_value', 'secret_manager'), ('organization', 'member', 'admin'), ('organization', 'member', 'member'), ('organization', 'member', 'owner'), ('organization', 'owner', 'owner'), ('organization', 'secret_manager', 'secret_manager'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('secret', 'inspect_metadata', 'inspect_metadata'), ('secret', 'manage_grants', 'manage_grants'), ('secret', 'owner', 'owner'), ('secret', 'purge', 'purge'), ('secret', 'revoke', 'revoke'), ('secret', 'rotate', 'rotate'), ('secret', 'write_value', 'write_value')) AS c(object_type, relation, satisfying_relation)
             WHERE (c.object_type = 'secret' AND c.relation = 'inspect_metadata' AND c.satisfying_relation = v_filter_relation)
@@ -38882,8 +40532,8 @@ BEGIN
         -- Self-candidate: when filter type matches object type
         IF v_filter_type = 'secret' THEN
         IF EXISTS (
-    		SELECT p_object_id || '#' || v_filter_relation AS subject_id
-    		WHERE (v_filter_type = 'secret' AND EXISTS (
+		SELECT p_object_id || '#' || v_filter_relation AS subject_id
+		WHERE (v_filter_type = 'secret' AND EXISTS (
     SELECT 1
     FROM (VALUES ('organization', 'admin', 'admin'), ('organization', 'admin', 'owner'), ('organization', 'can_create_project', 'admin'), ('organization', 'can_create_project', 'can_create_project'), ('organization', 'can_create_project', 'owner'), ('organization', 'can_delete', 'can_delete'), ('organization', 'can_delete', 'owner'), ('organization', 'can_inspect_secrets', 'can_inspect_secrets'), ('organization', 'can_inspect_secrets', 'owner'), ('organization', 'can_inspect_secrets', 'secret_manager'), ('organization', 'can_manage', 'can_manage'), ('organization', 'can_manage', 'owner'), ('organization', 'can_manage_members', 'admin'), ('organization', 'can_manage_members', 'can_manage_members'), ('organization', 'can_manage_members', 'owner'), ('organization', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('organization', 'can_manage_secret_grants', 'owner'), ('organization', 'can_manage_secret_grants', 'secret_manager'), ('organization', 'can_purge_secrets', 'can_purge_secrets'), ('organization', 'can_purge_secrets', 'owner'), ('organization', 'can_purge_secrets', 'secret_manager'), ('organization', 'can_read', 'admin'), ('organization', 'can_read', 'can_read'), ('organization', 'can_read', 'member'), ('organization', 'can_read', 'owner'), ('organization', 'can_revoke_secrets', 'can_revoke_secrets'), ('organization', 'can_revoke_secrets', 'owner'), ('organization', 'can_revoke_secrets', 'secret_manager'), ('organization', 'can_rotate_secrets', 'can_rotate_secrets'), ('organization', 'can_rotate_secrets', 'owner'), ('organization', 'can_rotate_secrets', 'secret_manager'), ('organization', 'can_write_secret_value', 'can_write_secret_value'), ('organization', 'can_write_secret_value', 'owner'), ('organization', 'can_write_secret_value', 'secret_manager'), ('organization', 'member', 'admin'), ('organization', 'member', 'member'), ('organization', 'member', 'owner'), ('organization', 'owner', 'owner'), ('organization', 'secret_manager', 'secret_manager'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('secret', 'inspect_metadata', 'inspect_metadata'), ('secret', 'manage_grants', 'manage_grants'), ('secret', 'owner', 'owner'), ('secret', 'purge', 'purge'), ('secret', 'revoke', 'revoke'), ('secret', 'rotate', 'rotate'), ('secret', 'write_value', 'write_value')) AS c(object_type, relation, satisfying_relation)
     WHERE (c.object_type = 'secret' AND c.relation = 'manage_grants' AND c.satisfying_relation = v_filter_relation)
@@ -38892,7 +40542,7 @@ BEGIN
         RETURN QUERY
         WITH base_results AS (
             SELECT p_object_id || '#' || v_filter_relation AS subject_id
-            		WHERE (v_filter_type = 'secret' AND EXISTS (
+		WHERE (v_filter_type = 'secret' AND EXISTS (
             SELECT 1
             FROM (VALUES ('organization', 'admin', 'admin'), ('organization', 'admin', 'owner'), ('organization', 'can_create_project', 'admin'), ('organization', 'can_create_project', 'can_create_project'), ('organization', 'can_create_project', 'owner'), ('organization', 'can_delete', 'can_delete'), ('organization', 'can_delete', 'owner'), ('organization', 'can_inspect_secrets', 'can_inspect_secrets'), ('organization', 'can_inspect_secrets', 'owner'), ('organization', 'can_inspect_secrets', 'secret_manager'), ('organization', 'can_manage', 'can_manage'), ('organization', 'can_manage', 'owner'), ('organization', 'can_manage_members', 'admin'), ('organization', 'can_manage_members', 'can_manage_members'), ('organization', 'can_manage_members', 'owner'), ('organization', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('organization', 'can_manage_secret_grants', 'owner'), ('organization', 'can_manage_secret_grants', 'secret_manager'), ('organization', 'can_purge_secrets', 'can_purge_secrets'), ('organization', 'can_purge_secrets', 'owner'), ('organization', 'can_purge_secrets', 'secret_manager'), ('organization', 'can_read', 'admin'), ('organization', 'can_read', 'can_read'), ('organization', 'can_read', 'member'), ('organization', 'can_read', 'owner'), ('organization', 'can_revoke_secrets', 'can_revoke_secrets'), ('organization', 'can_revoke_secrets', 'owner'), ('organization', 'can_revoke_secrets', 'secret_manager'), ('organization', 'can_rotate_secrets', 'can_rotate_secrets'), ('organization', 'can_rotate_secrets', 'owner'), ('organization', 'can_rotate_secrets', 'secret_manager'), ('organization', 'can_write_secret_value', 'can_write_secret_value'), ('organization', 'can_write_secret_value', 'owner'), ('organization', 'can_write_secret_value', 'secret_manager'), ('organization', 'member', 'admin'), ('organization', 'member', 'member'), ('organization', 'member', 'owner'), ('organization', 'owner', 'owner'), ('organization', 'secret_manager', 'secret_manager'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('secret', 'inspect_metadata', 'inspect_metadata'), ('secret', 'manage_grants', 'manage_grants'), ('secret', 'owner', 'owner'), ('secret', 'purge', 'purge'), ('secret', 'revoke', 'revoke'), ('secret', 'rotate', 'rotate'), ('secret', 'write_value', 'write_value')) AS c(object_type, relation, satisfying_relation)
             WHERE (c.object_type = 'secret' AND c.relation = 'manage_grants' AND c.satisfying_relation = v_filter_relation)
@@ -39054,8 +40704,8 @@ BEGIN
         -- Self-candidate: when filter type matches object type
         IF v_filter_type = 'secret' THEN
         IF EXISTS (
-    		SELECT p_object_id || '#' || v_filter_relation AS subject_id
-    		WHERE (v_filter_type = 'secret' AND EXISTS (
+		SELECT p_object_id || '#' || v_filter_relation AS subject_id
+		WHERE (v_filter_type = 'secret' AND EXISTS (
     SELECT 1
     FROM (VALUES ('organization', 'admin', 'admin'), ('organization', 'admin', 'owner'), ('organization', 'can_create_project', 'admin'), ('organization', 'can_create_project', 'can_create_project'), ('organization', 'can_create_project', 'owner'), ('organization', 'can_delete', 'can_delete'), ('organization', 'can_delete', 'owner'), ('organization', 'can_inspect_secrets', 'can_inspect_secrets'), ('organization', 'can_inspect_secrets', 'owner'), ('organization', 'can_inspect_secrets', 'secret_manager'), ('organization', 'can_manage', 'can_manage'), ('organization', 'can_manage', 'owner'), ('organization', 'can_manage_members', 'admin'), ('organization', 'can_manage_members', 'can_manage_members'), ('organization', 'can_manage_members', 'owner'), ('organization', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('organization', 'can_manage_secret_grants', 'owner'), ('organization', 'can_manage_secret_grants', 'secret_manager'), ('organization', 'can_purge_secrets', 'can_purge_secrets'), ('organization', 'can_purge_secrets', 'owner'), ('organization', 'can_purge_secrets', 'secret_manager'), ('organization', 'can_read', 'admin'), ('organization', 'can_read', 'can_read'), ('organization', 'can_read', 'member'), ('organization', 'can_read', 'owner'), ('organization', 'can_revoke_secrets', 'can_revoke_secrets'), ('organization', 'can_revoke_secrets', 'owner'), ('organization', 'can_revoke_secrets', 'secret_manager'), ('organization', 'can_rotate_secrets', 'can_rotate_secrets'), ('organization', 'can_rotate_secrets', 'owner'), ('organization', 'can_rotate_secrets', 'secret_manager'), ('organization', 'can_write_secret_value', 'can_write_secret_value'), ('organization', 'can_write_secret_value', 'owner'), ('organization', 'can_write_secret_value', 'secret_manager'), ('organization', 'member', 'admin'), ('organization', 'member', 'member'), ('organization', 'member', 'owner'), ('organization', 'owner', 'owner'), ('organization', 'secret_manager', 'secret_manager'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('secret', 'inspect_metadata', 'inspect_metadata'), ('secret', 'manage_grants', 'manage_grants'), ('secret', 'owner', 'owner'), ('secret', 'purge', 'purge'), ('secret', 'revoke', 'revoke'), ('secret', 'rotate', 'rotate'), ('secret', 'write_value', 'write_value')) AS c(object_type, relation, satisfying_relation)
     WHERE (c.object_type = 'secret' AND c.relation = 'purge' AND c.satisfying_relation = v_filter_relation)
@@ -39064,7 +40714,7 @@ BEGIN
         RETURN QUERY
         WITH base_results AS (
             SELECT p_object_id || '#' || v_filter_relation AS subject_id
-            		WHERE (v_filter_type = 'secret' AND EXISTS (
+		WHERE (v_filter_type = 'secret' AND EXISTS (
             SELECT 1
             FROM (VALUES ('organization', 'admin', 'admin'), ('organization', 'admin', 'owner'), ('organization', 'can_create_project', 'admin'), ('organization', 'can_create_project', 'can_create_project'), ('organization', 'can_create_project', 'owner'), ('organization', 'can_delete', 'can_delete'), ('organization', 'can_delete', 'owner'), ('organization', 'can_inspect_secrets', 'can_inspect_secrets'), ('organization', 'can_inspect_secrets', 'owner'), ('organization', 'can_inspect_secrets', 'secret_manager'), ('organization', 'can_manage', 'can_manage'), ('organization', 'can_manage', 'owner'), ('organization', 'can_manage_members', 'admin'), ('organization', 'can_manage_members', 'can_manage_members'), ('organization', 'can_manage_members', 'owner'), ('organization', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('organization', 'can_manage_secret_grants', 'owner'), ('organization', 'can_manage_secret_grants', 'secret_manager'), ('organization', 'can_purge_secrets', 'can_purge_secrets'), ('organization', 'can_purge_secrets', 'owner'), ('organization', 'can_purge_secrets', 'secret_manager'), ('organization', 'can_read', 'admin'), ('organization', 'can_read', 'can_read'), ('organization', 'can_read', 'member'), ('organization', 'can_read', 'owner'), ('organization', 'can_revoke_secrets', 'can_revoke_secrets'), ('organization', 'can_revoke_secrets', 'owner'), ('organization', 'can_revoke_secrets', 'secret_manager'), ('organization', 'can_rotate_secrets', 'can_rotate_secrets'), ('organization', 'can_rotate_secrets', 'owner'), ('organization', 'can_rotate_secrets', 'secret_manager'), ('organization', 'can_write_secret_value', 'can_write_secret_value'), ('organization', 'can_write_secret_value', 'owner'), ('organization', 'can_write_secret_value', 'secret_manager'), ('organization', 'member', 'admin'), ('organization', 'member', 'member'), ('organization', 'member', 'owner'), ('organization', 'owner', 'owner'), ('organization', 'secret_manager', 'secret_manager'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('secret', 'inspect_metadata', 'inspect_metadata'), ('secret', 'manage_grants', 'manage_grants'), ('secret', 'owner', 'owner'), ('secret', 'purge', 'purge'), ('secret', 'revoke', 'revoke'), ('secret', 'rotate', 'rotate'), ('secret', 'write_value', 'write_value')) AS c(object_type, relation, satisfying_relation)
             WHERE (c.object_type = 'secret' AND c.relation = 'purge' AND c.satisfying_relation = v_filter_relation)
@@ -39226,8 +40876,8 @@ BEGIN
         -- Self-candidate: when filter type matches object type
         IF v_filter_type = 'secret' THEN
         IF EXISTS (
-    		SELECT p_object_id || '#' || v_filter_relation AS subject_id
-    		WHERE (v_filter_type = 'secret' AND EXISTS (
+		SELECT p_object_id || '#' || v_filter_relation AS subject_id
+		WHERE (v_filter_type = 'secret' AND EXISTS (
     SELECT 1
     FROM (VALUES ('organization', 'admin', 'admin'), ('organization', 'admin', 'owner'), ('organization', 'can_create_project', 'admin'), ('organization', 'can_create_project', 'can_create_project'), ('organization', 'can_create_project', 'owner'), ('organization', 'can_delete', 'can_delete'), ('organization', 'can_delete', 'owner'), ('organization', 'can_inspect_secrets', 'can_inspect_secrets'), ('organization', 'can_inspect_secrets', 'owner'), ('organization', 'can_inspect_secrets', 'secret_manager'), ('organization', 'can_manage', 'can_manage'), ('organization', 'can_manage', 'owner'), ('organization', 'can_manage_members', 'admin'), ('organization', 'can_manage_members', 'can_manage_members'), ('organization', 'can_manage_members', 'owner'), ('organization', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('organization', 'can_manage_secret_grants', 'owner'), ('organization', 'can_manage_secret_grants', 'secret_manager'), ('organization', 'can_purge_secrets', 'can_purge_secrets'), ('organization', 'can_purge_secrets', 'owner'), ('organization', 'can_purge_secrets', 'secret_manager'), ('organization', 'can_read', 'admin'), ('organization', 'can_read', 'can_read'), ('organization', 'can_read', 'member'), ('organization', 'can_read', 'owner'), ('organization', 'can_revoke_secrets', 'can_revoke_secrets'), ('organization', 'can_revoke_secrets', 'owner'), ('organization', 'can_revoke_secrets', 'secret_manager'), ('organization', 'can_rotate_secrets', 'can_rotate_secrets'), ('organization', 'can_rotate_secrets', 'owner'), ('organization', 'can_rotate_secrets', 'secret_manager'), ('organization', 'can_write_secret_value', 'can_write_secret_value'), ('organization', 'can_write_secret_value', 'owner'), ('organization', 'can_write_secret_value', 'secret_manager'), ('organization', 'member', 'admin'), ('organization', 'member', 'member'), ('organization', 'member', 'owner'), ('organization', 'owner', 'owner'), ('organization', 'secret_manager', 'secret_manager'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('secret', 'inspect_metadata', 'inspect_metadata'), ('secret', 'manage_grants', 'manage_grants'), ('secret', 'owner', 'owner'), ('secret', 'purge', 'purge'), ('secret', 'revoke', 'revoke'), ('secret', 'rotate', 'rotate'), ('secret', 'write_value', 'write_value')) AS c(object_type, relation, satisfying_relation)
     WHERE (c.object_type = 'secret' AND c.relation = 'revoke' AND c.satisfying_relation = v_filter_relation)
@@ -39236,7 +40886,7 @@ BEGIN
         RETURN QUERY
         WITH base_results AS (
             SELECT p_object_id || '#' || v_filter_relation AS subject_id
-            		WHERE (v_filter_type = 'secret' AND EXISTS (
+		WHERE (v_filter_type = 'secret' AND EXISTS (
             SELECT 1
             FROM (VALUES ('organization', 'admin', 'admin'), ('organization', 'admin', 'owner'), ('organization', 'can_create_project', 'admin'), ('organization', 'can_create_project', 'can_create_project'), ('organization', 'can_create_project', 'owner'), ('organization', 'can_delete', 'can_delete'), ('organization', 'can_delete', 'owner'), ('organization', 'can_inspect_secrets', 'can_inspect_secrets'), ('organization', 'can_inspect_secrets', 'owner'), ('organization', 'can_inspect_secrets', 'secret_manager'), ('organization', 'can_manage', 'can_manage'), ('organization', 'can_manage', 'owner'), ('organization', 'can_manage_members', 'admin'), ('organization', 'can_manage_members', 'can_manage_members'), ('organization', 'can_manage_members', 'owner'), ('organization', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('organization', 'can_manage_secret_grants', 'owner'), ('organization', 'can_manage_secret_grants', 'secret_manager'), ('organization', 'can_purge_secrets', 'can_purge_secrets'), ('organization', 'can_purge_secrets', 'owner'), ('organization', 'can_purge_secrets', 'secret_manager'), ('organization', 'can_read', 'admin'), ('organization', 'can_read', 'can_read'), ('organization', 'can_read', 'member'), ('organization', 'can_read', 'owner'), ('organization', 'can_revoke_secrets', 'can_revoke_secrets'), ('organization', 'can_revoke_secrets', 'owner'), ('organization', 'can_revoke_secrets', 'secret_manager'), ('organization', 'can_rotate_secrets', 'can_rotate_secrets'), ('organization', 'can_rotate_secrets', 'owner'), ('organization', 'can_rotate_secrets', 'secret_manager'), ('organization', 'can_write_secret_value', 'can_write_secret_value'), ('organization', 'can_write_secret_value', 'owner'), ('organization', 'can_write_secret_value', 'secret_manager'), ('organization', 'member', 'admin'), ('organization', 'member', 'member'), ('organization', 'member', 'owner'), ('organization', 'owner', 'owner'), ('organization', 'secret_manager', 'secret_manager'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('secret', 'inspect_metadata', 'inspect_metadata'), ('secret', 'manage_grants', 'manage_grants'), ('secret', 'owner', 'owner'), ('secret', 'purge', 'purge'), ('secret', 'revoke', 'revoke'), ('secret', 'rotate', 'rotate'), ('secret', 'write_value', 'write_value')) AS c(object_type, relation, satisfying_relation)
             WHERE (c.object_type = 'secret' AND c.relation = 'revoke' AND c.satisfying_relation = v_filter_relation)
@@ -39398,8 +41048,8 @@ BEGIN
         -- Self-candidate: when filter type matches object type
         IF v_filter_type = 'secret' THEN
         IF EXISTS (
-    		SELECT p_object_id || '#' || v_filter_relation AS subject_id
-    		WHERE (v_filter_type = 'secret' AND EXISTS (
+		SELECT p_object_id || '#' || v_filter_relation AS subject_id
+		WHERE (v_filter_type = 'secret' AND EXISTS (
     SELECT 1
     FROM (VALUES ('organization', 'admin', 'admin'), ('organization', 'admin', 'owner'), ('organization', 'can_create_project', 'admin'), ('organization', 'can_create_project', 'can_create_project'), ('organization', 'can_create_project', 'owner'), ('organization', 'can_delete', 'can_delete'), ('organization', 'can_delete', 'owner'), ('organization', 'can_inspect_secrets', 'can_inspect_secrets'), ('organization', 'can_inspect_secrets', 'owner'), ('organization', 'can_inspect_secrets', 'secret_manager'), ('organization', 'can_manage', 'can_manage'), ('organization', 'can_manage', 'owner'), ('organization', 'can_manage_members', 'admin'), ('organization', 'can_manage_members', 'can_manage_members'), ('organization', 'can_manage_members', 'owner'), ('organization', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('organization', 'can_manage_secret_grants', 'owner'), ('organization', 'can_manage_secret_grants', 'secret_manager'), ('organization', 'can_purge_secrets', 'can_purge_secrets'), ('organization', 'can_purge_secrets', 'owner'), ('organization', 'can_purge_secrets', 'secret_manager'), ('organization', 'can_read', 'admin'), ('organization', 'can_read', 'can_read'), ('organization', 'can_read', 'member'), ('organization', 'can_read', 'owner'), ('organization', 'can_revoke_secrets', 'can_revoke_secrets'), ('organization', 'can_revoke_secrets', 'owner'), ('organization', 'can_revoke_secrets', 'secret_manager'), ('organization', 'can_rotate_secrets', 'can_rotate_secrets'), ('organization', 'can_rotate_secrets', 'owner'), ('organization', 'can_rotate_secrets', 'secret_manager'), ('organization', 'can_write_secret_value', 'can_write_secret_value'), ('organization', 'can_write_secret_value', 'owner'), ('organization', 'can_write_secret_value', 'secret_manager'), ('organization', 'member', 'admin'), ('organization', 'member', 'member'), ('organization', 'member', 'owner'), ('organization', 'owner', 'owner'), ('organization', 'secret_manager', 'secret_manager'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('secret', 'inspect_metadata', 'inspect_metadata'), ('secret', 'manage_grants', 'manage_grants'), ('secret', 'owner', 'owner'), ('secret', 'purge', 'purge'), ('secret', 'revoke', 'revoke'), ('secret', 'rotate', 'rotate'), ('secret', 'write_value', 'write_value')) AS c(object_type, relation, satisfying_relation)
     WHERE (c.object_type = 'secret' AND c.relation = 'rotate' AND c.satisfying_relation = v_filter_relation)
@@ -39408,7 +41058,7 @@ BEGIN
         RETURN QUERY
         WITH base_results AS (
             SELECT p_object_id || '#' || v_filter_relation AS subject_id
-            		WHERE (v_filter_type = 'secret' AND EXISTS (
+		WHERE (v_filter_type = 'secret' AND EXISTS (
             SELECT 1
             FROM (VALUES ('organization', 'admin', 'admin'), ('organization', 'admin', 'owner'), ('organization', 'can_create_project', 'admin'), ('organization', 'can_create_project', 'can_create_project'), ('organization', 'can_create_project', 'owner'), ('organization', 'can_delete', 'can_delete'), ('organization', 'can_delete', 'owner'), ('organization', 'can_inspect_secrets', 'can_inspect_secrets'), ('organization', 'can_inspect_secrets', 'owner'), ('organization', 'can_inspect_secrets', 'secret_manager'), ('organization', 'can_manage', 'can_manage'), ('organization', 'can_manage', 'owner'), ('organization', 'can_manage_members', 'admin'), ('organization', 'can_manage_members', 'can_manage_members'), ('organization', 'can_manage_members', 'owner'), ('organization', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('organization', 'can_manage_secret_grants', 'owner'), ('organization', 'can_manage_secret_grants', 'secret_manager'), ('organization', 'can_purge_secrets', 'can_purge_secrets'), ('organization', 'can_purge_secrets', 'owner'), ('organization', 'can_purge_secrets', 'secret_manager'), ('organization', 'can_read', 'admin'), ('organization', 'can_read', 'can_read'), ('organization', 'can_read', 'member'), ('organization', 'can_read', 'owner'), ('organization', 'can_revoke_secrets', 'can_revoke_secrets'), ('organization', 'can_revoke_secrets', 'owner'), ('organization', 'can_revoke_secrets', 'secret_manager'), ('organization', 'can_rotate_secrets', 'can_rotate_secrets'), ('organization', 'can_rotate_secrets', 'owner'), ('organization', 'can_rotate_secrets', 'secret_manager'), ('organization', 'can_write_secret_value', 'can_write_secret_value'), ('organization', 'can_write_secret_value', 'owner'), ('organization', 'can_write_secret_value', 'secret_manager'), ('organization', 'member', 'admin'), ('organization', 'member', 'member'), ('organization', 'member', 'owner'), ('organization', 'owner', 'owner'), ('organization', 'secret_manager', 'secret_manager'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('secret', 'inspect_metadata', 'inspect_metadata'), ('secret', 'manage_grants', 'manage_grants'), ('secret', 'owner', 'owner'), ('secret', 'purge', 'purge'), ('secret', 'revoke', 'revoke'), ('secret', 'rotate', 'rotate'), ('secret', 'write_value', 'write_value')) AS c(object_type, relation, satisfying_relation)
             WHERE (c.object_type = 'secret' AND c.relation = 'rotate' AND c.satisfying_relation = v_filter_relation)
@@ -39570,8 +41220,8 @@ BEGIN
         -- Self-candidate: when filter type matches object type
         IF v_filter_type = 'secret' THEN
         IF EXISTS (
-    		SELECT p_object_id || '#' || v_filter_relation AS subject_id
-    		WHERE (v_filter_type = 'secret' AND EXISTS (
+		SELECT p_object_id || '#' || v_filter_relation AS subject_id
+		WHERE (v_filter_type = 'secret' AND EXISTS (
     SELECT 1
     FROM (VALUES ('organization', 'admin', 'admin'), ('organization', 'admin', 'owner'), ('organization', 'can_create_project', 'admin'), ('organization', 'can_create_project', 'can_create_project'), ('organization', 'can_create_project', 'owner'), ('organization', 'can_delete', 'can_delete'), ('organization', 'can_delete', 'owner'), ('organization', 'can_inspect_secrets', 'can_inspect_secrets'), ('organization', 'can_inspect_secrets', 'owner'), ('organization', 'can_inspect_secrets', 'secret_manager'), ('organization', 'can_manage', 'can_manage'), ('organization', 'can_manage', 'owner'), ('organization', 'can_manage_members', 'admin'), ('organization', 'can_manage_members', 'can_manage_members'), ('organization', 'can_manage_members', 'owner'), ('organization', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('organization', 'can_manage_secret_grants', 'owner'), ('organization', 'can_manage_secret_grants', 'secret_manager'), ('organization', 'can_purge_secrets', 'can_purge_secrets'), ('organization', 'can_purge_secrets', 'owner'), ('organization', 'can_purge_secrets', 'secret_manager'), ('organization', 'can_read', 'admin'), ('organization', 'can_read', 'can_read'), ('organization', 'can_read', 'member'), ('organization', 'can_read', 'owner'), ('organization', 'can_revoke_secrets', 'can_revoke_secrets'), ('organization', 'can_revoke_secrets', 'owner'), ('organization', 'can_revoke_secrets', 'secret_manager'), ('organization', 'can_rotate_secrets', 'can_rotate_secrets'), ('organization', 'can_rotate_secrets', 'owner'), ('organization', 'can_rotate_secrets', 'secret_manager'), ('organization', 'can_write_secret_value', 'can_write_secret_value'), ('organization', 'can_write_secret_value', 'owner'), ('organization', 'can_write_secret_value', 'secret_manager'), ('organization', 'member', 'admin'), ('organization', 'member', 'member'), ('organization', 'member', 'owner'), ('organization', 'owner', 'owner'), ('organization', 'secret_manager', 'secret_manager'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('secret', 'inspect_metadata', 'inspect_metadata'), ('secret', 'manage_grants', 'manage_grants'), ('secret', 'owner', 'owner'), ('secret', 'purge', 'purge'), ('secret', 'revoke', 'revoke'), ('secret', 'rotate', 'rotate'), ('secret', 'write_value', 'write_value')) AS c(object_type, relation, satisfying_relation)
     WHERE (c.object_type = 'secret' AND c.relation = 'write_value' AND c.satisfying_relation = v_filter_relation)
@@ -39580,7 +41230,7 @@ BEGIN
         RETURN QUERY
         WITH base_results AS (
             SELECT p_object_id || '#' || v_filter_relation AS subject_id
-            		WHERE (v_filter_type = 'secret' AND EXISTS (
+		WHERE (v_filter_type = 'secret' AND EXISTS (
             SELECT 1
             FROM (VALUES ('organization', 'admin', 'admin'), ('organization', 'admin', 'owner'), ('organization', 'can_create_project', 'admin'), ('organization', 'can_create_project', 'can_create_project'), ('organization', 'can_create_project', 'owner'), ('organization', 'can_delete', 'can_delete'), ('organization', 'can_delete', 'owner'), ('organization', 'can_inspect_secrets', 'can_inspect_secrets'), ('organization', 'can_inspect_secrets', 'owner'), ('organization', 'can_inspect_secrets', 'secret_manager'), ('organization', 'can_manage', 'can_manage'), ('organization', 'can_manage', 'owner'), ('organization', 'can_manage_members', 'admin'), ('organization', 'can_manage_members', 'can_manage_members'), ('organization', 'can_manage_members', 'owner'), ('organization', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('organization', 'can_manage_secret_grants', 'owner'), ('organization', 'can_manage_secret_grants', 'secret_manager'), ('organization', 'can_purge_secrets', 'can_purge_secrets'), ('organization', 'can_purge_secrets', 'owner'), ('organization', 'can_purge_secrets', 'secret_manager'), ('organization', 'can_read', 'admin'), ('organization', 'can_read', 'can_read'), ('organization', 'can_read', 'member'), ('organization', 'can_read', 'owner'), ('organization', 'can_revoke_secrets', 'can_revoke_secrets'), ('organization', 'can_revoke_secrets', 'owner'), ('organization', 'can_revoke_secrets', 'secret_manager'), ('organization', 'can_rotate_secrets', 'can_rotate_secrets'), ('organization', 'can_rotate_secrets', 'owner'), ('organization', 'can_rotate_secrets', 'secret_manager'), ('organization', 'can_write_secret_value', 'can_write_secret_value'), ('organization', 'can_write_secret_value', 'owner'), ('organization', 'can_write_secret_value', 'secret_manager'), ('organization', 'member', 'admin'), ('organization', 'member', 'member'), ('organization', 'member', 'owner'), ('organization', 'owner', 'owner'), ('organization', 'secret_manager', 'secret_manager'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('secret', 'inspect_metadata', 'inspect_metadata'), ('secret', 'manage_grants', 'manage_grants'), ('secret', 'owner', 'owner'), ('secret', 'purge', 'purge'), ('secret', 'revoke', 'revoke'), ('secret', 'rotate', 'rotate'), ('secret', 'write_value', 'write_value')) AS c(object_type, relation, satisfying_relation)
             WHERE (c.object_type = 'secret' AND c.relation = 'write_value' AND c.satisfying_relation = v_filter_relation)
@@ -39742,8 +41392,8 @@ BEGIN
         -- Self-candidate: when filter type matches object type
         IF v_filter_type = 'secret_import' THEN
         IF EXISTS (
-    		SELECT p_object_id || '#' || v_filter_relation AS subject_id
-    		WHERE (v_filter_type = 'secret_import' AND EXISTS (
+		SELECT p_object_id || '#' || v_filter_relation AS subject_id
+		WHERE (v_filter_type = 'secret_import' AND EXISTS (
     SELECT 1
     FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager'), ('secret_import', 'accept', 'accept'), ('secret_import', 'active_target', 'active_target'), ('secret_import', 'bind_brokered', 'bind_brokered'), ('secret_import', 'bind_raw', 'bind_raw'), ('secret_import', 'grant', 'grant'), ('secret_import', 'inspect_metadata', 'inspect_metadata'), ('secret_import', 'target', 'target')) AS c(object_type, relation, satisfying_relation)
     WHERE (c.object_type = 'secret_import' AND c.relation = 'accept' AND c.satisfying_relation = v_filter_relation)
@@ -39752,7 +41402,7 @@ BEGIN
         RETURN QUERY
         WITH base_results AS (
             SELECT p_object_id || '#' || v_filter_relation AS subject_id
-            		WHERE (v_filter_type = 'secret_import' AND EXISTS (
+		WHERE (v_filter_type = 'secret_import' AND EXISTS (
             SELECT 1
             FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager'), ('secret_import', 'accept', 'accept'), ('secret_import', 'active_target', 'active_target'), ('secret_import', 'bind_brokered', 'bind_brokered'), ('secret_import', 'bind_raw', 'bind_raw'), ('secret_import', 'grant', 'grant'), ('secret_import', 'inspect_metadata', 'inspect_metadata'), ('secret_import', 'target', 'target')) AS c(object_type, relation, satisfying_relation)
             WHERE (c.object_type = 'secret_import' AND c.relation = 'accept' AND c.satisfying_relation = v_filter_relation)
@@ -39914,8 +41564,8 @@ BEGIN
         -- Self-candidate: when filter type matches object type
         IF v_filter_type = 'secret_import' THEN
         IF EXISTS (
-    		SELECT p_object_id || '#' || v_filter_relation AS subject_id
-    		WHERE (v_filter_type = 'secret_import' AND EXISTS (
+		SELECT p_object_id || '#' || v_filter_relation AS subject_id
+		WHERE (v_filter_type = 'secret_import' AND EXISTS (
     SELECT 1
     FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager'), ('secret_import', 'accept', 'accept'), ('secret_import', 'active_target', 'active_target'), ('secret_import', 'bind_brokered', 'bind_brokered'), ('secret_import', 'bind_raw', 'bind_raw'), ('secret_import', 'grant', 'grant'), ('secret_import', 'inspect_metadata', 'inspect_metadata'), ('secret_import', 'target', 'target')) AS c(object_type, relation, satisfying_relation)
     WHERE (c.object_type = 'secret_import' AND c.relation = 'inspect_metadata' AND c.satisfying_relation = v_filter_relation)
@@ -39924,7 +41574,7 @@ BEGIN
         RETURN QUERY
         WITH base_results AS (
             SELECT p_object_id || '#' || v_filter_relation AS subject_id
-            		WHERE (v_filter_type = 'secret_import' AND EXISTS (
+		WHERE (v_filter_type = 'secret_import' AND EXISTS (
             SELECT 1
             FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager'), ('secret_import', 'accept', 'accept'), ('secret_import', 'active_target', 'active_target'), ('secret_import', 'bind_brokered', 'bind_brokered'), ('secret_import', 'bind_raw', 'bind_raw'), ('secret_import', 'grant', 'grant'), ('secret_import', 'inspect_metadata', 'inspect_metadata'), ('secret_import', 'target', 'target')) AS c(object_type, relation, satisfying_relation)
             WHERE (c.object_type = 'secret_import' AND c.relation = 'inspect_metadata' AND c.satisfying_relation = v_filter_relation)
@@ -40086,8 +41736,8 @@ BEGIN
         -- Self-candidate: when filter type matches object type
         IF v_filter_type = 'secret_import' THEN
         IF EXISTS (
-    		SELECT p_object_id || '#' || v_filter_relation AS subject_id
-    		WHERE (v_filter_type = 'secret_import' AND EXISTS (
+		SELECT p_object_id || '#' || v_filter_relation AS subject_id
+		WHERE (v_filter_type = 'secret_import' AND EXISTS (
     SELECT 1
     FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager'), ('secret_import', 'accept', 'accept'), ('secret_import', 'active_target', 'active_target'), ('secret_import', 'bind_brokered', 'bind_brokered'), ('secret_import', 'bind_raw', 'bind_raw'), ('secret_import', 'grant', 'grant'), ('secret_import', 'inspect_metadata', 'inspect_metadata'), ('secret_import', 'target', 'target')) AS c(object_type, relation, satisfying_relation)
     WHERE (c.object_type = 'secret_import' AND c.relation = 'bind_brokered' AND c.satisfying_relation = v_filter_relation)
@@ -40096,7 +41746,7 @@ BEGIN
         RETURN QUERY
         WITH base_results AS (
             SELECT p_object_id || '#' || v_filter_relation AS subject_id
-            		WHERE (v_filter_type = 'secret_import' AND EXISTS (
+		WHERE (v_filter_type = 'secret_import' AND EXISTS (
             SELECT 1
             FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager'), ('secret_import', 'accept', 'accept'), ('secret_import', 'active_target', 'active_target'), ('secret_import', 'bind_brokered', 'bind_brokered'), ('secret_import', 'bind_raw', 'bind_raw'), ('secret_import', 'grant', 'grant'), ('secret_import', 'inspect_metadata', 'inspect_metadata'), ('secret_import', 'target', 'target')) AS c(object_type, relation, satisfying_relation)
             WHERE (c.object_type = 'secret_import' AND c.relation = 'bind_brokered' AND c.satisfying_relation = v_filter_relation)
@@ -40258,8 +41908,8 @@ BEGIN
         -- Self-candidate: when filter type matches object type
         IF v_filter_type = 'secret_import' THEN
         IF EXISTS (
-    		SELECT p_object_id || '#' || v_filter_relation AS subject_id
-    		WHERE (v_filter_type = 'secret_import' AND EXISTS (
+		SELECT p_object_id || '#' || v_filter_relation AS subject_id
+		WHERE (v_filter_type = 'secret_import' AND EXISTS (
     SELECT 1
     FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager'), ('secret_import', 'accept', 'accept'), ('secret_import', 'active_target', 'active_target'), ('secret_import', 'bind_brokered', 'bind_brokered'), ('secret_import', 'bind_raw', 'bind_raw'), ('secret_import', 'grant', 'grant'), ('secret_import', 'inspect_metadata', 'inspect_metadata'), ('secret_import', 'target', 'target')) AS c(object_type, relation, satisfying_relation)
     WHERE (c.object_type = 'secret_import' AND c.relation = 'bind_raw' AND c.satisfying_relation = v_filter_relation)
@@ -40268,7 +41918,7 @@ BEGIN
         RETURN QUERY
         WITH base_results AS (
             SELECT p_object_id || '#' || v_filter_relation AS subject_id
-            		WHERE (v_filter_type = 'secret_import' AND EXISTS (
+		WHERE (v_filter_type = 'secret_import' AND EXISTS (
             SELECT 1
             FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager'), ('secret_import', 'accept', 'accept'), ('secret_import', 'active_target', 'active_target'), ('secret_import', 'bind_brokered', 'bind_brokered'), ('secret_import', 'bind_raw', 'bind_raw'), ('secret_import', 'grant', 'grant'), ('secret_import', 'inspect_metadata', 'inspect_metadata'), ('secret_import', 'target', 'target')) AS c(object_type, relation, satisfying_relation)
             WHERE (c.object_type = 'secret_import' AND c.relation = 'bind_raw' AND c.satisfying_relation = v_filter_relation)
@@ -40429,8 +42079,8 @@ BEGIN
         WITH base_results AS (
             -- Userset filter: find userset tuples that match and return normalized references
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'organization' AND t.relation IN ('admin', 'can_read', 'member', 'owner') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'organization' AND t.relation IN ('admin', 'can_read', 'member', 'owner') AND t.object_id = p_object_id AND t.subject_type = v_filter_type AND position('#' in t.subject_id) > 0 AND (substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('organization', 'admin', 'admin'), ('organization', 'admin', 'owner'), ('organization', 'can_create_project', 'admin'), ('organization', 'can_create_project', 'can_create_project'), ('organization', 'can_create_project', 'owner'), ('organization', 'can_delete', 'can_delete'), ('organization', 'can_delete', 'owner'), ('organization', 'can_inspect_secrets', 'can_inspect_secrets'), ('organization', 'can_inspect_secrets', 'owner'), ('organization', 'can_inspect_secrets', 'secret_manager'), ('organization', 'can_manage', 'can_manage'), ('organization', 'can_manage', 'owner'), ('organization', 'can_manage_members', 'admin'), ('organization', 'can_manage_members', 'can_manage_members'), ('organization', 'can_manage_members', 'owner'), ('organization', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('organization', 'can_manage_secret_grants', 'owner'), ('organization', 'can_manage_secret_grants', 'secret_manager'), ('organization', 'can_purge_secrets', 'can_purge_secrets'), ('organization', 'can_purge_secrets', 'owner'), ('organization', 'can_purge_secrets', 'secret_manager'), ('organization', 'can_read', 'admin'), ('organization', 'can_read', 'can_read'), ('organization', 'can_read', 'member'), ('organization', 'can_read', 'owner'), ('organization', 'can_revoke_secrets', 'can_revoke_secrets'), ('organization', 'can_revoke_secrets', 'owner'), ('organization', 'can_revoke_secrets', 'secret_manager'), ('organization', 'can_rotate_secrets', 'can_rotate_secrets'), ('organization', 'can_rotate_secrets', 'owner'), ('organization', 'can_rotate_secrets', 'secret_manager'), ('organization', 'can_write_secret_value', 'can_write_secret_value'), ('organization', 'can_write_secret_value', 'owner'), ('organization', 'can_write_secret_value', 'secret_manager'), ('organization', 'member', 'admin'), ('organization', 'member', 'member'), ('organization', 'member', 'owner'), ('organization', 'owner', 'owner'), ('organization', 'secret_manager', 'secret_manager')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -40440,7 +42090,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'organization' AND EXISTS (
+		WHERE (v_filter_type = 'organization' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('organization', 'admin', 'admin'), ('organization', 'admin', 'owner'), ('organization', 'can_create_project', 'admin'), ('organization', 'can_create_project', 'can_create_project'), ('organization', 'can_create_project', 'owner'), ('organization', 'can_delete', 'can_delete'), ('organization', 'can_delete', 'owner'), ('organization', 'can_inspect_secrets', 'can_inspect_secrets'), ('organization', 'can_inspect_secrets', 'owner'), ('organization', 'can_inspect_secrets', 'secret_manager'), ('organization', 'can_manage', 'can_manage'), ('organization', 'can_manage', 'owner'), ('organization', 'can_manage_members', 'admin'), ('organization', 'can_manage_members', 'can_manage_members'), ('organization', 'can_manage_members', 'owner'), ('organization', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('organization', 'can_manage_secret_grants', 'owner'), ('organization', 'can_manage_secret_grants', 'secret_manager'), ('organization', 'can_purge_secrets', 'can_purge_secrets'), ('organization', 'can_purge_secrets', 'owner'), ('organization', 'can_purge_secrets', 'secret_manager'), ('organization', 'can_read', 'admin'), ('organization', 'can_read', 'can_read'), ('organization', 'can_read', 'member'), ('organization', 'can_read', 'owner'), ('organization', 'can_revoke_secrets', 'can_revoke_secrets'), ('organization', 'can_revoke_secrets', 'owner'), ('organization', 'can_revoke_secrets', 'secret_manager'), ('organization', 'can_rotate_secrets', 'can_rotate_secrets'), ('organization', 'can_rotate_secrets', 'owner'), ('organization', 'can_rotate_secrets', 'secret_manager'), ('organization', 'can_write_secret_value', 'can_write_secret_value'), ('organization', 'can_write_secret_value', 'owner'), ('organization', 'can_write_secret_value', 'secret_manager'), ('organization', 'member', 'admin'), ('organization', 'member', 'member'), ('organization', 'member', 'owner'), ('organization', 'owner', 'owner'), ('organization', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'organization' AND c.relation = 'can_read' AND c.satisfying_relation = v_filter_relation)
@@ -40541,8 +42191,8 @@ BEGIN
         -- Self-candidate: when filter type matches object type
         IF v_filter_type = 'agent_attachment' THEN
         IF EXISTS (
-    		SELECT p_object_id || '#' || v_filter_relation AS subject_id
-    		WHERE (v_filter_type = 'agent_attachment' AND EXISTS (
+		SELECT p_object_id || '#' || v_filter_relation AS subject_id
+		WHERE (v_filter_type = 'agent_attachment' AND EXISTS (
     SELECT 1
     FROM (VALUES ('agent_attachment', 'can_execute', 'can_execute'), ('agent_attachment', 'can_manage', 'can_manage'), ('agent_attachment', 'can_read', 'can_read'), ('agent_attachment', 'instance', 'instance'), ('agent_attachment', 'repository', 'repository'), ('agent_instance', 'can_execute', 'can_execute'), ('agent_instance', 'can_manage', 'can_manage'), ('agent_instance', 'can_read', 'can_read'), ('agent_instance', 'can_recover', 'can_recover'), ('agent_instance', 'can_update', 'can_update'), ('agent_instance', 'can_use_release', 'can_use_release'), ('agent_instance', 'project', 'project'), ('agent_instance', 'release_agent', 'release_agent'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
     WHERE (c.object_type = 'agent_attachment' AND c.relation = 'can_manage' AND c.satisfying_relation = v_filter_relation)
@@ -40551,7 +42201,7 @@ BEGIN
         RETURN QUERY
         WITH base_results AS (
             SELECT p_object_id || '#' || v_filter_relation AS subject_id
-            		WHERE (v_filter_type = 'agent_attachment' AND EXISTS (
+		WHERE (v_filter_type = 'agent_attachment' AND EXISTS (
             SELECT 1
             FROM (VALUES ('agent_attachment', 'can_execute', 'can_execute'), ('agent_attachment', 'can_manage', 'can_manage'), ('agent_attachment', 'can_read', 'can_read'), ('agent_attachment', 'instance', 'instance'), ('agent_attachment', 'repository', 'repository'), ('agent_instance', 'can_execute', 'can_execute'), ('agent_instance', 'can_manage', 'can_manage'), ('agent_instance', 'can_read', 'can_read'), ('agent_instance', 'can_recover', 'can_recover'), ('agent_instance', 'can_update', 'can_update'), ('agent_instance', 'can_use_release', 'can_use_release'), ('agent_instance', 'project', 'project'), ('agent_instance', 'release_agent', 'release_agent'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
             WHERE (c.object_type = 'agent_attachment' AND c.relation = 'can_manage' AND c.satisfying_relation = v_filter_relation)
@@ -40701,8 +42351,8 @@ BEGIN
         -- Self-candidate: when filter type matches object type
         IF v_filter_type = 'agent_secret_binding' THEN
         IF EXISTS (
-    		SELECT p_object_id || '#' || v_filter_relation AS subject_id
-    		WHERE (v_filter_type = 'agent_secret_binding' AND EXISTS (
+		SELECT p_object_id || '#' || v_filter_relation AS subject_id
+		WHERE (v_filter_type = 'agent_secret_binding' AND EXISTS (
     SELECT 1
     FROM (VALUES ('agent_instance', 'can_execute', 'can_execute'), ('agent_instance', 'can_manage', 'can_manage'), ('agent_instance', 'can_read', 'can_read'), ('agent_instance', 'can_recover', 'can_recover'), ('agent_instance', 'can_update', 'can_update'), ('agent_instance', 'can_use_release', 'can_use_release'), ('agent_instance', 'project', 'project'), ('agent_instance', 'release_agent', 'release_agent'), ('agent_secret_binding', 'bind_brokered', 'bind_brokered'), ('agent_secret_binding', 'bind_raw', 'bind_raw'), ('agent_secret_binding', 'can_manage', 'can_manage'), ('agent_secret_binding', 'can_read', 'can_read'), ('agent_secret_binding', 'instance', 'instance'), ('agent_secret_binding', 'secret_import', 'secret_import'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
     WHERE (c.object_type = 'agent_secret_binding' AND c.relation = 'can_manage' AND c.satisfying_relation = v_filter_relation)
@@ -40711,7 +42361,7 @@ BEGIN
         RETURN QUERY
         WITH base_results AS (
             SELECT p_object_id || '#' || v_filter_relation AS subject_id
-            		WHERE (v_filter_type = 'agent_secret_binding' AND EXISTS (
+		WHERE (v_filter_type = 'agent_secret_binding' AND EXISTS (
             SELECT 1
             FROM (VALUES ('agent_instance', 'can_execute', 'can_execute'), ('agent_instance', 'can_manage', 'can_manage'), ('agent_instance', 'can_read', 'can_read'), ('agent_instance', 'can_recover', 'can_recover'), ('agent_instance', 'can_update', 'can_update'), ('agent_instance', 'can_use_release', 'can_use_release'), ('agent_instance', 'project', 'project'), ('agent_instance', 'release_agent', 'release_agent'), ('agent_secret_binding', 'bind_brokered', 'bind_brokered'), ('agent_secret_binding', 'bind_raw', 'bind_raw'), ('agent_secret_binding', 'can_manage', 'can_manage'), ('agent_secret_binding', 'can_read', 'can_read'), ('agent_secret_binding', 'instance', 'instance'), ('agent_secret_binding', 'secret_import', 'secret_import'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
             WHERE (c.object_type = 'agent_secret_binding' AND c.relation = 'can_manage' AND c.satisfying_relation = v_filter_relation)
@@ -40861,8 +42511,8 @@ BEGIN
         -- Self-candidate: when filter type matches object type
         IF v_filter_type = 'state_volume' THEN
         IF EXISTS (
-    		SELECT p_object_id || '#' || v_filter_relation AS subject_id
-    		WHERE (v_filter_type = 'state_volume' AND EXISTS (
+		SELECT p_object_id || '#' || v_filter_relation AS subject_id
+		WHERE (v_filter_type = 'state_volume' AND EXISTS (
     SELECT 1
     FROM (VALUES ('agent_instance', 'can_execute', 'can_execute'), ('agent_instance', 'can_manage', 'can_manage'), ('agent_instance', 'can_read', 'can_read'), ('agent_instance', 'can_recover', 'can_recover'), ('agent_instance', 'can_update', 'can_update'), ('agent_instance', 'can_use_release', 'can_use_release'), ('agent_instance', 'project', 'project'), ('agent_instance', 'release_agent', 'release_agent'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('state_volume', 'can_attach', 'can_attach'), ('state_volume', 'can_manage', 'can_manage'), ('state_volume', 'can_read', 'can_read'), ('state_volume', 'can_restore', 'can_restore'), ('state_volume', 'instance', 'instance')) AS c(object_type, relation, satisfying_relation)
     WHERE (c.object_type = 'state_volume' AND c.relation = 'can_manage' AND c.satisfying_relation = v_filter_relation)
@@ -40871,7 +42521,7 @@ BEGIN
         RETURN QUERY
         WITH base_results AS (
             SELECT p_object_id || '#' || v_filter_relation AS subject_id
-            		WHERE (v_filter_type = 'state_volume' AND EXISTS (
+		WHERE (v_filter_type = 'state_volume' AND EXISTS (
             SELECT 1
             FROM (VALUES ('agent_instance', 'can_execute', 'can_execute'), ('agent_instance', 'can_manage', 'can_manage'), ('agent_instance', 'can_read', 'can_read'), ('agent_instance', 'can_recover', 'can_recover'), ('agent_instance', 'can_update', 'can_update'), ('agent_instance', 'can_use_release', 'can_use_release'), ('agent_instance', 'project', 'project'), ('agent_instance', 'release_agent', 'release_agent'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('state_volume', 'can_attach', 'can_attach'), ('state_volume', 'can_manage', 'can_manage'), ('state_volume', 'can_read', 'can_read'), ('state_volume', 'can_restore', 'can_restore'), ('state_volume', 'instance', 'instance')) AS c(object_type, relation, satisfying_relation)
             WHERE (c.object_type = 'state_volume' AND c.relation = 'can_manage' AND c.satisfying_relation = v_filter_relation)
@@ -41021,8 +42671,8 @@ BEGIN
         -- Self-candidate: when filter type matches object type
         IF v_filter_type = 'state_volume' THEN
         IF EXISTS (
-    		SELECT p_object_id || '#' || v_filter_relation AS subject_id
-    		WHERE (v_filter_type = 'state_volume' AND EXISTS (
+		SELECT p_object_id || '#' || v_filter_relation AS subject_id
+		WHERE (v_filter_type = 'state_volume' AND EXISTS (
     SELECT 1
     FROM (VALUES ('agent_instance', 'can_execute', 'can_execute'), ('agent_instance', 'can_manage', 'can_manage'), ('agent_instance', 'can_read', 'can_read'), ('agent_instance', 'can_recover', 'can_recover'), ('agent_instance', 'can_update', 'can_update'), ('agent_instance', 'can_use_release', 'can_use_release'), ('agent_instance', 'project', 'project'), ('agent_instance', 'release_agent', 'release_agent'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('state_volume', 'can_attach', 'can_attach'), ('state_volume', 'can_manage', 'can_manage'), ('state_volume', 'can_read', 'can_read'), ('state_volume', 'can_restore', 'can_restore'), ('state_volume', 'instance', 'instance')) AS c(object_type, relation, satisfying_relation)
     WHERE (c.object_type = 'state_volume' AND c.relation = 'can_restore' AND c.satisfying_relation = v_filter_relation)
@@ -41031,7 +42681,7 @@ BEGIN
         RETURN QUERY
         WITH base_results AS (
             SELECT p_object_id || '#' || v_filter_relation AS subject_id
-            		WHERE (v_filter_type = 'state_volume' AND EXISTS (
+		WHERE (v_filter_type = 'state_volume' AND EXISTS (
             SELECT 1
             FROM (VALUES ('agent_instance', 'can_execute', 'can_execute'), ('agent_instance', 'can_manage', 'can_manage'), ('agent_instance', 'can_read', 'can_read'), ('agent_instance', 'can_recover', 'can_recover'), ('agent_instance', 'can_update', 'can_update'), ('agent_instance', 'can_use_release', 'can_use_release'), ('agent_instance', 'project', 'project'), ('agent_instance', 'release_agent', 'release_agent'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('state_volume', 'can_attach', 'can_attach'), ('state_volume', 'can_manage', 'can_manage'), ('state_volume', 'can_read', 'can_read'), ('state_volume', 'can_restore', 'can_restore'), ('state_volume', 'instance', 'instance')) AS c(object_type, relation, satisfying_relation)
             WHERE (c.object_type = 'state_volume' AND c.relation = 'can_restore' AND c.satisfying_relation = v_filter_relation)
@@ -41181,8 +42831,8 @@ BEGIN
         -- Self-candidate: when filter type matches object type
         IF v_filter_type = 'agent_update' THEN
         IF EXISTS (
-    		SELECT p_object_id || '#' || v_filter_relation AS subject_id
-    		WHERE (v_filter_type = 'agent_update' AND EXISTS (
+		SELECT p_object_id || '#' || v_filter_relation AS subject_id
+		WHERE (v_filter_type = 'agent_update' AND EXISTS (
     SELECT 1
     FROM (VALUES ('agent_instance', 'can_execute', 'can_execute'), ('agent_instance', 'can_manage', 'can_manage'), ('agent_instance', 'can_read', 'can_read'), ('agent_instance', 'can_recover', 'can_recover'), ('agent_instance', 'can_update', 'can_update'), ('agent_instance', 'can_use_release', 'can_use_release'), ('agent_instance', 'project', 'project'), ('agent_instance', 'release_agent', 'release_agent'), ('agent_update', 'can_read', 'can_read'), ('agent_update', 'can_recover', 'can_recover'), ('agent_update', 'can_start', 'can_start'), ('agent_update', 'instance', 'instance'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
     WHERE (c.object_type = 'agent_update' AND c.relation = 'can_recover' AND c.satisfying_relation = v_filter_relation)
@@ -41191,7 +42841,7 @@ BEGIN
         RETURN QUERY
         WITH base_results AS (
             SELECT p_object_id || '#' || v_filter_relation AS subject_id
-            		WHERE (v_filter_type = 'agent_update' AND EXISTS (
+		WHERE (v_filter_type = 'agent_update' AND EXISTS (
             SELECT 1
             FROM (VALUES ('agent_instance', 'can_execute', 'can_execute'), ('agent_instance', 'can_manage', 'can_manage'), ('agent_instance', 'can_read', 'can_read'), ('agent_instance', 'can_recover', 'can_recover'), ('agent_instance', 'can_update', 'can_update'), ('agent_instance', 'can_use_release', 'can_use_release'), ('agent_instance', 'project', 'project'), ('agent_instance', 'release_agent', 'release_agent'), ('agent_update', 'can_read', 'can_read'), ('agent_update', 'can_recover', 'can_recover'), ('agent_update', 'can_start', 'can_start'), ('agent_update', 'instance', 'instance'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
             WHERE (c.object_type = 'agent_update' AND c.relation = 'can_recover' AND c.satisfying_relation = v_filter_relation)
@@ -41341,8 +42991,8 @@ BEGIN
         -- Self-candidate: when filter type matches object type
         IF v_filter_type = 'agent_update' THEN
         IF EXISTS (
-    		SELECT p_object_id || '#' || v_filter_relation AS subject_id
-    		WHERE (v_filter_type = 'agent_update' AND EXISTS (
+		SELECT p_object_id || '#' || v_filter_relation AS subject_id
+		WHERE (v_filter_type = 'agent_update' AND EXISTS (
     SELECT 1
     FROM (VALUES ('agent_instance', 'can_execute', 'can_execute'), ('agent_instance', 'can_manage', 'can_manage'), ('agent_instance', 'can_read', 'can_read'), ('agent_instance', 'can_recover', 'can_recover'), ('agent_instance', 'can_update', 'can_update'), ('agent_instance', 'can_use_release', 'can_use_release'), ('agent_instance', 'project', 'project'), ('agent_instance', 'release_agent', 'release_agent'), ('agent_update', 'can_read', 'can_read'), ('agent_update', 'can_recover', 'can_recover'), ('agent_update', 'can_start', 'can_start'), ('agent_update', 'instance', 'instance'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
     WHERE (c.object_type = 'agent_update' AND c.relation = 'can_start' AND c.satisfying_relation = v_filter_relation)
@@ -41351,7 +43001,7 @@ BEGIN
         RETURN QUERY
         WITH base_results AS (
             SELECT p_object_id || '#' || v_filter_relation AS subject_id
-            		WHERE (v_filter_type = 'agent_update' AND EXISTS (
+		WHERE (v_filter_type = 'agent_update' AND EXISTS (
             SELECT 1
             FROM (VALUES ('agent_instance', 'can_execute', 'can_execute'), ('agent_instance', 'can_manage', 'can_manage'), ('agent_instance', 'can_read', 'can_read'), ('agent_instance', 'can_recover', 'can_recover'), ('agent_instance', 'can_update', 'can_update'), ('agent_instance', 'can_use_release', 'can_use_release'), ('agent_instance', 'project', 'project'), ('agent_instance', 'release_agent', 'release_agent'), ('agent_update', 'can_read', 'can_read'), ('agent_update', 'can_recover', 'can_recover'), ('agent_update', 'can_start', 'can_start'), ('agent_update', 'instance', 'instance'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
             WHERE (c.object_type = 'agent_update' AND c.relation = 'can_start' AND c.satisfying_relation = v_filter_relation)
@@ -41501,8 +43151,8 @@ BEGIN
         -- Self-candidate: when filter type matches object type
         IF v_filter_type = 'agent_attachment' THEN
         IF EXISTS (
-    		SELECT p_object_id || '#' || v_filter_relation AS subject_id
-    		WHERE (v_filter_type = 'agent_attachment' AND EXISTS (
+		SELECT p_object_id || '#' || v_filter_relation AS subject_id
+		WHERE (v_filter_type = 'agent_attachment' AND EXISTS (
     SELECT 1
     FROM (VALUES ('agent_attachment', 'can_execute', 'can_execute'), ('agent_attachment', 'can_manage', 'can_manage'), ('agent_attachment', 'can_read', 'can_read'), ('agent_attachment', 'instance', 'instance'), ('agent_attachment', 'repository', 'repository'), ('agent_instance', 'can_execute', 'can_execute'), ('agent_instance', 'can_manage', 'can_manage'), ('agent_instance', 'can_read', 'can_read'), ('agent_instance', 'can_recover', 'can_recover'), ('agent_instance', 'can_update', 'can_update'), ('agent_instance', 'can_use_release', 'can_use_release'), ('agent_instance', 'project', 'project'), ('agent_instance', 'release_agent', 'release_agent'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
     WHERE (c.object_type = 'agent_attachment' AND c.relation = 'can_execute' AND c.satisfying_relation = v_filter_relation)
@@ -41511,7 +43161,7 @@ BEGIN
         RETURN QUERY
         WITH base_results AS (
             SELECT p_object_id || '#' || v_filter_relation AS subject_id
-            		WHERE (v_filter_type = 'agent_attachment' AND EXISTS (
+		WHERE (v_filter_type = 'agent_attachment' AND EXISTS (
             SELECT 1
             FROM (VALUES ('agent_attachment', 'can_execute', 'can_execute'), ('agent_attachment', 'can_manage', 'can_manage'), ('agent_attachment', 'can_read', 'can_read'), ('agent_attachment', 'instance', 'instance'), ('agent_attachment', 'repository', 'repository'), ('agent_instance', 'can_execute', 'can_execute'), ('agent_instance', 'can_manage', 'can_manage'), ('agent_instance', 'can_read', 'can_read'), ('agent_instance', 'can_recover', 'can_recover'), ('agent_instance', 'can_update', 'can_update'), ('agent_instance', 'can_use_release', 'can_use_release'), ('agent_instance', 'project', 'project'), ('agent_instance', 'release_agent', 'release_agent'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
             WHERE (c.object_type = 'agent_attachment' AND c.relation = 'can_execute' AND c.satisfying_relation = v_filter_relation)
@@ -41661,8 +43311,8 @@ BEGIN
         -- Self-candidate: when filter type matches object type
         IF v_filter_type = 'run' THEN
         IF EXISTS (
-    		SELECT p_object_id || '#' || v_filter_relation AS subject_id
-    		WHERE (v_filter_type = 'run' AND EXISTS (
+		SELECT p_object_id || '#' || v_filter_relation AS subject_id
+		WHERE (v_filter_type = 'run' AND EXISTS (
     SELECT 1
     FROM (VALUES ('agent_instance', 'can_execute', 'can_execute'), ('agent_instance', 'can_manage', 'can_manage'), ('agent_instance', 'can_read', 'can_read'), ('agent_instance', 'can_recover', 'can_recover'), ('agent_instance', 'can_update', 'can_update'), ('agent_instance', 'can_use_release', 'can_use_release'), ('agent_instance', 'project', 'project'), ('agent_instance', 'release_agent', 'release_agent'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('run', 'can_cancel', 'can_cancel'), ('run', 'can_read', 'can_read'), ('run', 'instance', 'instance')) AS c(object_type, relation, satisfying_relation)
     WHERE (c.object_type = 'run' AND c.relation = 'can_cancel' AND c.satisfying_relation = v_filter_relation)
@@ -41671,7 +43321,7 @@ BEGIN
         RETURN QUERY
         WITH base_results AS (
             SELECT p_object_id || '#' || v_filter_relation AS subject_id
-            		WHERE (v_filter_type = 'run' AND EXISTS (
+		WHERE (v_filter_type = 'run' AND EXISTS (
             SELECT 1
             FROM (VALUES ('agent_instance', 'can_execute', 'can_execute'), ('agent_instance', 'can_manage', 'can_manage'), ('agent_instance', 'can_read', 'can_read'), ('agent_instance', 'can_recover', 'can_recover'), ('agent_instance', 'can_update', 'can_update'), ('agent_instance', 'can_use_release', 'can_use_release'), ('agent_instance', 'project', 'project'), ('agent_instance', 'release_agent', 'release_agent'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('run', 'can_cancel', 'can_cancel'), ('run', 'can_read', 'can_read'), ('run', 'instance', 'instance')) AS c(object_type, relation, satisfying_relation)
             WHERE (c.object_type = 'run' AND c.relation = 'can_cancel' AND c.satisfying_relation = v_filter_relation)
@@ -41821,8 +43471,8 @@ BEGIN
         -- Self-candidate: when filter type matches object type
         IF v_filter_type = 'state_volume' THEN
         IF EXISTS (
-    		SELECT p_object_id || '#' || v_filter_relation AS subject_id
-    		WHERE (v_filter_type = 'state_volume' AND EXISTS (
+		SELECT p_object_id || '#' || v_filter_relation AS subject_id
+		WHERE (v_filter_type = 'state_volume' AND EXISTS (
     SELECT 1
     FROM (VALUES ('agent_instance', 'can_execute', 'can_execute'), ('agent_instance', 'can_manage', 'can_manage'), ('agent_instance', 'can_read', 'can_read'), ('agent_instance', 'can_recover', 'can_recover'), ('agent_instance', 'can_update', 'can_update'), ('agent_instance', 'can_use_release', 'can_use_release'), ('agent_instance', 'project', 'project'), ('agent_instance', 'release_agent', 'release_agent'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('state_volume', 'can_attach', 'can_attach'), ('state_volume', 'can_manage', 'can_manage'), ('state_volume', 'can_read', 'can_read'), ('state_volume', 'can_restore', 'can_restore'), ('state_volume', 'instance', 'instance')) AS c(object_type, relation, satisfying_relation)
     WHERE (c.object_type = 'state_volume' AND c.relation = 'can_attach' AND c.satisfying_relation = v_filter_relation)
@@ -41831,7 +43481,7 @@ BEGIN
         RETURN QUERY
         WITH base_results AS (
             SELECT p_object_id || '#' || v_filter_relation AS subject_id
-            		WHERE (v_filter_type = 'state_volume' AND EXISTS (
+		WHERE (v_filter_type = 'state_volume' AND EXISTS (
             SELECT 1
             FROM (VALUES ('agent_instance', 'can_execute', 'can_execute'), ('agent_instance', 'can_manage', 'can_manage'), ('agent_instance', 'can_read', 'can_read'), ('agent_instance', 'can_recover', 'can_recover'), ('agent_instance', 'can_update', 'can_update'), ('agent_instance', 'can_use_release', 'can_use_release'), ('agent_instance', 'project', 'project'), ('agent_instance', 'release_agent', 'release_agent'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('state_volume', 'can_attach', 'can_attach'), ('state_volume', 'can_manage', 'can_manage'), ('state_volume', 'can_read', 'can_read'), ('state_volume', 'can_restore', 'can_restore'), ('state_volume', 'instance', 'instance')) AS c(object_type, relation, satisfying_relation)
             WHERE (c.object_type = 'state_volume' AND c.relation = 'can_attach' AND c.satisfying_relation = v_filter_relation)
@@ -41981,8 +43631,8 @@ BEGIN
         -- Self-candidate: when filter type matches object type
         IF v_filter_type = 'build' THEN
         IF EXISTS (
-    		SELECT p_object_id || '#' || v_filter_relation AS subject_id
-    		WHERE (v_filter_type = 'build' AND EXISTS (
+		SELECT p_object_id || '#' || v_filter_relation AS subject_id
+		WHERE (v_filter_type = 'build' AND EXISTS (
     SELECT 1
     FROM (VALUES ('build', 'can_cancel', 'can_cancel'), ('build', 'can_execute', 'can_execute'), ('build', 'can_read', 'can_read'), ('build', 'repository', 'repository'), ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
     WHERE (c.object_type = 'build' AND c.relation = 'can_cancel' AND c.satisfying_relation = v_filter_relation)
@@ -41991,7 +43641,7 @@ BEGIN
         RETURN QUERY
         WITH base_results AS (
             SELECT p_object_id || '#' || v_filter_relation AS subject_id
-            		WHERE (v_filter_type = 'build' AND EXISTS (
+		WHERE (v_filter_type = 'build' AND EXISTS (
             SELECT 1
             FROM (VALUES ('build', 'can_cancel', 'can_cancel'), ('build', 'can_execute', 'can_execute'), ('build', 'can_read', 'can_read'), ('build', 'repository', 'repository'), ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
             WHERE (c.object_type = 'build' AND c.relation = 'can_cancel' AND c.satisfying_relation = v_filter_relation)
@@ -42141,8 +43791,8 @@ BEGIN
         -- Self-candidate: when filter type matches object type
         IF v_filter_type = 'build' THEN
         IF EXISTS (
-    		SELECT p_object_id || '#' || v_filter_relation AS subject_id
-    		WHERE (v_filter_type = 'build' AND EXISTS (
+		SELECT p_object_id || '#' || v_filter_relation AS subject_id
+		WHERE (v_filter_type = 'build' AND EXISTS (
     SELECT 1
     FROM (VALUES ('build', 'can_cancel', 'can_cancel'), ('build', 'can_execute', 'can_execute'), ('build', 'can_read', 'can_read'), ('build', 'repository', 'repository'), ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
     WHERE (c.object_type = 'build' AND c.relation = 'can_execute' AND c.satisfying_relation = v_filter_relation)
@@ -42151,7 +43801,7 @@ BEGIN
         RETURN QUERY
         WITH base_results AS (
             SELECT p_object_id || '#' || v_filter_relation AS subject_id
-            		WHERE (v_filter_type = 'build' AND EXISTS (
+		WHERE (v_filter_type = 'build' AND EXISTS (
             SELECT 1
             FROM (VALUES ('build', 'can_cancel', 'can_cancel'), ('build', 'can_execute', 'can_execute'), ('build', 'can_read', 'can_read'), ('build', 'repository', 'repository'), ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
             WHERE (c.object_type = 'build' AND c.relation = 'can_execute' AND c.satisfying_relation = v_filter_relation)
@@ -42301,8 +43951,8 @@ BEGIN
         -- Self-candidate: when filter type matches object type
         IF v_filter_type = 'release' THEN
         IF EXISTS (
-    		SELECT p_object_id || '#' || v_filter_relation AS subject_id
-    		WHERE (v_filter_type = 'release' AND EXISTS (
+		SELECT p_object_id || '#' || v_filter_relation AS subject_id
+		WHERE (v_filter_type = 'release' AND EXISTS (
     SELECT 1
     FROM (VALUES ('release', 'can_publish', 'can_publish'), ('release', 'can_read', 'can_read'), ('release', 'can_revoke', 'can_revoke'), ('release', 'can_use', 'can_use'), ('release', 'repository', 'repository'), ('release', 'usable_repository', 'usable_repository'), ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
     WHERE (c.object_type = 'release' AND c.relation = 'can_publish' AND c.satisfying_relation = v_filter_relation)
@@ -42311,7 +43961,7 @@ BEGIN
         RETURN QUERY
         WITH base_results AS (
             SELECT p_object_id || '#' || v_filter_relation AS subject_id
-            		WHERE (v_filter_type = 'release' AND EXISTS (
+		WHERE (v_filter_type = 'release' AND EXISTS (
             SELECT 1
             FROM (VALUES ('release', 'can_publish', 'can_publish'), ('release', 'can_read', 'can_read'), ('release', 'can_revoke', 'can_revoke'), ('release', 'can_use', 'can_use'), ('release', 'repository', 'repository'), ('release', 'usable_repository', 'usable_repository'), ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
             WHERE (c.object_type = 'release' AND c.relation = 'can_publish' AND c.satisfying_relation = v_filter_relation)
@@ -42461,8 +44111,8 @@ BEGIN
         -- Self-candidate: when filter type matches object type
         IF v_filter_type = 'release' THEN
         IF EXISTS (
-    		SELECT p_object_id || '#' || v_filter_relation AS subject_id
-    		WHERE (v_filter_type = 'release' AND EXISTS (
+		SELECT p_object_id || '#' || v_filter_relation AS subject_id
+		WHERE (v_filter_type = 'release' AND EXISTS (
     SELECT 1
     FROM (VALUES ('release', 'can_publish', 'can_publish'), ('release', 'can_read', 'can_read'), ('release', 'can_revoke', 'can_revoke'), ('release', 'can_use', 'can_use'), ('release', 'repository', 'repository'), ('release', 'usable_repository', 'usable_repository'), ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
     WHERE (c.object_type = 'release' AND c.relation = 'can_revoke' AND c.satisfying_relation = v_filter_relation)
@@ -42471,7 +44121,7 @@ BEGIN
         RETURN QUERY
         WITH base_results AS (
             SELECT p_object_id || '#' || v_filter_relation AS subject_id
-            		WHERE (v_filter_type = 'release' AND EXISTS (
+		WHERE (v_filter_type = 'release' AND EXISTS (
             SELECT 1
             FROM (VALUES ('release', 'can_publish', 'can_publish'), ('release', 'can_read', 'can_read'), ('release', 'can_revoke', 'can_revoke'), ('release', 'can_use', 'can_use'), ('release', 'repository', 'repository'), ('release', 'usable_repository', 'usable_repository'), ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
             WHERE (c.object_type = 'release' AND c.relation = 'can_revoke' AND c.satisfying_relation = v_filter_relation)
@@ -42621,8 +44271,8 @@ BEGIN
         -- Self-candidate: when filter type matches object type
         IF v_filter_type = 'secret_grant' THEN
         IF EXISTS (
-    		SELECT p_object_id || '#' || v_filter_relation AS subject_id
-    		WHERE (v_filter_type = 'secret_grant' AND EXISTS (
+		SELECT p_object_id || '#' || v_filter_relation AS subject_id
+		WHERE (v_filter_type = 'secret_grant' AND EXISTS (
     SELECT 1
     FROM (VALUES ('organization', 'admin', 'admin'), ('organization', 'admin', 'owner'), ('organization', 'can_create_project', 'admin'), ('organization', 'can_create_project', 'can_create_project'), ('organization', 'can_create_project', 'owner'), ('organization', 'can_delete', 'can_delete'), ('organization', 'can_delete', 'owner'), ('organization', 'can_inspect_secrets', 'can_inspect_secrets'), ('organization', 'can_inspect_secrets', 'owner'), ('organization', 'can_inspect_secrets', 'secret_manager'), ('organization', 'can_manage', 'can_manage'), ('organization', 'can_manage', 'owner'), ('organization', 'can_manage_members', 'admin'), ('organization', 'can_manage_members', 'can_manage_members'), ('organization', 'can_manage_members', 'owner'), ('organization', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('organization', 'can_manage_secret_grants', 'owner'), ('organization', 'can_manage_secret_grants', 'secret_manager'), ('organization', 'can_purge_secrets', 'can_purge_secrets'), ('organization', 'can_purge_secrets', 'owner'), ('organization', 'can_purge_secrets', 'secret_manager'), ('organization', 'can_read', 'admin'), ('organization', 'can_read', 'can_read'), ('organization', 'can_read', 'member'), ('organization', 'can_read', 'owner'), ('organization', 'can_revoke_secrets', 'can_revoke_secrets'), ('organization', 'can_revoke_secrets', 'owner'), ('organization', 'can_revoke_secrets', 'secret_manager'), ('organization', 'can_rotate_secrets', 'can_rotate_secrets'), ('organization', 'can_rotate_secrets', 'owner'), ('organization', 'can_rotate_secrets', 'secret_manager'), ('organization', 'can_write_secret_value', 'can_write_secret_value'), ('organization', 'can_write_secret_value', 'owner'), ('organization', 'can_write_secret_value', 'secret_manager'), ('organization', 'member', 'admin'), ('organization', 'member', 'member'), ('organization', 'member', 'owner'), ('organization', 'owner', 'owner'), ('organization', 'secret_manager', 'secret_manager'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('secret', 'inspect_metadata', 'inspect_metadata'), ('secret', 'manage_grants', 'manage_grants'), ('secret', 'owner', 'owner'), ('secret', 'purge', 'purge'), ('secret', 'revoke', 'revoke'), ('secret', 'rotate', 'rotate'), ('secret', 'write_value', 'write_value'), ('secret_grant', 'inspect_metadata', 'inspect_metadata'), ('secret_grant', 'manage', 'manage'), ('secret_grant', 'secret', 'secret'), ('secret_grant', 'target', 'target')) AS c(object_type, relation, satisfying_relation)
     WHERE (c.object_type = 'secret_grant' AND c.relation = 'inspect_metadata' AND c.satisfying_relation = v_filter_relation)
@@ -42631,7 +44281,7 @@ BEGIN
         RETURN QUERY
         WITH base_results AS (
             SELECT p_object_id || '#' || v_filter_relation AS subject_id
-            		WHERE (v_filter_type = 'secret_grant' AND EXISTS (
+		WHERE (v_filter_type = 'secret_grant' AND EXISTS (
             SELECT 1
             FROM (VALUES ('organization', 'admin', 'admin'), ('organization', 'admin', 'owner'), ('organization', 'can_create_project', 'admin'), ('organization', 'can_create_project', 'can_create_project'), ('organization', 'can_create_project', 'owner'), ('organization', 'can_delete', 'can_delete'), ('organization', 'can_delete', 'owner'), ('organization', 'can_inspect_secrets', 'can_inspect_secrets'), ('organization', 'can_inspect_secrets', 'owner'), ('organization', 'can_inspect_secrets', 'secret_manager'), ('organization', 'can_manage', 'can_manage'), ('organization', 'can_manage', 'owner'), ('organization', 'can_manage_members', 'admin'), ('organization', 'can_manage_members', 'can_manage_members'), ('organization', 'can_manage_members', 'owner'), ('organization', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('organization', 'can_manage_secret_grants', 'owner'), ('organization', 'can_manage_secret_grants', 'secret_manager'), ('organization', 'can_purge_secrets', 'can_purge_secrets'), ('organization', 'can_purge_secrets', 'owner'), ('organization', 'can_purge_secrets', 'secret_manager'), ('organization', 'can_read', 'admin'), ('organization', 'can_read', 'can_read'), ('organization', 'can_read', 'member'), ('organization', 'can_read', 'owner'), ('organization', 'can_revoke_secrets', 'can_revoke_secrets'), ('organization', 'can_revoke_secrets', 'owner'), ('organization', 'can_revoke_secrets', 'secret_manager'), ('organization', 'can_rotate_secrets', 'can_rotate_secrets'), ('organization', 'can_rotate_secrets', 'owner'), ('organization', 'can_rotate_secrets', 'secret_manager'), ('organization', 'can_write_secret_value', 'can_write_secret_value'), ('organization', 'can_write_secret_value', 'owner'), ('organization', 'can_write_secret_value', 'secret_manager'), ('organization', 'member', 'admin'), ('organization', 'member', 'member'), ('organization', 'member', 'owner'), ('organization', 'owner', 'owner'), ('organization', 'secret_manager', 'secret_manager'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('secret', 'inspect_metadata', 'inspect_metadata'), ('secret', 'manage_grants', 'manage_grants'), ('secret', 'owner', 'owner'), ('secret', 'purge', 'purge'), ('secret', 'revoke', 'revoke'), ('secret', 'rotate', 'rotate'), ('secret', 'write_value', 'write_value'), ('secret_grant', 'inspect_metadata', 'inspect_metadata'), ('secret_grant', 'manage', 'manage'), ('secret_grant', 'secret', 'secret'), ('secret_grant', 'target', 'target')) AS c(object_type, relation, satisfying_relation)
             WHERE (c.object_type = 'secret_grant' AND c.relation = 'inspect_metadata' AND c.satisfying_relation = v_filter_relation)
@@ -42781,8 +44431,8 @@ BEGIN
         -- Self-candidate: when filter type matches object type
         IF v_filter_type = 'secret_grant' THEN
         IF EXISTS (
-    		SELECT p_object_id || '#' || v_filter_relation AS subject_id
-    		WHERE (v_filter_type = 'secret_grant' AND EXISTS (
+		SELECT p_object_id || '#' || v_filter_relation AS subject_id
+		WHERE (v_filter_type = 'secret_grant' AND EXISTS (
     SELECT 1
     FROM (VALUES ('organization', 'admin', 'admin'), ('organization', 'admin', 'owner'), ('organization', 'can_create_project', 'admin'), ('organization', 'can_create_project', 'can_create_project'), ('organization', 'can_create_project', 'owner'), ('organization', 'can_delete', 'can_delete'), ('organization', 'can_delete', 'owner'), ('organization', 'can_inspect_secrets', 'can_inspect_secrets'), ('organization', 'can_inspect_secrets', 'owner'), ('organization', 'can_inspect_secrets', 'secret_manager'), ('organization', 'can_manage', 'can_manage'), ('organization', 'can_manage', 'owner'), ('organization', 'can_manage_members', 'admin'), ('organization', 'can_manage_members', 'can_manage_members'), ('organization', 'can_manage_members', 'owner'), ('organization', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('organization', 'can_manage_secret_grants', 'owner'), ('organization', 'can_manage_secret_grants', 'secret_manager'), ('organization', 'can_purge_secrets', 'can_purge_secrets'), ('organization', 'can_purge_secrets', 'owner'), ('organization', 'can_purge_secrets', 'secret_manager'), ('organization', 'can_read', 'admin'), ('organization', 'can_read', 'can_read'), ('organization', 'can_read', 'member'), ('organization', 'can_read', 'owner'), ('organization', 'can_revoke_secrets', 'can_revoke_secrets'), ('organization', 'can_revoke_secrets', 'owner'), ('organization', 'can_revoke_secrets', 'secret_manager'), ('organization', 'can_rotate_secrets', 'can_rotate_secrets'), ('organization', 'can_rotate_secrets', 'owner'), ('organization', 'can_rotate_secrets', 'secret_manager'), ('organization', 'can_write_secret_value', 'can_write_secret_value'), ('organization', 'can_write_secret_value', 'owner'), ('organization', 'can_write_secret_value', 'secret_manager'), ('organization', 'member', 'admin'), ('organization', 'member', 'member'), ('organization', 'member', 'owner'), ('organization', 'owner', 'owner'), ('organization', 'secret_manager', 'secret_manager'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('secret', 'inspect_metadata', 'inspect_metadata'), ('secret', 'manage_grants', 'manage_grants'), ('secret', 'owner', 'owner'), ('secret', 'purge', 'purge'), ('secret', 'revoke', 'revoke'), ('secret', 'rotate', 'rotate'), ('secret', 'write_value', 'write_value'), ('secret_grant', 'inspect_metadata', 'inspect_metadata'), ('secret_grant', 'manage', 'manage'), ('secret_grant', 'secret', 'secret'), ('secret_grant', 'target', 'target')) AS c(object_type, relation, satisfying_relation)
     WHERE (c.object_type = 'secret_grant' AND c.relation = 'manage' AND c.satisfying_relation = v_filter_relation)
@@ -42791,7 +44441,7 @@ BEGIN
         RETURN QUERY
         WITH base_results AS (
             SELECT p_object_id || '#' || v_filter_relation AS subject_id
-            		WHERE (v_filter_type = 'secret_grant' AND EXISTS (
+		WHERE (v_filter_type = 'secret_grant' AND EXISTS (
             SELECT 1
             FROM (VALUES ('organization', 'admin', 'admin'), ('organization', 'admin', 'owner'), ('organization', 'can_create_project', 'admin'), ('organization', 'can_create_project', 'can_create_project'), ('organization', 'can_create_project', 'owner'), ('organization', 'can_delete', 'can_delete'), ('organization', 'can_delete', 'owner'), ('organization', 'can_inspect_secrets', 'can_inspect_secrets'), ('organization', 'can_inspect_secrets', 'owner'), ('organization', 'can_inspect_secrets', 'secret_manager'), ('organization', 'can_manage', 'can_manage'), ('organization', 'can_manage', 'owner'), ('organization', 'can_manage_members', 'admin'), ('organization', 'can_manage_members', 'can_manage_members'), ('organization', 'can_manage_members', 'owner'), ('organization', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('organization', 'can_manage_secret_grants', 'owner'), ('organization', 'can_manage_secret_grants', 'secret_manager'), ('organization', 'can_purge_secrets', 'can_purge_secrets'), ('organization', 'can_purge_secrets', 'owner'), ('organization', 'can_purge_secrets', 'secret_manager'), ('organization', 'can_read', 'admin'), ('organization', 'can_read', 'can_read'), ('organization', 'can_read', 'member'), ('organization', 'can_read', 'owner'), ('organization', 'can_revoke_secrets', 'can_revoke_secrets'), ('organization', 'can_revoke_secrets', 'owner'), ('organization', 'can_revoke_secrets', 'secret_manager'), ('organization', 'can_rotate_secrets', 'can_rotate_secrets'), ('organization', 'can_rotate_secrets', 'owner'), ('organization', 'can_rotate_secrets', 'secret_manager'), ('organization', 'can_write_secret_value', 'can_write_secret_value'), ('organization', 'can_write_secret_value', 'owner'), ('organization', 'can_write_secret_value', 'secret_manager'), ('organization', 'member', 'admin'), ('organization', 'member', 'member'), ('organization', 'member', 'owner'), ('organization', 'owner', 'owner'), ('organization', 'secret_manager', 'secret_manager'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('secret', 'inspect_metadata', 'inspect_metadata'), ('secret', 'manage_grants', 'manage_grants'), ('secret', 'owner', 'owner'), ('secret', 'purge', 'purge'), ('secret', 'revoke', 'revoke'), ('secret', 'rotate', 'rotate'), ('secret', 'write_value', 'write_value'), ('secret_grant', 'inspect_metadata', 'inspect_metadata'), ('secret_grant', 'manage', 'manage'), ('secret_grant', 'secret', 'secret'), ('secret_grant', 'target', 'target')) AS c(object_type, relation, satisfying_relation)
             WHERE (c.object_type = 'secret_grant' AND c.relation = 'manage' AND c.satisfying_relation = v_filter_relation)
@@ -42940,8 +44590,8 @@ BEGIN
         WITH base_results AS (
             -- Direct userset tuples
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'project' AND t.object_id = p_object_id AND t.relation IN ('can_read', 'maintainer') AND position('#' in t.subject_id) > 0 AND t.subject_type = v_filter_type AND EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'project' AND t.object_id = p_object_id AND t.relation IN ('can_read', 'maintainer') AND position('#' in t.subject_id) > 0 AND t.subject_type = v_filter_type AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('organization', 'admin', 'admin'), ('organization', 'admin', 'owner'), ('organization', 'can_create_project', 'admin'), ('organization', 'can_create_project', 'can_create_project'), ('organization', 'can_create_project', 'owner'), ('organization', 'can_delete', 'can_delete'), ('organization', 'can_delete', 'owner'), ('organization', 'can_inspect_secrets', 'can_inspect_secrets'), ('organization', 'can_inspect_secrets', 'owner'), ('organization', 'can_inspect_secrets', 'secret_manager'), ('organization', 'can_manage', 'can_manage'), ('organization', 'can_manage', 'owner'), ('organization', 'can_manage_members', 'admin'), ('organization', 'can_manage_members', 'can_manage_members'), ('organization', 'can_manage_members', 'owner'), ('organization', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('organization', 'can_manage_secret_grants', 'owner'), ('organization', 'can_manage_secret_grants', 'secret_manager'), ('organization', 'can_purge_secrets', 'can_purge_secrets'), ('organization', 'can_purge_secrets', 'owner'), ('organization', 'can_purge_secrets', 'secret_manager'), ('organization', 'can_read', 'admin'), ('organization', 'can_read', 'can_read'), ('organization', 'can_read', 'member'), ('organization', 'can_read', 'owner'), ('organization', 'can_revoke_secrets', 'can_revoke_secrets'), ('organization', 'can_revoke_secrets', 'owner'), ('organization', 'can_revoke_secrets', 'secret_manager'), ('organization', 'can_rotate_secrets', 'can_rotate_secrets'), ('organization', 'can_rotate_secrets', 'owner'), ('organization', 'can_rotate_secrets', 'secret_manager'), ('organization', 'can_write_secret_value', 'can_write_secret_value'), ('organization', 'can_write_secret_value', 'owner'), ('organization', 'can_write_secret_value', 'secret_manager'), ('organization', 'member', 'admin'), ('organization', 'member', 'member'), ('organization', 'member', 'owner'), ('organization', 'owner', 'owner'), ('organization', 'secret_manager', 'secret_manager'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = v_filter_type AND c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND c.satisfying_relation = v_filter_relation)
@@ -42949,11 +44599,11 @@ BEGIN
                 UNION
                 -- TTU userset: organization -> can_read
                 SELECT DISTINCT substring(pt.subject_id from 1 for position('#' in pt.subject_id) - 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS link
-                		INNER JOIN melange_tuples AS pt ON (pt.object_type = link.subject_type AND pt.object_id = link.subject_id AND pt.relation IN (SELECT c.satisfying_relation
+		FROM melange_tuples AS link
+		INNER JOIN melange_tuples AS pt ON (pt.object_type = link.subject_type AND pt.object_id = link.subject_id AND pt.relation IN (SELECT c.satisfying_relation
                 FROM (VALUES ('organization', 'admin', 'admin'), ('organization', 'admin', 'owner'), ('organization', 'can_create_project', 'admin'), ('organization', 'can_create_project', 'can_create_project'), ('organization', 'can_create_project', 'owner'), ('organization', 'can_delete', 'can_delete'), ('organization', 'can_delete', 'owner'), ('organization', 'can_inspect_secrets', 'can_inspect_secrets'), ('organization', 'can_inspect_secrets', 'owner'), ('organization', 'can_inspect_secrets', 'secret_manager'), ('organization', 'can_manage', 'can_manage'), ('organization', 'can_manage', 'owner'), ('organization', 'can_manage_members', 'admin'), ('organization', 'can_manage_members', 'can_manage_members'), ('organization', 'can_manage_members', 'owner'), ('organization', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('organization', 'can_manage_secret_grants', 'owner'), ('organization', 'can_manage_secret_grants', 'secret_manager'), ('organization', 'can_purge_secrets', 'can_purge_secrets'), ('organization', 'can_purge_secrets', 'owner'), ('organization', 'can_purge_secrets', 'secret_manager'), ('organization', 'can_read', 'admin'), ('organization', 'can_read', 'can_read'), ('organization', 'can_read', 'member'), ('organization', 'can_read', 'owner'), ('organization', 'can_revoke_secrets', 'can_revoke_secrets'), ('organization', 'can_revoke_secrets', 'owner'), ('organization', 'can_revoke_secrets', 'secret_manager'), ('organization', 'can_rotate_secrets', 'can_rotate_secrets'), ('organization', 'can_rotate_secrets', 'owner'), ('organization', 'can_rotate_secrets', 'secret_manager'), ('organization', 'can_write_secret_value', 'can_write_secret_value'), ('organization', 'can_write_secret_value', 'owner'), ('organization', 'can_write_secret_value', 'secret_manager'), ('organization', 'member', 'admin'), ('organization', 'member', 'member'), ('organization', 'member', 'owner'), ('organization', 'owner', 'owner'), ('organization', 'secret_manager', 'secret_manager'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = link.subject_type AND c.relation = 'can_read')))
-                		WHERE (link.object_type = 'project' AND link.object_id = p_object_id AND link.relation = 'organization' AND pt.subject_type = v_filter_type AND position('#' in pt.subject_id) > 0 AND (substring(pt.subject_id from position('#' in pt.subject_id) + 1) = v_filter_relation OR EXISTS (
+		WHERE (link.object_type = 'project' AND link.object_id = p_object_id AND link.relation = 'organization' AND pt.subject_type = v_filter_type AND position('#' in pt.subject_id) > 0 AND (substring(pt.subject_id from position('#' in pt.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('organization', 'admin', 'admin'), ('organization', 'admin', 'owner'), ('organization', 'can_create_project', 'admin'), ('organization', 'can_create_project', 'can_create_project'), ('organization', 'can_create_project', 'owner'), ('organization', 'can_delete', 'can_delete'), ('organization', 'can_delete', 'owner'), ('organization', 'can_inspect_secrets', 'can_inspect_secrets'), ('organization', 'can_inspect_secrets', 'owner'), ('organization', 'can_inspect_secrets', 'secret_manager'), ('organization', 'can_manage', 'can_manage'), ('organization', 'can_manage', 'owner'), ('organization', 'can_manage_members', 'admin'), ('organization', 'can_manage_members', 'can_manage_members'), ('organization', 'can_manage_members', 'owner'), ('organization', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('organization', 'can_manage_secret_grants', 'owner'), ('organization', 'can_manage_secret_grants', 'secret_manager'), ('organization', 'can_purge_secrets', 'can_purge_secrets'), ('organization', 'can_purge_secrets', 'owner'), ('organization', 'can_purge_secrets', 'secret_manager'), ('organization', 'can_read', 'admin'), ('organization', 'can_read', 'can_read'), ('organization', 'can_read', 'member'), ('organization', 'can_read', 'owner'), ('organization', 'can_revoke_secrets', 'can_revoke_secrets'), ('organization', 'can_revoke_secrets', 'owner'), ('organization', 'can_revoke_secrets', 'secret_manager'), ('organization', 'can_rotate_secrets', 'can_rotate_secrets'), ('organization', 'can_rotate_secrets', 'owner'), ('organization', 'can_rotate_secrets', 'secret_manager'), ('organization', 'can_write_secret_value', 'can_write_secret_value'), ('organization', 'can_write_secret_value', 'owner'), ('organization', 'can_write_secret_value', 'secret_manager'), ('organization', 'member', 'admin'), ('organization', 'member', 'member'), ('organization', 'member', 'owner'), ('organization', 'owner', 'owner'), ('organization', 'secret_manager', 'secret_manager'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(pt.subject_id from position('#' in pt.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -42961,8 +44611,8 @@ BEGIN
                 UNION
                 -- TTU intermediate: parent object as userset reference
                 SELECT DISTINCT link.subject_id || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS link
-                		WHERE (link.object_type = 'project' AND link.object_id = p_object_id AND link.relation = 'organization' AND link.subject_type = v_filter_type AND EXISTS (
+		FROM melange_tuples AS link
+		WHERE (link.object_type = 'project' AND link.object_id = p_object_id AND link.relation = 'organization' AND link.subject_type = v_filter_type AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('organization', 'admin', 'admin'), ('organization', 'admin', 'owner'), ('organization', 'can_create_project', 'admin'), ('organization', 'can_create_project', 'can_create_project'), ('organization', 'can_create_project', 'owner'), ('organization', 'can_delete', 'can_delete'), ('organization', 'can_delete', 'owner'), ('organization', 'can_inspect_secrets', 'can_inspect_secrets'), ('organization', 'can_inspect_secrets', 'owner'), ('organization', 'can_inspect_secrets', 'secret_manager'), ('organization', 'can_manage', 'can_manage'), ('organization', 'can_manage', 'owner'), ('organization', 'can_manage_members', 'admin'), ('organization', 'can_manage_members', 'can_manage_members'), ('organization', 'can_manage_members', 'owner'), ('organization', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('organization', 'can_manage_secret_grants', 'owner'), ('organization', 'can_manage_secret_grants', 'secret_manager'), ('organization', 'can_purge_secrets', 'can_purge_secrets'), ('organization', 'can_purge_secrets', 'owner'), ('organization', 'can_purge_secrets', 'secret_manager'), ('organization', 'can_read', 'admin'), ('organization', 'can_read', 'can_read'), ('organization', 'can_read', 'member'), ('organization', 'can_read', 'owner'), ('organization', 'can_revoke_secrets', 'can_revoke_secrets'), ('organization', 'can_revoke_secrets', 'owner'), ('organization', 'can_revoke_secrets', 'secret_manager'), ('organization', 'can_rotate_secrets', 'can_rotate_secrets'), ('organization', 'can_rotate_secrets', 'owner'), ('organization', 'can_rotate_secrets', 'secret_manager'), ('organization', 'can_write_secret_value', 'can_write_secret_value'), ('organization', 'can_write_secret_value', 'owner'), ('organization', 'can_write_secret_value', 'secret_manager'), ('organization', 'member', 'admin'), ('organization', 'member', 'member'), ('organization', 'member', 'owner'), ('organization', 'owner', 'owner'), ('organization', 'secret_manager', 'secret_manager'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = link.subject_type AND c.relation = 'can_read' AND c.satisfying_relation = v_filter_relation)
@@ -42978,7 +44628,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'project' AND EXISTS (
+		WHERE (v_filter_type = 'project' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('organization', 'admin', 'admin'), ('organization', 'admin', 'owner'), ('organization', 'can_create_project', 'admin'), ('organization', 'can_create_project', 'can_create_project'), ('organization', 'can_create_project', 'owner'), ('organization', 'can_delete', 'can_delete'), ('organization', 'can_delete', 'owner'), ('organization', 'can_inspect_secrets', 'can_inspect_secrets'), ('organization', 'can_inspect_secrets', 'owner'), ('organization', 'can_inspect_secrets', 'secret_manager'), ('organization', 'can_manage', 'can_manage'), ('organization', 'can_manage', 'owner'), ('organization', 'can_manage_members', 'admin'), ('organization', 'can_manage_members', 'can_manage_members'), ('organization', 'can_manage_members', 'owner'), ('organization', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('organization', 'can_manage_secret_grants', 'owner'), ('organization', 'can_manage_secret_grants', 'secret_manager'), ('organization', 'can_purge_secrets', 'can_purge_secrets'), ('organization', 'can_purge_secrets', 'owner'), ('organization', 'can_purge_secrets', 'secret_manager'), ('organization', 'can_read', 'admin'), ('organization', 'can_read', 'can_read'), ('organization', 'can_read', 'member'), ('organization', 'can_read', 'owner'), ('organization', 'can_revoke_secrets', 'can_revoke_secrets'), ('organization', 'can_revoke_secrets', 'owner'), ('organization', 'can_revoke_secrets', 'secret_manager'), ('organization', 'can_rotate_secrets', 'can_rotate_secrets'), ('organization', 'can_rotate_secrets', 'owner'), ('organization', 'can_rotate_secrets', 'secret_manager'), ('organization', 'can_write_secret_value', 'can_write_secret_value'), ('organization', 'can_write_secret_value', 'owner'), ('organization', 'can_write_secret_value', 'secret_manager'), ('organization', 'member', 'admin'), ('organization', 'member', 'member'), ('organization', 'member', 'owner'), ('organization', 'owner', 'owner'), ('organization', 'secret_manager', 'secret_manager'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'project' AND c.relation = 'can_read' AND c.satisfying_relation = v_filter_relation)
@@ -43098,8 +44748,8 @@ BEGIN
         -- Self-candidate: when filter type matches object type
         IF v_filter_type = 'agent_instance' THEN
         IF EXISTS (
-    		SELECT p_object_id || '#' || v_filter_relation AS subject_id
-    		WHERE (v_filter_type = 'agent_instance' AND EXISTS (
+		SELECT p_object_id || '#' || v_filter_relation AS subject_id
+		WHERE (v_filter_type = 'agent_instance' AND EXISTS (
     SELECT 1
     FROM (VALUES ('agent_instance', 'can_execute', 'can_execute'), ('agent_instance', 'can_manage', 'can_manage'), ('agent_instance', 'can_read', 'can_read'), ('agent_instance', 'can_recover', 'can_recover'), ('agent_instance', 'can_update', 'can_update'), ('agent_instance', 'can_use_release', 'can_use_release'), ('agent_instance', 'project', 'project'), ('agent_instance', 'release_agent', 'release_agent'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
     WHERE (c.object_type = 'agent_instance' AND c.relation = 'can_read' AND c.satisfying_relation = v_filter_relation)
@@ -43108,7 +44758,7 @@ BEGIN
         RETURN QUERY
         WITH base_results AS (
             SELECT p_object_id || '#' || v_filter_relation AS subject_id
-            		WHERE (v_filter_type = 'agent_instance' AND EXISTS (
+		WHERE (v_filter_type = 'agent_instance' AND EXISTS (
             SELECT 1
             FROM (VALUES ('agent_instance', 'can_execute', 'can_execute'), ('agent_instance', 'can_manage', 'can_manage'), ('agent_instance', 'can_read', 'can_read'), ('agent_instance', 'can_recover', 'can_recover'), ('agent_instance', 'can_update', 'can_update'), ('agent_instance', 'can_use_release', 'can_use_release'), ('agent_instance', 'project', 'project'), ('agent_instance', 'release_agent', 'release_agent'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
             WHERE (c.object_type = 'agent_instance' AND c.relation = 'can_read' AND c.satisfying_relation = v_filter_relation)
@@ -43257,8 +44907,8 @@ BEGIN
         WITH base_results AS (
             -- Direct userset tuples
                 SELECT DISTINCT split_part(t.subject_id, '#', 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS t
-                		WHERE (t.object_type = 'repository' AND t.object_id = p_object_id AND t.relation IN ('can_read', 'public') AND position('#' in t.subject_id) > 0 AND t.subject_type = v_filter_type AND EXISTS (
+		FROM melange_tuples AS t
+		WHERE (t.object_type = 'repository' AND t.object_id = p_object_id AND t.relation IN ('can_read', 'public') AND position('#' in t.subject_id) > 0 AND t.subject_type = v_filter_type AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = v_filter_type AND c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1) AND c.satisfying_relation = v_filter_relation)
@@ -43266,11 +44916,11 @@ BEGIN
                 UNION
                 -- TTU userset: project -> can_read
                 SELECT DISTINCT substring(pt.subject_id from 1 for position('#' in pt.subject_id) - 1) || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS link
-                		INNER JOIN melange_tuples AS pt ON (pt.object_type = link.subject_type AND pt.object_id = link.subject_id AND pt.relation IN (SELECT c.satisfying_relation
+		FROM melange_tuples AS link
+		INNER JOIN melange_tuples AS pt ON (pt.object_type = link.subject_type AND pt.object_id = link.subject_id AND pt.relation IN (SELECT c.satisfying_relation
                 FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = link.subject_type AND c.relation = 'can_read')))
-                		WHERE (link.object_type = 'repository' AND link.object_id = p_object_id AND link.relation = 'project' AND pt.subject_type = v_filter_type AND position('#' in pt.subject_id) > 0 AND (substring(pt.subject_id from position('#' in pt.subject_id) + 1) = v_filter_relation OR EXISTS (
+		WHERE (link.object_type = 'repository' AND link.object_id = p_object_id AND link.relation = 'project' AND pt.subject_type = v_filter_type AND position('#' in pt.subject_id) > 0 AND (substring(pt.subject_id from position('#' in pt.subject_id) + 1) = v_filter_relation OR EXISTS (
                 SELECT 1
                 FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager')) AS subj_c(object_type, relation, satisfying_relation)
                 WHERE (subj_c.object_type = v_filter_type AND subj_c.relation = substring(pt.subject_id from position('#' in pt.subject_id) + 1) AND subj_c.satisfying_relation = v_filter_relation)
@@ -43278,8 +44928,8 @@ BEGIN
                 UNION
                 -- TTU intermediate: parent object as userset reference
                 SELECT DISTINCT link.subject_id || '#' || v_filter_relation AS subject_id
-                		FROM melange_tuples AS link
-                		WHERE (link.object_type = 'repository' AND link.object_id = p_object_id AND link.relation = 'project' AND link.subject_type = v_filter_type AND EXISTS (
+		FROM melange_tuples AS link
+		WHERE (link.object_type = 'repository' AND link.object_id = p_object_id AND link.relation = 'project' AND link.subject_type = v_filter_type AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = link.subject_type AND c.relation = 'can_read' AND c.satisfying_relation = v_filter_relation)
@@ -43295,7 +44945,7 @@ BEGIN
                 -- e.g., querying document:1.viewer with filter document#writer
                 -- should return document:1#writer if writer satisfies the relation
                 SELECT p_object_id || '#' || v_filter_relation AS subject_id
-                		WHERE (v_filter_type = 'repository' AND EXISTS (
+		WHERE (v_filter_type = 'repository' AND EXISTS (
                 SELECT 1
                 FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
                 WHERE (c.object_type = 'repository' AND c.relation = 'can_read' AND c.satisfying_relation = v_filter_relation)
@@ -43391,6 +45041,166 @@ END;
 $$ LANGUAGE plpgsql STABLE
 SET search_path = 'public';
 
+-- Generated list_subjects function for repository_oci_image.can_read
+-- Features: Recursive
+-- Indirect anchor: project.can_read via ttu
+CREATE OR REPLACE FUNCTION "public"."list_repository_oci_image_can_read_sub"(
+    p_object_id TEXT,
+    p_subject_type TEXT,
+    p_limit INT DEFAULT NULL,
+    p_after TEXT DEFAULT NULL
+) RETURNS TABLE(subject_id TEXT, next_cursor TEXT) ROWS 100 AS $$
+DECLARE
+    v_is_userset_filter BOOLEAN;
+    v_filter_type TEXT;
+    v_filter_relation TEXT;
+BEGIN
+    v_is_userset_filter := position('#' in p_subject_type) > 0;
+    IF v_is_userset_filter THEN
+        v_filter_type := split_part(p_subject_type, '#', 1);
+        v_filter_relation := split_part(p_subject_type, '#', 2);
+        -- Self-candidate: when filter type matches object type
+        IF v_filter_type = 'repository_oci_image' THEN
+        IF EXISTS (
+		SELECT p_object_id || '#' || v_filter_relation AS subject_id
+		WHERE (v_filter_type = 'repository_oci_image' AND EXISTS (
+    SELECT 1
+    FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('repository_oci_image', 'can_manage', 'can_manage'), ('repository_oci_image', 'can_read', 'can_read'), ('repository_oci_image', 'can_write', 'can_write'), ('repository_oci_image', 'project', 'project')) AS c(object_type, relation, satisfying_relation)
+    WHERE (c.object_type = 'repository_oci_image' AND c.relation = 'can_read' AND c.satisfying_relation = v_filter_relation)
+    ))
+    ) THEN
+        RETURN QUERY
+        WITH base_results AS (
+            SELECT p_object_id || '#' || v_filter_relation AS subject_id
+		WHERE (v_filter_type = 'repository_oci_image' AND EXISTS (
+            SELECT 1
+            FROM (VALUES ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('repository_oci_image', 'can_manage', 'can_manage'), ('repository_oci_image', 'can_read', 'can_read'), ('repository_oci_image', 'can_write', 'can_write'), ('repository_oci_image', 'project', 'project')) AS c(object_type, relation, satisfying_relation)
+            WHERE (c.object_type = 'repository_oci_image' AND c.relation = 'can_read' AND c.satisfying_relation = v_filter_relation)
+            ))
+        ),
+        paged AS (
+            SELECT br.subject_id
+            FROM base_results br
+            WHERE p_after IS NULL OR (
+                -- Compound comparison for wildcard-first ordering:
+                -- (is_not_wildcard, subject_id) > (cursor_is_not_wildcard, cursor)
+                (CASE WHEN br.subject_id = '*' THEN 0 ELSE 1 END, br.subject_id) >
+                (CASE WHEN p_after = '*' THEN 0 ELSE 1 END, p_after)
+            )
+            ORDER BY (CASE WHEN br.subject_id = '*' THEN 0 ELSE 1 END), br.subject_id
+            LIMIT CASE WHEN p_limit IS NULL THEN NULL ELSE p_limit + 1 END
+        ),
+        returned AS (
+            SELECT p.subject_id FROM paged p
+            ORDER BY (CASE WHEN p.subject_id = '*' THEN 0 ELSE 1 END), p.subject_id
+            LIMIT p_limit
+        ),
+        next AS (
+            SELECT CASE
+                WHEN p_limit IS NOT NULL AND (SELECT count(*) FROM paged) > p_limit
+                THEN (SELECT r.subject_id FROM returned r
+                      ORDER BY (CASE WHEN r.subject_id = '*' THEN 0 ELSE 1 END) DESC, r.subject_id DESC
+                      LIMIT 1)
+            END AS next_cursor
+        )
+        SELECT r.subject_id, n.next_cursor
+        FROM returned r
+        CROSS JOIN next n;
+        RETURN;
+    END IF;
+    END IF;
+        -- Userset filter case
+        RETURN QUERY
+        WITH base_results AS (
+            WITH subject_candidates AS (
+                -- From project parents
+                    SELECT DISTINCT s.subject_id
+                    FROM melange_tuples AS link
+                    CROSS JOIN LATERAL "public"."list_project_can_read_sub"(link.subject_id, p_subject_type) AS s
+                    WHERE (link.object_type = 'repository_oci_image' AND link.object_id = p_object_id AND link.relation = 'project' AND link.subject_type = 'project')
+            )
+            SELECT DISTINCT sc.subject_id
+            FROM subject_candidates AS sc
+            WHERE "public"."check_permission_internal"(v_filter_type, sc.subject_id, 'can_read', 'repository_oci_image', p_object_id, ARRAY[]::TEXT[]) = 1
+        ),
+        paged AS (
+            SELECT br.subject_id
+            FROM base_results br
+            WHERE p_after IS NULL OR (
+                -- Compound comparison for wildcard-first ordering:
+                -- (is_not_wildcard, subject_id) > (cursor_is_not_wildcard, cursor)
+                (CASE WHEN br.subject_id = '*' THEN 0 ELSE 1 END, br.subject_id) >
+                (CASE WHEN p_after = '*' THEN 0 ELSE 1 END, p_after)
+            )
+            ORDER BY (CASE WHEN br.subject_id = '*' THEN 0 ELSE 1 END), br.subject_id
+            LIMIT CASE WHEN p_limit IS NULL THEN NULL ELSE p_limit + 1 END
+        ),
+        returned AS (
+            SELECT p.subject_id FROM paged p
+            ORDER BY (CASE WHEN p.subject_id = '*' THEN 0 ELSE 1 END), p.subject_id
+            LIMIT p_limit
+        ),
+        next AS (
+            SELECT CASE
+                WHEN p_limit IS NOT NULL AND (SELECT count(*) FROM paged) > p_limit
+                THEN (SELECT r.subject_id FROM returned r
+                      ORDER BY (CASE WHEN r.subject_id = '*' THEN 0 ELSE 1 END) DESC, r.subject_id DESC
+                      LIMIT 1)
+            END AS next_cursor
+        )
+        SELECT r.subject_id, n.next_cursor
+        FROM returned r
+        CROSS JOIN next n;
+    ELSE
+        -- Direct subject type case
+        IF p_subject_type NOT IN ('user') THEN
+        RETURN;
+    END IF;
+        RETURN QUERY
+        WITH base_results AS (
+            WITH subject_candidates AS (
+                -- From project parents
+                    SELECT DISTINCT s.subject_id
+                    FROM melange_tuples AS link
+                    CROSS JOIN LATERAL "public"."list_project_can_read_sub"(link.subject_id, p_subject_type) AS s
+                    WHERE (link.object_type = 'repository_oci_image' AND link.object_id = p_object_id AND link.relation = 'project' AND link.subject_type = 'project')
+            )
+            SELECT DISTINCT sc.subject_id
+            FROM subject_candidates AS sc
+        ),
+        paged AS (
+            SELECT br.subject_id
+            FROM base_results br
+            WHERE p_after IS NULL OR (
+                -- Compound comparison for wildcard-first ordering:
+                -- (is_not_wildcard, subject_id) > (cursor_is_not_wildcard, cursor)
+                (CASE WHEN br.subject_id = '*' THEN 0 ELSE 1 END, br.subject_id) >
+                (CASE WHEN p_after = '*' THEN 0 ELSE 1 END, p_after)
+            )
+            ORDER BY (CASE WHEN br.subject_id = '*' THEN 0 ELSE 1 END), br.subject_id
+            LIMIT CASE WHEN p_limit IS NULL THEN NULL ELSE p_limit + 1 END
+        ),
+        returned AS (
+            SELECT p.subject_id FROM paged p
+            ORDER BY (CASE WHEN p.subject_id = '*' THEN 0 ELSE 1 END), p.subject_id
+            LIMIT p_limit
+        ),
+        next AS (
+            SELECT CASE
+                WHEN p_limit IS NOT NULL AND (SELECT count(*) FROM paged) > p_limit
+                THEN (SELECT r.subject_id FROM returned r
+                      ORDER BY (CASE WHEN r.subject_id = '*' THEN 0 ELSE 1 END) DESC, r.subject_id DESC
+                      LIMIT 1)
+            END AS next_cursor
+        )
+        SELECT r.subject_id, n.next_cursor
+        FROM returned r
+        CROSS JOIN next n;
+    END IF;
+END;
+$$ LANGUAGE plpgsql STABLE
+SET search_path = 'public';
+
 -- Generated list_subjects function for agent_attachment.can_read
 -- Features: Recursive
 -- Indirect anchor: project.can_read via ttu
@@ -43412,8 +45222,8 @@ BEGIN
         -- Self-candidate: when filter type matches object type
         IF v_filter_type = 'agent_attachment' THEN
         IF EXISTS (
-    		SELECT p_object_id || '#' || v_filter_relation AS subject_id
-    		WHERE (v_filter_type = 'agent_attachment' AND EXISTS (
+		SELECT p_object_id || '#' || v_filter_relation AS subject_id
+		WHERE (v_filter_type = 'agent_attachment' AND EXISTS (
     SELECT 1
     FROM (VALUES ('agent_attachment', 'can_execute', 'can_execute'), ('agent_attachment', 'can_manage', 'can_manage'), ('agent_attachment', 'can_read', 'can_read'), ('agent_attachment', 'instance', 'instance'), ('agent_attachment', 'repository', 'repository'), ('agent_instance', 'can_execute', 'can_execute'), ('agent_instance', 'can_manage', 'can_manage'), ('agent_instance', 'can_read', 'can_read'), ('agent_instance', 'can_recover', 'can_recover'), ('agent_instance', 'can_update', 'can_update'), ('agent_instance', 'can_use_release', 'can_use_release'), ('agent_instance', 'project', 'project'), ('agent_instance', 'release_agent', 'release_agent'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
     WHERE (c.object_type = 'agent_attachment' AND c.relation = 'can_read' AND c.satisfying_relation = v_filter_relation)
@@ -43422,7 +45232,7 @@ BEGIN
         RETURN QUERY
         WITH base_results AS (
             SELECT p_object_id || '#' || v_filter_relation AS subject_id
-            		WHERE (v_filter_type = 'agent_attachment' AND EXISTS (
+		WHERE (v_filter_type = 'agent_attachment' AND EXISTS (
             SELECT 1
             FROM (VALUES ('agent_attachment', 'can_execute', 'can_execute'), ('agent_attachment', 'can_manage', 'can_manage'), ('agent_attachment', 'can_read', 'can_read'), ('agent_attachment', 'instance', 'instance'), ('agent_attachment', 'repository', 'repository'), ('agent_instance', 'can_execute', 'can_execute'), ('agent_instance', 'can_manage', 'can_manage'), ('agent_instance', 'can_read', 'can_read'), ('agent_instance', 'can_recover', 'can_recover'), ('agent_instance', 'can_update', 'can_update'), ('agent_instance', 'can_use_release', 'can_use_release'), ('agent_instance', 'project', 'project'), ('agent_instance', 'release_agent', 'release_agent'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
             WHERE (c.object_type = 'agent_attachment' AND c.relation = 'can_read' AND c.satisfying_relation = v_filter_relation)
@@ -43572,8 +45382,8 @@ BEGIN
         -- Self-candidate: when filter type matches object type
         IF v_filter_type = 'agent_secret_binding' THEN
         IF EXISTS (
-    		SELECT p_object_id || '#' || v_filter_relation AS subject_id
-    		WHERE (v_filter_type = 'agent_secret_binding' AND EXISTS (
+		SELECT p_object_id || '#' || v_filter_relation AS subject_id
+		WHERE (v_filter_type = 'agent_secret_binding' AND EXISTS (
     SELECT 1
     FROM (VALUES ('agent_instance', 'can_execute', 'can_execute'), ('agent_instance', 'can_manage', 'can_manage'), ('agent_instance', 'can_read', 'can_read'), ('agent_instance', 'can_recover', 'can_recover'), ('agent_instance', 'can_update', 'can_update'), ('agent_instance', 'can_use_release', 'can_use_release'), ('agent_instance', 'project', 'project'), ('agent_instance', 'release_agent', 'release_agent'), ('agent_secret_binding', 'bind_brokered', 'bind_brokered'), ('agent_secret_binding', 'bind_raw', 'bind_raw'), ('agent_secret_binding', 'can_manage', 'can_manage'), ('agent_secret_binding', 'can_read', 'can_read'), ('agent_secret_binding', 'instance', 'instance'), ('agent_secret_binding', 'secret_import', 'secret_import'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
     WHERE (c.object_type = 'agent_secret_binding' AND c.relation = 'can_read' AND c.satisfying_relation = v_filter_relation)
@@ -43582,7 +45392,7 @@ BEGIN
         RETURN QUERY
         WITH base_results AS (
             SELECT p_object_id || '#' || v_filter_relation AS subject_id
-            		WHERE (v_filter_type = 'agent_secret_binding' AND EXISTS (
+		WHERE (v_filter_type = 'agent_secret_binding' AND EXISTS (
             SELECT 1
             FROM (VALUES ('agent_instance', 'can_execute', 'can_execute'), ('agent_instance', 'can_manage', 'can_manage'), ('agent_instance', 'can_read', 'can_read'), ('agent_instance', 'can_recover', 'can_recover'), ('agent_instance', 'can_update', 'can_update'), ('agent_instance', 'can_use_release', 'can_use_release'), ('agent_instance', 'project', 'project'), ('agent_instance', 'release_agent', 'release_agent'), ('agent_secret_binding', 'bind_brokered', 'bind_brokered'), ('agent_secret_binding', 'bind_raw', 'bind_raw'), ('agent_secret_binding', 'can_manage', 'can_manage'), ('agent_secret_binding', 'can_read', 'can_read'), ('agent_secret_binding', 'instance', 'instance'), ('agent_secret_binding', 'secret_import', 'secret_import'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
             WHERE (c.object_type = 'agent_secret_binding' AND c.relation = 'can_read' AND c.satisfying_relation = v_filter_relation)
@@ -43732,8 +45542,8 @@ BEGIN
         -- Self-candidate: when filter type matches object type
         IF v_filter_type = 'agent_update' THEN
         IF EXISTS (
-    		SELECT p_object_id || '#' || v_filter_relation AS subject_id
-    		WHERE (v_filter_type = 'agent_update' AND EXISTS (
+		SELECT p_object_id || '#' || v_filter_relation AS subject_id
+		WHERE (v_filter_type = 'agent_update' AND EXISTS (
     SELECT 1
     FROM (VALUES ('agent_instance', 'can_execute', 'can_execute'), ('agent_instance', 'can_manage', 'can_manage'), ('agent_instance', 'can_read', 'can_read'), ('agent_instance', 'can_recover', 'can_recover'), ('agent_instance', 'can_update', 'can_update'), ('agent_instance', 'can_use_release', 'can_use_release'), ('agent_instance', 'project', 'project'), ('agent_instance', 'release_agent', 'release_agent'), ('agent_update', 'can_read', 'can_read'), ('agent_update', 'can_recover', 'can_recover'), ('agent_update', 'can_start', 'can_start'), ('agent_update', 'instance', 'instance'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
     WHERE (c.object_type = 'agent_update' AND c.relation = 'can_read' AND c.satisfying_relation = v_filter_relation)
@@ -43742,7 +45552,7 @@ BEGIN
         RETURN QUERY
         WITH base_results AS (
             SELECT p_object_id || '#' || v_filter_relation AS subject_id
-            		WHERE (v_filter_type = 'agent_update' AND EXISTS (
+		WHERE (v_filter_type = 'agent_update' AND EXISTS (
             SELECT 1
             FROM (VALUES ('agent_instance', 'can_execute', 'can_execute'), ('agent_instance', 'can_manage', 'can_manage'), ('agent_instance', 'can_read', 'can_read'), ('agent_instance', 'can_recover', 'can_recover'), ('agent_instance', 'can_update', 'can_update'), ('agent_instance', 'can_use_release', 'can_use_release'), ('agent_instance', 'project', 'project'), ('agent_instance', 'release_agent', 'release_agent'), ('agent_update', 'can_read', 'can_read'), ('agent_update', 'can_recover', 'can_recover'), ('agent_update', 'can_start', 'can_start'), ('agent_update', 'instance', 'instance'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
             WHERE (c.object_type = 'agent_update' AND c.relation = 'can_read' AND c.satisfying_relation = v_filter_relation)
@@ -43892,8 +45702,8 @@ BEGIN
         -- Self-candidate: when filter type matches object type
         IF v_filter_type = 'run' THEN
         IF EXISTS (
-    		SELECT p_object_id || '#' || v_filter_relation AS subject_id
-    		WHERE (v_filter_type = 'run' AND EXISTS (
+		SELECT p_object_id || '#' || v_filter_relation AS subject_id
+		WHERE (v_filter_type = 'run' AND EXISTS (
     SELECT 1
     FROM (VALUES ('agent_instance', 'can_execute', 'can_execute'), ('agent_instance', 'can_manage', 'can_manage'), ('agent_instance', 'can_read', 'can_read'), ('agent_instance', 'can_recover', 'can_recover'), ('agent_instance', 'can_update', 'can_update'), ('agent_instance', 'can_use_release', 'can_use_release'), ('agent_instance', 'project', 'project'), ('agent_instance', 'release_agent', 'release_agent'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('run', 'can_cancel', 'can_cancel'), ('run', 'can_read', 'can_read'), ('run', 'instance', 'instance')) AS c(object_type, relation, satisfying_relation)
     WHERE (c.object_type = 'run' AND c.relation = 'can_read' AND c.satisfying_relation = v_filter_relation)
@@ -43902,7 +45712,7 @@ BEGIN
         RETURN QUERY
         WITH base_results AS (
             SELECT p_object_id || '#' || v_filter_relation AS subject_id
-            		WHERE (v_filter_type = 'run' AND EXISTS (
+		WHERE (v_filter_type = 'run' AND EXISTS (
             SELECT 1
             FROM (VALUES ('agent_instance', 'can_execute', 'can_execute'), ('agent_instance', 'can_manage', 'can_manage'), ('agent_instance', 'can_read', 'can_read'), ('agent_instance', 'can_recover', 'can_recover'), ('agent_instance', 'can_update', 'can_update'), ('agent_instance', 'can_use_release', 'can_use_release'), ('agent_instance', 'project', 'project'), ('agent_instance', 'release_agent', 'release_agent'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('run', 'can_cancel', 'can_cancel'), ('run', 'can_read', 'can_read'), ('run', 'instance', 'instance')) AS c(object_type, relation, satisfying_relation)
             WHERE (c.object_type = 'run' AND c.relation = 'can_read' AND c.satisfying_relation = v_filter_relation)
@@ -44052,8 +45862,8 @@ BEGIN
         -- Self-candidate: when filter type matches object type
         IF v_filter_type = 'state_volume' THEN
         IF EXISTS (
-    		SELECT p_object_id || '#' || v_filter_relation AS subject_id
-    		WHERE (v_filter_type = 'state_volume' AND EXISTS (
+		SELECT p_object_id || '#' || v_filter_relation AS subject_id
+		WHERE (v_filter_type = 'state_volume' AND EXISTS (
     SELECT 1
     FROM (VALUES ('agent_instance', 'can_execute', 'can_execute'), ('agent_instance', 'can_manage', 'can_manage'), ('agent_instance', 'can_read', 'can_read'), ('agent_instance', 'can_recover', 'can_recover'), ('agent_instance', 'can_update', 'can_update'), ('agent_instance', 'can_use_release', 'can_use_release'), ('agent_instance', 'project', 'project'), ('agent_instance', 'release_agent', 'release_agent'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('state_volume', 'can_attach', 'can_attach'), ('state_volume', 'can_manage', 'can_manage'), ('state_volume', 'can_read', 'can_read'), ('state_volume', 'can_restore', 'can_restore'), ('state_volume', 'instance', 'instance')) AS c(object_type, relation, satisfying_relation)
     WHERE (c.object_type = 'state_volume' AND c.relation = 'can_read' AND c.satisfying_relation = v_filter_relation)
@@ -44062,7 +45872,7 @@ BEGIN
         RETURN QUERY
         WITH base_results AS (
             SELECT p_object_id || '#' || v_filter_relation AS subject_id
-            		WHERE (v_filter_type = 'state_volume' AND EXISTS (
+		WHERE (v_filter_type = 'state_volume' AND EXISTS (
             SELECT 1
             FROM (VALUES ('agent_instance', 'can_execute', 'can_execute'), ('agent_instance', 'can_manage', 'can_manage'), ('agent_instance', 'can_read', 'can_read'), ('agent_instance', 'can_recover', 'can_recover'), ('agent_instance', 'can_update', 'can_update'), ('agent_instance', 'can_use_release', 'can_use_release'), ('agent_instance', 'project', 'project'), ('agent_instance', 'release_agent', 'release_agent'), ('project', 'brokered_secret_binder', 'brokered_secret_binder'), ('project', 'can_accept_secret_import', 'can_accept_secret_import'), ('project', 'can_accept_secret_import', 'secret_manager'), ('project', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('project', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('project', 'can_bind_brokered_secret', 'secret_manager'), ('project', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('project', 'can_bind_raw_secret', 'raw_secret_binder'), ('project', 'can_bind_raw_secret', 'secret_manager'), ('project', 'can_delete', 'can_delete'), ('project', 'can_inspect_secrets', 'can_inspect_secrets'), ('project', 'can_inspect_secrets', 'secret_manager'), ('project', 'can_manage', 'can_manage'), ('project', 'can_manage', 'maintainer'), ('project', 'can_manage_secret_grants', 'can_manage_secret_grants'), ('project', 'can_manage_secret_grants', 'secret_manager'), ('project', 'can_purge_secrets', 'can_purge_secrets'), ('project', 'can_purge_secrets', 'secret_manager'), ('project', 'can_read', 'can_read'), ('project', 'can_read', 'maintainer'), ('project', 'can_revoke_secrets', 'can_revoke_secrets'), ('project', 'can_revoke_secrets', 'secret_manager'), ('project', 'can_rotate_secrets', 'can_rotate_secrets'), ('project', 'can_rotate_secrets', 'secret_manager'), ('project', 'can_write', 'can_write'), ('project', 'can_write', 'maintainer'), ('project', 'can_write_secret_value', 'can_write_secret_value'), ('project', 'can_write_secret_value', 'secret_manager'), ('project', 'maintainer', 'maintainer'), ('project', 'organization', 'organization'), ('project', 'raw_secret_binder', 'raw_secret_binder'), ('project', 'secret_manager', 'secret_manager'), ('state_volume', 'can_attach', 'can_attach'), ('state_volume', 'can_manage', 'can_manage'), ('state_volume', 'can_read', 'can_read'), ('state_volume', 'can_restore', 'can_restore'), ('state_volume', 'instance', 'instance')) AS c(object_type, relation, satisfying_relation)
             WHERE (c.object_type = 'state_volume' AND c.relation = 'can_read' AND c.satisfying_relation = v_filter_relation)
@@ -44212,8 +46022,8 @@ BEGIN
         -- Self-candidate: when filter type matches object type
         IF v_filter_type = 'build' THEN
         IF EXISTS (
-    		SELECT p_object_id || '#' || v_filter_relation AS subject_id
-    		WHERE (v_filter_type = 'build' AND EXISTS (
+		SELECT p_object_id || '#' || v_filter_relation AS subject_id
+		WHERE (v_filter_type = 'build' AND EXISTS (
     SELECT 1
     FROM (VALUES ('build', 'can_cancel', 'can_cancel'), ('build', 'can_execute', 'can_execute'), ('build', 'can_read', 'can_read'), ('build', 'repository', 'repository'), ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
     WHERE (c.object_type = 'build' AND c.relation = 'can_read' AND c.satisfying_relation = v_filter_relation)
@@ -44222,7 +46032,7 @@ BEGIN
         RETURN QUERY
         WITH base_results AS (
             SELECT p_object_id || '#' || v_filter_relation AS subject_id
-            		WHERE (v_filter_type = 'build' AND EXISTS (
+		WHERE (v_filter_type = 'build' AND EXISTS (
             SELECT 1
             FROM (VALUES ('build', 'can_cancel', 'can_cancel'), ('build', 'can_execute', 'can_execute'), ('build', 'can_read', 'can_read'), ('build', 'repository', 'repository'), ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
             WHERE (c.object_type = 'build' AND c.relation = 'can_read' AND c.satisfying_relation = v_filter_relation)
@@ -44372,8 +46182,8 @@ BEGIN
         -- Self-candidate: when filter type matches object type
         IF v_filter_type = 'release' THEN
         IF EXISTS (
-    		SELECT p_object_id || '#' || v_filter_relation AS subject_id
-    		WHERE (v_filter_type = 'release' AND EXISTS (
+		SELECT p_object_id || '#' || v_filter_relation AS subject_id
+		WHERE (v_filter_type = 'release' AND EXISTS (
     SELECT 1
     FROM (VALUES ('release', 'can_publish', 'can_publish'), ('release', 'can_read', 'can_read'), ('release', 'can_revoke', 'can_revoke'), ('release', 'can_use', 'can_use'), ('release', 'repository', 'repository'), ('release', 'usable_repository', 'usable_repository'), ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
     WHERE (c.object_type = 'release' AND c.relation = 'can_read' AND c.satisfying_relation = v_filter_relation)
@@ -44382,7 +46192,7 @@ BEGIN
         RETURN QUERY
         WITH base_results AS (
             SELECT p_object_id || '#' || v_filter_relation AS subject_id
-            		WHERE (v_filter_type = 'release' AND EXISTS (
+		WHERE (v_filter_type = 'release' AND EXISTS (
             SELECT 1
             FROM (VALUES ('release', 'can_publish', 'can_publish'), ('release', 'can_read', 'can_read'), ('release', 'can_revoke', 'can_revoke'), ('release', 'can_use', 'can_use'), ('release', 'repository', 'repository'), ('release', 'usable_repository', 'usable_repository'), ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
             WHERE (c.object_type = 'release' AND c.relation = 'can_read' AND c.satisfying_relation = v_filter_relation)
@@ -44532,8 +46342,8 @@ BEGIN
         -- Self-candidate: when filter type matches object type
         IF v_filter_type = 'release' THEN
         IF EXISTS (
-    		SELECT p_object_id || '#' || v_filter_relation AS subject_id
-    		WHERE (v_filter_type = 'release' AND EXISTS (
+		SELECT p_object_id || '#' || v_filter_relation AS subject_id
+		WHERE (v_filter_type = 'release' AND EXISTS (
     SELECT 1
     FROM (VALUES ('release', 'can_publish', 'can_publish'), ('release', 'can_read', 'can_read'), ('release', 'can_revoke', 'can_revoke'), ('release', 'can_use', 'can_use'), ('release', 'repository', 'repository'), ('release', 'usable_repository', 'usable_repository'), ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
     WHERE (c.object_type = 'release' AND c.relation = 'can_use' AND c.satisfying_relation = v_filter_relation)
@@ -44542,7 +46352,7 @@ BEGIN
         RETURN QUERY
         WITH base_results AS (
             SELECT p_object_id || '#' || v_filter_relation AS subject_id
-            		WHERE (v_filter_type = 'release' AND EXISTS (
+		WHERE (v_filter_type = 'release' AND EXISTS (
             SELECT 1
             FROM (VALUES ('release', 'can_publish', 'can_publish'), ('release', 'can_read', 'can_read'), ('release', 'can_revoke', 'can_revoke'), ('release', 'can_use', 'can_use'), ('release', 'repository', 'repository'), ('release', 'usable_repository', 'usable_repository'), ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
             WHERE (c.object_type = 'release' AND c.relation = 'can_use' AND c.satisfying_relation = v_filter_relation)
@@ -44692,8 +46502,8 @@ BEGIN
         -- Self-candidate: when filter type matches object type
         IF v_filter_type = 'release_agent' THEN
         IF EXISTS (
-    		SELECT p_object_id || '#' || v_filter_relation AS subject_id
-    		WHERE (v_filter_type = 'release_agent' AND EXISTS (
+		SELECT p_object_id || '#' || v_filter_relation AS subject_id
+		WHERE (v_filter_type = 'release_agent' AND EXISTS (
     SELECT 1
     FROM (VALUES ('release', 'can_publish', 'can_publish'), ('release', 'can_read', 'can_read'), ('release', 'can_revoke', 'can_revoke'), ('release', 'can_use', 'can_use'), ('release', 'repository', 'repository'), ('release', 'usable_repository', 'usable_repository'), ('release_agent', 'can_read', 'can_read'), ('release_agent', 'can_use', 'can_use'), ('release_agent', 'release', 'release'), ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
     WHERE (c.object_type = 'release_agent' AND c.relation = 'can_read' AND c.satisfying_relation = v_filter_relation)
@@ -44702,7 +46512,7 @@ BEGIN
         RETURN QUERY
         WITH base_results AS (
             SELECT p_object_id || '#' || v_filter_relation AS subject_id
-            		WHERE (v_filter_type = 'release_agent' AND EXISTS (
+		WHERE (v_filter_type = 'release_agent' AND EXISTS (
             SELECT 1
             FROM (VALUES ('release', 'can_publish', 'can_publish'), ('release', 'can_read', 'can_read'), ('release', 'can_revoke', 'can_revoke'), ('release', 'can_use', 'can_use'), ('release', 'repository', 'repository'), ('release', 'usable_repository', 'usable_repository'), ('release_agent', 'can_read', 'can_read'), ('release_agent', 'can_use', 'can_use'), ('release_agent', 'release', 'release'), ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
             WHERE (c.object_type = 'release_agent' AND c.relation = 'can_read' AND c.satisfying_relation = v_filter_relation)
@@ -44852,8 +46662,8 @@ BEGIN
         -- Self-candidate: when filter type matches object type
         IF v_filter_type = 'release_agent' THEN
         IF EXISTS (
-    		SELECT p_object_id || '#' || v_filter_relation AS subject_id
-    		WHERE (v_filter_type = 'release_agent' AND EXISTS (
+		SELECT p_object_id || '#' || v_filter_relation AS subject_id
+		WHERE (v_filter_type = 'release_agent' AND EXISTS (
     SELECT 1
     FROM (VALUES ('release', 'can_publish', 'can_publish'), ('release', 'can_read', 'can_read'), ('release', 'can_revoke', 'can_revoke'), ('release', 'can_use', 'can_use'), ('release', 'repository', 'repository'), ('release', 'usable_repository', 'usable_repository'), ('release_agent', 'can_read', 'can_read'), ('release_agent', 'can_use', 'can_use'), ('release_agent', 'release', 'release'), ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
     WHERE (c.object_type = 'release_agent' AND c.relation = 'can_use' AND c.satisfying_relation = v_filter_relation)
@@ -44862,7 +46672,7 @@ BEGIN
         RETURN QUERY
         WITH base_results AS (
             SELECT p_object_id || '#' || v_filter_relation AS subject_id
-            		WHERE (v_filter_type = 'release_agent' AND EXISTS (
+		WHERE (v_filter_type = 'release_agent' AND EXISTS (
             SELECT 1
             FROM (VALUES ('release', 'can_publish', 'can_publish'), ('release', 'can_read', 'can_read'), ('release', 'can_revoke', 'can_revoke'), ('release', 'can_use', 'can_use'), ('release', 'repository', 'repository'), ('release', 'usable_repository', 'usable_repository'), ('release_agent', 'can_read', 'can_read'), ('release_agent', 'can_use', 'can_use'), ('release_agent', 'release', 'release'), ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
             WHERE (c.object_type = 'release_agent' AND c.relation = 'can_use' AND c.satisfying_relation = v_filter_relation)
@@ -45012,8 +46822,8 @@ BEGIN
         -- Self-candidate: when filter type matches object type
         IF v_filter_type = 'agent_instance' THEN
         IF EXISTS (
-    		SELECT p_object_id || '#' || v_filter_relation AS subject_id
-    		WHERE (v_filter_type = 'agent_instance' AND EXISTS (
+		SELECT p_object_id || '#' || v_filter_relation AS subject_id
+		WHERE (v_filter_type = 'agent_instance' AND EXISTS (
     SELECT 1
     FROM (VALUES ('agent_instance', 'can_execute', 'can_execute'), ('agent_instance', 'can_manage', 'can_manage'), ('agent_instance', 'can_read', 'can_read'), ('agent_instance', 'can_recover', 'can_recover'), ('agent_instance', 'can_update', 'can_update'), ('agent_instance', 'can_use_release', 'can_use_release'), ('agent_instance', 'project', 'project'), ('agent_instance', 'release_agent', 'release_agent'), ('release', 'can_publish', 'can_publish'), ('release', 'can_read', 'can_read'), ('release', 'can_revoke', 'can_revoke'), ('release', 'can_use', 'can_use'), ('release', 'repository', 'repository'), ('release', 'usable_repository', 'usable_repository'), ('release_agent', 'can_read', 'can_read'), ('release_agent', 'can_use', 'can_use'), ('release_agent', 'release', 'release'), ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
     WHERE (c.object_type = 'agent_instance' AND c.relation = 'can_use_release' AND c.satisfying_relation = v_filter_relation)
@@ -45022,7 +46832,7 @@ BEGIN
         RETURN QUERY
         WITH base_results AS (
             SELECT p_object_id || '#' || v_filter_relation AS subject_id
-            		WHERE (v_filter_type = 'agent_instance' AND EXISTS (
+		WHERE (v_filter_type = 'agent_instance' AND EXISTS (
             SELECT 1
             FROM (VALUES ('agent_instance', 'can_execute', 'can_execute'), ('agent_instance', 'can_manage', 'can_manage'), ('agent_instance', 'can_read', 'can_read'), ('agent_instance', 'can_recover', 'can_recover'), ('agent_instance', 'can_update', 'can_update'), ('agent_instance', 'can_use_release', 'can_use_release'), ('agent_instance', 'project', 'project'), ('agent_instance', 'release_agent', 'release_agent'), ('release', 'can_publish', 'can_publish'), ('release', 'can_read', 'can_read'), ('release', 'can_revoke', 'can_revoke'), ('release', 'can_use', 'can_use'), ('release', 'repository', 'repository'), ('release', 'usable_repository', 'usable_repository'), ('release_agent', 'can_read', 'can_read'), ('release_agent', 'can_use', 'can_use'), ('release_agent', 'release', 'release'), ('repository', 'brokered_secret_binder', 'brokered_secret_binder'), ('repository', 'can_accept_secret_import', 'can_accept_secret_import'), ('repository', 'can_accept_secret_import', 'secret_manager'), ('repository', 'can_bind_brokered_secret', 'brokered_secret_binder'), ('repository', 'can_bind_brokered_secret', 'can_bind_brokered_secret'), ('repository', 'can_bind_brokered_secret', 'secret_manager'), ('repository', 'can_bind_raw_secret', 'can_bind_raw_secret'), ('repository', 'can_bind_raw_secret', 'raw_secret_binder'), ('repository', 'can_bind_raw_secret', 'secret_manager'), ('repository', 'can_delete', 'can_delete'), ('repository', 'can_read', 'can_read'), ('repository', 'can_read', 'public'), ('repository', 'can_write', 'can_write'), ('repository', 'can_write', 'manager'), ('repository', 'manager', 'manager'), ('repository', 'project', 'project'), ('repository', 'public', 'public'), ('repository', 'raw_secret_binder', 'raw_secret_binder'), ('repository', 'secret_manager', 'secret_manager')) AS c(object_type, relation, satisfying_relation)
             WHERE (c.object_type = 'agent_instance' AND c.relation = 'can_use_release' AND c.satisfying_relation = v_filter_relation)
@@ -45440,6 +47250,21 @@ BEGIN
     END IF;
         RETURN 0;
     END IF;
+    IF p_object_type = 'repository_oci_image' THEN
+        IF p_relation = 'project' THEN
+        RETURN "public"."check_repository_oci_image_project"(p_subject_type, p_subject_id, p_object_id, p_visited);
+    END IF;
+        IF p_relation = 'can_manage' THEN
+        RETURN "public"."check_repository_oci_image_can_manage"(p_subject_type, p_subject_id, p_object_id, p_visited);
+    END IF;
+        IF p_relation = 'can_write' THEN
+        RETURN "public"."check_repository_oci_image_can_write"(p_subject_type, p_subject_id, p_object_id, p_visited);
+    END IF;
+        IF p_relation = 'can_read' THEN
+        RETURN "public"."check_repository_oci_image_can_read"(p_subject_type, p_subject_id, p_object_id, p_visited);
+    END IF;
+        RETURN 0;
+    END IF;
     IF p_object_type = 'run' THEN
         IF p_relation = 'instance' THEN
         RETURN "public"."check_run_instance"(p_subject_type, p_subject_id, p_object_id, p_visited);
@@ -45850,6 +47675,21 @@ BEGIN
     END IF;
         RETURN 0;
     END IF;
+    IF p_object_type = 'repository_oci_image' THEN
+        IF p_relation = 'project' THEN
+        RETURN "public"."check_repository_oci_image_project_nw"(p_subject_type, p_subject_id, p_object_id, p_visited);
+    END IF;
+        IF p_relation = 'can_manage' THEN
+        RETURN "public"."check_repository_oci_image_can_manage_nw"(p_subject_type, p_subject_id, p_object_id, p_visited);
+    END IF;
+        IF p_relation = 'can_write' THEN
+        RETURN "public"."check_repository_oci_image_can_write_nw"(p_subject_type, p_subject_id, p_object_id, p_visited);
+    END IF;
+        IF p_relation = 'can_read' THEN
+        RETURN "public"."check_repository_oci_image_can_read_nw"(p_subject_type, p_subject_id, p_object_id, p_visited);
+    END IF;
+        RETURN 0;
+    END IF;
     IF p_object_type = 'run' THEN
         IF p_relation = 'instance' THEN
         RETURN "public"."check_run_instance_nw"(p_subject_type, p_subject_id, p_object_id, p_visited);
@@ -45976,7 +47816,7 @@ $$ LANGUAGE sql STABLE;
 
 
 -- Generated bulk dispatcher for check_permission_bulk
--- Routes 109 (object_type, relation) pairs across 16 object types
+-- Routes 113 (object_type, relation) pairs across 17 object types
 -- Uses separate IF blocks to execute only branches for object types present in the batch
 CREATE OR REPLACE FUNCTION "public"."check_permission_bulk"(
     p_subject_types TEXT[],
@@ -45993,7 +47833,7 @@ BEGIN
             WITH ORDINALITY AS t(subject_type, subject_id, relation, object_type, object_id, idx)
             WHERE t.object_type = 'agent_attachment'
     )
-    		SELECT r.idx::INTEGER, CASE
+		SELECT r.idx::INTEGER, CASE
             WHEN (r.subject_type = 'agent_attachment' AND position('#' in r.subject_id) > 0 AND split_part(r.subject_id, '#', 1) = r.object_id AND substring(r.subject_id from position('#' in r.subject_id) + 1) IN ('instance')) THEN 1
             WHEN EXISTS (
     SELECT 1
@@ -46002,12 +47842,12 @@ BEGIN
     ) THEN 1
             ELSE 0
         END
-    		FROM requests AS r
-    		WHERE r.relation = 'instance'
-    
+		FROM requests AS r
+		WHERE r.relation = 'instance'
+
     UNION ALL
-    
-    		SELECT r.idx::INTEGER, CASE
+
+		SELECT r.idx::INTEGER, CASE
             WHEN (r.subject_type = 'agent_attachment' AND position('#' in r.subject_id) > 0 AND split_part(r.subject_id, '#', 1) = r.object_id AND substring(r.subject_id from position('#' in r.subject_id) + 1) IN ('repository')) THEN 1
             WHEN EXISTS (
     SELECT 1
@@ -46016,29 +47856,29 @@ BEGIN
     ) THEN 1
             ELSE 0
         END
-    		FROM requests AS r
-    		WHERE r.relation = 'repository'
-    
+		FROM requests AS r
+		WHERE r.relation = 'repository'
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_agent_attachment_can_manage"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'can_manage'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_agent_attachment_can_execute"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'can_execute'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_agent_attachment_can_read"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'can_read'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, 0
     FROM requests AS r
     WHERE r.relation NOT IN ('instance', 'repository', 'can_manage', 'can_execute', 'can_read');
@@ -46050,7 +47890,7 @@ BEGIN
             WITH ORDINALITY AS t(subject_type, subject_id, relation, object_type, object_id, idx)
             WHERE t.object_type = 'agent_instance'
     )
-    		SELECT r.idx::INTEGER, CASE
+		SELECT r.idx::INTEGER, CASE
             WHEN (r.subject_type = 'agent_instance' AND position('#' in r.subject_id) > 0 AND split_part(r.subject_id, '#', 1) = r.object_id AND substring(r.subject_id from position('#' in r.subject_id) + 1) IN ('project')) THEN 1
             WHEN EXISTS (
     SELECT 1
@@ -46059,12 +47899,12 @@ BEGIN
     ) THEN 1
             ELSE 0
         END
-    		FROM requests AS r
-    		WHERE r.relation = 'project'
-    
+		FROM requests AS r
+		WHERE r.relation = 'project'
+
     UNION ALL
-    
-    		SELECT r.idx::INTEGER, CASE
+
+		SELECT r.idx::INTEGER, CASE
             WHEN (r.subject_type = 'agent_instance' AND position('#' in r.subject_id) > 0 AND split_part(r.subject_id, '#', 1) = r.object_id AND substring(r.subject_id from position('#' in r.subject_id) + 1) IN ('release_agent')) THEN 1
             WHEN EXISTS (
     SELECT 1
@@ -46073,47 +47913,47 @@ BEGIN
     ) THEN 1
             ELSE 0
         END
-    		FROM requests AS r
-    		WHERE r.relation = 'release_agent'
-    
+		FROM requests AS r
+		WHERE r.relation = 'release_agent'
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_agent_instance_can_manage"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'can_manage'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_agent_instance_can_recover"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'can_recover'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_agent_instance_can_update"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'can_update'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_agent_instance_can_execute"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'can_execute'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_agent_instance_can_read"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'can_read'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_agent_instance_can_use_release"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'can_use_release'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, 0
     FROM requests AS r
     WHERE r.relation NOT IN ('project', 'release_agent', 'can_manage', 'can_recover', 'can_update', 'can_execute', 'can_read', 'can_use_release');
@@ -46125,7 +47965,7 @@ BEGIN
             WITH ORDINALITY AS t(subject_type, subject_id, relation, object_type, object_id, idx)
             WHERE t.object_type = 'agent_secret_binding'
     )
-    		SELECT r.idx::INTEGER, CASE
+		SELECT r.idx::INTEGER, CASE
             WHEN (r.subject_type = 'agent_secret_binding' AND position('#' in r.subject_id) > 0 AND split_part(r.subject_id, '#', 1) = r.object_id AND substring(r.subject_id from position('#' in r.subject_id) + 1) IN ('instance')) THEN 1
             WHEN EXISTS (
     SELECT 1
@@ -46134,12 +47974,12 @@ BEGIN
     ) THEN 1
             ELSE 0
         END
-    		FROM requests AS r
-    		WHERE r.relation = 'instance'
-    
+		FROM requests AS r
+		WHERE r.relation = 'instance'
+
     UNION ALL
-    
-    		SELECT r.idx::INTEGER, CASE
+
+		SELECT r.idx::INTEGER, CASE
             WHEN (r.subject_type = 'agent_secret_binding' AND position('#' in r.subject_id) > 0 AND split_part(r.subject_id, '#', 1) = r.object_id AND substring(r.subject_id from position('#' in r.subject_id) + 1) IN ('secret_import')) THEN 1
             WHEN EXISTS (
     SELECT 1
@@ -46148,23 +47988,23 @@ BEGIN
     ) THEN 1
             ELSE 0
         END
-    		FROM requests AS r
-    		WHERE r.relation = 'secret_import'
-    
+		FROM requests AS r
+		WHERE r.relation = 'secret_import'
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_agent_secret_binding_can_manage"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'can_manage'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_agent_secret_binding_can_read"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'can_read'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, 0
     FROM requests AS r
     WHERE r.relation NOT IN ('instance', 'secret_import', 'can_manage', 'can_read');
@@ -46176,7 +48016,7 @@ BEGIN
             WITH ORDINALITY AS t(subject_type, subject_id, relation, object_type, object_id, idx)
             WHERE t.object_type = 'agent_update'
     )
-    		SELECT r.idx::INTEGER, CASE
+		SELECT r.idx::INTEGER, CASE
             WHEN (r.subject_type = 'agent_update' AND position('#' in r.subject_id) > 0 AND split_part(r.subject_id, '#', 1) = r.object_id AND substring(r.subject_id from position('#' in r.subject_id) + 1) IN ('instance')) THEN 1
             WHEN EXISTS (
     SELECT 1
@@ -46185,29 +48025,29 @@ BEGIN
     ) THEN 1
             ELSE 0
         END
-    		FROM requests AS r
-    		WHERE r.relation = 'instance'
-    
+		FROM requests AS r
+		WHERE r.relation = 'instance'
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_agent_update_can_recover"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'can_recover'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_agent_update_can_start"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'can_start'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_agent_update_can_read"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'can_read'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, 0
     FROM requests AS r
     WHERE r.relation NOT IN ('instance', 'can_recover', 'can_start', 'can_read');
@@ -46219,7 +48059,7 @@ BEGIN
             WITH ORDINALITY AS t(subject_type, subject_id, relation, object_type, object_id, idx)
             WHERE t.object_type = 'build'
     )
-    		SELECT r.idx::INTEGER, CASE
+		SELECT r.idx::INTEGER, CASE
             WHEN (r.subject_type = 'build' AND position('#' in r.subject_id) > 0 AND split_part(r.subject_id, '#', 1) = r.object_id AND substring(r.subject_id from position('#' in r.subject_id) + 1) IN ('repository')) THEN 1
             WHEN EXISTS (
     SELECT 1
@@ -46228,29 +48068,29 @@ BEGIN
     ) THEN 1
             ELSE 0
         END
-    		FROM requests AS r
-    		WHERE r.relation = 'repository'
-    
+		FROM requests AS r
+		WHERE r.relation = 'repository'
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_build_can_cancel"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'can_cancel'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_build_can_execute"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'can_execute'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_build_can_read"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'can_read'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, 0
     FROM requests AS r
     WHERE r.relation NOT IN ('repository', 'can_cancel', 'can_execute', 'can_read');
@@ -46262,7 +48102,7 @@ BEGIN
             WITH ORDINALITY AS t(subject_type, subject_id, relation, object_type, object_id, idx)
             WHERE t.object_type = 'organization'
     )
-    		SELECT r.idx::INTEGER, CASE
+		SELECT r.idx::INTEGER, CASE
             WHEN (r.subject_type = 'organization' AND position('#' in r.subject_id) > 0 AND split_part(r.subject_id, '#', 1) = r.object_id AND substring(r.subject_id from position('#' in r.subject_id) + 1) IN ('owner')) THEN 1
             WHEN EXISTS (
     SELECT 1
@@ -46271,12 +48111,12 @@ BEGIN
     ) THEN 1
             ELSE 0
         END
-    		FROM requests AS r
-    		WHERE r.relation = 'owner'
-    
+		FROM requests AS r
+		WHERE r.relation = 'owner'
+
     UNION ALL
-    
-    		SELECT r.idx::INTEGER, CASE
+
+		SELECT r.idx::INTEGER, CASE
             WHEN (r.subject_type = 'organization' AND position('#' in r.subject_id) > 0 AND split_part(r.subject_id, '#', 1) = r.object_id AND substring(r.subject_id from position('#' in r.subject_id) + 1) IN ('secret_manager')) THEN 1
             WHEN EXISTS (
     SELECT 1
@@ -46285,89 +48125,89 @@ BEGIN
     ) THEN 1
             ELSE 0
         END
-    		FROM requests AS r
-    		WHERE r.relation = 'secret_manager'
-    
+		FROM requests AS r
+		WHERE r.relation = 'secret_manager'
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_organization_admin"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'admin'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_organization_can_delete"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'can_delete'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_organization_can_manage"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'can_manage'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_organization_can_inspect_secrets"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'can_inspect_secrets'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_organization_can_manage_secret_grants"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'can_manage_secret_grants'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_organization_can_purge_secrets"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'can_purge_secrets'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_organization_can_revoke_secrets"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'can_revoke_secrets'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_organization_can_rotate_secrets"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'can_rotate_secrets'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_organization_can_write_secret_value"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'can_write_secret_value'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_organization_can_create_project"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'can_create_project'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_organization_can_manage_members"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'can_manage_members'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_organization_member"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'member'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_organization_can_read"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'can_read'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, 0
     FROM requests AS r
     WHERE r.relation NOT IN ('owner', 'secret_manager', 'admin', 'can_delete', 'can_manage', 'can_inspect_secrets', 'can_manage_secret_grants', 'can_purge_secrets', 'can_revoke_secrets', 'can_rotate_secrets', 'can_write_secret_value', 'can_create_project', 'can_manage_members', 'member', 'can_read');
@@ -46379,7 +48219,7 @@ BEGIN
             WITH ORDINALITY AS t(subject_type, subject_id, relation, object_type, object_id, idx)
             WHERE t.object_type = 'project'
     )
-    		SELECT r.idx::INTEGER, CASE
+		SELECT r.idx::INTEGER, CASE
             WHEN (r.subject_type = 'project' AND position('#' in r.subject_id) > 0 AND split_part(r.subject_id, '#', 1) = r.object_id AND substring(r.subject_id from position('#' in r.subject_id) + 1) IN ('brokered_secret_binder')) THEN 1
             WHEN EXISTS (
     SELECT 1
@@ -46388,12 +48228,12 @@ BEGIN
     ) THEN 1
             ELSE 0
         END
-    		FROM requests AS r
-    		WHERE r.relation = 'brokered_secret_binder'
-    
+		FROM requests AS r
+		WHERE r.relation = 'brokered_secret_binder'
+
     UNION ALL
-    
-    		SELECT r.idx::INTEGER, CASE
+
+		SELECT r.idx::INTEGER, CASE
             WHEN (r.subject_type = 'project' AND position('#' in r.subject_id) > 0 AND split_part(r.subject_id, '#', 1) = r.object_id AND substring(r.subject_id from position('#' in r.subject_id) + 1) IN ('maintainer')) THEN 1
             WHEN EXISTS (
     SELECT 1
@@ -46402,12 +48242,12 @@ BEGIN
     ) THEN 1
             ELSE 0
         END
-    		FROM requests AS r
-    		WHERE r.relation = 'maintainer'
-    
+		FROM requests AS r
+		WHERE r.relation = 'maintainer'
+
     UNION ALL
-    
-    		SELECT r.idx::INTEGER, CASE
+
+		SELECT r.idx::INTEGER, CASE
             WHEN (r.subject_type = 'project' AND position('#' in r.subject_id) > 0 AND split_part(r.subject_id, '#', 1) = r.object_id AND substring(r.subject_id from position('#' in r.subject_id) + 1) IN ('organization')) THEN 1
             WHEN EXISTS (
     SELECT 1
@@ -46416,12 +48256,12 @@ BEGIN
     ) THEN 1
             ELSE 0
         END
-    		FROM requests AS r
-    		WHERE r.relation = 'organization'
-    
+		FROM requests AS r
+		WHERE r.relation = 'organization'
+
     UNION ALL
-    
-    		SELECT r.idx::INTEGER, CASE
+
+		SELECT r.idx::INTEGER, CASE
             WHEN (r.subject_type = 'project' AND position('#' in r.subject_id) > 0 AND split_part(r.subject_id, '#', 1) = r.object_id AND substring(r.subject_id from position('#' in r.subject_id) + 1) IN ('raw_secret_binder')) THEN 1
             WHEN EXISTS (
     SELECT 1
@@ -46430,12 +48270,12 @@ BEGIN
     ) THEN 1
             ELSE 0
         END
-    		FROM requests AS r
-    		WHERE r.relation = 'raw_secret_binder'
-    
+		FROM requests AS r
+		WHERE r.relation = 'raw_secret_binder'
+
     UNION ALL
-    
-    		SELECT r.idx::INTEGER, CASE
+
+		SELECT r.idx::INTEGER, CASE
             WHEN (r.subject_type = 'project' AND position('#' in r.subject_id) > 0 AND split_part(r.subject_id, '#', 1) = r.object_id AND substring(r.subject_id from position('#' in r.subject_id) + 1) IN ('secret_manager')) THEN 1
             WHEN EXISTS (
     SELECT 1
@@ -46444,89 +48284,89 @@ BEGIN
     ) THEN 1
             ELSE 0
         END
-    		FROM requests AS r
-    		WHERE r.relation = 'secret_manager'
-    
+		FROM requests AS r
+		WHERE r.relation = 'secret_manager'
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_project_can_delete"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'can_delete'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_project_can_manage"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'can_manage'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_project_can_write"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'can_write'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_project_can_accept_secret_import"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'can_accept_secret_import'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_project_can_bind_brokered_secret"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'can_bind_brokered_secret'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_project_can_bind_raw_secret"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'can_bind_raw_secret'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_project_can_inspect_secrets"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'can_inspect_secrets'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_project_can_manage_secret_grants"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'can_manage_secret_grants'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_project_can_purge_secrets"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'can_purge_secrets'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_project_can_revoke_secrets"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'can_revoke_secrets'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_project_can_rotate_secrets"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'can_rotate_secrets'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_project_can_write_secret_value"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'can_write_secret_value'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_project_can_read"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'can_read'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, 0
     FROM requests AS r
     WHERE r.relation NOT IN ('brokered_secret_binder', 'maintainer', 'organization', 'raw_secret_binder', 'secret_manager', 'can_delete', 'can_manage', 'can_write', 'can_accept_secret_import', 'can_bind_brokered_secret', 'can_bind_raw_secret', 'can_inspect_secrets', 'can_manage_secret_grants', 'can_purge_secrets', 'can_revoke_secrets', 'can_rotate_secrets', 'can_write_secret_value', 'can_read');
@@ -46538,7 +48378,7 @@ BEGIN
             WITH ORDINALITY AS t(subject_type, subject_id, relation, object_type, object_id, idx)
             WHERE t.object_type = 'release'
     )
-    		SELECT r.idx::INTEGER, CASE
+		SELECT r.idx::INTEGER, CASE
             WHEN (r.subject_type = 'release' AND position('#' in r.subject_id) > 0 AND split_part(r.subject_id, '#', 1) = r.object_id AND substring(r.subject_id from position('#' in r.subject_id) + 1) IN ('repository')) THEN 1
             WHEN EXISTS (
     SELECT 1
@@ -46547,12 +48387,12 @@ BEGIN
     ) THEN 1
             ELSE 0
         END
-    		FROM requests AS r
-    		WHERE r.relation = 'repository'
-    
+		FROM requests AS r
+		WHERE r.relation = 'repository'
+
     UNION ALL
-    
-    		SELECT r.idx::INTEGER, CASE
+
+		SELECT r.idx::INTEGER, CASE
             WHEN (r.subject_type = 'release' AND position('#' in r.subject_id) > 0 AND split_part(r.subject_id, '#', 1) = r.object_id AND substring(r.subject_id from position('#' in r.subject_id) + 1) IN ('usable_repository')) THEN 1
             WHEN EXISTS (
     SELECT 1
@@ -46561,35 +48401,35 @@ BEGIN
     ) THEN 1
             ELSE 0
         END
-    		FROM requests AS r
-    		WHERE r.relation = 'usable_repository'
-    
+		FROM requests AS r
+		WHERE r.relation = 'usable_repository'
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_release_can_publish"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'can_publish'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_release_can_revoke"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'can_revoke'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_release_can_read"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'can_read'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_release_can_use"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'can_use'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, 0
     FROM requests AS r
     WHERE r.relation NOT IN ('repository', 'usable_repository', 'can_publish', 'can_revoke', 'can_read', 'can_use');
@@ -46601,7 +48441,7 @@ BEGIN
             WITH ORDINALITY AS t(subject_type, subject_id, relation, object_type, object_id, idx)
             WHERE t.object_type = 'release_agent'
     )
-    		SELECT r.idx::INTEGER, CASE
+		SELECT r.idx::INTEGER, CASE
             WHEN (r.subject_type = 'release_agent' AND position('#' in r.subject_id) > 0 AND split_part(r.subject_id, '#', 1) = r.object_id AND substring(r.subject_id from position('#' in r.subject_id) + 1) IN ('release')) THEN 1
             WHEN EXISTS (
     SELECT 1
@@ -46610,23 +48450,23 @@ BEGIN
     ) THEN 1
             ELSE 0
         END
-    		FROM requests AS r
-    		WHERE r.relation = 'release'
-    
+		FROM requests AS r
+		WHERE r.relation = 'release'
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_release_agent_can_read"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'can_read'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_release_agent_can_use"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'can_use'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, 0
     FROM requests AS r
     WHERE r.relation NOT IN ('release', 'can_read', 'can_use');
@@ -46638,7 +48478,7 @@ BEGIN
             WITH ORDINALITY AS t(subject_type, subject_id, relation, object_type, object_id, idx)
             WHERE t.object_type = 'repository'
     )
-    		SELECT r.idx::INTEGER, CASE
+		SELECT r.idx::INTEGER, CASE
             WHEN (r.subject_type = 'repository' AND position('#' in r.subject_id) > 0 AND split_part(r.subject_id, '#', 1) = r.object_id AND substring(r.subject_id from position('#' in r.subject_id) + 1) IN ('brokered_secret_binder')) THEN 1
             WHEN EXISTS (
     SELECT 1
@@ -46647,12 +48487,12 @@ BEGIN
     ) THEN 1
             ELSE 0
         END
-    		FROM requests AS r
-    		WHERE r.relation = 'brokered_secret_binder'
-    
+		FROM requests AS r
+		WHERE r.relation = 'brokered_secret_binder'
+
     UNION ALL
-    
-    		SELECT r.idx::INTEGER, CASE
+
+		SELECT r.idx::INTEGER, CASE
             WHEN (r.subject_type = 'repository' AND position('#' in r.subject_id) > 0 AND split_part(r.subject_id, '#', 1) = r.object_id AND substring(r.subject_id from position('#' in r.subject_id) + 1) IN ('manager')) THEN 1
             WHEN EXISTS (
     SELECT 1
@@ -46661,12 +48501,12 @@ BEGIN
     ) THEN 1
             ELSE 0
         END
-    		FROM requests AS r
-    		WHERE r.relation = 'manager'
-    
+		FROM requests AS r
+		WHERE r.relation = 'manager'
+
     UNION ALL
-    
-    		SELECT r.idx::INTEGER, CASE
+
+		SELECT r.idx::INTEGER, CASE
             WHEN (r.subject_type = 'repository' AND position('#' in r.subject_id) > 0 AND split_part(r.subject_id, '#', 1) = r.object_id AND substring(r.subject_id from position('#' in r.subject_id) + 1) IN ('project')) THEN 1
             WHEN EXISTS (
     SELECT 1
@@ -46675,18 +48515,18 @@ BEGIN
     ) THEN 1
             ELSE 0
         END
-    		FROM requests AS r
-    		WHERE r.relation = 'project'
-    
+		FROM requests AS r
+		WHERE r.relation = 'project'
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_repository_public"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'public'
-    
+
     UNION ALL
-    
-    		SELECT r.idx::INTEGER, CASE
+
+		SELECT r.idx::INTEGER, CASE
             WHEN (r.subject_type = 'repository' AND position('#' in r.subject_id) > 0 AND split_part(r.subject_id, '#', 1) = r.object_id AND substring(r.subject_id from position('#' in r.subject_id) + 1) IN ('raw_secret_binder')) THEN 1
             WHEN EXISTS (
     SELECT 1
@@ -46695,12 +48535,12 @@ BEGIN
     ) THEN 1
             ELSE 0
         END
-    		FROM requests AS r
-    		WHERE r.relation = 'raw_secret_binder'
-    
+		FROM requests AS r
+		WHERE r.relation = 'raw_secret_binder'
+
     UNION ALL
-    
-    		SELECT r.idx::INTEGER, CASE
+
+		SELECT r.idx::INTEGER, CASE
             WHEN (r.subject_type = 'repository' AND position('#' in r.subject_id) > 0 AND split_part(r.subject_id, '#', 1) = r.object_id AND substring(r.subject_id from position('#' in r.subject_id) + 1) IN ('secret_manager')) THEN 1
             WHEN EXISTS (
     SELECT 1
@@ -46709,50 +48549,93 @@ BEGIN
     ) THEN 1
             ELSE 0
         END
-    		FROM requests AS r
-    		WHERE r.relation = 'secret_manager'
-    
+		FROM requests AS r
+		WHERE r.relation = 'secret_manager'
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_repository_can_accept_secret_import"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'can_accept_secret_import'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_repository_can_bind_brokered_secret"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'can_bind_brokered_secret'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_repository_can_bind_raw_secret"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'can_bind_raw_secret'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_repository_can_delete"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'can_delete'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_repository_can_write"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'can_write'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_repository_can_read"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'can_read'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, 0
     FROM requests AS r
     WHERE r.relation NOT IN ('brokered_secret_binder', 'manager', 'project', 'public', 'raw_secret_binder', 'secret_manager', 'can_accept_secret_import', 'can_bind_brokered_secret', 'can_bind_raw_secret', 'can_delete', 'can_write', 'can_read');
+    END IF;
+    IF 'repository_oci_image' = ANY(p_object_types) THEN
+        RETURN QUERY
+        WITH requests AS MATERIALIZED (
+        SELECT t.* FROM UNNEST(p_subject_types, p_subject_ids, p_relations, p_object_types, p_object_ids)
+            WITH ORDINALITY AS t(subject_type, subject_id, relation, object_type, object_id, idx)
+            WHERE t.object_type = 'repository_oci_image'
+    )
+		SELECT r.idx::INTEGER, CASE
+            WHEN (r.subject_type = 'repository_oci_image' AND position('#' in r.subject_id) > 0 AND split_part(r.subject_id, '#', 1) = r.object_id AND substring(r.subject_id from position('#' in r.subject_id) + 1) IN ('project')) THEN 1
+            WHEN EXISTS (
+    SELECT 1
+    FROM melange_tuples AS t
+    WHERE (t.subject_type = r.subject_type AND t.subject_id = r.subject_id AND t.relation = 'project' AND t.object_type = 'repository_oci_image' AND t.object_id = r.object_id AND r.subject_type IN ('project'))
+    ) THEN 1
+            ELSE 0
+        END
+		FROM requests AS r
+		WHERE r.relation = 'project'
+
+    UNION ALL
+
+    SELECT r.idx::INTEGER, "public"."check_repository_oci_image_can_manage"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
+    FROM requests AS r
+    WHERE r.relation = 'can_manage'
+
+    UNION ALL
+
+    SELECT r.idx::INTEGER, "public"."check_repository_oci_image_can_write"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
+    FROM requests AS r
+    WHERE r.relation = 'can_write'
+
+    UNION ALL
+
+    SELECT r.idx::INTEGER, "public"."check_repository_oci_image_can_read"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
+    FROM requests AS r
+    WHERE r.relation = 'can_read'
+
+    UNION ALL
+
+    SELECT r.idx::INTEGER, 0
+    FROM requests AS r
+    WHERE r.relation NOT IN ('project', 'can_manage', 'can_write', 'can_read');
     END IF;
     IF 'run' = ANY(p_object_types) THEN
         RETURN QUERY
@@ -46761,7 +48644,7 @@ BEGIN
             WITH ORDINALITY AS t(subject_type, subject_id, relation, object_type, object_id, idx)
             WHERE t.object_type = 'run'
     )
-    		SELECT r.idx::INTEGER, CASE
+		SELECT r.idx::INTEGER, CASE
             WHEN (r.subject_type = 'run' AND position('#' in r.subject_id) > 0 AND split_part(r.subject_id, '#', 1) = r.object_id AND substring(r.subject_id from position('#' in r.subject_id) + 1) IN ('instance')) THEN 1
             WHEN EXISTS (
     SELECT 1
@@ -46770,23 +48653,23 @@ BEGIN
     ) THEN 1
             ELSE 0
         END
-    		FROM requests AS r
-    		WHERE r.relation = 'instance'
-    
+		FROM requests AS r
+		WHERE r.relation = 'instance'
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_run_can_cancel"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'can_cancel'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_run_can_read"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'can_read'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, 0
     FROM requests AS r
     WHERE r.relation NOT IN ('instance', 'can_cancel', 'can_read');
@@ -46798,7 +48681,7 @@ BEGIN
             WITH ORDINALITY AS t(subject_type, subject_id, relation, object_type, object_id, idx)
             WHERE t.object_type = 'secret'
     )
-    		SELECT r.idx::INTEGER, CASE
+		SELECT r.idx::INTEGER, CASE
             WHEN (r.subject_type = 'secret' AND position('#' in r.subject_id) > 0 AND split_part(r.subject_id, '#', 1) = r.object_id AND substring(r.subject_id from position('#' in r.subject_id) + 1) IN ('owner')) THEN 1
             WHEN EXISTS (
     SELECT 1
@@ -46807,47 +48690,47 @@ BEGIN
     ) THEN 1
             ELSE 0
         END
-    		FROM requests AS r
-    		WHERE r.relation = 'owner'
-    
+		FROM requests AS r
+		WHERE r.relation = 'owner'
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_secret_inspect_metadata"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'inspect_metadata'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_secret_manage_grants"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'manage_grants'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_secret_purge"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'purge'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_secret_revoke"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'revoke'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_secret_rotate"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'rotate'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_secret_write_value"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'write_value'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, 0
     FROM requests AS r
     WHERE r.relation NOT IN ('owner', 'inspect_metadata', 'manage_grants', 'purge', 'revoke', 'rotate', 'write_value');
@@ -46859,7 +48742,7 @@ BEGIN
             WITH ORDINALITY AS t(subject_type, subject_id, relation, object_type, object_id, idx)
             WHERE t.object_type = 'secret_grant'
     )
-    		SELECT r.idx::INTEGER, CASE
+		SELECT r.idx::INTEGER, CASE
             WHEN (r.subject_type = 'secret_grant' AND position('#' in r.subject_id) > 0 AND split_part(r.subject_id, '#', 1) = r.object_id AND substring(r.subject_id from position('#' in r.subject_id) + 1) IN ('secret')) THEN 1
             WHEN EXISTS (
     SELECT 1
@@ -46868,12 +48751,12 @@ BEGIN
     ) THEN 1
             ELSE 0
         END
-    		FROM requests AS r
-    		WHERE r.relation = 'secret'
-    
+		FROM requests AS r
+		WHERE r.relation = 'secret'
+
     UNION ALL
-    
-    		SELECT r.idx::INTEGER, CASE
+
+		SELECT r.idx::INTEGER, CASE
             WHEN (r.subject_type = 'secret_grant' AND position('#' in r.subject_id) > 0 AND split_part(r.subject_id, '#', 1) = r.object_id AND substring(r.subject_id from position('#' in r.subject_id) + 1) IN ('target')) THEN 1
             WHEN EXISTS (
     SELECT 1
@@ -46882,23 +48765,23 @@ BEGIN
     ) THEN 1
             ELSE 0
         END
-    		FROM requests AS r
-    		WHERE r.relation = 'target'
-    
+		FROM requests AS r
+		WHERE r.relation = 'target'
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_secret_grant_inspect_metadata"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'inspect_metadata'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_secret_grant_manage"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'manage'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, 0
     FROM requests AS r
     WHERE r.relation NOT IN ('secret', 'target', 'inspect_metadata', 'manage');
@@ -46910,7 +48793,7 @@ BEGIN
             WITH ORDINALITY AS t(subject_type, subject_id, relation, object_type, object_id, idx)
             WHERE t.object_type = 'secret_import'
     )
-    		SELECT r.idx::INTEGER, CASE
+		SELECT r.idx::INTEGER, CASE
             WHEN (r.subject_type = 'secret_import' AND position('#' in r.subject_id) > 0 AND split_part(r.subject_id, '#', 1) = r.object_id AND substring(r.subject_id from position('#' in r.subject_id) + 1) IN ('active_target')) THEN 1
             WHEN EXISTS (
     SELECT 1
@@ -46919,12 +48802,12 @@ BEGIN
     ) THEN 1
             ELSE 0
         END
-    		FROM requests AS r
-    		WHERE r.relation = 'active_target'
-    
+		FROM requests AS r
+		WHERE r.relation = 'active_target'
+
     UNION ALL
-    
-    		SELECT r.idx::INTEGER, CASE
+
+		SELECT r.idx::INTEGER, CASE
             WHEN (r.subject_type = 'secret_import' AND position('#' in r.subject_id) > 0 AND split_part(r.subject_id, '#', 1) = r.object_id AND substring(r.subject_id from position('#' in r.subject_id) + 1) IN ('grant')) THEN 1
             WHEN EXISTS (
     SELECT 1
@@ -46933,12 +48816,12 @@ BEGIN
     ) THEN 1
             ELSE 0
         END
-    		FROM requests AS r
-    		WHERE r.relation = 'grant'
-    
+		FROM requests AS r
+		WHERE r.relation = 'grant'
+
     UNION ALL
-    
-    		SELECT r.idx::INTEGER, CASE
+
+		SELECT r.idx::INTEGER, CASE
             WHEN (r.subject_type = 'secret_import' AND position('#' in r.subject_id) > 0 AND split_part(r.subject_id, '#', 1) = r.object_id AND substring(r.subject_id from position('#' in r.subject_id) + 1) IN ('target')) THEN 1
             WHEN EXISTS (
     SELECT 1
@@ -46947,35 +48830,35 @@ BEGIN
     ) THEN 1
             ELSE 0
         END
-    		FROM requests AS r
-    		WHERE r.relation = 'target'
-    
+		FROM requests AS r
+		WHERE r.relation = 'target'
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_secret_import_accept"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'accept'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_secret_import_inspect_metadata"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'inspect_metadata'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_secret_import_bind_brokered"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'bind_brokered'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_secret_import_bind_raw"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'bind_raw'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, 0
     FROM requests AS r
     WHERE r.relation NOT IN ('active_target', 'grant', 'target', 'accept', 'inspect_metadata', 'bind_brokered', 'bind_raw');
@@ -46987,7 +48870,7 @@ BEGIN
             WITH ORDINALITY AS t(subject_type, subject_id, relation, object_type, object_id, idx)
             WHERE t.object_type = 'secret_lease'
     )
-    		SELECT r.idx::INTEGER, CASE
+		SELECT r.idx::INTEGER, CASE
             WHEN (r.subject_type = 'secret_lease' AND position('#' in r.subject_id) > 0 AND split_part(r.subject_id, '#', 1) = r.object_id AND substring(r.subject_id from position('#' in r.subject_id) + 1) IN ('binding')) THEN 1
             WHEN EXISTS (
     SELECT 1
@@ -46996,12 +48879,12 @@ BEGIN
     ) THEN 1
             ELSE 0
         END
-    		FROM requests AS r
-    		WHERE r.relation = 'binding'
-    
+		FROM requests AS r
+		WHERE r.relation = 'binding'
+
     UNION ALL
-    
-    		SELECT r.idx::INTEGER, CASE
+
+		SELECT r.idx::INTEGER, CASE
             WHEN (r.subject_type = 'secret_lease' AND position('#' in r.subject_id) > 0 AND split_part(r.subject_id, '#', 1) = r.object_id AND substring(r.subject_id from position('#' in r.subject_id) + 1) IN ('receive_raw')) THEN 1
             WHEN EXISTS (
     SELECT 1
@@ -47010,12 +48893,12 @@ BEGIN
     ) THEN 1
             ELSE 0
         END
-    		FROM requests AS r
-    		WHERE r.relation = 'receive_raw'
-    
+		FROM requests AS r
+		WHERE r.relation = 'receive_raw'
+
     UNION ALL
-    
-    		SELECT r.idx::INTEGER, CASE
+
+		SELECT r.idx::INTEGER, CASE
             WHEN (r.subject_type = 'secret_lease' AND position('#' in r.subject_id) > 0 AND split_part(r.subject_id, '#', 1) = r.object_id AND substring(r.subject_id from position('#' in r.subject_id) + 1) IN ('run')) THEN 1
             WHEN EXISTS (
     SELECT 1
@@ -47024,12 +48907,12 @@ BEGIN
     ) THEN 1
             ELSE 0
         END
-    		FROM requests AS r
-    		WHERE r.relation = 'run'
-    
+		FROM requests AS r
+		WHERE r.relation = 'run'
+
     UNION ALL
-    
-    		SELECT r.idx::INTEGER, CASE
+
+		SELECT r.idx::INTEGER, CASE
             WHEN (r.subject_type = 'secret_lease' AND position('#' in r.subject_id) > 0 AND split_part(r.subject_id, '#', 1) = r.object_id AND substring(r.subject_id from position('#' in r.subject_id) + 1) IN ('use_brokered')) THEN 1
             WHEN EXISTS (
     SELECT 1
@@ -47038,11 +48921,11 @@ BEGIN
     ) THEN 1
             ELSE 0
         END
-    		FROM requests AS r
-    		WHERE r.relation = 'use_brokered'
-    
+		FROM requests AS r
+		WHERE r.relation = 'use_brokered'
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, 0
     FROM requests AS r
     WHERE r.relation NOT IN ('binding', 'receive_raw', 'run', 'use_brokered');
@@ -47054,7 +48937,7 @@ BEGIN
             WITH ORDINALITY AS t(subject_type, subject_id, relation, object_type, object_id, idx)
             WHERE t.object_type = 'state_volume'
     )
-    		SELECT r.idx::INTEGER, CASE
+		SELECT r.idx::INTEGER, CASE
             WHEN (r.subject_type = 'state_volume' AND position('#' in r.subject_id) > 0 AND split_part(r.subject_id, '#', 1) = r.object_id AND substring(r.subject_id from position('#' in r.subject_id) + 1) IN ('instance')) THEN 1
             WHEN EXISTS (
     SELECT 1
@@ -47063,35 +48946,35 @@ BEGIN
     ) THEN 1
             ELSE 0
         END
-    		FROM requests AS r
-    		WHERE r.relation = 'instance'
-    
+		FROM requests AS r
+		WHERE r.relation = 'instance'
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_state_volume_can_manage"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'can_manage'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_state_volume_can_restore"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'can_restore'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_state_volume_can_attach"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'can_attach'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, "public"."check_state_volume_can_read"(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])
     FROM requests AS r
     WHERE r.relation = 'can_read'
-    
+
     UNION ALL
-    
+
     SELECT r.idx::INTEGER, 0
     FROM requests AS r
     WHERE r.relation NOT IN ('instance', 'can_manage', 'can_restore', 'can_attach', 'can_read');
@@ -47100,7 +48983,7 @@ BEGIN
         SELECT t.idx::INTEGER, 0
     FROM UNNEST(p_subject_types, p_subject_ids, p_relations, p_object_types, p_object_ids)
       WITH ORDINALITY AS t(subject_type, subject_id, relation, object_type, object_id, idx)
-    WHERE (t.object_type, t.relation) NOT IN (('agent_attachment', 'instance'), ('agent_attachment', 'repository'), ('agent_instance', 'project'), ('agent_instance', 'release_agent'), ('agent_secret_binding', 'instance'), ('agent_secret_binding', 'secret_import'), ('agent_update', 'instance'), ('build', 'repository'), ('organization', 'owner'), ('organization', 'secret_manager'), ('project', 'brokered_secret_binder'), ('project', 'maintainer'), ('project', 'organization'), ('project', 'raw_secret_binder'), ('project', 'secret_manager'), ('release', 'repository'), ('release', 'usable_repository'), ('release_agent', 'release'), ('repository', 'brokered_secret_binder'), ('repository', 'manager'), ('repository', 'project'), ('repository', 'public'), ('repository', 'raw_secret_binder'), ('repository', 'secret_manager'), ('run', 'instance'), ('secret', 'owner'), ('secret_grant', 'secret'), ('secret_grant', 'target'), ('secret_import', 'active_target'), ('secret_import', 'grant'), ('secret_import', 'target'), ('secret_lease', 'binding'), ('secret_lease', 'receive_raw'), ('secret_lease', 'run'), ('secret_lease', 'use_brokered'), ('state_volume', 'instance'), ('organization', 'admin'), ('organization', 'can_delete'), ('organization', 'can_manage'), ('project', 'can_delete'), ('organization', 'can_inspect_secrets'), ('organization', 'can_manage_secret_grants'), ('organization', 'can_purge_secrets'), ('organization', 'can_revoke_secrets'), ('organization', 'can_rotate_secrets'), ('organization', 'can_write_secret_value'), ('project', 'can_manage'), ('project', 'can_write'), ('project', 'can_accept_secret_import'), ('project', 'can_bind_brokered_secret'), ('project', 'can_bind_raw_secret'), ('project', 'can_inspect_secrets'), ('project', 'can_manage_secret_grants'), ('project', 'can_purge_secrets'), ('project', 'can_revoke_secrets'), ('project', 'can_rotate_secrets'), ('project', 'can_write_secret_value'), ('repository', 'can_accept_secret_import'), ('repository', 'can_bind_brokered_secret'), ('repository', 'can_bind_raw_secret'), ('organization', 'can_create_project'), ('organization', 'can_manage_members'), ('organization', 'member'), ('repository', 'can_delete'), ('agent_instance', 'can_manage'), ('agent_instance', 'can_recover'), ('agent_instance', 'can_update'), ('agent_instance', 'can_execute'), ('repository', 'can_write'), ('secret', 'inspect_metadata'), ('secret', 'manage_grants'), ('secret', 'purge'), ('secret', 'revoke'), ('secret', 'rotate'), ('secret', 'write_value'), ('secret_import', 'accept'), ('secret_import', 'inspect_metadata'), ('secret_import', 'bind_brokered'), ('secret_import', 'bind_raw'), ('organization', 'can_read'), ('agent_attachment', 'can_manage'), ('agent_secret_binding', 'can_manage'), ('state_volume', 'can_manage'), ('state_volume', 'can_restore'), ('agent_update', 'can_recover'), ('agent_update', 'can_start'), ('agent_attachment', 'can_execute'), ('run', 'can_cancel'), ('state_volume', 'can_attach'), ('build', 'can_cancel'), ('build', 'can_execute'), ('release', 'can_publish'), ('release', 'can_revoke'), ('secret_grant', 'inspect_metadata'), ('secret_grant', 'manage'), ('project', 'can_read'), ('agent_instance', 'can_read'), ('repository', 'can_read'), ('agent_attachment', 'can_read'), ('agent_secret_binding', 'can_read'), ('agent_update', 'can_read'), ('run', 'can_read'), ('state_volume', 'can_read'), ('build', 'can_read'), ('release', 'can_read'), ('release', 'can_use'), ('release_agent', 'can_read'), ('release_agent', 'can_use'), ('agent_instance', 'can_use_release'));
+    WHERE (t.object_type, t.relation) NOT IN (('agent_attachment', 'instance'), ('agent_attachment', 'repository'), ('agent_instance', 'project'), ('agent_instance', 'release_agent'), ('agent_secret_binding', 'instance'), ('agent_secret_binding', 'secret_import'), ('agent_update', 'instance'), ('build', 'repository'), ('organization', 'owner'), ('organization', 'secret_manager'), ('project', 'brokered_secret_binder'), ('project', 'maintainer'), ('project', 'organization'), ('project', 'raw_secret_binder'), ('project', 'secret_manager'), ('release', 'repository'), ('release', 'usable_repository'), ('release_agent', 'release'), ('repository', 'brokered_secret_binder'), ('repository', 'manager'), ('repository', 'project'), ('repository', 'public'), ('repository', 'raw_secret_binder'), ('repository', 'secret_manager'), ('repository_oci_image', 'project'), ('run', 'instance'), ('secret', 'owner'), ('secret_grant', 'secret'), ('secret_grant', 'target'), ('secret_import', 'active_target'), ('secret_import', 'grant'), ('secret_import', 'target'), ('secret_lease', 'binding'), ('secret_lease', 'receive_raw'), ('secret_lease', 'run'), ('secret_lease', 'use_brokered'), ('state_volume', 'instance'), ('organization', 'admin'), ('organization', 'can_delete'), ('organization', 'can_manage'), ('project', 'can_delete'), ('organization', 'can_inspect_secrets'), ('organization', 'can_manage_secret_grants'), ('organization', 'can_purge_secrets'), ('organization', 'can_revoke_secrets'), ('organization', 'can_rotate_secrets'), ('organization', 'can_write_secret_value'), ('project', 'can_manage'), ('project', 'can_write'), ('project', 'can_accept_secret_import'), ('project', 'can_bind_brokered_secret'), ('project', 'can_bind_raw_secret'), ('project', 'can_inspect_secrets'), ('project', 'can_manage_secret_grants'), ('project', 'can_purge_secrets'), ('project', 'can_revoke_secrets'), ('project', 'can_rotate_secrets'), ('project', 'can_write_secret_value'), ('repository', 'can_accept_secret_import'), ('repository', 'can_bind_brokered_secret'), ('repository', 'can_bind_raw_secret'), ('organization', 'can_create_project'), ('organization', 'can_manage_members'), ('organization', 'member'), ('repository', 'can_delete'), ('agent_instance', 'can_manage'), ('agent_instance', 'can_recover'), ('agent_instance', 'can_update'), ('repository_oci_image', 'can_manage'), ('agent_instance', 'can_execute'), ('repository', 'can_write'), ('repository_oci_image', 'can_write'), ('secret', 'inspect_metadata'), ('secret', 'manage_grants'), ('secret', 'purge'), ('secret', 'revoke'), ('secret', 'rotate'), ('secret', 'write_value'), ('secret_import', 'accept'), ('secret_import', 'inspect_metadata'), ('secret_import', 'bind_brokered'), ('secret_import', 'bind_raw'), ('organization', 'can_read'), ('agent_attachment', 'can_manage'), ('agent_secret_binding', 'can_manage'), ('state_volume', 'can_manage'), ('state_volume', 'can_restore'), ('agent_update', 'can_recover'), ('agent_update', 'can_start'), ('agent_attachment', 'can_execute'), ('run', 'can_cancel'), ('state_volume', 'can_attach'), ('build', 'can_cancel'), ('build', 'can_execute'), ('release', 'can_publish'), ('release', 'can_revoke'), ('secret_grant', 'inspect_metadata'), ('secret_grant', 'manage'), ('project', 'can_read'), ('agent_instance', 'can_read'), ('repository', 'can_read'), ('repository_oci_image', 'can_read'), ('agent_attachment', 'can_read'), ('agent_secret_binding', 'can_read'), ('agent_update', 'can_read'), ('run', 'can_read'), ('state_volume', 'can_read'), ('build', 'can_read'), ('release', 'can_read'), ('release', 'can_use'), ('release_agent', 'can_read'), ('release_agent', 'can_use'), ('agent_instance', 'can_use_release'));
 END;
 $$ LANGUAGE plpgsql STABLE
 SET search_path = 'public';
@@ -47455,6 +49338,28 @@ BEGIN
     END IF;
         IF p_relation = 'can_read' THEN
         RETURN "public"."explain_repository_can_read"(p_subject_type, p_subject_id, p_object_id, p_visited, p_max_nodes);
+    END IF;
+        RETURN jsonb_build_object(
+        'object', (p_object_type || ':' || p_object_id),
+        'relation', p_relation,
+        'subject', (p_subject_type || ':' || p_subject_id),
+        'result', false,
+        'root', jsonb_build_object('type', 'union', 'label', 'explain not yet supported for this (object_type, relation) — no generated explain function for the requested pair. Confirm the pair exists in the migrated schema.', 'children', '[]'::jsonb, 'result', false),
+        'truncated', false,
+        'node_count', 1);
+    END IF;
+    IF p_object_type = 'repository_oci_image' THEN
+        IF p_relation = 'project' THEN
+        RETURN "public"."explain_repository_oci_image_project"(p_subject_type, p_subject_id, p_object_id, p_visited, p_max_nodes);
+    END IF;
+        IF p_relation = 'can_manage' THEN
+        RETURN "public"."explain_repository_oci_image_can_manage"(p_subject_type, p_subject_id, p_object_id, p_visited, p_max_nodes);
+    END IF;
+        IF p_relation = 'can_write' THEN
+        RETURN "public"."explain_repository_oci_image_can_write"(p_subject_type, p_subject_id, p_object_id, p_visited, p_max_nodes);
+    END IF;
+        IF p_relation = 'can_read' THEN
+        RETURN "public"."explain_repository_oci_image_can_read"(p_subject_type, p_subject_id, p_object_id, p_visited, p_max_nodes);
     END IF;
         RETURN jsonb_build_object(
         'object', (p_object_type || ':' || p_object_id),
@@ -47926,6 +49831,21 @@ BEGIN
     END IF;
         RETURN jsonb_build_object('root', jsonb_build_object('name', (p_object_type || ':' || p_object_id || '#' || p_relation)) || jsonb_build_object('leaf', jsonb_build_object('users', jsonb_build_object('users', '[]'::jsonb))));
     END IF;
+    IF p_object_type = 'repository_oci_image' THEN
+        IF p_relation = 'project' THEN
+        RETURN "public"."expand_repository_oci_image_project"(p_object_id, p_subject_type, p_max_leaf);
+    END IF;
+        IF p_relation = 'can_manage' THEN
+        RETURN "public"."expand_repository_oci_image_can_manage"(p_object_id, p_subject_type, p_max_leaf);
+    END IF;
+        IF p_relation = 'can_write' THEN
+        RETURN "public"."expand_repository_oci_image_can_write"(p_object_id, p_subject_type, p_max_leaf);
+    END IF;
+        IF p_relation = 'can_read' THEN
+        RETURN "public"."expand_repository_oci_image_can_read"(p_object_id, p_subject_type, p_max_leaf);
+    END IF;
+        RETURN jsonb_build_object('root', jsonb_build_object('name', (p_object_type || ':' || p_object_id || '#' || p_relation)) || jsonb_build_object('leaf', jsonb_build_object('users', jsonb_build_object('users', '[]'::jsonb))));
+    END IF;
     IF p_object_type = 'run' THEN
         IF p_relation = 'instance' THEN
         RETURN "public"."expand_run_instance"(p_object_id, p_subject_type, p_max_leaf);
@@ -48190,6 +50110,11 @@ BEGIN
         SELECT * FROM "public"."list_repository_secret_manager_obj"(p_subject_type, p_subject_id, p_limit, p_after);
         RETURN;
     END IF;
+    IF (p_object_type = 'repository_oci_image' AND p_relation = 'project') THEN
+        RETURN QUERY
+        SELECT * FROM "public"."list_repository_oci_image_project_obj"(p_subject_type, p_subject_id, p_limit, p_after);
+        RETURN;
+    END IF;
     IF (p_object_type = 'run' AND p_relation = 'instance') THEN
         RETURN QUERY
         SELECT * FROM "public"."list_run_instance_obj"(p_subject_type, p_subject_id, p_limit, p_after);
@@ -48405,6 +50330,11 @@ BEGIN
         SELECT * FROM "public"."list_agent_instance_can_update_obj"(p_subject_type, p_subject_id, p_limit, p_after);
         RETURN;
     END IF;
+    IF (p_object_type = 'repository_oci_image' AND p_relation = 'can_manage') THEN
+        RETURN QUERY
+        SELECT * FROM "public"."list_repository_oci_image_can_manage_obj"(p_subject_type, p_subject_id, p_limit, p_after);
+        RETURN;
+    END IF;
     IF (p_object_type = 'agent_instance' AND p_relation = 'can_execute') THEN
         RETURN QUERY
         SELECT * FROM "public"."list_agent_instance_can_execute_obj"(p_subject_type, p_subject_id, p_limit, p_after);
@@ -48413,6 +50343,11 @@ BEGIN
     IF (p_object_type = 'repository' AND p_relation = 'can_write') THEN
         RETURN QUERY
         SELECT * FROM "public"."list_repository_can_write_obj"(p_subject_type, p_subject_id, p_limit, p_after);
+        RETURN;
+    END IF;
+    IF (p_object_type = 'repository_oci_image' AND p_relation = 'can_write') THEN
+        RETURN QUERY
+        SELECT * FROM "public"."list_repository_oci_image_can_write_obj"(p_subject_type, p_subject_id, p_limit, p_after);
         RETURN;
     END IF;
     IF (p_object_type = 'secret' AND p_relation = 'inspect_metadata') THEN
@@ -48558,6 +50493,11 @@ BEGIN
     IF (p_object_type = 'repository' AND p_relation = 'can_read') THEN
         RETURN QUERY
         SELECT * FROM "public"."list_repository_can_read_obj"(p_subject_type, p_subject_id, p_limit, p_after);
+        RETURN;
+    END IF;
+    IF (p_object_type = 'repository_oci_image' AND p_relation = 'can_read') THEN
+        RETURN QUERY
+        SELECT * FROM "public"."list_repository_oci_image_can_read_obj"(p_subject_type, p_subject_id, p_limit, p_after);
         RETURN;
     END IF;
     IF (p_object_type = 'agent_attachment' AND p_relation = 'can_read') THEN
@@ -48751,6 +50691,11 @@ BEGIN
     IF (p_object_type = 'repository' AND p_relation = 'secret_manager') THEN
         RETURN QUERY
         SELECT * FROM "public"."list_repository_secret_manager_sub"(p_object_id, p_subject_type, p_limit, p_after);
+        RETURN;
+    END IF;
+    IF (p_object_type = 'repository_oci_image' AND p_relation = 'project') THEN
+        RETURN QUERY
+        SELECT * FROM "public"."list_repository_oci_image_project_sub"(p_object_id, p_subject_type, p_limit, p_after);
         RETURN;
     END IF;
     IF (p_object_type = 'run' AND p_relation = 'instance') THEN
@@ -48968,6 +50913,11 @@ BEGIN
         SELECT * FROM "public"."list_agent_instance_can_update_sub"(p_object_id, p_subject_type, p_limit, p_after);
         RETURN;
     END IF;
+    IF (p_object_type = 'repository_oci_image' AND p_relation = 'can_manage') THEN
+        RETURN QUERY
+        SELECT * FROM "public"."list_repository_oci_image_can_manage_sub"(p_object_id, p_subject_type, p_limit, p_after);
+        RETURN;
+    END IF;
     IF (p_object_type = 'agent_instance' AND p_relation = 'can_execute') THEN
         RETURN QUERY
         SELECT * FROM "public"."list_agent_instance_can_execute_sub"(p_object_id, p_subject_type, p_limit, p_after);
@@ -48976,6 +50926,11 @@ BEGIN
     IF (p_object_type = 'repository' AND p_relation = 'can_write') THEN
         RETURN QUERY
         SELECT * FROM "public"."list_repository_can_write_sub"(p_object_id, p_subject_type, p_limit, p_after);
+        RETURN;
+    END IF;
+    IF (p_object_type = 'repository_oci_image' AND p_relation = 'can_write') THEN
+        RETURN QUERY
+        SELECT * FROM "public"."list_repository_oci_image_can_write_sub"(p_object_id, p_subject_type, p_limit, p_after);
         RETURN;
     END IF;
     IF (p_object_type = 'secret' AND p_relation = 'inspect_metadata') THEN
@@ -49121,6 +51076,11 @@ BEGIN
     IF (p_object_type = 'repository' AND p_relation = 'can_read') THEN
         RETURN QUERY
         SELECT * FROM "public"."list_repository_can_read_sub"(p_object_id, p_subject_type, p_limit, p_after);
+        RETURN;
+    END IF;
+    IF (p_object_type = 'repository_oci_image' AND p_relation = 'can_read') THEN
+        RETURN QUERY
+        SELECT * FROM "public"."list_repository_oci_image_can_read_sub"(p_object_id, p_subject_type, p_limit, p_after);
         RETURN;
     END IF;
     IF (p_object_type = 'agent_attachment' AND p_relation = 'can_read') THEN

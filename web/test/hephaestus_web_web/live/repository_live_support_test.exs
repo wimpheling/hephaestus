@@ -50,7 +50,10 @@ defmodule HephaestusWebWeb.RepositoryLiveSupportTest do
     }
 
     updated =
-      RepositoryLiveSupport.apply_effects(socket, RepositoryFilesState, [:snapshot, :replace_watch])
+      RepositoryLiveSupport.apply_effects(socket, RepositoryFilesState, [
+        :snapshot,
+        :replace_watch
+      ])
 
     assert updated.assigns.snapshot_task == nil
     assert updated.assigns.watch_task == nil

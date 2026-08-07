@@ -1,4 +1,4 @@
-# Provision local platform-builder images explicitly
+# Provision local platform OCI images explicitly
 
 Owner: Codex
 
@@ -6,7 +6,7 @@ Owner: Codex
 
 A KVM-capable developer machine can run the Hephaestus stack locally with
 Podman-managed infrastructure and, when explicitly requested, build and
-install the four standard platform builder images into the persistent local
+install the four standard platform OCI images into the persistent local
 Zot/catalog state. Normal `cargo dev` startup never builds, scans,
 publishes, or provisions platform images.
 
@@ -17,10 +17,10 @@ publishes, or provisions platform images.
 | Stack lifecycle | Keep `cargo dev` as the authoritative local supervisor; do not introduce a parallel Compose file. |
 | Infrastructure | PostgreSQL, NATS, Zot, and the OCI build-toolchain remain Podman-managed with named volumes or isolated local state. Heph, Phoenix, OIDC, and libkrun remain host processes. |
 | VM support | Accessible KVM is a hard prerequisite; no degraded non-KVM demo mode exists. |
-| Image operation | Standard builder distribution is an explicit heavy operator action and is never a startup, migration, seed, or CI side effect. |
+| Image operation | Standard OCI image distribution is an explicit heavy operator action and is never a startup, migration, seed, or CI side effect. |
 | Build toolchain | Run Buildah, Skopeo, Syft, Trivy, ORAS, and jq only from a pinned, administrator-built Podman tool image. The host does not need those OCI tools installed. |
 | Persistence | Approved local catalog records, release evidence, and OCI layouts survive `cargo dev` restarts. Local installation receipts are removed only by an explicit scoped clean command. |
-| Supply chain | Build inputs remain pinned; Buildah construction, Syft SBOM, offline Trivy scan, publication, verification, approval, and catalog provisioning remain separate observable phases. Repository-defined OCI builder rootfs materialization is a separate runtime lifecycle. |
+| Supply chain | Build inputs remain pinned; Buildah construction, Syft SBOM, offline Trivy scan, publication, verification, approval, and catalog provisioning remain separate observable phases. Every approved OCI image is materialized through the same lifecycle and is selectable by any execution contract. |
 
 ## Implementation checklist
 
@@ -46,9 +46,9 @@ publishes, or provisions platform images.
 - [x] Implement the explicit four-image build and evidence operation using
   fixed reviewed definitions and a caller-confirmed source revision/timestamp.
 - [x] Implement publication, read-back verification, approval, and catalog
-  provisioning against local Zot/PostgreSQL. Platform builder images are build
-  bases, not VM rootfs images; rootfs materialization remains the separate
-  repository-builder lifecycle.
+  provisioning against local Zot/PostgreSQL. The resulting plain OCI images
+  are materialized through the shared image lifecycle and may be selected by
+  build or guest execution contracts.
 - [x] Make reruns idempotent or fail safely on conflicting immutable release
   evidence; never overwrite an existing reviewed release output.
 - [x] Document local installation, expected disk/time cost, status inspection,

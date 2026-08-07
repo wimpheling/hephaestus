@@ -4,7 +4,7 @@
 //! durable ownership, immutable identity, verification, and approval decisions
 //! Hephaestus must make before content can be exposed or executed.
 
-use builder_catalog_domain::ProjectBuilderId;
+use builder_catalog_domain::OciImageId;
 use forge_domain::ProjectId;
 use runtime_types::ReleaseAgentId;
 use serde::{Deserialize, Serialize};
@@ -56,17 +56,17 @@ impl FromStr for PublicationIntentId {
     }
 }
 
-/// A bounded stable key for a platform-owned builder namespace.
+/// A bounded stable key for a platform-owned image namespace.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
-pub struct PlatformBuilderKey(String);
+pub struct PlatformImageKey(String);
 
-impl PlatformBuilderKey {
-    /// Parses a canonical platform builder key.
+impl PlatformImageKey {
+    /// Parses a canonical platform image key.
     ///
     /// # Errors
     ///
-    /// Returns [`RegistryValueError::InvalidPlatformBuilderKey`] when the key
+    /// Returns [`RegistryValueError::InvalidPlatformImageKey`] when the key
     /// is not a bounded lowercase identifier.
     pub fn parse(value: impl Into<String>) -> Result<Self, RegistryValueError> {
         let value = value.into();
@@ -78,7 +78,7 @@ impl PlatformBuilderKey {
             });
         valid
             .then_some(Self(value))
-            .ok_or(RegistryValueError::InvalidPlatformBuilderKey)
+            .ok_or(RegistryValueError::InvalidPlatformImageKey)
     }
 
     /// Returns the canonical key.
@@ -88,13 +88,13 @@ impl PlatformBuilderKey {
     }
 }
 
-impl fmt::Display for PlatformBuilderKey {
+impl fmt::Display for PlatformImageKey {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(formatter)
     }
 }
 
-impl TryFrom<String> for PlatformBuilderKey {
+impl TryFrom<String> for PlatformImageKey {
     type Error = RegistryValueError;
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
@@ -102,8 +102,8 @@ impl TryFrom<String> for PlatformBuilderKey {
     }
 }
 
-impl From<PlatformBuilderKey> for String {
-    fn from(value: PlatformBuilderKey) -> Self {
+impl From<PlatformImageKey> for String {
+    fn from(value: PlatformImageKey) -> Self {
         value.0
     }
 }
@@ -112,17 +112,17 @@ impl From<PlatformBuilderKey> for String {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RegistryOwner {
-    /// One platform-owned builder selected by its stable key.
-    PlatformBuilder {
-        /// Stable platform builder key.
-        builder_key: PlatformBuilderKey,
+    /// One platform-owned image selected by its stable key.
+    PlatformImage {
+        /// Stable platform image key.
+        image_key: PlatformImageKey,
     },
-    /// One project-owned repository builder.
-    RepositoryBuilder {
+    /// One project-owned repository OCI image.
+    RepositoryOciImage {
         /// Owning project.
         project_id: ProjectId,
-        /// Stable builder identity.
-        builder_id: ProjectBuilderId,
+        /// Stable image identity.
+        image_id: OciImageId,
     },
     /// One project-owned release agent.
     ReleaseAgent {
@@ -138,13 +138,13 @@ impl RegistryOwner {
     #[must_use]
     pub fn repository_path(&self) -> String {
         match self {
-            Self::PlatformBuilder { builder_key } => {
-                format!("platform/builders/{builder_key}")
+            Self::PlatformImage { image_key } => {
+                format!("platform/images/{image_key}")
             }
-            Self::RepositoryBuilder {
+            Self::RepositoryOciImage {
                 project_id,
-                builder_id,
-            } => format!("projects/{project_id}/repository-builders/{builder_id}"),
+                image_id,
+            } => format!("projects/{project_id}/repository-images/{image_id}"),
             Self::ReleaseAgent {
                 project_id,
                 release_agent_id,
@@ -178,13 +178,13 @@ impl RegistryNamespace {
         let value = value.into();
         let parts = value.split('/').collect::<Vec<_>>();
         let owner = match parts.as_slice() {
-            ["platform", "builders", builder_key] => RegistryOwner::PlatformBuilder {
-                builder_key: PlatformBuilderKey::parse((*builder_key).to_owned())?,
+            ["platform", "images", image_key] => RegistryOwner::PlatformImage {
+                image_key: PlatformImageKey::parse((*image_key).to_owned())?,
             },
-            ["projects", project_id, "repository-builders", builder_id] => {
-                RegistryOwner::RepositoryBuilder {
+            ["projects", project_id, "repository-images", image_id] => {
+                RegistryOwner::RepositoryOciImage {
                     project_id: canonical_project_id(project_id)?,
-                    builder_id: canonical_project_builder_id(builder_id)?,
+                    image_id: canonical_project_image_id(image_id)?,
                 }
             }
             ["projects", project_id, "release-agents", release_agent_id] => {
@@ -1090,10 +1090,10 @@ impl RegistryRetentionRoot {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RegistryRetentionRootKind {
-    /// An approved platform catalog builder manifest or index.
+    /// An approved platform catalog image manifest or index.
     ApprovedCatalog,
-    /// An approved project repository-builder manifest or index.
-    ApprovedRepositoryBuilder,
+    /// An approved project repository-image manifest or index.
+    ApprovedRepositoryOciImage,
     /// An approved project release-agent manifest or index.
     ApprovedReleaseAgent,
     /// A pending, publishing, or verified publication intent.
@@ -1180,10 +1180,10 @@ pub enum RegistryRetentionReportMode {
 // schema explicit in operator JSON; combining them into states would hide gaps.
 #[allow(clippy::struct_excessive_bools)]
 pub struct RegistryRetentionSchemaScope {
-    /// Platform catalog builder publications are represented.
+    /// Platform catalog image publications are represented.
     pub platform_catalog: bool,
-    /// Project repository-builder publications are represented.
-    pub repository_builders: bool,
+    /// Project repository-image publications are represented.
+    pub repository_oci_images: bool,
     /// Project release-agent publications are represented.
     pub release_agents: bool,
     /// Separate generic build-image roots are not represented yet.
@@ -1223,7 +1223,7 @@ impl RegistryRetentionReport {
             observability: metrics,
             schema_scope: RegistryRetentionSchemaScope {
                 platform_catalog: true,
-                repository_builders: true,
+                repository_oci_images: true,
                 release_agents: true,
                 generic_build_images: false,
                 generic_release_artifacts: false,
@@ -1238,9 +1238,9 @@ fn retention_roots(intents: &[PublicationIntent]) -> BTreeSet<RegistryRetentionR
         let namespace = intent.reference().namespace().clone();
         let primary_kind = match intent.state() {
             PublicationState::Approved => Some(match intent.claim().owner() {
-                RegistryOwner::PlatformBuilder { .. } => RegistryRetentionRootKind::ApprovedCatalog,
-                RegistryOwner::RepositoryBuilder { .. } => {
-                    RegistryRetentionRootKind::ApprovedRepositoryBuilder
+                RegistryOwner::PlatformImage { .. } => RegistryRetentionRootKind::ApprovedCatalog,
+                RegistryOwner::RepositoryOciImage { .. } => {
+                    RegistryRetentionRootKind::ApprovedRepositoryOciImage
                 }
                 RegistryOwner::ReleaseAgent { .. } => {
                     RegistryRetentionRootKind::ApprovedReleaseAgent
@@ -1617,9 +1617,9 @@ pub enum RegistryConsumptionError {
 /// Registry value validation failure.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum RegistryValueError {
-    /// Platform builder key is malformed.
-    #[error("platform builder key must be a bounded lowercase identifier")]
-    InvalidPlatformBuilderKey,
+    /// Platform image key is malformed.
+    #[error("platform image key must be a bounded lowercase identifier")]
+    InvalidPlatformImageKey,
     /// Repository path is not one of the supported canonical namespace shapes.
     #[error("registry namespace is not canonical or supported")]
     InvalidNamespace,
@@ -1668,10 +1668,10 @@ fn canonical_project_id(value: &str) -> Result<ProjectId, RegistryValueError> {
         .ok_or(RegistryValueError::InvalidNamespace)
 }
 
-fn canonical_project_builder_id(value: &str) -> Result<ProjectBuilderId, RegistryValueError> {
+fn canonical_project_image_id(value: &str) -> Result<OciImageId, RegistryValueError> {
     let parsed = Uuid::parse_str(value).map_err(|_| RegistryValueError::InvalidNamespace)?;
     (parsed.to_string() == value)
-        .then_some(ProjectBuilderId::from_uuid(parsed))
+        .then_some(OciImageId::from_uuid(parsed))
         .ok_or(RegistryValueError::InvalidNamespace)
 }
 
@@ -1716,9 +1716,9 @@ mod tests {
     }
 
     fn owner() -> RegistryOwner {
-        RegistryOwner::RepositoryBuilder {
+        RegistryOwner::RepositoryOciImage {
             project_id: ProjectId::from_uuid(Uuid::from_u128(1)),
-            builder_id: ProjectBuilderId::from_uuid(Uuid::from_u128(2)),
+            image_id: OciImageId::from_uuid(Uuid::from_u128(2)),
         }
     }
 
@@ -1792,16 +1792,16 @@ mod tests {
 
     #[test]
     fn canonicalizes_all_supported_namespace_shapes() {
-        let platform = RegistryNamespace::for_owner(RegistryOwner::PlatformBuilder {
-            builder_key: PlatformBuilderKey::parse("rust-ubuntu").expect("key"),
+        let platform = RegistryNamespace::for_owner(RegistryOwner::PlatformImage {
+            image_key: PlatformImageKey::parse("rust-ubuntu").expect("key"),
         });
-        assert_eq!(platform.as_str(), "platform/builders/rust-ubuntu");
+        assert_eq!(platform.as_str(), "platform/images/rust-ubuntu");
         assert_eq!(RegistryNamespace::parse(platform.to_string()), Ok(platform));
 
         let repository = RegistryNamespace::for_owner(owner());
         assert_eq!(
             repository.as_str(),
-            "projects/00000000-0000-0000-0000-000000000001/repository-builders/00000000-0000-0000-0000-000000000002"
+            "projects/00000000-0000-0000-0000-000000000001/repository-images/00000000-0000-0000-0000-000000000002"
         );
         assert_eq!(
             RegistryNamespace::parse(repository.to_string()),
@@ -1822,22 +1822,20 @@ mod tests {
     #[test]
     fn rejects_noncanonical_paths_and_immutable_references() {
         assert!(
-            RegistryNamespace::parse("projects/00000000-0000-0000-0000-000000000001/builders/x")
+            RegistryNamespace::parse("projects/00000000-0000-0000-0000-000000000001/images/x")
                 .is_err()
         );
-        assert!(RegistryNamespace::parse("platform/builders/Rust").is_err());
-        assert!(RegistryNamespace::parse("projects/{00000000-0000-0000-0000-000000000001}/repository-builders/00000000-0000-0000-0000-000000000002").is_err());
+        assert!(RegistryNamespace::parse("platform/images/Rust").is_err());
+        assert!(RegistryNamespace::parse("projects/{00000000-0000-0000-0000-000000000001}/repository-images/00000000-0000-0000-0000-000000000002").is_err());
         assert!(RegistryAuthority::parse("https://registry.example.test").is_err());
         assert!(RegistryAuthority::parse("Registry.example.test").is_err());
         assert!(
-            ImmutableManifestReference::parse(
-                "registry.example.test/platform/builders/rust:latest"
-            )
-            .is_err()
+            ImmutableManifestReference::parse("registry.example.test/platform/images/rust:latest")
+                .is_err()
         );
         assert!(
             ImmutableManifestReference::parse(
-                "registry.example.test/platform/builders/rust@sha512:abc"
+                "registry.example.test/platform/images/rust@sha512:abc"
             )
             .is_err()
         );
@@ -1858,9 +1856,9 @@ mod tests {
         let same_namespace = RegistryNamespace::for_owner(owner());
         assert!(claim.assert_owns(&same_namespace).is_ok());
 
-        let other_namespace = RegistryNamespace::for_owner(RegistryOwner::RepositoryBuilder {
+        let other_namespace = RegistryNamespace::for_owner(RegistryOwner::RepositoryOciImage {
             project_id: ProjectId::from_uuid(Uuid::from_u128(9)),
-            builder_id: ProjectBuilderId::from_uuid(Uuid::from_u128(2)),
+            image_id: OciImageId::from_uuid(Uuid::from_u128(2)),
         });
         assert_eq!(
             claim.assert_owns(&other_namespace),

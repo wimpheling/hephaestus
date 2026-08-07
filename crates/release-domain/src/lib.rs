@@ -573,8 +573,8 @@ pub struct ReleaseAgent {
     pub arguments: Vec<String>,
     /// Release-relative working directory.
     pub working_directory: ArtifactPath,
-    /// Pinned root-image digest.
-    pub root_image_digest: String,
+    /// Exact immutable OCI image reference selected for guest execution.
+    pub image_reference: String,
     /// Whether one persistent volume is required per consuming instance.
     pub requires_state: bool,
     /// Normalized release-owned policy ceiling.

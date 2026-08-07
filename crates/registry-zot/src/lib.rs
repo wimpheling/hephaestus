@@ -453,7 +453,7 @@ mod tests {
         extract::{Request, State},
         http::{HeaderValue, Response},
     };
-    use registry_domain::{PlatformBuilderKey, RegistryOwner};
+    use registry_domain::{PlatformImageKey, RegistryOwner};
     use registry_token::{
         AuthorizationDecision, KeyId, RegistryService, RegistryTokenIssuer, RepositoryActions,
         RepositoryName, ScopeRequest, SigningKey, TokenIssuer, TokenLifetime, TokenSubject,
@@ -588,8 +588,8 @@ mod tests {
     #[tokio::test]
     async fn reads_and_validates_an_exact_subject_and_required_referrers() {
         let authority = RegistryAuthority::parse("registry.test").expect("authority");
-        let namespace = RegistryNamespace::for_owner(RegistryOwner::PlatformBuilder {
-            builder_key: PlatformBuilderKey::parse("rust-ubuntu").expect("key"),
+        let namespace = RegistryNamespace::for_owner(RegistryOwner::PlatformImage {
+            image_key: PlatformImageKey::parse("rust-ubuntu").expect("key"),
         });
         let platform_digest = format!("sha256:{}", "b".repeat(64));
         let subject = format!(
@@ -658,8 +658,8 @@ mod tests {
     #[tokio::test]
     async fn reports_an_exact_missing_digest_without_treating_it_as_an_outage() {
         let authority = RegistryAuthority::parse("registry.test").expect("authority");
-        let namespace = RegistryNamespace::for_owner(RegistryOwner::PlatformBuilder {
-            builder_key: PlatformBuilderKey::parse("python-ubuntu").expect("key"),
+        let namespace = RegistryNamespace::for_owner(RegistryOwner::PlatformImage {
+            image_key: PlatformImageKey::parse("python-ubuntu").expect("key"),
         });
         let (origin, server) = serve(BTreeMap::new()).await;
         let client = ZotHttpRegistry::new(

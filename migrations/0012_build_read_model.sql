@@ -8,11 +8,6 @@ ALTER TABLE build_requests
         CHECK (build_trigger IN ('push', 'manual', 'recovery')),
     ADD COLUMN agent_key text
         CHECK (agent_key IS NULL OR agent_key ~ '^[a-z0-9][a-z0-9_-]{0,63}$'),
-    ADD COLUMN builder_image_id uuid REFERENCES builder_images(id),
-    ADD COLUMN builder_image_key text
-        CHECK (builder_image_key IS NULL OR builder_image_key ~ '^[a-z0-9][a-z0-9_-]{0,63}$'),
-    ADD COLUMN builder_image_reference text
-        CHECK (builder_image_reference IS NULL OR builder_image_reference ~ '@sha256:[0-9a-f]{64}$'),
     ADD COLUMN configuration_hash bytea
         CHECK (configuration_hash IS NULL OR octet_length(configuration_hash) = 32),
     ADD COLUMN build_declaration jsonb NOT NULL DEFAULT '{}'::jsonb
@@ -22,60 +17,41 @@ ALTER TABLE build_requests
     ADD COLUMN declared_artifacts jsonb NOT NULL DEFAULT '[]'::jsonb
         CHECK (jsonb_typeof(declared_artifacts) = 'array');
 
--- Existing receive-linked requests were created by the push workflow. New
--- callers set the value explicitly, while old fixture rows remain readable.
-UPDATE build_requests
-   SET build_trigger = 'push'
- WHERE origin_receive_id IS NOT NULL;
+-- This blueprint starts with an empty database; every build request is
+-- created with its resolved immutable OCI image snapshot.
 
--- Populate the new snapshot for rows created before this migration. The
--- revision is selected by the same repository/commit/validity rule used by
--- the build request application operation.
-WITH snapshots AS (
-    SELECT request.id,
-           revision.config -> 'agent' ->> 'key' AS agent_key,
-           catalog.id AS builder_image_id,
-           catalog.key AS builder_image_key,
-           request_build.root_image AS builder_image_reference,
-           decode(revision.normalized_config_hash, 'hex') AS configuration_hash,
-           request_build.declaration,
-           request_build.policy,
-           COALESCE(request_build.declaration -> 'artifacts', '[]'::jsonb)
-               AS declared_artifacts
-      FROM build_requests request
-      JOIN LATERAL (
-          SELECT revision.config, revision.normalized_config_hash
-            FROM agent_config_revisions revision
-           WHERE revision.repository_id = request.repository_id
-             AND revision.commit_sha = request.source_commit
-             AND revision.status = 'valid'
-             AND revision.config -> 'build' IS NOT NULL
-           ORDER BY revision.created_at DESC, revision.id
-           LIMIT 1
-      ) revision ON true
-      CROSS JOIN LATERAL (
-          SELECT revision.config -> 'build' ->> 'root_image' AS root_image,
-                 revision.config -> 'build' AS declaration,
-                 jsonb_build_object(
-                     'resources', revision.config -> 'build' -> 'resources',
-                     'network', revision.config -> 'build' -> 'network'
-                 ) AS policy
-      ) request_build
-      LEFT JOIN builder_images catalog
-        ON catalog.image_reference = request_build.root_image
-     WHERE request.build_declaration = '{}'::jsonb
-)
-UPDATE build_requests request
-   SET agent_key = snapshots.agent_key,
-       builder_image_id = snapshots.builder_image_id,
-       builder_image_key = snapshots.builder_image_key,
-       builder_image_reference = snapshots.builder_image_reference,
-       configuration_hash = snapshots.configuration_hash,
-       build_declaration = snapshots.declaration,
-       build_policy = snapshots.policy,
-       declared_artifacts = snapshots.declared_artifacts
-  FROM snapshots
- WHERE request.id = snapshots.id;
+CREATE TABLE build_request_images (
+    build_request_id uuid NOT NULL REFERENCES build_requests(id) ON DELETE CASCADE,
+    execution_context text NOT NULL CHECK (execution_context IN ('build', 'guest')),
+    image_id uuid NOT NULL REFERENCES oci_images(id),
+    image_key text NOT NULL CHECK (image_key ~ '^[a-z0-9][a-z0-9_-]{0,63}$'),
+    image_reference text NOT NULL CHECK (image_reference ~ '@sha256:[0-9a-f]{64}$'),
+    PRIMARY KEY (build_request_id, execution_context)
+);
+
+ALTER TABLE build_request_images ENABLE ROW LEVEL SECURITY;
+ALTER TABLE build_request_images FORCE ROW LEVEL SECURITY;
+CREATE POLICY build_request_images_select ON build_request_images
+    FOR SELECT USING (
+        check_permission(
+            'user', hephaestus_actor_id(), 'can_read',
+            'build', build_request_id::text
+        ) = 1
+    );
+CREATE POLICY build_request_images_insert ON build_request_images
+    FOR INSERT WITH CHECK (
+        EXISTS (
+            SELECT 1
+              FROM build_requests request
+             WHERE request.id = build_request_images.build_request_id
+               AND check_permission(
+                    'user', hephaestus_actor_id(), 'can_write',
+                    'repository', request.repository_id::text
+               ) = 1
+        )
+    );
+GRANT SELECT, INSERT ON build_request_images TO hephaestus_app;
+GRANT SELECT, INSERT ON build_request_images TO hephaestus_worker;
 
 -- A build timeline is an append-only projection of lifecycle transitions. It
 -- deliberately contains no logs or source-controlled values.

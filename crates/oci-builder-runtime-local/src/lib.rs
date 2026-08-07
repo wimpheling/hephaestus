@@ -1,15 +1,15 @@
-//! Administrator-owned local runtime adapters for repository OCI builders.
+//! Administrator-owned local runtime adapters for repository OCI images.
 //!
 //! The adapters deliberately accept only opaque durable job identities and
 //! paths derived from configured roots. Repository text never becomes a host
 //! path, command executable, registry credential, or scanner argument.
 
 use async_trait::async_trait;
-use builder_catalog_domain::{BuilderImageReference, OciDigest};
+use builder_catalog_domain::{OciDigest, OciImageReference};
 use oci_builder_worker::{
-    ClaimedPreparationJob, IsolatedOciBuild, OciOutputPublisher, OciPreparationOutput,
+    ClaimedProductionJob, IsolatedOciBuild, OciImageProductionOutput, OciOutputPublisher,
     OciRootfsExporter, OciWorkerError, PreparedSource, RegistryPublisherTokenIssuer,
-    RepositoryBuilderPublicationLease, RepositoryBuilderPublicationStore, SourceCheckoutProvider,
+    RepositoryOciImagePublicationLease, RepositoryOciImagePublicationStore, SourceCheckoutProvider,
     local_image_name,
 };
 use registry_domain::{
@@ -40,8 +40,9 @@ pub struct LocalOciRuntimeConfig {
     pub repository_root: PathBuf,
     /// Private transient directory for exact source checkouts.
     pub checkout_root: PathBuf,
-    /// Administrator-owned OCI layouts for approved catalog base digests.
-    pub base_layouts: BTreeMap<String, PathBuf>,
+    /// Administrator-owned OCI layouts cached by immutable image reference.
+    /// These are daemon cache entries, never repository-supplied paths.
+    pub image_layouts: BTreeMap<String, PathBuf>,
     /// Private immutable OCI layout output directory.
     pub output_root: PathBuf,
     /// Absolute trusted Git executable.
@@ -112,11 +113,11 @@ impl LocalOciRuntime {
         {
             return Err(OciWorkerError::InvalidConfiguration);
         }
-        config.base_layouts = config
-            .base_layouts
+        config.image_layouts = config
+            .image_layouts
             .into_iter()
             .map(|(reference, path)| {
-                BuilderImageReference::parse(reference.clone())
+                OciImageReference::parse(reference.clone())
                     .map_err(|_| OciWorkerError::InvalidConfiguration)?;
                 Ok((reference, canonical_directory(&path)?))
             })
@@ -126,10 +127,10 @@ impl LocalOciRuntime {
         })
     }
 
-    /// Returns the exact local Buildah image name for a job's immutable builder.
+    /// Returns the exact local Buildah image name for a job's immutable image.
     #[must_use]
     pub fn buildah_image_name(&self, request: &IsolatedOciBuild) -> String {
-        local_image_name(&self.config.buildah_output_prefix, request.builder_id)
+        local_image_name(&self.config.buildah_output_prefix, request.image_id)
     }
 
     async fn command_success(
@@ -158,7 +159,7 @@ impl LocalOciRuntime {
     fn layout_directory(&self, request: &IsolatedOciBuild) -> PathBuf {
         self.config
             .output_root
-            .join(request.builder_id.as_uuid().to_string())
+            .join(request.image_id.as_uuid().to_string())
     }
 
     async fn publish_layout(
@@ -195,7 +196,7 @@ impl LocalOciRuntime {
         let archive = self
             .config
             .output_root
-            .join(format!("{}.oci.tar", request.builder_id.as_uuid()));
+            .join(format!("{}.oci.tar", request.image_id.as_uuid()));
         if archive.exists() {
             return Err(OciWorkerError::UnsafeSourcePath);
         }
@@ -278,7 +279,7 @@ impl LocalOciRuntime {
         let provenance_document = ProvenanceDocument {
             version: 1,
             project_id: request.project_id,
-            builder_id: request.builder_id.as_uuid(),
+            image_id: request.image_id.as_uuid(),
             base_reference: request.base_reference.as_str(),
             manifest_digest: expected_manifest.digest().as_str(),
         };
@@ -306,10 +307,7 @@ impl LocalOciRuntime {
 
 #[async_trait]
 impl SourceCheckoutProvider for LocalOciRuntime {
-    async fn checkout(
-        &self,
-        job: &ClaimedPreparationJob,
-    ) -> Result<PreparedSource, OciWorkerError> {
+    async fn checkout(&self, job: &ClaimedProductionJob) -> Result<PreparedSource, OciWorkerError> {
         let repository = self
             .config
             .repository_root
@@ -370,7 +368,7 @@ impl SourceCheckoutProvider for LocalOciRuntime {
         let source = canonical_directory(&source)?;
         let base_oci_layout = self
             .config
-            .base_layouts
+            .image_layouts
             .get(job.base_reference.as_str())
             .cloned()
             .ok_or(OciWorkerError::InvalidConfiguration)?;
@@ -413,7 +411,7 @@ pub struct ForgeZotOciPublisher<S, T, R> {
 }
 
 impl<S, T, R> ForgeZotOciPublisher<S, T, R> {
-    /// Creates the repository-builder Zot publication adapter.
+    /// Creates the repository-image Zot publication adapter.
     #[must_use]
     pub const fn new(
         runtime: LocalOciRuntime,
@@ -435,34 +433,34 @@ impl<S, T, R> ForgeZotOciPublisher<S, T, R> {
 #[async_trait]
 impl<S, T, R> OciOutputPublisher for ForgeZotOciPublisher<S, T, R>
 where
-    S: RepositoryBuilderPublicationStore,
+    S: RepositoryOciImagePublicationStore,
     T: RegistryPublisherTokenIssuer,
     R: CommandRunner + Send + Sync + 'static,
 {
     async fn publish(
         &self,
         request: &IsolatedOciBuild,
-    ) -> Result<OciPreparationOutput, OciWorkerError> {
+    ) -> Result<OciImageProductionOutput, OciWorkerError> {
         let prepared = self
             .runtime
             .publication_material(request, &self.tooling)
             .await?;
         let lease = self
             .publications
-            .begin_repository_builder_publication(
+            .begin_repository_image_publication(
                 request.project_id,
-                request.builder_id,
+                request.image_id,
                 prepared.expected_manifest.clone(),
             )
             .await?;
         let approved = match lease {
-            RepositoryBuilderPublicationLease::Approved(intent) => intent,
-            RepositoryBuilderPublicationLease::Publish(intent) => {
+            RepositoryOciImagePublicationLease::Approved(intent) => intent,
+            RepositoryOciImagePublicationLease::Publish(intent) => {
                 let token = match self.tokens.issue_pull_push(&intent).await {
                     Ok(token) => token,
                     Err(error) => {
                         self.publications
-                            .retry_repository_builder_publication(intent.id())
+                            .retry_repository_image_publication(intent.id())
                             .await?;
                         return Err(error);
                     }
@@ -479,7 +477,7 @@ where
                     Ok(verification) => verification,
                     Err(error) => {
                         self.publications
-                            .retry_repository_builder_publication(intent.id())
+                            .retry_repository_image_publication(intent.id())
                             .await?;
                         return Err(error);
                     }
@@ -493,7 +491,7 @@ where
     }
 }
 
-/// The local runtime cannot publish repository-builder output by itself.
+/// The local runtime cannot publish repository-image output by itself.
 ///
 /// This compatibility implementation deliberately fails closed until the
 /// daemon composes [`ForgeZotOciPublisher`] with durable registry and token
@@ -503,7 +501,7 @@ impl OciOutputPublisher for LocalOciRuntime {
     async fn publish(
         &self,
         _request: &IsolatedOciBuild,
-    ) -> Result<OciPreparationOutput, OciWorkerError> {
+    ) -> Result<OciImageProductionOutput, OciWorkerError> {
         Err(OciWorkerError::RegistryPublication)
     }
 }
@@ -512,10 +510,14 @@ impl OciOutputPublisher for LocalOciRuntime {
 impl OciRootfsExporter for LocalOciRuntime {
     async fn export_rootfs(
         &self,
-        _image_reference: &BuilderImageReference,
-        local_oci_layout: &Path,
+        image_reference: &OciImageReference,
         destination: &Path,
     ) -> Result<(), OciWorkerError> {
+        let layout = self
+            .config
+            .image_layouts
+            .get(image_reference.as_str())
+            .ok_or(OciWorkerError::ImageNotCached)?;
         let bundle = destination.join(".umoci-bundle");
         self.command_success(
             &self.config.umoci_binary,
@@ -523,7 +525,7 @@ impl OciRootfsExporter for LocalOciRuntime {
                 OsString::from("unpack"),
                 OsString::from("--rootless"),
                 OsString::from("--image"),
-                OsString::from(format!("{}:latest", local_oci_layout.display())),
+                OsString::from(format!("{}:latest", layout.display())),
                 bundle.as_os_str().to_os_string(),
             ],
         )
@@ -543,7 +545,7 @@ impl OciRootfsExporter for LocalOciRuntime {
 struct ProvenanceDocument<'a> {
     version: u32,
     project_id: uuid::Uuid,
-    builder_id: uuid::Uuid,
+    image_id: uuid::Uuid,
     base_reference: &'a str,
     manifest_digest: &'a str,
 }
@@ -703,7 +705,7 @@ fn trusted_output_file(root: &Path, file: &Path) -> Result<PathBuf, OciWorkerErr
 fn zot_confirmed_output(
     intent: &PublicationIntent,
     local_oci_layout: PathBuf,
-) -> Result<OciPreparationOutput, OciWorkerError> {
+) -> Result<OciImageProductionOutput, OciWorkerError> {
     if intent.state() != PublicationState::Approved {
         return Err(OciWorkerError::RegistryPublication);
     }
@@ -727,11 +729,11 @@ fn zot_confirmed_output(
             referrer.descriptor().digest()
         ))
     };
-    let image_reference = BuilderImageReference::parse(reference.to_string())
+    let image_reference = OciImageReference::parse(reference.to_string())
         .map_err(|_| OciWorkerError::RegistryPublication)?;
     let image_digest = OciDigest::parse(reference.digest().as_str().to_owned())
         .map_err(|_| OciWorkerError::RegistryPublication)?;
-    Ok(OciPreparationOutput {
+    Ok(OciImageProductionOutput {
         image_reference,
         image_digest,
         attestation_reference: evidence_reference(SupplyChainReferrerKind::Provenance)?,
@@ -744,7 +746,7 @@ fn zot_confirmed_output(
 #[cfg(test)]
 mod tests {
     use super::{LocalOciRuntime, LocalOciRuntimeConfig, zot_confirmed_output};
-    use builder_catalog_domain::ProjectBuilderId;
+    use builder_catalog_domain::OciImageId;
     use oci_builder_worker::{PreparedSource, SourceCheckoutProvider};
     use registry_domain::{
         ImmutableManifestReference, NamespaceClaim, OciDescriptor, OciMediaType,
@@ -774,7 +776,7 @@ mod tests {
                 path
             },
             checkout_root: root.join("checkouts"),
-            base_layouts: BTreeMap::from([(
+            image_layouts: BTreeMap::from([(
                 String::from(
                     "registry.example/heph-base@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 ),
@@ -786,7 +788,7 @@ mod tests {
             buildah_binary: binary.clone(),
             trivy_binary: binary.clone(),
             umoci_binary: binary,
-            buildah_output_prefix: String::from("heph-builder"),
+            buildah_output_prefix: String::from("heph-image"),
         }
     }
 
@@ -802,11 +804,11 @@ mod tests {
 
     fn approved_intent() -> PublicationIntent {
         let project_id = Uuid::from_u128(1);
-        let builder_id = ProjectBuilderId::from_uuid(Uuid::from_u128(2));
+        let image_id = OciImageId::from_uuid(Uuid::from_u128(2));
         let namespace = RegistryNamespace::parse(format!(
-            "projects/{project_id}/repository-builders/{builder_id}"
+            "projects/{project_id}/repository-images/{image_id}"
         ))
-        .expect("repository builder namespace");
+        .expect("repository image namespace");
         let claim = NamespaceClaim::new(namespace.owner().clone());
         let manifest = descriptor('a', OciMediaType::IMAGE_INDEX);
         let reference = ImmutableManifestReference::new(
@@ -863,7 +865,7 @@ mod tests {
             claim,
             reference,
             manifest,
-            PolicyVersion::parse("builder-v1").expect("policy version"),
+            PolicyVersion::parse("image-v1").expect("policy version"),
             SupplyChainPolicy::without_signature(),
         )
         .expect("intent")
@@ -905,7 +907,7 @@ mod tests {
     }
 
     #[test]
-    fn only_a_verified_and_approved_zot_intent_becomes_durable_builder_output() {
+    fn only_a_verified_and_approved_zot_intent_becomes_durable_image_output() {
         let temporary = tempfile::tempdir().expect("temporary directory");
         let layout = temporary.path().join("layout");
         fs::create_dir(&layout).expect("layout");
@@ -913,7 +915,7 @@ mod tests {
             zot_confirmed_output(&approved_intent(), layout.clone()).expect("Zot-confirmed output");
         assert_eq!(
             output.image_reference.as_str(),
-            "registry.example/projects/00000000-0000-0000-0000-000000000001/repository-builders/00000000-0000-0000-0000-000000000002@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            "registry.example/projects/00000000-0000-0000-0000-000000000001/repository-images/00000000-0000-0000-0000-000000000002@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         );
         assert!(output.attestation_reference.ends_with(&"c".repeat(64)));
         assert!(

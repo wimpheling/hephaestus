@@ -545,7 +545,7 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use registry_domain::{
-        ImmutableManifestReference, NamespaceClaim, OciMediaType, PlatformBuilderKey,
+        ImmutableManifestReference, NamespaceClaim, OciMediaType, PlatformImageKey,
         RegistryAuthority, RegistryOwner, Sha256Digest, SupplyChainPolicy, SupplyChainReferrer,
         SupplyChainReferrerKind,
     };
@@ -656,8 +656,8 @@ mod tests {
     }
 
     fn intent() -> PublicationIntent {
-        let owner = RegistryOwner::PlatformBuilder {
-            builder_key: PlatformBuilderKey::parse("rust-ubuntu").expect("key"),
+        let owner = RegistryOwner::PlatformImage {
+            image_key: PlatformImageKey::parse("rust-ubuntu").expect("key"),
         };
         let claim = NamespaceClaim::new(owner);
         let reference = ImmutableManifestReference::new(

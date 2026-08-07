@@ -68,6 +68,8 @@ pub enum ObjectType {
     Project,
     /// Git repository.
     Repository,
+    /// Immutable OCI image produced from repository source.
+    RepositoryOciImage,
     /// Agent execution.
     Run,
     /// Persistent agent-state volume.
@@ -104,6 +106,7 @@ impl ObjectType {
             Self::Organization => "organization",
             Self::Project => "project",
             Self::Repository => "repository",
+            Self::RepositoryOciImage => "repository_oci_image",
             Self::Run => "run",
             Self::StateVolume => "state_volume",
             Self::Build => "build",
@@ -129,6 +132,7 @@ impl FromStr for ObjectType {
             "organization" => Ok(Self::Organization),
             "project" => Ok(Self::Project),
             "repository" => Ok(Self::Repository),
+            "repository_oci_image" => Ok(Self::RepositoryOciImage),
             "run" => Ok(Self::Run),
             "state_volume" => Ok(Self::StateVolume),
             "build" => Ok(Self::Build),
@@ -375,6 +379,10 @@ mod tests {
         assert_eq!(
             ObjectType::from_str("state_volume").expect("known type"),
             ObjectType::StateVolume
+        );
+        assert_eq!(
+            ObjectType::from_str("repository_oci_image").expect("known type"),
+            ObjectType::RepositoryOciImage
         );
         assert!(ObjectType::from_str("unknown").is_err());
         assert_eq!(

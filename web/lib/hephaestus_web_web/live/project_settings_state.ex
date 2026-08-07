@@ -323,5 +323,4 @@ defmodule HephaestusWebWeb.ProjectSettingsState do
 
   defp command_error(action, :invalid_target), do: "#{action} requires an exact target."
   defp command_error(action, _reason), do: "#{action} could not be completed."
-
 end

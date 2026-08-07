@@ -564,13 +564,13 @@ impl PgForgeRepository {
         let mut build_requests = Vec::new();
         let mut invalid_configurations = 0;
         for item in inspected {
-            if let Some(builders) = item.repository_builders.as_deref() {
-                persist_repository_builder_revisions(
+            if let Some(images) = item.repository_oci_images.as_deref() {
+                persist_repository_oci_image_revisions(
                     &mut transaction,
                     repository.id,
                     repository.project_id,
                     &item.commit,
-                    builders,
+                    images,
                 )
                 .await?;
             }
@@ -639,6 +639,7 @@ impl PgForgeRepository {
                         &item.git_ref,
                         &item.commit,
                         build,
+                        &config.guest.image,
                         config.agent.key.as_deref(),
                         parsed.normalized_hash.as_ref().ok_or(
                             ForgeRepositoryError::InvalidStoredData(
@@ -829,11 +830,11 @@ struct InspectedUpdate {
     git_ref: GitRef,
     commit: CommitSha,
     parsed: Option<ParsedConfig>,
-    repository_builders: Option<Vec<InspectedRepositoryBuilder>>,
+    repository_oci_images: Option<Vec<InspectedRepositoryOciImage>>,
 }
 
 #[derive(Debug)]
-struct InspectedRepositoryBuilder {
+struct InspectedRepositoryOciImage {
     key: String,
     display_name: String,
     dockerfile_path: String,
@@ -866,99 +867,96 @@ fn inspect_updates(
                             .map_err(git)
                     })
                     .transpose()?;
-                let repository_builders = inspect_repository_builders(&tree)?;
+                let repository_oci_images = inspect_repository_oci_images(&tree)?;
                 Ok(InspectedUpdate {
                     git_ref: update.git_ref.clone(),
                     commit: commit.clone(),
                     parsed,
-                    repository_builders,
+                    repository_oci_images,
                 })
             })
         })
         .collect()
 }
 
-fn inspect_repository_builders(
+fn inspect_repository_oci_images(
     tree: &gix::Tree<'_>,
-) -> Result<Option<Vec<InspectedRepositoryBuilder>>, ForgeRepositoryError> {
-    let Some(entry) = tree
-        .lookup_entry_by_path("heph.builders.toml")
-        .map_err(git)?
-    else {
+) -> Result<Option<Vec<InspectedRepositoryOciImage>>, ForgeRepositoryError> {
+    let Some(entry) = tree.lookup_entry_by_path("heph.images.toml").map_err(git)? else {
         return Ok(None);
     };
     if !entry.mode().is_blob() {
         return Err(ForgeRepositoryError::InvalidMetadata(
-            "heph.builders.toml must be a regular file",
+            "heph.images.toml must be a regular file",
         ));
     }
     let manifest = entry.object().map_err(git)?.try_into_blob().map_err(git)?;
-    let parsed = agent_config::parse_repository_builders(&manifest.data);
+    let parsed = agent_config::parse_repository_oci_images(&manifest.data);
     let Some(config) = parsed.config else {
         return Ok(None);
     };
     config
-        .builders
+        .images
         .into_iter()
-        .map(|builder| inspect_repository_builder(tree, builder))
+        .map(|image| inspect_repository_oci_image(tree, image))
         .collect::<Result<Vec<_>, _>>()
         .map(Some)
 }
 
-fn inspect_repository_builder(
+fn inspect_repository_oci_image(
     tree: &gix::Tree<'_>,
-    builder: agent_config::RepositoryBuilderConfig,
-) -> Result<InspectedRepositoryBuilder, ForgeRepositoryError> {
+    image: agent_config::RepositoryOciImageConfig,
+) -> Result<InspectedRepositoryOciImage, ForgeRepositoryError> {
     let dockerfile = tree
-        .lookup_entry_by_path(&builder.oci.dockerfile)
+        .lookup_entry_by_path(&image.build.dockerfile)
         .map_err(git)?
         .ok_or(ForgeRepositoryError::InvalidMetadata(
-            "repository builder Dockerfile does not exist in its source commit",
+            "repository OCI image Dockerfile does not exist in its source commit",
         ))?;
     if !dockerfile.mode().is_blob() {
         return Err(ForgeRepositoryError::InvalidMetadata(
-            "repository builder Dockerfile must be a regular file, not a symlink",
+            "repository OCI image Dockerfile must be a regular file, not a symlink",
         ));
     }
-    let context = if builder.oci.context == "." {
+    let context = if image.build.context == "." {
         tree.clone()
     } else {
         let entry = tree
-            .lookup_entry_by_path(&builder.oci.context)
+            .lookup_entry_by_path(&image.build.context)
             .map_err(git)?
             .ok_or(ForgeRepositoryError::InvalidMetadata(
-                "repository builder context does not exist in its source commit",
+                "repository OCI image context does not exist in its source commit",
             ))?;
         if !entry.mode().is_tree() {
             return Err(ForgeRepositoryError::InvalidMetadata(
-                "repository builder context must be a directory, not a symlink",
+                "repository OCI image context must be a directory, not a symlink",
             ));
         }
         entry.object().map_err(git)?.try_into_tree().map_err(git)?
     };
-    validate_repository_builder_context(&context)?;
+    validate_repository_oci_image_context(&context)?;
     let context_digest = format!("sha256:{:x}", Sha256::digest(&context.data));
-    Ok(InspectedRepositoryBuilder {
-        key: builder.key,
-        display_name: builder.display_name,
-        dockerfile_path: builder.oci.dockerfile,
-        context_path: builder.oci.context,
+    Ok(InspectedRepositoryOciImage {
+        key: image.key,
+        display_name: image.display_name,
+        dockerfile_path: image.build.dockerfile,
+        context_path: image.build.context,
         context_digest,
-        base_key: builder.oci.base,
+        base_key: image.build.base.key,
     })
 }
 
-fn validate_repository_builder_context(tree: &gix::Tree<'_>) -> Result<(), ForgeRepositoryError> {
+fn validate_repository_oci_image_context(tree: &gix::Tree<'_>) -> Result<(), ForgeRepositoryError> {
     for entry in tree.iter() {
         let entry = entry.map_err(git)?;
         if entry.mode().is_link() || entry.mode().is_commit() {
             return Err(ForgeRepositoryError::InvalidMetadata(
-                "repository builder contexts may not contain symlinks or submodules",
+                "repository OCI image contexts may not contain symlinks or submodules",
             ));
         }
         if entry.mode().is_tree() {
             let child = entry.object().map_err(git)?.try_into_tree().map_err(git)?;
-            validate_repository_builder_context(&child)?;
+            validate_repository_oci_image_context(&child)?;
         }
     }
     Ok(())
@@ -1017,52 +1015,51 @@ async fn persist_revision(
     Ok(AgentConfigRevisionId::from_uuid(row.id))
 }
 
-async fn persist_repository_builder_revisions(
+async fn persist_repository_oci_image_revisions(
     transaction: &mut Transaction<'_, Postgres>,
     repository_id: RepositoryId,
     project_id: ProjectId,
     source_commit: &CommitSha,
-    builders: &[InspectedRepositoryBuilder],
+    images: &[InspectedRepositoryOciImage],
 ) -> Result<(), ForgeRepositoryError> {
-    for builder in builders {
+    for image in images {
         // Keeping the catalog read and revision insert in the receive
         // transaction makes the selected base digest part of the immutable
         // source revision, rather than resolving a mutable key later.
         let base_reference: Option<String> = sqlx::query_scalar(
             "SELECT image_reference
-             FROM builder_images
-             WHERE key = $1 AND preparation_state = 'ready'
-               AND availability_state = 'available'
+             FROM oci_images
+             WHERE key = $1 AND availability_state = 'available'
              FOR SHARE",
         )
-        .bind(&builder.base_key)
+        .bind(&image.base_key)
         .fetch_optional(&mut **transaction)
         .await
         .map_err(storage)?;
         let base_reference = base_reference.ok_or(ForgeRepositoryError::InvalidMetadata(
-            "repository builder base is not an approved prepared platform image",
+            "repository OCI image base is not an available catalog image",
         ))?;
         let revision_id = Uuid::new_v4();
         sqlx::query_scalar::<_, Uuid>(
-            "INSERT INTO project_builder_definitions
+            "INSERT INTO repository_oci_image_definitions
                 (id, project_id, source_repository_id, key, display_name,
                  source_revision, dockerfile_path, context_path, context_digest,
-                 approved_base_image_reference, status)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'preparing')
+                 base_image_reference, status)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'producing')
              ON CONFLICT (source_repository_id, key, source_revision,
-                          context_digest, approved_base_image_reference)
+                          context_digest, base_image_reference)
              DO NOTHING
              RETURNING id",
         )
         .bind(revision_id)
         .bind(project_id.as_uuid())
         .bind(repository_id.as_uuid())
-        .bind(&builder.key)
-        .bind(&builder.display_name)
+        .bind(&image.key)
+        .bind(&image.display_name)
         .bind(source_commit.as_str())
-        .bind(&builder.dockerfile_path)
-        .bind(&builder.context_path)
-        .bind(&builder.context_digest)
+        .bind(&image.dockerfile_path)
+        .bind(&image.context_path)
+        .bind(&image.context_digest)
         .bind(base_reference)
         .fetch_optional(&mut **transaction)
         .await
@@ -1094,6 +1091,7 @@ async fn persist_build_request(
     git_ref: &GitRef,
     commit: &CommitSha,
     build: &agent_config::BuildConfig,
+    guest_image: &agent_config::ImageSelection,
     agent_key: Option<&str>,
     normalized_hash: &ConfigHash,
     now: OffsetDateTime,
@@ -1109,19 +1107,17 @@ async fn persist_build_request(
     let declared_artifacts =
         serde_json::to_value(&build.artifacts).map_err(ForgeRepositoryError::Serialization)?;
     let build_definition_hash: [u8; 32] = Sha256::digest(&build_definition).into();
-    let resolved_root_image =
-        resolve_build_root_image(transaction, repository_id, commit.as_str(), build).await?;
+    let build_image = resolve_image(transaction, &build.image.key).await?;
+    let guest_image = resolve_image(transaction, &guest_image.key).await?;
     let requested_id = BuildRequestId::new();
     let stored_id: Uuid = sqlx::query_scalar(
         "INSERT INTO build_requests
          (id, repository_id, source_commit, source_ref, origin_receive_id,
           build_definition_hash, state, created_by, created_at, build_trigger,
-          agent_key, builder_image_id, builder_image_key, builder_image_reference,
-          configuration_hash, build_declaration, build_policy, declared_artifacts)
+          agent_key, configuration_hash, build_declaration, build_policy,
+          declared_artifacts)
          VALUES ($1, $2, $3, $4, $5, $6, 'queued', $7, $8, 'push', $9,
-                 (SELECT id FROM builder_images WHERE image_reference = $10),
-                 (SELECT key FROM builder_images WHERE image_reference = $10),
-                 $10, decode($11, 'hex'), $12, $13, $14)
+                 decode($10, 'hex'), $11, $12, $13)
          ON CONFLICT (
              repository_id, source_commit, source_ref, build_definition_hash
          ) DO UPDATE SET repository_id = EXCLUDED.repository_id
@@ -1136,7 +1132,6 @@ async fn persist_build_request(
     .bind(identity.map(|value| value.user_id.as_uuid()))
     .bind(now)
     .bind(agent_key)
-    .bind(&resolved_root_image)
     .bind(normalized_hash.as_str())
     .bind(build_declaration)
     .bind(build_policy)
@@ -1144,6 +1139,22 @@ async fn persist_build_request(
     .fetch_one(&mut **transaction)
     .await
     .map_err(storage)?;
+    for (execution_context, image) in [("build", &build_image), ("guest", &guest_image)] {
+        sqlx::query(
+            "INSERT INTO build_request_images
+                (build_request_id, execution_context, image_id, image_key, image_reference)
+             VALUES ($1, $2, $3, $4, $5)
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(stored_id)
+        .bind(execution_context)
+        .bind(image.id)
+        .bind(&image.key)
+        .bind(&image.image_reference)
+        .execute(&mut **transaction)
+        .await
+        .map_err(storage)?;
+    }
     sqlx::query(
         "INSERT INTO build_request_sources
          (build_request_id, receive_id, source_ref, source_commit, created_at)
@@ -1180,116 +1191,29 @@ async fn persist_build_request(
 }
 
 #[derive(Debug, sqlx::FromRow)]
-struct ResolvedBuilderRow {
+struct ResolvedImageRow {
+    id: Uuid,
+    key: String,
     image_reference: String,
-    max_vcpus: i16,
-    max_memory_mib: i32,
-    network_ceiling: String,
 }
 
-async fn resolve_build_root_image(
+async fn resolve_image(
     transaction: &mut Transaction<'_, Postgres>,
-    repository_id: RepositoryId,
-    source_commit: &str,
-    build: &agent_config::BuildConfig,
-) -> Result<String, ForgeRepositoryError> {
-    let row = match (&build.root_image, &build.builder) {
-        (Some(reference), None) => sqlx::query_as::<_, ResolvedBuilderRow>(
-            "SELECT image_reference, max_vcpus, max_memory_mib, network_ceiling
-             FROM builder_images
-             WHERE image_reference = $1 AND preparation_state = 'ready'
-               AND availability_state = 'available'",
-        )
-        .bind(reference)
-        .fetch_optional(&mut **transaction)
-        .await
-        .map_err(storage)?,
-        (None, Some(agent_config::BuilderSelection::Platform { key })) => {
-            sqlx::query_as::<_, ResolvedBuilderRow>(
-                "SELECT image_reference, max_vcpus, max_memory_mib, network_ceiling
-                 FROM builder_images
-                 WHERE key = $1 AND preparation_state = 'ready'
-                   AND availability_state = 'available'",
-            )
-            .bind(key)
-            .fetch_optional(&mut **transaction)
-            .await
-            .map_err(storage)?
-        }
-        (None, Some(agent_config::BuilderSelection::Project { id })) => {
-            let builder_id = Uuid::parse_str(id)
-                .map_err(|_| ForgeRepositoryError::InvalidMetadata("invalid project builder id"))?;
-            sqlx::query_as::<_, ResolvedBuilderRow>(
-                "SELECT project_builder.oci_image_reference AS image_reference,
-                        base.max_vcpus, base.max_memory_mib, base.network_ceiling
-                 FROM project_builder_definitions AS project_builder
-                 JOIN repositories AS repository
-                   ON repository.project_id = project_builder.project_id
-                 JOIN builder_images AS base
-                   ON base.image_reference = project_builder.approved_base_image_reference
-                 WHERE repository.id = $1 AND project_builder.id = $2
-                   AND project_builder.status = 'ready'
-                   AND base.preparation_state = 'ready'
-                   AND base.availability_state = 'available'",
-            )
-            .bind(repository_id.as_uuid())
-            .bind(builder_id)
-            .fetch_optional(&mut **transaction)
-            .await
-            .map_err(storage)?
-        }
-        (None, Some(agent_config::BuilderSelection::Repository { key })) => {
-            sqlx::query_as::<_, ResolvedBuilderRow>(
-                "SELECT project_builder.oci_image_reference AS image_reference,
-                        base.max_vcpus, base.max_memory_mib, base.network_ceiling
-                 FROM project_builder_definitions AS project_builder
-                 JOIN builder_images AS base
-                   ON base.image_reference = project_builder.approved_base_image_reference
-                 WHERE project_builder.source_repository_id = $1
-                   AND project_builder.key = $2
-                   AND project_builder.source_revision = $3
-                   AND project_builder.status = 'ready'
-                   AND base.preparation_state = 'ready'
-                   AND base.availability_state = 'available'
-                 ORDER BY project_builder.created_at DESC, project_builder.id DESC
-                 LIMIT 1",
-            )
-            .bind(repository_id.as_uuid())
-            .bind(key)
-            .bind(source_commit)
-            .fetch_optional(&mut **transaction)
-            .await
-            .map_err(storage)?
-        }
-        _ => None,
-    };
-    let row = row.ok_or(ForgeRepositoryError::InvalidMetadata(
-        "builder selection is not approved or prepared",
-    ))?;
-    let requested_network = match build.network.profile {
-        agent_config::NetworkProfile::Disabled => 0,
-        agent_config::NetworkProfile::BrokerOnly => 1,
-        agent_config::NetworkProfile::Egress => 2,
-    };
-    let permitted_network = match row.network_ceiling.as_str() {
-        "disabled" => 0,
-        "broker_only" => 1,
-        "egress" => 2,
-        _ => {
-            return Err(ForgeRepositoryError::InvalidStoredData(
-                "unknown builder network ceiling",
-            ));
-        }
-    };
-    if build.resources.vcpus > u8::try_from(row.max_vcpus).unwrap_or(0)
-        || i64::from(build.resources.memory_mib) > i64::from(row.max_memory_mib)
-        || requested_network > permitted_network
-    {
-        return Err(ForgeRepositoryError::InvalidMetadata(
-            "build policy exceeds builder catalog limits",
-        ));
-    }
-    Ok(row.image_reference)
+    key: &str,
+) -> Result<ResolvedImageRow, ForgeRepositoryError> {
+    sqlx::query_as::<_, ResolvedImageRow>(
+        "SELECT id, key, image_reference
+           FROM oci_images
+          WHERE key = $1 AND availability_state = 'available'
+          FOR SHARE",
+    )
+    .bind(key)
+    .fetch_optional(&mut **transaction)
+    .await
+    .map_err(storage)?
+    .ok_or(ForgeRepositoryError::InvalidMetadata(
+        "selected OCI image is unavailable",
+    ))
 }
 
 fn hex_digest(digest: &[u8; 32]) -> String {
@@ -1702,7 +1626,7 @@ mod tests {
     use std::{path::Path, process::Command};
 
     #[test]
-    fn discovers_repository_builder_inputs_from_the_exact_received_commit() {
+    fn discovers_repository_oci_image_inputs_from_the_exact_received_commit() {
         let temporary = tempfile::tempdir().expect("temporary repository");
         let bare = temporary.path().join("source.git");
         let worktree = temporary.path().join("source");
@@ -1721,18 +1645,18 @@ mod tests {
         );
         std::fs::create_dir_all(worktree.join("containers")).expect("containers directory");
         std::fs::write(
-            worktree.join("heph.builders.toml"),
+            worktree.join("heph.images.toml"),
             r#"
 version = 1
 
-[[builders]]
+[[images]]
 key = "typescript-tools"
 display_name = "TypeScript tools"
 
-[builders.oci]
+[images.build]
 dockerfile = "containers/Dockerfile"
 context = "."
-base = "typescript-node-ubuntu"
+base = { key = "typescript-node-ubuntu" }
 "#,
         )
         .expect("manifest");
@@ -1742,7 +1666,7 @@ base = "typescript-node-ubuntu"
         )
         .expect("Dockerfile");
         git(&worktree, &["add", "."]);
-        git(&worktree, &["commit", "-m", "repository builder"]);
+        git(&worktree, &["commit", "-m", "repository OCI image"]);
         let commit =
             CommitSha::parse(git_output(&worktree, &["rev-parse", "HEAD"])).expect("commit ID");
         git(
@@ -1764,15 +1688,15 @@ base = "typescript-node-ubuntu"
         )
         .expect("inspect received commit");
 
-        let builders = inspected[0]
-            .repository_builders
+        let images = inspected[0]
+            .repository_oci_images
             .as_ref()
-            .expect("repository builder manifest");
-        assert_eq!(builders.len(), 1);
-        assert_eq!(builders[0].key, "typescript-tools");
-        assert_eq!(builders[0].dockerfile_path, "containers/Dockerfile");
-        assert_eq!(builders[0].context_digest.len(), 71);
-        assert!(builders[0].context_digest.starts_with("sha256:"));
+            .expect("repository OCI image manifest");
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].key, "typescript-tools");
+        assert_eq!(images[0].dockerfile_path, "containers/Dockerfile");
+        assert_eq!(images[0].context_digest.len(), 71);
+        assert!(images[0].context_digest.starts_with("sha256:"));
     }
 
     fn git(directory: &Path, arguments: &[&str]) {

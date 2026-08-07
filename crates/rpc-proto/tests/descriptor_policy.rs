@@ -24,7 +24,7 @@ fn reflection_inventory_contains_every_application_service_and_method() {
     let expected = BTreeSet::from([
         "hephaestus.artifact.v1.ArtifactService",
         "hephaestus.build.v1.BuildService",
-        "hephaestus.builder.v1.BuilderCatalogService",
+        "hephaestus.image.v1.ImageCatalogService",
         "hephaestus.event.v1.ProductEventService",
         "hephaestus.identity.v1.IdentityService",
         "hephaestus.instance.v1.AgentInstanceService",
@@ -51,7 +51,7 @@ fn reflection_inventory_contains_every_application_service_and_method() {
             .iter()
             .map(|service| service.methods().len())
             .sum::<usize>(),
-        67
+        64
     );
 
     let reflector = connectrpc_reflection::Reflector::from_descriptor_pool(pool)
@@ -347,7 +347,7 @@ fn every_method_declares_auth_kind_limits_and_retry_policy() {
         }
     }
 
-    assert_eq!(methods, 67, "review the policy when adding an RPC method");
+    assert_eq!(methods, 64, "review the policy when adding an RPC method");
 }
 
 #[test]
@@ -892,7 +892,6 @@ fn application_payloads_are_typed_and_responses_are_secret_safe() {
         "hephaestus.artifact.v1.StreamArtifactResponse.contents",
         "hephaestus.repository_browser.v1.StreamFileResponse.contents",
         "hephaestus.secret.v1.SecretValue.value",
-        "hephaestus.builder.v1.ValidateAgentConfigRequest.agent_toml",
     ]);
 
     for message in pool
@@ -936,10 +935,7 @@ fn application_payloads_are_typed_and_responses_are_secret_safe() {
 
     assert_eq!(
         sensitive_fields(&pool),
-        BTreeSet::from([
-            "hephaestus.builder.v1.ValidateAgentConfigRequest.agent_toml".to_owned(),
-            "hephaestus.secret.v1.SecretValue.value".to_owned(),
-        ])
+        BTreeSet::from(["hephaestus.secret.v1.SecretValue.value".to_owned(),])
     );
     for service in pool
         .services()
@@ -965,7 +961,7 @@ fn sensitive_fields_are_annotated_request_only_and_error_safe() {
     let sensitive = sensitive_fields(&pool);
     assert_eq!(
         sensitive.len(),
-        2,
+        1,
         "review every sensitive descriptor field"
     );
     for qualified in sensitive {

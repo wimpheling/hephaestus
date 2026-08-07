@@ -1,15 +1,15 @@
 [package]
 name = "builder-catalog-postgres"
-description = "PostgreSQL adapter for the platform-owned builder image catalog"
+description = "PostgreSQL adapter for the platform-owned OCI image catalog"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 
 [package.metadata.hephaestus]
 layer = "adapter"
-context = "build"
+context = "image"
 postgres_adapter = true
-database_context = "build"
+database_context = "image"
 allow_cross_context_dependencies = ["authz-postgres", "identity-domain"]
 
 [dependencies]

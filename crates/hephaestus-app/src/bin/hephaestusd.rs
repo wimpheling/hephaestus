@@ -1,6 +1,6 @@
 //! Hephaestus single-node forge and agent-runtime daemon.
 
-use builder_catalog_domain::BuilderImageReference;
+use builder_catalog_domain::OciImageReference;
 use hephaestus_app::{
     AppConfig, HephaestusApp, OciBuilderWorkerConfig, OidcConfig, RegistryConfig, VmBackendConfig,
 };
@@ -235,9 +235,9 @@ fn oci_builder_from_environment(
     if !base_layout_manifest.is_absolute() {
         return Err(String::from("OCI base-layout manifest path must be absolute").into());
     }
-    let base_layouts: BTreeMap<String, PathBuf> =
+    let image_layouts: BTreeMap<String, PathBuf> =
         serde_json::from_slice(&std::fs::read(base_layout_manifest)?)?;
-    if base_layouts.is_empty() {
+    if image_layouts.is_empty() {
         return Err(String::from("OCI base-layout manifest must not be empty").into());
     }
     let host_id = required("HEPHAESTUS_HOST_ID")?;
@@ -251,7 +251,7 @@ fn oci_builder_from_environment(
     let runtime = LocalOciRuntimeConfig {
         repository_root: repository_root.to_path_buf(),
         checkout_root: path("HEPHAESTUS_OCI_BUILDER_CHECKOUT_ROOT")?,
-        base_layouts,
+        image_layouts,
         output_root: output_root.clone(),
         git_binary: path_or("HEPHAESTUS_GIT_BINARY", "/usr/bin/git"),
         tar_binary: path_or("HEPHAESTUS_TAR_BINARY", "/usr/bin/tar"),
@@ -413,7 +413,7 @@ fn validate_root_image_entries(
     entries
         .into_iter()
         .map(|(reference, entry)| {
-            BuilderImageReference::parse(reference.clone()).map_err(|error| {
+            OciImageReference::parse(reference.clone()).map_err(|error| {
                 format!("root image reference {reference:?} is not digest-pinned: {error}")
             })?;
             let root = match entry {

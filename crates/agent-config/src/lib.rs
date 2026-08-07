@@ -19,12 +19,10 @@ pub struct AgentConfig {
     /// Isolated build definition, required by version 2.
     #[serde(default)]
     pub build: Option<BuildConfig>,
-    /// Guest process.
+    /// Guest process and its selected OCI image.
     pub guest: GuestConfig,
     /// Compute limits.
     pub resources: ResourceLimits,
-    /// Immutable guest root image.
-    pub root_image: RootImage,
     /// Repository workspace mount intent.
     pub workspace: WorkspaceMount,
     /// Persistent agent-state volume intent.
@@ -63,6 +61,8 @@ pub struct AgentIdentity {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GuestConfig {
+    /// Catalog key for the OCI image that executes this guest.
+    pub image: ImageSelection,
     /// Path relative to the immutable `/release` mount.
     pub command: String,
     /// Arguments excluding the executable.
@@ -76,6 +76,8 @@ pub struct GuestConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BuildConfig {
+    /// Catalog key for the OCI image that executes this build.
+    pub image: ImageSelection,
     /// Absolute executable inside the pinned build root image.
     pub command: String,
     /// Fixed arguments.
@@ -83,14 +85,6 @@ pub struct BuildConfig {
     pub arguments: Vec<String>,
     /// Absolute directory inside the build guest.
     pub working_directory: String,
-    /// Legacy digest-pinned build root image. New configurations should use
-    /// [`BuilderSelection`] so the platform resolves the digest from its
-    /// approved catalog at build-request time.
-    #[serde(default)]
-    pub root_image: Option<String>,
-    /// Catalog identity for the build root image.
-    #[serde(default)]
-    pub builder: Option<BuilderSelection>,
     /// Build-specific resource limits.
     pub resources: ResourceLimits,
     /// Build network ceiling.
@@ -102,64 +96,50 @@ pub struct BuildConfig {
     pub triggers: Vec<String>,
 }
 
-/// A declarative builder identity resolved by the owning project and platform
-/// catalog before a VM is started.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum BuilderSelection {
-    /// A platform-curated builder key.
-    Platform {
-        /// Stable platform catalog key.
-        key: String,
-    },
-    /// A project-owned prepared builder identity.
-    Project {
-        /// Opaque UUID of the project-owned builder definition.
-        id: String,
-    },
-    /// A repository-owned builder declared by the exact source commit.
-    Repository {
-        /// Stable key from the repository's `heph.builders.toml`.
-        key: String,
-    },
-}
-
-/// Schema version for a repository's OCI builder manifest.
-pub const REPOSITORY_BUILDERS_VERSION: u32 = 1;
-
-/// Repository-owned OCI builder definitions read from `heph.builders.toml`.
+/// A declarative OCI image identity resolved by the catalog before execution.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct RepositoryBuildersConfig {
+pub struct ImageSelection {
+    /// Stable key in the OCI image catalog.
+    pub key: String,
+}
+
+/// Schema version for a repository's OCI image manifest.
+pub const REPOSITORY_OCI_IMAGES_VERSION: u32 = 1;
+
+/// Repository-owned OCI image definitions read from `heph.images.toml`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RepositoryOciImagesConfig {
     /// Manifest schema version.
     pub version: u32,
     /// Builder definitions owned by this repository.
     #[serde(default)]
-    pub builders: Vec<RepositoryBuilderConfig>,
+    pub images: Vec<RepositoryOciImageConfig>,
 }
 
-/// One repository-local OCI builder definition.
+/// One repository-local OCI image definition.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct RepositoryBuilderConfig {
+pub struct RepositoryOciImageConfig {
     /// Stable repository-local key.
     pub key: String,
     /// Human-readable non-secret display name.
     pub display_name: String,
     /// Isolated OCI build input.
-    pub oci: RepositoryBuilderOciConfig,
+    pub build: RepositoryOciImageBuildConfig,
 }
 
 /// OCI inputs accepted from a repository manifest.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct RepositoryBuilderOciConfig {
+pub struct RepositoryOciImageBuildConfig {
     /// Repository-relative Dockerfile path.
     pub dockerfile: String,
     /// Repository-relative build-context path.
     pub context: String,
-    /// Approved platform catalog key, never an OCI reference.
-    pub base: String,
+    /// Platform image selected as the immutable base during production.
+    pub base: ImageSelection,
 }
 
 /// One declared build output.
@@ -194,13 +174,6 @@ pub struct ResourceLimits {
     pub vcpus: u8,
     /// Guest memory in mebibytes.
     pub memory_mib: u32,
-}
-
-/// Root image selection.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RootImage {
-    /// Immutable image reference, normally digest-pinned.
-    pub reference: String,
 }
 
 /// Repository workspace mount intent.
@@ -430,13 +403,13 @@ pub struct ParsedConfig {
     pub diagnostics: Vec<Diagnostic>,
 }
 
-/// Result of parsing one repository `heph.builders.toml` manifest.
+/// Result of parsing one repository `heph.images.toml` manifest.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParsedRepositoryBuilders {
+pub struct ParsedRepositoryOciImages {
     /// Hash of the exact source bytes.
     pub hash: ConfigHash,
     /// Validated manifest, absent on failure.
-    pub config: Option<RepositoryBuildersConfig>,
+    pub config: Option<RepositoryOciImagesConfig>,
     /// Structured parser and validation diagnostics.
     pub diagnostics: Vec<Diagnostic>,
 }
@@ -501,18 +474,18 @@ pub fn parse(source: &[u8]) -> ParsedConfig {
     }
 }
 
-/// Parses and validates a repository's root-level `heph.builders.toml`.
+/// Parses and validates a repository's root-level `heph.images.toml`.
 ///
 /// This function only validates the declarative source contract. The receive
 /// workflow verifies the declared paths against the exact Git tree and resolves
 /// `oci.base` to an approved digest-pinned platform image transactionally.
 #[must_use]
-pub fn parse_repository_builders(source: &[u8]) -> ParsedRepositoryBuilders {
+pub fn parse_repository_oci_images(source: &[u8]) -> ParsedRepositoryOciImages {
     let source_hash = hash(source);
     let text = match std::str::from_utf8(source) {
         Ok(text) => text,
         Err(error) => {
-            return ParsedRepositoryBuilders {
+            return ParsedRepositoryOciImages {
                 hash: source_hash,
                 config: None,
                 diagnostics: vec![Diagnostic {
@@ -523,10 +496,10 @@ pub fn parse_repository_builders(source: &[u8]) -> ParsedRepositoryBuilders {
             };
         }
     };
-    let config = match toml::from_str::<RepositoryBuildersConfig>(text) {
+    let config = match toml::from_str::<RepositoryOciImagesConfig>(text) {
         Ok(config) => config,
         Err(error) => {
-            return ParsedRepositoryBuilders {
+            return ParsedRepositoryOciImages {
                 hash: source_hash,
                 config: None,
                 diagnostics: vec![Diagnostic {
@@ -539,8 +512,8 @@ pub fn parse_repository_builders(source: &[u8]) -> ParsedRepositoryBuilders {
             };
         }
     };
-    let diagnostics = validate_repository_builders(&config);
-    ParsedRepositoryBuilders {
+    let diagnostics = validate_repository_oci_images(&config);
+    ParsedRepositoryOciImages {
         hash: source_hash,
         config: diagnostics.is_empty().then_some(config),
         diagnostics,
@@ -556,82 +529,82 @@ fn hash(source: &[u8]) -> ConfigHash {
     ConfigHash(value)
 }
 
-fn validate_repository_builders(config: &RepositoryBuildersConfig) -> Vec<Diagnostic> {
+fn validate_repository_oci_images(config: &RepositoryOciImagesConfig) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
-    if config.version != REPOSITORY_BUILDERS_VERSION {
+    if config.version != REPOSITORY_OCI_IMAGES_VERSION {
         diagnostic(
             &mut diagnostics,
-            "unsupported_repository_builders_version",
+            "unsupported_repository_oci_images_version",
             "version",
             format!(
-                "repository builder version {} is unsupported; expected {REPOSITORY_BUILDERS_VERSION}",
+                "repository OCI image version {} is unsupported; expected {REPOSITORY_OCI_IMAGES_VERSION}",
                 config.version
             ),
         );
         return diagnostics;
     }
-    if config.builders.len() > 64 {
+    if config.images.len() > 64 {
         diagnostic(
             &mut diagnostics,
-            "too_many_repository_builders",
-            "builders",
-            "a repository may define at most 64 builders",
+            "too_many_repository_oci_images",
+            "images",
+            "a repository may define at most 64 OCI images",
         );
     }
     let mut keys = HashSet::new();
-    for (index, builder) in config.builders.iter().enumerate() {
-        if !valid_key(&builder.key, 64) {
+    for (index, image) in config.images.iter().enumerate() {
+        if !valid_key(&image.key, 64) {
             diagnostic(
                 &mut diagnostics,
-                "invalid_repository_builder_key",
-                format!("builders[{index}].key"),
-                "builder keys must be lowercase and at most 64 characters",
+                "invalid_repository_oci_image_key",
+                format!("images[{index}].key"),
+                "OCI image keys must be lowercase and at most 64 characters",
             );
-        } else if !keys.insert(&builder.key) {
+        } else if !keys.insert(&image.key) {
             diagnostic(
                 &mut diagnostics,
-                "duplicate_repository_builder_key",
-                format!("builders[{index}].key"),
-                "builder keys must be unique within a repository",
+                "duplicate_repository_oci_image_key",
+                format!("images[{index}].key"),
+                "OCI image keys must be unique within a repository",
             );
         }
-        if builder.display_name.trim().is_empty() || builder.display_name.len() > 200 {
+        if image.display_name.trim().is_empty() || image.display_name.len() > 200 {
             diagnostic(
                 &mut diagnostics,
-                "invalid_repository_builder_display_name",
-                format!("builders[{index}].display_name"),
+                "invalid_repository_oci_image_display_name",
+                format!("images[{index}].display_name"),
                 "display names must contain 1 to 200 characters",
             );
         }
-        if !valid_repository_builder_path(&builder.oci.dockerfile, false) {
+        if !valid_repository_oci_image_path(&image.build.dockerfile, false) {
             diagnostic(
                 &mut diagnostics,
-                "invalid_repository_builder_dockerfile",
-                format!("builders[{index}].oci.dockerfile"),
+                "invalid_repository_oci_image_dockerfile",
+                format!("images[{index}].build.dockerfile"),
                 "dockerfile must be a safe repository-relative path",
             );
         }
-        if !valid_repository_builder_path(&builder.oci.context, true) {
+        if !valid_repository_oci_image_path(&image.build.context, true) {
             diagnostic(
                 &mut diagnostics,
-                "invalid_repository_builder_context",
-                format!("builders[{index}].oci.context"),
+                "invalid_repository_oci_image_context",
+                format!("images[{index}].build.context"),
                 "context must be a safe repository-relative path or .",
             );
         }
-        if !valid_key(&builder.oci.base, 64) {
+        if !valid_key(&image.build.base.key, 64) {
             diagnostic(
                 &mut diagnostics,
-                "invalid_repository_builder_base",
-                format!("builders[{index}].oci.base"),
-                "base must be a lowercase approved platform builder key",
+                "invalid_repository_oci_image_base",
+                format!("images[{index}].build.base.key"),
+                "base image keys must be lowercase and at most 64 characters",
             );
         }
     }
     diagnostics
 }
 
-fn valid_repository_builder_path(value: &str, permit_current_directory: bool) -> bool {
+fn valid_repository_oci_image_path(value: &str, permit_current_directory: bool) -> bool {
     if permit_current_directory && value == "." {
         return true;
     }
@@ -679,12 +652,12 @@ fn validate(config: &AgentConfig) -> Vec<Diagnostic> {
             "memory_mib must be between 128 and 1048576",
         );
     }
-    if config.root_image.reference.trim().is_empty() {
+    if !valid_key(&config.guest.image.key, 64) {
         diagnostic(
             &mut diagnostics,
-            "missing_root_image",
-            "root_image.reference",
-            "root image reference must not be empty",
+            "invalid_guest_image_key",
+            "guest.image.key",
+            "guest image keys must be lowercase and at most 64 characters",
         );
     }
     if config.workspace.mount {
@@ -769,12 +742,12 @@ fn validate_v2(config: &AgentConfig, diagnostics: &mut Vec<Diagnostic>) {
         &config.guest.working_directory,
         "invalid_release_working_directory",
     );
-    if !valid_digest(&config.root_image.reference) {
+    if !valid_key(&config.guest.image.key, 64) {
         diagnostic(
             diagnostics,
-            "unpinned_root_image",
-            "root_image.reference",
-            "version 2 runtime root images must end in a lowercase sha256 digest",
+            "invalid_guest_image_key",
+            "guest.image.key",
+            "guest image keys must be lowercase and at most 64 characters",
         );
     }
     let Some(build) = &config.build else {
@@ -798,56 +771,13 @@ fn validate_v2(config: &AgentConfig, diagnostics: &mut Vec<Diagnostic>) {
         &build.working_directory,
         "invalid_build_working_directory",
     );
-    match (&build.root_image, &build.builder) {
-        (Some(root_image), None) if !valid_digest(root_image) => diagnostic(
+    if !valid_key(&build.image.key, 64) {
+        diagnostic(
             diagnostics,
-            "unpinned_build_root_image",
-            "build.root_image",
-            "build root image must end in a lowercase sha256 digest",
-        ),
-        (Some(_), None) => {}
-        (Some(_), Some(_)) => diagnostic(
-            diagnostics,
-            "ambiguous_build_builder",
-            "build",
-            "configure either build.root_image or build.builder, not both",
-        ),
-        (None, None) => diagnostic(
-            diagnostics,
-            "missing_build_builder",
-            "build",
-            "configure a digest-pinned build.root_image or a catalog build.builder",
-        ),
-        (None, Some(BuilderSelection::Platform { key })) => {
-            if !valid_key(key, 64) {
-                diagnostic(
-                    diagnostics,
-                    "invalid_builder_key",
-                    "build.builder.key",
-                    "platform builder keys must be lowercase and at most 64 characters",
-                );
-            }
-        }
-        (None, Some(BuilderSelection::Project { id })) => {
-            if uuid::Uuid::parse_str(id).is_err() {
-                diagnostic(
-                    diagnostics,
-                    "invalid_project_builder_id",
-                    "build.builder.id",
-                    "project builder id must be a UUID",
-                );
-            }
-        }
-        (None, Some(BuilderSelection::Repository { key })) => {
-            if !valid_key(key, 64) {
-                diagnostic(
-                    diagnostics,
-                    "invalid_repository_builder_key",
-                    "build.builder.key",
-                    "repository builder keys must be lowercase and at most 64 characters",
-                );
-            }
-        }
+            "invalid_build_image_key",
+            "build.image.key",
+            "build image keys must be lowercase and at most 64 characters",
+        );
     }
     if build.artifacts.is_empty() || build.artifacts.len() > 128 {
         diagnostic(
@@ -1033,15 +963,6 @@ fn valid_key(value: &str, maximum: usize) -> bool {
         })
 }
 
-fn valid_digest(value: &str) -> bool {
-    value.rsplit_once("@sha256:").is_some_and(|(_, digest)| {
-        digest.len() == 64
-            && digest
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    })
-}
-
 fn validate_relative_path(diagnostics: &mut Vec<Diagnostic>, path: &str, value: &str, code: &str) {
     if !valid_relative_path(value) {
         diagnostic(
@@ -1101,8 +1022,7 @@ const fn default_true() -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        BuilderSelection, REPOSITORY_BUILDERS_VERSION, REUSABLE_RELEASE_VERSION, parse,
-        parse_repository_builders,
+        REPOSITORY_OCI_IMAGES_VERSION, REUSABLE_RELEASE_VERSION, parse, parse_repository_oci_images,
     };
     use forge_domain::GitRef;
 
@@ -1116,7 +1036,7 @@ key = "reviewer"
 [build]
 command = "/usr/bin/build"
 working_directory = "/workspace/source"
-root_image = "registry.example/build@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+image = { key = "ubuntu-native" }
 triggers = ["refs/heads/main"]
 
 [build.resources]
@@ -1131,6 +1051,7 @@ path = "bin/review"
 kind = "executable"
 
 [guest]
+image = { key = "ubuntu-native" }
 command = "bin/review"
 arguments = ["--format=json"]
 working_directory = "bin"
@@ -1138,9 +1059,6 @@ working_directory = "bin"
 [resources]
 vcpus = 2
 memory_mib = 512
-
-[root_image]
-reference = "registry.example/agent@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
 [workspace]
 mount = true
@@ -1218,7 +1136,6 @@ refs = ["refs/heads/*"]
 
     #[test]
     fn parses_reusable_release_contract_and_symbolic_slots() {
-        let digest = "a".repeat(64);
         let source = format!(
             r#"
 version = {REUSABLE_RELEASE_VERSION}
@@ -1231,7 +1148,7 @@ key = "reviewer"
 command = "/bin/build"
 arguments = ["--release"]
 working_directory = "/workspace/source"
-root_image = "build.example/image@sha256:{digest}"
+image = {{ key = "python-ubuntu" }}
 triggers = ["refs/heads/main"]
 
 [build.resources]
@@ -1247,6 +1164,7 @@ kind = "executable"
 media_type = "application/octet-stream"
 
 [guest]
+image = {{ key = "python-ubuntu" }}
 command = "bin/reviewer"
 arguments = ["--json"]
 working_directory = "bin"
@@ -1254,9 +1172,6 @@ working_directory = "bin"
 [resources]
 vcpus = 4
 memory_mib = 2048
-
-[root_image]
-reference = "runtime.example/image@sha256:{digest}"
 
 [workspace]
 mount = true
@@ -1324,9 +1239,7 @@ memory_mib = 512
 
     #[test]
     fn rejects_tenant_secret_material_and_unsafe_release_paths() {
-        let digest = "a".repeat(64);
-        let source = format!(
-            r#"
+        let source = r#"
 version = 2
 [agent]
 name = "Reviewer"
@@ -1334,7 +1247,7 @@ key = "reviewer"
 [build]
 command = "/bin/build"
 working_directory = "/source"
-root_image = "image@sha256:{digest}"
+image = { key = "ubuntu-native" }
 [build.resources]
 vcpus = 1
 memory_mib = 512
@@ -1344,13 +1257,12 @@ profile = "disabled"
 path = "../escape"
 kind = "file"
 [guest]
+image = { key = "ubuntu-native" }
 command = "/host/path"
 working_directory = "../source"
 [resources]
 vcpus = 1
 memory_mib = 512
-[root_image]
-reference = "image@sha256:{digest}"
 [workspace]
 mount = true
 path = "/workspace/repo"
@@ -1367,8 +1279,7 @@ delivery_modes = ["brokered"]
 phases = ["normal"]
 secret_id = "f774d581-c89e-4420-9712-24cc642d2a9a"
 plaintext = "must-never-be-accepted"
-"#
-        );
+"#;
         let parsed = parse(source.as_bytes());
         assert!(parsed.config.is_none());
         assert_eq!(parsed.diagnostics[0].code, "invalid_toml");
@@ -1379,70 +1290,74 @@ plaintext = "must-never-be-accepted"
     }
 
     #[test]
-    fn parses_repository_builder_manifest() {
+    fn parses_repository_oci_image_manifest() {
         let manifest = format!(
             r#"
-version = {REPOSITORY_BUILDERS_VERSION}
+version = {REPOSITORY_OCI_IMAGES_VERSION}
 
-[[builders]]
+[[images]]
 key = "typescript-tools"
 display_name = "TypeScript tools"
 
-[builders.oci]
+[images.build]
 dockerfile = "containers/typescript-tools.Dockerfile"
 context = "."
-base = "typescript-node-ubuntu"
+base = {{ key = "typescript-node-ubuntu" }}
 "#
         );
-        let parsed = parse_repository_builders(manifest.as_bytes());
+        let parsed = parse_repository_oci_images(manifest.as_bytes());
         assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
-        let builders = parsed.config.expect("valid repository builders");
-        assert_eq!(builders.builders.len(), 1);
-        assert_eq!(builders.builders[0].oci.base, "typescript-node-ubuntu");
+        let images = parsed.config.expect("valid repository OCI images");
+        assert_eq!(images.images.len(), 1);
+        assert_eq!(images.images[0].build.base.key, "typescript-node-ubuntu");
     }
 
     #[test]
-    fn parses_repository_builder_selection_without_changing_runtime_root() {
-        let build_root = "root_image = \"registry.example/build@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"";
-        let source = VALID.replace(
-            build_root,
-            "builder = { kind = \"repository\", key = \"typescript-tools\" }",
-        );
+    fn parses_image_selection_for_both_execution_contexts() {
+        let source = VALID.replace("ubuntu-native", "typescript-tools");
         let parsed = parse(source.as_bytes());
         assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
-        let config = parsed.config.expect("valid repository builder selection");
-        assert!(matches!(
-            config.build.as_ref().and_then(|build| build.builder.as_ref()),
-            Some(BuilderSelection::Repository { key }) if key == "typescript-tools"
-        ));
+        let config = parsed.config.expect("valid image selection");
         assert_eq!(
-            config.root_image.reference,
-            "registry.example/agent@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            config.build.as_ref().map(|build| build.image.key.as_str()),
+            Some("typescript-tools")
         );
+        assert_eq!(config.guest.image.key, "typescript-tools");
     }
 
     #[test]
-    fn rejects_unsafe_repository_builder_manifest_paths_and_duplicate_keys() {
+    fn rejects_repository_supplied_immutable_image_references() {
+        let source = VALID.replace(
+            "image = { key = \"ubuntu-native\" }",
+            "image = { key = \"ubuntu-native\", reference = \"registry.example/ubuntu@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\" }",
+        );
+        let parsed = parse(source.as_bytes());
+        assert!(parsed.config.is_none());
+        assert_eq!(parsed.diagnostics[0].code, "invalid_toml");
+    }
+
+    #[test]
+    fn rejects_unsafe_repository_oci_image_paths_and_duplicate_keys() {
         let manifest = r#"
 version = 1
 
-[[builders]]
+[[images]]
 key = "typescript-tools"
 display_name = "TypeScript tools"
-[builders.oci]
+[images.build]
 dockerfile = "../Dockerfile"
 context = "."
-base = "typescript-node-ubuntu"
+base = { key = "typescript-node-ubuntu" }
 
-[[builders]]
+[[images]]
 key = "typescript-tools"
 display_name = "Duplicate"
-[builders.oci]
+[images.build]
 dockerfile = "Dockerfile"
 context = "../../host"
-base = "node:latest"
+base = { key = "node:latest" }
 "#;
-        let parsed = parse_repository_builders(manifest.as_bytes());
+        let parsed = parse_repository_oci_images(manifest.as_bytes());
         assert!(parsed.config.is_none());
         let codes = parsed
             .diagnostics
@@ -1452,10 +1367,10 @@ base = "node:latest"
         assert_eq!(
             codes,
             [
-                "invalid_repository_builder_dockerfile",
-                "duplicate_repository_builder_key",
-                "invalid_repository_builder_context",
-                "invalid_repository_builder_base",
+                "invalid_repository_oci_image_dockerfile",
+                "duplicate_repository_oci_image_key",
+                "invalid_repository_oci_image_context",
+                "invalid_repository_oci_image_base",
             ]
         );
     }

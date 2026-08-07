@@ -2,7 +2,7 @@
 
 use clap::{Parser, Subcommand};
 use registry_domain::{
-    ImmutableManifestReference, NamespaceClaim, OciDescriptor, OciMediaType, PlatformBuilderKey,
+    ImmutableManifestReference, NamespaceClaim, OciDescriptor, OciMediaType, PlatformImageKey,
     PolicyVersion, PublicationIntent, PublicationIntentId, PublicationState, RegistryAuthority,
     RegistryOwner, Sha256Digest, SupplyChainPolicy, VerifiedPublication,
 };
@@ -30,9 +30,9 @@ struct Arguments {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Publish and approve one reviewed platform builder.
-    PublishPlatformBuilder {
-        /// Stable platform builder key.
+    /// Publish and approve one reviewed platform image.
+    PublishPlatformImage {
+        /// Stable platform image key.
         #[arg(long)]
         key: String,
         /// Administrator-owned OCI image layout.
@@ -51,7 +51,7 @@ enum Command {
         #[arg(long)]
         signature: Option<PathBuf>,
         /// Reviewed policy revision.
-        #[arg(long, default_value = "builder/v1")]
+        #[arg(long, default_value = "image/v1")]
         policy_version: String,
     },
 }
@@ -107,7 +107,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let (release_runtime, output) = async_runtime.block_on(async {
         let release_runtime = runtime(authority, publisher_configuration).await?;
         let output = match arguments.command {
-            Command::PublishPlatformBuilder {
+            Command::PublishPlatformImage {
                 key,
                 layout,
                 sbom,
@@ -152,9 +152,9 @@ impl Runtime {
         &self,
         request: PublishPlatform,
     ) -> Result<ReleaseOutput, Box<dyn Error>> {
-        let key = PlatformBuilderKey::parse(request.key)?;
+        let key = PlatformImageKey::parse(request.key)?;
         let expected = layout_descriptor(&request.material.layout)?;
-        let owner = RegistryOwner::PlatformBuilder { builder_key: key };
+        let owner = RegistryOwner::PlatformImage { image_key: key };
         let claim = NamespaceClaim::new(owner);
         let reference = ImmutableManifestReference::new(
             self.authority.clone(),
@@ -186,7 +186,10 @@ impl Runtime {
                     self.publisher
                         .verify_existing(&intent, &request.material, token.token())
                 })?;
-                intent = self.store.restore_verified(intent.id(), &verification).await?;
+                intent = self
+                    .store
+                    .restore_verified(intent.id(), &verification)
+                    .await?;
                 return release_output(&intent);
             }
             PublicationState::Retired => {

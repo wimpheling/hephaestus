@@ -1,9 +1,9 @@
 //! Opt-in integration coverage for the registry control-plane migration.
 
-use builder_catalog_domain::ProjectBuilderId;
+use builder_catalog_domain::OciImageId;
 use registry_domain::{
-    ImmutableManifestReference, NamespaceClaim, OciDescriptor, OciMediaType, PlatformBuilderKey,
-    PlatformDescriptor, PolicyVersion, PublicationIntent, PublicationIntentId, RegistryAuthority,
+    ImmutableManifestReference, NamespaceClaim, OciDescriptor, OciMediaType, PlatformDescriptor,
+    PlatformImageKey, PolicyVersion, PublicationIntent, PublicationIntentId, RegistryAuthority,
     RegistryOwner, Sha256Digest, SupplyChainEvidence, SupplyChainPolicy, SupplyChainReferrer,
     SupplyChainReferrerKind, VerifiedPublication,
 };
@@ -44,7 +44,7 @@ async fn migration_enforces_registry_lifecycle_and_outbox_atomicity() {
     let owner_id = uuid::Uuid::new_v4();
     let outsider_id = uuid::Uuid::new_v4();
     let project_id = seed_project_reader(&pool, owner_id, outsider_id).await;
-    let project_intent = project_intent(project_id, ProjectBuilderId::new());
+    let project_intent = project_intent(project_id, OciImageId::new());
     let project_publication = store
         .create_intent(&project_intent)
         .await
@@ -70,17 +70,21 @@ async fn migration_enforces_registry_lifecycle_and_outbox_atomicity() {
             .fetch_one(&pool)
             .await
             .expect("namespace");
-    assert!(sqlx::query("UPDATE registry_namespaces SET repository_path = 'platform/builders/other' WHERE id = $1")
+    assert!(
+        sqlx::query(
+            "UPDATE registry_namespaces SET repository_path = 'platform/images/other' WHERE id = $1"
+        )
         .bind(namespace_id)
         .execute(&pool)
         .await
-        .is_err());
+        .is_err()
+    );
     assert!(
         sqlx::query(
             "INSERT INTO registry_publications (
-            id, namespace_id, owner_kind, platform_builder_key, registry_authority,
+            id, namespace_id, owner_kind, platform_image_key, registry_authority,
             expected_digest, expected_media_type, expected_size, policy_version
-         ) VALUES (gen_random_uuid(), $1, 'platform_builder', 'other', 'registry.example',
+         ) VALUES (gen_random_uuid(), $1, 'platform_image', 'other', 'registry.example',
             $2, 'application/vnd.oci.image.index.v1+json', 100, 'v1')",
         )
         .bind(namespace_id)
@@ -376,8 +380,8 @@ async fn fixture() -> Option<PgPool> {
 }
 
 fn intent() -> PublicationIntent {
-    let owner = RegistryOwner::PlatformBuilder {
-        builder_key: PlatformBuilderKey::parse(format!("test-{}", uuid::Uuid::new_v4().simple()))
+    let owner = RegistryOwner::PlatformImage {
+        image_key: PlatformImageKey::parse(format!("test-{}", uuid::Uuid::new_v4().simple()))
             .expect("platform key"),
     };
     let claim = NamespaceClaim::new(owner);
@@ -398,10 +402,10 @@ fn intent() -> PublicationIntent {
     .expect("intent")
 }
 
-fn project_intent(project_id: uuid::Uuid, builder_id: ProjectBuilderId) -> PublicationIntent {
-    let owner = RegistryOwner::RepositoryBuilder {
+fn project_intent(project_id: uuid::Uuid, image_id: OciImageId) -> PublicationIntent {
+    let owner = RegistryOwner::RepositoryOciImage {
         project_id: forge_domain::ProjectId::from_uuid(project_id),
-        builder_id,
+        image_id,
     };
     let claim = NamespaceClaim::new(owner);
     let digest = digest('f');

@@ -476,7 +476,6 @@ dependencies = [
 name = "builder-catalog-application"
 version = "0.1.0"
 dependencies = [
- "agent-config",
  "async-trait",
  "builder-catalog-domain",
  "identity-domain",

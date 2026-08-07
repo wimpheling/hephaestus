@@ -9,38 +9,38 @@ CREATE TABLE registry_namespaces (
         AND repository_path !~ '[[:space:]@:]'
     ),
     owner_kind text NOT NULL CHECK (
-        owner_kind IN ('platform_builder', 'repository_builder', 'release_agent')
+        owner_kind IN ('platform_image', 'repository_oci_image', 'release_agent')
     ),
-    platform_builder_key text,
+    platform_image_key text,
     owner_id uuid,
     project_id uuid REFERENCES projects(id) ON DELETE RESTRICT,
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
     CHECK (
-        (owner_kind = 'platform_builder'
-            AND platform_builder_key ~ '^[a-z0-9][a-z0-9_-]{0,63}$'
+        (owner_kind = 'platform_image'
+            AND platform_image_key ~ '^[a-z0-9][a-z0-9_-]{0,63}$'
             AND owner_id IS NULL AND project_id IS NULL
-            AND repository_path = 'platform/builders/' || platform_builder_key)
+            AND repository_path = 'platform/images/' || platform_image_key)
         OR
-        (owner_kind = 'repository_builder'
-            AND platform_builder_key IS NULL AND owner_id IS NOT NULL
+        (owner_kind = 'repository_oci_image'
+            AND platform_image_key IS NULL AND owner_id IS NOT NULL
             AND project_id IS NOT NULL
             AND repository_path = 'projects/' || project_id::text
-                || '/repository-builders/' || owner_id::text)
+                || '/repository-images/' || owner_id::text)
         OR
         (owner_kind = 'release_agent'
-            AND platform_builder_key IS NULL AND owner_id IS NOT NULL
+            AND platform_image_key IS NULL AND owner_id IS NOT NULL
             AND project_id IS NOT NULL
             AND repository_path = 'projects/' || project_id::text
                 || '/release-agents/' || owner_id::text)
     )
 );
 CREATE UNIQUE INDEX registry_platform_namespace_owner
-    ON registry_namespaces (platform_builder_key)
-    WHERE owner_kind = 'platform_builder';
+    ON registry_namespaces (platform_image_key)
+    WHERE owner_kind = 'platform_image';
 CREATE UNIQUE INDEX registry_resource_namespace_owner
     ON registry_namespaces (owner_kind, owner_id)
-    WHERE owner_kind IN ('repository_builder', 'release_agent');
+    WHERE owner_kind IN ('repository_oci_image', 'release_agent');
 CREATE INDEX registry_namespaces_by_project
     ON registry_namespaces (project_id, owner_kind, owner_id);
 
@@ -48,9 +48,9 @@ CREATE TABLE registry_publications (
     id uuid PRIMARY KEY,
     namespace_id uuid NOT NULL REFERENCES registry_namespaces(id) ON DELETE RESTRICT,
     owner_kind text NOT NULL CHECK (
-        owner_kind IN ('platform_builder', 'repository_builder', 'release_agent')
+        owner_kind IN ('platform_image', 'repository_oci_image', 'release_agent')
     ),
-    platform_builder_key text,
+    platform_image_key text,
     owner_id uuid,
     project_id uuid REFERENCES projects(id) ON DELETE RESTRICT,
     registry_authority text NOT NULL CHECK (
@@ -83,10 +83,10 @@ CREATE TABLE registry_publications (
     CHECK (state = 'retired' OR (state IN ('verified', 'approved', 'missing')) = (verified_at IS NOT NULL)),
     CHECK (state = 'retired' OR (state IN ('approved', 'missing')) = (approved_at IS NOT NULL)),
     CHECK (
-        (owner_kind = 'platform_builder' AND platform_builder_key IS NOT NULL
+        (owner_kind = 'platform_image' AND platform_image_key IS NOT NULL
             AND owner_id IS NULL AND project_id IS NULL)
-        OR (owner_kind IN ('repository_builder', 'release_agent')
-            AND platform_builder_key IS NULL AND owner_id IS NOT NULL AND project_id IS NOT NULL)
+        OR (owner_kind IN ('repository_oci_image', 'release_agent')
+            AND platform_image_key IS NULL AND owner_id IS NOT NULL AND project_id IS NOT NULL)
     )
 );
 CREATE INDEX registry_publications_by_namespace
@@ -157,9 +157,9 @@ CREATE INDEX registry_notification_inbox_claimable
 CREATE FUNCTION validate_registry_namespace_immutability() RETURNS trigger
 LANGUAGE plpgsql AS $$
 BEGIN
-    IF (NEW.repository_path, NEW.owner_kind, NEW.platform_builder_key, NEW.owner_id, NEW.project_id)
+    IF (NEW.repository_path, NEW.owner_kind, NEW.platform_image_key, NEW.owner_id, NEW.project_id)
        IS DISTINCT FROM
-       (OLD.repository_path, OLD.owner_kind, OLD.platform_builder_key, OLD.owner_id, OLD.project_id) THEN
+       (OLD.repository_path, OLD.owner_kind, OLD.platform_image_key, OLD.owner_id, OLD.project_id) THEN
         RAISE EXCEPTION 'registry namespace ownership is immutable';
     END IF;
     NEW.updated_at := now();
@@ -185,9 +185,9 @@ DECLARE
 BEGIN
     SELECT * INTO v_namespace FROM registry_namespaces WHERE id = NEW.namespace_id;
     IF v_namespace.id IS NULL
-       OR (NEW.owner_kind, NEW.platform_builder_key, NEW.owner_id, NEW.project_id)
+       OR (NEW.owner_kind, NEW.platform_image_key, NEW.owner_id, NEW.project_id)
           IS DISTINCT FROM
-          (v_namespace.owner_kind, v_namespace.platform_builder_key, v_namespace.owner_id, v_namespace.project_id) THEN
+          (v_namespace.owner_kind, v_namespace.platform_image_key, v_namespace.owner_id, v_namespace.project_id) THEN
         RAISE EXCEPTION 'registry publication owner does not match namespace ownership';
     END IF;
     IF TG_OP = 'INSERT' THEN
@@ -196,11 +196,11 @@ BEGIN
         END IF;
         RETURN NEW;
     END IF;
-    IF (NEW.namespace_id, NEW.owner_kind, NEW.platform_builder_key, NEW.owner_id, NEW.project_id,
+    IF (NEW.namespace_id, NEW.owner_kind, NEW.platform_image_key, NEW.owner_id, NEW.project_id,
         NEW.registry_authority, NEW.expected_digest,
         NEW.expected_media_type, NEW.expected_size, NEW.policy_version,
         NEW.signature_required) IS DISTINCT FROM
-       (OLD.namespace_id, OLD.owner_kind, OLD.platform_builder_key, OLD.owner_id, OLD.project_id,
+       (OLD.namespace_id, OLD.owner_kind, OLD.platform_image_key, OLD.owner_id, OLD.project_id,
         OLD.registry_authority, OLD.expected_digest,
         OLD.expected_media_type, OLD.expected_size, OLD.policy_version,
         OLD.signature_required) THEN
@@ -354,7 +354,7 @@ CREATE POLICY registry_namespaces_select ON registry_namespaces FOR SELECT USING
     project_id IS NOT NULL
     AND check_permission('user', hephaestus_actor_id(), 'can_read', 'project', project_id::text) = 1
 );
--- Platform-builder metadata is catalog data, not tenant OCI authorization.
+-- Platform-image metadata is catalog data, not tenant OCI authorization.
 -- It is visible only to an authenticated app actor; registry pull grants stay
 -- at the separate token-authorization boundary.
 CREATE POLICY registry_publications_select ON registry_publications FOR SELECT USING (

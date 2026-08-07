@@ -41,6 +41,8 @@ release capability requirements
 | Runtime credential | Each runtime session has one opaque, random, short-lived bearer credential. PostgreSQL stores only its hash, and queued work never contains it. |
 | Effective permission | Every privileged call must match the runtime session, snapshot ceiling, exact resource and operation, live authorization, and RLS policy. |
 | Resource semantics | Permissions describe controlled Hephaestus operations rather than filesystem-style read/write access. |
+| Git resources | A repository binding is a named, exact resource capability. It may grant only declared Git operations, ref globs, and write-path globs; a repository name, project membership, or attachment never grants ambient Git authority. |
+| Git read boundary | Raw Git reads may be restricted by repository and ref, but not by path. Path-restricted reads require a distinct filtered content API or virtual repository and are not implied by sparse checkout. |
 | State | Private persistent state is allocated from the release's state requirement and is not a user-selected external capability binding. |
 | Secrets | Secret slots, imports, bindings, exact-version resolution, and delivery policy remain typed secret contracts. Their leases attach to the run's runtime session. |
 | Setup experience | Parameters, state, secret slots, and capability slots appear in one instance requirements review while retaining their distinct storage and enforcement models. |
@@ -52,14 +54,13 @@ resource kinds and semantic operations. It must cover the existing
 repository, project, agent-instance, run, and state-volume operations required
 by installed agents.
 
-Initial repository operations should distinguish:
-
-- inspecting repository metadata;
-- reading exact source;
-- requesting an attached run;
-- proposing a change;
-- publishing an approved result; and
-- managing instance attachments.
+Initial repository operations should distinguish metadata/tree inspection,
+Git read, ref creation, fast-forward ref update, force update, ref deletion,
+tag creation/deletion, run triggering, and attachment management. A Git write
+binding must carry independent ref glob and changed-path glob constraints;
+delete authority is never inferred from write authority. The initial Git
+capability may constrain writes by path at receive time, but must not claim to
+hide paths from a raw Git clone or fetch.
 
 Initial project and agent-instance operations should distinguish inspection
 from configuration, execution, update, pause, and recovery. Permission to
@@ -82,8 +83,10 @@ This task does not implement mailboxes, public ingress, model providers,
 outbound adapters, an Operator Agent, a Project Agent, human-to-agent
 delegation, one-shot approvals, schedules, or long-lived service sessions.
 
-It does not expose arbitrary database operations, host paths, canonical Git
-credentials, plaintext secrets, or a generic “full project access” bit.
+It does not expose arbitrary database operations, host paths, plaintext
+secrets, a generic “full project access” bit, or broad reusable Git
+credentials. Git-specific runtime credential transport and Git HTTP enforcement
+are implemented by MVP 01.1.
 
 ## Implementation checklist
 
@@ -111,6 +114,17 @@ credentials, plaintext secrets, or a generic “full project access” bit.
     - [ ] Add parser and release-domain tests for valid declarations,
       unsupported versions, malformed operations, duplicate slots, normalized
       hashes, and immutable publication.
+  - [ ] **Define repository capability requirements**
+    - [ ] Define repository operations and normalized ref/path glob grammar,
+      including explicit create, update, force-update, delete, and tag rules.
+    - [ ] Require a release to declare each named repository slot and its
+      maximum operation/ref/path ceiling; reject resource names, remote URLs,
+      token values, and tenant identifiers in release source.
+    - [ ] Specify receive-time changed-path semantics for additions, deletions,
+      renames, merges, and new refs, including byte/object limits and
+      deny-by-default behavior for ambiguous history.
+    - [ ] State and test that raw Git read policy is repository/ref scoped;
+      path-restricted reads are a later filtered-content capability.
 
 - [ ] **2. Bind instance permissions**
   - [ ] **Persist immutable revision bindings**
@@ -220,6 +234,15 @@ credentials, plaintext secrets, or a generic “full project access” bit.
       the immutable snapshot.
     - [ ] Add race tests before dispatch, after session creation, during guest
       provisioning, during a privileged call, and after revocation.
+  - [ ] **Specialize runtime authority for Git**
+    - [ ] Define the authenticated runtime-Git principal as the exact runtime
+      session, never as a human user or a reusable agent-wide identity.
+    - [ ] Require every Git request to recheck credential validity, exact run,
+      binding, operation, repository, ref/path constraints, expiry, current
+      authorization, and resource lifecycle.
+    - [ ] Delegate Git credential format, Git HTTP authentication, ref
+      advertisement, receive enforcement, and runtime worktree delivery to
+      MVP 01.1 without weakening this task's immutable binding ceiling.
 
 - [ ] **6. Add the instance permission UI**
   - [ ] **Review requirements during instance creation**

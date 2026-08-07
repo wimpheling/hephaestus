@@ -1,17 +1,16 @@
 [package]
 name = "builder-catalog-application"
-description = "Builder catalog application port and agent.toml selection validation"
+description = "OCI image catalog application port and immutable selection resolution"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 
 [package.metadata.hephaestus]
 layer = "application"
-context = "build"
-allow_cross_context_dependencies = ["agent-config", "identity-domain"]
+context = "image"
+allow_cross_context_dependencies = ["identity-domain"]
 
 [dependencies]
-agent-config = { path = "../agent-config" }
 async-trait.workspace = true
 builder-catalog-domain = { path = "../builder-catalog-domain" }
 identity-domain = { path = "../identity-domain" }

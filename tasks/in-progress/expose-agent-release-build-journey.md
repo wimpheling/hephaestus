@@ -47,7 +47,7 @@ Repository push
 | Publication | Explicit human publication of a successful draft release. |
 | Draft version | The publisher chooses the release version while the release is still a draft. |
 | Build actions | Retry an attempt, rebuild immutable inputs for verification, and build another commit are distinct actions in both the API and UI. |
-| Builder images | Platform-curated and digest-pinned catalog, with project-owned OCI builders based on approved platform images. |
+| OCI images | Platform-curated and digest-pinned catalog, with project-owned OCI images based on approved images. Any approved image may be selected by build or guest execution contracts. |
 | Dependencies | Begin with vendored/offline dependencies and curated toolchain images. |
 | Fixtures | Exercise the real application workflow instead of seeding final releases directly. |
 
@@ -104,7 +104,7 @@ explicit platform policy.
   - [x] Automatically request a build for a matching push.
   - [x] Add a Builds tab at `/repositories/:repository_id/builds`.
   - [x] Show build state, source commit, source ref, trigger, agent key,
-    builder image, start time, duration, artifact count, and draft/published
+    OCI image, start time, duration, artifact count, and draft/published
     release result in each build row.
   - [x] Support a deliberate manual build request through the UI where the
     product policy permits it.
@@ -121,7 +121,7 @@ explicit platform policy.
     `/repositories/:repository_id/builds/:build_id`.
   - [x] Show the exact source commit and configuration hash.
   - [x] Show the parsed build declaration.
-  - [x] Show builder image identity and digest.
+  - [x] Show OCI image identity and digest.
   - [x] Show resource limits and network policy.
   - [x] Show the durable state timeline.
   - [x] Show bounded stdout/stderr logs with reconnect and truncation states.
@@ -191,7 +191,7 @@ explicit platform policy.
   - [x] Add browser coverage from publication through import and initial agent
     inspection.
 
-- [ ] **8. Provide the builder-image catalog**
+- [ ] **8. Provide the OCI image catalog**
   - [x] Replace the daemon environment-variable map with a platform-owned
     catalog exposed through the appropriate UI and service boundary.
   - [x] Configure workers with a versioned, explicit digest-to-rootfs manifest;
@@ -200,27 +200,26 @@ explicit platform policy.
   - [x] Keep the legacy single-root environment pair available only for the
     fixture VM backend so existing deterministic fixtures remain usable without
     weakening production configuration.
-  - [x] Show each builder image's stable ID and display name.
+  - [x] Show each OCI image's stable ID and display name.
   - [x] Show its immutable digest-pinned reference.
   - [x] Show toolchains and versions.
   - [x] Show supported architecture.
   - [x] Show preparation status.
   - [x] Show provenance and optional signature/SBOM.
   - [x] Show availability and retirement state.
-  - [x] Show the permitted build-network ceiling.
-  - [x] Resolve `agent.toml` builder selection through a catalog identity or
-    immutable reference.
+  - [x] Resolve each `agent.toml` image selection through a catalog identity
+    to its immutable reference.
   - [x] Reject arbitrary unapproved image pulls and execution.
   - [ ] Add the initial catalog entries through a reviewed provisioning process:
     - [x] Define and attest the initial platform images and digest-manifest
       generator in the manually dispatched release workflow.
     - [ ] Register the reviewed artifact records for `ubuntu-native`, `rust-ubuntu`,
       `typescript-node-ubuntu`, and `python-ubuntu`.
-    - [x] Define Ubuntu minimal for shell/native builds.
-    - [x] Define the Rust builder on Ubuntu with pinned Rust and Cargo toolchains.
-    - [x] Define the TypeScript/Node builder on Ubuntu with pinned Node, package manager,
+    - [x] Define Ubuntu minimal for shell/native execution.
+    - [x] Define the Rust image on Ubuntu with pinned Rust and Cargo toolchains.
+    - [x] Define the TypeScript/Node image on Ubuntu with pinned Node, package manager,
       TypeScript, and bundler versions.
-    - [x] Define the Python builder on Ubuntu with pinned CPython and package tooling.
+    - [x] Define the Python image on Ubuntu with pinned CPython and package tooling.
   - [x] Use Ubuntu-based images as the initial compatibility-oriented default;
     reserve Alpine/musl images for a later explicit target rather than making
     them the universal builder.
@@ -229,12 +228,12 @@ explicit platform policy.
     stable catalog IDs, supports dry-run validation, and does not run at
     application startup or in a schema migration. See
     `docs/builder-catalog-provisioning.md`.
-  - [x] Allow a project to define a custom builder from a committed Dockerfile
+  - [x] Allow a project to define a custom OCI image from a committed Dockerfile
     and OCI build configuration.
     - [x] Define repository-owned Dockerfile discovery, approved-base, selector,
       lifecycle, and isolation rules in `tasks/in-progress/repository-oci-builders.md`.
-    - [x] Restrict custom-builder base images to approved digest-pinned
-      platform builders.
+    - [x] Restrict custom image base images to approved digest-pinned
+      platform OCI images.
     - [x] Build custom OCI images in an isolated image-builder job with
       rootless Buildah, disabled network, no ambient credentials, approved
       `heph-base` OCI layouts, exact-Git checkouts, and an offline Trivy gate.
@@ -243,13 +242,12 @@ explicit platform policy.
         `tasks/in-progress/repository-oci-builders.md`.
     - [x] Record the resulting immutable OCI digest, provenance, scan result,
       and preparation state under the owning project.
-    - [x] Materialize only prepared custom digests as VM builder roots.
+    - [x] Materialize each prepared custom digest in the shared local image cache.
       - The daemon updates its digest-to-rootfs manifest atomically and resolves
-        build requests only from a successful local materialization row.
-  - [x] Let `agent.toml` select either a platform builder key or an immutable
-    project-owned builder identity; persist the resolved digest on each build.
-  - [x] Keep builder-root selection separate from the agent runtime image
-    contract.
+        every execution only from a successful local materialization row.
+  - [x] Let `agent.toml` select a platform or project-owned image identity;
+    persist the resolved digest in each build and release.
+  - [x] Use the same image selection model for build and guest execution.
   - [x] Keep network access disabled by default.
   - [x] Define and expose the dependency policy:
     - [x] Vendored/offline dependencies.
@@ -273,14 +271,14 @@ explicit platform policy.
   - [x] Remove fixture paths that insert final published releases directly.
 
 - [x] **10. Prove authorization, durability, and product-event behavior**
-  - [x] Verify project, repository, build, release, builder-catalog, and agent
+  - [x] Verify project, repository, build, release, OCI-image catalog, and agent
     import actions enforce the owning organization/project authorization.
     - The browser journey proves authenticated catalog access, project-member
-      repository-builder visibility, outsider denial, and anonymous redirect;
+      repository-image visibility, outsider denial, and anonymous redirect;
       PostgreSQL authorization integration coverage verifies the owning
       organization/project perimeter for durable resource operations.
   - [x] Verify unauthorized users cannot inspect source, logs, artifacts,
-    releases, builder metadata, or live updates.
+    releases, image metadata, or live updates.
   - [x] Verify authoritative mutations and their product events commit
     durably together.
   - [x] Verify live build and release updates resume from a committed cursor
@@ -300,7 +298,7 @@ explicit platform policy.
     - Browser scenarios cover failed/retry, verification request, reconnect,
       denial, and a completed verification mismatch with both immutable
       manifests visible.
-  - [x] Document the supported `agent.toml` build declaration and builder
+  - [x] Document the supported `agent.toml` execution declarations and image
     selection contract.
   - [x] Document the distinction between retry, verification rebuild, and a
     build for another commit.
@@ -309,34 +307,21 @@ explicit platform policy.
   - [x] Run `cargo dev quality`.
 - [x] Run `git diff --check`.
 
-## Current implementation boundary
+## Target image-model boundary
 
-The repository-owned builder contract is specified in
-`tasks/in-progress/repository-oci-builders.md`. The current implementation has
-the following durable boundary:
+The image model replaces the legacy builder/root-image split completely:
 
-- `agent.toml` can select a platform key (`build.builder.kind = "platform"`)
-  a legacy project-builder UUID (`kind = "project"`), or a repository-local
-  key (`kind = "repository"`). Legacy digest-pinned `build.root_image` remains
-  supported.
-- `heph.builders.toml` is read from the exact received commit; safe Dockerfile
-  and context paths are persisted as immutable repository-builder revisions.
-- Receive and manual-build request paths resolve either selector transactionally
-  against approved, ready catalog records and persist the immutable resolved
-  digest in `build_requests.builder_image_reference`.
-- Claimed worker input replaces the selector with that resolved digest, so VM
-  execution remains digest-only and separate from the agent runtime image.
-- Project Dockerfile/OCI definitions have durable lifecycle state, project
-  authorization, RLS-backed persistence, product-event outbox publication, and
-  an authorized read-only project-builders UI route. Definitions are discovered
-  from committed repository configuration; callers cannot create or complete
-  an arbitrary OCI digest through an RPC.
-- The OCI preparation queue, exact checkout, rootless Buildah build,
-  offline-scan/provenance output, Umoci rootfs export, durable result writes,
-  root manifest generation, and supervised optional daemon worker are wired.
-  Repository builder revisions enter `preparing` transactionally on receive.
-- Local libkrun fixtures now use a pinned Ubuntu root image; Fedora remains a
-  host/documentation concern rather than the product default.
+- `agent.toml` selects a platform or project OCI image by key in each execution
+  contract. Each selection is resolved to an immutable digest before its build
+  request or release is created.
+- Platform and project-produced OCI images share one catalog, publication,
+  evidence, availability, authorization, and daemon materialization lifecycle.
+- The daemon uses one digest-keyed local image cache for builds and guest
+  execution. A non-materialized image is rejected before execution creation.
+- Project Dockerfile definitions produce normal project-owned OCI images. Once
+  published, verified, and materialized, they have no build-only classification.
+- Resources, network, mounts, state, and secrets belong to their individual
+  build or guest execution contracts, not to image metadata.
 
 Still deliberately open:
 
@@ -367,7 +352,7 @@ Still deliberately open:
 - [x] Repository route: `/repositories/:repository_id`
 - [x] Build list route: `/repositories/:repository_id/builds`
 - [x] Build detail route: `/repositories/:repository_id/builds/:build_id`
-- [x] Builder catalog route: `/builders`
+- [x] OCI image catalog route: `/images`
 
 ## Completion evidence
 
@@ -380,7 +365,7 @@ Still deliberately open:
     `130b5144-abdf-4aec-bee2-ff987aba4440`, and imported agent
     `4c967726-c20a-8a30-ac1a-86b341c20354`.
 - [x] Record the source commit, build identity, configuration hash, artifact
-  manifest, builder-image digest, and release version.
+  manifest, OCI-image digest, and release version.
   - The build detail projection now records and renders each of these values;
     ephemeral fixture evidence is written to `real-build-journey-ids.json`.
 - [x] Record browser screenshots for the complete journey and each meaningful

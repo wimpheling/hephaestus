@@ -1,13 +1,11 @@
-//! Isolated, durable OCI preparation and rootfs materialization.
+//! Isolated, durable OCI production and rootfs materialization.
 //!
 //! This crate has no database or RPC dependency. It consumes claimed durable
-//! jobs, materializes one exact source tree, invokes a rootless OCI builder
+//! jobs, materializes one exact source tree, invokes a rootless OCI image
 //! with no network or credentials, and commits outcomes through its job port.
 
 use async_trait::async_trait;
-use builder_catalog_domain::{
-    BuilderImageReference, BuilderSourcePath, OciDigest, ProjectBuilderId, ProjectBuilderProvenance,
-};
+use builder_catalog_domain::{OciDigest, OciImageId, OciImageReference};
 use registry_domain::{OciDescriptor, PublicationIntent, PublicationIntentId, VerifiedPublication};
 use registry_token::IssuedToken;
 use serde::Serialize;
@@ -24,15 +22,90 @@ use uuid::Uuid;
 
 const TRUSTED_SYSTEM_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
-/// A claimed durable preparation request.
+/// A validated repository-relative Dockerfile or OCI build-context path.
+///
+/// This is repository-source metadata, not image-catalog metadata: an image
+/// remains an image after it has been produced.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RepositoryOciImageSourcePath(String);
+
+impl RepositoryOciImageSourcePath {
+    /// Parses a bounded, traversal-free repository-relative POSIX path.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OciWorkerError::UnsafeSourcePath`] for a malformed path.
+    pub fn parse(value: impl Into<String>) -> Result<Self, OciWorkerError> {
+        let value = value.into();
+        let valid = !value.is_empty()
+            && value.len() <= 1024
+            && value == value.trim()
+            && !value.starts_with('/')
+            && !value.contains('\\')
+            && !value.bytes().any(|byte| byte.is_ascii_control())
+            && (value == "."
+                || value.split('/').all(|component| {
+                    !component.is_empty() && component != "." && component != ".."
+                }));
+        valid
+            .then_some(Self(value))
+            .ok_or(OciWorkerError::UnsafeSourcePath)
+    }
+
+    /// Returns the validated path.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Immutable provenance for one repository-produced OCI image.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct RepositoryOciImageProvenance {
+    /// Exact Git revision used as the source.
+    pub source_revision: String,
+    /// Digest of the exact source context.
+    pub context_digest: OciDigest,
+    /// Immutable build-attestation reference.
+    pub attestation_reference: String,
+    /// Optional immutable SBOM reference.
+    pub sbom_reference: Option<String>,
+}
+
+impl RepositoryOciImageProvenance {
+    /// Validates immutable repository-image provenance.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OciWorkerError::InvalidOutput`] for malformed provenance.
+    pub fn validate(&self) -> Result<(), OciWorkerError> {
+        let valid_revision = matches!(self.source_revision.len(), 40 | 64)
+            && self
+                .source_revision
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase());
+        let valid_reference = |reference: &str| {
+            !reference.trim().is_empty()
+                && reference.len() <= 2048
+                && !reference.bytes().any(|byte| byte.is_ascii_control())
+        };
+        (valid_revision
+            && valid_reference(&self.attestation_reference)
+            && self.sbom_reference.as_deref().is_none_or(valid_reference))
+        .then_some(())
+        .ok_or(OciWorkerError::InvalidOutput)
+    }
+}
+
+/// A claimed durable production request.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ClaimedPreparationJob {
+pub struct ClaimedProductionJob {
     /// Durable job identifier.
     pub id: Uuid,
-    /// Opaque durable project identity that owns this builder.
+    /// Opaque durable project identity that owns this image.
     pub project_id: Uuid,
-    /// Owning builder definition.
-    pub builder_id: ProjectBuilderId,
+    /// Owning image definition.
+    pub image_id: OciImageId,
     /// Owning repository.
     pub repository_id: Uuid,
     /// Immutable Git revision.
@@ -40,11 +113,11 @@ pub struct ClaimedPreparationJob {
     /// Expected digest of the build context.
     pub context_digest: OciDigest,
     /// Dockerfile path within the checkout.
-    pub dockerfile_path: BuilderSourcePath,
+    pub dockerfile_path: RepositoryOciImageSourcePath,
     /// Context path within the checkout.
-    pub context_path: BuilderSourcePath,
+    pub context_path: RepositoryOciImageSourcePath,
     /// Resolved approved platform base.
-    pub base_reference: BuilderImageReference,
+    pub base_reference: OciImageReference,
 }
 
 /// One prepared source checkout supplied by the trusted Git materializer.
@@ -59,9 +132,9 @@ pub struct PreparedSource {
 /// Arguments exposed to an isolated OCI build engine.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IsolatedOciBuild {
-    /// Builder definition being prepared.
-    pub builder_id: ProjectBuilderId,
-    /// Opaque durable project identity that owns this builder.
+    /// Repository OCI image definition being prepared.
+    pub image_id: OciImageId,
+    /// Opaque durable project identity that owns this image.
     pub project_id: Uuid,
     /// Absolute canonical Dockerfile path.
     pub dockerfile: PathBuf,
@@ -70,18 +143,18 @@ pub struct IsolatedOciBuild {
     /// Local immutable OCI layout bound as the `heph-base` build context.
     pub base_oci_layout: PathBuf,
     /// Expected catalog base image reference for attestation.
-    pub base_reference: BuilderImageReference,
+    pub base_reference: OciImageReference,
     /// Whether the build sandbox permits guest network access.
     pub network_disabled: bool,
     /// Whether credentials, secrets, and host sockets are available.
     pub ambient_credentials_disabled: bool,
 }
 
-/// Immutable output and required supply-chain results from OCI preparation.
+/// Immutable output and required supply-chain results from OCI production.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OciPreparationOutput {
+pub struct OciImageProductionOutput {
     /// Published immutable output reference.
-    pub image_reference: BuilderImageReference,
+    pub image_reference: OciImageReference,
     /// Digest copied from `image_reference`.
     pub image_digest: OciDigest,
     /// Build attestation reference.
@@ -99,45 +172,40 @@ pub struct OciPreparationOutput {
 pub struct ClaimedMaterializationJob {
     /// Durable materialization job identity.
     pub id: Uuid,
-    /// Owning builder definition.
-    pub builder_id: ProjectBuilderId,
     /// Immutable output to export.
-    pub image_reference: BuilderImageReference,
-    /// Local OCI-layout directory attached to this worker's artifact cache.
-    pub local_oci_layout: PathBuf,
+    pub image_reference: OciImageReference,
 }
 
 /// One root filesystem that may be placed in a daemon manifest.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct MaterializedRoot {
     /// Immutable output reference used as the manifest key.
-    pub image_reference: BuilderImageReference,
+    pub image_reference: OciImageReference,
     /// Absolute, canonical root filesystem directory.
     pub root_path: PathBuf,
 }
 
 /// PostgreSQL or equivalent durable worker boundary.
 #[async_trait]
-pub trait OciPreparationJobStore: Send + Sync + 'static {
-    /// Claims one queued or expired preparation job.
-    async fn claim_preparation(
+pub trait OciImageProductionJobStore: Send + Sync + 'static {
+    /// Claims one queued or expired production job.
+    async fn claim_production(
         &self,
         worker_name: &str,
         lease: Duration,
-    ) -> Result<Option<ClaimedPreparationJob>, OciWorkerStoreError>;
+    ) -> Result<Option<ClaimedProductionJob>, OciWorkerStoreError>;
 
-    /// Records verified preparation output and queues materialization.
-    async fn complete_preparation(
+    /// Records verified production output and queues materialization.
+    async fn complete_production(
         &self,
         job_id: Uuid,
         materialization_worker_name: &str,
-        output: &OciPreparationOutput,
-        provenance: ProjectBuilderProvenance,
+        output: &OciImageProductionOutput,
+        provenance: RepositoryOciImageProvenance,
     ) -> Result<(), OciWorkerStoreError>;
 
-    /// Records a non-sensitive, bounded preparation failure.
-    async fn fail_preparation(&self, job_id: Uuid, reason: &str)
-    -> Result<(), OciWorkerStoreError>;
+    /// Records a non-sensitive, bounded production failure.
+    async fn fail_production(&self, job_id: Uuid, reason: &str) -> Result<(), OciWorkerStoreError>;
 
     /// Claims one materialization job for this daemon worker.
     async fn claim_materialization(
@@ -171,8 +239,7 @@ pub trait OciPreparationJobStore: Send + Sync + 'static {
 #[async_trait]
 pub trait SourceCheckoutProvider: Send + Sync + 'static {
     /// Materializes only the exact revision and approved base requested by a job.
-    async fn checkout(&self, job: &ClaimedPreparationJob)
-    -> Result<PreparedSource, OciWorkerError>;
+    async fn checkout(&self, job: &ClaimedProductionJob) -> Result<PreparedSource, OciWorkerError>;
 
     /// Removes a checkout after its OCI build attempt has reached a terminal
     /// worker outcome. Implementations may retain no source-controlled files.
@@ -188,7 +255,7 @@ pub trait OciBuildEngine: Send + Sync + 'static {
     async fn build(
         &self,
         request: IsolatedOciBuild,
-    ) -> Result<OciPreparationOutput, OciWorkerError>;
+    ) -> Result<OciImageProductionOutput, OciWorkerError>;
 }
 
 /// Platform-owned publication, scanning, and attestation boundary following a
@@ -199,33 +266,33 @@ pub trait OciOutputPublisher: Send + Sync + 'static {
     async fn publish(
         &self,
         request: &IsolatedOciBuild,
-    ) -> Result<OciPreparationOutput, OciWorkerError>;
+    ) -> Result<OciImageProductionOutput, OciWorkerError>;
 }
 
-/// The durable publication state returned after a repository-builder intent
+/// The durable publication state returned after a repository-image intent
 /// has been created or resumed.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RepositoryBuilderPublicationLease {
+pub enum RepositoryOciImagePublicationLease {
     /// Zot publication must be attempted with the enclosed exact intent.
     Publish(PublicationIntent),
     /// A prior attempt already verified and approved the exact immutable output.
     Approved(PublicationIntent),
 }
 
-/// Durable registry control-plane boundary for repository-builder outputs.
+/// Durable registry control-plane boundary for repository-image outputs.
 ///
 /// The local build runtime never derives registry namespaces or creates a
 /// reference itself. It supplies only opaque owner identifiers and the exact
 /// OCI index descriptor produced from its trusted local layout.
 #[async_trait]
-pub trait RepositoryBuilderPublicationStore: Send + Sync + 'static {
-    /// Creates or resumes the exact repository-builder publication intent.
-    async fn begin_repository_builder_publication(
+pub trait RepositoryOciImagePublicationStore: Send + Sync + 'static {
+    /// Creates or resumes the exact repository-image publication intent.
+    async fn begin_repository_image_publication(
         &self,
         project_id: Uuid,
-        builder_id: ProjectBuilderId,
+        image_id: OciImageId,
         expected_manifest: OciDescriptor,
-    ) -> Result<RepositoryBuilderPublicationLease, OciWorkerError>;
+    ) -> Result<RepositoryOciImagePublicationLease, OciWorkerError>;
 
     /// Records Zot read-back evidence and commits the matching intent as approved.
     async fn record_verified_and_approve(
@@ -235,7 +302,7 @@ pub trait RepositoryBuilderPublicationStore: Send + Sync + 'static {
     ) -> Result<PublicationIntent, OciWorkerError>;
 
     /// Returns an interrupted publication to a retryable pending state.
-    async fn retry_repository_builder_publication(
+    async fn retry_repository_image_publication(
         &self,
         intent_id: PublicationIntentId,
     ) -> Result<(), OciWorkerError>;
@@ -258,17 +325,18 @@ pub trait RegistryPublisherTokenIssuer: Send + Sync + 'static {
 /// OCI layout-to-rootfs exporter boundary.
 #[async_trait]
 pub trait OciRootfsExporter: Send + Sync + 'static {
-    /// Exports one immutable local OCI layout into an empty destination.
+    /// Pulls and verifies one immutable registry image into an empty
+    /// destination. The durable job contains no caller-controlled local OCI
+    /// path, so a rootfs is always a cache of forge registry content.
     async fn export_rootfs(
         &self,
-        image_reference: &BuilderImageReference,
-        local_oci_layout: &Path,
+        image_reference: &OciImageReference,
         destination: &Path,
     ) -> Result<(), OciWorkerError>;
 }
 
-/// Isolated OCI preparation worker.
-pub struct OciPreparationWorker<S, C, E> {
+/// Isolated OCI production worker.
+pub struct OciImageProductionWorker<S, C, E> {
     store: S,
     checkout: C,
     engine: E,
@@ -277,9 +345,9 @@ pub struct OciPreparationWorker<S, C, E> {
     lease: Duration,
 }
 
-impl<S, C, E> OciPreparationWorker<S, C, E>
+impl<S, C, E> OciImageProductionWorker<S, C, E>
 where
-    S: OciPreparationJobStore,
+    S: OciImageProductionJobStore,
     C: SourceCheckoutProvider,
     E: OciBuildEngine,
 {
@@ -323,7 +391,7 @@ where
     pub async fn run_once(&self) -> Result<bool, OciWorkerError> {
         let Some(job) = self
             .store
-            .claim_preparation(&self.worker_name, self.lease)
+            .claim_production(&self.worker_name, self.lease)
             .await
             .map_err(OciWorkerError::Store)?
         else {
@@ -333,7 +401,7 @@ where
         match result {
             Ok((output, provenance)) => self
                 .store
-                .complete_preparation(
+                .complete_production(
                     job.id,
                     &self.materialization_worker_name,
                     &output,
@@ -343,7 +411,7 @@ where
                 .map_err(OciWorkerError::Store)?,
             Err(error) => self
                 .store
-                .fail_preparation(job.id, &bounded_reason(&error))
+                .fail_production(job.id, &bounded_reason(&error))
                 .await
                 .map_err(OciWorkerError::Store)?,
         }
@@ -352,14 +420,14 @@ where
 
     async fn prepare(
         &self,
-        job: &ClaimedPreparationJob,
-    ) -> Result<(OciPreparationOutput, ProjectBuilderProvenance), OciWorkerError> {
+        job: &ClaimedProductionJob,
+    ) -> Result<(OciImageProductionOutput, RepositoryOciImageProvenance), OciWorkerError> {
         let source = self.checkout.checkout(job).await?;
         let result = async {
             let request = isolated_request(job, &source)?;
             let output = self.engine.build(request).await?;
             validate_output(job, &output)?;
-            let provenance = ProjectBuilderProvenance {
+            let provenance = RepositoryOciImageProvenance {
                 source_revision: job.source_revision.clone(),
                 context_digest: job.context_digest.clone(),
                 attestation_reference: output.attestation_reference.clone(),
@@ -387,7 +455,7 @@ pub struct RootfsMaterializationWorker<S, E> {
 
 impl<S, E> RootfsMaterializationWorker<S, E>
 where
-    S: OciPreparationJobStore,
+    S: OciImageProductionJobStore,
     E: OciRootfsExporter,
 {
     /// Creates a materializer rooted at one private daemon-owned directory.
@@ -467,14 +535,13 @@ where
         staging: &Path,
         destination: &Path,
     ) -> Result<(), OciWorkerError> {
-        let local_oci_layout = canonical_directory(&job.local_oci_layout)?;
         if staging.exists() {
             return Err(OciWorkerError::UnsafeMaterializationPath);
         }
         fs::create_dir(staging).map_err(OciWorkerError::Filesystem)?;
         let export = self
             .exporter
-            .export_rootfs(&job.image_reference, &local_oci_layout, staging)
+            .export_rootfs(&job.image_reference, staging)
             .await;
         if let Err(error) = export {
             let _ = fs::remove_dir_all(staging);
@@ -558,7 +625,7 @@ enum RootManifestEntry {
 }
 
 fn isolated_request(
-    job: &ClaimedPreparationJob,
+    job: &ClaimedProductionJob,
     source: &PreparedSource,
 ) -> Result<IsolatedOciBuild, OciWorkerError> {
     let checkout = canonical_directory(&source.checkout_root)?;
@@ -569,7 +636,7 @@ fn isolated_request(
     let dockerfile_text = fs::read_to_string(&dockerfile).map_err(OciWorkerError::Filesystem)?;
     DockerfilePolicy::validate(&dockerfile_text)?;
     Ok(IsolatedOciBuild {
-        builder_id: job.builder_id,
+        image_id: job.image_id,
         project_id: job.project_id,
         dockerfile,
         context,
@@ -594,7 +661,7 @@ fn canonical_directory(path: &Path) -> Result<PathBuf, OciWorkerError> {
 
 fn safe_child(
     root: &Path,
-    relative: &BuilderSourcePath,
+    relative: &RepositoryOciImageSourcePath,
     directory: bool,
 ) -> Result<PathBuf, OciWorkerError> {
     let canonical =
@@ -624,8 +691,8 @@ fn validate_tree(root: &Path) -> Result<(), OciWorkerError> {
 }
 
 fn validate_output(
-    job: &ClaimedPreparationJob,
-    output: &OciPreparationOutput,
+    job: &ClaimedProductionJob,
+    output: &OciImageProductionOutput,
 ) -> Result<(), OciWorkerError> {
     if output
         .image_reference
@@ -640,16 +707,14 @@ fn validate_output(
             .sbom_reference
             .as_ref()
             .is_some_and(|reference| reference.trim().is_empty() || reference.len() > 2048)
-        || !output.local_oci_layout.is_absolute()
         || job.base_reference.as_str().is_empty()
     {
         return Err(OciWorkerError::InvalidOutput);
     }
-    canonical_directory(&output.local_oci_layout)?;
     Ok(())
 }
 
-fn digest_directory_name(reference: &BuilderImageReference) -> Result<String, OciWorkerError> {
+fn digest_directory_name(reference: &OciImageReference) -> Result<String, OciWorkerError> {
     let digest = reference
         .digest()
         .map_err(|_| OciWorkerError::InvalidOutput)?;
@@ -760,7 +825,7 @@ pub struct BuildahEngine {
 impl BuildahEngine {
     /// Creates the runner using an absolute trusted `buildah` executable.
     ///
-    /// The output name is internal to an isolated builder store; publishing,
+    /// The output name is internal to an isolated image store; publishing,
     /// scan, signing, and final digest attribution are intentionally supplied
     /// by the platform's engine implementation rather than a tenant command.
     ///
@@ -780,7 +845,7 @@ impl BuildahEngine {
     /// Returns the local Buildah tag shared with the output publisher.
     #[must_use]
     pub fn output_name(&self, request: &IsolatedOciBuild) -> String {
-        local_image_name(&self.output_prefix, request.builder_id)
+        local_image_name(&self.output_prefix, request.image_id)
     }
 
     /// Returns the auditable isolated invocation. No registry credential or
@@ -838,8 +903,8 @@ impl BuildahEngine {
 
 /// Builds a deterministic local image tag from an administrator-owned prefix.
 #[must_use]
-pub fn local_image_name(prefix: &str, builder_id: ProjectBuilderId) -> String {
-    format!("{prefix}-{}", builder_id.as_uuid().simple())
+pub fn local_image_name(prefix: &str, image_id: OciImageId) -> String {
+    format!("{prefix}-{}", image_id.as_uuid().simple())
 }
 
 /// Concrete isolated engine that composes rootless Buildah with the
@@ -865,7 +930,7 @@ where
     async fn build(
         &self,
         request: IsolatedOciBuild,
-    ) -> Result<OciPreparationOutput, OciWorkerError> {
+    ) -> Result<OciImageProductionOutput, OciWorkerError> {
         self.buildah.execute(&request).await?;
         self.publisher.publish(&request).await
     }
@@ -892,13 +957,17 @@ pub enum OciWorkerError {
     #[error("OCI worker configuration is invalid")]
     InvalidConfiguration,
     /// A source path escaped the exact checkout or contained a symlink.
-    #[error("OCI builder source path is unsafe")]
+    #[error("OCI image source path is unsafe")]
     UnsafeSourcePath,
     /// A rootfs destination was unsafe or already occupied.
     #[error("OCI rootfs materialization path is unsafe")]
     UnsafeMaterializationPath,
+    /// The daemon has not made the verified immutable image available to its
+    /// image-cache adapter.
+    #[error("immutable OCI image is not available in the daemon cache")]
+    ImageNotCached,
     /// Dockerfile syntax did not satisfy the restricted contract.
-    #[error("Dockerfile does not satisfy the restricted OCI builder contract")]
+    #[error("Dockerfile does not satisfy the restricted OCI image contract")]
     InvalidDockerfile,
     /// Dockerfile selected an image other than the approved `heph-base` or a stage.
     #[error("Dockerfile uses an unapproved base image")]
@@ -907,11 +976,11 @@ pub enum OciWorkerError {
     #[error("Dockerfile uses a remote ADD or COPY source")]
     RemoteDockerfileSource,
     /// Engine output did not supply matching immutable scan/provenance data.
-    #[error("OCI builder output is invalid")]
+    #[error("OCI image output is invalid")]
     InvalidOutput,
     /// Registry intent, token, publication, or verification failed without
     /// exposing a credential, source path, or remote command output.
-    #[error("repository builder registry publication failed")]
+    #[error("repository image registry publication failed")]
     RegistryPublication,
     /// Filesystem operation failed.
     #[error("OCI worker filesystem operation failed: {0}")]
@@ -920,10 +989,10 @@ pub enum OciWorkerError {
     #[error("OCI root manifest serialization failed: {0}")]
     Serialization(#[source] serde_json::Error),
     /// The isolated OCI command could not be started or observed.
-    #[error("isolated OCI builder process failed: {0}")]
+    #[error("isolated OCI image process failed: {0}")]
     Process(#[source] std::io::Error),
-    /// The isolated OCI builder exited unsuccessfully.
-    #[error("isolated OCI builder failed")]
+    /// The isolated OCI image exited unsuccessfully.
+    #[error("isolated OCI image failed")]
     BuildFailed,
 }
 
@@ -937,32 +1006,32 @@ mod tests {
 
     #[derive(Clone)]
     struct TestStore {
-        job: Arc<Mutex<Option<ClaimedPreparationJob>>>,
+        job: Arc<Mutex<Option<ClaimedProductionJob>>>,
         materialization_job: Arc<Mutex<Option<ClaimedMaterializationJob>>>,
-        completed: Arc<Mutex<Vec<(Uuid, OciPreparationOutput, ProjectBuilderProvenance)>>>,
+        completed: Arc<Mutex<Vec<(Uuid, OciImageProductionOutput, RepositoryOciImageProvenance)>>>,
         failed: Arc<Mutex<Vec<(Uuid, String)>>>,
         materialized: Arc<Mutex<Vec<(Uuid, PathBuf)>>>,
         materialization_failed: Arc<Mutex<Vec<(Uuid, String)>>>,
-        root_reference: Option<BuilderImageReference>,
+        root_reference: Option<OciImageReference>,
         roots: Arc<Mutex<Vec<MaterializedRoot>>>,
     }
 
     #[async_trait]
-    impl OciPreparationJobStore for TestStore {
-        async fn claim_preparation(
+    impl OciImageProductionJobStore for TestStore {
+        async fn claim_production(
             &self,
             _worker_name: &str,
             _lease: Duration,
-        ) -> Result<Option<ClaimedPreparationJob>, OciWorkerStoreError> {
+        ) -> Result<Option<ClaimedProductionJob>, OciWorkerStoreError> {
             Ok(self.job.lock().expect("test job lock").take())
         }
 
-        async fn complete_preparation(
+        async fn complete_production(
             &self,
             job_id: Uuid,
             _materialization_worker_name: &str,
-            output: &OciPreparationOutput,
-            provenance: ProjectBuilderProvenance,
+            output: &OciImageProductionOutput,
+            provenance: RepositoryOciImageProvenance,
         ) -> Result<(), OciWorkerStoreError> {
             self.completed.lock().expect("test completed lock").push((
                 job_id,
@@ -972,7 +1041,7 @@ mod tests {
             Ok(())
         }
 
-        async fn fail_preparation(
+        async fn fail_production(
             &self,
             job_id: Uuid,
             reason: &str,
@@ -1047,7 +1116,7 @@ mod tests {
     impl SourceCheckoutProvider for TestCheckout {
         async fn checkout(
             &self,
-            _job: &ClaimedPreparationJob,
+            _job: &ClaimedProductionJob,
         ) -> Result<PreparedSource, OciWorkerError> {
             Ok(self.source.clone())
         }
@@ -1059,7 +1128,7 @@ mod tests {
     }
 
     struct TestEngine {
-        output: OciPreparationOutput,
+        output: OciImageProductionOutput,
         fail: bool,
     }
 
@@ -1068,7 +1137,7 @@ mod tests {
         async fn build(
             &self,
             _request: IsolatedOciBuild,
-        ) -> Result<OciPreparationOutput, OciWorkerError> {
+        ) -> Result<OciImageProductionOutput, OciWorkerError> {
             if self.fail {
                 Err(OciWorkerError::BuildFailed)
             } else {
@@ -1086,8 +1155,7 @@ mod tests {
     impl OciRootfsExporter for TestRootfsExporter {
         async fn export_rootfs(
             &self,
-            _image_reference: &BuilderImageReference,
-            _local_oci_layout: &Path,
+            _image_reference: &OciImageReference,
             destination: &Path,
         ) -> Result<(), OciWorkerError> {
             fs::write(destination.join("tool"), "fixture root filesystem")
@@ -1097,26 +1165,27 @@ mod tests {
         }
     }
 
-    fn reference(digest: char) -> BuilderImageReference {
-        BuilderImageReference::parse(format!(
-            "registry.test/builder@sha256:{}",
+    fn reference(digest: char) -> OciImageReference {
+        OciImageReference::parse(format!(
+            "registry.test/image@sha256:{}",
             digest.to_string().repeat(64)
         ))
         .expect("digest-pinned reference")
     }
 
-    fn preparation_job() -> ClaimedPreparationJob {
-        ClaimedPreparationJob {
+    fn production_job() -> ClaimedProductionJob {
+        ClaimedProductionJob {
             id: Uuid::new_v4(),
             project_id: Uuid::new_v4(),
-            builder_id: ProjectBuilderId::new(),
+            image_id: OciImageId::new(),
             repository_id: Uuid::new_v4(),
             source_revision: "a".repeat(40),
             context_digest: OciDigest::parse(format!("sha256:{}", "b".repeat(64)))
                 .expect("context digest"),
-            dockerfile_path: BuilderSourcePath::parse(String::from("Dockerfile"))
+            dockerfile_path: RepositoryOciImageSourcePath::parse(String::from("Dockerfile"))
                 .expect("Dockerfile path"),
-            context_path: BuilderSourcePath::parse(String::from(".")).expect("context path"),
+            context_path: RepositoryOciImageSourcePath::parse(String::from("."))
+                .expect("context path"),
             base_reference: reference('c'),
         }
     }
@@ -1135,10 +1204,10 @@ mod tests {
         }
     }
 
-    fn successful_output(root: &Path) -> OciPreparationOutput {
+    fn successful_output(root: &Path) -> OciImageProductionOutput {
         let layout = root.join("layout");
         fs::create_dir(&layout).expect("output layout directory");
-        OciPreparationOutput {
+        OciImageProductionOutput {
             image_reference: reference('d'),
             image_digest: OciDigest::parse(format!("sha256:{}", "d".repeat(64)))
                 .expect("output digest"),
@@ -1182,12 +1251,12 @@ mod tests {
         let engine = BuildahEngine::new(PathBuf::from("/usr/bin/buildah"), String::from("output"))
             .expect("engine");
         let request = IsolatedOciBuild {
-            builder_id: ProjectBuilderId::new(),
+            image_id: OciImageId::new(),
             project_id: Uuid::new_v4(),
             dockerfile: PathBuf::from("/source/Dockerfile"),
             context: PathBuf::from("/source"),
             base_oci_layout: PathBuf::from("/bases/ubuntu"),
-            base_reference: BuilderImageReference::parse(format!(
+            base_reference: OciImageReference::parse(format!(
                 "registry.test/base@sha256:{}",
                 "a".repeat(64)
             ))
@@ -1206,9 +1275,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn durable_preparation_records_verified_output_and_cleans_the_exact_checkout() {
+    async fn durable_production_records_verified_output_and_cleans_the_exact_checkout() {
         let temporary = tempfile::tempdir().expect("temporary source tree");
-        let job = preparation_job();
+        let job = production_job();
         let store = TestStore {
             job: Arc::new(Mutex::new(Some(job.clone()))),
             materialization_job: Arc::new(Mutex::new(None)),
@@ -1220,7 +1289,7 @@ mod tests {
             roots: Arc::new(Mutex::new(Vec::new())),
         };
         let cleaned = Arc::new(AtomicBool::new(false));
-        let worker = OciPreparationWorker::new(
+        let worker = OciImageProductionWorker::new(
             store.clone(),
             TestCheckout {
                 source: source_fixture(temporary.path()),
@@ -1230,13 +1299,13 @@ mod tests {
                 output: successful_output(temporary.path()),
                 fail: false,
             },
-            String::from("preparation-worker"),
+            String::from("production-worker"),
             String::from("rootfs-worker"),
             Duration::from_secs(30),
         )
         .expect("worker configuration");
 
-        assert!(worker.run_once().await.expect("preparation pass"));
+        assert!(worker.run_once().await.expect("production pass"));
         assert!(cleaned.load(Ordering::Acquire));
         {
             let completed = store.completed.lock().expect("test completed lock");
@@ -1250,9 +1319,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn failed_publication_never_completes_or_makes_a_builder_ready() {
+    async fn failed_publication_never_completes_or_makes_a_image_ready() {
         let temporary = tempfile::tempdir().expect("temporary source tree");
-        let job = preparation_job();
+        let job = production_job();
         let store = TestStore {
             job: Arc::new(Mutex::new(Some(job.clone()))),
             materialization_job: Arc::new(Mutex::new(None)),
@@ -1264,7 +1333,7 @@ mod tests {
             roots: Arc::new(Mutex::new(Vec::new())),
         };
         let cleaned = Arc::new(AtomicBool::new(false));
-        let worker = OciPreparationWorker::new(
+        let worker = OciImageProductionWorker::new(
             store.clone(),
             TestCheckout {
                 source: source_fixture(temporary.path()),
@@ -1274,19 +1343,19 @@ mod tests {
                 output: successful_output(temporary.path()),
                 fail: true,
             },
-            String::from("preparation-worker"),
+            String::from("production-worker"),
             String::from("rootfs-worker"),
             Duration::from_secs(30),
         )
         .expect("worker configuration");
 
-        assert!(worker.run_once().await.expect("preparation pass"));
+        assert!(worker.run_once().await.expect("production pass"));
         assert!(cleaned.load(Ordering::Acquire));
         {
             let failed = store.failed.lock().expect("test failed lock");
             assert_eq!(failed.len(), 1);
             assert_eq!(failed[0].0, job.id);
-            assert_eq!(failed[0].1, "isolated OCI builder failed");
+            assert_eq!(failed[0].1, "isolated OCI image failed");
             drop(failed);
         }
         assert!(
@@ -1304,9 +1373,7 @@ mod tests {
         let output = successful_output(temporary.path());
         let materialization = ClaimedMaterializationJob {
             id: Uuid::new_v4(),
-            builder_id: ProjectBuilderId::new(),
             image_reference: output.image_reference.clone(),
-            local_oci_layout: output.local_oci_layout,
         };
         let store = TestStore {
             job: Arc::new(Mutex::new(None)),
@@ -1340,7 +1407,7 @@ mod tests {
             assert!(completed[0].1.join("tool").is_file());
             drop(completed);
         }
-        let manifest = temporary.path().join("builder-roots.json");
+        let manifest = temporary.path().join("image-roots.json");
         worker
             .write_manifest(&manifest)
             .await

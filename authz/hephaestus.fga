@@ -57,6 +57,17 @@ type repository
     define can_bind_brokered_secret: brokered_secret_binder or secret_manager
     define can_bind_raw_secret: raw_secret_binder or secret_manager
 
+# A repository-produced OCI image is a project resource. Its source
+# repository is immutable provenance, not an authorization shortcut: project
+# membership remains the only authority boundary for selecting, inspecting,
+# producing, or retiring the image.
+type repository_oci_image
+  relations
+    define project: [project]
+    define can_read: can_read from project
+    define can_write: can_write from project
+    define can_manage: can_manage from project
+
 type run
   relations
     define instance: [agent_instance]

@@ -179,5 +179,4 @@ defmodule HephaestusWebWeb.OrganizationSecretsState do
 
   defp present_error({:rejected, _status}), do: "Command was denied or failed validation."
   defp present_error(_reason), do: "Command service is temporarily unavailable."
-
 end

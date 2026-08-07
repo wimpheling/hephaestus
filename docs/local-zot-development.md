@@ -46,7 +46,7 @@ For a deliberate local release, set
 Zot read endpoint, not a registry authority or token audience. The release
 command also needs the local PostgreSQL URL, local signing-key path, token
 issuer/key ID, private credential root, and the pinned Skopeo/ORAS paths
-documented in [the platform builder guide](../platform/builders/README.md).
+documented in [the platform OCI image guide](../platform/builders/README.md).
 It is intentionally not run by the normal development supervisor.
 
 Use these commands to inspect it:

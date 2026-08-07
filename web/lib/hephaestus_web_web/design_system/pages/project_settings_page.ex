@@ -236,12 +236,6 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.ProjectSettingsPage do
         icon: "hero-cpu-chip",
         destination: "/projects/#{id}/agents"
       },
-      %{
-        key: :builders,
-        label: "Builders",
-        icon: "hero-cube",
-        destination: "/projects/#{id}/builders"
-      },
       %{key: :runs, label: "Runs", icon: "hero-play-circle", destination: "/projects/#{id}/runs"},
       %{
         key: :settings,

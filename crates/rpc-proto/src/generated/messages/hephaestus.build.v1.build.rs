@@ -311,29 +311,29 @@ pub struct Build {
         skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
     )]
     pub agent_key: ::buffa::alloc::string::String,
-    /// Field 18: `builder_image_id`
+    /// Field 18: `image_id`
     #[serde(
-        rename = "builderImageId",
-        alias = "builder_image_id",
+        rename = "imageId",
+        alias = "image_id",
         skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
     )]
-    pub builder_image_id: ::buffa::MessageField<super::super::common::v1::OpaqueId>,
-    /// Field 19: `builder_image_key`
+    pub image_id: ::buffa::MessageField<super::super::common::v1::OpaqueId>,
+    /// Field 19: `image_key`
     #[serde(
-        rename = "builderImageKey",
-        alias = "builder_image_key",
+        rename = "imageKey",
+        alias = "image_key",
         with = "::buffa::json_helpers::proto_string",
         skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
     )]
-    pub builder_image_key: ::buffa::alloc::string::String,
-    /// Field 20: `builder_image_reference`
+    pub image_key: ::buffa::alloc::string::String,
+    /// Field 20: `image_reference`
     #[serde(
-        rename = "builderImageReference",
-        alias = "builder_image_reference",
+        rename = "imageReference",
+        alias = "image_reference",
         with = "::buffa::json_helpers::proto_string",
         skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
     )]
-    pub builder_image_reference: ::buffa::alloc::string::String,
+    pub image_reference: ::buffa::alloc::string::String,
     /// Field 21: `configuration_hash`
     #[serde(
         rename = "configurationHash",
@@ -450,9 +450,9 @@ impl ::core::fmt::Debug for Build {
             .field("artifact_count", &self.artifact_count)
             .field("trigger", &self.trigger)
             .field("agent_key", &self.agent_key)
-            .field("builder_image_id", &self.builder_image_id)
-            .field("builder_image_key", &self.builder_image_key)
-            .field("builder_image_reference", &self.builder_image_reference)
+            .field("image_id", &self.image_id)
+            .field("image_key", &self.image_key)
+            .field("image_reference", &self.image_reference)
             .field("configuration_hash", &self.configuration_hash)
             .field("parsed_declaration_json", &self.parsed_declaration_json)
             .field("build_policy_json", &self.build_policy_json)
@@ -592,24 +592,21 @@ impl ::buffa::Message for Build {
         if !self.agent_key.is_empty() {
             size += 2u32 + ::buffa::types::string_encoded_len(&self.agent_key) as u32;
         }
-        if self.builder_image_id.is_set() {
+        if self.image_id.is_set() {
             let __slot = __cache.reserve();
-            let inner_size = self.builder_image_id.compute_size(__cache);
+            let inner_size = self.image_id.compute_size(__cache);
             __cache.set(__slot, inner_size);
             size
                 += 2u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
                     + inner_size;
         }
-        if !self.builder_image_key.is_empty() {
-            size
-                += 2u32
-                    + ::buffa::types::string_encoded_len(&self.builder_image_key) as u32;
+        if !self.image_key.is_empty() {
+            size += 2u32 + ::buffa::types::string_encoded_len(&self.image_key) as u32;
         }
-        if !self.builder_image_reference.is_empty() {
+        if !self.image_reference.is_empty() {
             size
                 += 2u32
-                    + ::buffa::types::string_encoded_len(&self.builder_image_reference)
-                        as u32;
+                    + ::buffa::types::string_encoded_len(&self.image_reference) as u32;
         }
         if !self.configuration_hash.is_empty() {
             size
@@ -763,15 +760,15 @@ impl ::buffa::Message for Build {
         if !self.agent_key.is_empty() {
             ::buffa::types::put_string_field(17u32, &self.agent_key, buf);
         }
-        if self.builder_image_id.is_set() {
+        if self.image_id.is_set() {
             ::buffa::types::put_len_delimited_header(18u32, __cache.consume_next(), buf);
-            self.builder_image_id.write_to(__cache, buf);
+            self.image_id.write_to(__cache, buf);
         }
-        if !self.builder_image_key.is_empty() {
-            ::buffa::types::put_string_field(19u32, &self.builder_image_key, buf);
+        if !self.image_key.is_empty() {
+            ::buffa::types::put_string_field(19u32, &self.image_key, buf);
         }
-        if !self.builder_image_reference.is_empty() {
-            ::buffa::types::put_string_field(20u32, &self.builder_image_reference, buf);
+        if !self.image_reference.is_empty() {
+            ::buffa::types::put_string_field(20u32, &self.image_reference, buf);
         }
         if !self.configuration_hash.is_empty() {
             ::buffa::types::put_string_field(21u32, &self.configuration_hash, buf);
@@ -979,7 +976,7 @@ impl ::buffa::Message for Build {
                     ::buffa::encoding::WireType::LengthDelimited,
                 )?;
                 ::buffa::Message::merge_length_delimited(
-                    self.builder_image_id.get_or_insert_default(),
+                    self.image_id.get_or_insert_default(),
                     buf,
                     ctx,
                 )?;
@@ -989,14 +986,14 @@ impl ::buffa::Message for Build {
                     tag,
                     ::buffa::encoding::WireType::LengthDelimited,
                 )?;
-                ::buffa::types::merge_string(&mut self.builder_image_key, buf)?;
+                ::buffa::types::merge_string(&mut self.image_key, buf)?;
             }
             20u32 => {
                 ::buffa::encoding::check_wire_type(
                     tag,
                     ::buffa::encoding::WireType::LengthDelimited,
                 )?;
-                ::buffa::types::merge_string(&mut self.builder_image_reference, buf)?;
+                ::buffa::types::merge_string(&mut self.image_reference, buf)?;
             }
             21u32 => {
                 ::buffa::encoding::check_wire_type(
@@ -1123,9 +1120,9 @@ impl ::buffa::Message for Build {
         self.artifact_count = 0u32;
         self.trigger.clear();
         self.agent_key.clear();
-        self.builder_image_id = ::buffa::MessageField::none();
-        self.builder_image_key.clear();
-        self.builder_image_reference.clear();
+        self.image_id = ::buffa::MessageField::none();
+        self.image_key.clear();
+        self.image_reference.clear();
         self.configuration_hash.clear();
         self.parsed_declaration_json.clear();
         self.build_policy_json.clear();

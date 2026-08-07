@@ -48,7 +48,7 @@ async fn execute(pool: &PgPool, arguments: &[String]) -> Result<Value, Box<dyn E
         }
         "recover-update" => recover_update(pool, arguments).await,
         "abandon-build" => abandon_build(pool, arguments).await,
-        "provision-builder-catalog" => provision_builder_catalog(pool, arguments).await,
+        "provision-image-catalog" => provision_image_catalog(pool, arguments).await,
         "registry-retention-report" => registry_retention_report(pool, arguments).await,
         _ => Err(usage().into()),
     }
@@ -82,19 +82,14 @@ fn load_registry_inventory(path: &Path) -> Result<RegistryInventory, Box<dyn Err
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct BuilderCatalogRecord {
+struct OciImageRecord {
     id: Uuid,
     key: String,
     display_name: String,
     image_reference: String,
     toolchains: Value,
     architectures: Vec<String>,
-    preparation_state: String,
     availability_state: String,
-    network_ceiling: String,
-    max_vcpus: i64,
-    max_memory_mib: i64,
-    dependency_policy: String,
     provenance: Value,
     signature_reference: Option<String>,
     sbom_reference: Option<String>,
@@ -102,12 +97,12 @@ struct BuilderCatalogRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct BuilderCatalogManifest {
+struct OciImageCatalogManifest {
     schema_version: u64,
-    images: Vec<BuilderCatalogRecord>,
+    images: Vec<OciImageRecord>,
 }
 
-async fn provision_builder_catalog(
+async fn provision_image_catalog(
     pool: &PgPool,
     arguments: &[String],
 ) -> Result<Value, Box<dyn Error>> {
@@ -117,10 +112,10 @@ async fn provision_builder_catalog(
         .try_fold(false, |dry_run, flag| match flag.as_str() {
             "--dry-run" if !dry_run => Ok(true),
             "--dry-run" => Err("--dry-run may only be supplied once"),
-            _ => Err("unknown provision-builder-catalog option"),
+            _ => Err("unknown provision-image-catalog option"),
         })?;
     let contents = fs::read_to_string(manifest_path)?;
-    let manifest = parse_builder_catalog_manifest(&contents, Path::new(manifest_path))?;
+    let manifest = parse_image_catalog_manifest(&contents, Path::new(manifest_path))?;
 
     if dry_run {
         return Ok(json!({
@@ -130,7 +125,6 @@ async fn provision_builder_catalog(
                 "id": image.id,
                 "key": image.key,
                 "image_reference": image.image_reference,
-                "preparation_state": image.preparation_state,
                 "availability_state": image.availability_state,
             })).collect::<Vec<_>>(),
         }));
@@ -138,7 +132,7 @@ async fn provision_builder_catalog(
 
     let mut transaction = pool.begin().await?;
     for image in &manifest.images {
-        provision_catalog_image(&mut transaction, image).await?;
+        provision_oci_image(&mut transaction, image).await?;
     }
     transaction.commit().await?;
 
@@ -150,37 +144,30 @@ async fn provision_builder_catalog(
     }))
 }
 
-async fn provision_catalog_image(
+async fn provision_oci_image(
     transaction: &mut Transaction<'_, Postgres>,
-    image: &BuilderCatalogRecord,
+    image: &OciImageRecord,
 ) -> Result<(), Box<dyn Error>> {
     let changed = sqlx::query(
-        "INSERT INTO builder_images
+        "INSERT INTO oci_images
                (id, key, display_name, image_reference, toolchains,
-                architectures, preparation_state, availability_state,
-                network_ceiling, max_vcpus, max_memory_mib, dependency_policy,
-                provenance, signature_reference, sbom_reference,
+                architectures, availability_state, provenance,
+                signature_reference, sbom_reference,
                 platform_policy_version)
              VALUES
-               ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
-                $15, $16)
+               ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
              ON CONFLICT (key) DO UPDATE SET
                display_name = EXCLUDED.display_name,
                image_reference = EXCLUDED.image_reference,
                toolchains = EXCLUDED.toolchains,
                architectures = EXCLUDED.architectures,
-               preparation_state = EXCLUDED.preparation_state,
                availability_state = EXCLUDED.availability_state,
-               network_ceiling = EXCLUDED.network_ceiling,
-               max_vcpus = EXCLUDED.max_vcpus,
-               max_memory_mib = EXCLUDED.max_memory_mib,
-               dependency_policy = EXCLUDED.dependency_policy,
                provenance = EXCLUDED.provenance,
                signature_reference = EXCLUDED.signature_reference,
                sbom_reference = EXCLUDED.sbom_reference,
                platform_policy_version = EXCLUDED.platform_policy_version,
                updated_at = now()
-             WHERE builder_images.id = EXCLUDED.id",
+             WHERE oci_images.id = EXCLUDED.id",
     )
     .bind(image.id)
     .bind(&image.key)
@@ -188,12 +175,7 @@ async fn provision_catalog_image(
     .bind(&image.image_reference)
     .bind(&image.toolchains)
     .bind(&image.architectures)
-    .bind(&image.preparation_state)
     .bind(&image.availability_state)
-    .bind(&image.network_ceiling)
-    .bind(image.max_vcpus)
-    .bind(image.max_memory_mib)
-    .bind(&image.dependency_policy)
     .bind(&image.provenance)
     .bind(image.signature_reference.as_deref())
     .bind(image.sbom_reference.as_deref())
@@ -210,25 +192,25 @@ async fn provision_catalog_image(
     Ok(())
 }
 
-fn parse_builder_catalog_manifest(
+fn parse_image_catalog_manifest(
     contents: &str,
     path: &Path,
-) -> Result<BuilderCatalogManifest, Box<dyn Error>> {
+) -> Result<OciImageCatalogManifest, Box<dyn Error>> {
     let document = serde_json::from_str::<Value>(contents)
         .map_err(|error| format!("{} is not valid JSON: {error}", path.display()))?;
     let object = document
         .as_object()
-        .ok_or_else(|| manifest_error("builder catalog manifest must be a JSON object"))?;
+        .ok_or_else(|| manifest_error("image catalog manifest must be a JSON object"))?;
     let schema_version = required_u64(object, "schema_version")?;
     if schema_version != 1 {
         return Err(manifest_error(format!(
-            "unsupported builder catalog manifest schema_version {schema_version}; expected 1"
+            "unsupported image catalog manifest schema_version {schema_version}; expected 1"
         )));
     }
     let images = required_array(object, "images")?;
     if images.is_empty() {
         return Err(manifest_error(
-            "builder catalog manifest must contain at least one image",
+            "image catalog manifest must contain at least one image",
         ));
     }
 
@@ -237,7 +219,7 @@ fn parse_builder_catalog_manifest(
     let mut keys = HashSet::with_capacity(images.len());
     let mut references = HashSet::with_capacity(images.len());
     for (index, image) in images.iter().enumerate() {
-        let record = parse_builder_catalog_record(image, index)?;
+        let record = parse_image_catalog_record(image, index)?;
         if !ids.insert(record.id) {
             return Err(manifest_error(format!(
                 "images[{index}] duplicates stable id {}",
@@ -258,7 +240,7 @@ fn parse_builder_catalog_manifest(
         }
         records.push(record);
     }
-    Ok(BuilderCatalogManifest {
+    Ok(OciImageCatalogManifest {
         schema_version,
         images: records,
     })
@@ -267,10 +249,10 @@ fn parse_builder_catalog_manifest(
 // Keep all field validation in one reviewable record parser so malformed
 // catalog entries cannot bypass a validation branch by taking another path.
 #[allow(clippy::too_many_lines)]
-fn parse_builder_catalog_record(
+fn parse_image_catalog_record(
     value: &Value,
     index: usize,
-) -> Result<BuilderCatalogRecord, Box<dyn Error>> {
+) -> Result<OciImageRecord, Box<dyn Error>> {
     let object = value
         .as_object()
         .ok_or_else(|| manifest_error(format!("images[{index}] must be a JSON object")))?;
@@ -302,12 +284,6 @@ fn parse_builder_catalog_record(
             "images[{index}].architectures must contain non-empty, bounded values"
         )));
     }
-    let preparation_state = required_string(object, "preparation_state")?;
-    if !matches!(preparation_state.as_str(), "ready" | "preparing" | "failed") {
-        return Err(manifest_error(format!(
-            "images[{index}].preparation_state is invalid"
-        )));
-    }
     let availability_state = required_string(object, "availability_state")?;
     if !matches!(
         availability_state.as_str(),
@@ -315,36 +291,6 @@ fn parse_builder_catalog_record(
     ) {
         return Err(manifest_error(format!(
             "images[{index}].availability_state is invalid"
-        )));
-    }
-    let network_ceiling = required_string(object, "network_ceiling")?;
-    if !matches!(
-        network_ceiling.as_str(),
-        "disabled" | "broker_only" | "egress"
-    ) {
-        return Err(manifest_error(format!(
-            "images[{index}].network_ceiling is invalid"
-        )));
-    }
-    let max_vcpus = required_i64(object, "max_vcpus", index)?;
-    if !(1..=64).contains(&max_vcpus) {
-        return Err(manifest_error(format!(
-            "images[{index}].max_vcpus must be between 1 and 64"
-        )));
-    }
-    let max_memory_mib = required_i64(object, "max_memory_mib", index)?;
-    if !(128..=1_048_576).contains(&max_memory_mib) {
-        return Err(manifest_error(format!(
-            "images[{index}].max_memory_mib must be between 128 and 1048576"
-        )));
-    }
-    let dependency_policy = required_string(object, "dependency_policy")?;
-    if !matches!(
-        dependency_policy.as_str(),
-        "vendored_offline" | "read_only_platform_cache" | "constrained_registry_egress"
-    ) {
-        return Err(manifest_error(format!(
-            "images[{index}].dependency_policy is invalid"
         )));
     }
     let provenance = required_value(object, "provenance")?.clone();
@@ -366,19 +312,14 @@ fn parse_builder_catalog_record(
         )));
     }
 
-    Ok(BuilderCatalogRecord {
+    Ok(OciImageRecord {
         id,
         key,
         display_name,
         image_reference,
         toolchains,
         architectures,
-        preparation_state,
         availability_state,
-        network_ceiling,
-        max_vcpus,
-        max_memory_mib,
-        dependency_policy,
         provenance,
         signature_reference,
         sbom_reference,
@@ -487,16 +428,6 @@ fn required_u64(object: &Map<String, Value>, key: &str) -> Result<u64, Box<dyn E
     required_value(object, key)?
         .as_u64()
         .ok_or_else(|| manifest_error(format!("field {key} must be a positive integer")))
-}
-
-fn required_i64(
-    object: &Map<String, Value>,
-    key: &str,
-    index: usize,
-) -> Result<i64, Box<dyn Error>> {
-    required_value(object, key)?
-        .as_i64()
-        .ok_or_else(|| manifest_error(format!("images[{index}].{key} must be an integer")))
 }
 
 fn required_array<'a>(
@@ -821,13 +752,13 @@ const fn usage() -> &'static str {
        hephaestus-operator recover-update <actor-uuid> <update-uuid> \
        <retry|reject|resume> [request-uuid]\n\
        hephaestus-operator abandon-build <actor-uuid> <build-uuid> [request-uuid]\n\
-       hephaestus-operator provision-builder-catalog <manifest.json> [--dry-run]\n\
+       hephaestus-operator provision-image-catalog <manifest.json> [--dry-run]\n\
        hephaestus-operator registry-retention-report <inventory.json>"
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{InspectionTarget, ObjectType, Permission, parse_builder_catalog_manifest};
+    use super::{InspectionTarget, ObjectType, Permission, parse_image_catalog_manifest};
     use std::path::Path;
 
     const TEST_DIGEST: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -857,18 +788,13 @@ mod tests {
                 "images": [{
                     "id": "20000000-0000-4000-8000-000000000010",
                     "key": "ubuntu-native",
-                    "display_name": "Ubuntu native builder",
+                    "display_name": "Ubuntu native image",
                     "image_reference": "__REFERENCE__",
                     "toolchains": [{"name":"shell","version":"ubuntu-24.04"}],
                     "architectures": ["x86_64"],
-                    "preparation_state": "ready",
                     "availability_state": "available",
-                    "network_ceiling": "disabled",
-                    "max_vcpus": 4,
-                    "max_memory_mib": 1024,
-                    "dependency_policy": "vendored_offline",
                     "provenance": {"source":"attestation://test/ubuntu-native"},
-                    "platform_policy_version": "builder/v1"
+                    "platform_policy_version": "image/v1"
                 }]
             }"#
         .replace("__REFERENCE__", reference)
@@ -878,7 +804,7 @@ mod tests {
     fn catalog_manifest_requires_explicit_digest_pinned_records() {
         let reference = format!("registry.example/ubuntu@sha256:{TEST_DIGEST}");
         let manifest = manifest_json(&reference);
-        let parsed = parse_builder_catalog_manifest(&manifest, Path::new("test.json"))
+        let parsed = parse_image_catalog_manifest(&manifest, Path::new("test.json"))
             .expect("manifest should be valid");
         assert_eq!(parsed.schema_version, 1);
         assert_eq!(parsed.images[0].key, "ubuntu-native");
@@ -888,6 +814,6 @@ mod tests {
     #[test]
     fn catalog_manifest_rejects_unpinned_references() {
         let tagged = manifest_json("registry.example/ubuntu:24.04");
-        assert!(parse_builder_catalog_manifest(&tagged, Path::new("test.json")).is_err());
+        assert!(parse_image_catalog_manifest(&tagged, Path::new("test.json")).is_err());
     }
 }

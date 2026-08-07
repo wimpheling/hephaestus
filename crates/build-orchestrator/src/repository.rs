@@ -18,6 +18,9 @@ pub struct BuildInput {
     pub source_commit: String,
     pub source_ref: String,
     pub build: BuildConfig,
+    /// Exact immutable OCI image reference resolved before this request was
+    /// persisted. Worker execution never resolves mutable catalog keys.
+    pub image_reference: String,
 }
 
 /// Durable identity allocated while claiming a build.

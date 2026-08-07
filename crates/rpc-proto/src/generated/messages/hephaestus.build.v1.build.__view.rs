@@ -50,14 +50,14 @@ pub struct BuildView<'a> {
     pub trigger: &'a str,
     /// Field 17: `agent_key`
     pub agent_key: &'a str,
-    /// Field 18: `builder_image_id`
-    pub builder_image_id: ::buffa::MessageFieldView<
+    /// Field 18: `image_id`
+    pub image_id: ::buffa::MessageFieldView<
         super::super::super::super::common::v1::__buffa::view::OpaqueIdView<'a>,
     >,
-    /// Field 19: `builder_image_key`
-    pub builder_image_key: &'a str,
-    /// Field 20: `builder_image_reference`
-    pub builder_image_reference: &'a str,
+    /// Field 19: `image_key`
+    pub image_key: &'a str,
+    /// Field 20: `image_reference`
+    pub image_reference: &'a str,
     /// Field 21: `configuration_hash`
     pub configuration_hash: &'a str,
     /// Field 22: `parsed_declaration_json`
@@ -311,12 +311,12 @@ impl<'a> ::buffa::MessageView<'a> for BuildView<'a> {
                 )?;
                 let __sub_ctx = ctx.descend()?;
                 let sub = ::buffa::types::borrow_bytes(&mut cur)?;
-                match view.builder_image_id.as_mut() {
+                match view.image_id.as_mut() {
                     Some(existing) => {
                         ::buffa::MessageView::merge_into_view(existing, sub, __sub_ctx)?
                     }
                     None => {
-                        view.builder_image_id = ::buffa::MessageFieldView::set(
+                        view.image_id = ::buffa::MessageFieldView::set(
                             <super::super::super::super::common::v1::__buffa::view::OpaqueIdView as ::buffa::MessageView>::decode_view_ctx(
                                 sub,
                                 __sub_ctx,
@@ -330,14 +330,14 @@ impl<'a> ::buffa::MessageView<'a> for BuildView<'a> {
                     tag,
                     ::buffa::encoding::WireType::LengthDelimited,
                 )?;
-                view.builder_image_key = ::buffa::types::borrow_str(&mut cur)?;
+                view.image_key = ::buffa::types::borrow_str(&mut cur)?;
             }
             20u32 => {
                 ::buffa::encoding::check_wire_type(
                     tag,
                     ::buffa::encoding::WireType::LengthDelimited,
                 )?;
-                view.builder_image_reference = ::buffa::types::borrow_str(&mut cur)?;
+                view.image_reference = ::buffa::types::borrow_str(&mut cur)?;
             }
             21u32 => {
                 ::buffa::encoding::check_wire_type(
@@ -583,7 +583,7 @@ impl<'a> ::buffa::MessageView<'a> for BuildView<'a> {
             artifact_count: self.artifact_count,
             trigger: self.trigger.to_string(),
             agent_key: self.agent_key.to_string(),
-            builder_image_id: match self.builder_image_id.as_option() {
+            image_id: match self.image_id.as_option() {
                 Some(v) => {
                     ::buffa::MessageField::<
                         super::super::super::super::common::v1::OpaqueId,
@@ -591,8 +591,8 @@ impl<'a> ::buffa::MessageView<'a> for BuildView<'a> {
                 }
                 None => ::buffa::MessageField::none(),
             },
-            builder_image_key: self.builder_image_key.to_string(),
-            builder_image_reference: self.builder_image_reference.to_string(),
+            image_key: self.image_key.to_string(),
+            image_reference: self.image_reference.to_string(),
             configuration_hash: self.configuration_hash.to_string(),
             parsed_declaration_json: self.parsed_declaration_json.to_string(),
             build_policy_json: self.build_policy_json.to_string(),
@@ -736,24 +736,21 @@ impl<'a> ::buffa::ViewEncode<'a> for BuildView<'a> {
         if !self.agent_key.is_empty() {
             size += 2u32 + ::buffa::types::string_encoded_len(&self.agent_key) as u32;
         }
-        if self.builder_image_id.is_set() {
+        if self.image_id.is_set() {
             let __slot = __cache.reserve();
-            let inner_size = self.builder_image_id.compute_size(__cache);
+            let inner_size = self.image_id.compute_size(__cache);
             __cache.set(__slot, inner_size);
             size
                 += 2u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
                     + inner_size;
         }
-        if !self.builder_image_key.is_empty() {
-            size
-                += 2u32
-                    + ::buffa::types::string_encoded_len(&self.builder_image_key) as u32;
+        if !self.image_key.is_empty() {
+            size += 2u32 + ::buffa::types::string_encoded_len(&self.image_key) as u32;
         }
-        if !self.builder_image_reference.is_empty() {
+        if !self.image_reference.is_empty() {
             size
                 += 2u32
-                    + ::buffa::types::string_encoded_len(&self.builder_image_reference)
-                        as u32;
+                    + ::buffa::types::string_encoded_len(&self.image_reference) as u32;
         }
         if !self.configuration_hash.is_empty() {
             size
@@ -908,15 +905,15 @@ impl<'a> ::buffa::ViewEncode<'a> for BuildView<'a> {
         if !self.agent_key.is_empty() {
             ::buffa::types::put_string_field(17u32, &self.agent_key, buf);
         }
-        if self.builder_image_id.is_set() {
+        if self.image_id.is_set() {
             ::buffa::types::put_len_delimited_header(18u32, __cache.consume_next(), buf);
-            self.builder_image_id.write_to(__cache, buf);
+            self.image_id.write_to(__cache, buf);
         }
-        if !self.builder_image_key.is_empty() {
-            ::buffa::types::put_string_field(19u32, &self.builder_image_key, buf);
+        if !self.image_key.is_empty() {
+            ::buffa::types::put_string_field(19u32, &self.image_key, buf);
         }
-        if !self.builder_image_reference.is_empty() {
-            ::buffa::types::put_string_field(20u32, &self.builder_image_reference, buf);
+        if !self.image_reference.is_empty() {
+            ::buffa::types::put_string_field(20u32, &self.image_reference, buf);
         }
         if !self.configuration_hash.is_empty() {
             ::buffa::types::put_string_field(21u32, &self.configuration_hash, buf);
@@ -1047,17 +1044,15 @@ impl<'__a> ::serde::Serialize for BuildView<'__a> {
             __map.serialize_entry("agentKey", self.agent_key)?;
         }
         {
-            if let ::core::option::Option::Some(__v) = self.builder_image_id.as_option()
-            {
-                __map.serialize_entry("builderImageId", __v)?;
+            if let ::core::option::Option::Some(__v) = self.image_id.as_option() {
+                __map.serialize_entry("imageId", __v)?;
             }
         }
-        if !::buffa::json_helpers::skip_if::is_empty_str(self.builder_image_key) {
-            __map.serialize_entry("builderImageKey", self.builder_image_key)?;
+        if !::buffa::json_helpers::skip_if::is_empty_str(self.image_key) {
+            __map.serialize_entry("imageKey", self.image_key)?;
         }
-        if !::buffa::json_helpers::skip_if::is_empty_str(self.builder_image_reference) {
-            __map
-                .serialize_entry("builderImageReference", self.builder_image_reference)?;
+        if !::buffa::json_helpers::skip_if::is_empty_str(self.image_reference) {
+            __map.serialize_entry("imageReference", self.image_reference)?;
         }
         if !::buffa::json_helpers::skip_if::is_empty_str(self.configuration_hash) {
             __map.serialize_entry("configurationHash", self.configuration_hash)?;
@@ -1299,24 +1294,24 @@ impl BuildOwnedView {
     pub fn agent_key(&self) -> &'_ str {
         self.0.reborrow().agent_key
     }
-    /// Field 18: `builder_image_id`
+    /// Field 18: `image_id`
     #[must_use]
-    pub fn builder_image_id(
+    pub fn image_id(
         &self,
     ) -> &::buffa::MessageFieldView<
         super::super::super::super::common::v1::__buffa::view::OpaqueIdView<'_>,
     > {
-        &self.0.reborrow().builder_image_id
+        &self.0.reborrow().image_id
     }
-    /// Field 19: `builder_image_key`
+    /// Field 19: `image_key`
     #[must_use]
-    pub fn builder_image_key(&self) -> &'_ str {
-        self.0.reborrow().builder_image_key
+    pub fn image_key(&self) -> &'_ str {
+        self.0.reborrow().image_key
     }
-    /// Field 20: `builder_image_reference`
+    /// Field 20: `image_reference`
     #[must_use]
-    pub fn builder_image_reference(&self) -> &'_ str {
-        self.0.reborrow().builder_image_reference
+    pub fn image_reference(&self) -> &'_ str {
+        self.0.reborrow().image_reference
     }
     /// Field 21: `configuration_hash`
     #[must_use]

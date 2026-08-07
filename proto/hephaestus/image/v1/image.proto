@@ -1,0 +1,147 @@
+// NOTE: This file intentionally defines the replacement image API before its
+// generated clients and servers are regenerated. Do not mix these definitions
+// with the checked-in generated builder API; regenerate all protobuf outputs
+// and update callers in the image-model refactor as one atomic change.
+syntax = "proto3";
+
+package hephaestus.image.v1;
+
+import "hephaestus/common/v1/common.proto";
+import "hephaestus/options/v1/options.proto";
+
+// Read-only catalog of immutable OCI images. Images are not classified by the
+// execution context that consumes them: a build and a guest execution both
+// select ordinary OCI images and apply their own policy independently.
+service ImageCatalogService {
+  rpc ListImages(ListImagesRequest) returns (ListImagesResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (hephaestus.options.v1.authorization) = {
+      permission: "image_catalog.list"
+      audience: "/hephaestus.image.v1.ImageCatalogService/ListImages"
+      actor_source: ACTOR_SOURCE_MEDIATOR_JWT_METADATA
+    };
+    option (hephaestus.options.v1.operation_kind) = OPERATION_KIND_QUERY;
+    option (hephaestus.options.v1.max_request_bytes) = 4096;
+    option (hephaestus.options.v1.max_response_bytes) = 1048576;
+  }
+  rpc GetImage(GetImageRequest) returns (GetImageResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (hephaestus.options.v1.authorization) = {
+      permission: "image_catalog.read"
+      audience: "/hephaestus.image.v1.ImageCatalogService/GetImage"
+      actor_source: ACTOR_SOURCE_MEDIATOR_JWT_METADATA
+    };
+    option (hephaestus.options.v1.operation_kind) = OPERATION_KIND_QUERY;
+    option (hephaestus.options.v1.max_request_bytes) = 4096;
+    option (hephaestus.options.v1.max_response_bytes) = 65536;
+  }
+}
+
+enum ImagePreparationState {
+  IMAGE_PREPARATION_STATE_UNSPECIFIED = 0;
+  IMAGE_PREPARATION_STATE_READY = 1;
+  IMAGE_PREPARATION_STATE_PREPARING = 2;
+  IMAGE_PREPARATION_STATE_FAILED = 3;
+}
+
+enum ImageAvailabilityState {
+  IMAGE_AVAILABILITY_STATE_UNSPECIFIED = 0;
+  IMAGE_AVAILABILITY_STATE_AVAILABLE = 1;
+  IMAGE_AVAILABILITY_STATE_UNAVAILABLE = 2;
+  IMAGE_AVAILABILITY_STATE_RETIRED = 3;
+}
+
+// Lifecycle owned by the forge registry control plane. It is distinct from an
+// image source/preparation lifecycle: an image is not selectable until its
+// immutable registry publication is approved.
+enum RegistryPublicationState {
+  REGISTRY_PUBLICATION_STATE_UNSPECIFIED = 0;
+  REGISTRY_PUBLICATION_STATE_NOT_REQUESTED = 1;
+  REGISTRY_PUBLICATION_STATE_PENDING = 2;
+  REGISTRY_PUBLICATION_STATE_PUBLISHING = 3;
+  REGISTRY_PUBLICATION_STATE_VERIFIED = 4;
+  REGISTRY_PUBLICATION_STATE_APPROVED = 5;
+  REGISTRY_PUBLICATION_STATE_MISSING = 6;
+  REGISTRY_PUBLICATION_STATE_RETIRED = 7;
+  REGISTRY_PUBLICATION_STATE_FAILED = 8;
+}
+
+enum RegistryAvailabilityState {
+  REGISTRY_AVAILABILITY_STATE_UNSPECIFIED = 0;
+  REGISTRY_AVAILABILITY_STATE_AVAILABLE = 1;
+  REGISTRY_AVAILABILITY_STATE_UNAVAILABLE = 2;
+  REGISTRY_AVAILABILITY_STATE_RETIRED = 3;
+}
+
+enum RegistryEvidenceState {
+  REGISTRY_EVIDENCE_STATE_UNSPECIFIED = 0;
+  REGISTRY_EVIDENCE_STATE_PENDING = 1;
+  REGISTRY_EVIDENCE_STATE_VERIFIED = 2;
+  REGISTRY_EVIDENCE_STATE_NOT_REQUIRED = 3;
+}
+
+message Toolchain {
+  string name = 1;
+  string version = 2;
+}
+
+message Provenance {
+  string source = 1;
+  optional string signature = 2;
+  optional string sbom = 3;
+}
+
+// A digest-pinned supply-chain referrer verified by the forge. This exposes
+// neither OCI credentials nor registry implementation details.
+message RegistryEvidence {
+  RegistryEvidenceState state = 1;
+  optional string immutable_reference = 2;
+}
+
+// Safe, read-only registry control-plane projection for an OCI image.
+// `immutable_reference` is an internal authority/path@sha256 reference only;
+// it is never a token, callback payload, storage location, or private endpoint.
+message RegistryPublication {
+  RegistryPublicationState state = 1;
+  RegistryAvailabilityState availability = 2;
+  optional string immutable_reference = 3;
+  repeated string architectures = 4;
+  RegistryEvidence sbom = 5;
+  RegistryEvidence provenance = 6;
+  RegistryEvidence scan = 7;
+  RegistryEvidence signature = 8;
+}
+
+// Immutable OCI image metadata. Execution-specific resources, networking,
+// mounts, state, and secrets belong to the build or guest execution contract,
+// never to an image.
+message OciImage {
+  hephaestus.common.v1.OpaqueId id = 1;
+  string key = 2;
+  string display_name = 3;
+  string image_reference = 4;
+  repeated Toolchain toolchains = 5;
+  repeated string architectures = 6;
+  ImagePreparationState preparation = 7;
+  ImageAvailabilityState availability = 8;
+  Provenance provenance = 9;
+  string platform_policy_version = 10;
+  RegistryPublication registry_publication = 11;
+}
+
+message ListImagesRequest {
+  hephaestus.common.v1.PageRequest page = 1;
+}
+
+message ListImagesResponse {
+  repeated OciImage images = 1;
+  hephaestus.common.v1.PageResponse page = 2;
+}
+
+message GetImageRequest {
+  hephaestus.common.v1.OpaqueId image_id = 1;
+}
+
+message GetImageResponse {
+  OciImage image = 1;
+}

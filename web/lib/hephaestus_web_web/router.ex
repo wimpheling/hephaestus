@@ -31,7 +31,7 @@ defmodule HephaestusWebWeb.Router do
       on_mount: [{HephaestusWebWeb.UserAuth, :require_authenticated}] do
       live "/organizations", OrganizationLive
       live "/organizations/:organization_id", OrganizationWorkspaceLive, :projects
-      live "/builders", BuilderCatalogLive, :index
+      live "/images", ImageCatalogLive, :index
       live "/organizations/:organization_id/projects/new", ProjectNewLive, :new_project
       live "/organizations/:organization_id/secrets", OrganizationSecretsLive, :secrets
 
@@ -47,7 +47,6 @@ defmodule HephaestusWebWeb.Router do
       live "/projects/:project_id/repositories", ProjectLive, :repositories
       live "/projects/:project_id/repositories/new", RepositoryNewLive, :new_repository
       live "/projects/:project_id/agents", ProjectAgentsLive, :agents
-      live "/projects/:project_id/builders", ProjectBuildersLive, :builders
       live "/projects/:project_id/agents/:instance_id", AgentInstanceLive, :show
       live "/projects/:project_id/runs", ProjectRunsLive, :runs
       live "/projects/:project_id/settings", ProjectSettingsLive, :settings

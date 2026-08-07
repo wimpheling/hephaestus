@@ -188,7 +188,7 @@ async fn publishes_once_and_imports_isolated_instances_with_exact_attachments() 
         "command",
         "arguments",
         "working_directory",
-        "root_image_digest",
+        "image_reference",
         "mounts",
         "requires_state",
     ])
@@ -1456,6 +1456,22 @@ async fn seed(pool: &PgPool) -> Fixture {
     .execute(pool)
     .await
     .expect("seed receive");
+    let digest = "a".repeat(64);
+    for key in ["build", "runtime"] {
+        sqlx::query(
+            "INSERT INTO oci_images
+             (id, key, display_name, image_reference, toolchains, architectures,
+              availability_state, provenance, platform_policy_version)
+             VALUES ($1, $2, $2, $3, '[]'::jsonb, ARRAY['x86_64'],
+                     'available', '{}'::jsonb, 'test/v1')",
+        )
+        .bind(Uuid::new_v4())
+        .bind(key)
+        .bind(format!("{key}@sha256:{digest}"))
+        .execute(pool)
+        .await
+        .expect("seed OCI image");
+    }
     let source = reusable_config();
     let parsed = parse(source.as_bytes());
     let config = parsed.config.expect("fixture configuration should parse");
@@ -1500,6 +1516,18 @@ async fn seed(pool: &PgPool) -> Fixture {
     .execute(pool)
     .await
     .expect("seed importing build");
+    sqlx::query(
+        "INSERT INTO build_request_images
+         (build_request_id, execution_context, image_id, image_key, image_reference)
+         SELECT $1, context.execution_context, image.id, image.key, image.image_reference
+           FROM (VALUES ('build'::text, 'build'::text), ('guest', 'runtime'))
+                    AS context(execution_context, image_key)
+           JOIN oci_images AS image ON image.key = context.image_key",
+    )
+    .bind(build.as_uuid())
+    .execute(pool)
+    .await
+    .expect("seed build image snapshots");
     Fixture {
         actor,
         first_project,
@@ -1633,17 +1661,15 @@ async fn seed_fork_release(
 }
 
 fn reusable_config() -> String {
-    let digest = "a".repeat(64);
-    format!(
-        r#"
+    r#"
 version = 2
 [agent]
 name = "Reviewer"
 key = "reviewer"
 [build]
+image = { key = "build" }
 command = "/bin/build"
 working_directory = "/source"
-root_image = "build@sha256:{digest}"
 triggers = ["refs/heads/main"]
 [build.resources]
 vcpus = 2
@@ -1654,14 +1680,13 @@ profile = "disabled"
 path = "bin/reviewer"
 kind = "executable"
 [guest]
+image = { key = "runtime" }
 command = "bin/reviewer"
 arguments = ["--json"]
 working_directory = "bin"
 [resources]
 vcpus = 4
 memory_mib = 2048
-[root_image]
-reference = "runtime@sha256:{digest}"
 [workspace]
 mount = true
 path = "/workspace/repo"
@@ -1685,5 +1710,5 @@ delivery_modes = ["brokered"]
 phases = ["normal"]
 destinations = ["api.example.test"]
 "#
-    )
+    .to_owned()
 }

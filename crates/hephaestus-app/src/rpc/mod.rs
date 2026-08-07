@@ -3,8 +3,8 @@
 mod artifact;
 mod auth;
 mod build;
-mod builder_catalog;
 mod error;
+mod image_catalog;
 // The event adapter is shared with the single outbound product-event adapter.
 #[allow(clippy::redundant_pub_crate)]
 pub(crate) mod event;
@@ -205,7 +205,7 @@ pub(crate) fn service(
     );
     let router =
         rpc_proto::connect::hephaestus::secret::v1::SecretServiceExt::register(secret, router);
-    let router = builder_catalog::register(
+    let router = image_catalog::register(
         router,
         pool.clone(),
         MediatorAuthenticator::new(mediator_signing_key),

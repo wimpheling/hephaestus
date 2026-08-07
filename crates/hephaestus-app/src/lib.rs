@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use axum::{Router, routing::get};
 use build_orchestrator::{BuildExecutionError, BuildExecutor, BuildExecutorConfig};
 use build_postgres::PgBuildRepository;
-use builder_catalog_domain::BuilderImageReference;
+use builder_catalog_domain::OciImageReference;
 use control_plane_postgres::launch::PgRunLaunchAuthorizer;
 use control_plane_postgres::{
     ControlPlanePool, connect as connect_control_plane, load_vm_launch_contract,
@@ -29,14 +29,12 @@ use identity_application::IdempotentIdentityResolver;
 use identity_oidc::OidcVerifier;
 use identity_postgres::PostgresIdentityStore;
 use jsonwebtoken::{Algorithm, DecodingKey};
-use oci_builder_postgres::{
-    PgBuilderRootImageResolver, PgOciPreparationJobStore, PgRepositoryBuilderPublicationStore,
-};
+use oci_builder_postgres::{PgOciImageProductionJobStore, PgRepositoryOciImagePublicationStore};
 use oci_builder_runtime_local::{
     ForgeZotOciPublisher, ForgeZotPublicationConfig, LocalOciRuntime, LocalOciRuntimeConfig,
 };
 use oci_builder_worker::{
-    BuildahEngine, OciPreparationWorker, OciWorkerError, PublishedBuildahEngine,
+    BuildahEngine, OciImageProductionWorker, OciWorkerError, PublishedBuildahEngine,
     RegistryPublisherTokenIssuer, RootfsMaterializationWorker,
 };
 use registry_domain::{PolicyVersion, RegistryNamespace, SupplyChainPolicy};
@@ -296,7 +294,7 @@ impl AppConfig {
             )));
         }
         for (reference, root) in &self.root_images {
-            BuilderImageReference::parse(reference.clone()).map_err(|error| {
+            OciImageReference::parse(reference.clone()).map_err(|error| {
                 AppError::Configuration(format!(
                     "root image reference {reference:?} is not digest-pinned: {error}"
                 ))
@@ -431,18 +429,18 @@ pub struct HephaestusApp {
 }
 
 struct OciBuilderWorkers {
-    preparation: OciPreparationWorker<
-        PgOciPreparationJobStore,
+    preparation: OciImageProductionWorker<
+        PgOciImageProductionJobStore,
         LocalOciRuntime,
         PublishedBuildahEngine<
             ForgeZotOciPublisher<
-                PgRepositoryBuilderPublicationStore,
+                PgRepositoryOciImagePublicationStore,
                 InternalRegistryTokens,
                 SystemCommandRunner,
             >,
         >,
     >,
-    materialization: RootfsMaterializationWorker<PgOciPreparationJobStore, LocalOciRuntime>,
+    materialization: RootfsMaterializationWorker<PgOciImageProductionJobStore, LocalOciRuntime>,
     manifest: PathBuf,
     poll_interval: Duration,
 }
@@ -751,7 +749,7 @@ impl OciBuilderWorkers {
         .map_err(component("OCI Buildah configuration"))?;
         let runtime = LocalOciRuntime::initialize(config.runtime)
             .map_err(component("OCI local runtime configuration"))?;
-        let publication_store = PgRepositoryBuilderPublicationStore::new(
+        let publication_store = PgRepositoryOciImagePublicationStore::new(
             pool.clone(),
             PgRegistryStore::new(pool.clone()),
             config.publisher.authority().clone(),
@@ -771,8 +769,8 @@ impl OciBuilderWorkers {
             },
             ControlledOciPublisher::new(config.publisher, SystemCommandRunner),
         );
-        let preparation = OciPreparationWorker::new(
-            PgOciPreparationJobStore::new(pool.clone()),
+        let preparation = OciImageProductionWorker::new(
+            PgOciImageProductionJobStore::new(pool.clone()),
             runtime.clone(),
             PublishedBuildahEngine::new(buildah, publisher),
             config.preparation_worker_name,
@@ -781,7 +779,7 @@ impl OciBuilderWorkers {
         )
         .map_err(component("OCI preparation worker configuration"))?;
         let materialization = RootfsMaterializationWorker::new(
-            PgOciPreparationJobStore::new(pool),
+            PgOciImageProductionJobStore::new(pool),
             runtime,
             config.materialization_worker_name,
             config.rootfs_root,
@@ -886,10 +884,6 @@ impl HephaestusApp {
             config.secret_broker_adapter,
         ));
 
-        let materialization_worker_name = config.oci_builder.as_ref().map_or_else(
-            || String::from("oci-rootfs-disabled"),
-            |worker| worker.materialization_worker_name.clone(),
-        );
         let oci_builder_workers = config
             .oci_builder
             .take()
@@ -920,11 +914,6 @@ impl HephaestusApp {
                 .map_err(component("release artifact store"))?,
         )
         .map_err(component("release artifact store"))?;
-        let build_root_resolver = Arc::new(PgBuilderRootImageResolver::new(
-            pool.clone(),
-            config.root_images.clone(),
-            materialization_worker_name,
-        ));
         let build_executor = Arc::new(
             BuildExecutor::initialize(
                 Arc::new(PgBuildRepository::new(pool.clone())),
@@ -935,12 +924,11 @@ impl HephaestusApp {
                     workspace_root: config.build_workspace_root,
                     repository_root: config.repository_root.clone(),
                     git_binary: build_git_binary,
-                    root_images: config.root_images.clone(),
+                    image_filesystems: config.root_images.clone(),
                     timeout: config.build_timeout,
                 },
             )
-            .map_err(component("isolated build executor"))?
-            .with_root_image_resolver(build_root_resolver),
+            .map_err(component("isolated build executor"))?,
         );
         let internal_platform_policy = release_domain::RuntimePolicy {
             vcpus: config.runtime_policy.max_vcpus,
@@ -2022,7 +2010,7 @@ struct StoredRuntimeContract {
     command: String,
     arguments: Vec<String>,
     working_directory: String,
-    root_image_digest: String,
+    image_reference: String,
 }
 
 #[derive(Deserialize)]
@@ -2088,9 +2076,9 @@ impl VmSpecFactory for PgAgentVmSpecFactory {
             serde_json::from_value(stored.effective_runtime_policy).map_err(vm_factory_error)?;
         let root = self
             .root_images
-            .get(&contract.root_image_digest)
+            .get(&contract.image_reference)
             .cloned()
-            .ok_or_else(|| invalid_spec("root_image.reference", "root image is not configured"))?;
+            .ok_or_else(|| invalid_spec("guest.image", "OCI image is not materialized"))?;
         let network_access = policy.network;
         let network = match network_access {
             StoredNetworkAccess::Disabled => NetworkMode::Disabled,

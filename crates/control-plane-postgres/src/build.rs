@@ -52,9 +52,9 @@ pub struct BuildView {
     pub artifact_count: u32,
     pub trigger: String,
     pub agent_key: Option<String>,
-    pub builder_image_id: Option<Uuid>,
-    pub builder_image_key: Option<String>,
-    pub builder_image_reference: Option<String>,
+    pub image_id: Option<Uuid>,
+    pub image_key: Option<String>,
+    pub image_reference: Option<String>,
     pub configuration_hash: Option<String>,
     pub parsed_declaration: Value,
     pub build_policy: Value,
@@ -236,8 +236,15 @@ impl BuildApplication {
                     request.source_commit, request.source_ref,
                     encode(request.build_definition_hash, 'hex') AS build_definition_hash,
                     request.build_trigger, request.agent_key,
-                    request.builder_image_id, request.builder_image_key,
-                    request.builder_image_reference,
+                    (SELECT image_id FROM build_request_images
+                      WHERE build_request_id = request.id
+                        AND execution_context = 'build') AS image_id,
+                    (SELECT image_key FROM build_request_images
+                      WHERE build_request_id = request.id
+                        AND execution_context = 'build') AS image_key,
+                    (SELECT image_reference FROM build_request_images
+                      WHERE build_request_id = request.id
+                        AND execution_context = 'build') AS image_reference,
                     encode(request.configuration_hash, 'hex') AS configuration_hash,
                     request.build_declaration, request.build_policy,
                     request.declared_artifacts, execution.started_at,
@@ -314,8 +321,15 @@ impl BuildApplication {
                     request.source_commit, request.source_ref,
                     encode(request.build_definition_hash, 'hex') AS build_definition_hash,
                     request.build_trigger, request.agent_key,
-                    request.builder_image_id, request.builder_image_key,
-                    request.builder_image_reference,
+                    (SELECT image_id FROM build_request_images
+                      WHERE build_request_id = request.id
+                        AND execution_context = 'build') AS image_id,
+                    (SELECT image_key FROM build_request_images
+                      WHERE build_request_id = request.id
+                        AND execution_context = 'build') AS image_key,
+                    (SELECT image_reference FROM build_request_images
+                      WHERE build_request_id = request.id
+                        AND execution_context = 'build') AS image_reference,
                     encode(request.configuration_hash, 'hex') AS configuration_hash,
                     request.build_declaration, request.build_policy,
                     request.declared_artifacts, execution.started_at,
@@ -570,13 +584,8 @@ impl BuildApplication {
             .build
             .as_ref()
             .ok_or(BuildError::FailedPrecondition)?;
-        let resolved_root_image = resolve_build_root_image(
-            &mut transaction,
-            request.repository_id,
-            &request.source_commit,
-            build,
-        )
-        .await?;
+        let resolved_build_image = resolve_image(&mut transaction, &build.image).await?;
+        let resolved_guest_image = resolve_image(&mut transaction, &config.guest.image).await?;
         let build_declaration = serde_json::to_value(build).map_err(BuildError::Serialization)?;
         let build_policy = json!({
             "resources": build.resources,
@@ -592,12 +601,10 @@ impl BuildApplication {
             "INSERT INTO build_requests
              (id, repository_id, source_commit, source_ref, origin_receive_id,
               build_definition_hash, state, created_by, created_at, build_trigger,
-              agent_key, builder_image_id, builder_image_key, builder_image_reference,
+              agent_key,
               configuration_hash, build_declaration, build_policy, declared_artifacts)
              VALUES ($1, $2, $3, $4, $5, $6, 'queued', $7, $8, 'manual', $9,
-                     (SELECT id FROM builder_images WHERE image_reference = $10),
-                     (SELECT key FROM builder_images WHERE image_reference = $10),
-                     $10, decode($11, 'hex'), $12, $13, $14)
+                     decode($10, 'hex'), $11, $12, $13)
              ON CONFLICT
                (repository_id, source_commit, source_ref, build_definition_hash)
              DO UPDATE SET repository_id = EXCLUDED.repository_id
@@ -613,12 +620,28 @@ impl BuildApplication {
         .bind(identity.user_id.as_uuid())
         .bind(now)
         .bind(agent_key)
-        .bind(&resolved_root_image)
         .bind(&configuration_hash)
         .bind(build_declaration)
         .bind(build_policy)
         .bind(declared_artifacts)
         .fetch_one(&mut *transaction)
+        .await
+        .map_err(BuildError::Persistence)?;
+        sqlx::query(
+            "INSERT INTO build_request_images
+             (build_request_id, execution_context, image_id, image_key, image_reference)
+             VALUES ($1, 'build', $2, $3, $4),
+                    ($1, 'guest', $5, $6, $7)
+             ON CONFLICT (build_request_id, execution_context) DO NOTHING",
+        )
+        .bind(row.0)
+        .bind(resolved_build_image.id)
+        .bind(&resolved_build_image.key)
+        .bind(&resolved_build_image.reference)
+        .bind(resolved_guest_image.id)
+        .bind(&resolved_guest_image.key)
+        .bind(&resolved_guest_image.reference)
+        .execute(&mut *transaction)
         .await
         .map_err(BuildError::Persistence)?;
         sqlx::query(
@@ -679,107 +702,26 @@ impl BuildApplication {
 }
 
 #[derive(Debug, FromRow)]
-struct ResolvedBuilderRow {
-    image_reference: String,
-    max_vcpus: i16,
-    max_memory_mib: i32,
-    network_ceiling: String,
+struct ResolvedImageRow {
+    id: Uuid,
+    key: String,
+    reference: String,
 }
 
-async fn resolve_build_root_image(
+async fn resolve_image(
     transaction: &mut Transaction<'_, Postgres>,
-    repository_id: Uuid,
-    source_commit: &str,
-    build: &agent_config::BuildConfig,
-) -> Result<String, BuildError> {
-    let row = match (&build.root_image, &build.builder) {
-        (Some(reference), None) => sqlx::query_as::<_, ResolvedBuilderRow>(
-            "SELECT image_reference, max_vcpus, max_memory_mib, network_ceiling
-             FROM builder_images
-             WHERE image_reference = $1 AND preparation_state = 'ready'
-               AND availability_state = 'available'",
-        )
-        .bind(reference)
-        .fetch_optional(&mut **transaction)
-        .await
-        .map_err(BuildError::Persistence)?,
-        (None, Some(agent_config::BuilderSelection::Platform { key })) => {
-            sqlx::query_as::<_, ResolvedBuilderRow>(
-                "SELECT image_reference, max_vcpus, max_memory_mib, network_ceiling
-                 FROM builder_images
-                 WHERE key = $1 AND preparation_state = 'ready'
-                   AND availability_state = 'available'",
-            )
-            .bind(key)
-            .fetch_optional(&mut **transaction)
-            .await
-            .map_err(BuildError::Persistence)?
-        }
-        (None, Some(agent_config::BuilderSelection::Project { id })) => {
-            let builder_id = Uuid::parse_str(id).map_err(|_| BuildError::FailedPrecondition)?;
-            sqlx::query_as::<_, ResolvedBuilderRow>(
-                "SELECT project_builder.oci_image_reference AS image_reference,
-                        base.max_vcpus, base.max_memory_mib, base.network_ceiling
-                 FROM project_builder_definitions AS project_builder
-                 JOIN repositories AS repository
-                   ON repository.project_id = project_builder.project_id
-                 JOIN builder_images AS base
-                   ON base.image_reference = project_builder.approved_base_image_reference
-                 WHERE repository.id = $1 AND project_builder.id = $2
-                   AND project_builder.status = 'ready'
-                   AND base.preparation_state = 'ready'
-                   AND base.availability_state = 'available'",
-            )
-            .bind(repository_id)
-            .bind(builder_id)
-            .fetch_optional(&mut **transaction)
-            .await
-            .map_err(BuildError::Persistence)?
-        }
-        (None, Some(agent_config::BuilderSelection::Repository { key })) => {
-            sqlx::query_as::<_, ResolvedBuilderRow>(
-                "SELECT project_builder.oci_image_reference AS image_reference,
-                        base.max_vcpus, base.max_memory_mib, base.network_ceiling
-                 FROM project_builder_definitions AS project_builder
-                 JOIN builder_images AS base
-                   ON base.image_reference = project_builder.approved_base_image_reference
-                 WHERE project_builder.source_repository_id = $1
-                   AND project_builder.key = $2
-                   AND project_builder.source_revision = $3
-                   AND project_builder.status = 'ready'
-                   AND base.preparation_state = 'ready'
-                   AND base.availability_state = 'available'
-                 ORDER BY project_builder.created_at DESC, project_builder.id DESC
-                 LIMIT 1",
-            )
-            .bind(repository_id)
-            .bind(key)
-            .bind(source_commit)
-            .fetch_optional(&mut **transaction)
-            .await
-            .map_err(BuildError::Persistence)?
-        }
-        _ => None,
-    };
+    selection: &agent_config::ImageSelection,
+) -> Result<ResolvedImageRow, BuildError> {
+    let row = sqlx::query_as::<_, ResolvedImageRow>(
+        "SELECT id, key, image_reference AS reference FROM oci_images
+          WHERE key = $1 AND availability_state = 'available'",
+    )
+    .bind(&selection.key)
+    .fetch_optional(&mut **transaction)
+    .await
+    .map_err(BuildError::Persistence)?;
     let row = row.ok_or(BuildError::FailedPrecondition)?;
-    let requested_network = match build.network.profile {
-        agent_config::NetworkProfile::Disabled => 0,
-        agent_config::NetworkProfile::BrokerOnly => 1,
-        agent_config::NetworkProfile::Egress => 2,
-    };
-    let permitted_network = match row.network_ceiling.as_str() {
-        "disabled" => 0,
-        "broker_only" => 1,
-        "egress" => 2,
-        _ => return Err(BuildError::InvalidStoredData),
-    };
-    if build.resources.vcpus > u8::try_from(row.max_vcpus).unwrap_or(0)
-        || i64::from(build.resources.memory_mib) > i64::from(row.max_memory_mib)
-        || requested_network > permitted_network
-    {
-        return Err(BuildError::FailedPrecondition);
-    }
-    Ok(row.image_reference)
+    Ok(row)
 }
 
 #[derive(FromRow)]
@@ -798,9 +740,9 @@ struct BuildRow {
     build_definition_hash: String,
     build_trigger: String,
     agent_key: Option<String>,
-    builder_image_id: Option<Uuid>,
-    builder_image_key: Option<String>,
-    builder_image_reference: Option<String>,
+    image_id: Option<Uuid>,
+    image_key: Option<String>,
+    image_reference: Option<String>,
     configuration_hash: Option<String>,
     build_declaration: Option<Value>,
     build_policy: Option<Value>,
@@ -1029,9 +971,9 @@ impl TryFrom<BuildRow> for BuildView {
                 .map_err(|_| BuildError::InvalidStoredData)?,
             trigger: row.build_trigger,
             agent_key: row.agent_key,
-            builder_image_id: row.builder_image_id,
-            builder_image_key: row.builder_image_key,
-            builder_image_reference: row.builder_image_reference,
+            image_id: row.image_id,
+            image_key: row.image_key,
+            image_reference: row.image_reference,
             configuration_hash: row.configuration_hash,
             parsed_declaration: row
                 .build_declaration
@@ -1142,9 +1084,9 @@ mod tests {
             artifact_count: 0,
             trigger: String::from("manual"),
             agent_key: None,
-            builder_image_id: None,
-            builder_image_key: None,
-            builder_image_reference: None,
+            image_id: None,
+            image_key: None,
+            image_reference: None,
             configuration_hash: None,
             parsed_declaration: serde_json::json!({}),
             build_policy: serde_json::json!({}),

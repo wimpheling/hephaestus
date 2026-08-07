@@ -40,7 +40,7 @@ struct InputRow {
     repository_id: Uuid,
     source_commit: String,
     source_ref: String,
-    builder_image_reference: Option<String>,
+    image_reference: Option<String>,
     state: String,
     config: Value,
     created_by: Option<Uuid>,
@@ -55,11 +55,10 @@ fn claimed(
 ) -> Result<ClaimedBuild, BuildRepositoryError> {
     let config: agent_config::AgentConfig =
         serde_json::from_value(row.config).map_err(|_| BuildRepositoryError::InvalidData)?;
-    let mut build = config.build.ok_or(BuildRepositoryError::InvalidData)?;
-    if let Some(reference) = row.builder_image_reference {
-        build.root_image = Some(reference);
-        build.builder = None;
-    }
+    let build = config.build.ok_or(BuildRepositoryError::InvalidData)?;
+    let image_reference = row
+        .image_reference
+        .ok_or(BuildRepositoryError::InvalidData)?;
     Ok(ClaimedBuild {
         input: BuildInput {
             id,
@@ -67,6 +66,7 @@ fn claimed(
             source_commit: row.source_commit,
             source_ref: row.source_ref,
             build,
+            image_reference,
         },
         release_id,
         release_agent_id: agent,
@@ -121,9 +121,12 @@ impl BuildRepository for PgBuildRepository {
         let mut tx = self.pool.begin().await.map_err(storage)?;
         let input: InputRow = sqlx::query_as(
             "SELECT request.repository_id, request.source_commit, request.source_ref,
-                    request.builder_image_reference, request.state, revision.config,
+                    selected.image_reference, request.state, revision.config,
                     request.created_by
-               FROM build_requests AS request
+             FROM build_requests AS request
+             JOIN build_request_images AS selected
+               ON selected.build_request_id = request.id
+              AND selected.execution_context = 'build'
                JOIN LATERAL (
                    SELECT config FROM agent_config_revisions
                     WHERE repository_id = request.repository_id
@@ -299,7 +302,7 @@ impl BuildRepository for PgBuildRepository {
         let Some((state, release, agent, version, artifact_manifest)) = row else {
             return Ok(None);
         };
-        let input: InputRow = sqlx::query_as("SELECT request.repository_id, request.source_commit, request.source_ref, request.builder_image_reference, request.state, revision.config, request.created_by FROM build_requests AS request JOIN LATERAL (SELECT config FROM agent_config_revisions WHERE repository_id = request.repository_id AND commit_sha = request.source_commit AND status = 'valid' ORDER BY created_at DESC LIMIT 1) AS revision ON true WHERE request.id = $1")
+        let input: InputRow = sqlx::query_as("SELECT request.repository_id, request.source_commit, request.source_ref, selected.image_reference, request.state, revision.config, request.created_by FROM build_requests AS request JOIN build_request_images AS selected ON selected.build_request_id = request.id AND selected.execution_context = 'build' JOIN LATERAL (SELECT config FROM agent_config_revisions WHERE repository_id = request.repository_id AND commit_sha = request.source_commit AND status = 'valid' ORDER BY created_at DESC LIMIT 1) AS revision ON true WHERE request.id = $1")
             .bind(id.as_uuid()).fetch_optional(&self.pool).await.map_err(storage)?.ok_or(BuildRepositoryError::Unavailable)?;
         Ok(Some(FinalizationBuild {
             state,
@@ -316,7 +319,7 @@ impl BuildRepository for PgBuildRepository {
 
     async fn claim(&self, id: BuildRequestId) -> Result<ClaimedBuild, BuildRepositoryError> {
         let mut tx = self.pool.begin().await.map_err(storage)?;
-        let row: InputRow = sqlx::query_as("SELECT request.repository_id, request.source_commit, request.source_ref, request.builder_image_reference, request.state, revision.config, request.created_by FROM build_requests AS request JOIN LATERAL (SELECT config FROM agent_config_revisions WHERE repository_id = request.repository_id AND commit_sha = request.source_commit AND status = 'valid' ORDER BY created_at DESC LIMIT 1) AS revision ON true WHERE request.id = $1 FOR UPDATE OF request")
+        let row: InputRow = sqlx::query_as("SELECT request.repository_id, request.source_commit, request.source_ref, selected.image_reference, request.state, revision.config, request.created_by FROM build_requests AS request JOIN build_request_images AS selected ON selected.build_request_id = request.id AND selected.execution_context = 'build' JOIN LATERAL (SELECT config FROM agent_config_revisions WHERE repository_id = request.repository_id AND commit_sha = request.source_commit AND status = 'valid' ORDER BY created_at DESC LIMIT 1) AS revision ON true WHERE request.id = $1 FOR UPDATE OF request")
             .bind(id.as_uuid()).fetch_optional(&mut *tx).await.map_err(storage)?.ok_or(BuildRepositoryError::Unavailable)?;
         let actor = row.created_by.ok_or(BuildRepositoryError::Unauthorized)?;
         sqlx::query("SELECT set_config('hephaestus.actor_id', $1, true), set_config('hephaestus.subject_type', 'user', true), set_config('hephaestus.request_id', $2, true)").bind(actor.to_string()).bind(id.to_string()).execute(&mut *tx).await.map_err(storage)?;

@@ -28,9 +28,9 @@ pub(in crate::rpc) fn build(value: BuildView) -> Build {
         artifact_count: value.artifact_count,
         trigger: value.trigger,
         agent_key: value.agent_key.unwrap_or_default(),
-        builder_image_id: value.builder_image_id.map(opaque).into(),
-        builder_image_key: value.builder_image_key.unwrap_or_default(),
-        builder_image_reference: value.builder_image_reference.unwrap_or_default(),
+        image_id: value.image_id.map(opaque).into(),
+        image_key: value.image_key.unwrap_or_default(),
+        image_reference: value.image_reference.unwrap_or_default(),
         configuration_hash: value.configuration_hash.unwrap_or_default(),
         parsed_declaration_json: serde_json::to_string(&value.parsed_declaration)
             .unwrap_or_default(),

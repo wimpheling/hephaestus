@@ -1,4 +1,4 @@
-# Platform builder release operation
+# Platform OCI image release operation
 
 The four reviewed Dockerfiles in this directory are released by two
 administrator-operated scripts and the trusted `hephaestus-registry-release`
@@ -12,7 +12,7 @@ the trusted local image store through the separately reviewed platform-import
 operation. This prevents the release command from silently treating arbitrary
 upstream registry availability as its supply chain.
 
-After Buildah produces the platform manifest, the operation creates a canonical
+After Buildah produces the platform image manifest, the operation creates a canonical
 OCI index with exactly that one explicit `linux/amd64` descriptor and a local
 `heph-sha256-…` digest tag. This is the layout contract used by the controlled
 publisher; it intentionally does not claim an arm64 variant.
@@ -62,14 +62,15 @@ cargo dev platform-images status
 ```
 
 `publish` starts local Zot, uses the pinned tool image to publish and read back
-the four immutable layouts, approves them, and applies the builder catalog.
+the four immutable layouts, approves them, and applies the OCI image catalog.
 It writes the review, catalog, and catalog-application receipts beneath
 `.local/hephaestus/platform-images/installations/<revision>/`. It never runs
 automatically. `cargo dev platform-images clean --revision <revision>` removes
 only those private local receipts; it deliberately does not delete approved
-Zot content or catalog records. Platform builder images are OCI build bases,
-not VM rootfs images: repository-defined builder rootfs materialization is a
-separate runtime lifecycle.
+Zot content or catalog records. The four standard artifacts are ordinary OCI
+images: an execution contract may select any approved image for either a build
+or a guest execution. Image selection does not grant network access, secrets,
+mounts, or resources; those remain execution-contract policy.
 
 ## Standalone operator tool configuration
 

@@ -1,1198 +1,196 @@
-//! Application port and policy validation for the builder image catalog.
+//! Application ports for immutable OCI images.
 
-use agent_config::{AgentConfig, NetworkProfile};
 use async_trait::async_trait;
 use builder_catalog_domain::{
-    BuildNetworkPolicy, BuilderCatalogValueError, BuilderImage, BuilderImageId,
-    BuilderImagePublication, BuilderImageReference, BuilderSelectionError, NewProjectBuilder,
-    OciDigest, ProjectBuilderDefinition, ProjectBuilderId, ProjectBuilderLifecycleError,
-    ProjectBuilderProvenance, ProjectBuilderPublication, ProjectBuilderStatus,
-    ValidatedBuilderSelection,
+    ImageCatalogValueError, ImageKey, ImageSelectionError, OciImage, OciImageId,
+    OciImagePublication, OciImageReference, ResolvedImage,
 };
 use identity_domain::AuthenticatedIdentity;
 use std::sync::Arc;
-use uuid::Uuid;
 
-/// Provider-neutral builder catalog persistence failure.
+/// Persistence failure for the OCI image catalog.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
-pub enum BuilderCatalogError {
-    /// The requested image does not exist.
-    #[error("builder image was not found")]
+pub enum ImageCatalogError {
+    /// No image matches the requested immutable identity.
+    #[error("OCI image was not found")]
     NotFound,
-    /// Persistence or transport failed.
-    #[error("builder catalog storage failed: {0}")]
+    /// Storage or transport failed.
+    #[error("OCI image catalog storage failed: {0}")]
     Storage(#[source] Box<dyn std::error::Error + Send + Sync>),
     /// Persisted metadata violates the domain contract.
-    #[error("builder catalog contains invalid metadata: {0}")]
-    InvalidData(#[source] BuilderCatalogValueError),
+    #[error("OCI image catalog contains invalid metadata: {0}")]
+    InvalidData(#[source] ImageCatalogValueError),
 }
 
-/// Persistence boundary for platform-owned builder images.
+/// Persistence boundary for immutable OCI images.
 #[async_trait]
-pub trait BuilderCatalog: Send + Sync + 'static {
-    /// Lists catalog entries in stable platform order.
-    async fn list_builder_images(&self) -> Result<Vec<BuilderImage>, BuilderCatalogError>;
+pub trait ImageCatalog: Send + Sync + 'static {
+    /// Lists platform catalog entries in stable key order.
+    async fn list_images(&self) -> Result<Vec<OciImage>, ImageCatalogError>;
 
-    /// Loads one entry by stable identity.
-    async fn get_builder_image(
-        &self,
-        id: BuilderImageId,
-    ) -> Result<BuilderImage, BuilderCatalogError>;
+    /// Loads one entry by its stable identity.
+    async fn get_image(&self, id: OciImageId) -> Result<OciImage, ImageCatalogError>;
 
-    /// Loads one entry by its exact digest-pinned reference.
-    async fn find_builder_image_by_reference(
+    /// Loads one entry by its immutable OCI reference.
+    async fn find_image_by_reference(
         &self,
-        reference: &BuilderImageReference,
-    ) -> Result<BuilderImage, BuilderCatalogError>;
+        reference: &OciImageReference,
+    ) -> Result<OciImage, ImageCatalogError>;
 
-    /// Loads a catalog entry by its stable platform key.
-    async fn find_builder_image_by_key(
-        &self,
-        key: &str,
-    ) -> Result<BuilderImage, BuilderCatalogError> {
-        self.list_builder_images()
+    /// Loads one entry by its human-selected stable key.
+    async fn find_image_by_key(&self, key: &ImageKey) -> Result<OciImage, ImageCatalogError> {
+        self.list_images()
             .await?
             .into_iter()
-            .find(|image| image.key.as_str() == key)
-            .ok_or(BuilderCatalogError::NotFound)
+            .find(|image| image.key == *key)
+            .ok_or(ImageCatalogError::NotFound)
     }
 }
 
-/// Persistence boundary for safe registry-publication projections associated
-/// with catalog and project-builder rows.
-///
-/// Implementations expose only immutable internal references and verified
-/// evidence metadata. Credentials, callback bodies, storage paths, mutable
-/// tags, and operational endpoints never cross this boundary.
+/// Read boundary for safe OCI registry-publication projections.
 #[async_trait]
 pub trait RegistryPublicationCatalog: Send + Sync + 'static {
-    /// Lists platform builder images with registry control-plane state.
-    async fn list_builder_image_publications(
+    /// Lists platform images with their registry state and evidence.
+    async fn list_image_publications(
         &self,
         identity: &AuthenticatedIdentity,
-    ) -> Result<Vec<BuilderImagePublication>, BuilderCatalogError>;
+    ) -> Result<Vec<OciImagePublication>, ImageCatalogError>;
 
-    /// Loads one platform builder image with registry control-plane state.
-    async fn get_builder_image_publication(
+    /// Loads one platform image with its registry state and evidence.
+    async fn get_image_publication(
         &self,
         identity: &AuthenticatedIdentity,
-        id: BuilderImageId,
-    ) -> Result<BuilderImagePublication, BuilderCatalogError>;
-
-    /// Lists project builders with project-scoped registry state.
-    async fn list_project_builder_publications(
-        &self,
-        identity: &AuthenticatedIdentity,
-        project_id: Uuid,
-    ) -> Result<Vec<ProjectBuilderPublication>, ProjectBuilderStoreError>;
-
-    /// Loads one project builder with project-scoped registry state.
-    async fn get_project_builder_publication(
-        &self,
-        identity: &AuthenticatedIdentity,
-        project_id: Uuid,
-        id: ProjectBuilderId,
-    ) -> Result<ProjectBuilderPublication, ProjectBuilderStoreError>;
+        id: OciImageId,
+    ) -> Result<OciImagePublication, ImageCatalogError>;
 }
 
-/// Application service exposing catalog reads and source-selection validation.
-pub struct BuilderCatalogApplication<C> {
+/// Resolves image keys to immutable OCI provenance for any execution context.
+pub struct ImageCatalogApplication<C> {
     catalog: Arc<C>,
 }
 
-impl<C> BuilderCatalogApplication<C>
+impl<C> ImageCatalogApplication<C>
 where
-    C: BuilderCatalog,
+    C: ImageCatalog,
 {
-    /// Creates the application service over one catalog adapter.
+    /// Creates the service over an OCI image catalog.
     #[must_use]
     pub const fn new(catalog: Arc<C>) -> Self {
         Self { catalog }
     }
 
-    /// Lists validated platform-owned catalog entries.
+    /// Lists validated image metadata.
     ///
     /// # Errors
     ///
-    /// Returns a persistence or invalid-data failure.
-    pub async fn list_builder_images(&self) -> Result<Vec<BuilderImage>, BuilderCatalogError> {
-        let entries = self.catalog.list_builder_images().await?;
-        entries
+    /// Returns a storage or invalid-data error.
+    pub async fn list_images(&self) -> Result<Vec<OciImage>, ImageCatalogError> {
+        self.catalog
+            .list_images()
+            .await?
             .into_iter()
-            .map(validate_entry)
-            .collect::<Result<Vec<_>, _>>()
+            .map(validate_image)
+            .collect()
     }
 
-    /// Loads and validates one catalog entry.
+    /// Loads validated image metadata.
     ///
     /// # Errors
     ///
-    /// Returns a persistence or invalid-data failure.
-    pub async fn get_builder_image(
-        &self,
-        id: BuilderImageId,
-    ) -> Result<BuilderImage, BuilderCatalogError> {
-        validate_entry(self.catalog.get_builder_image(id).await?)
+    /// Returns a storage or invalid-data error.
+    pub async fn get_image(&self, id: OciImageId) -> Result<OciImage, ImageCatalogError> {
+        validate_image(self.catalog.get_image(id).await?)
     }
 
-    /// Resolves and validates the build section of a parsed `agent.toml`.
+    /// Resolves a selected catalog key to an immutable OCI reference.
     ///
-    /// The exact digest-pinned reference in `build.root_image` is the only
-    /// accepted selection identity. No environment variable or arbitrary image
-    /// lookup is consulted.
+    /// Execution-specific resource, network, secret, and mount policy is
+    /// deliberately not considered here: it belongs to the calling context.
     ///
     /// # Errors
     ///
-    /// Returns a stable selection failure or catalog persistence failure.
-    pub async fn validate_agent_config(
+    /// Returns a catalog failure or an unavailable/retired selection error.
+    pub async fn resolve_key(
         &self,
-        config: &AgentConfig,
-    ) -> Result<ValidatedBuilderSelection, BuilderCatalogApplicationError> {
-        let build = config
-            .build
-            .as_ref()
-            .ok_or(BuilderSelectionError::MissingBuild)?;
-        self.validate_build_config(build).await
+        key: &ImageKey,
+    ) -> Result<ResolvedImage, ImageCatalogApplicationError> {
+        let image = self.catalog.find_image_by_key(key).await?;
+        validate_image(image)?.resolve().map_err(Into::into)
     }
 
-    /// Resolves and validates an already parsed isolated build definition.
+    /// Resolves an immutable reference already held in durable provenance.
     ///
     /// # Errors
     ///
-    /// Returns a stable selection failure or catalog persistence failure.
-    pub async fn validate_build_config(
+    /// Returns a catalog failure or an unavailable/retired selection error.
+    pub async fn resolve_reference(
         &self,
-        build: &agent_config::BuildConfig,
-    ) -> Result<ValidatedBuilderSelection, BuilderCatalogApplicationError> {
-        let (image, selected_key, selected_reference) = match (&build.root_image, &build.builder) {
-            (Some(reference), None) => {
-                let reference = BuilderImageReference::parse(reference.clone())
-                    .map_err(|_| BuilderSelectionError::UnknownImage)?;
-                let image = self
-                    .catalog
-                    .find_builder_image_by_reference(&reference)
-                    .await
-                    .map_err(BuilderCatalogApplicationError::Catalog)?;
-                (image, None, reference)
-            }
-            (None, Some(agent_config::BuilderSelection::Platform { key })) => {
-                let image = self
-                    .catalog
-                    .find_builder_image_by_key(key)
-                    .await
-                    .map_err(BuilderCatalogApplicationError::Catalog)?;
-                let reference = image.image_reference.clone();
-                (image, Some(key.clone()), reference)
-            }
-            _ => return Err(BuilderSelectionError::UnknownImage.into()),
-        };
-        validate_selection(image, selected_key, selected_reference, build)
+        reference: &OciImageReference,
+    ) -> Result<ResolvedImage, ImageCatalogApplicationError> {
+        let image = self.catalog.find_image_by_reference(reference).await?;
+        validate_image(image)?.resolve().map_err(Into::into)
     }
 }
 
-impl<C> BuilderCatalogApplication<C>
+impl<C> ImageCatalogApplication<C>
 where
-    C: BuilderCatalog + RegistryPublicationCatalog,
+    C: ImageCatalog + RegistryPublicationCatalog,
 {
-    /// Lists platform catalog rows enriched with safe registry publication
-    /// state.
+    /// Lists validated catalog and registry-publication metadata.
     ///
     /// # Errors
     ///
-    /// Returns an adapter failure or invalid persisted projection.
-    pub async fn list_builder_image_publications(
+    /// Returns a storage or invalid-data error.
+    pub async fn list_image_publications(
         &self,
         identity: &AuthenticatedIdentity,
-    ) -> Result<Vec<BuilderImagePublication>, BuilderCatalogError> {
+    ) -> Result<Vec<OciImagePublication>, ImageCatalogError> {
         self.catalog
-            .list_builder_image_publications(identity)
+            .list_image_publications(identity)
             .await?
             .into_iter()
             .map(|publication| {
                 publication
                     .validate()
                     .map(|()| publication)
-                    .map_err(BuilderCatalogError::InvalidData)
+                    .map_err(ImageCatalogError::InvalidData)
             })
             .collect()
     }
 
-    /// Loads one platform catalog row enriched with safe registry publication
-    /// state.
+    /// Loads validated catalog and registry-publication metadata.
     ///
     /// # Errors
     ///
-    /// Returns an adapter failure or invalid persisted projection.
-    pub async fn get_builder_image_publication(
+    /// Returns a storage or invalid-data error.
+    pub async fn get_image_publication(
         &self,
         identity: &AuthenticatedIdentity,
-        id: BuilderImageId,
-    ) -> Result<BuilderImagePublication, BuilderCatalogError> {
-        let publication = self
-            .catalog
-            .get_builder_image_publication(identity, id)
-            .await?;
+        id: OciImageId,
+    ) -> Result<OciImagePublication, ImageCatalogError> {
+        let publication = self.catalog.get_image_publication(identity, id).await?;
         publication
             .validate()
             .map(|()| publication)
-            .map_err(BuilderCatalogError::InvalidData)
+            .map_err(ImageCatalogError::InvalidData)
     }
 }
 
-impl<C> BuilderCatalogApplication<C>
-where
-    C: BuilderCatalog + ProjectBuilderStore,
-{
-    /// Resolves a config that may select a project-owned prepared builder.
-    ///
-    /// # Errors
-    ///
-    /// Returns a selection, catalog, or project-builder persistence failure.
-    pub async fn validate_agent_config_for_project(
-        &self,
-        config: &AgentConfig,
-        project_id: Uuid,
-    ) -> Result<ValidatedBuilderSelection, BuilderCatalogApplicationError> {
-        let build = config
-            .build
-            .as_ref()
-            .ok_or(BuilderSelectionError::MissingBuild)?;
-        self.validate_build_config_for_project(build, project_id)
-            .await
-    }
-
-    /// Resolves a config for one repository at one exact source revision.
-    ///
-    /// Repository selectors are deliberately scoped to both the repository and
-    /// the source commit. Legacy platform, digest, and UUID project selectors
-    /// retain their existing behavior.
-    ///
-    /// # Errors
-    ///
-    /// Returns a selection, catalog, or project-builder persistence failure.
-    pub async fn validate_agent_config_for_repository(
-        &self,
-        config: &AgentConfig,
-        project_id: Uuid,
-        source_repository_id: Uuid,
-        source_revision: &str,
-    ) -> Result<ValidatedBuilderSelection, BuilderCatalogApplicationError> {
-        let build = config
-            .build
-            .as_ref()
-            .ok_or(BuilderSelectionError::MissingBuild)?;
-        let Some(agent_config::BuilderSelection::Repository { key }) = build.builder.as_ref()
-        else {
-            return self
-                .validate_build_config_for_project(build, project_id)
-                .await;
-        };
-        let builder = self
-            .catalog
-            .get_project_builder_by_repository_key(
-                project_id,
-                source_repository_id,
-                key,
-                source_revision,
-            )
-            .await
-            .map_err(BuilderCatalogApplicationError::ProjectStore)?;
-        self.validate_project_builder_selection(builder, build)
-            .await
-    }
-
-    async fn validate_build_config_for_project(
-        &self,
-        build: &agent_config::BuildConfig,
-        project_id: Uuid,
-    ) -> Result<ValidatedBuilderSelection, BuilderCatalogApplicationError> {
-        if !matches!(
-            (&build.root_image, &build.builder),
-            (None, Some(agent_config::BuilderSelection::Project { .. }))
-        ) {
-            return self.validate_build_config(build).await;
-        }
-        let agent_config::BuilderSelection::Project { id } = build
-            .builder
-            .as_ref()
-            .expect("project builder selector checked above")
-        else {
-            unreachable!("project builder selector checked above");
-        };
-        let builder_id = uuid::Uuid::parse_str(id)
-            .map(builder_catalog_domain::ProjectBuilderId::from_uuid)
-            .map_err(|_| BuilderSelectionError::UnknownImage)?;
-        let builder = self
-            .catalog
-            .get_project_builder(project_id, builder_id)
-            .await
-            .map_err(BuilderCatalogApplicationError::ProjectStore)?;
-        self.validate_project_builder_selection(builder, build)
-            .await
-    }
-
-    async fn validate_project_builder_selection(
-        &self,
-        builder: ProjectBuilderDefinition,
-        build: &agent_config::BuildConfig,
-    ) -> Result<ValidatedBuilderSelection, BuilderCatalogApplicationError> {
-        let output = builder
-            .status
-            .eq(&ProjectBuilderStatus::Ready)
-            .then(|| builder.oci_image_reference.clone())
-            .flatten()
-            .ok_or(BuilderSelectionError::NotPrepared)?;
-        let base = self
-            .catalog
-            .find_builder_image_by_reference(&builder.approved_base_image)
-            .await
-            .map_err(BuilderCatalogApplicationError::Catalog)?;
-        validate_selection(base, Some(builder.key.to_string()), output, build)
-    }
-}
-
-fn validate_selection(
-    image: BuilderImage,
-    selected_key: Option<String>,
-    selected_reference: BuilderImageReference,
-    build: &agent_config::BuildConfig,
-) -> Result<ValidatedBuilderSelection, BuilderCatalogApplicationError> {
-    let network = network_policy(build.network.profile);
-    let image = validate_entry(image).map_err(BuilderCatalogApplicationError::Catalog)?;
-    let mut selection = image
-        .validate_selection(network, build.resources.vcpus, build.resources.memory_mib)
-        .map_err(BuilderCatalogApplicationError::Selection)?;
-    selection.image_reference = selected_reference;
-    if let Some(key) = selected_key {
-        selection.key = builder_catalog_domain::BuilderKey::parse(key).map_err(|error| {
-            BuilderCatalogApplicationError::Catalog(BuilderCatalogError::InvalidData(error))
-        })?;
-    }
-    Ok(selection)
-}
-
-fn validate_entry(entry: BuilderImage) -> Result<BuilderImage, BuilderCatalogError> {
-    entry
+fn validate_image(image: OciImage) -> Result<OciImage, ImageCatalogError> {
+    image
         .validate()
-        .map(|()| entry)
-        .map_err(BuilderCatalogError::InvalidData)
+        .map(|()| image)
+        .map_err(ImageCatalogError::InvalidData)
 }
 
-const fn network_policy(profile: NetworkProfile) -> BuildNetworkPolicy {
-    match profile {
-        NetworkProfile::Disabled => BuildNetworkPolicy::Disabled,
-        NetworkProfile::BrokerOnly => BuildNetworkPolicy::BrokerOnly,
-        NetworkProfile::Egress => BuildNetworkPolicy::Egress,
-    }
-}
-
-/// Application-level builder catalog failure.
+/// Application-level OCI image failure.
 #[derive(Debug, thiserror::Error)]
-pub enum BuilderCatalogApplicationError {
-    /// Catalog persistence failed.
+pub enum ImageCatalogApplicationError {
+    /// Image catalog lookup or validation failed.
     #[error(transparent)]
-    Catalog(#[from] BuilderCatalogError),
-    /// Source configuration cannot select the image.
+    Catalog(#[from] ImageCatalogError),
+    /// The selected image cannot be used for new work.
     #[error(transparent)]
-    Selection(#[from] BuilderSelectionError),
-    /// Project-owned builder lookup failed.
-    #[error(transparent)]
-    ProjectStore(#[from] ProjectBuilderStoreError),
-}
-
-/// Durable project-owned builder persistence failure.
-#[derive(Debug, thiserror::Error)]
-#[non_exhaustive]
-pub enum ProjectBuilderStoreError {
-    /// The requested project builder does not exist.
-    #[error("project builder was not found")]
-    NotFound,
-    /// The requested lifecycle operation lost a concurrent state race.
-    #[error("project builder lifecycle state changed concurrently")]
-    Conflict,
-    /// Persisted metadata violates the project-builder domain contract.
-    #[error("project builder contains invalid metadata: {0}")]
-    InvalidData(#[source] BuilderCatalogValueError),
-    /// Persistence or transport failed.
-    #[error("project builder storage failed: {0}")]
-    Storage(#[source] Box<dyn std::error::Error + Send + Sync>),
-}
-
-/// Persistence boundary for project-owned OCI builder definitions.
-#[async_trait]
-pub trait ProjectBuilderStore: Send + Sync + 'static {
-    /// Persists a new draft definition.
-    async fn create_project_builder(
-        &self,
-        builder: NewProjectBuilder,
-    ) -> Result<ProjectBuilderDefinition, ProjectBuilderStoreError>;
-
-    /// Lists definitions visible within one project.
-    async fn list_project_builders(
-        &self,
-        project_id: Uuid,
-    ) -> Result<Vec<ProjectBuilderDefinition>, ProjectBuilderStoreError>;
-
-    /// Loads one definition within its owning project.
-    async fn get_project_builder(
-        &self,
-        project_id: Uuid,
-        id: ProjectBuilderId,
-    ) -> Result<ProjectBuilderDefinition, ProjectBuilderStoreError>;
-
-    /// Loads one repository-local builder revision by its source commit and
-    /// stable repository key.
-    async fn get_project_builder_by_repository_key(
-        &self,
-        project_id: Uuid,
-        source_repository_id: Uuid,
-        key: &str,
-        source_revision: &str,
-    ) -> Result<ProjectBuilderDefinition, ProjectBuilderStoreError>;
-
-    /// Atomically moves a draft or failed definition into preparation.
-    async fn begin_project_builder_preparation(
-        &self,
-        project_id: Uuid,
-        id: ProjectBuilderId,
-    ) -> Result<ProjectBuilderDefinition, ProjectBuilderStoreError>;
-
-    /// Atomically records an immutable OCI output and its provenance.
-    async fn complete_project_builder(
-        &self,
-        project_id: Uuid,
-        id: ProjectBuilderId,
-        output_reference: BuilderImageReference,
-        output_digest: OciDigest,
-        provenance: ProjectBuilderProvenance,
-    ) -> Result<ProjectBuilderDefinition, ProjectBuilderStoreError>;
-
-    /// Atomically records a failed preparation.
-    async fn fail_project_builder(
-        &self,
-        project_id: Uuid,
-        id: ProjectBuilderId,
-        reason: String,
-    ) -> Result<ProjectBuilderDefinition, ProjectBuilderStoreError>;
-
-    /// Retires a definition without deleting its history.
-    async fn retire_project_builder(
-        &self,
-        project_id: Uuid,
-        id: ProjectBuilderId,
-    ) -> Result<ProjectBuilderDefinition, ProjectBuilderStoreError>;
-}
-
-/// User-supplied project builder source and policy metadata.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CreateProjectBuilderRequest {
-    /// Owning project identity.
-    pub project_id: Uuid,
-    /// Repository containing the Dockerfile and context.
-    pub source_repository_id: Uuid,
-    /// Project-local builder key.
-    pub key: String,
-    /// Human-readable builder name.
-    pub display_name: String,
-    /// Immutable source commit digest.
-    pub source_revision: String,
-    /// Repository-relative Dockerfile path.
-    pub dockerfile_path: String,
-    /// Repository-relative build context path.
-    pub context_path: String,
-    /// Immutable digest of the submitted context.
-    pub context_digest: String,
-    /// Exact digest-pinned approved platform base image.
-    pub approved_base_image: String,
-}
-
-/// Application service for validating and advancing project-owned builders.
-pub struct ProjectBuilderApplication<C> {
-    catalog: Arc<C>,
-}
-
-impl<C> ProjectBuilderApplication<C>
-where
-    C: BuilderCatalog + ProjectBuilderStore,
-{
-    /// Creates the application service over one catalog/store adapter.
-    #[must_use]
-    pub const fn new(catalog: Arc<C>) -> Self {
-        Self { catalog }
-    }
-
-    /// Validates and persists a project-owned builder draft.
-    ///
-    /// The base image must be an available, ready platform catalog entry. No
-    /// project-provided image reference can satisfy this policy.
-    ///
-    /// # Errors
-    ///
-    /// Returns a validation, approval, or persistence failure.
-    pub async fn create_project_builder(
-        &self,
-        request: CreateProjectBuilderRequest,
-    ) -> Result<ProjectBuilderDefinition, ProjectBuilderApplicationError> {
-        let builder = NewProjectBuilder {
-            id: ProjectBuilderId::new(),
-            project_id: request.project_id,
-            key: builder_catalog_domain::BuilderKey::parse(request.key)
-                .map_err(ProjectBuilderApplicationError::Invalid)?,
-            display_name: request.display_name,
-            source_repository_id: request.source_repository_id,
-            source_revision: request.source_revision,
-            dockerfile_path: builder_catalog_domain::BuilderSourcePath::parse(
-                request.dockerfile_path,
-            )
-            .map_err(ProjectBuilderApplicationError::Invalid)?,
-            context_path: builder_catalog_domain::BuilderSourcePath::parse(request.context_path)
-                .map_err(ProjectBuilderApplicationError::Invalid)?,
-            context_digest: OciDigest::parse(request.context_digest)
-                .map_err(ProjectBuilderApplicationError::Invalid)?,
-            approved_base_image: BuilderImageReference::parse(request.approved_base_image)
-                .map_err(ProjectBuilderApplicationError::Invalid)?,
-        };
-        builder
-            .validate()
-            .map_err(ProjectBuilderApplicationError::Invalid)?;
-        self.ensure_approved_base(&builder.approved_base_image)
-            .await?;
-        self.catalog
-            .create_project_builder(builder)
-            .await
-            .map_err(ProjectBuilderApplicationError::Store)
-    }
-
-    /// Lists validated project-owned builders for one project.
-    ///
-    /// # Errors
-    ///
-    /// Returns a persistence or invalid-data failure.
-    pub async fn list_project_builders(
-        &self,
-        project_id: Uuid,
-    ) -> Result<Vec<ProjectBuilderDefinition>, ProjectBuilderApplicationError> {
-        let builders = self
-            .catalog
-            .list_project_builders(project_id)
-            .await
-            .map_err(ProjectBuilderApplicationError::Store)?;
-        builders
-            .into_iter()
-            .map(|builder| {
-                builder
-                    .validate()
-                    .map(|()| builder)
-                    .map_err(ProjectBuilderApplicationError::Invalid)
-            })
-            .collect()
-    }
-
-    /// Loads one validated project-owned builder.
-    ///
-    /// # Errors
-    ///
-    /// Returns a persistence or invalid-data failure.
-    pub async fn get_project_builder(
-        &self,
-        project_id: Uuid,
-        id: ProjectBuilderId,
-    ) -> Result<ProjectBuilderDefinition, ProjectBuilderApplicationError> {
-        let builder = self
-            .catalog
-            .get_project_builder(project_id, id)
-            .await
-            .map_err(ProjectBuilderApplicationError::Store)?;
-        builder
-            .validate()
-            .map(|()| builder)
-            .map_err(ProjectBuilderApplicationError::Invalid)
-    }
-
-    /// Begins a preparation attempt after validating the current state.
-    ///
-    /// # Errors
-    ///
-    /// Returns a lifecycle or persistence failure.
-    pub async fn begin_project_builder_preparation(
-        &self,
-        project_id: Uuid,
-        id: ProjectBuilderId,
-    ) -> Result<ProjectBuilderDefinition, ProjectBuilderApplicationError> {
-        let current = self.get_project_builder(project_id, id).await?;
-        self.ensure_approved_base(&current.approved_base_image)
-            .await?;
-        current
-            .begin_preparation()
-            .map_err(ProjectBuilderApplicationError::Lifecycle)?;
-        self.catalog
-            .begin_project_builder_preparation(project_id, id)
-            .await
-            .map_err(ProjectBuilderApplicationError::Store)
-    }
-
-    /// Completes preparation with a validated immutable OCI output.
-    ///
-    /// # Errors
-    ///
-    /// Returns a lifecycle, validation, or persistence failure.
-    pub async fn complete_project_builder(
-        &self,
-        project_id: Uuid,
-        id: ProjectBuilderId,
-        output_reference: String,
-        output_digest: String,
-        provenance: ProjectBuilderProvenance,
-    ) -> Result<ProjectBuilderDefinition, ProjectBuilderApplicationError> {
-        let current = self.get_project_builder(project_id, id).await?;
-        let output_reference = BuilderImageReference::parse(output_reference)
-            .map_err(ProjectBuilderApplicationError::Invalid)?;
-        let output_digest =
-            OciDigest::parse(output_digest).map_err(ProjectBuilderApplicationError::Invalid)?;
-        current
-            .clone()
-            .complete(
-                output_reference.clone(),
-                output_digest.clone(),
-                provenance.clone(),
-            )
-            .map_err(ProjectBuilderApplicationError::Lifecycle)?;
-        self.catalog
-            .complete_project_builder(project_id, id, output_reference, output_digest, provenance)
-            .await
-            .map_err(ProjectBuilderApplicationError::Store)
-    }
-
-    /// Records a validated preparation failure.
-    ///
-    /// # Errors
-    ///
-    /// Returns a lifecycle or persistence failure.
-    pub async fn fail_project_builder(
-        &self,
-        project_id: Uuid,
-        id: ProjectBuilderId,
-        reason: String,
-    ) -> Result<ProjectBuilderDefinition, ProjectBuilderApplicationError> {
-        let current = self.get_project_builder(project_id, id).await?;
-        current
-            .clone()
-            .fail(reason.clone())
-            .map_err(ProjectBuilderApplicationError::Lifecycle)?;
-        self.catalog
-            .fail_project_builder(project_id, id, reason)
-            .await
-            .map_err(ProjectBuilderApplicationError::Store)
-    }
-
-    /// Retires a project builder without deleting its record.
-    ///
-    /// # Errors
-    ///
-    /// Returns a lifecycle or persistence failure.
-    pub async fn retire_project_builder(
-        &self,
-        project_id: Uuid,
-        id: ProjectBuilderId,
-    ) -> Result<ProjectBuilderDefinition, ProjectBuilderApplicationError> {
-        let current = self.get_project_builder(project_id, id).await?;
-        current
-            .retire()
-            .map_err(ProjectBuilderApplicationError::Lifecycle)?;
-        self.catalog
-            .retire_project_builder(project_id, id)
-            .await
-            .map_err(ProjectBuilderApplicationError::Store)
-    }
-
-    async fn ensure_approved_base(
-        &self,
-        reference: &BuilderImageReference,
-    ) -> Result<(), ProjectBuilderApplicationError> {
-        let image = self
-            .catalog
-            .find_builder_image_by_reference(reference)
-            .await
-            .map_err(ProjectBuilderApplicationError::Catalog)?;
-        image.validate().map_err(|error| {
-            ProjectBuilderApplicationError::Catalog(BuilderCatalogError::InvalidData(error))
-        })?;
-        if image.preparation != builder_catalog_domain::PreparationState::Ready
-            || image.availability != builder_catalog_domain::AvailabilityState::Available
-        {
-            return Err(ProjectBuilderApplicationError::BaseImageNotApproved);
-        }
-        Ok(())
-    }
-}
-
-impl<C> ProjectBuilderApplication<C>
-where
-    C: BuilderCatalog + ProjectBuilderStore + RegistryPublicationCatalog,
-{
-    /// Lists project builders enriched with their safe project-scoped registry
-    /// control-plane state.
-    ///
-    /// # Errors
-    ///
-    /// Returns a persistence failure or invalid persisted projection.
-    pub async fn list_project_builder_publications(
-        &self,
-        identity: &AuthenticatedIdentity,
-        project_id: Uuid,
-    ) -> Result<Vec<ProjectBuilderPublication>, ProjectBuilderApplicationError> {
-        self.catalog
-            .list_project_builder_publications(identity, project_id)
-            .await
-            .map_err(ProjectBuilderApplicationError::Store)?
-            .into_iter()
-            .map(|publication| {
-                publication
-                    .validate()
-                    .map(|()| publication)
-                    .map_err(ProjectBuilderApplicationError::Invalid)
-            })
-            .collect()
-    }
-
-    /// Loads one project builder enriched with its safe project-scoped registry
-    /// control-plane state.
-    ///
-    /// # Errors
-    ///
-    /// Returns a persistence failure or invalid persisted projection.
-    pub async fn get_project_builder_publication(
-        &self,
-        identity: &AuthenticatedIdentity,
-        project_id: Uuid,
-        id: ProjectBuilderId,
-    ) -> Result<ProjectBuilderPublication, ProjectBuilderApplicationError> {
-        let publication = self
-            .catalog
-            .get_project_builder_publication(identity, project_id, id)
-            .await
-            .map_err(ProjectBuilderApplicationError::Store)?;
-        publication
-            .validate()
-            .map(|()| publication)
-            .map_err(ProjectBuilderApplicationError::Invalid)
-    }
-}
-
-/// Application-level project builder failure.
-#[derive(Debug, thiserror::Error)]
-pub enum ProjectBuilderApplicationError {
-    /// Platform catalog lookup failed.
-    #[error(transparent)]
-    Catalog(#[from] BuilderCatalogError),
-    /// Project builder persistence failed.
-    #[error(transparent)]
-    Store(#[from] ProjectBuilderStoreError),
-    /// User-supplied metadata is invalid.
-    #[error(transparent)]
-    Invalid(#[from] BuilderCatalogValueError),
-    /// The selected base is not a ready, available platform image.
-    #[error("project builder base image is not an approved available platform image")]
-    BaseImageNotApproved,
-    /// The requested lifecycle operation is invalid.
-    #[error(transparent)]
-    Lifecycle(#[from] ProjectBuilderLifecycleError),
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use builder_catalog_domain::{
-        AvailabilityState, BuilderImageId, BuilderImageReference, BuilderKey, BuilderProvenance,
-        BuilderSourcePath, DependencyPolicy, NewProjectBuilder, OciDigest, PreparationState,
-        ProjectBuilderDefinition, ProjectBuilderId, ProjectBuilderProvenance, ProjectBuilderStatus,
-        Toolchain,
-    };
-    use uuid::Uuid;
-
-    struct FixtureCatalog {
-        image: BuilderImage,
-        project_builder: Option<ProjectBuilderDefinition>,
-    }
-
-    #[async_trait]
-    impl BuilderCatalog for FixtureCatalog {
-        async fn list_builder_images(&self) -> Result<Vec<BuilderImage>, BuilderCatalogError> {
-            Ok(vec![self.image.clone()])
-        }
-
-        async fn get_builder_image(
-            &self,
-            id: BuilderImageId,
-        ) -> Result<BuilderImage, BuilderCatalogError> {
-            (id == self.image.id)
-                .then_some(self.image.clone())
-                .ok_or(BuilderCatalogError::NotFound)
-        }
-
-        async fn find_builder_image_by_reference(
-            &self,
-            reference: &BuilderImageReference,
-        ) -> Result<BuilderImage, BuilderCatalogError> {
-            (reference == &self.image.image_reference)
-                .then_some(self.image.clone())
-                .ok_or(BuilderCatalogError::NotFound)
-        }
-    }
-
-    #[async_trait]
-    impl ProjectBuilderStore for FixtureCatalog {
-        async fn create_project_builder(
-            &self,
-            builder: NewProjectBuilder,
-        ) -> Result<ProjectBuilderDefinition, ProjectBuilderStoreError> {
-            let now = time::OffsetDateTime::UNIX_EPOCH;
-            Ok(ProjectBuilderDefinition {
-                id: builder.id,
-                project_id: builder.project_id,
-                key: builder.key,
-                display_name: builder.display_name,
-                source_repository_id: builder.source_repository_id,
-                source_revision: builder.source_revision,
-                dockerfile_path: builder.dockerfile_path,
-                context_path: builder.context_path,
-                context_digest: builder.context_digest,
-                approved_base_image: builder.approved_base_image,
-                status: ProjectBuilderStatus::Draft,
-                oci_image_reference: None,
-                oci_image_digest: None,
-                provenance: None,
-                failure_reason: None,
-                created_at: now,
-                updated_at: now,
-            })
-        }
-
-        async fn list_project_builders(
-            &self,
-            _project_id: Uuid,
-        ) -> Result<Vec<ProjectBuilderDefinition>, ProjectBuilderStoreError> {
-            Err(unused_store())
-        }
-
-        async fn get_project_builder(
-            &self,
-            project_id: Uuid,
-            id: ProjectBuilderId,
-        ) -> Result<ProjectBuilderDefinition, ProjectBuilderStoreError> {
-            self.project_builder
-                .as_ref()
-                .filter(|builder| builder.project_id == project_id && builder.id == id)
-                .cloned()
-                .ok_or(ProjectBuilderStoreError::NotFound)
-        }
-
-        async fn get_project_builder_by_repository_key(
-            &self,
-            project_id: Uuid,
-            source_repository_id: Uuid,
-            key: &str,
-            source_revision: &str,
-        ) -> Result<ProjectBuilderDefinition, ProjectBuilderStoreError> {
-            self.project_builder
-                .as_ref()
-                .filter(|builder| {
-                    builder.project_id == project_id
-                        && builder.source_repository_id == source_repository_id
-                        && builder.key.as_str() == key
-                        && builder.source_revision == source_revision
-                })
-                .cloned()
-                .ok_or(ProjectBuilderStoreError::NotFound)
-        }
-
-        async fn begin_project_builder_preparation(
-            &self,
-            _project_id: Uuid,
-            _id: ProjectBuilderId,
-        ) -> Result<ProjectBuilderDefinition, ProjectBuilderStoreError> {
-            Err(unused_store())
-        }
-
-        async fn complete_project_builder(
-            &self,
-            _project_id: Uuid,
-            _id: ProjectBuilderId,
-            _output_reference: BuilderImageReference,
-            _output_digest: OciDigest,
-            _provenance: ProjectBuilderProvenance,
-        ) -> Result<ProjectBuilderDefinition, ProjectBuilderStoreError> {
-            Err(unused_store())
-        }
-
-        async fn fail_project_builder(
-            &self,
-            _project_id: Uuid,
-            _id: ProjectBuilderId,
-            _reason: String,
-        ) -> Result<ProjectBuilderDefinition, ProjectBuilderStoreError> {
-            Err(unused_store())
-        }
-
-        async fn retire_project_builder(
-            &self,
-            _project_id: Uuid,
-            _id: ProjectBuilderId,
-        ) -> Result<ProjectBuilderDefinition, ProjectBuilderStoreError> {
-            Err(unused_store())
-        }
-    }
-
-    fn unused_store() -> ProjectBuilderStoreError {
-        ProjectBuilderStoreError::Storage(Box::new(std::io::Error::other("unused fixture path")))
-    }
-
-    fn image(network_ceiling: BuildNetworkPolicy) -> BuilderImage {
-        BuilderImage {
-            id: BuilderImageId::new(),
-            key: BuilderKey::parse("rust").expect("key"),
-            display_name: String::from("Rust builder"),
-            image_reference: BuilderImageReference::parse(
-                "registry.example/rust@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            )
-            .expect("reference"),
-            toolchains: vec![Toolchain {
-                name: String::from("rust"),
-                version: String::from("1.88.0"),
-            }],
-            architectures: vec![String::from("x86_64")],
-            preparation: PreparationState::Ready,
-            availability: AvailabilityState::Available,
-            network_ceiling,
-            max_vcpus: 2,
-            max_memory_mib: 512,
-            dependency_policy: DependencyPolicy::VendoredOffline,
-            provenance: BuilderProvenance {
-                source: String::from("attestation://rust"),
-                signature: None,
-                sbom: None,
-            },
-            platform_policy_version: String::from("build/v1"),
-        }
-    }
-
-    fn config(reference: &str, network: &str) -> AgentConfig {
-        let source = format!(
-            r#"
-version = 2
-[agent]
-name = "builder"
-key = "builder"
-[build]
-command = "/usr/bin/build"
-working_directory = "/workspace/source"
-root_image = "{reference}"
-[build.resources]
-vcpus = 1
-memory_mib = 128
-[build.network]
-profile = "{network}"
-[[build.artifacts]]
-path = "bin/agent"
-kind = "executable"
-[guest]
-command = "bin/agent"
-working_directory = "bin"
-[resources]
-vcpus = 1
-memory_mib = 128
-[root_image]
-reference = "registry.example/agent@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-[workspace]
-mount = true
-path = "/workspace/repo"
-[state_volume]
-enabled = false
-[network]
-profile = "disabled"
-[triggers]
-push = false
-"#
-        );
-        agent_config::parse(source.as_bytes())
-            .config
-            .expect("fixture config is valid")
-    }
-
-    fn ready_repository_builder(
-        image: &BuilderImage,
-        project_id: Uuid,
-        repository_id: Uuid,
-        source_revision: &str,
-    ) -> ProjectBuilderDefinition {
-        let digest = "b".repeat(64);
-        let context_digest = OciDigest::parse(format!("sha256:{digest}")).expect("digest");
-        ProjectBuilderDefinition {
-            id: ProjectBuilderId::new(),
-            project_id,
-            key: BuilderKey::parse("typescript-tools").expect("key"),
-            display_name: String::from("TypeScript tools"),
-            source_repository_id: repository_id,
-            source_revision: String::from(source_revision),
-            dockerfile_path: BuilderSourcePath::parse("containers/Dockerfile").expect("path"),
-            context_path: BuilderSourcePath::parse(".").expect("context"),
-            context_digest: context_digest.clone(),
-            approved_base_image: image.image_reference.clone(),
-            status: ProjectBuilderStatus::Ready,
-            oci_image_reference: Some(
-                BuilderImageReference::parse(format!("registry.example/project@sha256:{digest}"))
-                    .expect("output reference"),
-            ),
-            oci_image_digest: Some(context_digest.clone()),
-            provenance: Some(ProjectBuilderProvenance {
-                source_revision: String::from(source_revision),
-                context_digest,
-                attestation_reference: String::from("attestation://project"),
-                sbom_reference: None,
-            }),
-            failure_reason: None,
-            created_at: time::OffsetDateTime::UNIX_EPOCH,
-            updated_at: time::OffsetDateTime::UNIX_EPOCH,
-        }
-    }
-
-    #[tokio::test]
-    async fn validates_exact_digest_selection_and_policy() {
-        let catalog = Arc::new(FixtureCatalog {
-            image: image(BuildNetworkPolicy::Disabled),
-            project_builder: None,
-        });
-        let service = BuilderCatalogApplication::new(catalog);
-        let selected = service
-            .validate_agent_config(&config(
-                "registry.example/rust@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                "disabled",
-            ))
-            .await
-            .expect("selection is valid");
-        assert_eq!(selected.key.as_str(), "rust");
-        assert_eq!(selected.network, BuildNetworkPolicy::Disabled);
-    }
-
-    #[tokio::test]
-    async fn rejects_unknown_reference_and_broader_network() {
-        let catalog = Arc::new(FixtureCatalog {
-            image: image(BuildNetworkPolicy::Disabled),
-            project_builder: None,
-        });
-        let service = BuilderCatalogApplication::new(catalog);
-        assert!(matches!(
-            service
-                .validate_agent_config(&config(
-                    "registry.example/other@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-                    "disabled",
-                ))
-                .await,
-            Err(BuilderCatalogApplicationError::Catalog(
-                BuilderCatalogError::NotFound
-            ))
-        ));
-        assert!(matches!(
-            service
-                .validate_agent_config(&config(
-                    "registry.example/rust@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                    "egress",
-                ))
-                .await,
-            Err(BuilderCatalogApplicationError::Selection(
-                BuilderSelectionError::NetworkCeilingExceeded
-            ))
-        ));
-    }
-
-    #[tokio::test]
-    async fn resolves_ready_repository_builder_only_for_its_exact_commit() {
-        let image = image(BuildNetworkPolicy::Disabled);
-        let project_id = Uuid::new_v4();
-        let repository_id = Uuid::new_v4();
-        let revision = "a".repeat(40);
-        let catalog = Arc::new(FixtureCatalog {
-            project_builder: Some(ready_repository_builder(
-                &image,
-                project_id,
-                repository_id,
-                &revision,
-            )),
-            image,
-        });
-        let service = BuilderCatalogApplication::new(catalog);
-        let mut config = config(
-            "registry.example/rust@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            "disabled",
-        );
-        let build = config.build.as_mut().expect("build");
-        build.root_image = None;
-        build.builder = Some(agent_config::BuilderSelection::Repository {
-            key: String::from("typescript-tools"),
-        });
-        let selected = service
-            .validate_agent_config_for_repository(&config, project_id, repository_id, &revision)
-            .await
-            .expect("ready repository builder");
-        assert_eq!(selected.key.as_str(), "typescript-tools");
-        assert_eq!(
-            selected.image_reference.as_str(),
-            "registry.example/project@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-        );
-        assert!(matches!(
-            service
-                .validate_agent_config_for_repository(
-                    &config,
-                    project_id,
-                    repository_id,
-                    "c0ffee0000000000000000000000000000000000",
-                )
-                .await,
-            Err(BuilderCatalogApplicationError::ProjectStore(
-                ProjectBuilderStoreError::NotFound
-            ))
-        ));
-    }
-
-    #[tokio::test]
-    async fn project_builder_requires_an_available_platform_base() {
-        let catalog = Arc::new(FixtureCatalog {
-            image: image(BuildNetworkPolicy::Disabled),
-            project_builder: None,
-        });
-        let service = ProjectBuilderApplication::new(catalog);
-        let request = CreateProjectBuilderRequest {
-            project_id: Uuid::new_v4(),
-            source_repository_id: Uuid::new_v4(),
-            key: String::from("custom-node"),
-            display_name: String::from("Custom Node"),
-            source_revision: String::from("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
-            dockerfile_path: String::from("Dockerfile.builder"),
-            context_path: String::from("."),
-            context_digest: String::from(
-                "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-            ),
-            approved_base_image: String::from(
-                "registry.example/rust@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            ),
-        };
-        let created = service
-            .create_project_builder(request.clone())
-            .await
-            .expect("approved platform base");
-        assert_eq!(created.status, ProjectBuilderStatus::Draft);
-        assert_eq!(created.context_path.as_str(), ".");
-
-        let mut unapproved = request;
-        unapproved.approved_base_image = String::from(
-            "registry.example/custom@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-        );
-        assert!(matches!(
-            service.create_project_builder(unapproved).await,
-            Err(ProjectBuilderApplicationError::Catalog(
-                BuilderCatalogError::NotFound
-            ))
-        ));
-    }
+    Selection(#[from] ImageSelectionError),
 }

@@ -6,8 +6,8 @@
 use authz_domain::{ObjectRef, ObjectType, Permission, Subject};
 use identity_domain::AuthenticatedIdentity;
 use registry_domain::{
-    ImmutableManifestReference, NamespaceClaim, OciDescriptor, OciMediaType, PlatformBuilderKey,
-    PlatformDescriptor, PolicyVersion, PublicationIntent, PublicationIntentId,
+    ImmutableManifestReference, NamespaceClaim, OciDescriptor, OciMediaType, PlatformDescriptor,
+    PlatformImageKey, PolicyVersion, PublicationIntent, PublicationIntentId,
     PublicationLifecycleError, PublicationState, RegistryAuthority, RegistryNamespace,
     RegistryNotificationBacklog, RegistryOperationalMetrics, RegistryOwner,
     RegistryRetentionSnapshot, RegistryValueError, Sha256Digest, SupplyChainEvidence,
@@ -107,11 +107,11 @@ impl PgRegistryStore {
         let mut transaction = self.pool.begin().await.map_err(storage)?;
         let namespace_id = ensure_namespace(&mut transaction, intent.claim()).await?;
         let expected = intent.expected_manifest();
-        let (owner_kind, platform_builder_key, owner_id, project_id) =
+        let (owner_kind, platform_image_key, owner_id, project_id) =
             owner_fields(intent.claim().owner());
         let inserted = sqlx::query_scalar::<_, Uuid>(
             "INSERT INTO registry_publications (
-                id, namespace_id, owner_kind, platform_builder_key, owner_id, project_id,
+                id, namespace_id, owner_kind, platform_image_key, owner_id, project_id,
                 registry_authority, expected_digest,
                 expected_media_type, expected_size, policy_version, signature_required
              ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
@@ -122,7 +122,7 @@ impl PgRegistryStore {
         .bind(intent.id().as_uuid())
         .bind(namespace_id)
         .bind(owner_kind)
-        .bind(platform_builder_key)
+        .bind(platform_image_key)
         .bind(owner_id)
         .bind(project_id)
         .bind(intent.reference().authority().as_str())
@@ -719,7 +719,7 @@ struct PublicationRow {
     id: Uuid,
     repository_path: String,
     owner_kind: String,
-    platform_builder_key: Option<String>,
+    platform_image_key: Option<String>,
     owner_id: Option<Uuid>,
     project_id: Option<Uuid>,
     registry_authority: String,
@@ -794,17 +794,17 @@ async fn ensure_namespace(
     transaction: &mut Transaction<'_, Postgres>,
     claim: &NamespaceClaim,
 ) -> Result<Uuid, RegistryStoreError> {
-    let (owner_kind, platform_builder_key, owner_id, project_id) = owner_fields(claim.owner());
+    let (owner_kind, platform_image_key, owner_id, project_id) = owner_fields(claim.owner());
     let inserted = sqlx::query_scalar::<_, Uuid>(
         "INSERT INTO registry_namespaces (
-            id, repository_path, owner_kind, platform_builder_key, owner_id, project_id
+            id, repository_path, owner_kind, platform_image_key, owner_id, project_id
          ) VALUES ($1, $2, $3, $4, $5, $6)
          ON CONFLICT (repository_path) DO NOTHING RETURNING id",
     )
     .bind(Uuid::new_v4())
     .bind(claim.namespace().as_str())
     .bind(owner_kind)
-    .bind(platform_builder_key)
+    .bind(platform_image_key)
     .bind(owner_id)
     .bind(project_id)
     .fetch_optional(&mut **transaction)
@@ -814,7 +814,7 @@ async fn ensure_namespace(
         id
     } else {
         let stored = sqlx::query_as::<_, NamespaceRow>(
-            "SELECT id, repository_path, owner_kind, platform_builder_key, owner_id, project_id
+            "SELECT id, repository_path, owner_kind, platform_image_key, owner_id, project_id
              FROM registry_namespaces WHERE repository_path = $1 FOR UPDATE",
         )
         .bind(claim.namespace().as_str())
@@ -823,7 +823,7 @@ async fn ensure_namespace(
         .map_err(storage)?;
         if stored.repository_path != claim.namespace().as_str()
             || stored.owner_kind != owner_kind
-            || stored.platform_builder_key.as_deref() != platform_builder_key
+            || stored.platform_image_key.as_deref() != platform_image_key
             || stored.owner_id != owner_id
             || stored.project_id != project_id
         {
@@ -839,7 +839,7 @@ struct NamespaceRow {
     id: Uuid,
     repository_path: String,
     owner_kind: String,
-    platform_builder_key: Option<String>,
+    platform_image_key: Option<String>,
     owner_id: Option<Uuid>,
     project_id: Option<Uuid>,
 }
@@ -852,7 +852,7 @@ async fn load_intent(
     let row = if for_update {
         sqlx::query_as::<_, PublicationRow>(
             "SELECT publication.id, namespace.repository_path, namespace.owner_kind,
-            namespace.platform_builder_key, namespace.owner_id, namespace.project_id,
+            namespace.platform_image_key, namespace.owner_id, namespace.project_id,
             publication.registry_authority, publication.expected_digest,
             publication.expected_media_type, publication.expected_size,
             publication.policy_version, publication.signature_required, publication.state
@@ -868,7 +868,7 @@ async fn load_intent(
     } else {
         sqlx::query_as::<_, PublicationRow>(
             "SELECT publication.id, namespace.repository_path, namespace.owner_kind,
-            namespace.platform_builder_key, namespace.owner_id, namespace.project_id,
+            namespace.platform_image_key, namespace.owner_id, namespace.project_id,
             publication.registry_authority, publication.expected_digest,
             publication.expected_media_type, publication.expected_size,
             publication.policy_version, publication.signature_required, publication.state
@@ -908,18 +908,18 @@ fn publication_from_rows(
     evidence: Vec<EvidenceRow>,
 ) -> Result<PublicationIntent, RegistryStoreError> {
     let owner = match row.owner_kind.as_str() {
-        "platform_builder" => RegistryOwner::PlatformBuilder {
-            builder_key: PlatformBuilderKey::parse(
-                row.platform_builder_key
+        "platform_image" => RegistryOwner::PlatformImage {
+            image_key: PlatformImageKey::parse(
+                row.platform_image_key
                     .ok_or(RegistryStoreError::InvalidStoredData)?,
             )?,
         },
-        "repository_builder" => RegistryOwner::RepositoryBuilder {
+        "repository_oci_image" => RegistryOwner::RepositoryOciImage {
             project_id: forge_domain::ProjectId::from_uuid(
                 row.project_id
                     .ok_or(RegistryStoreError::InvalidStoredData)?,
             ),
-            builder_id: builder_catalog_domain::ProjectBuilderId::from_uuid(
+            image_id: builder_catalog_domain::OciImageId::from_uuid(
                 row.owner_id.ok_or(RegistryStoreError::InvalidStoredData)?,
             ),
         },
@@ -1087,16 +1087,16 @@ async fn insert_verification(
 
 fn owner_fields(owner: &RegistryOwner) -> (&'static str, Option<&str>, Option<Uuid>, Option<Uuid>) {
     match owner {
-        RegistryOwner::PlatformBuilder { builder_key } => {
-            ("platform_builder", Some(builder_key.as_str()), None, None)
+        RegistryOwner::PlatformImage { image_key } => {
+            ("platform_image", Some(image_key.as_str()), None, None)
         }
-        RegistryOwner::RepositoryBuilder {
+        RegistryOwner::RepositoryOciImage {
             project_id,
-            builder_id,
+            image_id,
         } => (
-            "repository_builder",
+            "repository_oci_image",
             None,
-            Some(builder_id.as_uuid()),
+            Some(image_id.as_uuid()),
             Some(project_id.as_uuid()),
         ),
         RegistryOwner::ReleaseAgent {

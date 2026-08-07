@@ -32,6 +32,7 @@ defmodule HephaestusWebWeb.ProjectAgentsState do
 
   def statuses, do: @statuses
   def stream_mode, do: @stream_mode
+
   def reduce(state, {:load, generation}),
     do: {%{state | status: :loading, error: nil, stream_generation: generation}, [:load]}
 
@@ -110,8 +111,10 @@ defmodule HephaestusWebWeb.ProjectAgentsState do
   end
 
   defp presentation_status(%{status: status}) when status in [:ready, :submitting], do: :ready
-  defp presentation_status(%{status: status}) when status in [:initial, :loading, :stale, :reconnecting],
-    do: :loading
+
+  defp presentation_status(%{status: status})
+       when status in [:initial, :loading, :stale, :reconnecting],
+       do: :loading
 
   defp presentation_status(_state), do: :error
 
@@ -174,5 +177,4 @@ defmodule HephaestusWebWeb.ProjectAgentsState do
     do: "#{action}: #{HephaestusWeb.RPC.Error.present(error)}"
 
   defp command_error(action, _reason), do: "#{action} could not be completed."
-
 end

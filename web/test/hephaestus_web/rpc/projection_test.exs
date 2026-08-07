@@ -14,9 +14,7 @@ defmodule HephaestusWeb.RPC.ProjectionTest do
   alias Hephaestus.Secret.V1.SecretSummary
   alias Hephaestus.Run.V1.{ResultProposal, Run, RunMetrics, RunResult}
 
-  alias Hephaestus.Builder.V1.{
-    ProjectBuilder,
-    ProjectBuilderStatus,
+  alias Hephaestus.Image.V1.{
     RegistryAvailabilityState,
     RegistryEvidence,
     RegistryEvidenceState,
@@ -101,12 +99,12 @@ defmodule HephaestusWeb.RPC.ProjectionTest do
       state: RegistryPublicationState.REGISTRY_PUBLICATION_STATE_APPROVED,
       availability: RegistryAvailabilityState.REGISTRY_AVAILABILITY_STATE_AVAILABLE,
       immutable_reference:
-        "registry.forge.example/projects/project/repository-builders/builder@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "registry.forge.example/projects/project/repository-images/image@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       architectures: ["amd64"],
       sbom: %RegistryEvidence{
         state: RegistryEvidenceState.REGISTRY_EVIDENCE_STATE_VERIFIED,
         immutable_reference:
-          "registry.forge.example/projects/project/repository-builders/builder@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          "registry.forge.example/projects/project/repository-images/image@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
       }
     }
 
@@ -119,12 +117,5 @@ defmodule HephaestusWeb.RPC.ProjectionTest do
                "immutable_reference" => "registry.forge.example/" <> _
              }
            } = Projection.to_value(publication)
-  end
-
-  test "projects repository-builder lifecycle enums into display values" do
-    assert %{"status" => "ready"} =
-             Projection.to_value(%ProjectBuilder{
-               status: ProjectBuilderStatus.PROJECT_BUILDER_STATUS_READY
-             })
   end
 end

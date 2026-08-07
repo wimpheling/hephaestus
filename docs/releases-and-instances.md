@@ -18,11 +18,13 @@ different family even if it publishes the same key.
 
 ## Source configuration and builds
 
-Version 2 `agent.toml` owns the build command, pinned build root image,
-resources, network profile, and declared outputs. It also owns the released
-runtime executable, arguments, working directory, root image, mount contract,
-state requirement, resource bounds, network ceiling, parameter schema, secret
-slot declarations, and optional update hook.
+Version 2 `agent.toml` owns the build command, selected immutable OCI image,
+resources, network profile, and declared outputs. It also owns the guest
+executable, arguments, working directory, selected immutable OCI image, mount
+contract, state requirement, resource bounds, network ceiling, parameter
+schema, secret slot declarations, and optional update hook. Image selection is
+independent of execution policy: the same image may be selected in both
+contexts without inheriting network, secret, mount, or resource permissions.
 
 An accepted matching push writes an idempotent `build_request` and
 `hephaestus.build.requested.v1` outbox event for an exact repository, commit,
@@ -222,11 +224,11 @@ recover-update <actor> <update> <retry|reject|resume> [request]
 abandon-build <actor> <build> [request]
 ```
 
-Platform builder catalog records are provisioned separately by the same
+Platform OCI image catalog records are provisioned separately by the same
 operator binary. Use
-`provision-builder-catalog <manifest.json> [--dry-run]` with an explicitly
+`provision-image-catalog <manifest.json> [--dry-run]` with an explicitly
 reviewed manifest containing real digest-pinned OCI references; application
-startup and schema migrations do not seed default builder rows. See
+startup and schema migrations do not seed default image rows. See
 `docs/builder-catalog-provisioning.md` for the manifest contract.
 
 Every command uses `HEPHAESTUS_DATABASE_URL`. Inspections reauthorize and read

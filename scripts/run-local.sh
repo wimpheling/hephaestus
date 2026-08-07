@@ -8,8 +8,8 @@ set -Eeuo pipefail
 readonly POSTGRES_IMAGE="${HEPHAESTUS_POSTGRES_IMAGE:-docker.io/library/postgres:17-alpine}"
 readonly NATS_IMAGE="${HEPHAESTUS_NATS_IMAGE:-docker.io/library/nats:2.11-alpine}"
 readonly ELIXIR_IMAGE="${HEPHAESTUS_ELIXIR_IMAGE:-docker.io/hexpm/elixir:1.18.4-erlang-27.3.4-debian-bookworm-20250428-slim}"
-readonly UBUNTU_IMAGE="${HEPHAESTUS_LIBKRUN_UBUNTU_IMAGE:-docker.io/library/ubuntu@sha256:52df9b1ee71626e0088f7d400d5c6b5f7bb916f8f0c82b474289a4ece6cf3faf}"
-readonly ROOT_IMAGE_REFERENCE="ubuntu@sha256:52df9b1ee71626e0088f7d400d5c6b5f7bb916f8f0c82b474289a4ece6cf3faf"
+readonly DEFAULT_LOCAL_OCI_IMAGE="${HEPHAESTUS_LIBKRUN_UBUNTU_IMAGE:-docker.io/library/ubuntu@sha256:52df9b1ee71626e0088f7d400d5c6b5f7bb916f8f0c82b474289a4ece6cf3faf}"
+readonly local_oci_images="${HEPHAESTUS_LOCAL_OCI_IMAGES:-${DEFAULT_LOCAL_OCI_IMAGE}}"
 readonly GUEST_TARGET="x86_64-unknown-linux-musl"
 readonly REQUIRED_CONTROLLERS=(cpu io memory pids)
 
@@ -19,8 +19,8 @@ repo_root="$(cd -- "${script_dir}/.." && pwd -P)"
 readonly repo_root
 local_root="${HEPHAESTUS_LOCAL_ROOT:-${repo_root}/.local/hephaestus}"
 readonly local_root
-readonly root_image_path="${local_root}/root-images/ubuntu-52df9b1e"
-readonly root_image_manifest="${local_root}/root-images/manifest.json"
+readonly image_cache="${local_root}/oci-images"
+readonly image_manifest="${image_cache}/manifest.json"
 readonly runtime_root="${HEPHAESTUS_LOCAL_RUNTIME_ROOT:-/tmp/hephaestus-runtime-$(id -u)}"
 readonly secret_runtime_root="${HEPHAESTUS_LOCAL_SECRET_RUNTIME_ROOT:-/dev/shm/hephaestus-secret-runtime-$(id -u)}"
 readonly secret_key_directory="${local_root}/secret-keys"
@@ -32,10 +32,51 @@ if [[ ! "${local_namespace}" =~ ^[a-z0-9-]+$ ]]; then
     printf 'HEPHAESTUS_LOCAL_NAMESPACE must contain lowercase letters, digits, and hyphens\n' >&2
     exit 1
 fi
+
+declare -a oci_image_references=()
+declare -A oci_image_digests=()
+IFS=',' read -r -a configured_oci_images <<<"${local_oci_images}"
+for reference in "${configured_oci_images[@]}"; do
+    reference="${reference//[[:space:]]/}"
+    if [[ ! "${reference}" =~ ^[A-Za-z0-9._/:+-]+@sha256:[0-9a-f]{64}$ ]]; then
+        printf 'HEPHAESTUS_LOCAL_OCI_IMAGES entries must be immutable OCI SHA-256 references\n' >&2
+        exit 1
+    fi
+    digest="${reference##*@sha256:}"
+    if [[ -n "${oci_image_digests[${digest}]:-}" && "${oci_image_digests[${digest}]}" != "${reference}" ]]; then
+        printf 'HEPHAESTUS_LOCAL_OCI_IMAGES cannot map one digest to multiple references\n' >&2
+        exit 1
+    fi
+    if [[ -z "${oci_image_digests[${digest}]:-}" ]]; then
+        oci_image_references+=("${reference}")
+        oci_image_digests[${digest}]="${reference}"
+    fi
+done
+if (( ${#oci_image_references[@]} == 0 )); then
+    printf 'HEPHAESTUS_LOCAL_OCI_IMAGES must contain at least one image\n' >&2
+    exit 1
+fi
+
+image_digest() {
+    local reference="$1"
+    printf '%s\n' "${reference##*@sha256:}"
+}
+
+image_cache_path() {
+    local reference="$1"
+    printf '%s/sha256-%s\n' "${image_cache}" "$(image_digest "${reference}")"
+}
+
+image_container_name() {
+    local reference="$1"
+    local digest
+    digest="$(image_digest "${reference}")"
+    printf '%s-image-%s\n' "${local_namespace}" "${digest:0:12}"
+}
+
 readonly postgres_container="${local_namespace}-postgres"
 readonly nats_container="${local_namespace}-nats"
 readonly web_container="${local_namespace}-web"
-readonly rootfs_container="${local_namespace}-rootfs"
 readonly postgres_volume="${local_namespace}-postgres-data"
 readonly nats_volume="${local_namespace}-nats-data"
 readonly local_postgres_port="${HEPHAESTUS_LOCAL_POSTGRES_PORT:-55432}"
@@ -182,7 +223,7 @@ if [[ "${1:-}" == "stop" ]]; then
     stop_pid_file "${oidc_pid_file}"
     stop_pid_file "${web_log_pid_file}"
     podman rm --force \
-        "${web_container}" "${nats_container}" "${postgres_container}" "${rootfs_container}" \
+        "${web_container}" "${nats_container}" "${postgres_container}" \
         >/dev/null 2>&1 || true
     cleanup_recorded_cgroup
     cleanup_secret_runtime
@@ -208,7 +249,7 @@ cleanup() {
         wait "${web_log_pid}" 2>/dev/null || true
     fi
     podman rm --force \
-        "${web_container}" "${nats_container}" "${postgres_container}" "${rootfs_container}" \
+        "${web_container}" "${nats_container}" "${postgres_container}" \
         >/dev/null 2>&1 || true
     cleanup_cgroup_path "${cgroup_root}"
     cleanup_secret_runtime
@@ -279,12 +320,16 @@ mkdir -p \
     "${local_root}/volumes" \
     "${local_root}/workspaces" \
     "${local_root}/artifacts" \
-    "${local_root}/root-images" \
+    "${image_cache}" \
     "${secret_key_directory}" \
     "${local_root}/logs" \
     "${runtime_root}" \
     "${secret_runtime_root}"
 chmod 0700 "${runtime_root}" "${secret_runtime_root}" "${secret_key_directory}"
+[[ ! -L "${image_cache}" ]] || {
+    printf 'OCI image cache must not be a symbolic link: %s\n' "${image_cache}" >&2
+    exit 1
+}
 find "${secret_runtime_root}" -mindepth 1 -delete
 if [[ ! -e "${secret_key_directory}/${secret_key_reference}" ]]; then
     umask 077
@@ -298,7 +343,7 @@ printf '%s\n' "$$" >"${supervisor_pid_file}"
 # Remove containers left by an interrupted prior local session. Named volumes
 # and host-side forge data are deliberately retained.
 podman rm --force \
-    "${web_container}" "${nats_container}" "${postgres_container}" "${rootfs_container}" \
+    "${web_container}" "${nats_container}" "${postgres_container}" \
     >/dev/null 2>&1 || true
 
 rustup target add "${GUEST_TARGET}"
@@ -311,35 +356,77 @@ cargo build \
     --package vm-libkrun \
     --bin hephaestus-vm-libkrun-worker
 
-if [[ ! -f "${root_image_path}/.hephaestus-image" ]]; then
-    root_image_staging="$(mktemp -d "${local_root}/root-images/.ubuntu.XXXXXX")"
-    podman pull "${UBUNTU_IMAGE}"
-    podman create --name "${rootfs_container}" "${UBUNTU_IMAGE}" /bin/true >/dev/null
-    podman export "${rootfs_container}" | tar -C "${root_image_staging}" -xf -
-    podman rm "${rootfs_container}" >/dev/null
-    if grep -qE '(^|:)10001:' "${root_image_staging}/etc/passwd"; then
-        printf 'the pinned image already assigns guest UID 10001\n' >&2
-        exit 1
+materialize_oci_image() {
+    local reference="$1"
+    local destination
+    local staging
+    local container
+    destination="$(image_cache_path "${reference}")"
+    if [[ -f "${destination}/.hephaestus-image" ]]; then
+        [[ -d "${destination}" && ! -L "${destination}" && ! -L "${destination}/.hephaestus-image" ]] || {
+            printf 'OCI image cache entry is unsafe: %s\n' "${destination}" >&2
+            return 1
+        }
+        [[ "$(<"${destination}/.hephaestus-image")" == "${reference}" ]] || {
+            printf 'OCI image cache entry has an unexpected immutable reference: %s\n' "${destination}" >&2
+            return 1
+        }
+        return
     fi
-    if grep -qE '(^|:)10001:' "${root_image_staging}/etc/group"; then
-        printf 'the pinned image already assigns guest GID 10001\n' >&2
-        exit 1
+    [[ ! -e "${destination}" ]] || {
+        printf 'OCI image cache destination already exists without trusted metadata: %s\n' "${destination}" >&2
+        return 1
+    }
+    staging="$(mktemp -d "${image_cache}/.image.XXXXXX")"
+    container="$(image_container_name "${reference}")"
+    podman pull "${reference}"
+    podman rm --force "${container}" >/dev/null 2>&1 || true
+    if ! podman create --name "${container}" "${reference}" /bin/true >/dev/null \
+        || ! podman export "${container}" | tar -C "${staging}" -xf -; then
+        podman rm --force "${container}" >/dev/null 2>&1 || true
+        rm -rf -- "${staging}"
+        return 1
+    fi
+    podman rm "${container}" >/dev/null
+    if grep -qE '(^|:)10001:' "${staging}/etc/passwd"; then
+        printf 'the OCI image already assigns guest UID 10001: %s\n' "${reference}" >&2
+        rm -rf -- "${staging}"
+        return 1
+    fi
+    if grep -qE '(^|:)10001:' "${staging}/etc/group"; then
+        printf 'the OCI image already assigns guest GID 10001: %s\n' "${reference}" >&2
+        rm -rf -- "${staging}"
+        return 1
     fi
     printf 'heph-agent:x:10001:10001:Hephaestus agent:/nonexistent:/sbin/nologin\n' \
-        >>"${root_image_staging}/etc/passwd"
-    printf 'heph-agent:x:10001:\n' >>"${root_image_staging}/etc/group"
-    printf '%s\n' "${UBUNTU_IMAGE}" >"${root_image_staging}/.hephaestus-image"
-    mv -- "${root_image_staging}" "${root_image_path}"
-fi
-install -D -m 0755 \
-    "${repo_root}/target/${GUEST_TARGET}/release/heph-init" \
-    "${root_image_path}/usr/libexec/hephaestus/heph-init"
+        >>"${staging}/etc/passwd"
+    printf 'heph-agent:x:10001:\n' >>"${staging}/etc/group"
+    printf '%s\n' "${reference}" >"${staging}/.hephaestus-image"
+    mv -- "${staging}" "${destination}"
+}
 
-escaped_root_image_path="${root_image_path//\\/\\\\}"
-escaped_root_image_path="${escaped_root_image_path//\"/\\\"}"
-printf '{"version":1,"roots":{"%s":{"kind":"directory","path":"%s"}}}\n' \
-    "${ROOT_IMAGE_REFERENCE}" "${escaped_root_image_path}" \
-    >"${root_image_manifest}"
+for reference in "${oci_image_references[@]}"; do
+    materialize_oci_image "${reference}"
+    install -D -m 0755 \
+        "${repo_root}/target/${GUEST_TARGET}/release/heph-init" \
+        "$(image_cache_path "${reference}")/usr/libexec/hephaestus/heph-init"
+done
+
+manifest_temporary="${image_manifest}.$$"
+{
+    printf '{"version":1,"roots":{'
+    separator=''
+    for reference in "${oci_image_references[@]}"; do
+        image_path="$(image_cache_path "${reference}")"
+        escaped_image_path="${image_path//\\/\\\\}"
+        escaped_image_path="${escaped_image_path//\"/\\\"}"
+        printf '%s"%s":{"kind":"directory","path":"%s"}' \
+            "${separator}" "${reference}" "${escaped_image_path}"
+        separator=','
+    done
+    printf '}}\n'
+} >"${manifest_temporary}"
+mv -- "${manifest_temporary}" "${image_manifest}"
 
 cgroup_parent="$(discover_cgroup_parent)"
 readonly cgroup_parent
@@ -417,7 +504,7 @@ export HEPHAESTUS_REGISTRY_TOKEN_KEY_ID="local-v1"
 export HEPHAESTUS_REGISTRY_TOKEN_LIFETIME_SECONDS="300"
 export HEPHAESTUS_REGISTRY_NOTIFICATION_CALLBACK_TOKEN_FILE="${registry_notification_callback_file}"
 unset HEPHAESTUS_ROOT_IMAGE_PATH HEPHAESTUS_ROOT_IMAGE_REFERENCE
-export HEPHAESTUS_ROOT_IMAGE_MANIFEST="${root_image_manifest}"
+export HEPHAESTUS_ROOT_IMAGE_MANIFEST="${image_manifest}"
 export HEPHAESTUS_VM_BACKEND="libkrun"
 export HEPHAESTUS_LIBKRUN_WORKER="${repo_root}/target/debug/hephaestus-vm-libkrun-worker"
 export HEPHAESTUS_CGROUP_ROOT="${cgroup_root}"
@@ -482,8 +569,8 @@ printf '\nHephaestus is ready for manual smoke testing.\n\n'
 printf '  Web UI:        http://127.0.0.1:4000\n'
 printf '  Git endpoint:  http://127.0.0.1:8080/%s\n' "${repository_id}"
 printf '  Login:         reviewer (Continue as Ada Reviewer)\n'
-printf '  VM backend:    libkrun/KVM with pinned Fedora 44\n'
-printf '  Root image:    %s\n' "${ROOT_IMAGE_REFERENCE}"
+printf '  VM backend:    libkrun/KVM with %s materialized OCI image(s)\n' "${#oci_image_references[@]}"
+printf '  OCI images:    %s\n' "${image_manifest}"
 printf '  VM runtime:    %s\n' "${runtime_root}"
 printf '  Data:          %s\n\n' "${local_root}"
 printf 'Create a fresh Git bearer token with:\n\n'

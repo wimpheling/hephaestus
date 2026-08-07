@@ -113,8 +113,8 @@ signature using the mounted verification material. Repository ownership is
 never expressed by mutable human names:
 
 ```text
-platform/builders/<builder-key>
-projects/<project-uuid>/repository-builders/<builder-uuid>
+platform/images/<image-key>
+projects/<project-uuid>/repository-images/<image-uuid>
 projects/<project-uuid>/release-agents/<release-agent-uuid>
 ```
 
@@ -125,12 +125,12 @@ tags are optional discovery aliases and never execution inputs.
 
 ## Trusted platform publication
 
-Platform builders are released through `scripts/publish-platform-builders.sh`,
+Platform OCI images are released through `scripts/publish-platform-images.sh`,
 which invokes the administrator-only `hephaestus-registry-release`
 subcommand for each reviewed OCI layout. The command is part of the forge
 control plane, not a general registry client: it creates or resumes the
 publication intent, issues its own short-lived RS256 `pull,push` token for the
-one exact `platform/builders/<key>` namespace, performs the controlled
+one exact `platform/images/<key>` namespace, performs the controlled
 publication, reads Zot back by digest, records verification, and commits
 approval. There are no pre-issued `.jwt` files or shared registry passwords.
 
@@ -214,7 +214,7 @@ The versioned input contains canonical repository paths and descriptor digests:
   "schema_version": 1,
   "entries": [
     {
-      "repository_path": "platform/builders/rust-ubuntu",
+      "repository_path": "platform/images/rust-ubuntu",
       "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     }
   ]
@@ -222,7 +222,7 @@ The versioned input contains canonical repository paths and descriptor digests:
 ```
 
 The report protects active intents, approved platform catalog images,
-repository builders, release agents, their platform manifests, and required
+project OCI images, release agents, their platform manifests, and required
 referrers. It separately lists durable roots missing from the supplied
 inventory and observed descriptors that have no durable root. Its
 `schema_scope` flags are deliberately explicit: generic build-image and generic

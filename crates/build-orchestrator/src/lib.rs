@@ -6,10 +6,6 @@
 //! instance state volume, secret mount, or host credential.
 
 use agent_config::{BuildArtifactKind, BuildConfig, NetworkProfile};
-use async_trait::async_trait;
-use builder_catalog_application::{
-    BuilderCatalog, BuilderCatalogApplication, BuilderCatalogApplicationError,
-};
 use release_artifact_store::{ImportedArtifact, LocalArtifactStore};
 use release_domain::{
     ArtifactKind, BuildRequestId, ReleaseAgentId, ReleaseArtifactId, ReleaseCommandKey, ReleaseId,
@@ -60,73 +56,11 @@ pub struct BuildExecutorConfig {
     pub repository_root: PathBuf,
     /// Absolute trusted Git executable.
     pub git_binary: PathBuf,
-    /// Platform-approved digest-pinned build root images.
-    pub root_images: BTreeMap<String, RootFilesystem>,
+    /// Materialized immutable OCI images, keyed by exact digest-pinned
+    /// reference. The same cache is shared by build and guest execution.
+    pub image_filesystems: BTreeMap<String, RootFilesystem>,
     /// Maximum wall-clock duration for one build guest.
     pub timeout: Duration,
-}
-
-/// Resolves a parsed build declaration to a trusted host-backed root.
-#[async_trait]
-pub trait BuildRootImageResolver: Send + Sync + 'static {
-    /// Resolves and validates the exact builder image selected by the build.
-    async fn resolve(
-        &self,
-        build: &BuildConfig,
-    ) -> Result<RootFilesystem, BuildRootImageResolverError>;
-}
-
-/// Catalog-backed builder image resolver.
-pub struct CatalogBuilderImageResolver<C> {
-    catalog: BuilderCatalogApplication<C>,
-    root_images: BTreeMap<String, RootFilesystem>,
-}
-
-impl<C> CatalogBuilderImageResolver<C>
-where
-    C: BuilderCatalog,
-{
-    /// Creates a resolver from the catalog and the local materialization of
-    /// approved image references.
-    #[must_use]
-    pub const fn new(catalog: Arc<C>, root_images: BTreeMap<String, RootFilesystem>) -> Self {
-        Self {
-            catalog: BuilderCatalogApplication::new(catalog),
-            root_images,
-        }
-    }
-}
-
-#[async_trait]
-impl<C> BuildRootImageResolver for CatalogBuilderImageResolver<C>
-where
-    C: BuilderCatalog,
-{
-    async fn resolve(
-        &self,
-        build: &BuildConfig,
-    ) -> Result<RootFilesystem, BuildRootImageResolverError> {
-        let selection = self
-            .catalog
-            .validate_build_config(build)
-            .await
-            .map_err(BuildRootImageResolverError::Catalog)?;
-        self.root_images
-            .get(selection.image_reference.as_str())
-            .cloned()
-            .ok_or(BuildRootImageResolverError::MissingMaterialization)
-    }
-}
-
-/// Failure while resolving a builder root image.
-#[derive(Debug, thiserror::Error)]
-pub enum BuildRootImageResolverError {
-    /// The catalog rejected the source-selected builder image.
-    #[error("builder catalog rejected the selected image")]
-    Catalog(#[source] BuilderCatalogApplicationError),
-    /// The catalog-approved image is not available on this worker.
-    #[error("catalog-approved builder image is not materialized on this worker")]
-    MissingMaterialization,
 }
 
 /// Stable result of one imported draft-producing build.
@@ -151,7 +85,6 @@ pub struct BuildExecutor {
     artifacts: LocalArtifactStore,
     releases: Arc<ReleaseService>,
     config: BuildExecutorConfig,
-    root_image_resolver: Option<Arc<dyn BuildRootImageResolver>>,
 }
 
 impl BuildExecutor {
@@ -191,16 +124,7 @@ impl BuildExecutor {
             artifacts,
             releases,
             config,
-            root_image_resolver: None,
         })
-    }
-
-    /// Installs the catalog-backed resolver used for production build image
-    /// selection.
-    #[must_use]
-    pub fn with_root_image_resolver(mut self, resolver: Arc<dyn BuildRootImageResolver>) -> Self {
-        self.root_image_resolver = Some(resolver);
-        self
     }
 
     /// Executes, seals, imports, and creates the immutable draft for one build.
@@ -240,7 +164,7 @@ impl BuildExecutor {
                 return Err(error);
             }
         };
-        let spec = match self.vm_spec(&claimed, &workspace).await {
+        let spec = match self.vm_spec(&claimed, &workspace) {
             Ok(spec) => spec,
             Err(error) => {
                 self.fail(build_request_id, "invalid_build_contract", &[], &[])
@@ -337,7 +261,7 @@ impl BuildExecutor {
                 return Err(error);
             }
         };
-        let spec = match self.vm_spec(&claimed, &workspace).await {
+        let spec = match self.vm_spec(&claimed, &workspace) {
             Ok(spec) => spec,
             Err(error) => {
                 self.repository
@@ -515,29 +439,18 @@ impl BuildExecutor {
         self.repository.claim(id).await.map_err(Into::into)
     }
 
-    async fn vm_spec(
+    fn vm_spec(
         &self,
         claimed: &ClaimedBuild,
         workspace: &PreparedBuildWorkspace,
     ) -> Result<VmSpec, BuildExecutionError> {
         let build = &claimed.input.build;
-        let root = match &self.root_image_resolver {
-            Some(resolver) => resolver
-                .resolve(build)
-                .await
-                .map_err(|_| BuildExecutionError::RootImageDenied)?,
-            None => self
-                .config
-                .root_images
-                .get(
-                    build
-                        .root_image
-                        .as_deref()
-                        .ok_or(BuildExecutionError::RootImageDenied)?,
-                )
-                .cloned()
-                .ok_or(BuildExecutionError::RootImageDenied)?,
-        };
+        let root = self
+            .config
+            .image_filesystems
+            .get(&claimed.input.image_reference)
+            .cloned()
+            .ok_or(BuildExecutionError::ImageUnavailable)?;
         let network = match build.network.profile {
             NetworkProfile::Disabled => NetworkMode::Disabled,
             NetworkProfile::Egress => NetworkMode::UserMode {
@@ -1148,9 +1061,10 @@ pub enum BuildExecutionError {
     /// Trusted Git inspection failed.
     #[error("isolated build Git inspection failed")]
     Git,
-    /// Selected build root image is not platform approved.
-    #[error("isolated build root image is denied")]
-    RootImageDenied,
+    /// The immutable OCI image selected for this build is not materialized on
+    /// this worker.
+    #[error("isolated build image is unavailable")]
+    ImageUnavailable,
     /// Selected build network policy is not supported.
     #[error("isolated build network policy is denied")]
     NetworkDenied,
@@ -1198,12 +1112,6 @@ pub enum BuildExecutionError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_trait::async_trait;
-    use builder_catalog_application::{BuilderCatalog, BuilderCatalogError};
-    use builder_catalog_domain::{
-        AvailabilityState, BuildNetworkPolicy, BuilderImage, BuilderImageId, BuilderImageReference,
-        BuilderKey, BuilderProvenance, DependencyPolicy, PreparationState, Toolchain,
-    };
     use std::os::unix::fs::symlink;
 
     const CONFIG: &str = r#"
@@ -1212,9 +1120,9 @@ version = 2
 name = "builder"
 key = "builder"
 [build]
+image = { key = "build" }
 command = "/usr/bin/build"
 working_directory = "/workspace/source"
-root_image = "build@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 triggers = ["refs/heads/main"]
 [build.resources]
 vcpus = 1
@@ -1225,13 +1133,12 @@ profile = "disabled"
 path = "bin/agent"
 kind = "executable"
 [guest]
+image = { key = "run" }
 command = "bin/agent"
 working_directory = "bin"
 [resources]
 vcpus = 1
 memory_mib = 128
-[root_image]
-reference = "run@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 [workspace]
 mount = true
 path = "/workspace/repo"
@@ -1244,127 +1151,6 @@ profile = "disabled"
 push = false
 refs = []
     "#;
-
-    #[tokio::test]
-    async fn catalog_resolver_requires_an_approved_materialized_image() {
-        let build = agent_config::parse(CONFIG.as_bytes())
-            .config
-            .expect("valid config")
-            .build
-            .expect("build config");
-        let root = tempfile::tempdir().expect("root directory");
-        let reference = build
-            .root_image
-            .clone()
-            .expect("test build config has a resolved root image");
-        let resolver = CatalogBuilderImageResolver::new(
-            Arc::new(FixtureCatalog {
-                image: Some(builder_image(AvailabilityState::Available)),
-            }),
-            BTreeMap::from([(
-                reference,
-                RootFilesystem::Directory {
-                    host_path: root.path().to_owned(),
-                },
-            )]),
-        );
-        let resolved_root = resolver.resolve(&build).await.expect("approved image");
-        match resolved_root {
-            RootFilesystem::Directory { host_path } => assert_eq!(host_path, root.path()),
-            RootFilesystem::Disk { .. } => panic!("fixture uses a directory root"),
-            _ => panic!("fixture uses a known root filesystem variant"),
-        }
-
-        let mut unavailable = build;
-        unavailable.root_image = Some(String::from(
-            "build@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-        ));
-        assert!(resolver.resolve(&unavailable).await.is_err());
-    }
-
-    #[tokio::test]
-    async fn catalog_resolver_rejects_unavailable_images_and_missing_materialization() {
-        let build = agent_config::parse(CONFIG.as_bytes())
-            .config
-            .expect("valid config")
-            .build
-            .expect("build config");
-        let resolver = CatalogBuilderImageResolver::new(
-            Arc::new(FixtureCatalog {
-                image: Some(builder_image(AvailabilityState::Unavailable)),
-            }),
-            BTreeMap::new(),
-        );
-        assert!(resolver.resolve(&build).await.is_err());
-
-        let resolver = CatalogBuilderImageResolver::new(
-            Arc::new(FixtureCatalog {
-                image: Some(builder_image(AvailabilityState::Available)),
-            }),
-            BTreeMap::new(),
-        );
-        assert!(matches!(
-            resolver.resolve(&build).await,
-            Err(BuildRootImageResolverError::MissingMaterialization)
-        ));
-    }
-
-    struct FixtureCatalog {
-        image: Option<BuilderImage>,
-    }
-
-    #[async_trait]
-    impl BuilderCatalog for FixtureCatalog {
-        async fn list_builder_images(&self) -> Result<Vec<BuilderImage>, BuilderCatalogError> {
-            Ok(self.image.clone().into_iter().collect())
-        }
-
-        async fn get_builder_image(
-            &self,
-            _id: BuilderImageId,
-        ) -> Result<BuilderImage, BuilderCatalogError> {
-            self.image.clone().ok_or(BuilderCatalogError::NotFound)
-        }
-
-        async fn find_builder_image_by_reference(
-            &self,
-            reference: &BuilderImageReference,
-        ) -> Result<BuilderImage, BuilderCatalogError> {
-            self.image
-                .clone()
-                .filter(|image| &image.image_reference == reference)
-                .ok_or(BuilderCatalogError::NotFound)
-        }
-    }
-
-    fn builder_image(availability: AvailabilityState) -> BuilderImage {
-        BuilderImage {
-            id: BuilderImageId::new(),
-            key: BuilderKey::parse("build").expect("builder key"),
-            display_name: String::from("Build fixture"),
-            image_reference: BuilderImageReference::parse(
-                "build@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            )
-            .expect("image reference"),
-            toolchains: vec![Toolchain {
-                name: String::from("fixture"),
-                version: String::from("1"),
-            }],
-            architectures: vec![String::from("x86_64")],
-            preparation: PreparationState::Ready,
-            availability,
-            network_ceiling: BuildNetworkPolicy::Disabled,
-            max_vcpus: 1,
-            max_memory_mib: 128,
-            dependency_policy: DependencyPolicy::VendoredOffline,
-            provenance: BuilderProvenance {
-                source: String::from("test://builder"),
-                signature: None,
-                sbom: None,
-            },
-            platform_policy_version: String::from("test/v1"),
-        }
-    }
 
     #[test]
     fn materializes_two_exact_commits_without_git_metadata() {
@@ -1405,7 +1191,7 @@ refs = []
             workspace_root: fs::canonicalize(&workspaces).expect("workspace path"),
             repository_root: fs::canonicalize(&repositories).expect("repository path"),
             git_binary: fs::canonicalize("/usr/bin/git").expect("Git binary"),
-            root_images: BTreeMap::new(),
+            image_filesystems: BTreeMap::new(),
             timeout: Duration::from_secs(30),
         };
         let build = agent_config::parse(CONFIG.as_bytes())
@@ -1427,6 +1213,9 @@ refs = []
                 source_commit: commit,
                 source_ref: String::from("refs/heads/main"),
                 build: build.clone(),
+                image_reference: String::from(
+                    "build@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                ),
             };
             let active = config
                 .workspace_root
