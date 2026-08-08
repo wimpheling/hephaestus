@@ -7,7 +7,7 @@ use std::{
     fs::{self, File},
     io::{self, Read, Seek, SeekFrom, Write},
     os::unix::ffi::OsStrExt,
-    os::unix::fs::chown,
+    os::unix::fs::{OpenOptionsExt, PermissionsExt, chown},
     os::unix::process::{CommandExt, ExitStatusExt},
     path::{Path, PathBuf},
     process::{Child, Command, ExitStatus, Stdio},
@@ -17,12 +17,15 @@ use std::{
 };
 use uuid::Uuid;
 use vm_libkrun::protocol::{
-    GuestLogStream, GuestMessage, GuestStateVolume, HostMessage, MAX_FRAME_SIZE, PROTOCOL_VERSION,
+    GUEST_RUNTIME_AUTHORITY_PATH, GuestLogStream, GuestMessage, GuestStateVolume, HostMessage,
+    MAX_FRAME_SIZE, PROTOCOL_VERSION, RuntimeAuthorityMessage,
 };
+use zeroize::Zeroizing;
 
 const CONTROL_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const AGENT_UID: u32 = 10_001;
 const AGENT_GID: u32 = 10_001;
+const RUNTIME_AUTHORITY_DIRECTORY: &str = "/run/hephaestus-authority";
 
 fn main() {
     if let Err(error) = run() {
@@ -48,6 +51,7 @@ fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         command,
         mounts,
         state_volume,
+        runtime_authority,
     } = read_frame(&mut control)?
     else {
         return Err("host did not send the start command".into());
@@ -77,6 +81,16 @@ fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             )
         })?;
         thread::sleep(Duration::from_millis(milliseconds));
+    }
+    if let Some(authority) = runtime_authority {
+        let (session_id, generation) = persist_runtime_authority(&authority)?;
+        write_frame(
+            &mut control,
+            &GuestMessage::RuntimeAuthorityAcknowledged {
+                session_id,
+                generation,
+            },
+        )?;
     }
 
     let mut child = Command::new(&command.program);
@@ -143,6 +157,67 @@ fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     write_message(&writer, &GuestMessage::Exited { code, signal })?;
     drop(control_thread);
     Ok(())
+}
+
+#[derive(Serialize)]
+struct GuestRuntimeAuthority<'a> {
+    session_id: uuid::Uuid,
+    generation: u64,
+    credential_hex: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    runtime_git_credential: Option<&'a str>,
+}
+
+fn persist_runtime_authority(
+    authority: &RuntimeAuthorityMessage,
+) -> Result<(uuid::Uuid, u64), Box<dyn std::error::Error + Send + Sync>> {
+    if authority.generation == 0 {
+        return Err("runtime authority generation must be positive".into());
+    }
+    let directory = Path::new(RUNTIME_AUTHORITY_DIRECTORY);
+    fs::create_dir_all(directory)?;
+    fs::set_permissions(directory, fs::Permissions::from_mode(0o700))?;
+    chown(directory, Some(AGENT_UID), Some(AGENT_GID))?;
+
+    let mut credential_hex = Zeroizing::new(String::with_capacity(authority.credential.len() * 2));
+    for byte in &authority.credential {
+        use std::fmt::Write as _;
+        write!(&mut credential_hex, "{byte:02x}")?;
+    }
+    let mut runtime_git_credential = authority.runtime_git_credential.as_ref().map(|credential| {
+        let mut encoded = String::with_capacity(credential.len() * 2);
+        for byte in credential {
+            use std::fmt::Write as _;
+            // Writing to a String cannot fail.
+            let _ = write!(&mut encoded, "{byte:02x}");
+        }
+        Zeroizing::new(encoded)
+    });
+    let document = GuestRuntimeAuthority {
+        session_id: authority.session_id,
+        generation: authority.generation,
+        credential_hex: credential_hex.as_str(),
+        runtime_git_credential: runtime_git_credential
+            .as_deref()
+            .map(std::string::String::as_str),
+    };
+    let bytes = Zeroizing::new(serde_json::to_vec(&document)?);
+    let mut file = fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .mode(0o400)
+        .open(GUEST_RUNTIME_AUTHORITY_PATH)?;
+    file.write_all(&bytes)?;
+    file.sync_all()?;
+    chown(
+        Path::new(GUEST_RUNTIME_AUTHORITY_PATH),
+        Some(AGENT_UID),
+        Some(AGENT_GID),
+    )?;
+    if let Some(credential) = &mut runtime_git_credential {
+        credential.clear();
+    }
+    Ok((authority.session_id, authority.generation))
 }
 
 fn mount_state_volume(volume: &GuestStateVolume) -> io::Result<PathBuf> {

@@ -46,7 +46,7 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.ProjectPage do
               :for={{dom_id, repository} <- @repositories}
               id={dom_id}
               destination={@repository_destination.(repository["id"])}
-              variant={:text}
+              variant={:resource_row}
             >
               <.frame variant={:resource_primary}>
                 <.glyph name="hero-command-line" />
@@ -71,7 +71,11 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.ProjectPage do
   attr :project, :map, required: true
   attr :project_id, :string, required: true
   attr :item_count, :integer, required: true
-  attr :active, :atom, required: true, values: [:repositories, :agents, :runs, :settings]
+
+  attr :active, :atom,
+    required: true,
+    values: [:repositories, :agents, :runs, :settings]
+
   attr :organization_index_destination, :string, required: true
   attr :organization_destination, :string, required: true
 
@@ -89,6 +93,13 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.ProjectPage do
     >
       <:actions>
         <.tag>{@item_count} visible</.tag>
+        <.action
+          id="create-repository-link"
+          destination={"/projects/#{@project_id}/repositories/new"}
+          variant={:secondary}
+        >
+          <.glyph name="hero-plus" /> Create repository
+        </.action>
       </:actions>
     </.page_heading>
     <.tab_navigation id="project-tabs" label="Project" active={@active} items={tabs(@project_id)} />

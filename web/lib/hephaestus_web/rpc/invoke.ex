@@ -9,7 +9,10 @@ defmodule HephaestusWeb.RPC.Invoke do
   alias HephaestusWeb.Identity
   alias HephaestusWeb.RPC.{Channel, Error, Mediator}
 
-  @default_timeout 5_000
+  # Page queries are local control-plane calls. Keep their failure bounded so
+  # a half-open transport cannot freeze a LiveView for the old five-second
+  # deadline before its safe-query retry can establish a fresh connection.
+  @default_timeout 1_000
   @default_maximum_request_bytes 1_048_576
   @default_maximum_response_bytes 2_097_152
 
@@ -125,14 +128,14 @@ defmodule HephaestusWeb.RPC.Invoke do
   end
 
   defp call(request, stub_call, call_options, options) do
-    case Keyword.fetch(options, :channel_provider) do
-      {:ok, channel_provider} ->
-        with {:ok, channel} <- channel_provider.() do
-          stub_call.(channel, request, call_options)
-        end
+    channel_provider = Keyword.get(options, :channel_provider, &Channel.get/0)
 
-      :error ->
-        Channel.invoke(stub_call, request, call_options)
+    with {:ok, channel} <- channel_provider.() do
+      try do
+        stub_call.(channel, request, call_options)
+      catch
+        :exit, _reason -> {:error, :transport_exit}
+      end
     end
   end
 
@@ -146,8 +149,14 @@ defmodule HephaestusWeb.RPC.Invoke do
          options,
          attempt
        ) do
-    if retry?(error, options, attempt) do
+    # Any unavailable result may describe a half-open shared HTTP/2 channel.
+    # Mutations cannot be retried, but they must still invalidate that channel
+    # so the next independent request does not inherit the same dead transport.
+    if error.kind == :unavailable do
       Keyword.get(options, :channel_reset, &Channel.reset/0).()
+    end
+
+    if retry?(error, options, attempt) do
       invoke(identity, audience, request, stub_call, maximum_response, options, attempt + 1)
     else
       {:error, error}

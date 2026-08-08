@@ -38,6 +38,7 @@ defmodule HephaestusWebWeb.RepositoryRouteModel do
         branch_options: [],
         branches: [],
         commits: [],
+        builds: [],
         releases: [],
         attached_instances: [],
         tree: empty_tree(),
@@ -45,7 +46,8 @@ defmodule HephaestusWebWeb.RepositoryRouteModel do
         file: nil,
         file_error: nil,
         params: %{},
-        uri: nil
+        uri: nil,
+        remote_url: nil
       },
       form: %{browse: %{"branch" => ""}}
     )
@@ -63,6 +65,31 @@ defmodule HephaestusWebWeb.RepositoryRouteModel do
 
   def reduce(state, :refresh, action) do
     reduce(state, {:load, state.data.params, state.data.uri}, action)
+  end
+
+  def reduce(state, {:request_build, attributes}, :builds) do
+    generation = state.stream_generation + 1
+
+    {%{
+       state
+       | status: :submitting,
+         error: nil,
+         stream_generation: generation,
+         form: Map.put(state.form, :build, attributes)
+     }, [{:request_build, state.data.repository_id, attributes}]}
+  end
+
+  def reduce(state, {:request_build_result, {:ok, %{"build_id" => build_id}}}, :builds) do
+    destination = "/repositories/#{state.data.repository_id}/builds/#{build_id}"
+    {%{state | status: :ready, error: nil}, [{:navigate, destination}]}
+  end
+
+  def reduce(state, {:request_build_result, {:ok, _receipt}}, :builds),
+    do: reduce(state, :refresh, :builds)
+
+  def reduce(state, {:request_build_result, {:error, _reason}}, :builds) do
+    message = "The build could not be requested."
+    {%{state | status: :error, error: message}, [{:flash, :error, message}]}
   end
 
   def reduce(state, :disconnected, _action), do: {%{state | status: :reconnecting}, []}
@@ -118,14 +145,33 @@ defmodule HephaestusWebWeb.RepositoryRouteModel do
         {
           :loaded,
           generation,
-          {:error, _reason}
+          {:error, %Error{kind: kind}}
         },
         _action
-      ) do
+      )
+      when kind in [:not_found, :permission_denied] do
     message = "Repository not found or access was revoked."
 
     {%{state | status: :access_revoked, error: message},
      [{:flash, :error, message}, {:navigate, "/organizations"}]}
+  end
+
+  def reduce(
+        %{stream_generation: generation} = state,
+        {:loaded, generation, {:error, %Error{} = reason}},
+        _action
+      ) do
+    message = Error.present(reason)
+    {%{state | status: :error, error: message}, [{:flash, :error, message}]}
+  end
+
+  def reduce(
+        %{stream_generation: generation} = state,
+        {:loaded, generation, {:error, _reason}},
+        _action
+      ) do
+    message = "Repository data is temporarily unavailable."
+    {%{state | status: :error, error: message}, [{:flash, :error, message}]}
   end
 
   def reduce(state, {:loaded, _stale_generation, _result}, _action), do: {state, []}
@@ -136,9 +182,18 @@ defmodule HephaestusWebWeb.RepositoryRouteModel do
   end
 
   def execute({:load, generation, action, repository_id, params, uri}, identity) do
+    # Repository identity and branch discovery are independent. Running them
+    # together keeps an empty repository to one local-RPC round instead of two
+    # serial channel/deadline rounds on every route entry.
+    repository_task = Task.async(fn -> Client.get_repository(identity, repository_id) end)
+    branches_task = Task.async(fn -> branches_for(identity, repository_id, action) end)
+
+    repository_result = Task.await(repository_task)
+    branches_result = Task.await(branches_task)
+
     result =
-      with {:ok, repository} <- Client.get_repository(identity, repository_id),
-           {:ok, branches} <- Client.branches(identity, repository_id),
+      with {:ok, repository} <- repository_result,
+           {:ok, branches} <- branches_result,
            {:ok, selected_branch} <- select_branch(repository, branches, params["ref"]),
            {:ok, route_data} <-
              load_route(action, repository_id, selected_branch, params, identity) do
@@ -147,6 +202,7 @@ defmodule HephaestusWebWeb.RepositoryRouteModel do
          |> Map.merge(%{
            repository_id: repository_id,
            repository: repository,
+           remote_url: remote_url(uri, repository_id),
            selected_branch: selected_branch,
            branch_options: Enum.map(branches, & &1.name),
            branches: branches,
@@ -157,6 +213,12 @@ defmodule HephaestusWebWeb.RepositoryRouteModel do
 
     {:loaded, generation, result}
   end
+
+  defp branches_for(identity, repository_id, action)
+       when action in [:files, :commits, :branches],
+       do: Client.branches(identity, repository_id)
+
+  defp branches_for(_identity, _repository_id, _action), do: {:ok, []}
 
   def execute(state, identity, generation, action) do
     execute(
@@ -174,8 +236,20 @@ defmodule HephaestusWebWeb.RepositoryRouteModel do
       selected_branch: state.data.selected_branch,
       branch_options: state.data.branch_options,
       browse_form: state.form.browse,
+      build_request_form:
+        Phoenix.Component.to_form(
+          state.form[:build] ||
+            %{
+              "source_commit" => "",
+              "build_definition_hash" => "",
+              "configuration_hash" => ""
+            },
+          as: :build
+        ),
       branches_empty?: state.data.branches == [],
       commits_empty?: state.data.commits == [],
+      builds_empty?: state.data.builds == [],
+      builds_unavailable?: false,
       releases_empty?: state.data.releases == [],
       attached_instances_empty?: state.data.attached_instances == [],
       tree: state.data.tree,
@@ -184,8 +258,11 @@ defmodule HephaestusWebWeb.RepositoryRouteModel do
       file_error: state.data.file_error,
       branches: state.data.branches,
       commits: state.data.commits,
+      builds: state.data.builds,
       releases: state.data.releases,
       attached_instances: state.data.attached_instances,
+      remote_url: state.data.remote_url,
+      default_branch: repository && friendly_ref(repository["default_branch"]),
       error: state.error,
       tabs: tabs(repository, state.data.selected_branch),
       destinations: destinations(repository),
@@ -222,6 +299,12 @@ defmodule HephaestusWebWeb.RepositoryRouteModel do
     end
   end
 
+  defp load_route(:builds, repository_id, _selected_branch, _params, identity) do
+    with {:ok, builds} <- Client.list_builds(identity, repository_id) do
+      {:ok, empty_route_data() |> Map.put(:builds, builds)}
+    end
+  end
+
   defp load_route(:branches, _repository_id, _selected_branch, _params, _identity),
     do: {:ok, empty_route_data()}
 
@@ -243,6 +326,9 @@ defmodule HephaestusWebWeb.RepositoryRouteModel do
   defp relevant_events(:releases),
     do: [:repository_changed, :build_changed, :release_changed, :artifact_changed]
 
+  defp relevant_events(:builds),
+    do: [:repository_changed, :build_changed, :release_changed, :artifact_changed]
+
   defp relevant_events(:agents),
     do: [:repository_changed, :agent_instance_changed]
 
@@ -262,6 +348,7 @@ defmodule HephaestusWebWeb.RepositoryRouteModel do
       file: nil,
       file_error: nil,
       commits: [],
+      builds: [],
       releases: [],
       attached_instances: []
     }
@@ -379,6 +466,12 @@ defmodule HephaestusWebWeb.RepositoryRouteModel do
         destination: "/repositories/#{repository_id}/branches"
       },
       %{
+        key: :builds,
+        label: "Builds",
+        icon: "hero-cpu-chip",
+        destination: "/repositories/#{repository_id}/builds"
+      },
+      %{
         key: :releases,
         label: "Releases",
         icon: "hero-cube-transparent",
@@ -408,9 +501,32 @@ defmodule HephaestusWebWeb.RepositoryRouteModel do
   defp page_state(status) when status in [:stale, :reconnecting], do: :reconnecting
   defp page_state(_status), do: :error
 
-  defp local_path(uri) do
+  defp local_path(nil), do: nil
+
+  defp local_path(uri) when is_binary(uri) do
     parsed = URI.parse(uri)
     if parsed.query, do: "#{parsed.path}?#{parsed.query}", else: parsed.path
+  end
+
+  # Git credentials must never be embedded in this URL. Keep only the public
+  # request origin and the canonical repository UUID route component.
+  defp remote_url(nil, repository_id), do: "/#{repository_id}"
+
+  defp remote_url(uri, repository_id) when is_binary(uri) do
+    parsed = URI.parse(uri)
+
+    case {parsed.scheme, parsed.host} do
+      {scheme, host} when is_binary(scheme) and is_binary(host) ->
+        URI.to_string(%URI{
+          scheme: scheme,
+          host: host,
+          port: parsed.port,
+          path: "/#{repository_id}"
+        })
+
+      _missing_origin ->
+        "/#{repository_id}"
+    end
   end
 
   defp friendly_ref("refs/heads/" <> branch), do: branch

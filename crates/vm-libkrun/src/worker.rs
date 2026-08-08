@@ -5,7 +5,7 @@ use crate::{
     protocol::{
         GuestCommandMessage, GuestLogStream, GuestMessage, GuestMount, GuestStateVolume,
         HostMessage, MAX_LOG_CHUNK_SIZE, MAX_METRIC_LABELS, MAX_METRIC_TEXT_SIZE,
-        MAX_RESULT_MESSAGE_SIZE, PROTOCOL_VERSION,
+        MAX_RESULT_MESSAGE_SIZE, PROTOCOL_VERSION, RuntimeAuthorityMessage,
     },
     validation::{PreparedForward, PreparedSpec},
 };
@@ -75,6 +75,10 @@ pub enum WorkerEvent {
         passt_pid: Option<u32>,
     },
     Ready,
+    RuntimeAuthorityAcknowledged {
+        session_id: uuid::Uuid,
+        generation: u64,
+    },
     Log {
         stream: WireLogStream,
         bytes: Vec<u8>,
@@ -359,6 +363,9 @@ fn spawn_guest_control(
     });
 }
 
+// Keeping the authenticated handshake, exact authority acknowledgement, and
+// event forwarding together makes their ordering directly auditable.
+#[allow(clippy::too_many_lines)]
 fn handle_guest(
     listener: &UnixListener,
     guest_slot: &Arc<Mutex<Option<UnixStream>>>,
@@ -406,6 +413,17 @@ fn handle_guest(
         }),
         _ => None,
     };
+    let runtime_authority = spec.runtime_authority.map(|authority| {
+        Box::new(RuntimeAuthorityMessage {
+            session_id: authority.session_id,
+            generation: authority.generation,
+            credential: authority.credential,
+            runtime_git_credential: authority.runtime_git_credential,
+        })
+    });
+    let expected_authority_ack = runtime_authority
+        .as_ref()
+        .map(|authority| (authority.session_id, authority.generation));
     write_sync(
         &mut stream,
         &HostMessage::Start {
@@ -413,15 +431,29 @@ fn handle_guest(
             command,
             mounts,
             state_volume,
+            runtime_authority,
         },
     )?;
 
+    let mut authority_acknowledged = false;
     loop {
         let message: GuestMessage = read_sync(&mut stream)?;
         validate_guest_message(&message)?;
+        validate_authority_sequence(
+            expected_authority_ack,
+            &mut authority_acknowledged,
+            &message,
+        )?;
         let event = match message {
             GuestMessage::Hello { .. } => continue,
             GuestMessage::Ready => WorkerEvent::Ready,
+            GuestMessage::RuntimeAuthorityAcknowledged {
+                session_id,
+                generation,
+            } => WorkerEvent::RuntimeAuthorityAcknowledged {
+                session_id,
+                generation,
+            },
             GuestMessage::Log { stream, bytes } => WorkerEvent::Log {
                 stream: stream.into(),
                 bytes,
@@ -453,6 +485,35 @@ fn handle_guest(
     Ok(())
 }
 
+fn validate_authority_sequence(
+    expected: Option<(uuid::Uuid, u64)>,
+    acknowledged: &mut bool,
+    message: &GuestMessage,
+) -> io::Result<()> {
+    match message {
+        GuestMessage::RuntimeAuthorityAcknowledged {
+            session_id,
+            generation,
+        } => {
+            if *acknowledged || expected != Some((*session_id, *generation)) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "guest runtime authority acknowledgement does not match bootstrap",
+                ));
+            }
+            *acknowledged = true;
+        }
+        GuestMessage::Ready if expected.is_some() && !*acknowledged => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "guest became ready before runtime authority acknowledgement",
+            ));
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 fn validate_guest_message(message: &GuestMessage) -> io::Result<()> {
     match message {
         GuestMessage::Hello { .. } => Err(io::Error::new(
@@ -462,6 +523,10 @@ fn validate_guest_message(message: &GuestMessage) -> io::Result<()> {
         GuestMessage::Log { bytes, .. } if bytes.len() > MAX_LOG_CHUNK_SIZE => Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "guest log chunk exceeds protocol limit",
+        )),
+        GuestMessage::RuntimeAuthorityAcknowledged { generation: 0, .. } => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "guest runtime authority acknowledgement generation must be positive",
         )),
         GuestMessage::Metric { name, .. }
             if name.is_empty() || name.len() > MAX_METRIC_TEXT_SIZE =>
@@ -628,7 +693,7 @@ impl From<GuestLogStream> for WireLogStream {
 mod tests {
     use super::{
         GuestLogStream, GuestMessage, MAX_LOG_CHUNK_SIZE, MAX_METRIC_LABELS, MAX_METRIC_TEXT_SIZE,
-        PROTOCOL_VERSION, validate_guest_message,
+        PROTOCOL_VERSION, validate_authority_sequence, validate_guest_message,
     };
     use std::collections::BTreeMap;
 
@@ -691,5 +756,48 @@ mod tests {
             labels: BTreeMap::from([(String::new(), String::from("value"))]),
         };
         assert!(validate_guest_message(&invalid_label).is_err());
+    }
+
+    #[test]
+    fn runtime_authority_acknowledgement_is_exact_and_precedes_ready() {
+        let session_id = uuid::Uuid::new_v4();
+        let expected = Some((session_id, 7));
+        let mut acknowledged = false;
+        assert!(
+            validate_authority_sequence(expected, &mut acknowledged, &GuestMessage::Ready).is_err()
+        );
+        assert!(
+            validate_authority_sequence(
+                expected,
+                &mut acknowledged,
+                &GuestMessage::RuntimeAuthorityAcknowledged {
+                    session_id,
+                    generation: 8,
+                },
+            )
+            .is_err()
+        );
+        validate_authority_sequence(
+            expected,
+            &mut acknowledged,
+            &GuestMessage::RuntimeAuthorityAcknowledged {
+                session_id,
+                generation: 7,
+            },
+        )
+        .expect("exact acknowledgement");
+        validate_authority_sequence(expected, &mut acknowledged, &GuestMessage::Ready)
+            .expect("ready after acknowledgement");
+        assert!(
+            validate_authority_sequence(
+                expected,
+                &mut acknowledged,
+                &GuestMessage::RuntimeAuthorityAcknowledged {
+                    session_id,
+                    generation: 7,
+                },
+            )
+            .is_err()
+        );
     }
 }

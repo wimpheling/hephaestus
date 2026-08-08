@@ -169,11 +169,23 @@ mkdir -p \
     "${fixture_root}/artifacts" \
     "${fixture_root}/runtime" \
     "${fixture_root}/root-image" \
-    "${fixture_root}/secret-keys"
-chmod 0700 "${fixture_root}/secret-keys" "${secret_runtime_root}"
+    "${fixture_root}/registry-credentials" \
+    "${fixture_root}/secret-keys" \
+    "${fixture_root}/screenshots"
+chmod 0700 \
+    "${fixture_root}/registry-credentials" \
+    "${fixture_root}/secret-keys" \
+    "${secret_runtime_root}"
 umask 077
 head -c 32 /dev/zero | tr '\0' '\127' >"${fixture_root}/secret-keys/e2e-v1"
 chmod 0400 "${fixture_root}/secret-keys/e2e-v1"
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 \
+    -out "${fixture_root}/registry-token-private.pem" >/dev/null 2>&1
+printf '%s\n' 'browser-e2e-notification-callback-token-0123456789abcdef' \
+    >"${fixture_root}/registry-notification-token"
+chmod 0400 \
+    "${fixture_root}/registry-token-private.pem" \
+    "${fixture_root}/registry-notification-token"
 
 podman run --detach --rm \
     --name "${postgres_container}" \
@@ -214,7 +226,8 @@ wait_for_url "${oidc_url}/.well-known/openid-configuration" \
     "${fixture_root}/oidc.log"
 
 cd "${repo_root}"
-cargo build -p hephaestus-app --bins
+cargo build -p hephaestus-app --bins -p bootstrap-postgres --bin hephaestus-e2e-seed \
+    -p git-http --bin pre-receive
 HEPHAESTUS_DATABASE_URL="${database_url}" \
 HEPHAESTUS_REPOSITORY_ROOT="${fixture_root}/repositories" \
 HEPHAESTUS_ARTIFACT_ROOT="${fixture_root}/artifacts" \
@@ -227,6 +240,7 @@ export HEPHAESTUS_NATS_URL="nats://127.0.0.1:${nats_port}"
 export HEPHAESTUS_HTTP_LISTEN="127.0.0.1:${daemon_port}"
 export HEPHAESTUS_REPOSITORY_ROOT="${fixture_root}/repositories"
 export HEPHAESTUS_GIT_HTTP_BACKEND="$(git --exec-path)/git-http-backend"
+export HEPHAESTUS_GIT_PRE_RECEIVE_HOOK="${repo_root}/target/debug/pre-receive"
 export HEPHAESTUS_OIDC_ISSUER="${oidc_url}"
 export HEPHAESTUS_OIDC_AUDIENCE="hephaestus-git"
 export HEPHAESTUS_OIDC_ALGORITHM="HS256"
@@ -239,8 +253,20 @@ export HEPHAESTUS_SECRET_RUNTIME_ROOT="${secret_runtime_root}"
 export HEPHAESTUS_SECRET_KEY_DIRECTORY="${fixture_root}/secret-keys"
 export HEPHAESTUS_SECRET_KEY_REFERENCE="e2e-v1"
 export HEPHAESTUS_RPC_MEDIATOR_SECRET="e2e-rpc-mediator-secret-with-sufficient-entropy"
-export HEPHAESTUS_ROOT_IMAGE_PATH="${fixture_root}/root-image"
-export HEPHAESTUS_ROOT_IMAGE_REFERENCE="fixture-root@sha256:e2e"
+export HEPHAESTUS_REGISTRY_TOKEN_PRIVATE_KEY="${fixture_root}/registry-token-private.pem"
+export HEPHAESTUS_REGISTRY_TOKEN_ISSUER="${daemon_url}/v1/registry/token"
+export HEPHAESTUS_REGISTRY_SERVICE="registry.browser.invalid"
+export HEPHAESTUS_REGISTRY_PRIVATE_ORIGIN="http://127.0.0.1:9/"
+export HEPHAESTUS_REGISTRY_TOKEN_KEY_ID="browser-e2e-v1"
+export HEPHAESTUS_REGISTRY_TOKEN_LIFETIME_SECONDS="300"
+export HEPHAESTUS_REGISTRY_NOTIFICATION_CALLBACK_TOKEN_FILE="${fixture_root}/registry-notification-token"
+export HEPHAESTUS_REGISTRY_RECONCILIATION_INTERVAL_MILLISECONDS="60000"
+export HEPHAESTUS_REGISTRY_CREDENTIAL_ROOT="${fixture_root}/registry-credentials"
+readonly root_image_manifest="${fixture_root}/root-image-manifest.json"
+printf '{"version":1,"roots":{"fixture-root@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa":{"kind":"directory","path":"%s"}}}\n' \
+    "${fixture_root}/root-image" >"${root_image_manifest}"
+unset HEPHAESTUS_ROOT_IMAGE_PATH HEPHAESTUS_ROOT_IMAGE_REFERENCE
+export HEPHAESTUS_ROOT_IMAGE_MANIFEST="${root_image_manifest}"
 export HEPHAESTUS_VM_BACKEND="fixture"
 export HEPHAESTUS_HOST_ID="browser-e2e"
 export HEPHAESTUS_MKFS_EXT4="$(command -v mkfs.ext4)"
@@ -283,6 +309,7 @@ HEPHAESTUS_REPOSITORY_ROOT="${fixture_root}/repositories" \
 HEPHAESTUS_GIT_URL="${daemon_url}" \
 HEPHAESTUS_WEB_URL="${web_url}" \
 HEPHAESTUS_OIDC_URL="${oidc_url}" \
+HEPHAESTUS_E2E_EVIDENCE_DIR="${fixture_root}/screenshots" \
     npm test
 
 podman logs "${web_container}" >"${fixture_root}/web.log" 2>&1

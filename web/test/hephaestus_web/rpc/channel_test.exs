@@ -12,6 +12,21 @@ defmodule HephaestusWeb.RPC.ChannelTest do
     def disconnect(channel), do: {:ok, channel}
   end
 
+  defmodule BlockingDisconnectConnector do
+    def connect(endpoint, _options) do
+      send(endpoint, :connect)
+      {:ok, %GRPC.Channel{host: endpoint, port: 443}}
+    end
+
+    def disconnect(channel) do
+      send(channel.host, {:disconnect_started, self()})
+
+      receive do
+        :finish_disconnect -> :ok
+      end
+    end
+  end
+
   test "connects lazily, reuses the channel, and resets it" do
     configuration = [endpoint: self(), reconnect_attempts: 2]
 
@@ -77,5 +92,26 @@ defmodule HephaestusWeb.RPC.ChannelTest do
              )
 
     assert Process.alive?(channel)
+  end
+
+  test "reset makes a fresh channel available without waiting for stale disconnect" do
+    configuration = [endpoint: self(), reconnect_attempts: 2]
+
+    channel =
+      start_supervised!(
+        {Channel,
+         name: nil, configuration: configuration, connector: BlockingDisconnectConnector},
+        id: make_ref()
+      )
+
+    assert {:ok, %GRPC.Channel{}} = Channel.get(channel)
+    assert_receive :connect
+
+    assert :ok = Channel.reset(channel)
+    assert {:ok, %GRPC.Channel{}} = Channel.get(channel)
+    assert_receive :connect
+    assert_receive {:disconnect_started, disconnect_pid}
+
+    send(disconnect_pid, :finish_disconnect)
   end
 end

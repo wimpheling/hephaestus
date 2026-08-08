@@ -1,0 +1,25 @@
+[package]
+name = "capability-audit"
+description = "Provider-neutral capability audit recording and inspection contracts"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[package.metadata.hephaestus]
+layer = "application"
+context = "authorization"
+
+[dependencies]
+async-trait.workspace = true
+capability-domain = { path = "../capability-domain" }
+identity-domain = { path = "../identity-domain" }
+runtime-types = { path = "../runtime-types" }
+thiserror.workspace = true
+time.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }
+
+[lints]
+workspace = true

@@ -1,7 +1,7 @@
 defmodule HephaestusWebWeb.ProjectState do
   @moduledoc "State and effects for the project repositories route."
 
-  alias HephaestusWeb.RPC.{Client, ProductEvents}
+  alias HephaestusWeb.RPC.{Client, Error, ProductEvents}
   alias HephaestusWebWeb.ProductEventReducer
 
   @stream_mode :page_scoped
@@ -61,12 +61,23 @@ defmodule HephaestusWebWeb.ProjectState do
     %{state | data: data} |> ProductEventReducer.snapshot_complete()
   end
 
-  def reduce(state, {:loaded, _generation, _project, _repositories}), do: {state, []}
+  # A snapshot already in flight may finish after a transient watch reconnect.
+  # Keep the stale-generation guard for ordinary loads, but do not discard that
+  # initial snapshot while the page is recovering its stream.
+  def reduce(%{status: :reconnecting} = state, {:loaded, _generation, project, repositories}) do
+    data = %{state.data | project: project, repositories: repositories}
+    %{state | data: data} |> ProductEventReducer.snapshot_complete()
+  end
+
+  def reduce(state, {:loaded, _stale_generation, _project, _repositories}), do: {state, []}
 
   def reduce(state, {:access_revoked, _reason}),
     do:
       {%{state | status: :access_revoked, error: "Project access was revoked."},
        [{:navigate, :organizations}]}
+
+  def reduce(state, {:error, message}) when is_binary(message),
+    do: {%{state | status: :error, error: message}, []}
 
   def reduce(state, :reconnecting), do: {%{state | status: :reconnecting}, []}
   def reduce(state, :stale), do: {%{state | status: :stale}, [:load]}
@@ -86,7 +97,14 @@ defmodule HephaestusWebWeb.ProjectState do
          {:ok, repositories} <- Client.list_project_repositories(identity, project_id) do
       {:loaded, generation, project, repositories}
     else
-      {:error, reason} -> {:access_revoked, reason}
+      {:error, %Error{kind: kind} = reason} when kind in [:not_found, :permission_denied] ->
+        {:access_revoked, reason}
+
+      {:error, %Error{} = reason} ->
+        {:error, Error.present(reason)}
+
+      {:error, _reason} ->
+        {:error, "The project data is temporarily unavailable."}
     end
   end
 

@@ -1,0 +1,31 @@
+[package]
+name = "oci-builder-runtime-local"
+description = "Local Git, Buildah, Trivy, and Umoci adapters for OCI builder preparation"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[package.metadata.hephaestus]
+layer = "adapter"
+context = "build"
+allow_cross_context_dependencies = ["registry-publisher"]
+
+[dependencies]
+async-trait.workspace = true
+builder-catalog-domain = { path = "../builder-catalog-domain" }
+oci-builder-worker = { path = "../oci-builder-worker" }
+registry-domain = { path = "../registry-domain" }
+registry-publisher = { path = "../registry-publisher" }
+registry-token = { path = "../registry-token" }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["fs", "io-util", "process", "rt", "rt-multi-thread"] }
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

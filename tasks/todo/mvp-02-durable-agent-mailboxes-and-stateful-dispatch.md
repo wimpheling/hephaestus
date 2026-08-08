@@ -26,7 +26,7 @@ from durable application state rather than arbitrary process checkpoints.
 | Semantics | The platform provides durable at-least-once delivery. Released code owns application interpretation and application-level idempotency. |
 | Envelope | Mailboxes carry bounded generic envelopes and opaque body references, never Telegram- or provider-specific schemas. |
 | Payload storage | MVP event bodies are size-bounded and stored transactionally in PostgreSQL behind opaque body IDs. NATS commands never contain event bodies. |
-| Ownership | A mailbox belongs to one project-owned agent instance. Publishing to it requires an explicit capability. |
+| Ownership | A mailbox belongs to one project-owned agent instance. A gateway is never an implicit mailbox owner; publishing to an agent mailbox requires an explicit capability. |
 | Stateful concurrency | An instance with one persistent state volume executes at most one normal stateful run or update hook at a time. |
 | Run gate | The existing transactional instance run gate controls normal dispatch, update draining, recovery, and deferred work. |
 | Revision binding | Queued events do not bind a revision until eligible dispatch. Dispatch binds the then-active immutable revision. |
@@ -42,7 +42,8 @@ from durable application state rather than arbitrary process checkpoints.
 
 ## Non-goals
 
-This task does not add public HTTP routing, protocol-specific gateways,
+This task does not add public HTTP routing, gateway HTTP invocation,
+protocol-specific gateways,
 WebSockets, streaming services, arbitrary workflow-stack checkpointing,
 stateless parallelism, state sharding, session volumes, schedules, or
 interactive terminals.
@@ -70,7 +71,7 @@ distributed lock, or general workflow engine.
 
 - [ ] **2. Persist mailboxes and events transactionally**
   - [ ] **Add authoritative PostgreSQL records**
-    - [ ] Add instance-owned mailboxes, immutable accepted events, delivery
+    - [ ] Add agent-instance-owned mailboxes, immutable accepted events, delivery
       state, attempts, dispositions, payload references, and tombstone-safe
       provenance.
     - [ ] Enforce project and instance boundaries, immutable producer

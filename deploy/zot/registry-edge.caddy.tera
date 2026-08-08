@@ -1,0 +1,28 @@
+# Public OCI data-plane route. The token realm is served by the normal forge
+# application authority and is intentionally not proxied to Zot.
+{{ registry.authority }} {
+    @distribution path /v2/*
+
+    handle @distribution {
+        request_body {
+            max_size {{ registry.maximum_request_bytes }}
+        }
+        reverse_proxy 127.0.0.1:{{ zot.private_port }} {
+            header_up Host {host}
+            header_up X-Forwarded-Host {host}
+            header_up X-Forwarded-Proto https
+            transport http {
+                dial_timeout 5s
+                response_header_timeout 30s
+                read_timeout {{ registry.upload_timeout }}
+                write_timeout {{ registry.upload_timeout }}
+            }
+        }
+    }
+
+    # Metrics, Zot extensions, its UI, and every non-Distribution surface fail
+    # closed on the public registry authority.
+    handle {
+        respond "not found" 404
+    }
+}

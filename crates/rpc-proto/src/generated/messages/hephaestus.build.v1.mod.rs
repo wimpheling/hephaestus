@@ -19,20 +19,71 @@ pub mod __buffa {
         #[allow(unused_imports)]
         use super::*;
         include!("hephaestus.build.v1.build.__view.rs");
+        pub mod oneof {
+            #[allow(unused_imports)]
+            use super::*;
+            include!("hephaestus.build.v1.build.__view_oneof.rs");
+        }
+    }
+    pub mod oneof {
+        #[allow(unused_imports)]
+        use super::*;
+        include!("hephaestus.build.v1.build.__oneof.rs");
     }
     /// Register this package's `Any` type entries and extension entries.
     pub fn register_types(reg: &mut ::buffa::type_registry::TypeRegistry) {
         reg.register_json_any(super::__BUILD_JSON_ANY);
+        reg.register_json_any(super::__BUILD_TIMELINE_ENTRY_JSON_ANY);
+        reg.register_json_any(super::__DECLARED_ARTIFACT_JSON_ANY);
+        reg.register_json_any(super::__PRODUCED_ARTIFACT_JSON_ANY);
+        reg.register_json_any(super::__BUILD_VERIFICATION_JSON_ANY);
+        reg.register_json_any(super::__LIST_BUILDS_REQUEST_JSON_ANY);
+        reg.register_json_any(super::__LIST_BUILDS_RESPONSE_JSON_ANY);
         reg.register_json_any(super::__GET_BUILD_REQUEST_JSON_ANY);
         reg.register_json_any(super::__GET_BUILD_RESPONSE_JSON_ANY);
         reg.register_json_any(super::__REQUEST_BUILD_REQUEST_JSON_ANY);
         reg.register_json_any(super::__REQUEST_BUILD_RESPONSE_JSON_ANY);
+        reg.register_json_any(super::__RETRY_BUILD_REQUEST_JSON_ANY);
+        reg.register_json_any(super::__RETRY_BUILD_RESPONSE_JSON_ANY);
+        reg.register_json_any(super::__REBUILD_FOR_VERIFICATION_REQUEST_JSON_ANY);
+        reg.register_json_any(super::__REBUILD_FOR_VERIFICATION_RESPONSE_JSON_ANY);
+        reg.register_json_any(super::__WATCH_BUILD_REQUEST_JSON_ANY);
+        reg.register_json_any(super::__WATCH_BUILD_RESPONSE_JSON_ANY);
+        reg.register_json_any(super::__STREAM_BUILD_LOGS_REQUEST_JSON_ANY);
+        reg.register_json_any(super::__STREAM_BUILD_LOGS_RESPONSE_JSON_ANY);
+        reg.register_json_any(super::__WATCH_REPOSITORY_BUILDS_REQUEST_JSON_ANY);
+        reg.register_json_any(super::__BUILD_CHANGE_JSON_ANY);
+        reg.register_json_any(super::__WATCH_REPOSITORY_BUILDS_RESPONSE_JSON_ANY);
     }
 }
 #[doc(inline)]
 pub use self::__buffa::view::BuildView;
 #[doc(inline)]
 pub use self::__buffa::view::BuildOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::BuildTimelineEntryView;
+#[doc(inline)]
+pub use self::__buffa::view::BuildTimelineEntryOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::DeclaredArtifactView;
+#[doc(inline)]
+pub use self::__buffa::view::DeclaredArtifactOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::ProducedArtifactView;
+#[doc(inline)]
+pub use self::__buffa::view::ProducedArtifactOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::BuildVerificationView;
+#[doc(inline)]
+pub use self::__buffa::view::BuildVerificationOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::ListBuildsRequestView;
+#[doc(inline)]
+pub use self::__buffa::view::ListBuildsRequestOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::ListBuildsResponseView;
+#[doc(inline)]
+pub use self::__buffa::view::ListBuildsResponseOwnedView;
 #[doc(inline)]
 pub use self::__buffa::view::GetBuildRequestView;
 #[doc(inline)]
@@ -49,5 +100,49 @@ pub use self::__buffa::view::RequestBuildRequestOwnedView;
 pub use self::__buffa::view::RequestBuildResponseView;
 #[doc(inline)]
 pub use self::__buffa::view::RequestBuildResponseOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::RetryBuildRequestView;
+#[doc(inline)]
+pub use self::__buffa::view::RetryBuildRequestOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::RetryBuildResponseView;
+#[doc(inline)]
+pub use self::__buffa::view::RetryBuildResponseOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::RebuildForVerificationRequestView;
+#[doc(inline)]
+pub use self::__buffa::view::RebuildForVerificationRequestOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::RebuildForVerificationResponseView;
+#[doc(inline)]
+pub use self::__buffa::view::RebuildForVerificationResponseOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::WatchBuildRequestView;
+#[doc(inline)]
+pub use self::__buffa::view::WatchBuildRequestOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::WatchBuildResponseView;
+#[doc(inline)]
+pub use self::__buffa::view::WatchBuildResponseOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::StreamBuildLogsRequestView;
+#[doc(inline)]
+pub use self::__buffa::view::StreamBuildLogsRequestOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::StreamBuildLogsResponseView;
+#[doc(inline)]
+pub use self::__buffa::view::StreamBuildLogsResponseOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::WatchRepositoryBuildsRequestView;
+#[doc(inline)]
+pub use self::__buffa::view::WatchRepositoryBuildsRequestOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::BuildChangeView;
+#[doc(inline)]
+pub use self::__buffa::view::BuildChangeOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::WatchRepositoryBuildsResponseView;
+#[doc(inline)]
+pub use self::__buffa::view::WatchRepositoryBuildsResponseOwnedView;
 #[doc(inline)]
 pub use self::__buffa::register_types;

@@ -56,7 +56,7 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.ProjectRunsPage do
               :for={{dom_id, run} <- @runs}
               id={dom_id}
               destination={@run_destination.(run["id"])}
-              variant={:text}
+              variant={:resource_row}
             >
               <.text as="strong">{run["instance_name"]}</.text><.text as="span">
                 {run["repository_name"]}

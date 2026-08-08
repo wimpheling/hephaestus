@@ -1,10 +1,10 @@
 defmodule HephaestusWebWeb.ProjectAgentsState do
   @moduledoc "State and effects for project agent instances and imports."
 
-  alias HephaestusWeb.RPC.{Client, ProductEvents}
+  alias HephaestusWeb.RPC.Client
   alias HephaestusWebWeb.ProductEventReducer
 
-  @stream_mode :page_scoped
+  @stream_mode :none
   @statuses [
     :initial,
     :loading,
@@ -32,29 +32,6 @@ defmodule HephaestusWebWeb.ProjectAgentsState do
 
   def statuses, do: @statuses
   def stream_mode, do: @stream_mode
-  def begin_watch(state), do: ProductEventReducer.begin_watch(state)
-  def watch_scope(state), do: {:project, state.data.project_id}
-
-  def watch(identity, state, owner, generation) do
-    ProductEvents.watch(
-      identity,
-      watch_scope(state),
-      ProductEventReducer.committed_cursor(state.cursor),
-      &deliver_watch(&1, owner, generation)
-    )
-  end
-
-  def reduce(state, {:watch, response}) do
-    ProductEventReducer.reduce(state, response, [
-      :project_changed,
-      :repository_changed,
-      :build_changed,
-      :release_changed,
-      :agent_instance_changed
-    ])
-  end
-
-  def reduce(state, :watch_ended), do: ProductEventReducer.reconnect(state)
 
   def reduce(state, {:load, generation}),
     do: {%{state | status: :loading, error: nil, stream_generation: generation}, [:load]}
@@ -68,7 +45,7 @@ defmodule HephaestusWebWeb.ProjectAgentsState do
         release_catalog: release_catalog
     }
 
-    %{state | data: data} |> ProductEventReducer.snapshot_complete()
+    {%{state | status: :ready, data: data, error: nil}, []}
   end
 
   def reduce(state, {:loaded, _generation, _project, _instances, _catalog}), do: {state, []}
@@ -83,9 +60,6 @@ defmodule HephaestusWebWeb.ProjectAgentsState do
     do:
       {%{state | status: :access_revoked, error: "Project access was revoked."},
        [{:navigate, :organizations}]}
-
-  def reduce(state, :reconnecting), do: {%{state | status: :reconnecting}, []}
-  def reduce(state, :stale), do: {%{state | status: :stale}, [:load]}
 
   def present(state) do
     Map.merge(state.data, %{
@@ -137,10 +111,10 @@ defmodule HephaestusWebWeb.ProjectAgentsState do
   end
 
   defp presentation_status(%{status: status}) when status in [:ready, :submitting], do: :ready
-  defp presentation_status(%{status: :reconnecting}), do: :reconnecting
 
-  defp presentation_status(%{status: status}) when status in [:initial, :loading, :stale],
-    do: :loading
+  defp presentation_status(%{status: status})
+       when status in [:initial, :loading, :stale, :reconnecting],
+       do: :loading
 
   defp presentation_status(_state), do: :error
 
@@ -203,13 +177,4 @@ defmodule HephaestusWebWeb.ProjectAgentsState do
     do: "#{action}: #{HephaestusWeb.RPC.Error.present(error)}"
 
   defp command_error(action, _reason), do: "#{action} could not be completed."
-
-  defp deliver_watch(response, owner, generation) do
-    send(owner, {:page_watch, generation, response})
-
-    case response.item do
-      {kind, _value} when kind in [:retention_gap, :access_revoked] -> :halt
-      _item -> :cont
-    end
-  end
 end

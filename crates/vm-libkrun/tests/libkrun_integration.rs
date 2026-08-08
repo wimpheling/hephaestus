@@ -430,6 +430,7 @@ fn state_probe_spec(
             env: BTreeMap::new(),
             working_dir: Some(PathBuf::from("/")),
         },
+        runtime_authority: None,
         labels: BTreeMap::from([
             ("test".to_owned(), id.to_owned()),
             (
@@ -475,6 +476,7 @@ impl ProviderHarness for LibkrunHarness {
                 env: BTreeMap::new(),
                 working_dir: Some(PathBuf::from("/")),
             },
+            runtime_authority: None,
             labels: BTreeMap::from([("test".to_owned(), "conformance".to_owned())]),
         }
     }
@@ -555,6 +557,7 @@ fn integration_spec(
             },
             working_dir: Some(PathBuf::from("/workspace")),
         },
+        runtime_authority: None,
         labels: BTreeMap::from([
             ("test".to_owned(), "hardware".to_owned()),
             (
@@ -586,6 +589,7 @@ fn mode_spec(rootfs: PathBuf, id: &str, argument: &str, network: NetworkMode) ->
             env: BTreeMap::new(),
             working_dir: Some(PathBuf::from("/")),
         },
+        runtime_authority: None,
         labels: BTreeMap::from([("test".to_owned(), id.to_owned())]),
     }
 }
@@ -738,6 +742,7 @@ fn long_running_spec(rootfs: PathBuf, kind: &str) -> VmSpec {
             env: BTreeMap::new(),
             working_dir: Some(PathBuf::from("/")),
         },
+        runtime_authority: None,
         labels: BTreeMap::from([("test".to_owned(), kind.to_owned())]),
     }
 }

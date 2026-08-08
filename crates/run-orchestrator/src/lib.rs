@@ -10,9 +10,10 @@ pub use nats::{
     NatsCommandHandler, START_RUN_SUBJECT, TopologyError, ensure_jetstream_topology,
 };
 pub use orchestrator::{
-    OrchestratorError, PreparedRunRuntime, PreparedRunSecrets, RunAuthorizationError,
-    RunCompletionError, RunCompletionObserver, RunLaunchAuthorizer, RunOrchestrator,
-    RunRuntimeError, RunRuntimeManager, RunSecretError, RunSecretManager, VmSpecFactory,
+    OrchestratorError, PreparedRunAuthority, PreparedRunRuntime, PreparedRunSecrets,
+    RunAuthorityError, RunAuthorityManager, RunAuthorizationError, RunCompletionError,
+    RunCompletionObserver, RunLaunchAuthorizer, RunOrchestrator, RunRuntimeError,
+    RunRuntimeManager, RunSecretError, RunSecretManager, VmSpecFactory,
 };
 pub use repository::{CreateRunResult, RepositoryError, RunRepository, StoredVmEvent};
 pub use runtime_catalog::{

@@ -8,6 +8,7 @@ defmodule HephaestusWeb.RPC.Projection do
   """
 
   alias Hephaestus.Artifact.V1.Artifact
+  alias Hephaestus.Build.V1.{Build, BuildVerification}
 
   alias Hephaestus.Common.V1.{
     Cursor,
@@ -48,6 +49,14 @@ defmodule HephaestusWeb.RPC.Projection do
     AGGREGATE_TYPE_
     CHANGE_KIND_
     LIFECYCLE_STATE_
+    PREPARATION_STATE_
+    AVAILABILITY_STATE_
+    REGISTRY_PUBLICATION_STATE_
+    REGISTRY_AVAILABILITY_STATE_
+    REGISTRY_EVIDENCE_STATE_
+    DEPENDENCY_POLICY_
+    PROJECT_BUILDER_STATUS_
+    GIT_OPERATION_
   )
 
   @spec to_value(term()) :: term()
@@ -159,6 +168,33 @@ defmodule HephaestusWeb.RPC.Projection do
     |> Map.put("content_hash", artifact.sha256)
   end
 
+  def to_value(%Build{} = build) do
+    build
+    |> message_map()
+    |> Map.drop([
+      "parsed_declaration_json",
+      "build_policy_json",
+      "artifact_manifest_json",
+      "verifications"
+    ])
+    |> Map.merge(%{
+      "parsed_declaration" => decode_json(build.parsed_declaration_json, %{}),
+      "build_policy" => decode_json(build.build_policy_json, %{}),
+      "artifact_manifest" => decode_json(build.artifact_manifest_json, []),
+      "verifications" => Enum.map(build.verifications, &to_value/1)
+    })
+  end
+
+  def to_value(%BuildVerification{} = verification) do
+    verification
+    |> message_map()
+    |> Map.drop(["expected_manifest_json", "actual_manifest_json"])
+    |> Map.merge(%{
+      "expected_manifest" => decode_json(verification.expected_manifest_json, []),
+      "actual_manifest" => decode_optional_json(verification.actual_manifest_json)
+    })
+  end
+
   def to_value(%Release{build: build} = release) do
     build_map = message_map(build)
 
@@ -201,7 +237,7 @@ defmodule HephaestusWeb.RPC.Projection do
   def to_value(list) when is_list(list), do: Enum.map(list, &to_value/1)
 
   def to_value(value) when is_atom(value) do
-    encoded = Atom.to_string(value)
+    encoded = value |> Atom.to_string() |> String.split(".") |> List.last()
 
     case Enum.find(@enum_prefixes, &String.starts_with?(encoded, &1)) do
       nil -> encoded
@@ -261,4 +297,14 @@ defmodule HephaestusWeb.RPC.Projection do
 
   defp blank_to_nil(""), do: nil
   defp blank_to_nil(value), do: value
+
+  defp decode_json(contents, fallback) when is_binary(contents) do
+    case Jason.decode(contents) do
+      {:ok, value} -> value
+      {:error, _reason} -> fallback
+    end
+  end
+
+  defp decode_optional_json(""), do: nil
+  defp decode_optional_json(contents), do: decode_json(contents, nil)
 end

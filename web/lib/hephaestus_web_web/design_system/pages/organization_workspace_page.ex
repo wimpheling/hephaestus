@@ -30,7 +30,17 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.OrganizationWorkspacePage do
               Reusable agents, repositories, and exact runs grouped by project.
             </.text>
           </.frame>
-          <.tag>{length(@projects)} projects</.tag>
+          <.frame variant={:resource_primary}>
+            <.tag>{length(@projects)} projects</.tag>
+            <.action
+              :if={@organization}
+              id="create-project-link"
+              destination={"/organizations/#{@organization["id"]}/projects/new"}
+              variant={:secondary}
+            >
+              <.glyph name="hero-plus" /> Create project
+            </.action>
+          </.frame>
         </.frame>
 
         <.resource_list id="projects" layout={:projects} aria_label="Projects">

@@ -10,7 +10,8 @@ implemented as ordinary released software.
 Two authorized family members communicate through released Telegram gateway
 code. The cooking agent owns its model loop and persistent recipe memory,
 updates a static cooking blog through controlled Git publication, uses model
-and outbound capabilities without receiving provider credentials, survives a
+and Telegram APIs through declared destination-bound HTTPS egress without
+receiving provider credentials, survives a
 release update, and exposes exact release, state-volume, lease, authorization,
 trigger, capability-use, and result provenance.
 
@@ -23,16 +24,17 @@ platform-specific Telegram or cooking abstractions.
 | --- | --- |
 | Application ownership | The released gateway and cooking-agent repositories own Telegram semantics, user mapping, prompts, memory schema, model loop, retry/idempotency policy, blog generation, and user experience. |
 | Users | Exactly two configured family identities are authorized in the golden path; an unrecognized identity is rejected by released policy before it reaches project authority. |
-| Gateway boundary | The public gateway is a separate principal that may receive its route and publish only to the cooking-agent mailbox. It has no repository or cooking-agent state authority. |
-| Agent authority | The cooking agent may consume its mailbox, use its state, invoke its bounded model policy, send responses through its outbound binding, and read/propose changes to one blog repository. |
+| Gateway boundary | The public gateway is a separate principal with a synchronous HTTP handler under the shared Caddy `/gateway/` namespace. It may publish only to the cooking-agent mailbox and has no repository or cooking-agent state authority. |
+| Agent authority | The cooking agent may consume its mailbox, use its state, call explicitly bound HTTPS destinations through placeholder substitution, and read/propose changes to one blog repository. |
 | Publication | Canonical Git mutation remains a host-side controlled operation with exact target commit and authorization provenance. |
-| Credentials | Telegram and model credentials remain brokered and unavailable as raw guest values. |
+| Credentials | Model, outbound-provider, and Telegram inbound verification credentials remain brokered and unavailable as raw guest values. The gateway receives only a non-secret Telegram placeholder: MVP 04 rewrites a valid inbound header to that placeholder, and substitutes the real value only on the authorized outbound HTTPS request. |
 | State | Recipe memory is durable application state in the instance volume; the process may stop and reconstruct from state and mailbox events. |
 | Testability | Deterministic fake Telegram and model upstreams are the required automated path. A real-provider smoke test is optional and must not weaken credential controls. |
 
 ## Dependencies
 
 - [`mvp-01-agent-principals-capabilities-and-runtime-authority.md`](mvp-01-agent-principals-capabilities-and-runtime-authority.md)
+- [`mvp-01.2-replace-controlled-result-publication-with-runtime-git.md`](mvp-01.2-replace-controlled-result-publication-with-runtime-git.md)
 - [`mvp-02-durable-agent-mailboxes-and-stateful-dispatch.md`](mvp-02-durable-agent-mailboxes-and-stateful-dispatch.md)
 - [`mvp-03-event-ingress-and-caddy-routing.md`](mvp-03-event-ingress-and-caddy-routing.md)
 - [`mvp-04-brokered-model-and-outbound-capabilities.md`](mvp-04-brokered-model-and-outbound-capabilities.md)
@@ -50,8 +52,10 @@ guarantees, or production marketing material.
 - [ ] **1. Specify the complete acceptance fixture**
   - [ ] **Define released application behavior**
     - [ ] Specify the gateway request validation, Telegram update parsing,
-      stable application deduplication, two-user mapping, normalization, and
-      cooking-mailbox publication contract.
+      stable application deduplication, two-user mapping, normalization,
+      HTTP acknowledgement/status contract, and cooking-mailbox publication
+      contract. Specify the exact Telegram brokered placeholder slot, inbound
+      header rule, rotation behavior, and rejected-request responses.
     - [ ] Specify the cooking agent's model loop, bounded context, recipe
       SQLite schema, transaction and idempotency policy, blog rendering, and
       outbound response behavior.
@@ -62,10 +66,10 @@ guarantees, or production marketing material.
       runtime commands, and update hook.
   - [ ] **Define allowed and denied authority**
     - [ ] Record the exact gateway and cooking-agent capability declarations,
-      concrete bindings, grants, model policy, destinations, repository,
+      concrete bindings, grants, HTTPS destinations/substitution rules, repository,
       mailbox, route, secrets, and state volume.
     - [ ] Record explicit denials for other users, projects, repositories,
-      mailboxes, routes, secrets, models, destinations, authorization changes,
+      mailboxes, routes, secrets, undeclared API destinations, authorization changes,
       direct canonical Git writes, and Caddy administration.
     - [ ] Define acceptance assertions for every allowed and denied operation.
 
@@ -88,24 +92,30 @@ guarantees, or production marketing material.
     instances and immutable revisions.
   - [ ] Allocate cooking-agent state and its durable mailbox without giving
     either resource to the gateway.
-  - [ ] Bind the public Caddy route to the gateway and bind gateway publication
-    only to the cooking mailbox.
-  - [ ] Create and bind model and Telegram secrets without exposing values to
-    the binding user or either guest.
+  - [ ] Bind a public `/gateway/` Caddy route to the gateway's synchronous HTTP
+    handler, record its resolved URL, and bind gateway publication only to the
+    cooking mailbox.
+  - [ ] Create and bind model-API, Telegram-API, and Telegram-verification
+    secrets without exposing values to the binding user or either guest. Bind
+    their exact placeholder, destination, and gateway-route substitution rules.
   - [ ] Bind the cooking agent to one exact blog repository/ref and bounded
-    model/outbound policies.
+    HTTPS destination and placeholder-substitution bindings.
   - [ ] Record the exact installation, revision, attachment, route,
     authorization snapshot, state volume, fenced lease, dispatch order, and
     secret binding fixture IDs.
 
 - [ ] **4. Exercise normal operation**
   - [ ] Send simultaneous fake Telegram requests from both authorized users
-    through Caddy and receive durable acknowledgements.
+    through Caddy and receive the handler's specified bounded HTTP responses.
+  - [ ] Send valid, missing, invalid, and rotated-secret Telegram requests and
+    verify that the authorized inbound header is rewritten to the placeholder,
+    gateway repository code returns the specified responses, and no cooking
+    agent, repository, HTTPS egress, or state authority is used before rejection.
   - [ ] Verify the gateway normalizes and publishes only the expected bounded
     events to the cooking mailbox.
-  - [ ] Verify stateful cooking runs serialize, invoke the bounded model
-    adapter, update recipe memory transactionally, and send responses through
-    the brokered Telegram adapter.
+  - [ ] Verify stateful cooking runs serialize, call declared model and Telegram APIs
+    through destination-bound placeholder substitution, update recipe memory
+    transactionally, and handle ordinary API responses in repository code.
   - [ ] Verify a generated blog change uses the exact target commit, creates a
     controlled proposal/result, and reaches canonical Git only through the
     authorized host-side publisher.
@@ -116,14 +126,14 @@ guarantees, or production marketing material.
 
 - [ ] **5. Prove the authority boundary**
   - [ ] Send an event from an unauthorized Telegram identity and verify
-    rejection without cooking-agent, repository, model, or state authority.
+    rejection without cooking-agent, repository, HTTPS egress, or state authority.
   - [ ] Run an adversarial gateway release and prove it cannot inspect cooking
     state, read the blog repository, publish to another mailbox, broaden its
     route, inspect another project, or administer Caddy.
   - [ ] Run adversarial cooking-agent operations and prove they cannot read
-    brokered credentials, bypass broker-only networking, bind another
-    repository, choose a forbidden model/destination, alter authorization, or
-    write canonical Git directly.
+    real credentials, bypass forced proxy egress, use an unbound destination,
+    bind another repository, alter authorization, or write canonical Git
+    directly.
   - [ ] Rotate the Telegram and model credentials and prove later operations
     use the new exact versions while earlier run provenance remains intact.
   - [ ] Revoke broker authority during an active journey and verify live denial,
@@ -148,7 +158,7 @@ guarantees, or production marketing material.
   - [ ] From the project UI or inspection API, resolve one journey from public
     request through route, gateway revision, normalized mailbox event,
     cooking-agent revision, authorization snapshot, state volume, fenced
-    lease, dispatch order, state-access outcome, model and outbound uses, Git
+    lease, dispatch order, state-access outcome, HTTPS egress uses, Git
     result, and final disposition.
   - [ ] Verify tombstoning an attachment or revoking a release, route, grant,
     or secret preserves historical resolution while denying new unauthorized
@@ -171,8 +181,8 @@ guarantees, or production marketing material.
   - [ ] Inject crashes around ingress commit, dispatch, state commit, broker
     call, result publication, update hook, revision activation, and cleanup.
   - [ ] Scan PostgreSQL, NATS, logs, traces, metrics, filesystems, browser
-    payloads, screenshots, and guest-visible paths for model and Telegram
-    credential sentinels.
+    payloads, screenshots, VM environment, files, and process arguments for
+    application-API and Telegram verification-secret sentinels.
 
 - [ ] **9. Verify and document**
   - [ ] Document how the reference applications own their loops and protocol
@@ -196,6 +206,6 @@ guarantees, or production marketing material.
 Record source repository commits, build/release/instance/revision IDs, route
 and mailbox IDs, state-volume and fenced-lease IDs, dispatch order and
 state-access outcomes, authorization snapshots, secret versions and leases,
-model/outbound usage records, Git target/result commits, update and recovery
+HTTPS egress usage records, Git target/result commits, update and recovery
 IDs, denial evidence, test counts, screenshots, and exact verification
 commands.

@@ -22,6 +22,8 @@ pub mod __buffa {
     }
     /// Register this package's `Any` type entries and extension entries.
     pub fn register_types(reg: &mut ::buffa::type_registry::TypeRegistry) {
+        reg.register_json_any(super::__CREATE_PROJECT_REQUEST_JSON_ANY);
+        reg.register_json_any(super::__CREATE_PROJECT_RESPONSE_JSON_ANY);
         reg.register_json_any(super::__PROJECT_JSON_ANY);
         reg.register_json_any(super::__PROJECT_REPOSITORY_JSON_ANY);
         reg.register_json_any(super::__INSTANCE_SUMMARY_JSON_ANY);
@@ -36,6 +38,14 @@ pub mod __buffa {
         reg.register_json_any(super::__LIST_IMPORTABLE_RELEASE_AGENTS_RESPONSE_JSON_ANY);
     }
 }
+#[doc(inline)]
+pub use self::__buffa::view::CreateProjectRequestView;
+#[doc(inline)]
+pub use self::__buffa::view::CreateProjectRequestOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::CreateProjectResponseView;
+#[doc(inline)]
+pub use self::__buffa::view::CreateProjectResponseOwnedView;
 #[doc(inline)]
 pub use self::__buffa::view::ProjectView;
 #[doc(inline)]

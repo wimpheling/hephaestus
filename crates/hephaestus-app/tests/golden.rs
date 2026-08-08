@@ -4,7 +4,9 @@ use async_trait::async_trait;
 use forge_domain::{GitRef, OrganizationId};
 use forge_postgres::PgForgeRepository;
 use forge_service::{CreateRepository, GitStorage};
-use hephaestus_app::{AppConfig, HephaestusApp, OidcConfig, RunEventKind, VmBackendConfig};
+use hephaestus_app::{
+    AppConfig, HephaestusApp, OidcConfig, RegistryConfig, RunEventKind, VmBackendConfig,
+};
 use identity_domain::UserId;
 use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use run_runtime_local::LocalRunRuntimeConfig;
@@ -159,6 +161,20 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
     let mut transient_runtime_roots = backend_fixture.transient_runtime_roots;
     transient_runtime_roots.push(root.join("workspaces"));
     let backend = git_backend().await;
+    let git_pre_receive_hook = root.join("git-hooks/pre-receive");
+    std::fs::create_dir_all(
+        git_pre_receive_hook
+            .parent()
+            .expect("Git hook has a parent directory"),
+    )
+    .expect("Git hook directory");
+    std::fs::write(&git_pre_receive_hook, b"#!/bin/sh\nexit 1\n")
+        .expect("write fail-closed Git hook fixture");
+    std::fs::set_permissions(
+        &git_pre_receive_hook,
+        std::os::unix::fs::PermissionsExt::from_mode(0o700),
+    )
+    .expect("Git hook fixture mode");
     let secret_mount_root = root.join("secret-mounts");
     std::fs::create_dir(&secret_mount_root).expect("secret mount root");
     std::fs::set_permissions(
@@ -175,12 +191,39 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
         ),
         repository_root: repository_root.clone(),
         git_http_backend: backend,
+        git_pre_receive_hook,
         git_http_limits: git_http::GitHttpLimits::default(),
         oidc: OidcConfig {
             issuer: String::from(ISSUER),
             audience: String::from(AUDIENCE),
             algorithm: Algorithm::HS256,
             decoding_key: jsonwebtoken::DecodingKey::from_secret(SIGNING_SECRET),
+        },
+        registry: RegistryConfig {
+            token_issuer: Arc::new(registry_token::RegistryTokenIssuer::new(
+                "https://forge.golden.invalid/v1/registry/token"
+                    .parse()
+                    .expect("registry issuer"),
+                "registry.golden.invalid".parse().expect("registry service"),
+                registry_token::SigningKey::hs256(
+                    "golden-v1".parse().expect("registry key id"),
+                    SIGNING_SECRET,
+                )
+                .expect("registry signing key"),
+                registry_token::TokenLifetime::new(300).expect("registry token lifetime"),
+            )),
+            notification_callback: registry_notification::CallbackCredential::parse(
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            )
+            .expect("registry notification callback"),
+            zot: registry_zot::ZotClientConfig::new(
+                registry_domain::RegistryAuthority::parse("registry.golden.invalid")
+                    .expect("registry authority"),
+                "http://127.0.0.1:1/",
+            )
+            .expect("Zot client configuration"),
+            reconciliation_lease: Duration::from_secs(30),
+            reconciliation_interval: Duration::from_secs(30),
         },
         volumes: LocalVolumeConfig {
             volume_root: backend_fixture.volume_root,
@@ -200,6 +243,9 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             runtime_root: root.join("run-runtime"),
             release_artifact_root: root.join("release-artifacts"),
         },
+        runtime_authority_handoff_root: root.join("runtime-authority-handoffs"),
+        runtime_authority_handoff_key: [0x39; 32],
+        runtime_authority_session_ttl: Duration::from_secs(3_600),
         build_workspace_root: root.join("isolated-builds"),
         build_timeout: Duration::from_secs(30),
         secret_mounts: EphemeralSecretConfig {
@@ -217,6 +263,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
                 host_path: backend_fixture.root_image,
             },
         )]),
+        oci_builder: None,
         runtime_policy: hephaestus_app::RuntimePolicy {
             version: String::from("golden/v1"),
             max_vcpus: 2,

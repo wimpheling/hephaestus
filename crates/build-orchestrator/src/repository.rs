@@ -18,6 +18,9 @@ pub struct BuildInput {
     pub source_commit: String,
     pub source_ref: String,
     pub build: BuildConfig,
+    /// Exact immutable OCI image reference resolved before this request was
+    /// persisted. Worker execution never resolves mutable catalog keys.
+    pub image_reference: String,
 }
 
 /// Durable identity allocated while claiming a build.
@@ -62,6 +65,26 @@ pub enum BuildRepositoryError {
 /// Provider-neutral durable build persistence boundary.
 #[async_trait]
 pub trait BuildRepository: Send + Sync + 'static {
+    /// Archives the active failed attempt and resets the execution for a
+    /// trusted retry worker.
+    async fn reset_for_retry(&self, id: BuildRequestId) -> Result<(), BuildRepositoryError>;
+    /// Claims a verification execution without changing the immutable build.
+    async fn claim_verification(
+        &self,
+        id: BuildRequestId,
+    ) -> Result<ClaimedBuild, BuildRepositoryError>;
+    /// Stores the verification result and returns whether manifests matched.
+    async fn complete_verification(
+        &self,
+        id: BuildRequestId,
+        actual_manifest: &Value,
+    ) -> Result<bool, BuildRepositoryError>;
+    /// Records a verification execution failure.
+    async fn fail_verification(
+        &self,
+        id: BuildRequestId,
+        code: &str,
+    ) -> Result<(), BuildRepositoryError>;
     async fn recoverable(&self) -> Result<Vec<RecoverableBuild>, BuildRepositoryError>;
     async fn finalizing(&self) -> Result<Vec<BuildRequestId>, BuildRepositoryError>;
     /// Resets an execution after provider cleanup confirms no guest remains.

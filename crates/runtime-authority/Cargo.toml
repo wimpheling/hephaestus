@@ -1,0 +1,20 @@
+[package]
+name = "runtime-authority"
+description = "Runtime authority issuance and handoff application contracts"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[package.metadata.hephaestus]
+layer = "application"
+context = "authorization"
+
+[dependencies]
+async-trait.workspace = true
+capability-domain = { path = "../capability-domain" }
+thiserror.workspace = true
+time.workspace = true
+uuid.workspace = true
+
+[lints]
+workspace = true

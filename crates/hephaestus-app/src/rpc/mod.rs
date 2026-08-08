@@ -4,12 +4,14 @@ mod artifact;
 mod auth;
 mod build;
 mod error;
+mod image_catalog;
 // The event adapter is shared with the single outbound product-event adapter.
 #[allow(clippy::redundant_pub_crate)]
 pub(crate) mod event;
 mod identity;
 mod instance;
 mod organization;
+mod pat;
 mod project;
 mod release;
 mod repository;
@@ -28,6 +30,7 @@ use connectrpc::{ConnectRpcService, DeadlinePolicy, Limits, Router};
 use connectrpc_reflection::Reflector;
 use control_plane_postgres::ControlPlanePool as PgPool;
 use event_application::MutationReceiptReader;
+use forge_postgres::PgForgeRepository;
 use forge_service::GitStorage;
 use identity_application::IdempotentIdentityResolver;
 use release_artifact_store::LocalArtifactStore;
@@ -134,6 +137,7 @@ pub fn mediator_signing_key(internal_token: &[u8]) -> [u8; 32] {
 /// Application dependencies shared by the generated Connect services.
 pub(crate) struct ApplicationDependencies {
     pool: PgPool,
+    forge: Arc<PgForgeRepository>,
     mutation_receipt_reader: Arc<dyn MutationReceiptReader>,
     identity_resolver: Arc<dyn IdempotentIdentityResolver>,
 }
@@ -141,11 +145,13 @@ pub(crate) struct ApplicationDependencies {
 impl ApplicationDependencies {
     pub(crate) fn new(
         pool: PgPool,
+        forge: Arc<PgForgeRepository>,
         mutation_receipt_reader: Arc<dyn MutationReceiptReader>,
         identity_resolver: Arc<dyn IdempotentIdentityResolver>,
     ) -> Self {
         Self {
             pool,
+            forge,
             mutation_receipt_reader,
             identity_resolver,
         }
@@ -200,15 +206,24 @@ pub(crate) fn service(
     );
     let router =
         rpc_proto::connect::hephaestus::secret::v1::SecretServiceExt::register(secret, router);
-    let router = project::register(
+    let router = image_catalog::register(
         router,
         pool.clone(),
         MediatorAuthenticator::new(mediator_signing_key),
     );
+    let router = project::register(
+        router,
+        pool.clone(),
+        Arc::clone(&applications.forge),
+        MediatorAuthenticator::new(mediator_signing_key),
+        mutation_receipts.clone(),
+    );
     let router = repository::register(
         router,
         pool.clone(),
+        Arc::clone(&applications.forge),
         MediatorAuthenticator::new(mediator_signing_key),
+        mutation_receipts.clone(),
     );
     let router = repository_browser::register(
         router,
@@ -216,16 +231,27 @@ pub(crate) fn service(
         storage,
         MediatorAuthenticator::new(mediator_signing_key),
     );
-    let router = build::register(
+    let router = pat::register(
         router,
         pool.clone(),
         MediatorAuthenticator::new(mediator_signing_key),
         mutation_receipts.clone(),
     );
+    let router = build::register(
+        router,
+        pool.clone(),
+        MediatorAuthenticator::new(mediator_signing_key),
+        mutation_receipts.clone(),
+        Arc::clone(&event_wakeups),
+        cursor_key,
+    );
     let router = release::register(
         router,
         pool.clone(),
         MediatorAuthenticator::new(mediator_signing_key),
+        mutation_receipts.clone(),
+        Arc::clone(&event_wakeups),
+        cursor_key,
     );
     let router = artifact::register(
         router,

@@ -213,6 +213,7 @@ pub enum AggregateType {
     AGGREGATE_TYPE_AGENT_SECRET_BINDING = 14i32,
     AGGREGATE_TYPE_ARTIFACT = 15i32,
     AGGREGATE_TYPE_IDENTITY_PROFILE = 16i32,
+    AGGREGATE_TYPE_REGISTRY_PUBLICATION = 17i32,
 }
 impl AggregateType {
     ///Idiomatic alias for [`Self::AGGREGATE_TYPE_UNSPECIFIED`]; `Debug` prints the variant name.
@@ -266,6 +267,9 @@ impl AggregateType {
     ///Idiomatic alias for [`Self::AGGREGATE_TYPE_IDENTITY_PROFILE`]; `Debug` prints the variant name.
     #[allow(non_upper_case_globals)]
     pub const IdentityProfile: Self = Self::AGGREGATE_TYPE_IDENTITY_PROFILE;
+    ///Idiomatic alias for [`Self::AGGREGATE_TYPE_REGISTRY_PUBLICATION`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const RegistryPublication: Self = Self::AGGREGATE_TYPE_REGISTRY_PUBLICATION;
 }
 impl ::core::default::Default for AggregateType {
     fn default() -> Self {
@@ -382,6 +386,9 @@ impl ::buffa::Enumeration for AggregateType {
             }
             15i32 => ::core::option::Option::Some(Self::AGGREGATE_TYPE_ARTIFACT),
             16i32 => ::core::option::Option::Some(Self::AGGREGATE_TYPE_IDENTITY_PROFILE),
+            17i32 => {
+                ::core::option::Option::Some(Self::AGGREGATE_TYPE_REGISTRY_PUBLICATION)
+            }
             _ => ::core::option::Option::None,
         }
     }
@@ -411,6 +418,9 @@ impl ::buffa::Enumeration for AggregateType {
             }
             Self::AGGREGATE_TYPE_ARTIFACT => "AGGREGATE_TYPE_ARTIFACT",
             Self::AGGREGATE_TYPE_IDENTITY_PROFILE => "AGGREGATE_TYPE_IDENTITY_PROFILE",
+            Self::AGGREGATE_TYPE_REGISTRY_PUBLICATION => {
+                "AGGREGATE_TYPE_REGISTRY_PUBLICATION"
+            }
         }
     }
     fn from_proto_name(name: &str) -> ::core::option::Option<Self> {
@@ -466,6 +476,9 @@ impl ::buffa::Enumeration for AggregateType {
             "AGGREGATE_TYPE_IDENTITY_PROFILE" => {
                 ::core::option::Option::Some(Self::AGGREGATE_TYPE_IDENTITY_PROFILE)
             }
+            "AGGREGATE_TYPE_REGISTRY_PUBLICATION" => {
+                ::core::option::Option::Some(Self::AGGREGATE_TYPE_REGISTRY_PUBLICATION)
+            }
             _ => ::core::option::Option::None,
         }
     }
@@ -488,6 +501,7 @@ impl ::buffa::Enumeration for AggregateType {
             Self::AGGREGATE_TYPE_AGENT_SECRET_BINDING,
             Self::AGGREGATE_TYPE_ARTIFACT,
             Self::AGGREGATE_TYPE_IDENTITY_PROFILE,
+            Self::AGGREGATE_TYPE_REGISTRY_PUBLICATION,
         ]
     }
 }
@@ -4422,6 +4436,171 @@ pub const __ARTIFACT_CHANGED_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::
     from_json: ::buffa::type_registry::any_from_json::<ArtifactChanged>,
     is_wkt: false,
 };
+/// Safe invalidation for one immutable OCI publication. The corresponding
+/// Builder Catalog snapshot supplies the immutable reference and evidence.
+/// Zot callback data never crosses the product-event boundary.
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct RegistryPublicationChanged {
+    /// Field 1: `change`
+    #[serde(
+        rename = "change",
+        with = "::buffa::json_helpers::proto_enum",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_default_enum_value"
+    )]
+    pub change: ::buffa::EnumValue<ChangeKind>,
+    /// Field 2: `state`
+    #[serde(
+        rename = "state",
+        with = "::buffa::json_helpers::proto_enum",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_default_enum_value"
+    )]
+    pub state: ::buffa::EnumValue<LifecycleState>,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for RegistryPublicationChanged {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("RegistryPublicationChanged")
+            .field("change", &self.change)
+            .field("state", &self.state)
+            .finish()
+    }
+}
+impl RegistryPublicationChanged {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.event.v1.RegistryPublicationChanged";
+}
+::buffa::impl_default_instance!(RegistryPublicationChanged);
+impl ::buffa::MessageName for RegistryPublicationChanged {
+    const PACKAGE: &'static str = "hephaestus.event.v1";
+    const NAME: &'static str = "RegistryPublicationChanged";
+    const FULL_NAME: &'static str = "hephaestus.event.v1.RegistryPublicationChanged";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.event.v1.RegistryPublicationChanged";
+}
+impl ::buffa::Message for RegistryPublicationChanged {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, _cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        {
+            let val = self.change.to_i32();
+            if val != 0 {
+                size += 1u32 + ::buffa::types::int32_encoded_len(val) as u32;
+            }
+        }
+        {
+            let val = self.state.to_i32();
+            if val != 0 {
+                size += 1u32 + ::buffa::types::int32_encoded_len(val) as u32;
+            }
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        _cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        {
+            let val = self.change.to_i32();
+            if val != 0 {
+                ::buffa::types::put_int32_field(1u32, val, buf);
+            }
+        }
+        {
+            let val = self.state.to_i32();
+            if val != 0 {
+                ::buffa::types::put_int32_field(2u32, val, buf);
+            }
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.change = ::buffa::EnumValue::from(
+                    ::buffa::types::decode_int32(buf)?,
+                );
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.state = ::buffa::EnumValue::from(
+                    ::buffa::types::decode_int32(buf)?,
+                );
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.change = ::buffa::EnumValue::from(0);
+        self.state = ::buffa::EnumValue::from(0);
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for RegistryPublicationChanged {
+    const PROTO_FQN: &'static str = "hephaestus.event.v1.RegistryPublicationChanged";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for RegistryPublicationChanged {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __REGISTRY_PUBLICATION_CHANGED_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/hephaestus.event.v1.RegistryPublicationChanged",
+    to_json: ::buffa::type_registry::any_to_json::<RegistryPublicationChanged>,
+    from_json: ::buffa::type_registry::any_from_json::<RegistryPublicationChanged>,
+    is_wkt: false,
+};
 /// Canonical client-facing event envelope. High-volume logs, metrics, artifact
 /// bytes, secret material, command parameters, and unrestricted diagnostics are
 /// deliberately absent.
@@ -4734,6 +4913,16 @@ impl ::buffa::Message for ProductEvent {
                         += 2u32 + ::buffa::encoding::varint_len(inner as u64) as u32
                             + inner;
                 }
+                __buffa::oneof::product_event::Payload::RegistryPublicationChanged(
+                    x,
+                ) => {
+                    let __slot = __cache.reserve();
+                    let inner = x.compute_size(__cache);
+                    __cache.set(__slot, inner);
+                    size
+                        += 2u32 + ::buffa::encoding::varint_len(inner as u64) as u32
+                            + inner;
+                }
             }
         }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
@@ -4909,6 +5098,16 @@ impl ::buffa::Message for ProductEvent {
                 __buffa::oneof::product_event::Payload::IdentityProfileChanged(x) => {
                     ::buffa::types::put_len_delimited_header(
                         35u32,
+                        __cache.consume_next(),
+                        buf,
+                    );
+                    x.write_to(__cache, buf);
+                }
+                __buffa::oneof::product_event::Payload::RegistryPublicationChanged(
+                    x,
+                ) => {
+                    ::buffa::types::put_len_delimited_header(
+                        36u32,
                         __cache.consume_next(),
                         buf,
                     );
@@ -5363,6 +5562,28 @@ impl ::buffa::Message for ProductEvent {
                     ::buffa::Message::merge_length_delimited(&mut val, buf, ctx)?;
                     self.payload = ::core::option::Option::Some(
                         __buffa::oneof::product_event::Payload::IdentityProfileChanged(
+                            ::buffa::alloc::boxed::Box::new(val),
+                        ),
+                    );
+                }
+            }
+            36u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                if let ::core::option::Option::Some(
+                    __buffa::oneof::product_event::Payload::RegistryPublicationChanged(
+                        ref mut existing,
+                    ),
+                ) = self.payload
+                {
+                    ::buffa::Message::merge_length_delimited(&mut **existing, buf, ctx)?;
+                } else {
+                    let mut val = ::core::default::Default::default();
+                    ::buffa::Message::merge_length_delimited(&mut val, buf, ctx)?;
+                    self.payload = ::core::option::Option::Some(
+                        __buffa::oneof::product_event::Payload::RegistryPublicationChanged(
                             ::buffa::alloc::boxed::Box::new(val),
                         ),
                     );
@@ -5915,6 +6136,31 @@ impl<'de> serde::Deserialize<'de> for ProductEvent {
                                 }
                                 __oneof_payload = Some(
                                     __buffa::oneof::product_event::Payload::IdentityProfileChanged(
+                                        ::buffa::alloc::boxed::Box::new(v),
+                                    ),
+                                );
+                            }
+                        }
+                        "registryPublicationChanged"
+                        | "registry_publication_changed" => {
+                            let v: ::core::option::Option<RegistryPublicationChanged> = map
+                                .next_value_seed(
+                                    ::buffa::json_helpers::NullableDeserializeSeed(
+                                        ::buffa::json_helpers::DefaultDeserializeSeed::<
+                                            RegistryPublicationChanged,
+                                        >::new(),
+                                    ),
+                                )?;
+                            if let Some(v) = v {
+                                if __oneof_payload.is_some() {
+                                    return Err(
+                                        serde::de::Error::custom(
+                                            "multiple oneof fields set for 'payload'",
+                                        ),
+                                    );
+                                }
+                                __oneof_payload = Some(
+                                    __buffa::oneof::product_event::Payload::RegistryPublicationChanged(
                                         ::buffa::alloc::boxed::Box::new(v),
                                     ),
                                 );

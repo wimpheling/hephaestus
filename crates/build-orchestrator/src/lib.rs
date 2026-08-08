@@ -56,8 +56,9 @@ pub struct BuildExecutorConfig {
     pub repository_root: PathBuf,
     /// Absolute trusted Git executable.
     pub git_binary: PathBuf,
-    /// Platform-approved digest-pinned build root images.
-    pub root_images: BTreeMap<String, RootFilesystem>,
+    /// Materialized immutable OCI images, keyed by exact digest-pinned
+    /// reference. The same cache is shared by build and guest execution.
+    pub image_filesystems: BTreeMap<String, RootFilesystem>,
     /// Maximum wall-clock duration for one build guest.
     pub timeout: Duration,
 }
@@ -216,6 +217,114 @@ impl BuildExecutor {
         self.finish_release(claimed, release_inputs).await
     }
 
+    /// Resets one failed execution through the trusted worker boundary and
+    /// runs the next durable attempt with the same immutable inputs.
+    ///
+    /// # Errors
+    ///
+    /// Returns a durable repository, execution, or release-finalization
+    /// failure.
+    pub async fn retry(
+        &self,
+        build_request_id: BuildRequestId,
+    ) -> Result<BuildExecutionResult, BuildExecutionError> {
+        self.repository.reset_for_retry(build_request_id).await?;
+        self.execute(build_request_id).await
+    }
+
+    /// Re-executes immutable build inputs and compares the produced manifest
+    /// with the original draft release without mutating that release.
+    ///
+    /// # Errors
+    ///
+    /// Returns a durable repository, VM, artifact, or verification failure.
+    #[allow(clippy::too_many_lines)]
+    pub async fn verify(
+        &self,
+        build_request_id: BuildRequestId,
+    ) -> Result<(), BuildExecutionError> {
+        let claimed = self.repository.claim_verification(build_request_id).await?;
+        let workspace = self.active_path(build_request_id);
+        let materializer = self.config.clone();
+        let input = claimed.input.clone();
+        let prepared = tokio::task::spawn_blocking(move || {
+            prepare_workspace(&materializer, &input, &workspace)
+        })
+        .await
+        .map_err(|_| BuildExecutionError::WorkerJoin)?;
+        let workspace = match prepared {
+            Ok(workspace) => workspace,
+            Err(error) => {
+                self.repository
+                    .fail_verification(build_request_id, "source_materialization")
+                    .await?;
+                return Err(error);
+            }
+        };
+        let spec = match self.vm_spec(&claimed, &workspace) {
+            Ok(spec) => spec,
+            Err(error) => {
+                self.repository
+                    .fail_verification(build_request_id, "invalid_build_contract")
+                    .await?;
+                cleanup_workspace(&workspace.root)?;
+                return Err(error);
+            }
+        };
+        let Ok(instance) = self.provider.provision(spec).await else {
+            self.repository
+                .fail_verification(build_request_id, "vm_provision")
+                .await?;
+            cleanup_workspace(&workspace.root)?;
+            return Err(BuildExecutionError::Vm);
+        };
+        let mut events = instance.subscribe_events();
+        if instance.start().await.is_err() {
+            drop(instance.destroy().await);
+            self.repository
+                .fail_verification(build_request_id, "vm_start")
+                .await?;
+            cleanup_workspace(&workspace.root)?;
+            return Err(BuildExecutionError::Vm);
+        }
+        let (exit, _logs, _metrics, timed_out) =
+            collect_execution(&instance, &mut events, self.config.timeout).await;
+        if timed_out {
+            drop(instance.stop(StopMode::Force).await);
+        }
+        if instance.destroy().await.is_err() {
+            self.repository
+                .fail_verification(build_request_id, "vm_destroy")
+                .await?;
+            cleanup_workspace(&workspace.root)?;
+            return Err(BuildExecutionError::VmCleanup);
+        }
+        let exit = exit.ok_or(BuildExecutionError::Vm)?;
+        if timed_out || exit.code != Some(0) || exit.signal.is_some() {
+            self.repository
+                .fail_verification(build_request_id, "guest_failed")
+                .await?;
+            cleanup_workspace(&workspace.root)?;
+            return Err(BuildExecutionError::GuestFailed);
+        }
+        seal_output(&workspace.output)?;
+        let imported = self
+            .artifacts
+            .import_for(build_request_id.as_uuid(), &workspace.output)?;
+        validate_declared_outputs(&claimed.input.build, &imported)?;
+        let artifacts = release_inputs(build_request_id, &claimed.input.build, &imported)?;
+        let matches = self
+            .repository
+            .complete_verification(build_request_id, &artifact_manifest(&artifacts))
+            .await?;
+        cleanup_workspace(&workspace.root)?;
+        if matches {
+            Ok(())
+        } else {
+            Err(BuildExecutionError::VerificationMismatch)
+        }
+    }
+
     /// Reaps build VMs abandoned before the one-way sealed-output boundary.
     ///
     /// The durable release and execution identities are retained. Once
@@ -338,10 +447,10 @@ impl BuildExecutor {
         let build = &claimed.input.build;
         let root = self
             .config
-            .root_images
-            .get(&build.root_image)
+            .image_filesystems
+            .get(&claimed.input.image_reference)
             .cloned()
-            .ok_or(BuildExecutionError::RootImageDenied)?;
+            .ok_or(BuildExecutionError::ImageUnavailable)?;
         let network = match build.network.profile {
             NetworkProfile::Disabled => NetworkMode::Disabled,
             NetworkProfile::Egress => NetworkMode::UserMode {
@@ -378,6 +487,7 @@ impl BuildExecutor {
                 env: BTreeMap::new(),
                 working_dir: Some(PathBuf::from(&build.working_directory)),
             },
+            runtime_authority: None,
             labels: BTreeMap::from([
                 (String::from("hephaestus.kind"), String::from("build")),
                 (
@@ -414,23 +524,12 @@ impl BuildExecutor {
         id: BuildRequestId,
         artifacts: &[ReleaseArtifactInput],
     ) -> Result<(), BuildExecutionError> {
-        let manifest = artifacts
-            .iter()
-            .map(|artifact| {
-                json!({
-                    "id": artifact.id,
-                    "path": artifact.path,
-                    "kind": artifact_kind(artifact.kind),
-                    "mode": artifact.mode,
-                    "content_hash": artifact.content_hash,
-                    "size_bytes": artifact.size_bytes,
-                    "media_type": artifact.media_type,
-                    "storage_key": artifact.storage_key,
-                })
-            })
-            .collect::<Vec<_>>();
+        let manifest = artifact_manifest(artifacts);
+        let manifest = manifest
+            .as_array()
+            .ok_or(BuildExecutionError::StoredState)?;
         self.repository
-            .mark_imported(id, &manifest)
+            .mark_imported(id, manifest)
             .await
             .map_err(Into::into)
     }
@@ -806,6 +905,26 @@ fn release_inputs(
         .collect()
 }
 
+fn artifact_manifest(artifacts: &[ReleaseArtifactInput]) -> Value {
+    Value::Array(
+        artifacts
+            .iter()
+            .map(|artifact| {
+                json!({
+                    "id": artifact.id,
+                    "path": artifact.path,
+                    "kind": artifact_kind(artifact.kind),
+                    "mode": artifact.mode,
+                    "content_hash": artifact.content_hash,
+                    "size_bytes": artifact.size_bytes,
+                    "media_type": artifact.media_type,
+                    "storage_key": artifact.storage_key,
+                })
+            })
+            .collect(),
+    )
+}
+
 fn stable_artifact_id(build_request_id: BuildRequestId, path: &str) -> ReleaseArtifactId {
     let mut digest = Sha256::new();
     digest.update(b"hephaestus.release-artifact-id.v1");
@@ -943,9 +1062,10 @@ pub enum BuildExecutionError {
     /// Trusted Git inspection failed.
     #[error("isolated build Git inspection failed")]
     Git,
-    /// Selected build root image is not platform approved.
-    #[error("isolated build root image is denied")]
-    RootImageDenied,
+    /// The immutable OCI image selected for this build is not materialized on
+    /// this worker.
+    #[error("isolated build image is unavailable")]
+    ImageUnavailable,
     /// Selected build network policy is not supported.
     #[error("isolated build network policy is denied")]
     NetworkDenied,
@@ -958,6 +1078,9 @@ pub enum BuildExecutionError {
     /// Guest exited unsuccessfully or timed out.
     #[error("isolated build guest failed")]
     GuestFailed,
+    /// A verification rebuild produced a different artifact manifest.
+    #[error("verification rebuild produced a different artifact manifest")]
+    VerificationMismatch,
     /// Sealed output includes an unsafe object.
     #[error("isolated build output is unsafe")]
     UnsafeOutput,
@@ -998,9 +1121,9 @@ version = 2
 name = "builder"
 key = "builder"
 [build]
+image = { key = "build" }
 command = "/usr/bin/build"
 working_directory = "/workspace/source"
-root_image = "build@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 triggers = ["refs/heads/main"]
 [build.resources]
 vcpus = 1
@@ -1011,13 +1134,12 @@ profile = "disabled"
 path = "bin/agent"
 kind = "executable"
 [guest]
+image = { key = "run" }
 command = "bin/agent"
 working_directory = "bin"
 [resources]
 vcpus = 1
 memory_mib = 128
-[root_image]
-reference = "run@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 [workspace]
 mount = true
 path = "/workspace/repo"
@@ -1029,7 +1151,7 @@ profile = "disabled"
 [triggers]
 push = false
 refs = []
-"#;
+    "#;
 
     #[test]
     fn materializes_two_exact_commits_without_git_metadata() {
@@ -1070,7 +1192,7 @@ refs = []
             workspace_root: fs::canonicalize(&workspaces).expect("workspace path"),
             repository_root: fs::canonicalize(&repositories).expect("repository path"),
             git_binary: fs::canonicalize("/usr/bin/git").expect("Git binary"),
-            root_images: BTreeMap::new(),
+            image_filesystems: BTreeMap::new(),
             timeout: Duration::from_secs(30),
         };
         let build = agent_config::parse(CONFIG.as_bytes())
@@ -1092,6 +1214,9 @@ refs = []
                 source_commit: commit,
                 source_ref: String::from("refs/heads/main"),
                 build: build.clone(),
+                image_reference: String::from(
+                    "build@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                ),
             };
             let active = config
                 .workspace_root

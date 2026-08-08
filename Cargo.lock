@@ -47,10 +47,13 @@ dependencies = [
 name = "agent-config"
 version = "0.1.0"
 dependencies = [
+ "capability-domain",
  "forge-domain",
+ "git-capability-domain",
  "serde",
  "sha2",
  "toml",
+ "uuid",
 ]
 
 [[package]]
@@ -166,7 +169,7 @@ dependencies = [
  "once_cell",
  "pin-project",
  "portable-atomic",
- "rand",
+ "rand 0.8.7",
  "regex",
  "ring",
  "rustls-native-certs",
@@ -312,6 +315,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
+name = "bit-set"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "08807e080ed7f9d5433fa9b275196cfc35414f66a0c79d864dc51a0d825231a3"
+dependencies = [
+ "bit-vec",
+]
+
+[[package]]
+name = "bit-vec"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5e764a1d40d510daf35e07be9eb06e75770908c27d411ee6c92109c9840eaaf7"
+
+[[package]]
 name = "bitflags"
 version = "1.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -355,6 +373,8 @@ dependencies = [
  "forge-postgres",
  "forge-service",
  "identity-domain",
+ "registry-domain",
+ "registry-postgres",
  "release-domain",
  "release-postgres",
  "serde_json",
@@ -424,6 +444,8 @@ version = "0.1.0"
 dependencies = [
  "agent-config",
  "async-trait",
+ "builder-catalog-application",
+ "builder-catalog-domain",
  "release-artifact-store",
  "release-domain",
  "release-postgres",
@@ -468,6 +490,45 @@ dependencies = [
 ]
 
 [[package]]
+name = "builder-catalog-application"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "builder-catalog-domain",
+ "identity-domain",
+ "thiserror 2.0.19",
+ "time",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "builder-catalog-domain"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror 2.0.19",
+ "time",
+ "uuid",
+]
+
+[[package]]
+name = "builder-catalog-postgres"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "authz-postgres",
+ "builder-catalog-application",
+ "builder-catalog-domain",
+ "identity-domain",
+ "serde_json",
+ "sqlx",
+ "time",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "bumpalo"
 version = "3.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -486,6 +547,51 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "capability-audit"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "capability-domain",
+ "identity-domain",
+ "runtime-types",
+ "thiserror 2.0.19",
+ "time",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "capability-audit-postgres"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "authz-postgres",
+ "capability-audit",
+ "capability-domain",
+ "identity-domain",
+ "runtime-types",
+ "serde_json",
+ "serial_test",
+ "sqlx",
+ "time",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "capability-domain"
+version = "0.1.0"
+dependencies = [
+ "runtime-types",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.19",
+ "time",
+ "uuid",
 ]
 
 [[package]]
@@ -794,7 +900,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "78c8292055d1c1df0cce5d180393dc8cce0abec0a7102adb6c7b1eef6016d60a"
 dependencies = [
  "generic-array",
- "rand_core",
+ "rand_core 0.6.4",
  "typenum",
 ]
 
@@ -1159,12 +1265,16 @@ dependencies = [
  "authz-domain",
  "authz-postgres",
  "axum",
+ "base64",
  "forge-domain",
  "forge-service",
  "futures-util",
+ "git-capability-domain",
  "git-http",
  "gix",
  "identity-domain",
+ "pat-domain",
+ "pat-postgres",
  "release-domain",
  "run-domain",
  "run-orchestrator",
@@ -1336,13 +1446,25 @@ dependencies = [
 
 [[package]]
 name = "getrandom"
+version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "899def5c37c4fd7b2664648c28120ecec138e4d395b459e5ca34f9cce2dd77fd"
+dependencies = [
+ "cfg-if",
+ "libc",
+ "r-efi 5.3.0",
+ "wasip2",
+]
+
+[[package]]
+name = "getrandom"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "300e883d756b2e4ec94e02791f39b04b522276138852cfc41d9fb7e904106099"
 dependencies = [
  "cfg-if",
  "libc",
- "r-efi",
+ "r-efi 6.0.0",
 ]
 
 [[package]]
@@ -1356,30 +1478,60 @@ dependencies = [
 ]
 
 [[package]]
+name = "git-capability-domain"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.19",
+ "uuid",
+]
+
+[[package]]
+name = "git-credential-hephaestus"
+version = "0.1.0"
+dependencies = [
+ "pat-domain",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.19",
+ "zeroize",
+]
+
+[[package]]
 name = "git-http"
 version = "0.1.0"
 dependencies = [
  "async-trait",
  "authz-domain",
  "axum",
+ "base64",
  "bytes",
  "forge-domain",
  "forge-postgres",
  "forge-service",
  "futures-util",
+ "git-capability-domain",
  "http",
  "identity-application",
  "identity-domain",
  "identity-oidc",
+ "pat-domain",
+ "pat-postgres",
+ "runtime-git-authority",
  "serde",
  "serde_json",
  "serial_test",
  "tempfile",
  "thiserror 2.0.19",
+ "time",
  "tokio",
  "tokio-stream",
  "tracing",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]
@@ -2081,6 +2233,10 @@ dependencies = [
  "buffa-types",
  "build-orchestrator",
  "build-postgres",
+ "builder-catalog-application",
+ "builder-catalog-domain",
+ "builder-catalog-postgres",
+ "capability-domain",
  "connectrpc",
  "connectrpc-reflection",
  "control-plane-postgres",
@@ -2090,6 +2246,7 @@ dependencies = [
  "forge-postgres",
  "forge-service",
  "futures-util",
+ "git-capability-domain",
  "git-http",
  "hmac",
  "http",
@@ -2098,6 +2255,20 @@ dependencies = [
  "identity-oidc",
  "identity-postgres",
  "jsonwebtoken",
+ "oci-builder-postgres",
+ "oci-builder-runtime-local",
+ "oci-builder-worker",
+ "pat-domain",
+ "pat-postgres",
+ "registry-domain",
+ "registry-http",
+ "registry-notification",
+ "registry-notification-http",
+ "registry-postgres",
+ "registry-publisher",
+ "registry-reconciler",
+ "registry-token",
+ "registry-zot",
  "release-artifact-store",
  "release-domain",
  "release-postgres",
@@ -2110,6 +2281,11 @@ dependencies = [
  "run-orchestrator",
  "run-postgres",
  "run-runtime-local",
+ "runtime-authority",
+ "runtime-authority-postgres",
+ "runtime-git-authority",
+ "runtime-git-authority-postgres",
+ "runtime-handoff-local",
  "runtime-types",
  "secret-application",
  "secret-broker",
@@ -2263,13 +2439,16 @@ version = "0.1.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "96547c2556ec9d12fb1578c4eaf448b04993e7fb79cbaad930a656880a6bdfa0"
 dependencies = [
+ "base64",
  "bytes",
  "futures-channel",
  "futures-util",
  "http",
  "http-body",
  "hyper",
+ "ipnet",
  "libc",
+ "percent-encoding",
  "pin-project-lite",
  "socket2",
  "tokio",
@@ -2446,6 +2625,12 @@ checksum = "879f10e63c20629ecabbb64a8010319738c66a5cd0c29b02d63d272b03751d01"
 dependencies = [
  "generic-array",
 ]
+
+[[package]]
+name = "ipnet"
+version = "2.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a756c3fac73139e83f14c2d742155dd2b78d3ee56597b419a0579b7bdd6dd78"
 
 [[package]]
 name = "is_terminal_polyfill"
@@ -2730,7 +2915,7 @@ dependencies = [
  "ed25519-dalek",
  "getrandom 0.2.17",
  "log",
- "rand",
+ "rand 0.8.7",
  "signatory",
 ]
 
@@ -2749,7 +2934,7 @@ version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc895af95856f929163a0aa20c26a78d26bfdc839f51b9d5aa7a5b79e52b7e83"
 dependencies = [
- "rand",
+ "rand 0.8.7",
 ]
 
 [[package]]
@@ -2773,7 +2958,7 @@ dependencies = [
  "num-integer",
  "num-iter",
  "num-traits",
- "rand",
+ "rand 0.8.7",
  "smallvec",
  "zeroize",
 ]
@@ -2829,6 +3014,59 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ef25abbcd74fb2609453eb695bd2f860d389e457f67dc17cafc8b8cbc89d0c33"
 
 [[package]]
+name = "oci-builder-postgres"
+version = "0.1.0"
+dependencies = [
+ "agent-config",
+ "async-trait",
+ "build-orchestrator",
+ "builder-catalog-domain",
+ "oci-builder-worker",
+ "registry-domain",
+ "registry-postgres",
+ "serde_json",
+ "sqlx",
+ "time",
+ "uuid",
+ "vm-trait",
+]
+
+[[package]]
+name = "oci-builder-runtime-local"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "builder-catalog-domain",
+ "oci-builder-worker",
+ "registry-domain",
+ "registry-publisher",
+ "registry-token",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.19",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "oci-builder-worker"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "builder-catalog-domain",
+ "registry-domain",
+ "registry-token",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.19",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2879,6 +3117,39 @@ dependencies = [
  "redox_syscall 0.5.18",
  "smallvec",
  "windows-link",
+]
+
+[[package]]
+name = "pat-domain"
+version = "0.1.0"
+dependencies = [
+ "forge-domain",
+ "git-capability-domain",
+ "identity-domain",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.19",
+ "time",
+ "uuid",
+]
+
+[[package]]
+name = "pat-postgres"
+version = "0.1.0"
+dependencies = [
+ "forge-domain",
+ "getrandom 0.3.4",
+ "git-capability-domain",
+ "identity-domain",
+ "pat-domain",
+ "serde_json",
+ "serial_test",
+ "sqlx",
+ "thiserror 2.0.19",
+ "time",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -3036,6 +3307,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "proptest"
+version = "1.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4b45fcc2344c680f5025fe57779faef368840d0bd1f42f216291f0dc4ace4744"
+dependencies = [
+ "bit-set",
+ "bit-vec",
+ "bitflags 2.13.1",
+ "num-traits",
+ "rand 0.9.5",
+ "rand_chacha 0.9.0",
+ "rand_xorshift",
+ "regex-syntax",
+ "rusty-fork",
+ "tempfile",
+ "unarray",
+]
+
+[[package]]
+name = "quick-error"
+version = "1.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a1d01941d82fa2ab50be1e79e6714289dd7cde78eba4c074bc5a4374f650dfe0"
+
+[[package]]
 name = "quote"
 version = "1.0.47"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3043,6 +3339,12 @@ checksum = "1fbf4db142a473a8d80c26bbf18454ed458bf8d26c8219c331daecfdbd079001"
 dependencies = [
  "proc-macro2",
 ]
+
+[[package]]
+name = "r-efi"
+version = "5.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"
 
 [[package]]
 name = "r-efi"
@@ -3057,8 +3359,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "22f6172bdec972074665ed81ed53b71da00bfc44b65a753cfde883ec4c702a1a"
 dependencies = [
  "libc",
- "rand_chacha",
- "rand_core",
+ "rand_chacha 0.3.1",
+ "rand_core 0.6.4",
+]
+
+[[package]]
+name = "rand"
+version = "0.9.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b9ef1d0d795eb7d84685bca4f72f3649f064e6641543d3a8c415898726a57b41"
+dependencies = [
+ "rand_chacha 0.9.0",
+ "rand_core 0.9.5",
 ]
 
 [[package]]
@@ -3068,7 +3380,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e6c10a63a0fa32252be49d21e7709d4d4baf8d231c2dbce1eaa8141b9b127d88"
 dependencies = [
  "ppv-lite86",
- "rand_core",
+ "rand_core 0.6.4",
+]
+
+[[package]]
+name = "rand_chacha"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d3022b5f1df60f26e1ffddd6c66e8aa15de382ae63b3a0c1bfc0e4d3e3f325cb"
+dependencies = [
+ "ppv-lite86",
+ "rand_core 0.9.5",
 ]
 
 [[package]]
@@ -3078,6 +3400,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec0be4795e2f6a28069bec0b5ff3e2ac9bafc99e6a9a7dc3547996c5c816922c"
 dependencies = [
  "getrandom 0.2.17",
+]
+
+[[package]]
+name = "rand_core"
+version = "0.9.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "76afc826de14238e6e8c374ddcc1fa19e374fd8dd986b0d2af0d02377261d83c"
+dependencies = [
+ "getrandom 0.3.4",
+]
+
+[[package]]
+name = "rand_xorshift"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "513962919efc330f829edb2535844d1b912b0fbe2ca165d613e4e8788bb05a5a"
+dependencies = [
+ "rand_core 0.9.5",
 ]
 
 [[package]]
@@ -3128,6 +3468,155 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
+name = "registry-domain"
+version = "0.1.0"
+dependencies = [
+ "builder-catalog-domain",
+ "forge-domain",
+ "runtime-types",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "uuid",
+]
+
+[[package]]
+name = "registry-http"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "identity-domain",
+ "registry-token",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "time",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "registry-notification"
+version = "0.1.0"
+dependencies = [
+ "hmac",
+ "http",
+ "registry-domain",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.19",
+ "time",
+ "uuid",
+]
+
+[[package]]
+name = "registry-notification-http"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "http",
+ "registry-notification",
+ "serde",
+ "thiserror 2.0.19",
+ "time",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "registry-postgres"
+version = "0.1.0"
+dependencies = [
+ "authz-domain",
+ "authz-postgres",
+ "builder-catalog-domain",
+ "forge-domain",
+ "identity-domain",
+ "registry-domain",
+ "runtime-types",
+ "serial_test",
+ "sqlx",
+ "thiserror 2.0.19",
+ "time",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "registry-publisher"
+version = "0.1.0"
+dependencies = [
+ "registry-domain",
+ "registry-token",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "registry-reconciler"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "registry-domain",
+ "thiserror 2.0.19",
+ "time",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "registry-release"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "registry-domain",
+ "registry-postgres",
+ "registry-publisher",
+ "registry-token",
+ "serde",
+ "serde_json",
+ "time",
+ "tokio",
+ "zeroize",
+]
+
+[[package]]
+name = "registry-token"
+version = "0.1.0"
+dependencies = [
+ "jsonwebtoken",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "uuid",
+]
+
+[[package]]
+name = "registry-zot"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "registry-domain",
+ "registry-reconciler",
+ "registry-token",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.19",
+ "tokio",
+]
+
+[[package]]
 name = "release-artifact-store"
 version = "0.1.0"
 dependencies = [
@@ -3160,8 +3649,10 @@ dependencies = [
  "async-nats",
  "authz-domain",
  "authz-postgres",
+ "capability-domain",
  "event-postgres",
  "forge-domain",
+ "git-capability-domain",
  "identity-domain",
  "release-domain",
  "release-service",
@@ -3182,10 +3673,46 @@ dependencies = [
 name = "release-service"
 version = "0.1.0"
 dependencies = [
+ "capability-domain",
  "forge-domain",
+ "git-capability-domain",
  "release-domain",
  "runtime-types",
  "uuid",
+]
+
+[[package]]
+name = "reqwest"
+version = "0.12.28"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eddd3ca559203180a307f12d114c268abf583f59b03cb906fd0b3ff8646c1147"
+dependencies = [
+ "base64",
+ "bytes",
+ "futures-channel",
+ "futures-core",
+ "futures-util",
+ "http",
+ "http-body",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "js-sys",
+ "log",
+ "percent-encoding",
+ "pin-project-lite",
+ "serde",
+ "serde_json",
+ "serde_urlencoded",
+ "sync_wrapper",
+ "tokio",
+ "tower",
+ "tower-http",
+ "tower-service",
+ "url",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
 ]
 
 [[package]]
@@ -3282,7 +3809,7 @@ dependencies = [
  "num-traits",
  "pkcs1",
  "pkcs8",
- "rand_core",
+ "rand_core 0.6.4",
  "signature",
  "spki",
  "subtle",
@@ -3364,6 +3891,74 @@ dependencies = [
  "tracing",
  "uuid",
  "vm-trait",
+]
+
+[[package]]
+name = "runtime-authority"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "capability-domain",
+ "thiserror 2.0.19",
+ "time",
+ "uuid",
+]
+
+[[package]]
+name = "runtime-authority-postgres"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "capability-domain",
+ "run-domain",
+ "runtime-authority",
+ "sqlx",
+ "time",
+ "uuid",
+]
+
+[[package]]
+name = "runtime-git-authority"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "base64",
+ "capability-domain",
+ "git-capability-domain",
+ "sha2",
+ "thiserror 2.0.19",
+ "time",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
+name = "runtime-git-authority-postgres"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "capability-domain",
+ "git-capability-domain",
+ "runtime-git-authority",
+ "sqlx",
+ "time",
+ "uuid",
+]
+
+[[package]]
+name = "runtime-handoff-local"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "capability-domain",
+ "runtime-authority",
+ "runtime-git-authority",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "time",
+ "uuid",
+ "zeroize",
 ]
 
 [[package]]
@@ -3483,6 +4078,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 
 [[package]]
+name = "rusty-fork"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cc6bf79ff24e648f6da1f8d1f011e9cac26491b619e6b9280f2b47f1774e6ee2"
+dependencies = [
+ "fnv",
+ "quick-error",
+ "tempfile",
+ "wait-timeout",
+]
+
+[[package]]
 name = "ryu"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3570,6 +4177,7 @@ dependencies = [
  "async-trait",
  "authz-domain",
  "authz-postgres",
+ "capability-domain",
  "forge-domain",
  "identity-domain",
  "release-domain",
@@ -3852,7 +4460,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c1e303f8205714074f6068773f0e29527e0453937fe837c9717d066635b65f31"
 dependencies = [
  "pkcs8",
- "rand_core",
+ "rand_core 0.6.4",
  "signature",
  "zeroize",
 ]
@@ -3864,7 +4472,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77549399552de45a898a580c1b41d445bf730df867cc44e6c0233bbc4b8329de"
 dependencies = [
  "digest",
- "rand_core",
+ "rand_core 0.6.4",
 ]
 
 [[package]]
@@ -4062,7 +4670,7 @@ dependencies = [
  "memchr",
  "once_cell",
  "percent-encoding",
- "rand",
+ "rand 0.8.7",
  "rsa",
  "serde",
  "sha1",
@@ -4102,7 +4710,7 @@ dependencies = [
  "md-5",
  "memchr",
  "once_cell",
- "rand",
+ "rand 0.8.7",
  "serde",
  "serde_json",
  "sha2",
@@ -4198,6 +4806,9 @@ name = "sync_wrapper"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0bf256ce5efdfa370213c1dabab5935a12e49f2c58d15e9eac2870d3b4f27263"
+dependencies = [
+ "futures-core",
+]
 
 [[package]]
 name = "synstructure"
@@ -4403,7 +5014,7 @@ dependencies = [
  "futures-sink",
  "http",
  "httparse",
- "rand",
+ "rand 0.8.7",
  "ring",
  "rustls-pki-types",
  "tokio",
@@ -4481,9 +5092,11 @@ dependencies = [
  "http-body",
  "http-body-util",
  "pin-project-lite",
+ "tower",
  "tower-layer",
  "tower-service",
  "tracing",
+ "url",
 ]
 
 [[package]]
@@ -4581,6 +5194,12 @@ name = "typenum"
 version = "1.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
+
+[[package]]
+name = "unarray"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eaea85b334db583fe3274d12b4cd1880032beab409c0d774be044d4480ab9a94"
 
 [[package]]
 name = "unicode-bidi"
@@ -4718,6 +5337,7 @@ dependencies = [
  "secret-domain",
  "secret-runtime",
  "serde",
+ "serde_json",
  "tempfile",
  "thiserror 2.0.19",
  "tokio",
@@ -4725,6 +5345,7 @@ dependencies = [
  "uuid",
  "vm-conformance",
  "vm-trait",
+ "zeroize",
 ]
 
 [[package]]
@@ -4734,6 +5355,7 @@ dependencies = [
  "async-trait",
  "thiserror 2.0.19",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -4779,6 +5401,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "wait-timeout"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "09ac3b126d3914f9849036f826e054cbabdc8519970b8998ddaf3b5bd3c65f11"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "walkdir"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4802,6 +5433,15 @@ name = "wasi"
 version = "0.11.1+wasi-snapshot-preview1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ccf3ec651a847eb01de73ccad15eb7d99f80485de043efb2f370cd654f4ea44b"
+
+[[package]]
+name = "wasip2"
+version = "1.0.4+wasi-0.2.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b67efb37e106e55ce722a510d6b5f9c17f083e5fc79afc2badeb12cc313d9487"
+dependencies = [
+ "wit-bindgen",
+]
 
 [[package]]
 name = "wasite"
@@ -4862,6 +5502,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc1b4cb0cc549fcf58d7dfc081778139b3d283a081644e833e84682ad71cea24"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "web-sys"
+version = "0.3.103"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8622dcb61c0bcc9fffa6938bed81210af2da9a7e4a1a834b2e37a59b6dfb6141"
+dependencies = [
+ "js-sys",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -5078,6 +5728,12 @@ name = "winnow"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "23b97319f7b8343df12cc98938e5c3eb436064524c8d2b4e30a1d3a36eecdf81"
+
+[[package]]
+name = "wit-bindgen"
+version = "0.57.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 
 [[package]]
 name = "workspace-domain"

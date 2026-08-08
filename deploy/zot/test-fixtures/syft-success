@@ -1,0 +1,20 @@
+#!/bin/sh
+set -eu
+
+output=''
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --output)
+            output=${2#spdx-json=}
+            shift 2
+            ;;
+        spdx-json=*)
+            output=${1#spdx-json=}
+            shift
+            ;;
+        *) shift ;;
+    esac
+done
+
+[ -n "$output" ]
+printf '%s\n' '{"spdxVersion":"SPDX-2.3","dataLicense":"CC0-1.0","SPDXID":"SPDXRef-DOCUMENT","name":"repository-builder-e2e","documentNamespace":"https://hephaestus.invalid/e2e/sbom","creationInfo":{"created":"2026-01-01T00:00:00Z","creators":["Tool: hephaestus-e2e"]},"packages":[]}' >"$output"

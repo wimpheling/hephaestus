@@ -1,0 +1,33 @@
+[package]
+name = "registry-postgres"
+description = "PostgreSQL control-plane adapter for forge-owned OCI registry publications"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[package.metadata.hephaestus]
+layer = "adapter"
+context = "registry"
+postgres_adapter = true
+database_context = "registry"
+allow_cross_context_dependencies = ["authz-postgres"]
+
+[dependencies]
+builder-catalog-domain = { path = "../builder-catalog-domain" }
+authz-domain = { path = "../authz-domain" }
+authz-postgres = { path = "../authz-postgres" }
+forge-domain = { path = "../forge-domain" }
+identity-domain = { path = "../identity-domain" }
+registry-domain = { path = "../registry-domain" }
+runtime-types = { path = "../runtime-types" }
+sqlx.workspace = true
+thiserror.workspace = true
+time.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+serial_test = "3"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

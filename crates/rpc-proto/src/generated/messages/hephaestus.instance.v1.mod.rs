@@ -34,6 +34,12 @@ pub mod __buffa {
     pub fn register_types(reg: &mut ::buffa::type_registry::TypeRegistry) {
         reg.register_json_any(super::__REF_SELECTOR_JSON_ANY);
         reg.register_json_any(super::__INSTANCE_REVISION_JSON_ANY);
+        reg.register_json_any(super::__CAPABILITY_REQUIREMENT_JSON_ANY);
+        reg.register_json_any(super::__CAPABILITY_RESOURCE_OPTION_JSON_ANY);
+        reg.register_json_any(super::__CAPABILITY_BINDING_JSON_ANY);
+        reg.register_json_any(super::__RUNTIME_AUTHORITY_SESSION_JSON_ANY);
+        reg.register_json_any(super::__CAPABILITY_AUDIT_RECORD_JSON_ANY);
+        reg.register_json_any(super::__CAPABILITY_METRICS_JSON_ANY);
         reg.register_json_any(super::__ATTACHMENT_JSON_ANY);
         reg.register_json_any(super::__UPDATE_EVENT_JSON_ANY);
         reg.register_json_any(super::__AGENT_UPDATE_JSON_ANY);
@@ -60,6 +66,9 @@ pub mod __buffa {
         reg.register_json_any(super::__RECOVER_UPDATE_RESPONSE_JSON_ANY);
         reg.register_json_any(super::__BIND_SECRET_REQUEST_JSON_ANY);
         reg.register_json_any(super::__BIND_SECRET_RESPONSE_JSON_ANY);
+        reg.register_json_any(super::__CAPABILITY_BINDING_SELECTION_JSON_ANY);
+        reg.register_json_any(super::__REVISE_CAPABILITIES_REQUEST_JSON_ANY);
+        reg.register_json_any(super::__REVISE_CAPABILITIES_RESPONSE_JSON_ANY);
     }
 }
 #[doc(inline)]
@@ -70,6 +79,30 @@ pub use self::__buffa::view::RefSelectorOwnedView;
 pub use self::__buffa::view::InstanceRevisionView;
 #[doc(inline)]
 pub use self::__buffa::view::InstanceRevisionOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::CapabilityRequirementView;
+#[doc(inline)]
+pub use self::__buffa::view::CapabilityRequirementOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::CapabilityResourceOptionView;
+#[doc(inline)]
+pub use self::__buffa::view::CapabilityResourceOptionOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::CapabilityBindingView;
+#[doc(inline)]
+pub use self::__buffa::view::CapabilityBindingOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::RuntimeAuthoritySessionView;
+#[doc(inline)]
+pub use self::__buffa::view::RuntimeAuthoritySessionOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::CapabilityAuditRecordView;
+#[doc(inline)]
+pub use self::__buffa::view::CapabilityAuditRecordOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::CapabilityMetricsView;
+#[doc(inline)]
+pub use self::__buffa::view::CapabilityMetricsOwnedView;
 #[doc(inline)]
 pub use self::__buffa::view::AttachmentView;
 #[doc(inline)]
@@ -174,5 +207,17 @@ pub use self::__buffa::view::BindSecretRequestOwnedView;
 pub use self::__buffa::view::BindSecretResponseView;
 #[doc(inline)]
 pub use self::__buffa::view::BindSecretResponseOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::CapabilityBindingSelectionView;
+#[doc(inline)]
+pub use self::__buffa::view::CapabilityBindingSelectionOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::ReviseCapabilitiesRequestView;
+#[doc(inline)]
+pub use self::__buffa::view::ReviseCapabilitiesRequestOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::ReviseCapabilitiesResponseView;
+#[doc(inline)]
+pub use self::__buffa::view::ReviseCapabilitiesResponseOwnedView;
 #[doc(inline)]
 pub use self::__buffa::register_types;

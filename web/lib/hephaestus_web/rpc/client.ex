@@ -15,9 +15,25 @@ defmodule HephaestusWeb.RPC.Client do
 
   alias Hephaestus.Identity.V1.{IdentityService, ResolveIdentityRequest}
 
+  alias Hephaestus.Image.V1.{
+    GetImageRequest,
+    ImageCatalogService,
+    ListImagesRequest
+  }
+
+  alias Hephaestus.Build.V1.{
+    BuildService,
+    GetBuildRequest,
+    ListBuildsRequest,
+    RebuildForVerificationRequest,
+    RetryBuildRequest,
+    RequestBuildRequest
+  }
+
   alias Hephaestus.Instance.V1.{
     AgentInstanceService,
     BindSecretRequest,
+    CapabilityBindingSelection,
     CreateAttachmentRequest,
     CreateUpdateRequest,
     GetInstanceRequest,
@@ -27,6 +43,7 @@ defmodule HephaestusWeb.RPC.Client do
     RefSelector,
     RemoveAttachmentRequest,
     ReviseInstanceRequest,
+    ReviseCapabilitiesRequest,
     SetAttachmentEnabledRequest,
     TriggerPolicy
   }
@@ -39,7 +56,18 @@ defmodule HephaestusWeb.RPC.Client do
     OrganizationService
   }
 
+  alias Hephaestus.Pat.V1.{
+    CreatePersonalAccessTokenRequest,
+    GitOperation,
+    ListPersonalAccessTokensRequest,
+    PersonalAccessTokenScope,
+    PersonalAccessTokenService,
+    RevokePersonalAccessTokenRequest,
+    RotatePersonalAccessTokenRequest
+  }
+
   alias Hephaestus.Project.V1.{
+    CreateProjectRequest,
     GetProjectRequest,
     ListImportableReleaseAgentsRequest,
     ListProjectInstancesRequest,
@@ -47,9 +75,16 @@ defmodule HephaestusWeb.RPC.Client do
     ProjectService
   }
 
-  alias Hephaestus.Release.V1.{GetReleaseRequest, ListRepositoryReleasesRequest, ReleaseService}
+  alias Hephaestus.Release.V1.{
+    GetReleaseRequest,
+    ListRepositoryReleasesRequest,
+    PublishReleaseRequest,
+    ReleaseService,
+    SetDraftVersionRequest
+  }
 
   alias Hephaestus.Repository.V1.{
+    CreateRepositoryRequest,
     GetRepositoryRequest,
     ListRepositoryInstancesRequest,
     RepositoryService
@@ -99,6 +134,7 @@ defmodule HephaestusWeb.RPC.Client do
   @page_size 100
   @list_organizations "/hephaestus.organization.v1.OrganizationService/ListOrganizations"
   @create_secret "/hephaestus.secret.v1.SecretService/CreateSecret"
+  @list_personal_access_tokens "/hephaestus.pat.v1.PersonalAccessTokenService/ListPersonalAccessTokens"
 
   @doc "Resolves a verified OIDC subject using bootstrap-only mediator authority."
   def resolve_identity(issuer, %{"sub" => subject} = claims)
@@ -155,6 +191,61 @@ defmodule HephaestusWeb.RPC.Client do
     )
   end
 
+  @doc "Lists safe metadata for the current user's developer Git credentials."
+  def list_personal_access_tokens(%Identity{} = identity) do
+    paginate(
+      identity,
+      @list_personal_access_tokens,
+      fn page -> %ListPersonalAccessTokensRequest{page: page} end,
+      &PersonalAccessTokenService.Stub.list_personal_access_tokens/3,
+      :tokens
+    )
+  end
+
+  @doc "Creates a developer Git credential and returns its bearer value once."
+  def create_personal_access_token(identity, attributes) do
+    with {:ok, expiration} <- timestamp(attributes["expires_at"]),
+         {:ok, scope} <- personal_access_token_scope(attributes) do
+      mutation(
+        identity,
+        "/hephaestus.pat.v1.PersonalAccessTokenService/CreatePersonalAccessToken",
+        CreatePersonalAccessTokenRequest,
+        [label: attributes["label"], scope: scope, expires_at: expiration],
+        &PersonalAccessTokenService.Stub.create_personal_access_token/3
+      )
+    end
+  end
+
+  @doc "Rotates a developer Git credential and returns its replacement once."
+  def rotate_personal_access_token(identity, token_id, attributes) do
+    with {:ok, expiration} <- timestamp(attributes["expires_at"]),
+         {:ok, scope} <- personal_access_token_scope(attributes) do
+      mutation(
+        identity,
+        "/hephaestus.pat.v1.PersonalAccessTokenService/RotatePersonalAccessToken",
+        RotatePersonalAccessTokenRequest,
+        [
+          token_id: id(token_id),
+          label: attributes["label"],
+          scope: scope,
+          expires_at: expiration
+        ],
+        &PersonalAccessTokenService.Stub.rotate_personal_access_token/3
+      )
+    end
+  end
+
+  @doc "Immediately revokes one owned developer Git credential."
+  def revoke_personal_access_token(identity, token_id),
+    do:
+      mutation(
+        identity,
+        "/hephaestus.pat.v1.PersonalAccessTokenService/RevokePersonalAccessToken",
+        RevokePersonalAccessTokenRequest,
+        [token_id: id(token_id)],
+        &PersonalAccessTokenService.Stub.revoke_personal_access_token/3
+      )
+
   def get_organization(identity, organization_id),
     do:
       unary_projected(
@@ -197,6 +288,38 @@ defmodule HephaestusWeb.RPC.Client do
         %GetProjectRequest{project_id: id(project_id)},
         &ProjectService.Stub.get_project/3,
         :project
+      )
+
+  def list_images(identity),
+    do:
+      unary_projected(
+        identity,
+        "/hephaestus.image.v1.ImageCatalogService/ListImages",
+        %ListImagesRequest{},
+        &ImageCatalogService.Stub.list_images/3,
+        :images,
+        maximum_response_bytes: 1_048_576
+      )
+
+  def get_image(identity, image_id),
+    do:
+      unary_projected(
+        identity,
+        "/hephaestus.image.v1.ImageCatalogService/GetImage",
+        %GetImageRequest{image_id: id(image_id)},
+        &ImageCatalogService.Stub.get_image/3,
+        :image,
+        maximum_response_bytes: 65_536
+      )
+
+  def create_project(identity, organization_id, name, description \\ ""),
+    do:
+      mutation(
+        identity,
+        "/hephaestus.project.v1.ProjectService/CreateProject",
+        CreateProjectRequest,
+        [organization_id: id(organization_id), name: name, description: description],
+        &ProjectService.Stub.create_project/3
       )
 
   def list_project_repositories(identity, project_id),
@@ -297,6 +420,92 @@ defmodule HephaestusWeb.RPC.Client do
         :repository
       )
 
+  def create_repository(
+        identity,
+        project_id,
+        name,
+        default_branch,
+        is_public,
+        agent_runs_enabled
+      ),
+      do:
+        mutation(
+          identity,
+          "/hephaestus.repository.v1.RepositoryService/CreateRepository",
+          CreateRepositoryRequest,
+          [
+            project_id: id(project_id),
+            name: name,
+            default_branch: default_branch,
+            is_public: is_public,
+            agent_runs_enabled: agent_runs_enabled
+          ],
+          &RepositoryService.Stub.create_repository/3
+        )
+
+  def list_builds(identity, repository_id),
+    do:
+      paged_by_id(
+        identity,
+        "/hephaestus.build.v1.BuildService/ListBuilds",
+        ListBuildsRequest,
+        :repository_id,
+        repository_id,
+        &BuildService.Stub.list_builds/3,
+        :builds
+      )
+
+  def get_build(identity, build_id),
+    do:
+      unary_projected(
+        identity,
+        "/hephaestus.build.v1.BuildService/GetBuild",
+        %GetBuildRequest{build_id: id(build_id)},
+        &BuildService.Stub.get_build/3,
+        :build
+      )
+
+  def request_build(
+        identity,
+        repository_id,
+        source_commit,
+        build_definition_hash,
+        configuration_hash
+      ),
+      do:
+        mutation(
+          identity,
+          "/hephaestus.build.v1.BuildService/RequestBuild",
+          RequestBuildRequest,
+          [
+            repository_id: id(repository_id),
+            source_commit: source_commit,
+            build_definition_hash: build_definition_hash,
+            configuration_hash: configuration_hash
+          ],
+          &BuildService.Stub.request_build/3
+        )
+
+  def retry_build(identity, build_id),
+    do:
+      mutation(
+        identity,
+        "/hephaestus.build.v1.BuildService/RetryBuild",
+        RetryBuildRequest,
+        [build_id: id(build_id)],
+        &BuildService.Stub.retry_build/3
+      )
+
+  def rebuild_for_verification(identity, build_id),
+    do:
+      mutation(
+        identity,
+        "/hephaestus.build.v1.BuildService/RebuildForVerification",
+        RebuildForVerificationRequest,
+        [build_id: id(build_id)],
+        &BuildService.Stub.rebuild_for_verification/3
+      )
+
   def list_repository_releases(identity, repository_id),
     do:
       paged_by_id(
@@ -318,6 +527,26 @@ defmodule HephaestusWeb.RPC.Client do
         &ReleaseService.Stub.get_release/3,
         :release,
         maximum_response_bytes: 8_388_608
+      )
+
+  def set_draft_version(identity, release_id, version),
+    do:
+      mutation(
+        identity,
+        "/hephaestus.release.v1.ReleaseService/SetDraftVersion",
+        SetDraftVersionRequest,
+        [release_id: id(release_id), version: version],
+        &ReleaseService.Stub.set_draft_version/3
+      )
+
+  def publish_release(identity, release_id),
+    do:
+      mutation(
+        identity,
+        "/hephaestus.release.v1.ReleaseService/PublishRelease",
+        PublishReleaseRequest,
+        [release_id: id(release_id)],
+        &ReleaseService.Stub.publish_release/3
       )
 
   def list_repository_instances(identity, repository_id),
@@ -592,6 +821,30 @@ defmodule HephaestusWeb.RPC.Client do
     )
   end
 
+  def revise_capabilities(identity, instance_id, expected_revision_id, bindings) do
+    selections =
+      Enum.map(bindings, fn binding ->
+        %CapabilityBindingSelection{
+          slot_key: binding["slot_key"],
+          resource_kind: binding["resource_kind"],
+          resource_id: id(binding["resource_id"]),
+          granted_operations: binding["granted_operations"]
+        }
+      end)
+
+    mutation(
+      identity,
+      "/hephaestus.instance.v1.AgentInstanceService/ReviseCapabilities",
+      ReviseCapabilitiesRequest,
+      [
+        instance_id: id(instance_id),
+        expected_revision_id: id(expected_revision_id),
+        bindings: selections
+      ],
+      &AgentInstanceService.Stub.revise_capabilities/3
+    )
+  end
+
   def create_update(
         identity,
         instance_id,
@@ -701,6 +954,37 @@ defmodule HephaestusWeb.RPC.Client do
     )
     |> project_response()
   end
+
+  defp personal_access_token_scope(attributes) do
+    operations =
+      attributes
+      |> Map.get("operations", [])
+      |> List.wrap()
+      |> Enum.map(&git_operation/1)
+
+    repositories =
+      attributes
+      |> Map.get("repository_ids", "")
+      |> then(&(&1 || ""))
+      |> String.split(",", trim: true)
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&(&1 == ""))
+
+    if Enum.any?(operations, &is_nil/1) do
+      {:error, Error.local(:invalid)}
+    else
+      {:ok,
+       %PersonalAccessTokenScope{
+         operations: operations,
+         repository_ids: Enum.map(repositories, &id/1)
+       }}
+    end
+  end
+
+  defp git_operation("discover"), do: GitOperation.value(:GIT_OPERATION_DISCOVER)
+  defp git_operation("fetch"), do: GitOperation.value(:GIT_OPERATION_FETCH)
+  defp git_operation("receive"), do: GitOperation.value(:GIT_OPERATION_RECEIVE)
+  defp git_operation(_operation), do: nil
 
   defp paged_by_id(identity, audience, request_module, id_field, value, stub_call, field) do
     paginate(

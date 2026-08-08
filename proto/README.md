@@ -69,8 +69,10 @@ IDs are opaque UUID wrappers. Lists use the shared page request/response and
 declare stable ordering. Cursors are opaque, scope-bound resume positions.
 Known data uses typed messages and `oneof` values; `Struct`, arbitrary JSON,
 maps, and actor fields are forbidden. Field masks are intentionally absent
-until a real partial-update operation exists. Secret plaintext appears only in
-`SecretValue.value` and is marked with the custom sensitive option.
+until a real partial-update operation exists. Secret plaintext requests use
+`SecretValue.value`. The only sensitive response is the one-time PAT value
+returned by successful create and rotate operations. Both are marked with the
+custom sensitive option and receive explicit descriptor-policy coverage.
 
 ## Product events and watches
 

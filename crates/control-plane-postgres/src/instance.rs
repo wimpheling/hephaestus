@@ -12,6 +12,11 @@ const MAX_UPDATES: usize = 100;
 const MAX_REPOSITORIES: usize = 200;
 const MAX_IMPORTS: usize = 200;
 const MAX_CANDIDATES: usize = 100;
+const MAX_CAPABILITY_REQUIREMENTS: usize = 400;
+const MAX_CAPABILITY_RESOURCES: usize = 400;
+const MAX_CAPABILITY_BINDINGS: usize = 400;
+const MAX_RUNTIME_SESSIONS: usize = 100;
+const MAX_CAPABILITY_AUDIT: usize = 200;
 
 #[derive(Debug, thiserror::Error)]
 pub enum InstanceQueryError {
@@ -145,6 +150,90 @@ pub struct RecentRunRow {
     pub updated_at: OffsetDateTime,
 }
 
+#[derive(FromRow)]
+pub struct CapabilityRequirementRow {
+    pub id: Uuid,
+    pub release_agent_id: Uuid,
+    pub slot_key: String,
+    pub purpose: String,
+    pub resource_kind: String,
+    pub required_operations: Vec<String>,
+    pub optional_operations: Vec<String>,
+    pub slot_required: bool,
+}
+
+#[derive(FromRow)]
+pub struct CapabilityResourceOptionRow {
+    pub id: Uuid,
+    pub slot_key: String,
+    pub resource_kind: String,
+    pub display_name: String,
+    pub grantable_operations: Vec<String>,
+}
+
+#[derive(FromRow)]
+pub struct CapabilityBindingRow {
+    pub id: Uuid,
+    pub instance_revision_id: Uuid,
+    pub requirement_id: Uuid,
+    pub slot_key: String,
+    pub resource_kind: String,
+    pub resource_id: Uuid,
+    pub resource_name: String,
+    pub granted_operations: Vec<String>,
+    pub grantor_id: Uuid,
+    pub grantor_name: String,
+    pub authorization_model_version: String,
+    pub created_at: OffsetDateTime,
+    pub live: bool,
+    pub last_used_at: Option<OffsetDateTime>,
+}
+
+#[derive(FromRow)]
+pub struct RuntimeSessionRow {
+    pub id: Uuid,
+    pub snapshot_id: Uuid,
+    pub run_id: Uuid,
+    pub instance_revision_id: Uuid,
+    pub status: String,
+    pub issued_at: OffsetDateTime,
+    pub expires_at: OffsetDateTime,
+    pub acknowledged_at: Option<OffsetDateTime>,
+    pub revoked_at: Option<OffsetDateTime>,
+    pub revocation_reason: Option<String>,
+}
+
+#[derive(FromRow)]
+pub struct CapabilityAuditRow {
+    pub id: Uuid,
+    pub run_id: Uuid,
+    pub runtime_session_id: Uuid,
+    pub snapshot_id: Uuid,
+    pub binding_id: Uuid,
+    pub slot_key: String,
+    pub resource_kind: String,
+    pub resource_id: Uuid,
+    pub operation: String,
+    pub event_kind: String,
+    pub decision: Option<String>,
+    pub outcome: Option<String>,
+    pub reason_code: Option<String>,
+    pub authorization_model_version: String,
+    pub occurred_at: OffsetDateTime,
+}
+
+pub struct CapabilityMetricsRow {
+    pub sessions_issued: u64,
+    pub sessions_active: u64,
+    pub sessions_expired: u64,
+    pub sessions_revoked: u64,
+    pub capability_calls: u64,
+    pub ceiling_denials: u64,
+    pub live_authorization_denials: u64,
+    pub invalid_revisions: u64,
+    pub average_revocation_latency_milliseconds: u64,
+}
+
 pub struct InstanceSnapshot {
     pub instance: InstanceRow,
     pub revisions: Vec<RevisionRow>,
@@ -154,6 +243,12 @@ pub struct InstanceSnapshot {
     pub imports: Vec<ImportRow>,
     pub candidates: Vec<CandidateRow>,
     pub recent_runs: Vec<RecentRunRow>,
+    pub capability_requirements: Vec<CapabilityRequirementRow>,
+    pub capability_resources: Vec<CapabilityResourceOptionRow>,
+    pub capability_bindings: Vec<CapabilityBindingRow>,
+    pub runtime_sessions: Vec<RuntimeSessionRow>,
+    pub capability_audit: Vec<CapabilityAuditRow>,
+    pub capability_metrics: CapabilityMetricsRow,
 }
 
 pub struct InstanceApplication {
@@ -200,12 +295,215 @@ impl InstanceApplication {
             .bind(instance.active_revision_id).fetch_all(&mut *tx).await.map_err(InstanceQueryError::Persistence)?;
         let recent_runs = sqlx::query_as("SELECT id, state, outcome, run_kind, instance_revision_id, release_id, attachment_id, created_at, updated_at FROM runs WHERE instance_id = $1 ORDER BY created_at DESC, id LIMIT 20")
             .bind(instance_id).fetch_all(&mut *tx).await.map_err(InstanceQueryError::Persistence)?;
+        let capability_requirements: Vec<CapabilityRequirementRow> = sqlx::query_as(
+            "SELECT requirement.id, requirement.release_agent_id,
+                    requirement.slot_key, requirement.purpose,
+                    requirement.resource_kind, requirement.required_operations,
+                    requirement.optional_operations, requirement.slot_required
+             FROM release_capability_requirements AS requirement
+             WHERE requirement.release_agent_id IN (
+                 SELECT revision.release_agent_id
+                 FROM agent_instance_revisions AS revision
+                 WHERE revision.instance_id = $1
+                 UNION
+                 SELECT candidate.id
+                 FROM agent_instance_revisions AS active_revision
+                 JOIN release_agents AS active_agent
+                   ON active_agent.id = active_revision.release_agent_id
+                 JOIN release_agents AS candidate
+                   ON candidate.family_id = active_agent.family_id
+                 JOIN releases AS release ON release.id = candidate.release_id
+                 WHERE active_revision.id = $2 AND release.state = 'published'
+             )
+             ORDER BY requirement.release_agent_id, requirement.slot_key
+             LIMIT 401",
+        )
+        .bind(instance_id)
+        .bind(instance.active_revision_id)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(InstanceQueryError::Persistence)?;
+        let capability_resources: Vec<CapabilityResourceOptionRow> = sqlx::query_as(
+            "WITH active_requirement AS (
+                 SELECT requirement.*
+                 FROM agent_instance_revisions AS revision
+                 JOIN release_capability_requirements AS requirement
+                   ON requirement.release_agent_id = revision.release_agent_id
+                 WHERE revision.id = $2
+             ), resource AS (
+                 SELECT repository.id, 'repository'::text AS resource_kind,
+                        repository.name AS display_name
+                 FROM repositories AS repository WHERE repository.project_id = $1
+                 UNION ALL
+                 SELECT project.id, 'project', project.name
+                 FROM projects AS project WHERE project.id = $1
+                 UNION ALL
+                 SELECT candidate.id, 'agent_instance', candidate.name
+                 FROM agent_instances AS candidate WHERE candidate.project_id = $1
+                 UNION ALL
+                 SELECT run.id, 'run', 'run ' || left(run.id::text, 8)
+                 FROM runs AS run JOIN agent_instances AS owner
+                   ON owner.id = run.instance_id WHERE owner.project_id = $1
+                 UNION ALL
+                 SELECT volume.id, 'state_volume',
+                        'state ' || left(volume.id::text, 8)
+                 FROM agent_instance_state_volumes AS volume
+                 JOIN agent_instances AS owner ON owner.id = volume.instance_id
+                 WHERE owner.project_id = $1
+             )
+             SELECT resource.id, requirement.slot_key,
+                    resource.resource_kind, resource.display_name,
+                    ARRAY(
+                        SELECT operation
+                        FROM unnest(
+                            requirement.required_operations ||
+                            requirement.optional_operations
+                        ) AS operation
+                        WHERE can_grant_agent_capability_operations(
+                            hephaestus_actor_id(), resource.resource_kind,
+                            resource.id, ARRAY[operation]
+                        )
+                        ORDER BY operation
+                    ) AS grantable_operations
+             FROM active_requirement AS requirement
+             JOIN resource ON resource.resource_kind = requirement.resource_kind
+             WHERE can_grant_agent_capability_operations(
+                 hephaestus_actor_id(), resource.resource_kind, resource.id,
+                 requirement.required_operations
+             )
+             ORDER BY requirement.slot_key, resource.display_name, resource.id
+             LIMIT 401",
+        )
+        .bind(instance.project_id)
+        .bind(instance.active_revision_id)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(InstanceQueryError::Persistence)?;
+        let capability_bindings: Vec<CapabilityBindingRow> = sqlx::query_as(
+            "SELECT binding.id, binding.instance_revision_id,
+                    binding.requirement_id, binding.slot_key,
+                    binding.resource_kind, binding.resource_id,
+                    CASE binding.resource_kind
+                      WHEN 'repository' THEN COALESCE((SELECT name FROM repositories WHERE id = binding.resource_id), 'unavailable')
+                      WHEN 'project' THEN COALESCE((SELECT name FROM projects WHERE id = binding.resource_id), 'unavailable')
+                      WHEN 'agent_instance' THEN COALESCE((SELECT name FROM agent_instances WHERE id = binding.resource_id), 'unavailable')
+                      WHEN 'run' THEN 'run ' || left(binding.resource_id::text, 8)
+                      WHEN 'state_volume' THEN 'state ' || left(binding.resource_id::text, 8)
+                      ELSE 'unavailable'
+                    END AS resource_name,
+                    binding.granted_operations, binding.created_by AS grantor_id,
+                    grantor.display_name AS grantor_name,
+                    binding.authorization_model_version, binding.created_at,
+                    revision.id = instance.active_revision_id
+                      AND bool_and(check_permission(
+                        'agent_instance', instance.id::text,
+                        'agent_' || operation.name, binding.resource_kind,
+                        binding.resource_id::text
+                      ) = 1) AS live,
+                    max(audit.occurred_at) AS last_used_at
+             FROM agent_capability_bindings AS binding
+             JOIN agent_instance_revisions AS revision
+               ON revision.id = binding.instance_revision_id
+             JOIN agent_instances AS instance ON instance.id = revision.instance_id
+             JOIN users AS grantor ON grantor.id = binding.created_by
+             CROSS JOIN LATERAL unnest(binding.granted_operations) AS operation(name)
+             LEFT JOIN capability_audit_inspection AS audit
+               ON audit.binding_id = binding.id
+              AND check_permission('user', hephaestus_actor_id(), 'can_read',
+                                   'run', audit.run_id::text) = 1
+             WHERE revision.instance_id = $1
+             GROUP BY binding.id, revision.id, instance.id,
+                      instance.active_revision_id, grantor.display_name
+             ORDER BY binding.created_at DESC, binding.id
+             LIMIT 401",
+        )
+        .bind(instance_id)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(InstanceQueryError::Persistence)?;
+        let runtime_sessions: Vec<RuntimeSessionRow> =
+            sqlx::query_as("SELECT * FROM inspect_runtime_authority_sessions($1, 100)")
+                .bind(instance_id)
+                .fetch_all(&mut *tx)
+                .await
+                .map_err(InstanceQueryError::Persistence)?;
+        let capability_audit: Vec<CapabilityAuditRow> = sqlx::query_as(
+            "SELECT audit.id, audit.run_id, audit.runtime_session_id,
+                    audit.snapshot_id, audit.binding_id, audit.slot_key,
+                    audit.resource_kind, audit.resource_id, audit.operation,
+                    audit.event_kind, audit.decision, audit.outcome,
+                    audit.reason_code, audit.authorization_model_version,
+                    audit.occurred_at
+             FROM capability_audit_inspection AS audit
+             WHERE audit.instance_id = $1
+               AND check_permission('user', hephaestus_actor_id(), 'can_read',
+                                    'run', audit.run_id::text) = 1
+             ORDER BY audit.occurred_at DESC, audit.id DESC
+             LIMIT 200",
+        )
+        .bind(instance_id)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(InstanceQueryError::Persistence)?;
+        let count = |value: usize| u64::try_from(value).unwrap_or(u64::MAX);
+        let capability_metrics = CapabilityMetricsRow {
+            sessions_issued: count(runtime_sessions.len()),
+            sessions_active: count(
+                runtime_sessions
+                    .iter()
+                    .filter(|row| row.status == "active")
+                    .count(),
+            ),
+            sessions_expired: count(
+                runtime_sessions
+                    .iter()
+                    .filter(|row| row.status == "expired")
+                    .count(),
+            ),
+            sessions_revoked: count(
+                runtime_sessions
+                    .iter()
+                    .filter(|row| row.status == "revoked")
+                    .count(),
+            ),
+            capability_calls: count(
+                capability_audit
+                    .iter()
+                    .filter(|row| row.event_kind == "capability_use")
+                    .count(),
+            ),
+            ceiling_denials: count(
+                capability_audit
+                    .iter()
+                    .filter(|row| {
+                        row.decision.as_deref() == Some("deny")
+                            && row.reason_code.as_deref() == Some("snapshot_ceiling_denied")
+                    })
+                    .count(),
+            ),
+            live_authorization_denials: count(
+                capability_audit
+                    .iter()
+                    .filter(|row| {
+                        row.decision.as_deref() == Some("deny")
+                            && row.reason_code.as_deref() == Some("live_authorization_denied")
+                    })
+                    .count(),
+            ),
+            invalid_revisions: count(revisions.iter().filter(|row| !row.runnable).count()),
+            average_revocation_latency_milliseconds: average_revocation_latency(&runtime_sessions),
+        };
         if revisions.len() > MAX_REVISIONS
             || attachments.len() > MAX_ATTACHMENTS
             || updates.len() > MAX_UPDATES
             || repositories.len() > MAX_REPOSITORIES
             || imports.len() > MAX_IMPORTS
             || candidates.len() > MAX_CANDIDATES
+            || capability_requirements.len() > MAX_CAPABILITY_REQUIREMENTS
+            || capability_resources.len() > MAX_CAPABILITY_RESOURCES
+            || capability_bindings.len() > MAX_CAPABILITY_BINDINGS
+            || runtime_sessions.len() > MAX_RUNTIME_SESSIONS
+            || capability_audit.len() > MAX_CAPABILITY_AUDIT
         {
             return Err(InstanceQueryError::ResponseTooLarge);
         }
@@ -219,6 +517,24 @@ impl InstanceApplication {
             imports,
             candidates,
             recent_runs,
+            capability_requirements,
+            capability_resources,
+            capability_bindings,
+            runtime_sessions,
+            capability_audit,
+            capability_metrics,
         })
     }
+}
+
+fn average_revocation_latency(rows: &[RuntimeSessionRow]) -> u64 {
+    let latencies = rows
+        .iter()
+        .filter_map(|row| row.revoked_at.map(|revoked| revoked - row.issued_at))
+        .filter_map(|duration| u64::try_from(duration.whole_milliseconds()).ok())
+        .collect::<Vec<_>>();
+    if latencies.is_empty() {
+        return 0;
+    }
+    latencies.iter().sum::<u64>() / u64::try_from(latencies.len()).unwrap_or(1)
 }

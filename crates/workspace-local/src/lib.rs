@@ -1,6 +1,6 @@
 //! Local exact-commit workspaces and trusted Git result publication.
 
-use agent_config::AgentConfig;
+use agent_config::{AgentConfig, PublicationMode};
 use async_trait::async_trait;
 use forge_domain::RepositoryId;
 use run_domain::{Run, RunKind, RunState};
@@ -443,6 +443,7 @@ impl LocalWorkspaceManager {
         if !request.config.workspace.mount {
             return Ok(None);
         }
+        validate_mount_policy(&request.config)?;
         let message = validate_message(message)?;
         let workspace = self
             .metadata
@@ -839,6 +840,13 @@ struct ManifestEntry {
 }
 
 fn validate_mount_policy(config: &AgentConfig) -> Result<(), LocalWorkspaceError> {
+    if config.publication.mode != PublicationMode::Proposal
+        || config.publication.mode.permits_git_write_remote()
+    {
+        return Err(LocalWorkspaceError::Configuration(String::from(
+            "controlled workspaces are available only to proposal-mode releases",
+        )));
+    }
     if config.workspace.path != SOURCE_GUEST_PATH || !config.workspace.read_only {
         return Err(LocalWorkspaceError::Configuration(format!(
             "workspace source mount must request read-only {SOURCE_GUEST_PATH}"

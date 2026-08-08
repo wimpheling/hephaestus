@@ -76,7 +76,28 @@ impl PgForgeRepository {
         organization_id: OrganizationId,
         name: &str,
     ) -> Result<Project, ForgeRepositoryError> {
+        self.create_project_with_description(identity, organization_id, name, "")
+            .await
+    }
+
+    /// Creates a durable project with an optional human-readable description
+    /// after checking the owning organization.
+    ///
+    /// The description is stored in the existing project settings JSON object
+    /// so this additive metadata does not require a schema migration.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for denial, invalid metadata, or persistence failure.
+    pub async fn create_project_with_description(
+        &self,
+        identity: &AuthenticatedIdentity,
+        organization_id: OrganizationId,
+        name: &str,
+        description: &str,
+    ) -> Result<Project, ForgeRepositoryError> {
         validate_name(name, "project name must contain 1 to 200 characters")?;
+        validate_description(description)?;
         let authorizer = self
             .authorizer
             .as_ref()
@@ -110,15 +131,23 @@ impl PgForgeRepository {
         }
         let id = ProjectId::new();
         let row = sqlx::query_as::<_, ProjectRow>(
-            "INSERT INTO projects (id, organization_id, name) VALUES ($1, $2, $3)
+            "INSERT INTO projects (id, organization_id, name, settings)
+             VALUES ($1, $2, $3, $4)
              RETURNING id, organization_id, name, created_at",
         )
         .bind(id.as_uuid())
         .bind(organization_id.as_uuid())
         .bind(name)
+        .bind(json!({"description": description}))
         .fetch_one(&mut *transaction)
         .await
         .map_err(storage)?;
+        sqlx::query("SELECT ensure_project_maintainer($1, $2)")
+            .bind(row.id)
+            .bind(identity.user_id.as_uuid())
+            .execute(&mut *transaction)
+            .await
+            .map_err(storage)?;
         transaction.commit().await.map_err(storage)?;
         Ok(row.into())
     }
@@ -135,15 +164,34 @@ impl PgForgeRepository {
         organization_id: OrganizationId,
         name: &str,
     ) -> Result<Project, ForgeRepositoryError> {
+        self.create_project_trusted_with_description(organization_id, name, "")
+            .await
+    }
+
+    /// Creates a project with a description from trusted bootstrap or test
+    /// code.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid metadata or persistence failure.
+    pub async fn create_project_trusted_with_description(
+        &self,
+        organization_id: OrganizationId,
+        name: &str,
+        description: &str,
+    ) -> Result<Project, ForgeRepositoryError> {
         validate_name(name, "project name must contain 1 to 200 characters")?;
+        validate_description(description)?;
         let id = ProjectId::new();
         let row = sqlx::query_as::<_, ProjectRow>(
-            "INSERT INTO projects (id, organization_id, name) VALUES ($1, $2, $3)
+            "INSERT INTO projects (id, organization_id, name, settings)
+             VALUES ($1, $2, $3, $4)
              RETURNING id, organization_id, name, created_at",
         )
         .bind(id.as_uuid())
         .bind(organization_id.as_uuid())
         .bind(name)
+        .bind(json!({"description": description}))
         .fetch_one(&self.pool)
         .await
         .map_err(storage)?;
@@ -516,6 +564,16 @@ impl PgForgeRepository {
         let mut build_requests = Vec::new();
         let mut invalid_configurations = 0;
         for item in inspected {
+            if let Some(images) = item.repository_oci_images.as_deref() {
+                persist_repository_oci_image_revisions(
+                    &mut transaction,
+                    repository.id,
+                    repository.project_id,
+                    &item.commit,
+                    images,
+                )
+                .await?;
+            }
             let Some(parsed) = item.parsed else {
                 continue;
             };
@@ -581,6 +639,8 @@ impl PgForgeRepository {
                         &item.git_ref,
                         &item.commit,
                         build,
+                        &config.guest.image,
+                        config.agent.key.as_deref(),
                         parsed.normalized_hash.as_ref().ok_or(
                             ForgeRepositoryError::InvalidStoredData(
                                 "valid reusable configuration normalized hash",
@@ -719,6 +779,16 @@ fn validate_name(name: &str, message: &'static str) -> Result<(), ForgeRepositor
     }
 }
 
+fn validate_description(description: &str) -> Result<(), ForgeRepositoryError> {
+    if description.chars().count() > 2_000 {
+        Err(ForgeRepositoryError::InvalidMetadata(
+            "project description must contain at most 2000 characters",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 fn validate_repository(input: &CreateRepository) -> Result<&str, ForgeRepositoryError> {
     validate_name(
         &input.name,
@@ -760,6 +830,17 @@ struct InspectedUpdate {
     git_ref: GitRef,
     commit: CommitSha,
     parsed: Option<ParsedConfig>,
+    repository_oci_images: Option<Vec<InspectedRepositoryOciImage>>,
+}
+
+#[derive(Debug)]
+struct InspectedRepositoryOciImage {
+    key: String,
+    display_name: String,
+    dockerfile_path: String,
+    context_path: String,
+    context_digest: String,
+    base_key: String,
 }
 
 fn inspect_updates(
@@ -786,14 +867,99 @@ fn inspect_updates(
                             .map_err(git)
                     })
                     .transpose()?;
+                let repository_oci_images = inspect_repository_oci_images(&tree)?;
                 Ok(InspectedUpdate {
                     git_ref: update.git_ref.clone(),
                     commit: commit.clone(),
                     parsed,
+                    repository_oci_images,
                 })
             })
         })
         .collect()
+}
+
+fn inspect_repository_oci_images(
+    tree: &gix::Tree<'_>,
+) -> Result<Option<Vec<InspectedRepositoryOciImage>>, ForgeRepositoryError> {
+    let Some(entry) = tree.lookup_entry_by_path("heph.images.toml").map_err(git)? else {
+        return Ok(None);
+    };
+    if !entry.mode().is_blob() {
+        return Err(ForgeRepositoryError::InvalidMetadata(
+            "heph.images.toml must be a regular file",
+        ));
+    }
+    let manifest = entry.object().map_err(git)?.try_into_blob().map_err(git)?;
+    let parsed = agent_config::parse_repository_oci_images(&manifest.data);
+    let Some(config) = parsed.config else {
+        return Ok(None);
+    };
+    config
+        .images
+        .into_iter()
+        .map(|image| inspect_repository_oci_image(tree, image))
+        .collect::<Result<Vec<_>, _>>()
+        .map(Some)
+}
+
+fn inspect_repository_oci_image(
+    tree: &gix::Tree<'_>,
+    image: agent_config::RepositoryOciImageConfig,
+) -> Result<InspectedRepositoryOciImage, ForgeRepositoryError> {
+    let dockerfile = tree
+        .lookup_entry_by_path(&image.build.dockerfile)
+        .map_err(git)?
+        .ok_or(ForgeRepositoryError::InvalidMetadata(
+            "repository OCI image Dockerfile does not exist in its source commit",
+        ))?;
+    if !dockerfile.mode().is_blob() {
+        return Err(ForgeRepositoryError::InvalidMetadata(
+            "repository OCI image Dockerfile must be a regular file, not a symlink",
+        ));
+    }
+    let context = if image.build.context == "." {
+        tree.clone()
+    } else {
+        let entry = tree
+            .lookup_entry_by_path(&image.build.context)
+            .map_err(git)?
+            .ok_or(ForgeRepositoryError::InvalidMetadata(
+                "repository OCI image context does not exist in its source commit",
+            ))?;
+        if !entry.mode().is_tree() {
+            return Err(ForgeRepositoryError::InvalidMetadata(
+                "repository OCI image context must be a directory, not a symlink",
+            ));
+        }
+        entry.object().map_err(git)?.try_into_tree().map_err(git)?
+    };
+    validate_repository_oci_image_context(&context)?;
+    let context_digest = format!("sha256:{:x}", Sha256::digest(&context.data));
+    Ok(InspectedRepositoryOciImage {
+        key: image.key,
+        display_name: image.display_name,
+        dockerfile_path: image.build.dockerfile,
+        context_path: image.build.context,
+        context_digest,
+        base_key: image.build.base.key,
+    })
+}
+
+fn validate_repository_oci_image_context(tree: &gix::Tree<'_>) -> Result<(), ForgeRepositoryError> {
+    for entry in tree.iter() {
+        let entry = entry.map_err(git)?;
+        if entry.mode().is_link() || entry.mode().is_commit() {
+            return Err(ForgeRepositoryError::InvalidMetadata(
+                "repository OCI image contexts may not contain symlinks or submodules",
+            ));
+        }
+        if entry.mode().is_tree() {
+            let child = entry.object().map_err(git)?.try_into_tree().map_err(git)?;
+            validate_repository_oci_image_context(&child)?;
+        }
+    }
+    Ok(())
 }
 
 async fn persist_revision(
@@ -849,6 +1015,59 @@ async fn persist_revision(
     Ok(AgentConfigRevisionId::from_uuid(row.id))
 }
 
+async fn persist_repository_oci_image_revisions(
+    transaction: &mut Transaction<'_, Postgres>,
+    repository_id: RepositoryId,
+    project_id: ProjectId,
+    source_commit: &CommitSha,
+    images: &[InspectedRepositoryOciImage],
+) -> Result<(), ForgeRepositoryError> {
+    for image in images {
+        // Keeping the catalog read and revision insert in the receive
+        // transaction makes the selected base digest part of the immutable
+        // source revision, rather than resolving a mutable key later.
+        let base_reference: Option<String> = sqlx::query_scalar(
+            "SELECT image_reference
+             FROM oci_images
+             WHERE key = $1 AND availability_state = 'available'
+             FOR SHARE",
+        )
+        .bind(&image.base_key)
+        .fetch_optional(&mut **transaction)
+        .await
+        .map_err(storage)?;
+        let base_reference = base_reference.ok_or(ForgeRepositoryError::InvalidMetadata(
+            "repository OCI image base is not an available catalog image",
+        ))?;
+        let revision_id = Uuid::new_v4();
+        sqlx::query_scalar::<_, Uuid>(
+            "INSERT INTO repository_oci_image_definitions
+                (id, project_id, source_repository_id, key, display_name,
+                 source_revision, dockerfile_path, context_path, context_digest,
+                 base_image_reference, status)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'producing')
+             ON CONFLICT (source_repository_id, key, source_revision,
+                          context_digest, base_image_reference)
+             DO NOTHING
+             RETURNING id",
+        )
+        .bind(revision_id)
+        .bind(project_id.as_uuid())
+        .bind(repository_id.as_uuid())
+        .bind(&image.key)
+        .bind(&image.display_name)
+        .bind(source_commit.as_str())
+        .bind(&image.dockerfile_path)
+        .bind(&image.context_path)
+        .bind(&image.context_digest)
+        .bind(base_reference)
+        .fetch_optional(&mut **transaction)
+        .await
+        .map_err(storage)?;
+    }
+    Ok(())
+}
+
 fn build_trigger_matches(patterns: &[String], git_ref: &GitRef) -> bool {
     patterns.iter().any(|pattern| {
         pattern.strip_suffix("/*").map_or_else(
@@ -872,18 +1091,33 @@ async fn persist_build_request(
     git_ref: &GitRef,
     commit: &CommitSha,
     build: &agent_config::BuildConfig,
+    guest_image: &agent_config::ImageSelection,
+    agent_key: Option<&str>,
     normalized_hash: &ConfigHash,
     now: OffsetDateTime,
 ) -> Result<BuildRequestId, ForgeRepositoryError> {
     let build_definition =
         serde_json::to_vec(build).map_err(ForgeRepositoryError::Serialization)?;
+    let build_declaration =
+        serde_json::to_value(build).map_err(ForgeRepositoryError::Serialization)?;
+    let build_policy = json!({
+        "resources": build.resources,
+        "network": build.network,
+    });
+    let declared_artifacts =
+        serde_json::to_value(&build.artifacts).map_err(ForgeRepositoryError::Serialization)?;
     let build_definition_hash: [u8; 32] = Sha256::digest(&build_definition).into();
+    let build_image = resolve_image(transaction, &build.image.key).await?;
+    let guest_image = resolve_image(transaction, &guest_image.key).await?;
     let requested_id = BuildRequestId::new();
     let stored_id: Uuid = sqlx::query_scalar(
         "INSERT INTO build_requests
          (id, repository_id, source_commit, source_ref, origin_receive_id,
-          build_definition_hash, state, created_by, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, 'queued', $7, $8)
+          build_definition_hash, state, created_by, created_at, build_trigger,
+          agent_key, configuration_hash, build_declaration, build_policy,
+          declared_artifacts)
+         VALUES ($1, $2, $3, $4, $5, $6, 'queued', $7, $8, 'push', $9,
+                 decode($10, 'hex'), $11, $12, $13)
          ON CONFLICT (
              repository_id, source_commit, source_ref, build_definition_hash
          ) DO UPDATE SET repository_id = EXCLUDED.repository_id
@@ -897,9 +1131,30 @@ async fn persist_build_request(
     .bind(build_definition_hash.as_slice())
     .bind(identity.map(|value| value.user_id.as_uuid()))
     .bind(now)
+    .bind(agent_key)
+    .bind(normalized_hash.as_str())
+    .bind(build_declaration)
+    .bind(build_policy)
+    .bind(declared_artifacts)
     .fetch_one(&mut **transaction)
     .await
     .map_err(storage)?;
+    for (execution_context, image) in [("build", &build_image), ("guest", &guest_image)] {
+        sqlx::query(
+            "INSERT INTO build_request_images
+                (build_request_id, execution_context, image_id, image_key, image_reference)
+             VALUES ($1, $2, $3, $4, $5)
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(stored_id)
+        .bind(execution_context)
+        .bind(image.id)
+        .bind(&image.key)
+        .bind(&image.image_reference)
+        .execute(&mut **transaction)
+        .await
+        .map_err(storage)?;
+    }
     sqlx::query(
         "INSERT INTO build_request_sources
          (build_request_id, receive_id, source_ref, source_commit, created_at)
@@ -933,6 +1188,32 @@ async fn persist_build_request(
     )
     .await?;
     Ok(BuildRequestId::from_uuid(stored_id))
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct ResolvedImageRow {
+    id: Uuid,
+    key: String,
+    image_reference: String,
+}
+
+async fn resolve_image(
+    transaction: &mut Transaction<'_, Postgres>,
+    key: &str,
+) -> Result<ResolvedImageRow, ForgeRepositoryError> {
+    sqlx::query_as::<_, ResolvedImageRow>(
+        "SELECT id, key, image_reference
+           FROM oci_images
+          WHERE key = $1 AND availability_state = 'available'
+          FOR SHARE",
+    )
+    .bind(key)
+    .fetch_optional(&mut **transaction)
+    .await
+    .map_err(storage)?
+    .ok_or(ForgeRepositoryError::InvalidMetadata(
+        "selected OCI image is unavailable",
+    ))
 }
 
 fn hex_digest(digest: &[u8; 32]) -> String {
@@ -1336,4 +1617,111 @@ fn git(error: impl std::fmt::Display) -> ForgeRepositoryError {
 
 const fn serialization(error: serde_json::Error) -> ForgeRepositoryError {
     ForgeRepositoryError::Serialization(error)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::inspect_updates;
+    use forge_domain::{CommitSha, GitRef, RefUpdate};
+    use std::{path::Path, process::Command};
+
+    #[test]
+    fn discovers_repository_oci_image_inputs_from_the_exact_received_commit() {
+        let temporary = tempfile::tempdir().expect("temporary repository");
+        let bare = temporary.path().join("source.git");
+        let worktree = temporary.path().join("source");
+        git(
+            temporary.path(),
+            &["init", "--bare", bare.to_str().expect("UTF-8 path")],
+        );
+        git(
+            temporary.path(),
+            &["init", worktree.to_str().expect("UTF-8 path")],
+        );
+        git(&worktree, &["config", "user.name", "Hephaestus Test"]);
+        git(
+            &worktree,
+            &["config", "user.email", "hephaestus@example.invalid"],
+        );
+        std::fs::create_dir_all(worktree.join("containers")).expect("containers directory");
+        std::fs::write(
+            worktree.join("heph.images.toml"),
+            r#"
+version = 1
+
+[[images]]
+key = "typescript-tools"
+display_name = "TypeScript tools"
+
+[images.build]
+dockerfile = "containers/Dockerfile"
+context = "."
+base = { key = "typescript-node-ubuntu" }
+"#,
+        )
+        .expect("manifest");
+        std::fs::write(
+            worktree.join("containers/Dockerfile"),
+            "FROM heph-base AS build\nRUN echo ready\n",
+        )
+        .expect("Dockerfile");
+        git(&worktree, &["add", "."]);
+        git(&worktree, &["commit", "-m", "repository OCI image"]);
+        let commit =
+            CommitSha::parse(git_output(&worktree, &["rev-parse", "HEAD"])).expect("commit ID");
+        git(
+            &worktree,
+            &[
+                "push",
+                bare.to_str().expect("UTF-8 path"),
+                "HEAD:refs/heads/main",
+            ],
+        );
+
+        let inspected = inspect_updates(
+            &bare,
+            &[RefUpdate {
+                git_ref: GitRef::parse("refs/heads/main").expect("Git ref"),
+                old_commit: None,
+                new_commit: Some(commit),
+            }],
+        )
+        .expect("inspect received commit");
+
+        let images = inspected[0]
+            .repository_oci_images
+            .as_ref()
+            .expect("repository OCI image manifest");
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].key, "typescript-tools");
+        assert_eq!(images[0].dockerfile_path, "containers/Dockerfile");
+        assert_eq!(images[0].context_digest.len(), 71);
+        assert!(images[0].context_digest.starts_with("sha256:"));
+    }
+
+    fn git(directory: &Path, arguments: &[&str]) {
+        let output = Command::new("git")
+            .args(arguments)
+            .current_dir(directory)
+            .output()
+            .expect("run Git");
+        assert!(
+            output.status.success(),
+            "git {arguments:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn git_output(directory: &Path, arguments: &[&str]) -> String {
+        let output = Command::new("git")
+            .args(arguments)
+            .current_dir(directory)
+            .output()
+            .expect("run Git");
+        assert!(output.status.success(), "git {arguments:?} failed");
+        String::from_utf8(output.stdout)
+            .expect("UTF-8 Git output")
+            .trim()
+            .to_owned()
+    }
 }

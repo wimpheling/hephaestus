@@ -52,6 +52,25 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.ProjectAgentsPage do
             variant={:proposal}
           >
             <.text as="strong">{release["display_name"]}</.text>
+            <.frame
+              :if={(release["capability_requirements"] || []) != []}
+              id={"release-capabilities-#{release["id"]}"}
+              variant={:resource_detail}
+            >
+              <.text as="small" variant={:muted}>Declared capability requirements</.text>
+              <.text
+                :for={requirement <- release["capability_requirements"] || []}
+                as="small"
+              >
+                {requirement["slot_key"]} · {requirement["resource_kind"]} · required: {Enum.join(
+                  requirement["required_operations"],
+                  ", "
+                )}
+              </.text>
+              <.text as="small" variant={:muted}>
+                Exact resources and optional operations are confirmed on the new instance before it becomes runnable.
+              </.text>
+            </.frame>
             <.form_container
               for={to_form(@form, as: :import)}
               id={"import-agent-#{release["id"]}"}
@@ -117,7 +136,7 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.ProjectAgentsPage do
               :for={{dom_id, instance} <- @instances}
               id={dom_id}
               destination={@instance_destination.(instance["id"])}
-              variant={:text}
+              variant={:resource_row}
             >
               <.text as="strong">{instance["name"]}</.text>
               <.tag>{instance["release_version"] || "unresolved"}</.tag>

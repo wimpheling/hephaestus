@@ -4,11 +4,9 @@ defmodule HephaestusWebWeb.ProjectRunsLive do
   alias HephaestusWebWeb.DesignSystem.Pages.ProjectRunsPage
   alias HephaestusWebWeb.PageStream
   alias HephaestusWebWeb.ProjectRunsState
-  @stream_mode :page_scoped
 
   @impl true
   def mount(%{"project_id" => project_id}, _session, socket) do
-    _stream_mode = @stream_mode
     state = ProjectRunsState.new(%{project_id: project_id})
 
     socket =
@@ -16,35 +14,20 @@ defmodule HephaestusWebWeb.ProjectRunsLive do
       |> stream_configure(:runs, dom_id: &"project-run-#{&1["id"]}")
       |> stream(:runs, [])
       |> assign(:page_state, state)
-      |> assign(:watch_task, nil)
       |> assign(:snapshot_task, nil)
       |> assign(:page_title, "Runs")
 
-    if connected?(socket),
-      do: {:ok, PageStream.start_watch(socket, ProjectRunsState)},
-      else: {:ok, socket}
-  end
+    if connected?(socket) do
+      {state, [:load]} = ProjectRunsState.reduce(state, {:load, 1})
 
-  @impl true
-  def handle_info(
-        {:page_watch, generation, response},
-        %{assigns: %{page_state: %{stream_generation: generation}}} = socket
-      ) do
-    {socket, effects} = PageStream.reduce_watch(socket, ProjectRunsState, response)
-    {:noreply, PageStream.apply_effects(socket, ProjectRunsState, effects)}
+      {:ok,
+       socket
+       |> assign(:page_state, state)
+       |> PageStream.start_snapshot(ProjectRunsState)}
+    else
+      {:ok, socket}
+    end
   end
-
-  def handle_info(
-        {:page_watch_ended, generation, result},
-        %{assigns: %{page_state: %{stream_generation: generation}}} = socket
-      ) do
-    {socket, effects} = PageStream.reduce_ended(socket, ProjectRunsState, result)
-    {:noreply, PageStream.apply_effects(socket, ProjectRunsState, effects)}
-  end
-
-  def handle_info({kind, _generation, _value}, socket)
-      when kind in [:page_watch, :page_watch_ended],
-      do: {:noreply, socket}
 
   def handle_info({ref, event}, %{assigns: %{snapshot_task: %Task{ref: ref}}} = socket) do
     Process.demonitor(ref, [:flush])
@@ -70,7 +53,6 @@ defmodule HephaestusWebWeb.ProjectRunsLive do
   def terminate(_reason, socket),
     do:
       (
-        PageStream.cancel(socket.assigns[:watch_task])
         PageStream.cancel(socket.assigns[:snapshot_task])
         :ok
       )

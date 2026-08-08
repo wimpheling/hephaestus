@@ -1,4 +1,7 @@
 //! Shared typed command application operations.
+use capability_domain::{
+    CapabilityBindingId, CapabilityOperation, CapabilityResource, CapabilitySlotKey,
+};
 use forge_domain::{ProjectId, RepositoryId};
 use identity_domain::AuthenticatedIdentity;
 use release_domain::{
@@ -7,8 +10,9 @@ use release_domain::{
     TriggerPolicy,
 };
 use release_postgres::{
-    BeginUpdateHook, CreateAttachment, CreateInstanceUpdate, ImportAgent, RecoverInstanceUpdate,
-    ReleaseService, RemoveAttachment, ReviseInstance, SetAttachmentEnabled, UpdateRecoveryAction,
+    BeginUpdateHook, CapabilityBindingSelection, CreateAttachment, CreateInstanceUpdate,
+    ImportAgent, RecoverInstanceUpdate, ReleaseService, RemoveAttachment, ReviseInstance,
+    ReviseInstanceCapabilities, SetAttachmentEnabled, UpdateRecoveryAction,
 };
 use runtime_types::RunId;
 use secret_application::{AcceptSecretImport, BindSecret, CreateSecret, GrantSecret, RotateSecret};
@@ -76,6 +80,11 @@ pub enum InternalCommand {
         parameters: BTreeMap<ParameterName, ParameterValue>,
         selected_policy: RuntimePolicy,
     },
+    ReviseCapabilities {
+        instance_id: AgentInstanceId,
+        expected_revision_id: AgentInstanceRevisionId,
+        bindings: Vec<CapabilitySelectionInput>,
+    },
     CreateUpdate {
         instance_id: AgentInstanceId,
         expected_revision_id: AgentInstanceRevisionId,
@@ -129,6 +138,12 @@ pub enum InternalCommand {
     PurgeSecret {
         secret_id: SecretId,
     },
+}
+
+pub struct CapabilitySelectionInput {
+    pub slot: CapabilitySlotKey,
+    pub resource: CapabilityResource,
+    pub granted_operations: Vec<CapabilityOperation>,
 }
 
 #[derive(Clone, Copy)]
@@ -273,6 +288,60 @@ pub async fn dispatch(
                 )
                 .await?;
             Ok(json!({"instance_id": instance_id, "revision_id": revision_id}))
+        }
+        InternalCommand::ReviseCapabilities {
+            instance_id,
+            expected_revision_id,
+            bindings,
+        } => {
+            let revision_id = AgentInstanceRevisionId::from_uuid(stable_id(
+                identity,
+                "revise_instance_capabilities.revision",
+            ));
+            let bindings = bindings
+                .into_iter()
+                .map(|binding| CapabilityBindingSelection {
+                    binding_id: CapabilityBindingId::from_uuid(stable_id(
+                        identity,
+                        &format!("revise_instance_capabilities.binding.{}", binding.slot),
+                    )),
+                    slot: binding.slot,
+                    resource: binding.resource,
+                    granted_operations: binding.granted_operations,
+                    // Typed runtime Git scope is delivered by the MVP 01.3
+                    // transport; this generic capability form cannot invent it.
+                    git_authority: None,
+                })
+                .collect();
+            let result = state
+                .releases
+                .revise_instance_capabilities(
+                    identity,
+                    ReviseInstanceCapabilities {
+                        command_key: release_key(
+                            identity,
+                            "revise_instance_capabilities",
+                            instance_id.as_uuid(),
+                        ),
+                        instance_id,
+                        expected_revision_id,
+                        new_revision_id: revision_id,
+                        bindings,
+                        authorization_model_version: String::from(
+                            authz_postgres::AUTHORIZATION_MODEL_VERSION,
+                        ),
+                    },
+                )
+                .await?;
+            Ok(json!({
+                "instance_id": instance_id,
+                "revision_id": result.revision_id,
+                "runnable": result.runnable,
+                "diagnostics": result.diagnostics.into_iter().map(|diagnostic| json!({
+                    "code": diagnostic.code,
+                    "slot": diagnostic.slot,
+                })).collect::<Vec<_>>(),
+            }))
         }
         InternalCommand::CreateUpdate {
             instance_id,

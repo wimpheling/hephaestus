@@ -1,0 +1,23 @@
+[package]
+name = "registry-reconciler"
+description = "Authoritative Zot reconciliation for forge-owned OCI publications"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[package.metadata.hephaestus]
+layer = "application"
+context = "registry"
+
+[dependencies]
+async-trait.workspace = true
+registry-domain = { path = "../registry-domain" }
+thiserror.workspace = true
+time.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }
+
+[lints]
+workspace = true

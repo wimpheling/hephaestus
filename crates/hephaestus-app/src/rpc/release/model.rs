@@ -18,7 +18,7 @@ use rpc_proto::messages::hephaestus::{
         SecretSlotDeclaration as ProtoSecretSlot, SecretSlotDeliveryMode, SecretSlotPhase,
         StringParameterConstraints, UpdateHook, parameter_default,
     },
-    release::v1::{ReleaseAgent, ReleaseState, ReleaseSummary},
+    release::v1::{Release, ReleaseAgent, ReleaseState, ReleaseSummary},
 };
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -36,6 +36,40 @@ pub(super) fn summary(value: ApplicationSummary) -> ReleaseSummary {
         manifest_hash: value.manifest_hash,
         artifact_count: value.artifact_count,
         exported_agent_count: value.agent_count,
+        ..Default::default()
+    }
+}
+
+pub(super) fn release(value: crate::application::release::ReleaseDetail) -> Release {
+    let release_id = value.summary.id;
+    let build_id = value.summary.build_request_id;
+    let source_commit = value.summary.source_commit.clone();
+    Release {
+        id: opaque(release_id).into(),
+        version: value.summary.version,
+        state: state(value.summary.state).into(),
+        source_commit: value.summary.source_commit,
+        source_ref: value.summary.source_ref,
+        build_request_id: opaque(build_id).into(),
+        build_definition_hash: value.build_definition_hash,
+        configuration_hash: value.configuration_hash,
+        manifest_hash: value.summary.manifest_hash,
+        created_at: timestamp(value.summary.created_at).into(),
+        published_at: value.summary.published_at.map(timestamp).into(),
+        revoked_at: value.revoked_at.map(timestamp).into(),
+        repository_id: opaque(value.repository_id).into(),
+        repository_name: value.repository_name,
+        project_id: opaque(value.project_id).into(),
+        project_name: value.project_name,
+        organization_id: opaque(value.organization_id).into(),
+        organization_name: value.organization_name,
+        build: build(value.build).into(),
+        artifacts: value
+            .artifacts
+            .into_iter()
+            .map(|artifact_value| artifact(artifact_value, release_id, build_id, &source_commit))
+            .collect(),
+        agents: value.agents.into_iter().map(agent).collect(),
         ..Default::default()
     }
 }
@@ -217,7 +251,9 @@ pub(super) fn application_error(error: ReleaseError) -> super::super::RpcError {
 
     match error {
         ReleaseError::NotFound => RpcError::NotFound,
-        ReleaseError::InvalidPage => RpcError::InvalidArgument,
+        ReleaseError::InvalidPage | ReleaseError::InvalidVersion => RpcError::InvalidArgument,
+        ReleaseError::Conflict => RpcError::AlreadyExists,
+        ReleaseError::FailedPrecondition => RpcError::FailedPrecondition,
         ReleaseError::InvalidStoredData | ReleaseError::Serialization(_) => {
             tracing::error!(%error, "stored release data could not be represented");
             RpcError::Internal

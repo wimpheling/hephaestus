@@ -381,6 +381,7 @@ impl VmSpecFactory for TestSpecFactory {
                 env: BTreeMap::new(),
                 working_dir: None,
             },
+            runtime_authority: None,
             labels: BTreeMap::new(),
         })
     }

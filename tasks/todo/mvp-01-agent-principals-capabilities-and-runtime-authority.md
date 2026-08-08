@@ -37,37 +37,40 @@ release capability requirements
 | User authority | Creating an instance does not itself authorize the creator to grant resources. Every binding requires permission to grant the selected operations on the exact resource. |
 | Revision history | Capability bindings belong to an immutable instance revision. Any binding or permission change creates a new revision. |
 | Live revocation | A binding records the run's maximum authority. Current OpenFGA/Mélange authorization may deny an operation at any time. |
-| Runtime principal | The agent instance is the durable principal. The runtime session authenticates one exact run of one immutable instance revision. |
+| Runtime principal | An agent instance or gateway is a durable workload principal. A runtime session authenticates one exact run or HTTP invocation of one immutable workload revision. |
 | Runtime credential | Each runtime session has one opaque, random, short-lived bearer credential. PostgreSQL stores only its hash, and queued work never contains it. |
+| Credential recovery | Credential issuance has a stable issuance generation and a temporary host-only encrypted handoff envelope. The guest acknowledges that exact generation before the envelope is destroyed; retry re-delivers the same credential, never a replacement for an active session. |
 | Effective permission | Every privileged call must match the runtime session, snapshot ceiling, exact resource and operation, live authorization, and RLS policy. |
 | Resource semantics | Permissions describe controlled Hephaestus operations rather than filesystem-style read/write access. |
+| Git resources | A repository binding is a named, exact resource capability. It may grant only declared Git operations, ref globs, and write-path globs; a repository name, project membership, or attachment never grants ambient Git authority. |
+| Git read boundary | Raw Git reads may be restricted by repository and ref, but not by path. Path-restricted reads require a distinct filtered content API or virtual repository and are not implied by sparse checkout. |
 | State | Private persistent state is allocated from the release's state requirement and is not a user-selected external capability binding. |
-| Secrets | Secret slots, imports, bindings, exact-version resolution, and delivery policy remain typed secret contracts. Their leases attach to the run's runtime session. |
+| Secrets | Secret slots, imports, bindings, exact-version resolution, and delivery policy remain typed secret contracts. Their leases attach to the runtime session. Brokered slots may bind destination-bound HTTPS placeholder substitution rules so provider and webhook credentials never enter the VM. |
 | Setup experience | Parameters, state, secret slots, and capability slots appear in one instance requirements review while retaining their distinct storage and enforcement models. |
 
 ## Initial permission vocabulary
 
 The first implementation must define a closed compatibility matrix between
 resource kinds and semantic operations. It must cover the existing
-repository, project, agent-instance, run, and state-volume operations required
-by installed agents.
+repository, project, agent-instance, gateway, run, and state-volume operations
+required by installed workloads.
 
-Initial repository operations should distinguish:
+Initial repository operations should distinguish metadata/tree inspection,
+Git read, ref creation, fast-forward ref update, force update, ref deletion,
+tag creation/deletion, run triggering, and attachment management. A Git write
+binding must carry independent ref glob and changed-path glob constraints;
+delete authority is never inferred from write authority. The initial Git
+capability may constrain writes by path at receive time, but must not claim to
+hide paths from a raw Git clone or fetch.
 
-- inspecting repository metadata;
-- reading exact source;
-- requesting an attached run;
-- proposing a change;
-- publishing an approved result; and
-- managing instance attachments.
+Initial project, agent-instance, and gateway operations should distinguish
+inspection from configuration, execution, update, pause, and recovery.
+Permission to manage a workload must not imply permission to grant it more
+authority, manage secrets, delete its project, or bypass approval for
+controlled publication. Gateway HTTP invocation has a short-lived session and
+no implicit mailbox, repository, state-volume, Caddy, or agent authority.
 
-Initial project and agent-instance operations should distinguish inspection
-from configuration, execution, update, pause, and recovery. Permission to
-manage an instance must not imply permission to grant it more authority,
-manage secrets, delete its project, or bypass approval for controlled
-publication.
-
-Mailbox, ingress, model, and outbound resource kinds will use this same
+Mailbox, gateway, and generic egress/secret bindings will use this same
 capability contract in their respective MVP tasks.
 
 ## Dependencies
@@ -82,8 +85,12 @@ This task does not implement mailboxes, public ingress, model providers,
 outbound adapters, an Operator Agent, a Project Agent, human-to-agent
 delegation, one-shot approvals, schedules, or long-lived service sessions.
 
-It does not expose arbitrary database operations, host paths, canonical Git
-credentials, plaintext secrets, or a generic “full project access” bit.
+It does not expose arbitrary database operations, host paths, a generic “full
+project access” bit, or broad reusable Git credentials. Plaintext secret
+      delivery is limited to an exact typed binding and bootstrap channel; provider
+      and webhook credentials use brokered placeholder substitution and are never
+      ambient or present in queues, logs, release source, or the VM. Git-specific runtime credential
+transport and Git HTTP enforcement are implemented by MVP 01.1.
 
 ## Implementation checklist
 
@@ -91,7 +98,7 @@ credentials, plaintext secrets, or a generic “full project access” bit.
   - [ ] **Add provider-neutral domain types**
     - [ ] Add validated capability slot keys, resource kinds, semantic
       operations, requirement IDs, binding IDs, authorization-snapshot IDs,
-      and runtime-session IDs.
+      runtime-session IDs, including gateway invocation sessions.
     - [ ] Represent required and optional operations separately and validate
       that each operation is legal for its resource kind.
     - [ ] Define deterministic normalized forms, hashes, and idempotency keys
@@ -111,6 +118,17 @@ credentials, plaintext secrets, or a generic “full project access” bit.
     - [ ] Add parser and release-domain tests for valid declarations,
       unsupported versions, malformed operations, duplicate slots, normalized
       hashes, and immutable publication.
+  - [ ] **Define repository capability requirements**
+    - [ ] Define repository operations and normalized ref/path glob grammar,
+      including explicit create, update, force-update, delete, and tag rules.
+    - [ ] Require a release to declare each named repository slot and its
+      maximum operation/ref/path ceiling; reject resource names, remote URLs,
+      token values, and tenant identifiers in release source.
+    - [ ] Specify receive-time changed-path semantics for additions, deletions,
+      renames, merges, and new refs, including byte/object limits and
+      deny-by-default behavior for ambiguous history.
+    - [ ] State and test that raw Git read policy is repository/ref scoped;
+      path-restricted reads are a later filtered-content capability.
 
 - [ ] **2. Bind instance permissions**
   - [ ] **Persist immutable revision bindings**
@@ -144,7 +162,7 @@ credentials, plaintext secrets, or a generic “full project access” bit.
 
 - [ ] **3. Make agent instances authorization subjects**
   - [ ] **Extend the canonical authorization model**
-    - [ ] Add explicit agent-instance relations for every supported resource
+    - [ ] Add explicit agent-instance and gateway relations for every supported resource
       and semantic operation.
     - [ ] Define separate user permissions for inspecting a resource, using
       it, and granting an agent access to it.
@@ -160,7 +178,8 @@ credentials, plaintext secrets, or a generic “full project access” bit.
     - [ ] Add forced RLS policies for capability requirements, bindings,
       snapshots, runtime sessions, and capability audit records.
     - [ ] Generalize transaction-local context to carry the effective agent
-      instance, exact run, runtime session, and request ID.
+      instance or gateway, exact run or HTTP invocation, runtime session, and
+      request ID.
     - [ ] Keep agent-facing transactions on a non-`BYPASSRLS` role and prevent
       callers from selecting a trusted worker identity.
     - [ ] Add real-PostgreSQL tests for user, agent-instance, exact-run, and
@@ -175,13 +194,25 @@ credentials, plaintext secrets, or a generic “full project access” bit.
       revision binding IDs, granted operations, resource IDs, secret lease
       identities, authorization-model version, and deterministic snapshot
       hash.
-    - [ ] Create one runtime session bound to the exact instance, revision,
-      run, optional attachment, snapshot, issue time, expiry, and lifecycle
-      state.
+    - [ ] Create one runtime session bound to the exact workload, revision,
+      run or HTTP invocation, optional attachment, snapshot, issue time,
+      expiry, and lifecycle state.
     - [ ] Mint one fresh opaque credential, store only its hash, and deliver
       bearer material only through the runtime bootstrap channel.
-    - [ ] Make dispatch retry and NATS redelivery idempotent without creating
-      conflicting active sessions or bearer credentials.
+    - [ ] Create a stable issuance generation and a temporary encrypted,
+      host-only handoff envelope before bootstrap delivery. PostgreSQL retains
+      only the credential hash; the envelope is readable only by trusted host
+      bootstrap code and expires with the session.
+    - [ ] Require the guest to acknowledge the exact issuance generation before
+      deleting the envelope. On dispatch retry or redelivery, re-deliver the
+      same credential and make duplicate guest acknowledgement idempotent.
+    - [ ] On acknowledgement timeout or unrecoverable bootstrap failure, revoke
+      the session, terminate the guest, and delete the envelope. Minting a new
+      credential requires a new session after the old session is revoked.
+    - [ ] Add failure-injection tests before and after credential generation,
+      hash/session commit, envelope persistence, bootstrap delivery, guest
+      acknowledgement, envelope deletion, and guest start. Prove retry neither
+      loses the credential nor creates conflicting active credentials.
     - [ ] Deny dispatch with stable diagnostics when any required binding is
       missing, revoked, unauthorized, or incompatible.
   - [ ] **Attach runtime leases**
@@ -189,6 +220,10 @@ credentials, plaintext secrets, or a generic “full project access” bit.
       with the same runtime session and authorization snapshot.
     - [ ] Preserve the distinct raw-secret and brokered-secret permissions and
       delivery behavior.
+    - [ ] Bind brokered HTTPS slots to exact placeholder, destination, injection,
+      and optional gateway-route rules. Record their versions, leases, runtime
+      revisions, rotation, and revocation without placing their values in
+      durable records, queues, logs, or guest bootstrap material.
     - [ ] Define session expiry, revocation, cancellation, terminal cleanup,
       and crash reconciliation.
     - [ ] Add dispatch tests for mixed ordinary and secret capabilities,
@@ -220,6 +255,15 @@ credentials, plaintext secrets, or a generic “full project access” bit.
       the immutable snapshot.
     - [ ] Add race tests before dispatch, after session creation, during guest
       provisioning, during a privileged call, and after revocation.
+  - [ ] **Specialize runtime authority for Git**
+    - [ ] Define the authenticated runtime-Git principal as the exact runtime
+      session, never as a human user or a reusable agent-wide identity.
+    - [ ] Require every Git request to recheck credential validity, exact run,
+      binding, operation, repository, ref/path constraints, expiry, current
+      authorization, and resource lifecycle.
+    - [ ] Delegate Git credential format, Git HTTP authentication, ref
+      advertisement, receive enforcement, and runtime worktree delivery to
+      MVP 01.1 without weakening this task's immutable binding ceiling.
 
 - [ ] **6. Add the instance permission UI**
   - [ ] **Review requirements during instance creation**

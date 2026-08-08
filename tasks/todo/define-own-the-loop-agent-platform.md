@@ -152,83 +152,57 @@ Human ──────────────→ Operator/Admin Agent
 
                                project plane
 
-Internet → Caddy → fast gateway → durable inbox → Project/installed Agent
-                     runtime                           runtime
-                        │                                 │
-                 protocol-specific                 owns loop, memory,
-                  released code                    and project behavior
+Internet → shared Caddy → GatewayDispatcher → gateway HTTP handler
+                                                runtime
+                                                   │
+                                           protocol-specific
+                                            released code
 ```
 
 The public gateway and project agent are separate principals. Compromise of a
 public protocol parser must not automatically grant repository, project-state,
 or management authority.
 
-### Fast gateways
+### Gateways
 
-Hephaestus should provide a surface on which users and their agents can expose
-small protocol-specific gateways. V8 isolates, WebAssembly, or another
-fast-start low-overhead runtime are candidates; the engine choice is not yet
-locked.
+Hephaestus should provide repository-declared gateway workloads alongside
+agents. A gateway maps bounded public routes to a released stateless HTTP
+request handler. Its canonical contract is a bounded HTTP request to a bounded
+HTTP response: application code owns protocol parsing, validation, and return
+semantics, while Hephaestus owns route authority, revision selection,
+invocation, and audit.
 
-A gateway may:
-
-- receive bounded public HTTP or WebSocket traffic;
-- validate a protocol signature or application token;
-- normalize an event using user-owned code;
-- acknowledge the remote service promptly;
-- publish a durable event to explicitly bound agent inboxes; and
-- send responses through narrowly scoped brokered capabilities.
-
-A gateway should not receive a project state volume, repository mount,
-organization-wide token, or implicit Project Agent authority.
-
-Two execution contracts require explicit decisions:
-
-```text
-event binding
-Caddy → persist generic request → acknowledge → wake agent asynchronously
-
-service binding
-Caddy → route to a live guest service with health, drain, and restart policy
-```
-
-Event bindings fit webhooks and scale-to-zero behavior. Service bindings fit
-streaming, WebSockets, preview servers, and applications requiring a live
-process. Service bindings expand beyond the current reusable-release task’s
-non-goal of long-lived interactive VMs and therefore require their own
-architecture and task.
+A gateway may receive bounded public HTTP traffic, validate a protocol
+signature or application token, return an application-specific HTTP response,
+normalize an event, publish to explicitly bound agent inboxes, and use narrowly
+scoped capabilities. It must not receive a project state volume, repository
+mount, organization-wide token, Caddy administration, or implicit agent
+authority. Streaming, WebSockets, and long-lived service processes are later
+contracts, not gateway MVP behavior.
 
 ### Caddy integration boundary
 
-Caddy should be the public HTTP edge, not the source of truth for ingress or
-an agent-aware control plane. It owns TLS termination, public HTTP protocol
-handling, and forwarding to stable Hephaestus ingress endpoints. Hephaestus
-owns domain and route bindings, authorization, activation, readiness, durable
-delivery, and the mapping from a logical target to an ephemeral guest.
+Caddy is the shared public HTTP edge, not the source of truth for gateways or
+an agent-aware control plane. Platform-owned routes (UI, API, registry, and
+health endpoints) remain distinct from the reserved `/gateway/` namespace for
+repository-declared routes. Hephaestus validates gateway route conflicts and
+authorization, then reconciles derived Caddy configuration. Agents never
+receive Caddy administration access; Caddy configuration is reconstructible
+deployment state and authoritative gateway records remain in PostgreSQL.
 
-An authorized user or agent requests an ingress binding through the
-Hephaestus API. The binding identifies a domain, bounded route and methods,
-event or service contract, target instance or inbox, and revision. Hephaestus
-validates domain ownership, route conflicts, and the caller's capabilities,
-then reconciles derived Caddy configuration. Agents must not receive direct
-access to Caddy's administration API. Caddy configuration is reconstructible
-deployment state; authoritative bindings and their audit history remain in
-the Hephaestus database.
+Caddy terminates HTTPS and forwards `/gateway/` requests to a stable host-side
+GatewayDispatcher. The dispatcher discards untrusted forwarding headers,
+applies limits, resolves the exact revision, invokes the gateway VM over
+private HTTP, and relays its bounded response. Caddy does not need VM
+addresses, leases, snapshots, or runtime credentials.
 
-For event bindings, Caddy forwards to an always-available Hephaestus ingress
-service, which applies request limits, durably records the generic envelope,
-and only then acknowledges and schedules work. For service bindings, Caddy
-forwards through a stable activation proxy; Hephaestus starts or wakes the
-selected revision, waits for readiness, and resolves its private endpoint.
-Caddy should not need to understand VM addresses, leases, snapshots, or agent
-credentials.
-
-The edge contract must define trusted proxy headers, request and response size
-limits, timeouts, rate limits, WebSocket and streaming behavior, request IDs,
-TLS certificate lifecycle, drain during revision cutover, and safe failure
-responses. Project code may implement application authentication such as a
-Telegram signature, but platform authorization to own a domain or expose a
-route remains outside that code.
+A host-side `GatewayProvider` adapter reconciles routes and translates
+provider-specific request/response representations to/from this canonical HTTP
+contract. The MVP implements only the shared-Caddy adapter. It has no gateway
+certificate, domain verification, issuance, renewal, or user-configurable TLS
+policy: gateway routes use the preconfigured listener and hostname. Project
+code may implement application authentication such as a Telegram signature,
+but platform authorization to expose a route remains outside that code.
 
 ### Unikraft as an optional instant-service runtime
 
@@ -395,13 +369,13 @@ Example release declaration:
 kind = "repository"
 permissions = ["read_source", "propose_change"]
 
-[capabilities.telegram]
-kind = "gateway"
-permissions = ["receive_events", "send_responses"]
+[capabilities.cooking_inbox]
+kind = "mailbox"
+permissions = ["publish"]
 
-[capabilities.model]
-kind = "model"
-permissions = ["invoke"]
+[secrets.telegram_api]
+delivery = "brokered"
+destination = "https://api.telegram.org"
 ```
 
 The consuming project resolves symbolic slots to concrete resources.
@@ -514,7 +488,7 @@ agent_instance.update
 agent_instance.pause
 agent_instance.recover
 
-model.invoke
+mailbox.publish
 secret.use
 schedule.manage
 authorization.grant_agent_access
@@ -556,12 +530,13 @@ The architecture should support an explicit safety ladder:
 
 1. raw secret delivery for deliberately trusted workloads;
 2. destination-bound proxy substitution;
-3. semantic capabilities where Hephaestus performs the privileged operation.
+3. first-class resource operations such as scoped Git, mailbox, SQLite, or
+   object-store access, where Hephaestus governs the primitive but never
+   interprets the application's protocol or policy.
 
-Model access is a candidate platform capability even though the agent owns its
-loop. A model gateway can keep provider credentials outside the guest and
-enforce budgets, rate limits, provider policy, revocation, and usage audit
-without prescribing prompts or orchestration.
+Model and provider APIs use the second level in this MVP: released code owns
+the protocol, retries, and spend decisions, while Hephaestus enforces only the
+declared destination and secret-substitution binding.
 
 ## Distributions and packaged agents
 
@@ -679,7 +654,7 @@ Cooking agent
   may send through its Telegram capability
   may read and propose changes to the cooking-blog repository
   may use its own state volume
-  may invoke a bounded model/search policy
+  may call explicitly bound HTTPS destinations through placeholder substitution
 
 Cooking agent may not
   inspect another project
@@ -765,17 +740,31 @@ authorization-snapshot decisions without absorbing their implementation.
 
 [`manage-delegate-and-deliver-secrets.md`](../done/manage-delegate-and-deliver-secrets.md)
 supplies encrypted secret storage, bindings, runtime leases, raw delivery, and
-the base non-disclosing broker. The MVP tasks below extend that broker for
-model and outbound semantic operations. Interactive sessions, optimized fast
+the base non-disclosing broker. The MVP tasks below extend it for generic
+destination-bound HTTPS placeholder substitution. Interactive sessions, optimized fast
 gateways, long-lived services, snapshots, distributions, packaged agents, and
 the curated catalog remain deferred.
 
-## MVP
+## MVP plan DAG
 
-The MVP is the smallest end-to-end product slice that proves released agents
-can own their loops while Hephaestus retains authority. Implementation details,
-tests, documentation, and completion evidence live in the five child tasks
-below, ordered by dependency rather than duplicated in this umbrella task.
+The MVP plans prove released agents can own their loops while Hephaestus retains
+authority. The following graph is the authoritative dependency order; each child
+task owns its implementation, tests, documentation, and completion evidence.
+
+```text
+MVP 01 authority
+├── MVP 01.1 Git transport
+│   └── MVP 01.2 runtime Git
+├── MVP 02 durable mailboxes
+└── MVP 04 destination-bound HTTPS egress and secret substitution
+    └── MVP 03 synchronous HTTP gateways
+
+MVP 05 cooking journey
+  ← MVP 01, 01.2, 02, 03, 04
+
+MVP 06 chat journey
+  ← MVP 01.2, MVP 04
+```
 
 - [ ] **0. Ratify the minimum product contract**
   - [ ] Add a concise canonical architecture/product document defining “own
@@ -811,19 +800,19 @@ below, ordered by dependency rather than duplicated in this umbrella task.
     serialize execution under its exclusive volume lease, and recover honestly
     from crashes.
 
-- [ ] **3. Add event-only public ingress**
+- [ ] **3. Add synchronous HTTP gateways**
   - [ ] Complete
-    [MVP 03: Event ingress and Caddy routing](mvp-03-event-ingress-and-caddy-routing.md).
+    [MVP 03: Gateway HTTP routing and invocation](mvp-03-event-ingress-and-caddy-routing.md).
   - [ ] Verify Caddy configuration is derived from authoritative bindings and a
     compromised gateway cannot acquire target-agent, repository, project-state,
     or Caddy-administration authority.
 
-- [ ] **4. Add brokered model and outbound operations**
+- [ ] **4. Add destination-bound HTTPS egress and secret substitution**
   - [ ] Complete
-    [MVP 04: Brokered model and outbound capabilities](mvp-04-brokered-model-and-outbound-capabilities.md).
-  - [ ] Verify model and Telegram-compatible outbound operations succeed while
-    broker credentials remain outside guests and broker-only egress cannot be
-    bypassed.
+    [MVP 04: Destination-bound HTTPS egress and secret substitution](mvp-04-brokered-model-and-outbound-capabilities.md).
+  - [ ] Verify real credentials never enter guests, substitutions occur only on
+    exact authorized destinations/routes, and direct egress cannot bypass the
+    proxy.
 
 - [ ] **5. Prove the golden cooking-agent journey**
   - [ ] Complete
@@ -833,11 +822,18 @@ below, ordered by dependency rather than duplicated in this umbrella task.
     controlled Git publication, release update, recovery, and complete
     provenance.
 
-- [ ] **6. Verify and hand off the MVP roadmap**
-  - [x] Create the five dependency-ordered MVP task files with independent
+- [ ] **6. Prove the Git-backed chat journey**
+  - [ ] Complete
+    [MVP 06: Git-backed session chat journey](mvp-06-git-backed-session-chat-journey.md)
+    after MVP 01.2 and MVP 04 only.
+  - [ ] Verify the selected chat release owns its session repository protocol;
+    public gateways and outbound delivery are not prerequisites.
+
+- [ ] **7. Verify and hand off the MVP roadmap**
+  - [x] Create and maintain dependency-ordered MVP task files with independent
     outcomes, locked decisions, non-goals, checklists, verification, and
     completion-evidence requirements.
-  - [ ] Review the umbrella decisions and all five MVP tasks for contradictory
+  - [ ] Review the umbrella decisions and all MVP tasks for contradictory
     terminology, authority, lifecycle, and commit-point requirements.
   - [ ] Confirm each unresolved MVP architecture question has one authoritative
     child task and no requirement depends on chat history.
@@ -854,7 +850,7 @@ The following work is deliberately outside the first product slice. Keep it in
 this umbrella until it is prioritized, then create one focused todo task with
 independently verifiable acceptance criteria before implementation.
 
-- [ ] **Fast gateway runtimes and live service bindings**
+- [ ] **Fast gateway runtimes and long-lived services**
   - [ ] Compare V8 isolates, WebAssembly, Unikraft, and the general Linux
     microVM using cold start, density, compatibility, observability, packaging,
     isolation, and cleanup evidence.
@@ -887,8 +883,8 @@ independently verifiable acceptance criteria before implementation.
   - [ ] Complete or replace
     [state-capability transitions](support-agent-state-capability-transitions.md)
     when transitions beyond the MVP reject-by-default contract are required.
-  - [ ] Create an interactive-session task only after its relationship to event
-    and service bindings is explicit.
+  - [ ] Reconcile interactive-session work with the gateway HTTP contract and
+    long-lived-service deferral before adding any shared routing behavior.
 
 - [ ] **Broader credential, egress, and semantic capability coverage**
   - [ ] Specify and validate a transparent destination-bound TLS interception

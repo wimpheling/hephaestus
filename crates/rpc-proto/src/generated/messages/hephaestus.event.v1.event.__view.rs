@@ -6311,6 +6311,302 @@ impl ::serde::Serialize for ArtifactChangedOwnedView {
         ::serde::Serialize::serialize(&self.0, __s)
     }
 }
+/// Safe invalidation for one immutable OCI publication. The corresponding
+/// Builder Catalog snapshot supplies the immutable reference and evidence.
+/// Zot callback data never crosses the product-event boundary.
+#[derive(Clone, Debug, Default)]
+pub struct RegistryPublicationChangedView<'a> {
+    /// Field 1: `change`
+    pub change: ::buffa::EnumValue<super::super::ChangeKind>,
+    /// Field 2: `state`
+    pub state: ::buffa::EnumValue<super::super::LifecycleState>,
+    pub __buffa_unknown_fields: ::buffa::UnknownFieldsView<'a>,
+}
+impl<'a> ::buffa::MessageView<'a> for RegistryPublicationChangedView<'a> {
+    type Owned = super::super::RegistryPublicationChanged;
+    fn decode_view(buf: &'a [u8]) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        let __limit = ::core::cell::Cell::new(::buffa::DEFAULT_UNKNOWN_FIELD_LIMIT);
+        <Self as ::buffa::MessageView>::decode_view_ctx(
+            buf,
+            ::buffa::DecodeContext::new(::buffa::RECURSION_LIMIT, &__limit),
+        )
+    }
+    fn decode_view_with_ctx(
+        buf: &'a [u8],
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        <Self as ::buffa::MessageView>::decode_view_ctx(buf, ctx)
+    }
+    fn merge_view_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        cur: &'a [u8],
+        before_tag: &'a [u8],
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<&'a [u8], ::buffa::DecodeError> {
+        let _ = ctx;
+        #[allow(unused_variables)]
+        let view = self;
+        let mut cur = cur;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                view.change = ::buffa::EnumValue::from(
+                    ::buffa::types::decode_int32(&mut cur)?,
+                );
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                view.state = ::buffa::EnumValue::from(
+                    ::buffa::types::decode_int32(&mut cur)?,
+                );
+            }
+            _ => {
+                ::buffa::encoding::skip_field_depth(tag, &mut cur, ctx.depth())?;
+                let span_len = before_tag.len() - cur.len();
+                view.__buffa_unknown_fields.push_record(before_tag, span_len, ctx)?;
+            }
+        }
+        ::core::result::Result::Ok(cur)
+    }
+    fn to_owned_message(
+        &self,
+    ) -> ::core::result::Result<
+        super::super::RegistryPublicationChanged,
+        ::buffa::DecodeError,
+    > {
+        self.to_owned_from_source(None)
+    }
+    #[allow(clippy::useless_conversion, clippy::needless_update)]
+    fn to_owned_from_source(
+        &self,
+        __buffa_src: ::core::option::Option<&::buffa::bytes::Bytes>,
+    ) -> ::core::result::Result<
+        super::super::RegistryPublicationChanged,
+        ::buffa::DecodeError,
+    > {
+        #[allow(unused_imports)]
+        use ::buffa::alloc::string::ToString as _;
+        let _ = __buffa_src;
+        ::core::result::Result::Ok(super::super::RegistryPublicationChanged {
+            change: self.change,
+            state: self.state,
+            __buffa_unknown_fields: self.__buffa_unknown_fields.to_owned()?.into(),
+            ..::core::default::Default::default()
+        })
+    }
+}
+impl<'a> ::buffa::ViewEncode<'a> for RegistryPublicationChangedView<'a> {
+    #[allow(clippy::needless_borrow, clippy::let_and_return)]
+    fn compute_size(&self, _cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        {
+            let val = self.change.to_i32();
+            if val != 0 {
+                size += 1u32 + ::buffa::types::int32_encoded_len(val) as u32;
+            }
+        }
+        {
+            let val = self.state.to_i32();
+            if val != 0 {
+                size += 1u32 + ::buffa::types::int32_encoded_len(val) as u32;
+            }
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    #[allow(clippy::needless_borrow)]
+    fn write_to(
+        &self,
+        _cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        {
+            let val = self.change.to_i32();
+            if val != 0 {
+                ::buffa::types::put_int32_field(1u32, val, buf);
+            }
+        }
+        {
+            let val = self.state.to_i32();
+            if val != 0 {
+                ::buffa::types::put_int32_field(2u32, val, buf);
+            }
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+}
+/// Serializes this view as protobuf JSON.
+///
+/// Implicit-presence fields with default values are omitted, `required`
+/// fields are always emitted, explicit-presence (`optional`) fields are
+/// emitted only when set, bytes fields are base64-encoded, and enum
+/// values are their proto name strings.
+///
+/// This impl uses `serialize_map(None)` because the number of emitted
+/// fields depends on default-omission rules; serializers that require
+/// known map lengths (e.g. `bincode`) will return a runtime error.
+/// Use the owned message type for those formats.
+impl<'__a> ::serde::Serialize for RegistryPublicationChangedView<'__a> {
+    fn serialize<__S: ::serde::Serializer>(
+        &self,
+        __s: __S,
+    ) -> ::core::result::Result<__S::Ok, __S::Error> {
+        use ::serde::ser::SerializeMap as _;
+        let mut __map = __s.serialize_map(::core::option::Option::None)?;
+        if !::buffa::json_helpers::skip_if::is_default_enum_value(&self.change) {
+            __map.serialize_entry("change", &self.change)?;
+        }
+        if !::buffa::json_helpers::skip_if::is_default_enum_value(&self.state) {
+            __map.serialize_entry("state", &self.state)?;
+        }
+        __map.end()
+    }
+}
+impl<'a> ::buffa::MessageName for RegistryPublicationChangedView<'a> {
+    const PACKAGE: &'static str = "hephaestus.event.v1";
+    const NAME: &'static str = "RegistryPublicationChanged";
+    const FULL_NAME: &'static str = "hephaestus.event.v1.RegistryPublicationChanged";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.event.v1.RegistryPublicationChanged";
+}
+::buffa::impl_default_view_instance!(RegistryPublicationChangedView);
+::buffa::impl_view_reborrow!(RegistryPublicationChangedView);
+/** Self-contained, `'static` owned view of a `RegistryPublicationChanged` message.
+
+ Wraps [`::buffa::OwnedView`]`<`[`RegistryPublicationChangedView`]`<'static>>`: the decoded view and the [`::buffa::bytes::Bytes`] buffer it borrows from travel together, so the handle is `'static` and `Send + Sync` — suitable for async handlers, spawned tasks, and anywhere a `'static` bound is required.
+
+ Field accessors return borrows tied to `&self`. Use [`Self::view`] to get the full [`RegistryPublicationChangedView`] when you need struct patterns, iteration helpers, or to pass the view to lifetime-parameterised code.*/
+#[derive(Clone, Debug)]
+pub struct RegistryPublicationChangedOwnedView(
+    ::buffa::OwnedView<RegistryPublicationChangedView<'static>>,
+);
+impl RegistryPublicationChangedOwnedView {
+    /// Decode an owned view from a [`::buffa::bytes::Bytes`] buffer.
+    ///
+    /// The view borrows directly from the buffer's data; the buffer is
+    /// retained inside the returned handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`::buffa::DecodeError`] if the buffer contains invalid
+    /// protobuf data.
+    pub fn decode(
+        bytes: ::buffa::bytes::Bytes,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        ::core::result::Result::Ok(
+            RegistryPublicationChangedOwnedView(::buffa::OwnedView::decode(bytes)?),
+        )
+    }
+    /// Decode with custom [`::buffa::DecodeOptions`] (recursion limit,
+    /// max message size).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`::buffa::DecodeError`] if the buffer is invalid or
+    /// exceeds the configured limits.
+    pub fn decode_with_options(
+        bytes: ::buffa::bytes::Bytes,
+        opts: &::buffa::DecodeOptions,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        ::core::result::Result::Ok(
+            RegistryPublicationChangedOwnedView(
+                ::buffa::OwnedView::decode_with_options(bytes, opts)?,
+            ),
+        )
+    }
+    /// Build from an owned message via an encode → decode round-trip.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`::buffa::DecodeError`] if the re-encoded bytes are
+    /// somehow invalid (should not happen for well-formed messages).
+    pub fn from_owned(
+        msg: &super::super::RegistryPublicationChanged,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        ::core::result::Result::Ok(
+            RegistryPublicationChangedOwnedView(::buffa::OwnedView::from_owned(msg)?),
+        )
+    }
+    /// Borrow the full [`RegistryPublicationChangedView`] with its lifetime tied to `&self`.
+    #[must_use]
+    pub fn view(&self) -> &RegistryPublicationChangedView<'_> {
+        self.0.reborrow()
+    }
+    /// Convert to the owned message type.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if re-materializing preserved unknown fields
+    /// fails (e.g. the unknown-field limit is exceeded).
+    pub fn to_owned_message(
+        &self,
+    ) -> ::core::result::Result<
+        super::super::RegistryPublicationChanged,
+        ::buffa::DecodeError,
+    > {
+        self.0.to_owned_message()
+    }
+    /// The underlying bytes buffer.
+    #[must_use]
+    pub fn bytes(&self) -> &::buffa::bytes::Bytes {
+        self.0.bytes()
+    }
+    /// Consume the handle, returning the underlying bytes buffer.
+    #[must_use]
+    pub fn into_bytes(self) -> ::buffa::bytes::Bytes {
+        self.0.into_bytes()
+    }
+    /// Field 1: `change`
+    #[must_use]
+    pub fn change(&self) -> ::buffa::EnumValue<super::super::ChangeKind> {
+        self.0.reborrow().change
+    }
+    /// Field 2: `state`
+    #[must_use]
+    pub fn state(&self) -> ::buffa::EnumValue<super::super::LifecycleState> {
+        self.0.reborrow().state
+    }
+}
+impl ::core::convert::From<::buffa::OwnedView<RegistryPublicationChangedView<'static>>>
+for RegistryPublicationChangedOwnedView {
+    fn from(inner: ::buffa::OwnedView<RegistryPublicationChangedView<'static>>) -> Self {
+        RegistryPublicationChangedOwnedView(inner)
+    }
+}
+impl ::core::convert::From<RegistryPublicationChangedOwnedView>
+for ::buffa::OwnedView<RegistryPublicationChangedView<'static>> {
+    fn from(wrapper: RegistryPublicationChangedOwnedView) -> Self {
+        wrapper.0
+    }
+}
+impl ::core::convert::AsRef<::buffa::OwnedView<RegistryPublicationChangedView<'static>>>
+for RegistryPublicationChangedOwnedView {
+    fn as_ref(&self) -> &::buffa::OwnedView<RegistryPublicationChangedView<'static>> {
+        &self.0
+    }
+}
+impl ::buffa::HasMessageView for super::super::RegistryPublicationChanged {
+    type View<'a> = RegistryPublicationChangedView<'a>;
+    type ViewHandle = RegistryPublicationChangedOwnedView;
+}
+impl ::serde::Serialize for RegistryPublicationChangedOwnedView {
+    fn serialize<__S: ::serde::Serializer>(
+        &self,
+        __s: __S,
+    ) -> ::core::result::Result<__S::Ok, __S::Error> {
+        ::serde::Serialize::serialize(&self.0, __s)
+    }
+}
 /// Canonical client-facing event envelope. High-volume logs, metrics, artifact
 /// bytes, secret material, command parameters, and unrestricted diagnostics are
 /// deliberately absent.
@@ -7023,6 +7319,37 @@ impl<'a> ::buffa::MessageView<'a> for ProductEventView<'a> {
                     );
                 }
             }
+            36u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                let __sub_ctx = ctx.descend()?;
+                let sub = ::buffa::types::borrow_bytes(&mut cur)?;
+                if let Some(
+                    super::super::__buffa::view::oneof::product_event::Payload::RegistryPublicationChanged(
+                        ref mut existing,
+                    ),
+                ) = view.payload
+                {
+                    ::buffa::MessageView::merge_into_view(
+                        &mut **existing,
+                        sub,
+                        __sub_ctx,
+                    )?;
+                } else {
+                    view.payload = Some(
+                        super::super::__buffa::view::oneof::product_event::Payload::RegistryPublicationChanged(
+                            ::buffa::alloc::boxed::Box::new(
+                                <super::super::__buffa::view::RegistryPublicationChangedView as ::buffa::MessageView>::decode_view_ctx(
+                                    sub,
+                                    __sub_ctx,
+                                )?,
+                            ),
+                        ),
+                    );
+                }
+            }
             _ => {
                 ::buffa::encoding::skip_field_depth(tag, &mut cur, ctx.depth())?;
                 let span_len = before_tag.len() - cur.len();
@@ -7239,6 +7566,15 @@ impl<'a> ::buffa::MessageView<'a> for ProductEventView<'a> {
                                 v,
                             ) => {
                                 super::super::__buffa::oneof::product_event::Payload::IdentityProfileChanged(
+                                    ::buffa::alloc::boxed::Box::new(
+                                        v.to_owned_from_source(__buffa_src)?,
+                                    ),
+                                )
+                            }
+                            super::super::__buffa::view::oneof::product_event::Payload::RegistryPublicationChanged(
+                                v,
+                            ) => {
+                                super::super::__buffa::oneof::product_event::Payload::RegistryPublicationChanged(
                                     ::buffa::alloc::boxed::Box::new(
                                         v.to_owned_from_source(__buffa_src)?,
                                     ),
@@ -7485,6 +7821,16 @@ impl<'a> ::buffa::ViewEncode<'a> for ProductEventView<'a> {
                         += 2u32 + ::buffa::encoding::varint_len(inner as u64) as u32
                             + inner;
                 }
+                super::super::__buffa::view::oneof::product_event::Payload::RegistryPublicationChanged(
+                    x,
+                ) => {
+                    let __slot = __cache.reserve();
+                    let inner = x.compute_size(__cache);
+                    __cache.set(__slot, inner);
+                    size
+                        += 2u32 + ::buffa::encoding::varint_len(inner as u64) as u32
+                            + inner;
+                }
             }
         }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
@@ -7696,6 +8042,16 @@ impl<'a> ::buffa::ViewEncode<'a> for ProductEventView<'a> {
                     );
                     x.write_to(__cache, buf);
                 }
+                super::super::__buffa::view::oneof::product_event::Payload::RegistryPublicationChanged(
+                    x,
+                ) => {
+                    ::buffa::types::put_len_delimited_header(
+                        36u32,
+                        __cache.consume_next(),
+                        buf,
+                    );
+                    x.write_to(__cache, buf);
+                }
             }
         }
         self.__buffa_unknown_fields.write_to(buf);
@@ -7847,6 +8203,11 @@ impl<'__a> ::serde::Serialize for ProductEventView<'__a> {
                     v,
                 ) => {
                     __map.serialize_entry("identityProfileChanged", v)?;
+                }
+                super::super::__buffa::view::oneof::product_event::Payload::RegistryPublicationChanged(
+                    v,
+                ) => {
+                    __map.serialize_entry("registryPublicationChanged", v)?;
                 }
             }
         }

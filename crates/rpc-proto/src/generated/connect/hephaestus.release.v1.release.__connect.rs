@@ -22,6 +22,42 @@ pub type OwnedGetReleaseResponseView = ::buffa::view::OwnedView<
         'static,
     >,
 >;
+///Shorthand for `OwnedView<SetDraftVersionRequestView<'static>>`.
+pub type OwnedSetDraftVersionRequestView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::release::v1::__buffa::view::SetDraftVersionRequestView<
+        'static,
+    >,
+>;
+///Shorthand for `OwnedView<SetDraftVersionResponseView<'static>>`.
+pub type OwnedSetDraftVersionResponseView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::release::v1::__buffa::view::SetDraftVersionResponseView<
+        'static,
+    >,
+>;
+///Shorthand for `OwnedView<PublishReleaseRequestView<'static>>`.
+pub type OwnedPublishReleaseRequestView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::release::v1::__buffa::view::PublishReleaseRequestView<
+        'static,
+    >,
+>;
+///Shorthand for `OwnedView<PublishReleaseResponseView<'static>>`.
+pub type OwnedPublishReleaseResponseView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::release::v1::__buffa::view::PublishReleaseResponseView<
+        'static,
+    >,
+>;
+///Shorthand for `OwnedView<WatchReleaseRequestView<'static>>`.
+pub type OwnedWatchReleaseRequestView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::release::v1::__buffa::view::WatchReleaseRequestView<
+        'static,
+    >,
+>;
+///Shorthand for `OwnedView<WatchReleaseResponseView<'static>>`.
+pub type OwnedWatchReleaseResponseView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::release::v1::__buffa::view::WatchReleaseResponseView<
+        'static,
+    >,
+>;
 impl ::connectrpc::Encodable<
     crate::messages::hephaestus::release::v1::ListRepositoryReleasesResponse,
 >
@@ -76,6 +112,90 @@ for ::buffa::view::OwnedView<
         ::connectrpc::__codegen::encode_view_body(self.reborrow(), codec)
     }
 }
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::release::v1::SetDraftVersionResponse,
+>
+for crate::messages::hephaestus::release::v1::__buffa::view::SetDraftVersionResponseView<
+    '_,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self, codec)
+    }
+}
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::release::v1::SetDraftVersionResponse,
+>
+for ::buffa::view::OwnedView<
+    crate::messages::hephaestus::release::v1::__buffa::view::SetDraftVersionResponseView<
+        'static,
+    >,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self.reborrow(), codec)
+    }
+}
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::release::v1::PublishReleaseResponse,
+>
+for crate::messages::hephaestus::release::v1::__buffa::view::PublishReleaseResponseView<
+    '_,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self, codec)
+    }
+}
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::release::v1::PublishReleaseResponse,
+>
+for ::buffa::view::OwnedView<
+    crate::messages::hephaestus::release::v1::__buffa::view::PublishReleaseResponseView<
+        'static,
+    >,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self.reborrow(), codec)
+    }
+}
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::release::v1::WatchReleaseResponse,
+>
+for crate::messages::hephaestus::release::v1::__buffa::view::WatchReleaseResponseView<
+    '_,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self, codec)
+    }
+}
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::release::v1::WatchReleaseResponse,
+>
+for ::buffa::view::OwnedView<
+    crate::messages::hephaestus::release::v1::__buffa::view::WatchReleaseResponseView<
+        'static,
+    >,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self.reborrow(), codec)
+    }
+}
 /// Full service name for this service.
 pub const RELEASE_SERVICE_SERVICE_NAME: &str = "hephaestus.release.v1.ReleaseService";
 /// Static [`Spec`](::connectrpc::Spec) for the server-side `ListRepositoryReleases` RPC.
@@ -96,6 +216,33 @@ pub const RELEASE_SERVICE_GET_RELEASE_SPEC: ::connectrpc::Spec = ::connectrpc::S
         ::connectrpc::StreamType::Unary,
     )
     .with_idempotency_level(::connectrpc::IdempotencyLevel::NoSideEffects);
+/// Static [`Spec`](::connectrpc::Spec) for the server-side `SetDraftVersion` RPC.
+///
+/// The dispatcher surfaces this on
+/// [`RequestContext::spec`](::connectrpc::RequestContext::spec).
+pub const RELEASE_SERVICE_SET_DRAFT_VERSION_SPEC: ::connectrpc::Spec = ::connectrpc::Spec::server(
+        "/hephaestus.release.v1.ReleaseService/SetDraftVersion",
+        ::connectrpc::StreamType::Unary,
+    )
+    .with_idempotency_level(::connectrpc::IdempotencyLevel::Unknown);
+/// Static [`Spec`](::connectrpc::Spec) for the server-side `PublishRelease` RPC.
+///
+/// The dispatcher surfaces this on
+/// [`RequestContext::spec`](::connectrpc::RequestContext::spec).
+pub const RELEASE_SERVICE_PUBLISH_RELEASE_SPEC: ::connectrpc::Spec = ::connectrpc::Spec::server(
+        "/hephaestus.release.v1.ReleaseService/PublishRelease",
+        ::connectrpc::StreamType::Unary,
+    )
+    .with_idempotency_level(::connectrpc::IdempotencyLevel::Unknown);
+/// Static [`Spec`](::connectrpc::Spec) for the server-side `WatchRelease` RPC.
+///
+/// The dispatcher surfaces this on
+/// [`RequestContext::spec`](::connectrpc::RequestContext::spec).
+pub const RELEASE_SERVICE_WATCH_RELEASE_SPEC: ::connectrpc::Spec = ::connectrpc::Spec::server(
+        "/hephaestus.release.v1.ReleaseService/WatchRelease",
+        ::connectrpc::StreamType::ServerStream,
+    )
+    .with_idempotency_level(::connectrpc::IdempotencyLevel::Unknown);
 /// Server trait for ReleaseService.
 ///
 /// # Implementing handlers
@@ -193,6 +340,75 @@ pub trait ReleaseService: Send + Sync + 'static {
             > + Send + use<'a, Self>,
         >,
     > + Send;
+    /// Handle the SetDraftVersion RPC.
+    ///
+    /// `'a` lets the response body borrow from `&self` (e.g. server-resident state).
+    ///
+    /// `request` is borrowed from the request body and is valid for the
+    /// duration of the call; message fields are read directly on it
+    /// (zero-copy). The response cannot borrow from `request` — use
+    /// `.to_owned_message()` (or copy the specific fields) for anything
+    /// returned, stored, or moved into `tokio::spawn`.
+    fn set_draft_version<'a>(
+        &'a self,
+        ctx: ::connectrpc::RequestContext,
+        request: ::connectrpc::ServiceRequest<
+            '_,
+            crate::messages::hephaestus::release::v1::SetDraftVersionRequest,
+        >,
+    ) -> impl ::std::future::Future<
+        Output = ::connectrpc::ServiceResult<
+            impl ::connectrpc::Encodable<
+                crate::messages::hephaestus::release::v1::SetDraftVersionResponse,
+            > + Send + use<'a, Self>,
+        >,
+    > + Send;
+    /// Handle the PublishRelease RPC.
+    ///
+    /// `'a` lets the response body borrow from `&self` (e.g. server-resident state).
+    ///
+    /// `request` is borrowed from the request body and is valid for the
+    /// duration of the call; message fields are read directly on it
+    /// (zero-copy). The response cannot borrow from `request` — use
+    /// `.to_owned_message()` (or copy the specific fields) for anything
+    /// returned, stored, or moved into `tokio::spawn`.
+    fn publish_release<'a>(
+        &'a self,
+        ctx: ::connectrpc::RequestContext,
+        request: ::connectrpc::ServiceRequest<
+            '_,
+            crate::messages::hephaestus::release::v1::PublishReleaseRequest,
+        >,
+    ) -> impl ::std::future::Future<
+        Output = ::connectrpc::ServiceResult<
+            impl ::connectrpc::Encodable<
+                crate::messages::hephaestus::release::v1::PublishReleaseResponse,
+            > + Send + use<'a, Self>,
+        >,
+    > + Send;
+    /// Handle the WatchRelease RPC.
+    ///
+    /// `request` is borrowed from the request body and is valid for the
+    /// duration of the call (until the response stream is returned);
+    /// message fields are read directly on it (zero-copy). Data the
+    /// returned stream needs must be copied out or converted via
+    /// `.to_owned_message()`.
+    fn watch_release(
+        &self,
+        ctx: ::connectrpc::RequestContext,
+        request: ::connectrpc::ServiceRequest<
+            '_,
+            crate::messages::hephaestus::release::v1::WatchReleaseRequest,
+        >,
+    ) -> impl ::std::future::Future<
+        Output = ::connectrpc::ServiceResult<
+            ::connectrpc::ServiceStream<
+                impl ::connectrpc::Encodable<
+                    crate::messages::hephaestus::release::v1::WatchReleaseResponse,
+                > + Send + use<Self>,
+            >,
+        >,
+    > + Send;
 }
 /// Extension trait for registering a service implementation with a Router.
 ///
@@ -283,6 +499,92 @@ impl<S: ReleaseService> ReleaseServiceExt for S {
                 },
             )
             .with_spec(RELEASE_SERVICE_GET_RELEASE_SPEC)
+            .route_view(
+                RELEASE_SERVICE_SERVICE_NAME,
+                "SetDraftVersion",
+                {
+                    let svc = ::std::sync::Arc::clone(&self);
+                    ::connectrpc::view_handler_fn(move |
+                        ctx,
+                        req: ::buffa::view::OwnedView<
+                            crate::messages::hephaestus::release::v1::__buffa::view::SetDraftVersionRequestView<
+                                'static,
+                            >,
+                        >,
+                        format|
+                    {
+                        let svc = ::std::sync::Arc::clone(&svc);
+                        async move {
+                            let sreq = ::connectrpc::ServiceRequest::<
+                                crate::messages::hephaestus::release::v1::SetDraftVersionRequest,
+                            >::from_parts(req.reborrow(), req.bytes());
+                            svc.set_draft_version(ctx, sreq)
+                                .await?
+                                .encode::<
+                                    crate::messages::hephaestus::release::v1::SetDraftVersionResponse,
+                                >(format)
+                        }
+                    })
+                },
+            )
+            .with_spec(RELEASE_SERVICE_SET_DRAFT_VERSION_SPEC)
+            .route_view(
+                RELEASE_SERVICE_SERVICE_NAME,
+                "PublishRelease",
+                {
+                    let svc = ::std::sync::Arc::clone(&self);
+                    ::connectrpc::view_handler_fn(move |
+                        ctx,
+                        req: ::buffa::view::OwnedView<
+                            crate::messages::hephaestus::release::v1::__buffa::view::PublishReleaseRequestView<
+                                'static,
+                            >,
+                        >,
+                        format|
+                    {
+                        let svc = ::std::sync::Arc::clone(&svc);
+                        async move {
+                            let sreq = ::connectrpc::ServiceRequest::<
+                                crate::messages::hephaestus::release::v1::PublishReleaseRequest,
+                            >::from_parts(req.reborrow(), req.bytes());
+                            svc.publish_release(ctx, sreq)
+                                .await?
+                                .encode::<
+                                    crate::messages::hephaestus::release::v1::PublishReleaseResponse,
+                                >(format)
+                        }
+                    })
+                },
+            )
+            .with_spec(RELEASE_SERVICE_PUBLISH_RELEASE_SPEC)
+            .route_view_server_stream::<
+                _,
+                _,
+                crate::messages::hephaestus::release::v1::WatchReleaseResponse,
+            >(
+                RELEASE_SERVICE_SERVICE_NAME,
+                "WatchRelease",
+                ::connectrpc::view_streaming_handler_fn({
+                    let svc = ::std::sync::Arc::clone(&self);
+                    move |
+                        ctx,
+                        req: ::buffa::view::OwnedView<
+                            crate::messages::hephaestus::release::v1::__buffa::view::WatchReleaseRequestView<
+                                'static,
+                            >,
+                        >|
+                    {
+                        let svc = ::std::sync::Arc::clone(&svc);
+                        async move {
+                            let sreq = ::connectrpc::ServiceRequest::<
+                                crate::messages::hephaestus::release::v1::WatchReleaseRequest,
+                            >::from_parts(req.reborrow(), req.bytes());
+                            svc.watch_release(ctx, sreq).await
+                        }
+                    }
+                }),
+            )
+            .with_spec(RELEASE_SERVICE_WATCH_RELEASE_SPEC)
     }
 }
 /// Type-inference marker used by [`Router::add_service`](::connectrpc::Router::add_service).
@@ -349,6 +651,24 @@ impl<T: ReleaseService> ::connectrpc::Dispatcher for ReleaseServiceServer<T> {
                         .with_spec(RELEASE_SERVICE_GET_RELEASE_SPEC),
                 )
             }
+            "SetDraftVersion" => {
+                Some(
+                    ::connectrpc::dispatcher::codegen::MethodDescriptor::unary(false)
+                        .with_spec(RELEASE_SERVICE_SET_DRAFT_VERSION_SPEC),
+                )
+            }
+            "PublishRelease" => {
+                Some(
+                    ::connectrpc::dispatcher::codegen::MethodDescriptor::unary(false)
+                        .with_spec(RELEASE_SERVICE_PUBLISH_RELEASE_SPEC),
+                )
+            }
+            "WatchRelease" => {
+                Some(
+                    ::connectrpc::dispatcher::codegen::MethodDescriptor::server_streaming()
+                        .with_spec(RELEASE_SERVICE_WATCH_RELEASE_SPEC),
+                )
+            }
             _ => None,
         }
     }
@@ -407,6 +727,48 @@ impl<T: ReleaseService> ::connectrpc::Dispatcher for ReleaseServiceServer<T> {
                         >(format)
                 })
             }
+            "SetDraftVersion" => {
+                let svc = ::std::sync::Arc::clone(&self.inner);
+                Box::pin(async move {
+                    let body = ::connectrpc::dispatcher::codegen::request_proto_bytes::<
+                        crate::messages::hephaestus::release::v1::SetDraftVersionRequest,
+                    >(request.encoded()?, format)?;
+                    let req: crate::messages::hephaestus::release::v1::__buffa::view::SetDraftVersionRequestView<
+                        '_,
+                    > = ::connectrpc::dispatcher::codegen::decode_borrowed_request_view(
+                        &body,
+                    )?;
+                    let req = ::connectrpc::ServiceRequest::<
+                        crate::messages::hephaestus::release::v1::SetDraftVersionRequest,
+                    >::from_parts(&req, &body);
+                    svc.set_draft_version(ctx, req)
+                        .await?
+                        .encode::<
+                            crate::messages::hephaestus::release::v1::SetDraftVersionResponse,
+                        >(format)
+                })
+            }
+            "PublishRelease" => {
+                let svc = ::std::sync::Arc::clone(&self.inner);
+                Box::pin(async move {
+                    let body = ::connectrpc::dispatcher::codegen::request_proto_bytes::<
+                        crate::messages::hephaestus::release::v1::PublishReleaseRequest,
+                    >(request.encoded()?, format)?;
+                    let req: crate::messages::hephaestus::release::v1::__buffa::view::PublishReleaseRequestView<
+                        '_,
+                    > = ::connectrpc::dispatcher::codegen::decode_borrowed_request_view(
+                        &body,
+                    )?;
+                    let req = ::connectrpc::ServiceRequest::<
+                        crate::messages::hephaestus::release::v1::PublishReleaseRequest,
+                    >::from_parts(&req, &body);
+                    svc.publish_release(ctx, req)
+                        .await?
+                        .encode::<
+                            crate::messages::hephaestus::release::v1::PublishReleaseResponse,
+                        >(format)
+                })
+            }
             _ => ::connectrpc::dispatcher::codegen::unimplemented_unary(path),
         }
     }
@@ -423,6 +785,31 @@ impl<T: ReleaseService> ::connectrpc::Dispatcher for ReleaseServiceServer<T> {
         };
         let _ = (&ctx, &request, &format);
         match method {
+            "WatchRelease" => {
+                let svc = ::std::sync::Arc::clone(&self.inner);
+                Box::pin(async move {
+                    let body = ::connectrpc::dispatcher::codegen::request_proto_bytes::<
+                        crate::messages::hephaestus::release::v1::WatchReleaseRequest,
+                    >(request, format)?;
+                    let req: crate::messages::hephaestus::release::v1::__buffa::view::WatchReleaseRequestView<
+                        '_,
+                    > = ::connectrpc::dispatcher::codegen::decode_borrowed_request_view(
+                        &body,
+                    )?;
+                    let req = ::connectrpc::ServiceRequest::<
+                        crate::messages::hephaestus::release::v1::WatchReleaseRequest,
+                    >::from_parts(&req, &body);
+                    let resp = svc.watch_release(ctx, req).await?;
+                    Ok(
+                        resp
+                            .map_body(|s| ::connectrpc::dispatcher::codegen::encode_response_stream::<
+                                crate::messages::hephaestus::release::v1::WatchReleaseResponse,
+                                _,
+                                _,
+                            >(s, format)),
+                    )
+                })
+            }
             _ => ::connectrpc::dispatcher::codegen::unimplemented_streaming(path),
         }
     }
@@ -625,6 +1012,139 @@ where
                 &self.config,
                 RELEASE_SERVICE_SERVICE_NAME,
                 "GetRelease",
+                request,
+                options,
+            )
+            .await
+    }
+    /// Call the SetDraftVersion RPC. Sends a request to /hephaestus.release.v1.ReleaseService/SetDraftVersion.
+    pub async fn set_draft_version(
+        &self,
+        request: crate::messages::hephaestus::release::v1::SetDraftVersionRequest,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::release::v1::__buffa::view::SetDraftVersionResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        self.set_draft_version_with_options(
+                request,
+                ::connectrpc::client::CallOptions::default(),
+            )
+            .await
+    }
+    /// Call the SetDraftVersion RPC with explicit per-call options. Options override [`ClientConfig`](::connectrpc::client::ClientConfig) defaults.
+    pub async fn set_draft_version_with_options(
+        &self,
+        request: crate::messages::hephaestus::release::v1::SetDraftVersionRequest,
+        options: ::connectrpc::client::CallOptions,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::release::v1::__buffa::view::SetDraftVersionResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        ::connectrpc::client::call_unary(
+                &self.transport,
+                &self.config,
+                RELEASE_SERVICE_SERVICE_NAME,
+                "SetDraftVersion",
+                request,
+                options,
+            )
+            .await
+    }
+    /// Call the PublishRelease RPC. Sends a request to /hephaestus.release.v1.ReleaseService/PublishRelease.
+    pub async fn publish_release(
+        &self,
+        request: crate::messages::hephaestus::release::v1::PublishReleaseRequest,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::release::v1::__buffa::view::PublishReleaseResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        self.publish_release_with_options(
+                request,
+                ::connectrpc::client::CallOptions::default(),
+            )
+            .await
+    }
+    /// Call the PublishRelease RPC with explicit per-call options. Options override [`ClientConfig`](::connectrpc::client::ClientConfig) defaults.
+    pub async fn publish_release_with_options(
+        &self,
+        request: crate::messages::hephaestus::release::v1::PublishReleaseRequest,
+        options: ::connectrpc::client::CallOptions,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::release::v1::__buffa::view::PublishReleaseResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        ::connectrpc::client::call_unary(
+                &self.transport,
+                &self.config,
+                RELEASE_SERVICE_SERVICE_NAME,
+                "PublishRelease",
+                request,
+                options,
+            )
+            .await
+    }
+    /// Call the WatchRelease RPC. Sends a request to /hephaestus.release.v1.ReleaseService/WatchRelease.
+    pub async fn watch_release(
+        &self,
+        request: crate::messages::hephaestus::release::v1::WatchReleaseRequest,
+    ) -> Result<
+        ::connectrpc::client::ServerStream<
+            T::ResponseBody,
+            crate::messages::hephaestus::release::v1::__buffa::view::WatchReleaseResponseView<
+                'static,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        self.watch_release_with_options(
+                request,
+                ::connectrpc::client::CallOptions::default(),
+            )
+            .await
+    }
+    /// Call the WatchRelease RPC with explicit per-call options. Options override [`ClientConfig`](::connectrpc::client::ClientConfig) defaults.
+    pub async fn watch_release_with_options(
+        &self,
+        request: crate::messages::hephaestus::release::v1::WatchReleaseRequest,
+        options: ::connectrpc::client::CallOptions,
+    ) -> Result<
+        ::connectrpc::client::ServerStream<
+            T::ResponseBody,
+            crate::messages::hephaestus::release::v1::__buffa::view::WatchReleaseResponseView<
+                'static,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        ::connectrpc::client::call_server_stream(
+                &self.transport,
+                &self.config,
+                RELEASE_SERVICE_SERVICE_NAME,
+                "WatchRelease",
                 request,
                 options,
             )

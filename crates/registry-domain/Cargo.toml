@@ -1,0 +1,24 @@
+[package]
+name = "registry-domain"
+description = "Forge-owned OCI registry ownership and immutable publication contracts"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[package.metadata.hephaestus]
+layer = "domain"
+context = "registry"
+
+[dependencies]
+builder-catalog-domain = { path = "../builder-catalog-domain" }
+forge-domain = { path = "../forge-domain" }
+runtime-types = { path = "../runtime-types" }
+serde.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

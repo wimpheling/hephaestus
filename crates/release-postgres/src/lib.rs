@@ -3,6 +3,16 @@
 use agent_config::{AgentConfig, NetworkProfile, ParameterDefault, REUSABLE_RELEASE_VERSION};
 use authz_domain::{AuthorizationDecision, ObjectRef, ObjectType, Permission, Subject};
 use authz_postgres::{PostgresMelangeAuthorizer, audit_decision, begin_actor_transaction};
+use capability_domain::{
+    CapabilityBinding, CapabilityBindingId, CapabilityError, CapabilityOperation,
+    CapabilityRequirement, CapabilityRequirementId, CapabilityResource, CapabilityResourceKind,
+    CapabilitySlotKey,
+};
+use git_capability_domain::{
+    BoundGitCapability, BranchRefPolicy, BranchUpdatePolicy, ChangedPathGlob, GitCapabilityCeiling,
+    GitCapabilityCeilingInput, GitOperation, RefGlob, RefMutationPermission, RefNamespacePolicy,
+    RefUpdatePolicy, RepositoryId as GitRepositoryId, TransferLimits,
+};
 use identity_domain::AuthenticatedIdentity;
 use release_domain::{
     AgentAttachmentId, AgentFamilyId, AgentInstanceId, AgentInstanceRevisionId, AgentKey,
@@ -16,7 +26,10 @@ use runtime_types::{CommandId, RunId};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Postgres, Transaction};
-use std::sync::Arc;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -66,9 +79,14 @@ impl ReleaseService {
             return Ok(ReleaseId::from_uuid(id.0));
         }
         let build: BuildRow = sqlx::query_as(
-            "SELECT repository_id, source_commit, source_ref,
-                    build_definition_hash, state
-             FROM build_requests WHERE id = $1 FOR UPDATE",
+            "SELECT request.repository_id, request.source_commit, request.source_ref,
+                    request.build_definition_hash, selected.image_reference AS guest_image_reference,
+                    request.state
+             FROM build_requests AS request
+             JOIN build_request_images AS selected
+               ON selected.build_request_id = request.id
+              AND selected.execution_context = 'guest'
+             WHERE request.id = $1 FOR UPDATE OF request",
         )
         .bind(command.build_request_id.as_uuid())
         .fetch_optional(&mut *tx)
@@ -91,6 +109,10 @@ impl ReleaseService {
         .await?
         .ok_or(ReleaseServiceError::ReusableConfigurationMissing)?;
         let config: AgentConfig = serde_json::from_value(config_row.0.clone())?;
+        let guest_image_reference = build
+            .guest_image_reference
+            .clone()
+            .ok_or(ReleaseServiceError::ReusableConfigurationMissing)?;
         let agent_key = AgentKey::parse(
             config
                 .agent
@@ -163,14 +185,24 @@ impl ReleaseService {
         }
         let policy = runtime_policy(&config);
         let parameters = parameter_schema(&config)?;
+        let capability_requirements =
+            release_capability_requirements(command.release_agent_id, &config.capability_slots)?;
+        let capability_requirements_hash =
+            release_capability_requirements_hash(&capability_requirements);
         let executable = ArtifactPath::parse(config.guest.command.clone())?;
         let working_directory = ArtifactPath::parse(config.guest.working_directory.clone())?;
         let contract = json!({
             "executable": executable,
             "arguments": config.guest.arguments,
             "working_directory": working_directory,
-            "root_image_digest": config.root_image.reference,
+            "image_reference": guest_image_reference,
             "requires_state": config.state_volume.enabled,
+            "publication_mode": config.publication.mode,
+            "publication_repository_slot": config
+                .publication
+                .repository_slot
+                .as_ref()
+                .map(CapabilitySlotKey::as_str),
             "policy_ceiling": policy,
             "workspace": {
                 "source": "/workspace/repo",
@@ -186,8 +218,10 @@ impl ReleaseService {
             "INSERT INTO release_agents
              (id, release_id, family_id, agent_key, display_name,
               runtime_contract, runtime_contract_hash, parameter_schema,
-              secret_slot_schema, requires_state, update_hook)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+              secret_slot_schema, capability_requirements_hash,
+              requires_state, update_hook, publication_mode,
+              publication_repository_slot)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
         )
         .bind(command.release_agent_id.as_uuid())
         .bind(command.release_id.as_uuid())
@@ -198,6 +232,7 @@ impl ReleaseService {
         .bind(contract_hash.as_slice())
         .bind(serde_json::to_value(&parameters)?)
         .bind(serde_json::to_value(&config.secret_slots)?)
+        .bind(capability_requirements_hash.as_slice())
         .bind(config.state_volume.enabled)
         .bind(
             config
@@ -206,8 +241,50 @@ impl ReleaseService {
                 .map(serde_json::to_value)
                 .transpose()?,
         )
+        .bind(config.publication.mode.as_str())
+        .bind(
+            config
+                .publication
+                .repository_slot
+                .as_ref()
+                .map(CapabilitySlotKey::as_str),
+        )
         .execute(&mut *tx)
         .await?;
+        for (purpose, requirement) in &capability_requirements {
+            sqlx::query(
+                "INSERT INTO release_capability_requirements
+                 (id, release_agent_id, slot_key, purpose, resource_kind,
+                  required_operations, optional_operations, slot_required,
+                  normalized_hash)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+            )
+            .bind(requirement.id().as_uuid())
+            .bind(command.release_agent_id.as_uuid())
+            .bind(requirement.slot().as_str())
+            .bind(purpose)
+            .bind(requirement.resource_kind().as_str())
+            .bind(operation_names(requirement.required_operations()))
+            .bind(operation_names(requirement.optional_operations()))
+            .bind(requirement.slot_required())
+            .bind(requirement.normalized_hash().as_bytes().as_slice())
+            .execute(&mut *tx)
+            .await?;
+            let declaration = config
+                .capability_slots
+                .iter()
+                .find(|slot| slot.key == requirement.slot().as_str())
+                .ok_or(ReleaseServiceError::InvalidStoredData)?;
+            if let Some(ceiling) = declaration.git_ceiling()? {
+                insert_release_git_ceiling(
+                    &mut tx,
+                    command.release_agent_id,
+                    requirement.id(),
+                    &ceiling,
+                )
+                .await?;
+            }
+        }
         sqlx::query(
             "UPDATE build_requests SET state = 'succeeded', completed_at = now()
              WHERE id = $1",
@@ -414,7 +491,7 @@ impl ReleaseService {
         let release: ReleaseAgentRow = sqlx::query_as(
             "SELECT agent.family_id, agent.parameter_schema,
                     agent.secret_slot_schema, agent.runtime_contract,
-                    agent.requires_state
+                    agent.requires_state, agent.publication_mode
              FROM release_agents AS agent
              JOIN releases ON releases.id = agent.release_id
              WHERE agent.id = $1 AND releases.state = 'published'",
@@ -433,17 +510,13 @@ impl ReleaseService {
             &command.selected_policy,
             &command.platform_policy,
         )?;
-        let required_slots = release
+        let mut diagnostics = release
             .secret_slot_schema
             .as_array()
             .ok_or(ReleaseServiceError::InvalidStoredData)?
             .iter()
             .filter(|slot| slot.get("required").and_then(Value::as_bool) == Some(true))
             .filter_map(|slot| slot.get("key").and_then(Value::as_str))
-            .collect::<Vec<_>>();
-        let runnable = required_slots.is_empty();
-        let diagnostics = required_slots
-            .into_iter()
             .map(|slot| {
                 json!({
                     "code": "required_secret_binding_missing",
@@ -451,6 +524,21 @@ impl ReleaseService {
                 })
             })
             .collect::<Vec<_>>();
+        let required_capability_slots: Vec<String> = sqlx::query_scalar(
+            "SELECT slot_key FROM release_capability_requirements
+             WHERE release_agent_id = $1 AND slot_required
+             ORDER BY slot_key",
+        )
+        .bind(command.release_agent_id.as_uuid())
+        .fetch_all(&mut *tx)
+        .await?;
+        diagnostics.extend(required_capability_slots.into_iter().map(|slot| {
+            json!({
+                "code": "required_capability_binding_missing",
+                "field": format!("capability_slots.{slot}")
+            })
+        }));
+        let runnable = diagnostics.is_empty();
         let state_volume_id = release.requires_state.then(Uuid::new_v4);
         sqlx::query(
             "INSERT INTO agent_instances
@@ -486,6 +574,8 @@ impl ReleaseService {
             &command.selected_policy,
             &effective_policy,
             &command.platform_policy_version,
+            &release.publication_mode,
+            None,
             runnable,
             &diagnostics,
             identity,
@@ -804,6 +894,346 @@ impl ReleaseService {
         Ok(())
     }
 
+    /// Creates and compare-and-swap activates a new immutable revision whose
+    /// complete capability binding set is selected explicitly.
+    ///
+    /// Existing parameter, secret, resource, and runtime-policy fields are
+    /// cloned byte-for-byte from the expected revision. Capability bindings
+    /// are revalidated against the immutable release requirements and receive
+    /// new revision ownership; the previous revision remains unchanged.
+    ///
+    /// # Errors
+    ///
+    /// Fails for denial, a stale revision, malformed or broadened bindings,
+    /// unavailable/cross-project resources, idempotency conflict, corrupt
+    /// stored requirements, or database failure.
+    #[allow(clippy::too_many_lines)]
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            actor_id = %identity.user_id,
+            request_id = %identity.request_id,
+            instance_id = %command.instance_id,
+            revision_id = %command.new_revision_id
+        )
+    )]
+    pub async fn revise_instance_capabilities(
+        &self,
+        identity: &AuthenticatedIdentity,
+        command: ReviseInstanceCapabilities,
+    ) -> Result<CapabilityRevisionResult, ReleaseServiceError> {
+        if command.authorization_model_version.is_empty()
+            || command.authorization_model_version.len() > 128
+        {
+            return Err(ReleaseServiceError::InvalidCapabilityBinding);
+        }
+        let mut tx = begin_actor_transaction(&self.pool, identity).await?;
+        self.require(
+            &mut tx,
+            identity,
+            Permission::CanManage,
+            ObjectRef::new(ObjectType::AgentInstance, command.instance_id.as_uuid()),
+        )
+        .await?;
+        if let Some((_instance, revision)) =
+            existing_command(&mut tx, command.command_key, "revise_instance_capabilities").await?
+        {
+            let revision_id = AgentInstanceRevisionId::from_uuid(
+                revision.ok_or(ReleaseServiceError::InvalidStoredData)?,
+            );
+            let stored: (bool, Value) = sqlx::query_as(
+                "SELECT runnable, diagnostics
+                 FROM agent_instance_revisions WHERE id = $1",
+            )
+            .bind(revision_id.as_uuid())
+            .fetch_one(&mut *tx)
+            .await?;
+            let diagnostics = capability_diagnostics_from_json(&stored.1)?;
+            tx.commit().await?;
+            return Ok(CapabilityRevisionResult {
+                revision_id,
+                runnable: stored.0,
+                diagnostics,
+            });
+        }
+        let source: CapabilityRevisionSourceRow = sqlx::query_as(
+            "SELECT instance.active_revision_id, instance.project_id,
+                    revision.release_agent_id, revision.secret_bindings,
+                    revision.diagnostics, agent.publication_repository_slot
+             FROM agent_instances AS instance
+             JOIN agent_instance_revisions AS revision
+               ON revision.id = instance.active_revision_id
+             JOIN release_agents AS agent
+               ON agent.id = revision.release_agent_id
+             JOIN releases AS release ON release.id = agent.release_id
+             WHERE instance.id = $1
+               AND instance.state IN ('active', 'update_rejected')
+               AND release.state = 'published'
+             FOR UPDATE OF instance",
+        )
+        .bind(command.instance_id.as_uuid())
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(ReleaseServiceError::Unavailable)?;
+        if source.active_revision_id != Some(command.expected_revision_id.as_uuid()) {
+            return Err(ReleaseServiceError::StaleInstanceRevision);
+        }
+        let carried_secrets: Vec<RevisionBindingRow> = sqlx::query_as(
+            "SELECT binding.import_id, binding.slot_key,
+                    binding.delivery_mode, binding.phases,
+                    binding.attachment_ids, binding.destinations,
+                    binding.effective_policy, binding.effective_policy_hash
+             FROM agent_secret_bindings AS binding
+             JOIN secret_imports AS imported ON imported.id = binding.import_id
+             JOIN secret_grants AS source_grant
+               ON source_grant.id = imported.grant_id
+             JOIN secrets AS secret ON secret.id = imported.secret_id
+             WHERE binding.instance_revision_id = $1
+               AND binding.status = 'active'
+               AND imported.status = 'active'
+               AND source_grant.status = 'active'
+               AND secret.status = 'active'
+               AND (source_grant.expires_at IS NULL
+                    OR source_grant.expires_at > now())
+             ORDER BY binding.slot_key",
+        )
+        .bind(command.expected_revision_id.as_uuid())
+        .fetch_all(&mut *tx)
+        .await?;
+        let expected_secret_ids: Vec<Uuid> = serde_json::from_value(source.secret_bindings)?;
+        if carried_secrets.len() != expected_secret_ids.len() {
+            return Err(ReleaseServiceError::SecretBindingUnavailable);
+        }
+        for binding in &carried_secrets {
+            self.require(
+                &mut tx,
+                identity,
+                if binding.delivery_mode == "raw" {
+                    Permission::BindRaw
+                } else {
+                    Permission::BindBrokered
+                },
+                ObjectRef::new(ObjectType::SecretImport, binding.import_id),
+            )
+            .await?;
+        }
+        let new_secret_ids = carried_secrets
+            .iter()
+            .map(|_| Uuid::new_v4())
+            .collect::<Vec<_>>();
+        let rows: Vec<CapabilityRequirementRow> = sqlx::query_as(
+            "SELECT id, slot_key, resource_kind, required_operations,
+                    optional_operations, slot_required, normalized_hash
+             FROM release_capability_requirements
+             WHERE release_agent_id = $1
+             ORDER BY slot_key, id",
+        )
+        .bind(source.release_agent_id)
+        .fetch_all(&mut *tx)
+        .await?;
+        let requirements = rows
+            .into_iter()
+            .map(stored_requirement)
+            .collect::<Result<BTreeMap<_, _>, _>>()?;
+        let git_ceilings = load_git_ceilings(&mut tx, source.release_agent_id).await?;
+        let mut selected = BTreeMap::new();
+        let mut binding_ids = BTreeSet::new();
+        for selection in &command.bindings {
+            if !binding_ids.insert(selection.binding_id)
+                || selected.insert(selection.slot.clone(), selection).is_some()
+            {
+                return Err(ReleaseServiceError::InvalidCapabilityBinding);
+            }
+        }
+        let mut bindings = Vec::with_capacity(selected.len());
+        let mut git_bindings = BTreeMap::new();
+        for (slot, selection) in selected {
+            let requirement = requirements
+                .get(&slot)
+                .ok_or(ReleaseServiceError::InvalidCapabilityBinding)?;
+            let binding = CapabilityBinding::bind(
+                selection.binding_id,
+                requirement,
+                selection.resource,
+                selection.granted_operations.iter().copied(),
+            )?;
+            match (
+                git_ceilings.get(&requirement.id()),
+                &selection.git_authority,
+            ) {
+                (Some(ceiling), selected) => {
+                    let authority = selected.as_ref().unwrap_or(ceiling);
+                    if !git_authority_matches_capability(authority, &binding) {
+                        return Err(ReleaseServiceError::InvalidCapabilityBinding);
+                    }
+                    let git_binding = BoundGitCapability::new(
+                        GitRepositoryId::new(binding.resource().id),
+                        authority.clone(),
+                        ceiling,
+                    )?;
+                    git_bindings.insert(binding.id(), git_binding);
+                }
+                (None, None) => {}
+                (None, Some(_)) => {
+                    return Err(ReleaseServiceError::InvalidCapabilityBinding);
+                }
+            }
+            if !capability_resource_is_in_project(
+                &mut tx,
+                source.project_id,
+                binding.resource().kind,
+                binding.resource().id,
+            )
+            .await?
+            {
+                return Err(ReleaseServiceError::CapabilityResourceUnavailable);
+            }
+            authorize_capability_selection(self, &mut tx, identity, &binding).await?;
+            bindings.push(binding);
+        }
+        let missing = requirements
+            .values()
+            .filter(|requirement| {
+                requirement.slot_required()
+                    && !bindings
+                        .iter()
+                        .any(|binding| binding.slot() == requirement.slot())
+            })
+            .map(|requirement| CapabilityRevisionDiagnostic {
+                code: String::from("required_capability_binding_missing"),
+                slot: requirement.slot().clone(),
+            })
+            .collect::<Vec<_>>();
+        let mut diagnostics = source
+            .diagnostics
+            .as_array()
+            .ok_or(ReleaseServiceError::InvalidStoredData)?
+            .iter()
+            .filter(|value| {
+                value.get("code").and_then(Value::as_str)
+                    != Some("required_capability_binding_missing")
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        diagnostics.extend(missing.iter().map(|diagnostic| {
+            json!({
+                "code": diagnostic.code,
+                "field": format!("capability_slots.{}", diagnostic.slot),
+            })
+        }));
+        let runnable = diagnostics.is_empty();
+        let publication_repository_binding_id = source
+            .publication_repository_slot
+            .as_deref()
+            .and_then(|slot| {
+                bindings
+                    .iter()
+                    .find(|binding| binding.slot().as_str() == slot)
+            })
+            .map(|binding| binding.id().as_uuid());
+        let inserted = sqlx::query(
+            "INSERT INTO agent_instance_revisions
+             (id, instance_id, release_agent_id, parameters, parameter_hash,
+              secret_bindings, resource_selection, network_restriction,
+              effective_runtime_policy, effective_policy_hash,
+              platform_policy_version, publication_mode,
+              publication_repository_binding_id, runnable, diagnostics, created_by)
+             SELECT $1, instance_id, release_agent_id, parameters,
+                    parameter_hash, $7, resource_selection,
+                    network_restriction, effective_runtime_policy,
+                    effective_policy_hash, platform_policy_version,
+                    publication_mode, $8, $3, $4, $5
+             FROM agent_instance_revisions
+             WHERE id = $2 AND instance_id = $6",
+        )
+        .bind(command.new_revision_id.as_uuid())
+        .bind(command.expected_revision_id.as_uuid())
+        .bind(runnable)
+        .bind(serde_json::to_value(&diagnostics)?)
+        .bind(identity.user_id.as_uuid())
+        .bind(command.instance_id.as_uuid())
+        .bind(serde_json::to_value(&new_secret_ids)?)
+        .bind(publication_repository_binding_id)
+        .execute(&mut *tx)
+        .await?;
+        if inserted.rows_affected() != 1 {
+            return Err(ReleaseServiceError::StaleInstanceRevision);
+        }
+        for binding in &bindings {
+            insert_capability_binding(
+                &mut tx,
+                command.new_revision_id,
+                source.release_agent_id,
+                binding,
+                &command.authorization_model_version,
+                identity,
+            )
+            .await?;
+            if let Some(git_binding) = git_bindings.get(&binding.id()) {
+                insert_git_capability_binding(
+                    &mut tx,
+                    command.new_revision_id,
+                    binding,
+                    git_binding,
+                )
+                .await?;
+            }
+        }
+        for (binding, binding_id) in carried_secrets.iter().zip(&new_secret_ids) {
+            clone_revision_binding(
+                &mut tx,
+                *binding_id,
+                command.new_revision_id,
+                binding,
+                identity,
+            )
+            .await?;
+        }
+        let activated = sqlx::query(
+            "UPDATE agent_instances
+             SET active_revision_id = $3, version = version + 1,
+                 updated_at = now()
+             WHERE id = $1 AND active_revision_id = $2
+               AND state IN ('active', 'update_rejected')",
+        )
+        .bind(command.instance_id.as_uuid())
+        .bind(command.expected_revision_id.as_uuid())
+        .bind(command.new_revision_id.as_uuid())
+        .execute(&mut *tx)
+        .await?;
+        if activated.rows_affected() != 1 {
+            return Err(ReleaseServiceError::StaleInstanceRevision);
+        }
+        record_command(
+            &mut tx,
+            command.command_key,
+            "revise_instance_capabilities",
+            command.instance_id.as_uuid(),
+            Some(command.new_revision_id.as_uuid()),
+            Some(identity),
+        )
+        .await?;
+        append_instance_event(
+            &mut tx,
+            command.instance_id,
+            Some(command.new_revision_id),
+            "instance.capabilities_revised",
+            identity,
+            json!({
+                "runnable": runnable,
+                "binding_count": bindings.len(),
+                "authorization_model_version": command.authorization_model_version,
+            }),
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(CapabilityRevisionResult {
+            revision_id: command.new_revision_id,
+            runnable,
+            diagnostics: missing,
+        })
+    }
+
     /// Validates, creates, and CAS-activates a new immutable instance
     /// revision. Existing secret bindings are cloned to new revision-bound
     /// identities only while their live imports remain bindable.
@@ -845,8 +1275,11 @@ impl ReleaseService {
             ));
         }
         let current: RevisionUpdateRow = sqlx::query_as(
-            "SELECT instance.active_revision_id, revision.release_agent_id,
-                    revision.secret_bindings, agent.parameter_schema,
+            "SELECT instance.active_revision_id, instance.project_id,
+                    revision.release_agent_id,
+                    revision.secret_bindings, revision.publication_mode,
+                    agent.publication_repository_slot,
+                    agent.parameter_schema,
                     agent.secret_slot_schema, agent.runtime_contract
              FROM agent_instances AS instance
              JOIN agent_instance_revisions AS revision
@@ -920,14 +1353,65 @@ impl ReleaseService {
             .iter()
             .map(|binding| binding.slot_key.as_str())
             .collect::<std::collections::HashSet<_>>();
-        let diagnostics = required_slot_diagnostics(&current.secret_slot_schema, &bound_slots)?;
+        let mut diagnostics = required_slot_diagnostics(&current.secret_slot_schema, &bound_slots)?;
+        let carried_capabilities =
+            load_carried_capability_bindings(&mut tx, command.expected_revision_id).await?;
+        for carried_capability in &carried_capabilities {
+            if !capability_resource_is_in_project(
+                &mut tx,
+                current.project_id,
+                carried_capability.binding.resource().kind,
+                carried_capability.binding.resource().id,
+            )
+            .await?
+            {
+                return Err(ReleaseServiceError::CapabilityResourceUnavailable);
+            }
+            authorize_capability_selection(self, &mut tx, identity, &carried_capability.binding)
+                .await?;
+        }
+        let requirements = load_capability_requirements(&mut tx, current.release_agent_id).await?;
+        diagnostics.extend(requirements.values().filter_map(|requirement| {
+            let missing = requirement.slot_required()
+                && !carried_capabilities
+                    .iter()
+                    .any(|carried| carried.binding.slot() == requirement.slot());
+            missing.then(|| {
+                json!({
+                    "code": "required_capability_binding_missing",
+                    "field": format!("capability_slots.{}", requirement.slot()),
+                })
+            })
+        }));
         let runnable = diagnostics.is_empty();
+        let cloned_capabilities = carried_capabilities
+            .iter()
+            .map(|carried| {
+                CapabilityBinding::bind(
+                    CapabilityBindingId::new(),
+                    &carried.requirement,
+                    carried.binding.resource(),
+                    carried.binding.granted_operations(),
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let publication_repository_binding_id = current
+            .publication_repository_slot
+            .as_deref()
+            .and_then(|slot| {
+                cloned_capabilities
+                    .iter()
+                    .find(|binding| binding.slot().as_str() == slot)
+            })
+            .map(|binding| binding.id().as_uuid());
         insert_revision_with_binding_ids(
             &mut tx,
             &command,
             current.release_agent_id,
             &parameters,
             &effective,
+            &current.publication_mode,
+            publication_repository_binding_id,
             runnable,
             &diagnostics,
             &new_binding_ids,
@@ -943,6 +1427,26 @@ impl ReleaseService {
                 identity,
             )
             .await?;
+        }
+        for (carried_capability, cloned) in carried_capabilities.iter().zip(&cloned_capabilities) {
+            insert_capability_binding(
+                &mut tx,
+                command.new_revision_id,
+                current.release_agent_id,
+                cloned,
+                &carried_capability.authorization_model_version,
+                identity,
+            )
+            .await?;
+            if let Some(git_binding) = &carried_capability.git_binding {
+                insert_git_capability_binding(
+                    &mut tx,
+                    command.new_revision_id,
+                    cloned,
+                    git_binding,
+                )
+                .await?;
+            }
         }
         let activated = sqlx::query(
             "UPDATE agent_instances
@@ -1045,7 +1549,7 @@ impl ReleaseService {
         }
         let current: UpdateCurrentRow = sqlx::query_as(
             "SELECT instance.active_revision_id, instance.family_id,
-                    instance.state, instance.run_gate_open,
+                    instance.project_id, instance.state, instance.run_gate_open,
                     current_agent.requires_state,
                     revision.secret_bindings
              FROM agent_instances AS instance
@@ -1071,7 +1575,9 @@ impl ReleaseService {
         let candidate: UpdateCandidateRow = sqlx::query_as(
             "SELECT candidate.family_id, candidate.parameter_schema,
                     candidate.secret_slot_schema, candidate.runtime_contract,
-                    candidate.requires_state, candidate.update_hook
+                    candidate.requires_state, candidate.update_hook,
+                    candidate.publication_mode,
+                    candidate.publication_repository_slot
              FROM release_agents AS candidate
              JOIN releases AS release ON release.id = candidate.release_id
              WHERE candidate.id = $1 AND release.state = 'published'",
@@ -1155,13 +1661,99 @@ impl ReleaseService {
             candidate.requires_state,
             candidate.update_hook.as_ref(),
         ));
+        let carried_capabilities =
+            load_carried_capability_bindings(&mut tx, command.expected_revision_id).await?;
+        let candidate_requirements =
+            load_capability_requirements(&mut tx, command.candidate_release_agent_id.as_uuid())
+                .await?;
+        let candidate_git_ceilings =
+            load_git_ceilings(&mut tx, command.candidate_release_agent_id.as_uuid()).await?;
+        let mut candidate_capabilities = Vec::new();
+        for carried in &carried_capabilities {
+            let Some(requirement) = candidate_requirements.get(carried.binding.slot()) else {
+                continue;
+            };
+            let Ok(binding) = CapabilityBinding::bind(
+                CapabilityBindingId::new(),
+                requirement,
+                carried.binding.resource(),
+                carried.binding.granted_operations(),
+            ) else {
+                diagnostics.push(json!({
+                    "code": "capability_binding_incompatible",
+                    "field": format!("capability_slots.{}", carried.binding.slot()),
+                }));
+                continue;
+            };
+            if !capability_resource_is_in_project(
+                &mut tx,
+                current.project_id,
+                binding.resource().kind,
+                binding.resource().id,
+            )
+            .await?
+            {
+                diagnostics.push(json!({
+                    "code": "capability_resource_unavailable",
+                    "field": format!("capability_slots.{}", binding.slot()),
+                }));
+                continue;
+            }
+            authorize_capability_selection(self, &mut tx, identity, &binding).await?;
+            let git_binding = match (
+                &carried.git_binding,
+                candidate_git_ceilings.get(&requirement.id()),
+            ) {
+                (Some(source), Some(ceiling)) => Some(BoundGitCapability::new(
+                    GitRepositoryId::new(binding.resource().id),
+                    source.authority().clone(),
+                    ceiling,
+                )?),
+                (None, None) => None,
+                (Some(_), None) | (None, Some(_)) => {
+                    diagnostics.push(json!({
+                        "code": "capability_binding_incompatible",
+                        "field": format!("capability_slots.{}", binding.slot()),
+                    }));
+                    continue;
+                }
+            };
+            candidate_capabilities.push((
+                binding,
+                carried.authorization_model_version.clone(),
+                git_binding,
+            ));
+        }
+        diagnostics.extend(candidate_requirements.values().filter_map(|requirement| {
+            let missing = requirement.slot_required()
+                && !candidate_capabilities
+                    .iter()
+                    .any(|(binding, _, _)| binding.slot() == requirement.slot());
+            missing.then(|| {
+                json!({
+                    "code": "required_capability_binding_missing",
+                    "field": format!("capability_slots.{}", requirement.slot()),
+                })
+            })
+        }));
         let runnable = diagnostics.is_empty();
+        let publication_repository_binding_id = candidate
+            .publication_repository_slot
+            .as_deref()
+            .and_then(|slot| {
+                candidate_capabilities
+                    .iter()
+                    .find(|(binding, _, _)| binding.slot().as_str() == slot)
+            })
+            .map(|(binding, _, _)| binding.id().as_uuid());
         let new_binding_ids = carried.iter().map(|_| Uuid::new_v4()).collect::<Vec<_>>();
         insert_update_candidate_revision(
             &mut tx,
             &command,
             &parameters,
             &effective,
+            &candidate.publication_mode,
+            publication_repository_binding_id,
             runnable,
             &diagnostics,
             &new_binding_ids,
@@ -1177,6 +1769,26 @@ impl ReleaseService {
                 identity,
             )
             .await?;
+        }
+        for (binding, authorization_model_version, git_binding) in &candidate_capabilities {
+            insert_capability_binding(
+                &mut tx,
+                command.candidate_revision_id,
+                command.candidate_release_agent_id.as_uuid(),
+                binding,
+                authorization_model_version,
+                identity,
+            )
+            .await?;
+            if let Some(git_binding) = git_binding {
+                insert_git_capability_binding(
+                    &mut tx,
+                    command.candidate_revision_id,
+                    binding,
+                    git_binding,
+                )
+                .await?;
+            }
         }
         let update_state = if runnable { "draining" } else { "rejected" };
         sqlx::query(
@@ -1980,6 +2592,7 @@ struct BuildRow {
     source_commit: String,
     source_ref: String,
     build_definition_hash: Vec<u8>,
+    guest_image_reference: Option<String>,
     state: String,
 }
 
@@ -1990,13 +2603,17 @@ struct ReleaseAgentRow {
     secret_slot_schema: Value,
     runtime_contract: Value,
     requires_state: bool,
+    publication_mode: String,
 }
 
 #[derive(sqlx::FromRow)]
 struct RevisionUpdateRow {
     active_revision_id: Option<Uuid>,
+    project_id: Uuid,
     release_agent_id: Uuid,
     secret_bindings: Value,
+    publication_mode: String,
+    publication_repository_slot: Option<String>,
     parameter_schema: Value,
     secret_slot_schema: Value,
     runtime_contract: Value,
@@ -2015,9 +2632,83 @@ struct RevisionBindingRow {
 }
 
 #[derive(sqlx::FromRow)]
+struct CapabilityRevisionSourceRow {
+    active_revision_id: Option<Uuid>,
+    project_id: Uuid,
+    release_agent_id: Uuid,
+    secret_bindings: Value,
+    diagnostics: Value,
+    publication_repository_slot: Option<String>,
+}
+
+#[derive(sqlx::FromRow)]
+struct CapabilityRequirementRow {
+    id: Uuid,
+    slot_key: String,
+    resource_kind: String,
+    required_operations: Vec<String>,
+    optional_operations: Vec<String>,
+    slot_required: bool,
+    normalized_hash: Vec<u8>,
+}
+
+// SQL rows mirror independently attenuable transition flags from the typed
+// persistence schema; grouping them would weaken the column-to-domain audit.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(sqlx::FromRow)]
+struct GitCapabilityRow {
+    requirement_id: Uuid,
+    grammar_version: i16,
+    git_operations: Vec<String>,
+    ref_globs: Vec<String>,
+    changed_path_globs: Vec<String>,
+    branch_update_policy: String,
+    branch_create: bool,
+    branch_delete: bool,
+    tag_create: bool,
+    tag_update: bool,
+    tag_delete: bool,
+    other_create: bool,
+    other_update: bool,
+    other_delete: bool,
+    request_bytes: i64,
+    pack_bytes: i64,
+    object_count: i32,
+    ref_updates: i32,
+    exact_parent_required: bool,
+    normalized_hash: Vec<u8>,
+}
+
+#[derive(sqlx::FromRow)]
+struct StoredCapabilityBindingRow {
+    binding_id: Uuid,
+    requirement_id: Uuid,
+    slot_key: String,
+    requirement_resource_kind: String,
+    required_operations: Vec<String>,
+    optional_operations: Vec<String>,
+    slot_required: bool,
+    requirement_normalized_hash: Vec<u8>,
+    binding_requirement_hash: Vec<u8>,
+    binding_resource_kind: String,
+    resource_id: Uuid,
+    granted_operations: Vec<String>,
+    binding_normalized_hash: Vec<u8>,
+    authorization_model_version: String,
+}
+
+struct CarriedCapabilityBinding {
+    requirement: CapabilityRequirement,
+    binding: CapabilityBinding,
+    git_binding: Option<BoundGitCapability>,
+    authorization_model_version: String,
+}
+
+#[derive(sqlx::FromRow)]
 struct UpdateCurrentRow {
     active_revision_id: Option<Uuid>,
     family_id: Uuid,
+    project_id: Uuid,
     state: String,
     run_gate_open: bool,
     requires_state: bool,
@@ -2043,6 +2734,8 @@ struct UpdateCandidateRow {
     runtime_contract: Value,
     requires_state: bool,
     update_hook: Option<Value>,
+    publication_mode: String,
+    publication_repository_slot: Option<String>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -2248,6 +2941,795 @@ fn policy_from_contract(contract: &Value) -> Result<RuntimePolicy, ReleaseServic
     .map_err(ReleaseServiceError::Serialization)
 }
 
+fn stored_requirement(
+    row: CapabilityRequirementRow,
+) -> Result<(CapabilitySlotKey, CapabilityRequirement), ReleaseServiceError> {
+    let slot = CapabilitySlotKey::parse(row.slot_key)?;
+    let requirement = CapabilityRequirement::new(
+        CapabilityRequirementId::from_uuid(row.id),
+        slot.clone(),
+        parse_capability_resource_kind(&row.resource_kind)?,
+        row.required_operations
+            .iter()
+            .map(String::as_str)
+            .map(parse_capability_operation)
+            .collect::<Result<Vec<_>, _>>()?,
+        row.optional_operations
+            .iter()
+            .map(String::as_str)
+            .map(parse_capability_operation)
+            .collect::<Result<Vec<_>, _>>()?,
+        row.slot_required,
+    )?;
+    if row.normalized_hash.as_slice() != requirement.normalized_hash().as_bytes() {
+        return Err(ReleaseServiceError::InvalidStoredData);
+    }
+    Ok((slot, requirement))
+}
+
+async fn load_capability_requirements(
+    tx: &mut Transaction<'_, Postgres>,
+    release_agent_id: Uuid,
+) -> Result<BTreeMap<CapabilitySlotKey, CapabilityRequirement>, ReleaseServiceError> {
+    let rows: Vec<CapabilityRequirementRow> = sqlx::query_as(
+        "SELECT id, slot_key, resource_kind, required_operations,
+                optional_operations, slot_required, normalized_hash
+         FROM release_capability_requirements
+         WHERE release_agent_id = $1
+         ORDER BY slot_key, id",
+    )
+    .bind(release_agent_id)
+    .fetch_all(&mut **tx)
+    .await?;
+    rows.into_iter().map(stored_requirement).collect()
+}
+
+async fn load_git_ceilings(
+    tx: &mut Transaction<'_, Postgres>,
+    release_agent_id: Uuid,
+) -> Result<BTreeMap<CapabilityRequirementId, GitCapabilityCeiling>, ReleaseServiceError> {
+    let rows = sqlx::query_as::<_, GitCapabilityRow>(
+        "SELECT requirement_id, grammar_version, git_operations, ref_globs,
+                changed_path_globs, branch_update_policy, branch_create,
+                branch_delete, tag_create, tag_update, tag_delete,
+                other_create, other_update, other_delete, request_bytes,
+                pack_bytes, object_count, ref_updates, exact_parent_required,
+                normalized_hash
+         FROM release_git_capability_ceilings
+         WHERE release_agent_id = $1
+         ORDER BY requirement_id",
+    )
+    .bind(release_agent_id)
+    .fetch_all(&mut **tx)
+    .await?;
+    rows.into_iter()
+        .map(|row| {
+            let requirement_id = CapabilityRequirementId::from_uuid(row.requirement_id);
+            let ceiling = stored_git_ceiling(&row)?;
+            Ok((requirement_id, ceiling))
+        })
+        .collect()
+}
+
+fn stored_git_ceiling(row: &GitCapabilityRow) -> Result<GitCapabilityCeiling, ReleaseServiceError> {
+    let version =
+        u16::try_from(row.grammar_version).map_err(|_| ReleaseServiceError::InvalidStoredData)?;
+    let ceiling = git_ceiling_from_row(row)?;
+    if version != ceiling.version()
+        || row.normalized_hash.as_slice() != ceiling.normalized_hash()?.as_bytes()
+    {
+        return Err(ReleaseServiceError::InvalidStoredData);
+    }
+    Ok(ceiling)
+}
+
+fn git_ceiling_from_row(
+    row: &GitCapabilityRow,
+) -> Result<GitCapabilityCeiling, ReleaseServiceError> {
+    GitCapabilityCeiling::new(GitCapabilityCeilingInput {
+        operations: row
+            .git_operations
+            .iter()
+            .map(|operation| match operation.as_str() {
+                "discover" => Ok(GitOperation::Discover),
+                "fetch" => Ok(GitOperation::Fetch),
+                "receive" => Ok(GitOperation::Receive),
+                _ => Err(ReleaseServiceError::InvalidStoredData),
+            })
+            .collect::<Result<_, _>>()?,
+        ref_globs: row
+            .ref_globs
+            .iter()
+            .cloned()
+            .map(RefGlob::parse_explicitly_broad)
+            .collect::<Result<_, _>>()?,
+        changed_path_globs: row
+            .changed_path_globs
+            .iter()
+            .cloned()
+            .map(ChangedPathGlob::parse_explicitly_broad)
+            .collect::<Result<_, _>>()?,
+        update_policy: RefUpdatePolicy {
+            branches: BranchRefPolicy {
+                updates: match row.branch_update_policy.as_str() {
+                    "fast_forward_only" => BranchUpdatePolicy::FastForwardOnly,
+                    "allow_force" => BranchUpdatePolicy::AllowForce,
+                    _ => return Err(ReleaseServiceError::InvalidStoredData),
+                },
+                create: permission_from_bool(row.branch_create),
+                delete: permission_from_bool(row.branch_delete),
+            },
+            tags: RefNamespacePolicy {
+                create: permission_from_bool(row.tag_create),
+                update: permission_from_bool(row.tag_update),
+                delete: permission_from_bool(row.tag_delete),
+            },
+            other: RefNamespacePolicy {
+                create: permission_from_bool(row.other_create),
+                update: permission_from_bool(row.other_update),
+                delete: permission_from_bool(row.other_delete),
+            },
+        },
+        transfer_limits: TransferLimits::new(
+            u64::try_from(row.request_bytes).map_err(|_| ReleaseServiceError::InvalidStoredData)?,
+            u64::try_from(row.pack_bytes).map_err(|_| ReleaseServiceError::InvalidStoredData)?,
+            u32::try_from(row.object_count).map_err(|_| ReleaseServiceError::InvalidStoredData)?,
+            u16::try_from(row.ref_updates).map_err(|_| ReleaseServiceError::InvalidStoredData)?,
+        )?,
+        exact_parent_required: row.exact_parent_required,
+    })
+    .map_err(ReleaseServiceError::GitCapability)
+}
+
+const fn permission_from_bool(allowed: bool) -> RefMutationPermission {
+    if allowed {
+        RefMutationPermission::Allow
+    } else {
+        RefMutationPermission::Deny
+    }
+}
+
+fn git_operations_for_capability<'a>(
+    operations: impl IntoIterator<Item = CapabilityOperation> + 'a,
+) -> Vec<GitOperation> {
+    let mut read = false;
+    let mut receive = false;
+    for operation in operations {
+        match operation {
+            CapabilityOperation::GitRead => read = true,
+            CapabilityOperation::CreateRef
+            | CapabilityOperation::UpdateRef
+            | CapabilityOperation::ForceUpdateRef
+            | CapabilityOperation::DeleteRef
+            | CapabilityOperation::CreateTag
+            | CapabilityOperation::DeleteTag => receive = true,
+            _ => {}
+        }
+    }
+    let mut values = Vec::with_capacity(3);
+    if read {
+        values.extend([GitOperation::Discover, GitOperation::Fetch]);
+    }
+    if receive {
+        values.push(GitOperation::Receive);
+    }
+    values
+}
+
+fn git_authority_matches_capability(
+    authority: &GitCapabilityCeiling,
+    binding: &CapabilityBinding,
+) -> bool {
+    let granted = binding.granted_operations().collect::<BTreeSet<_>>();
+    if authority.operations() != git_operations_for_capability(granted.iter().copied()).as_slice() {
+        return false;
+    }
+    if !authority.operations().contains(&GitOperation::Receive) {
+        return true;
+    }
+    let policy = authority.update_policy();
+    granted.contains(&CapabilityOperation::UpdateRef)
+        && (policy.branches.updates != BranchUpdatePolicy::AllowForce
+            || granted.contains(&CapabilityOperation::ForceUpdateRef))
+        && (!permission_allowed(policy.branches.create)
+            || granted.contains(&CapabilityOperation::CreateRef))
+        && (!permission_allowed(policy.branches.delete)
+            || granted.contains(&CapabilityOperation::DeleteRef))
+        && (!permission_allowed(policy.tags.create)
+            || granted.contains(&CapabilityOperation::CreateTag))
+        && (!permission_allowed(policy.tags.update)
+            || granted.contains(&CapabilityOperation::ForceUpdateRef))
+        && (!permission_allowed(policy.tags.delete)
+            || granted.contains(&CapabilityOperation::DeleteTag))
+        && (!permission_allowed(policy.other.create)
+            || granted.contains(&CapabilityOperation::CreateRef))
+        && (!permission_allowed(policy.other.update)
+            || granted.contains(&CapabilityOperation::ForceUpdateRef))
+        && (!permission_allowed(policy.other.delete)
+            || granted.contains(&CapabilityOperation::DeleteRef))
+}
+
+async fn load_carried_capability_bindings(
+    tx: &mut Transaction<'_, Postgres>,
+    revision_id: AgentInstanceRevisionId,
+) -> Result<Vec<CarriedCapabilityBinding>, ReleaseServiceError> {
+    let rows: Vec<StoredCapabilityBindingRow> = sqlx::query_as(
+        "SELECT binding.id AS binding_id,
+                requirement.id AS requirement_id,
+                requirement.slot_key,
+                requirement.resource_kind AS requirement_resource_kind,
+                requirement.required_operations,
+                requirement.optional_operations,
+                requirement.slot_required,
+                requirement.normalized_hash AS requirement_normalized_hash,
+                binding.requirement_hash AS binding_requirement_hash,
+                binding.resource_kind AS binding_resource_kind,
+                binding.resource_id,
+                binding.granted_operations,
+                binding.normalized_hash AS binding_normalized_hash,
+                binding.authorization_model_version
+         FROM agent_capability_bindings AS binding
+         JOIN release_capability_requirements AS requirement
+           ON requirement.id = binding.requirement_id
+          AND requirement.release_agent_id = binding.release_agent_id
+         WHERE binding.instance_revision_id = $1
+         ORDER BY binding.slot_key, binding.id",
+    )
+    .bind(revision_id.as_uuid())
+    .fetch_all(&mut **tx)
+    .await?;
+    let mut carried = Vec::with_capacity(rows.len());
+    for row in rows {
+        let (_, requirement) = stored_requirement(CapabilityRequirementRow {
+            id: row.requirement_id,
+            slot_key: row.slot_key,
+            resource_kind: row.requirement_resource_kind,
+            required_operations: row.required_operations,
+            optional_operations: row.optional_operations,
+            slot_required: row.slot_required,
+            normalized_hash: row.requirement_normalized_hash,
+        })?;
+        if row.binding_requirement_hash.as_slice() != requirement.normalized_hash().as_bytes() {
+            return Err(ReleaseServiceError::InvalidStoredData);
+        }
+        let resource_kind = parse_capability_resource_kind(&row.binding_resource_kind)?;
+        let granted_operations = row
+            .granted_operations
+            .iter()
+            .map(String::as_str)
+            .map(parse_capability_operation)
+            .collect::<Result<Vec<_>, _>>()?;
+        let binding = CapabilityBinding::bind(
+            CapabilityBindingId::from_uuid(row.binding_id),
+            &requirement,
+            CapabilityResource::new(resource_kind, row.resource_id),
+            granted_operations,
+        )?;
+        if row.binding_normalized_hash.as_slice() != binding.normalized_hash().as_bytes() {
+            return Err(ReleaseServiceError::InvalidStoredData);
+        }
+        let git_binding = load_stored_git_binding(tx, &binding).await?;
+        carried.push(CarriedCapabilityBinding {
+            requirement,
+            binding,
+            git_binding,
+            authorization_model_version: row.authorization_model_version,
+        });
+    }
+    Ok(carried)
+}
+
+async fn load_stored_git_binding(
+    tx: &mut Transaction<'_, Postgres>,
+    binding: &CapabilityBinding,
+) -> Result<Option<BoundGitCapability>, ReleaseServiceError> {
+    let row = sqlx::query_as::<_, GitCapabilityRow>(
+        "SELECT requirement_id, grammar_version, git_operations, ref_globs,
+                changed_path_globs, branch_update_policy, branch_create,
+                branch_delete, tag_create, tag_update, tag_delete,
+                other_create, other_update, other_delete, request_bytes,
+                pack_bytes, object_count, ref_updates, exact_parent_required,
+                normalized_hash
+         FROM agent_git_capability_bindings WHERE binding_id = $1",
+    )
+    .bind(binding.id().as_uuid())
+    .fetch_optional(&mut **tx)
+    .await?;
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    if row.requirement_id != binding.requirement_id().as_uuid() {
+        return Err(ReleaseServiceError::InvalidStoredData);
+    }
+    let ceiling_row = sqlx::query_as::<_, GitCapabilityRow>(
+        "SELECT requirement_id, grammar_version, git_operations, ref_globs,
+                changed_path_globs, branch_update_policy, branch_create,
+                branch_delete, tag_create, tag_update, tag_delete,
+                other_create, other_update, other_delete, request_bytes,
+                pack_bytes, object_count, ref_updates, exact_parent_required,
+                normalized_hash
+         FROM release_git_capability_ceilings WHERE requirement_id = $1",
+    )
+    .bind(binding.requirement_id().as_uuid())
+    .fetch_optional(&mut **tx)
+    .await?
+    .ok_or(ReleaseServiceError::InvalidStoredData)?;
+    let release_ceiling = stored_git_ceiling(&ceiling_row)?;
+    let authority = git_ceiling_from_row(&row)?;
+    if u16::try_from(row.grammar_version).ok() != Some(authority.version()) {
+        return Err(ReleaseServiceError::InvalidStoredData);
+    }
+    let bound = BoundGitCapability::new(
+        GitRepositoryId::new(binding.resource().id),
+        authority,
+        &release_ceiling,
+    )?;
+    if row.normalized_hash.as_slice() != bound.normalized_hash()?.as_bytes() {
+        return Err(ReleaseServiceError::InvalidStoredData);
+    }
+    Ok(Some(bound))
+}
+
+fn parse_capability_resource_kind(
+    value: &str,
+) -> Result<CapabilityResourceKind, ReleaseServiceError> {
+    match value {
+        "repository" => Ok(CapabilityResourceKind::Repository),
+        "project" => Ok(CapabilityResourceKind::Project),
+        "agent_instance" => Ok(CapabilityResourceKind::AgentInstance),
+        "gateway" => Ok(CapabilityResourceKind::Gateway),
+        "run" => Ok(CapabilityResourceKind::Run),
+        "state_volume" => Ok(CapabilityResourceKind::StateVolume),
+        _ => Err(ReleaseServiceError::InvalidStoredData),
+    }
+}
+
+fn parse_capability_operation(value: &str) -> Result<CapabilityOperation, ReleaseServiceError> {
+    match value {
+        "inspect" => Ok(CapabilityOperation::Inspect),
+        "configure" => Ok(CapabilityOperation::Configure),
+        "execute" => Ok(CapabilityOperation::Execute),
+        "update" => Ok(CapabilityOperation::Update),
+        "pause" => Ok(CapabilityOperation::Pause),
+        "recover" => Ok(CapabilityOperation::Recover),
+        "cancel" => Ok(CapabilityOperation::Cancel),
+        "attach" => Ok(CapabilityOperation::Attach),
+        "restore" => Ok(CapabilityOperation::Restore),
+        "git_read" => Ok(CapabilityOperation::GitRead),
+        "create_ref" => Ok(CapabilityOperation::CreateRef),
+        "update_ref" => Ok(CapabilityOperation::UpdateRef),
+        "force_update_ref" => Ok(CapabilityOperation::ForceUpdateRef),
+        "delete_ref" => Ok(CapabilityOperation::DeleteRef),
+        "create_tag" => Ok(CapabilityOperation::CreateTag),
+        "delete_tag" => Ok(CapabilityOperation::DeleteTag),
+        "trigger_run" => Ok(CapabilityOperation::TriggerRun),
+        "manage_attachments" => Ok(CapabilityOperation::ManageAttachments),
+        _ => Err(ReleaseServiceError::InvalidStoredData),
+    }
+}
+
+async fn capability_resource_is_in_project(
+    tx: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    kind: CapabilityResourceKind,
+    resource_id: Uuid,
+) -> Result<bool, ReleaseServiceError> {
+    let found = match kind {
+        CapabilityResourceKind::Repository => {
+            sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS (
+                    SELECT 1 FROM repositories
+                    WHERE id = $1 AND project_id = $2
+                 )",
+            )
+            .bind(resource_id)
+            .bind(project_id)
+            .fetch_one(&mut **tx)
+            .await?
+        }
+        CapabilityResourceKind::Project => resource_id == project_id,
+        CapabilityResourceKind::AgentInstance => {
+            sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS (
+                    SELECT 1 FROM agent_instances
+                    WHERE id = $1 AND project_id = $2 AND state <> 'removed'
+                 )",
+            )
+            .bind(resource_id)
+            .bind(project_id)
+            .fetch_one(&mut **tx)
+            .await?
+        }
+        CapabilityResourceKind::Run => {
+            sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS (
+                    SELECT 1 FROM runs AS run
+                    JOIN agent_instances AS instance
+                      ON instance.id = run.instance_id
+                    WHERE run.id = $1 AND instance.project_id = $2
+                 )",
+            )
+            .bind(resource_id)
+            .bind(project_id)
+            .fetch_one(&mut **tx)
+            .await?
+        }
+        CapabilityResourceKind::StateVolume => {
+            sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS (
+                    SELECT 1 FROM agent_instance_state_volumes AS volume
+                    JOIN agent_instances AS instance
+                      ON instance.id = volume.instance_id
+                    WHERE volume.id = $1 AND instance.project_id = $2
+                 )",
+            )
+            .bind(resource_id)
+            .bind(project_id)
+            .fetch_one(&mut **tx)
+            .await?
+        }
+        CapabilityResourceKind::Gateway => false,
+    };
+    Ok(found)
+}
+
+async fn authorize_capability_selection(
+    service: &ReleaseService,
+    tx: &mut Transaction<'_, Postgres>,
+    identity: &AuthenticatedIdentity,
+    binding: &CapabilityBinding,
+) -> Result<(), ReleaseServiceError> {
+    let object_type = match binding.resource().kind {
+        CapabilityResourceKind::Repository => ObjectType::Repository,
+        CapabilityResourceKind::Project => ObjectType::Project,
+        CapabilityResourceKind::AgentInstance => ObjectType::AgentInstance,
+        CapabilityResourceKind::Run => ObjectType::Run,
+        CapabilityResourceKind::StateVolume => ObjectType::StateVolume,
+        CapabilityResourceKind::Gateway => {
+            return Err(ReleaseServiceError::CapabilityResourceUnavailable);
+        }
+    };
+    let object = ObjectRef::new(object_type, binding.resource().id);
+    service
+        .require(tx, identity, Permission::CanGrantAgentCapability, object)
+        .await?;
+    let mut checked = Vec::new();
+    for operation in binding.granted_operations() {
+        let permission = capability_grant_permission(binding.resource().kind, operation)
+            .ok_or(ReleaseServiceError::InvalidCapabilityBinding)?;
+        if !checked.contains(&permission) {
+            service.require(tx, identity, permission, object).await?;
+            checked.push(permission);
+        }
+    }
+    Ok(())
+}
+
+const fn capability_grant_permission(
+    resource_kind: CapabilityResourceKind,
+    operation: CapabilityOperation,
+) -> Option<Permission> {
+    match (resource_kind, operation) {
+        (
+            CapabilityResourceKind::Repository,
+            CapabilityOperation::Inspect | CapabilityOperation::GitRead,
+        )
+        | (
+            CapabilityResourceKind::Project
+            | CapabilityResourceKind::AgentInstance
+            | CapabilityResourceKind::Run
+            | CapabilityResourceKind::StateVolume,
+            CapabilityOperation::Inspect,
+        ) => Some(Permission::CanRead),
+        (
+            CapabilityResourceKind::Repository,
+            CapabilityOperation::CreateRef
+            | CapabilityOperation::UpdateRef
+            | CapabilityOperation::ForceUpdateRef
+            | CapabilityOperation::DeleteRef
+            | CapabilityOperation::CreateTag
+            | CapabilityOperation::DeleteTag
+            | CapabilityOperation::TriggerRun
+            | CapabilityOperation::ManageAttachments,
+        )
+        | (CapabilityResourceKind::Project, CapabilityOperation::Execute) => {
+            Some(Permission::CanWrite)
+        }
+        (
+            CapabilityResourceKind::Project,
+            CapabilityOperation::Configure
+            | CapabilityOperation::Update
+            | CapabilityOperation::Pause
+            | CapabilityOperation::Recover,
+        )
+        | (
+            CapabilityResourceKind::AgentInstance,
+            CapabilityOperation::Configure | CapabilityOperation::Pause,
+        ) => Some(Permission::CanManage),
+        (CapabilityResourceKind::AgentInstance, CapabilityOperation::Execute) => {
+            Some(Permission::CanExecute)
+        }
+        (CapabilityResourceKind::AgentInstance, CapabilityOperation::Update) => {
+            Some(Permission::CanUpdate)
+        }
+        (
+            CapabilityResourceKind::AgentInstance | CapabilityResourceKind::Run,
+            CapabilityOperation::Recover,
+        ) => Some(Permission::CanRecover),
+        (CapabilityResourceKind::Run, CapabilityOperation::Cancel) => Some(Permission::CanCancel),
+        (CapabilityResourceKind::StateVolume, CapabilityOperation::Attach) => {
+            Some(Permission::CanAttach)
+        }
+        (CapabilityResourceKind::StateVolume, CapabilityOperation::Restore) => {
+            Some(Permission::CanRestore)
+        }
+        // Construction validates the compatibility matrix before this
+        // mapping is evaluated. A defensive fallback still denies malformed
+        // stored input instead of manufacturing broader authority.
+        _ => None,
+    }
+}
+
+async fn insert_capability_binding(
+    tx: &mut Transaction<'_, Postgres>,
+    revision_id: AgentInstanceRevisionId,
+    release_agent_id: Uuid,
+    binding: &CapabilityBinding,
+    authorization_model_version: &str,
+    identity: &AuthenticatedIdentity,
+) -> Result<(), ReleaseServiceError> {
+    sqlx::query(
+        "INSERT INTO agent_capability_bindings
+         (id, instance_revision_id, release_agent_id, requirement_id,
+          requirement_hash, slot_key, resource_kind, resource_id,
+          granted_operations, normalized_hash, authorization_model_version,
+          created_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
+    )
+    .bind(binding.id().as_uuid())
+    .bind(revision_id.as_uuid())
+    .bind(release_agent_id)
+    .bind(binding.requirement_id().as_uuid())
+    .bind(binding.requirement_hash().as_bytes().as_slice())
+    .bind(binding.slot().as_str())
+    .bind(binding.resource().kind.as_str())
+    .bind(binding.resource().id)
+    .bind(operation_names(binding.granted_operations()))
+    .bind(binding.normalized_hash().as_bytes().as_slice())
+    .bind(authorization_model_version)
+    .bind(identity.user_id.as_uuid())
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+async fn insert_release_git_ceiling(
+    tx: &mut Transaction<'_, Postgres>,
+    release_agent_id: ReleaseAgentId,
+    requirement_id: CapabilityRequirementId,
+    ceiling: &GitCapabilityCeiling,
+) -> Result<(), ReleaseServiceError> {
+    let policy = ceiling.update_policy();
+    let limits = ceiling.transfer_limits();
+    sqlx::query(
+        "INSERT INTO release_git_capability_ceilings
+         (requirement_id, release_agent_id, grammar_version, git_operations,
+          ref_globs, changed_path_globs, branch_update_policy,
+          branch_create, branch_delete, tag_create, tag_update, tag_delete,
+          other_create, other_update, other_delete, request_bytes, pack_bytes,
+          object_count, ref_updates, exact_parent_required, normalized_hash)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+                 $13, $14, $15, $16, $17, $18, $19, $20, $21)",
+    )
+    .bind(requirement_id.as_uuid())
+    .bind(release_agent_id.as_uuid())
+    .bind(i16::try_from(ceiling.version()).map_err(|_| ReleaseServiceError::InvalidStoredData)?)
+    .bind(git_operation_names(ceiling.operations()))
+    .bind(
+        ceiling
+            .ref_globs()
+            .iter()
+            .map(RefGlob::as_str)
+            .collect::<Vec<_>>(),
+    )
+    .bind(
+        ceiling
+            .changed_path_globs()
+            .iter()
+            .map(ChangedPathGlob::as_str)
+            .collect::<Vec<_>>(),
+    )
+    .bind(branch_update_name(policy.branches.updates))
+    .bind(permission_allowed(policy.branches.create))
+    .bind(permission_allowed(policy.branches.delete))
+    .bind(permission_allowed(policy.tags.create))
+    .bind(permission_allowed(policy.tags.update))
+    .bind(permission_allowed(policy.tags.delete))
+    .bind(permission_allowed(policy.other.create))
+    .bind(permission_allowed(policy.other.update))
+    .bind(permission_allowed(policy.other.delete))
+    .bind(
+        i64::try_from(limits.request_bytes())
+            .map_err(|_| ReleaseServiceError::InvalidStoredData)?,
+    )
+    .bind(i64::try_from(limits.pack_bytes()).map_err(|_| ReleaseServiceError::InvalidStoredData)?)
+    .bind(i32::try_from(limits.object_count()).map_err(|_| ReleaseServiceError::InvalidStoredData)?)
+    .bind(i32::from(limits.ref_updates()))
+    .bind(ceiling.exact_parent_required())
+    .bind(ceiling.normalized_hash()?.as_bytes().as_slice())
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+async fn insert_git_capability_binding(
+    tx: &mut Transaction<'_, Postgres>,
+    revision_id: AgentInstanceRevisionId,
+    generic_binding: &CapabilityBinding,
+    git_binding: &BoundGitCapability,
+) -> Result<(), ReleaseServiceError> {
+    let authority = git_binding.authority();
+    let policy = authority.update_policy();
+    let limits = authority.transfer_limits();
+    sqlx::query(
+        "INSERT INTO agent_git_capability_bindings
+         (binding_id, instance_revision_id, requirement_id, grammar_version,
+          git_operations, ref_globs, changed_path_globs,
+          branch_update_policy, branch_create, branch_delete, tag_create,
+          tag_update, tag_delete, other_create, other_update, other_delete,
+          request_bytes, pack_bytes, object_count, ref_updates,
+          exact_parent_required, normalized_hash)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+                 $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)",
+    )
+    .bind(generic_binding.id().as_uuid())
+    .bind(revision_id.as_uuid())
+    .bind(generic_binding.requirement_id().as_uuid())
+    .bind(i16::try_from(authority.version()).map_err(|_| ReleaseServiceError::InvalidStoredData)?)
+    .bind(git_operation_names(authority.operations()))
+    .bind(
+        authority
+            .ref_globs()
+            .iter()
+            .map(RefGlob::as_str)
+            .collect::<Vec<_>>(),
+    )
+    .bind(
+        authority
+            .changed_path_globs()
+            .iter()
+            .map(ChangedPathGlob::as_str)
+            .collect::<Vec<_>>(),
+    )
+    .bind(branch_update_name(policy.branches.updates))
+    .bind(permission_allowed(policy.branches.create))
+    .bind(permission_allowed(policy.branches.delete))
+    .bind(permission_allowed(policy.tags.create))
+    .bind(permission_allowed(policy.tags.update))
+    .bind(permission_allowed(policy.tags.delete))
+    .bind(permission_allowed(policy.other.create))
+    .bind(permission_allowed(policy.other.update))
+    .bind(permission_allowed(policy.other.delete))
+    .bind(
+        i64::try_from(limits.request_bytes())
+            .map_err(|_| ReleaseServiceError::InvalidStoredData)?,
+    )
+    .bind(i64::try_from(limits.pack_bytes()).map_err(|_| ReleaseServiceError::InvalidStoredData)?)
+    .bind(i32::try_from(limits.object_count()).map_err(|_| ReleaseServiceError::InvalidStoredData)?)
+    .bind(i32::from(limits.ref_updates()))
+    .bind(authority.exact_parent_required())
+    .bind(git_binding.normalized_hash()?.as_bytes().as_slice())
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+const fn git_operation_name(operation: GitOperation) -> &'static str {
+    match operation {
+        GitOperation::Discover => "discover",
+        GitOperation::Fetch => "fetch",
+        GitOperation::Receive => "receive",
+    }
+}
+
+fn git_operation_names(operations: &[GitOperation]) -> Vec<&'static str> {
+    operations.iter().copied().map(git_operation_name).collect()
+}
+
+const fn branch_update_name(policy: BranchUpdatePolicy) -> &'static str {
+    match policy {
+        BranchUpdatePolicy::FastForwardOnly => "fast_forward_only",
+        BranchUpdatePolicy::AllowForce => "allow_force",
+    }
+}
+
+const fn permission_allowed(permission: RefMutationPermission) -> bool {
+    matches!(permission, RefMutationPermission::Allow)
+}
+
+fn capability_diagnostics_from_json(
+    diagnostics: &Value,
+) -> Result<Vec<CapabilityRevisionDiagnostic>, ReleaseServiceError> {
+    diagnostics
+        .as_array()
+        .ok_or(ReleaseServiceError::InvalidStoredData)?
+        .iter()
+        .filter(|value| {
+            value.get("code").and_then(Value::as_str) == Some("required_capability_binding_missing")
+        })
+        .map(|value| {
+            let field = value
+                .get("field")
+                .and_then(Value::as_str)
+                .and_then(|field| field.strip_prefix("capability_slots."))
+                .ok_or(ReleaseServiceError::InvalidStoredData)?;
+            Ok(CapabilityRevisionDiagnostic {
+                code: String::from("required_capability_binding_missing"),
+                slot: CapabilitySlotKey::parse(field)?,
+            })
+        })
+        .collect()
+}
+
+fn release_capability_requirements(
+    release_agent_id: ReleaseAgentId,
+    declarations: &[agent_config::CapabilitySlotDeclaration],
+) -> Result<Vec<(String, CapabilityRequirement)>, ReleaseServiceError> {
+    let mut declarations = declarations.iter().collect::<Vec<_>>();
+    declarations.sort_unstable_by(|left, right| left.key.cmp(&right.key));
+    declarations
+        .into_iter()
+        .map(|declaration| {
+            let id = deterministic_requirement_id(release_agent_id, &declaration.key);
+            declaration
+                .to_requirement(id)
+                .map(|requirement| (declaration.purpose.clone(), requirement))
+                .map_err(ReleaseServiceError::Capability)
+        })
+        .collect()
+}
+
+fn deterministic_requirement_id(
+    release_agent_id: ReleaseAgentId,
+    slot: &str,
+) -> CapabilityRequirementId {
+    let mut hasher = Sha256::new();
+    hasher.update(b"hephaestus.release-capability-requirement-id.v1");
+    hasher.update(release_agent_id.as_uuid().as_bytes());
+    hasher.update(slot.len().to_be_bytes());
+    hasher.update(slot.as_bytes());
+    let digest = hasher.finalize();
+    let mut bytes = [0_u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    // RFC 9562 UUIDv8 marks this deterministic application-defined UUID.
+    bytes[6] = (bytes[6] & 0x0f) | 0x80;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    CapabilityRequirementId::from_uuid(Uuid::from_bytes(bytes))
+}
+
+fn release_capability_requirements_hash(
+    requirements: &[(String, CapabilityRequirement)],
+) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(b"hephaestus.release-capability-requirements.v1");
+    hasher.update(requirements.len().to_be_bytes());
+    for (purpose, requirement) in requirements {
+        hasher.update(requirement.slot().as_str().len().to_be_bytes());
+        hasher.update(requirement.slot().as_str().as_bytes());
+        hasher.update(purpose.len().to_be_bytes());
+        hasher.update(purpose.as_bytes());
+        hasher.update(requirement.normalized_hash().as_bytes());
+    }
+    hasher.finalize().into()
+}
+
+fn operation_names(operations: impl IntoIterator<Item = CapabilityOperation>) -> Vec<&'static str> {
+    operations
+        .into_iter()
+        .map(CapabilityOperation::as_str)
+        .collect()
+}
+
 // Revision fields stay explicit to prevent accidental runtime-policy omission.
 #[allow(clippy::too_many_arguments)]
 async fn insert_revision(
@@ -2259,6 +3741,8 @@ async fn insert_revision(
     selection: &RuntimePolicy,
     effective: &RuntimePolicy,
     platform_policy_version: &str,
+    publication_mode: &str,
+    publication_repository_binding_id: Option<Uuid>,
     runnable: bool,
     diagnostics: &[Value],
     identity: &AuthenticatedIdentity,
@@ -2270,9 +3754,10 @@ async fn insert_revision(
          (id, instance_id, release_agent_id, parameters, parameter_hash,
           secret_bindings, resource_selection, network_restriction,
           effective_runtime_policy, effective_policy_hash,
-          platform_policy_version, runnable, diagnostics, created_by)
+          platform_policy_version, publication_mode,
+          publication_repository_binding_id, runnable, diagnostics, created_by)
          VALUES ($1, $2, $3, $4, $5, '[]', $6, $7, $8, $9,
-                 $10, $11, $12, $13)",
+                 $10, $11, $12, $13, $14, $15)",
     )
     .bind(revision_id.as_uuid())
     .bind(instance_id.as_uuid())
@@ -2284,6 +3769,8 @@ async fn insert_revision(
     .bind(serde_json::to_value(effective)?)
     .bind(effective_hash.as_slice())
     .bind(platform_policy_version)
+    .bind(publication_mode)
+    .bind(publication_repository_binding_id)
     .bind(runnable)
     .bind(serde_json::to_value(diagnostics)?)
     .bind(identity.user_id.as_uuid())
@@ -2299,6 +3786,8 @@ async fn insert_revision_with_binding_ids(
     release_agent_id: Uuid,
     parameters: &ParameterDocument,
     effective: &RuntimePolicy,
+    publication_mode: &str,
+    publication_repository_binding_id: Option<Uuid>,
     runnable: bool,
     diagnostics: &[Value],
     binding_ids: &[Uuid],
@@ -2310,9 +3799,10 @@ async fn insert_revision_with_binding_ids(
          (id, instance_id, release_agent_id, parameters, parameter_hash,
           secret_bindings, resource_selection, network_restriction,
           effective_runtime_policy, effective_policy_hash,
-          platform_policy_version, runnable, diagnostics, created_by)
+          platform_policy_version, publication_mode,
+          publication_repository_binding_id, runnable, diagnostics, created_by)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-                 $11, $12, $13, $14)",
+                 $11, $12, $13, $14, $15, $16)",
     )
     .bind(command.new_revision_id.as_uuid())
     .bind(command.instance_id.as_uuid())
@@ -2325,6 +3815,8 @@ async fn insert_revision_with_binding_ids(
     .bind(serde_json::to_value(effective)?)
     .bind(effective_hash.as_slice())
     .bind(&command.platform_policy_version)
+    .bind(publication_mode)
+    .bind(publication_repository_binding_id)
     .bind(runnable)
     .bind(serde_json::to_value(diagnostics)?)
     .bind(identity.user_id.as_uuid())
@@ -2339,6 +3831,8 @@ async fn insert_update_candidate_revision(
     command: &CreateInstanceUpdate,
     parameters: &ParameterDocument,
     effective: &RuntimePolicy,
+    publication_mode: &str,
+    publication_repository_binding_id: Option<Uuid>,
     runnable: bool,
     diagnostics: &[Value],
     binding_ids: &[Uuid],
@@ -2350,9 +3844,10 @@ async fn insert_update_candidate_revision(
          (id, instance_id, release_agent_id, parameters, parameter_hash,
           secret_bindings, resource_selection, network_restriction,
           effective_runtime_policy, effective_policy_hash,
-          platform_policy_version, runnable, diagnostics, created_by)
+          platform_policy_version, publication_mode,
+          publication_repository_binding_id, runnable, diagnostics, created_by)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-                 $11, $12, $13, $14)",
+                 $11, $12, $13, $14, $15, $16)",
     )
     .bind(command.candidate_revision_id.as_uuid())
     .bind(command.instance_id.as_uuid())
@@ -2365,6 +3860,8 @@ async fn insert_update_candidate_revision(
     .bind(serde_json::to_value(effective)?)
     .bind(effective_hash.as_slice())
     .bind(&command.platform_policy_version)
+    .bind(publication_mode)
+    .bind(publication_repository_binding_id)
     .bind(runnable)
     .bind(serde_json::to_value(diagnostics)?)
     .bind(identity.user_id.as_uuid())
@@ -2883,6 +4380,18 @@ pub enum ReleaseServiceError {
     /// One carried secret binding is no longer live and bindable.
     #[error("agent instance secret binding is unavailable")]
     SecretBindingUnavailable,
+    /// Capability declaration or binding violates the immutable release ceiling.
+    #[error(transparent)]
+    Capability(#[from] CapabilityError),
+    /// Typed Git ceiling or attenuation is malformed.
+    #[error("runtime Git authority is invalid")]
+    GitCapability(#[from] git_capability_domain::GitCapabilityError),
+    /// Capability selection is duplicated, unknown, or otherwise malformed.
+    #[error("agent instance capability binding is invalid")]
+    InvalidCapabilityBinding,
+    /// Exact resource is missing, outside the project, or not implemented.
+    #[error("agent instance capability resource is unavailable")]
+    CapabilityResourceUnavailable,
     /// Another update already closed the instance run gate.
     #[error("agent instance already has an active update")]
     ConcurrentUpdate,
@@ -2923,7 +4432,14 @@ pub enum ReleaseServiceError {
 
 #[cfg(test)]
 mod tests {
-    use super::update_contract_diagnostics;
+    use super::{
+        capability_grant_permission, deterministic_requirement_id, release_capability_requirements,
+        release_capability_requirements_hash, update_contract_diagnostics,
+    };
+    use agent_config::CapabilitySlotDeclaration;
+    use authz_domain::Permission;
+    use capability_domain::{CapabilityOperation, CapabilityResourceKind};
+    use release_domain::ReleaseAgentId;
     use serde_json::json;
 
     #[test]
@@ -2951,6 +4467,93 @@ mod tests {
         assert!(
             update_contract_diagnostics(true, true, Some(&json!({"command": "bin/update"})))
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn release_capability_requirement_identity_and_hash_are_deterministic() {
+        let release_agent_id = ReleaseAgentId::new();
+        let declarations = vec![CapabilitySlotDeclaration {
+            key: String::from("source"),
+            purpose: String::from("Read the exact project repository"),
+            resource_kind: CapabilityResourceKind::Repository,
+            required_operations: vec![CapabilityOperation::GitRead],
+            optional_operations: vec![CapabilityOperation::TriggerRun],
+            required: true,
+            git: None,
+        }];
+        let first = release_capability_requirements(release_agent_id, &declarations)
+            .expect("valid requirement");
+        let second = release_capability_requirements(release_agent_id, &declarations)
+            .expect("valid requirement");
+        assert_eq!(first, second);
+        assert_eq!(
+            release_capability_requirements_hash(&first),
+            release_capability_requirements_hash(&second)
+        );
+        assert_ne!(
+            deterministic_requirement_id(release_agent_id, "source"),
+            deterministic_requirement_id(release_agent_id, "output")
+        );
+    }
+
+    #[test]
+    fn capability_grants_require_resource_specific_user_permissions() {
+        for (kind, operation, permission) in [
+            (
+                CapabilityResourceKind::Repository,
+                CapabilityOperation::GitRead,
+                Permission::CanRead,
+            ),
+            (
+                CapabilityResourceKind::Repository,
+                CapabilityOperation::TriggerRun,
+                Permission::CanWrite,
+            ),
+            (
+                CapabilityResourceKind::Project,
+                CapabilityOperation::Execute,
+                Permission::CanWrite,
+            ),
+            (
+                CapabilityResourceKind::Project,
+                CapabilityOperation::Recover,
+                Permission::CanManage,
+            ),
+            (
+                CapabilityResourceKind::AgentInstance,
+                CapabilityOperation::Update,
+                Permission::CanUpdate,
+            ),
+            (
+                CapabilityResourceKind::Run,
+                CapabilityOperation::Recover,
+                Permission::CanRecover,
+            ),
+            (
+                CapabilityResourceKind::StateVolume,
+                CapabilityOperation::Attach,
+                Permission::CanAttach,
+            ),
+        ] {
+            assert_eq!(
+                capability_grant_permission(kind, operation),
+                Some(permission)
+            );
+        }
+        assert_eq!(
+            capability_grant_permission(
+                CapabilityResourceKind::Gateway,
+                CapabilityOperation::Execute
+            ),
+            None
+        );
+        assert_eq!(
+            capability_grant_permission(
+                CapabilityResourceKind::Repository,
+                CapabilityOperation::Restore
+            ),
+            None
         );
     }
 }

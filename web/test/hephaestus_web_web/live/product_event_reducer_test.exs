@@ -36,6 +36,15 @@ defmodule HephaestusWebWeb.ProductEventReducerTest do
     assert changed.data.watch_snapshot_pending
   end
 
+  test "keeps an already-rendered page visible while attaching its first watch" do
+    state = %{ProjectState.new(%{project_id: "project-1"}) | status: :ready}
+
+    watched = ProductEventReducer.begin_watch(state)
+
+    assert watched.status == :ready
+    assert watched.stream_generation == state.stream_generation + 1
+  end
+
   test "suppresses duplicate IDs and versions without repeating snapshot effects" do
     state = barrier_ready_state()
 

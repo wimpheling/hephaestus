@@ -25,6 +25,7 @@ type project
   relations
     define organization: [organization]
     define maintainer: [user]
+    define capability_granter: [user]
     define secret_manager: [user]
     define brokered_secret_binder: [user]
     define raw_secret_binder: [user]
@@ -41,6 +42,15 @@ type project
     define can_accept_secret_import: secret_manager
     define can_bind_brokered_secret: brokered_secret_binder or secret_manager
     define can_bind_raw_secret: raw_secret_binder or secret_manager
+    # Granting a workload a project capability is a distinct decision. Merely
+    # belonging to the organization does not confer this permission.
+    define can_grant_agent_capability: capability_granter
+    define agent_inspect: [agent_instance]
+    define agent_configure: [agent_instance]
+    define agent_execute: [agent_instance]
+    define agent_update: [agent_instance]
+    define agent_pause: [agent_instance]
+    define agent_recover: [agent_instance]
 
 type repository
   relations
@@ -56,12 +66,39 @@ type repository
     define can_accept_secret_import: secret_manager
     define can_bind_brokered_secret: brokered_secret_binder or secret_manager
     define can_bind_raw_secret: raw_secret_binder or secret_manager
+    define can_grant_agent_capability: can_grant_agent_capability from project
+    define agent_inspect: [agent_instance]
+    define agent_git_read: [agent_instance]
+    define agent_create_ref: [agent_instance]
+    define agent_update_ref: [agent_instance]
+    define agent_force_update_ref: [agent_instance]
+    define agent_delete_ref: [agent_instance]
+    define agent_create_tag: [agent_instance]
+    define agent_delete_tag: [agent_instance]
+    define agent_trigger_run: [agent_instance]
+    define agent_manage_attachments: [agent_instance]
+
+# A repository-produced OCI image is a project resource. Its source
+# repository is immutable provenance, not an authorization shortcut: project
+# membership remains the only authority boundary for selecting, inspecting,
+# producing, or retiring the image.
+type repository_oci_image
+  relations
+    define project: [project]
+    define can_read: can_read from project
+    define can_write: can_write from project
+    define can_manage: can_manage from project
 
 type run
   relations
     define instance: [agent_instance]
     define can_read: can_read from instance
     define can_cancel: can_execute from instance or can_manage from instance
+    define can_recover: can_manage from instance
+    define can_grant_agent_capability: can_manage from instance
+    define agent_inspect: [agent_instance]
+    define agent_cancel: [agent_instance]
+    define agent_recover: [agent_instance]
 
 type state_volume
   relations
@@ -70,6 +107,10 @@ type state_volume
     define can_attach: can_execute from instance
     define can_restore: can_manage from instance
     define can_manage: can_manage from instance
+    define can_grant_agent_capability: can_manage from instance
+    define agent_inspect: [agent_instance]
+    define agent_attach: [agent_instance]
+    define agent_restore: [agent_instance]
 
 type build
   relations
@@ -103,6 +144,15 @@ type agent_instance
     define can_update: can_manage from project
     define can_recover: can_manage from project
     define can_use_release: can_use from release_agent
+    define can_grant_agent_capability: can_manage from project
+    # Workload-to-workload authority exists only through exact capability
+    # binding tuples. Project membership never appears in these relations.
+    define agent_inspect: [agent_instance]
+    define agent_configure: [agent_instance]
+    define agent_execute: [agent_instance]
+    define agent_update: [agent_instance]
+    define agent_pause: [agent_instance]
+    define agent_recover: [agent_instance]
 
 type agent_attachment
   relations

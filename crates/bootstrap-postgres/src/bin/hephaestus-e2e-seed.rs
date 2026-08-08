@@ -1,4 +1,7 @@
 //! Seeds the deterministic browser E2E identity and empty bare repository.
+//!
+//! The embedded migration directory is intentionally referenced here so a
+//! newly added migration rebuilds the seed binary with the current schema.
 
 use forge_domain::{GitRef, OrganizationId, ProjectId, Repository, RepositoryId};
 use forge_postgres::PgForgeRepository;
@@ -10,6 +13,7 @@ use std::{env, error::Error, path::PathBuf, sync::Arc};
 use uuid::Uuid;
 
 const USER_ID: &str = "10000000-0000-4000-8000-000000000001";
+const OUTSIDER_USER_ID: &str = "10000000-0000-4000-8000-000000000003";
 const ORGANIZATION_ID: &str = "10000000-0000-4000-8000-000000000002";
 
 #[tokio::main]
@@ -32,6 +36,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 
     let user_id = UserId::from_uuid(Uuid::parse_str(USER_ID)?);
+    let outsider_user_id = UserId::from_uuid(Uuid::parse_str(OUTSIDER_USER_ID)?);
     let organization_id = OrganizationId::from_uuid(Uuid::parse_str(ORGANIZATION_ID)?);
     sqlx::query(
         "INSERT INTO users (id, display_name)
@@ -48,6 +53,24 @@ async fn main() -> Result<(), Box<dyn Error>> {
            ON CONFLICT (issuer, subject) DO NOTHING",
     )
     .bind(user_id.as_uuid())
+    .bind(&issuer)
+    .execute(&pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO users (id, display_name)
+           VALUES ($1, 'Bea Outsider')
+           ON CONFLICT (id) DO NOTHING",
+    )
+    .bind(outsider_user_id.as_uuid())
+    .execute(&pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO external_identities
+           (user_id, issuer, subject, provider_metadata)
+           VALUES ($1, $2, 'outsider', '{\"fixture\":true}'::jsonb)
+           ON CONFLICT (issuer, subject) DO NOTHING",
+    )
+    .bind(outsider_user_id.as_uuid())
     .bind(&issuer)
     .execute(&pool)
     .await?;
@@ -72,6 +95,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let storage = Arc::new(GitStorage::initialize(&repository_root).await?);
     let forge = PgForgeRepository::new(pool.clone(), Arc::clone(&storage));
     let (project_id, repository) = bootstrap_forge(&pool, &forge, organization_id, user_id).await?;
+    seed_builder_catalog(&pool).await?;
     seed_secret_roles(
         &pool,
         project_id.as_uuid(),
@@ -192,7 +216,7 @@ async fn seed_release_catalog(
                 configuration_hash, manifest_hash, state,
                 publication_actor_id, published_at)
                VALUES ($1, $2, $3, $4, 'refs/heads/main', $5, $6, $7,
-                       $8, $9, 'published', $10, now())",
+               $8, $9, 'draft', NULL, NULL)",
         )
         .bind(release_id)
         .bind(repository_id)
@@ -212,7 +236,7 @@ async fn seed_release_catalog(
                 "working_directory": "bin"
             },
             "resources": {"vcpus": 1, "memory_mib": 128},
-            "root_image": {"reference": "fixture-root@sha256:e2e"},
+            "root_image": {"reference": "fixture-root@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
             "workspace": {
                 "mount": true,
                 "path": "/workspace/repo",
@@ -253,7 +277,11 @@ async fn seed_release_catalog(
                     Vec::<String>::new()
                 },
                 "timeout_seconds": 30,
-                "resources": {"vcpus": 1, "memory_mib": 128}
+                "resources": {
+                    "vcpus": 1,
+                    "memory_mib": 128,
+                    "network": "broker_only"
+                }
             }))
         };
         sqlx::query(
@@ -271,7 +299,7 @@ async fn seed_release_catalog(
             "executable": "bin/browser-reviewer",
             "arguments": [],
             "working_directory": "bin",
-            "root_image_digest": "fixture-root@sha256:e2e",
+            "root_image_digest": "fixture-root@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "requires_state": true,
             "policy_ceiling": {
                 "vcpus": 1,
@@ -324,6 +352,30 @@ async fn seed_release_catalog(
         release_agents.push(release_agent_id);
     }
     Ok(release_agents)
+}
+
+async fn seed_builder_catalog(pool: &sqlx::PgPool) -> Result<(), Box<dyn Error>> {
+    sqlx::query(
+        "INSERT INTO builder_images
+           (id, key, display_name, image_reference, toolchains, architectures,
+            preparation_state, availability_state, network_ceiling,
+            max_vcpus, max_memory_mib, dependency_policy, provenance,
+            platform_policy_version)
+         VALUES
+           ('20000000-0000-4000-8000-000000000001', 'fixture-root',
+            'Browser fixture build root',
+            'fixture-root@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            '[{\"name\":\"shell\",\"version\":\"fixture\"}]'::jsonb,
+            ARRAY['x86_64'], 'ready', 'available', 'disabled',
+            4, 1024, 'vendored_offline',
+            '{\"source\":\"e2e-fixture\"}'::jsonb, 'e2e-fixture-v1')
+         ON CONFLICT (image_reference) DO UPDATE SET
+           availability_state = EXCLUDED.availability_state,
+           preparation_state = EXCLUDED.preparation_state",
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 async fn bootstrap_forge(

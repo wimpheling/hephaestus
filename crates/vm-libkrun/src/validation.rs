@@ -8,7 +8,10 @@ use std::{
     path::{Path, PathBuf},
 };
 use uuid::Uuid;
-use vm_trait::{DiskFormat, NetworkMode, PortProtocol, RootFilesystem, VmError, VmId, VmSpec};
+use vm_trait::{
+    DiskFormat, NetworkMode, PortProtocol, RUNTIME_AUTHORITY_CREDENTIAL_BYTES, RootFilesystem,
+    VmError, VmId, VmSpec,
+};
 
 pub const PROVIDER_NAME: &str = "libkrun";
 
@@ -26,7 +29,44 @@ pub struct PreparedSpec {
     pub memory_mib: u32,
     pub network: PreparedNetwork,
     pub command: PreparedCommand,
+    pub runtime_authority: Option<PreparedRuntimeAuthority>,
     pub labels: BTreeMap<String, String>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct PreparedRuntimeAuthority {
+    pub session_id: Uuid,
+    pub generation: u64,
+    pub credential: [u8; RUNTIME_AUTHORITY_CREDENTIAL_BYTES],
+    pub runtime_git_credential: Option<[u8; vm_trait::RUNTIME_GIT_CREDENTIAL_BYTES]>,
+}
+
+impl std::fmt::Debug for PreparedRuntimeAuthority {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PreparedRuntimeAuthority")
+            .field("session_id", &self.session_id)
+            .field("generation", &self.generation)
+            .field("credential", &"[REDACTED]")
+            .field(
+                "runtime_git_credential",
+                &self.runtime_git_credential.as_ref().map(|_| "[REDACTED]"),
+            )
+            .finish()
+    }
+}
+
+impl Drop for PreparedRuntimeAuthority {
+    fn drop(&mut self) {
+        for byte in &mut self.credential {
+            *std::hint::black_box(byte) = 0;
+        }
+        if let Some(credential) = &mut self.runtime_git_credential {
+            for byte in credential {
+                *std::hint::black_box(byte) = 0;
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -222,6 +262,22 @@ pub fn prepare_spec(config: &LibkrunConfig, spec: &VmSpec) -> Result<PreparedSpe
     }
     validate_state_volume_labels(spec, &disks)?;
 
+    let runtime_authority = spec
+        .runtime_authority
+        .as_ref()
+        .map(|authority| {
+            if authority.generation() == 0 {
+                return invalid("runtime_authority.generation", "must be greater than zero");
+            }
+            Ok(PreparedRuntimeAuthority {
+                session_id: authority.session_id(),
+                generation: authority.generation(),
+                credential: *authority.credential(),
+                runtime_git_credential: authority.runtime_git_credential().copied(),
+            })
+        })
+        .transpose()?;
+
     let mut mount_tags = HashSet::new();
     let mut mounts = Vec::with_capacity(spec.mounts.len());
     for (index, mount) in spec.mounts.iter().enumerate() {
@@ -327,6 +383,7 @@ pub fn prepare_spec(config: &LibkrunConfig, spec: &VmSpec) -> Result<PreparedSpe
             env: spec.command.env.clone(),
             working_dir: spec.command.working_dir.clone(),
         },
+        runtime_authority,
         labels: spec.labels.clone(),
     })
 }
@@ -933,6 +990,7 @@ mod tests {
                     env: BTreeMap::new(),
                     working_dir: Some(PathBuf::from("/")),
                 },
+                runtime_authority: None,
                 labels: BTreeMap::new(),
             }
         }

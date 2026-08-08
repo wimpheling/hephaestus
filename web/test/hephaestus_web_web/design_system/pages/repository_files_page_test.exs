@@ -29,9 +29,52 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.RepositoryFilesPageTest do
           select_branch_event: "select-branch"
         })
 
-      assert html =~ "repository-page-state" or html =~ "repository-files"
+      assert html =~ "repository-page-state" or html =~ "repository-files" or
+               html =~ "repository-empty-push"
     end
 
     assert MapSet.new(Map.values(@status_visual_states)) == MapSet.new(@covered_states)
+  end
+
+  test "renders credential-free first-push instructions for an empty repository" do
+    model =
+      RepositoryPageFixtures.model()
+      |> Map.put(:remote_url, "https://forge.example/repository-1")
+      |> Map.put(:default_branch, "trunk")
+
+    html =
+      render_component(&RepositoryFilesPage.repository_files/1, %{
+        state: :ready,
+        model: model,
+        branch_form: Phoenix.Component.to_form(model.browse_form, as: :browse),
+        select_branch_event: "select-branch"
+      })
+
+    assert html =~ "Push your first commit"
+    assert html =~ "https://forge.example/repository-1"
+    assert html =~ "push -u origin trunk"
+    assert html =~ "HEPHAESTUS_GIT_TOKEN"
+    assert html =~ "agent.toml"
+    refute html =~ "Bearer ey"
+  end
+
+  test "keeps first-push instructions visible while the watch refreshes" do
+    model =
+      RepositoryPageFixtures.model()
+      |> Map.put(:remote_url, "https://forge.example/repository-1")
+      |> Map.put(:default_branch, "trunk")
+
+    for state <- [:loading, :reconnecting] do
+      html =
+        render_component(&RepositoryFilesPage.repository_files/1, %{
+          state: state,
+          model: model,
+          branch_form: Phoenix.Component.to_form(model.browse_form, as: :browse),
+          select_branch_event: "select-branch"
+        })
+
+      assert html =~ "repository-empty-push"
+      refute html =~ "Repository unavailable"
+    end
   end
 end

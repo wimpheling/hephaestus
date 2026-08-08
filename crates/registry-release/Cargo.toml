@@ -1,0 +1,29 @@
+[package]
+name = "registry-release"
+description = "Trusted forge registry release composition"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+clap.workspace = true
+registry-domain = { path = "../registry-domain" }
+registry-postgres = { path = "../registry-postgres" }
+registry-publisher = { path = "../registry-publisher" }
+registry-token = { path = "../registry-token" }
+serde.workspace = true
+serde_json.workspace = true
+time.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+zeroize.workspace = true
+
+[lints]
+workspace = true
+
+[package.metadata.hephaestus]
+layer = "composition"
+context = "registry"
+
+[[bin]]
+name = "hephaestus-registry-release"
+path = "src/main.rs"

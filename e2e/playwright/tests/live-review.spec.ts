@@ -1,10 +1,17 @@
 import {AxeBuilder} from "@axe-core/playwright";
 import {expect, test} from "@playwright/test";
 import {execFileSync} from "node:child_process";
+import {randomUUID} from "node:crypto";
 import {mkdtempSync, rmSync, writeFileSync, mkdirSync} from "node:fs";
 import {tmpdir} from "node:os";
 import path from "node:path";
 import pg from "pg";
+
+declare global {
+  interface Window {
+    liveSocket: {connect(): void; disconnect(): void};
+  }
+}
 
 const databaseUrl =
   process.env.HEPHAESTUS_E2E_DATABASE_URL ??
@@ -13,8 +20,262 @@ const repositoryRoot = process.env.HEPHAESTUS_REPOSITORY_ROOT;
 const gitUrl = process.env.HEPHAESTUS_GIT_URL ?? "http://127.0.0.1:8080";
 const oidcUrl = process.env.HEPHAESTUS_OIDC_URL ?? "http://127.0.0.1:5556";
 const secretSentinel = "HEPHAESTUS_BROWSER_SECRET_4d7ccf";
+let browserJourneyBuild: {repositoryId: string; id: string} | undefined;
 
 test.describe.serial("release, instance, secret, and live-review product journey", () => {
+  test("loads a project repository once and opens it without an unavailable redirect", async ({
+    page
+  }) => {
+    const fixture = await loadFixture();
+    await signIn(page);
+
+    const projectStartedAt = Date.now();
+    await page.goto(`/projects/${fixture.projectId}`);
+    await waitForLiveView(page);
+    const repository = page.locator(`#project-repository-${fixture.repositoryId}`);
+    await expect(repository).toBeVisible();
+    await expect(repository).toContainText("agent-workbench");
+    await expect(page.locator("#resource-empty-project-repository-stream")).not.toBeVisible();
+    expect(Date.now() - projectStartedAt).toBeLessThan(3_000);
+
+    const repositoryStartedAt = Date.now();
+    await repository.click();
+    await expect(page).toHaveURL(`/repositories/${fixture.repositoryId}`);
+    await waitForLiveView(page);
+    await expect(page.getByRole("main")).toContainText("agent-workbench");
+    await expect(page.getByText("Repository unavailable")).toHaveCount(0);
+    expect(Date.now() - repositoryStartedAt).toBeLessThan(3_000);
+  });
+
+  test("creates a repository, pushes agent.toml, and publishes its built release", async ({
+    page
+  }) => {
+    const fixture = await loadFixture();
+    await page.context().clearCookies();
+    await signIn(page);
+
+    const suffix = Date.now().toString(36);
+    const projectName = `browser-build-${suffix}`;
+    const repositoryName = `release-source-${suffix}`;
+
+    await page.goto(`/organizations/${fixture.organizationId}/projects/new`);
+    await waitForLiveView(page);
+    await page
+      .locator("#create-project-form")
+      .locator('input[name="project[name]"]')
+      .fill(projectName);
+    await page
+      .locator("#create-project-form")
+      .locator('textarea[name="project[description]"]')
+      .fill("Real browser build journey fixture");
+    await page.getByRole("button", {name: "Create project"}).click();
+    await expect(page).toHaveURL(/\/projects\/[0-9a-f-]+$/);
+    const projectId = page.url().split("/").at(-1)!;
+    await waitForLiveView(page);
+
+    await page.locator("#create-repository-link").click();
+    await waitForLiveView(page);
+    await page
+      .locator("#create-repository-form")
+      .locator('input[name="repository[name]"]')
+      .fill(repositoryName);
+    await page.getByRole("button", {name: "Create repository"}).click();
+    await expect(page).toHaveURL(/\/repositories\/[0-9a-f-]+$/);
+    const repositoryId = page.url().split("/").at(-1)!;
+    await expect(page.locator("#repository-empty-push")).toBeVisible();
+    await expect(page.getByText("Repository unavailable")).toHaveCount(0);
+
+    const sourceCommit = pushCommit(repositoryId, "build browser release", false, true);
+    const build = await waitForBuild(repositoryId, sourceCommit);
+    browserJourneyBuild = {repositoryId, id: build.id};
+    const release = await waitForDraftRelease(build.id);
+    writeJourneyEvidence({
+      organizationId: fixture.organizationId,
+      projectId,
+      repositoryId,
+      buildId: build.id,
+      releaseId: release.id,
+      releaseAgentId: release.release_agent_id,
+      sourceCommit
+    });
+
+    await page.goto(`/repositories/${repositoryId}/builds/${build.id}`);
+    await waitForLiveView(page);
+    await expect(page.getByText("Agent release build", {exact: true})).toBeVisible();
+    await expect(page.locator("#build-provenance")).toContainText(sourceCommit);
+    await expect(page.getByRole("main").getByText("succeeded", {exact: true}).first()).toBeVisible();
+    await captureJourneyScreenshot(page, "01-build-detail.png");
+
+    await page.goto(`/repositories/${repositoryId}/releases/${release.id}`);
+    await waitForLiveView(page);
+    const review = page.locator("#release-draft-review");
+    await expect(review).toBeVisible();
+    await review.locator('input[name="release[version]"]').fill("v1.0.0");
+    await review.getByRole("button", {name: "Save draft version"}).click();
+    page.once("dialog", dialog => dialog.accept());
+    await review.getByRole("button", {name: "Publish release"}).click();
+    await expect(page.locator("#release-draft-review")).toHaveCount(0);
+    await expect(page.getByRole("main").getByText("published", {exact: true})).toBeVisible();
+    await captureJourneyScreenshot(page, "02-published-release.png");
+
+    await page.goto(`/projects/${projectId}/agents`);
+    await waitForLiveView(page);
+    const importForm = page.locator(`#import-agent-${release.release_agent_id}`);
+    await expect(importForm).toBeVisible();
+    await importForm.locator('input[name="import[name]"]').fill("browser-built-agent");
+    await importForm.getByRole("button", {name: "Import as new instance"}).click();
+    await expect(page).toHaveURL(/\/projects\/[0-9a-f-]+\/agents\/[0-9a-f-]+$/);
+    await waitForLiveView(page);
+    await expect(page.getByRole("main")).toContainText("browser-built-agent");
+    await captureJourneyScreenshot(page, "03-imported-agent.png");
+  });
+
+  test("requires authentication for the OCI image catalog", async ({
+    page,
+    request
+  }) => {
+    await signIn(page);
+    await page.goto("/images");
+    await waitForLiveView(page);
+    await expect(page.getByRole("main")).toContainText("Images");
+
+    await page.context().clearCookies();
+    await signIn(page, "outsider");
+    await page.goto("/images");
+    await waitForLiveView(page);
+    await expect(page.getByRole("main")).toContainText("Images");
+
+    const anonymousCatalog = await request.get("/images", {maxRedirects: 0});
+    expect(anonymousCatalog.status()).toBe(302);
+    expect(anonymousCatalog.headers().location).toBe("/login");
+  });
+
+  test("reviews and publishes seeded draft releases through the durable UI workflow", async ({
+    page
+  }) => {
+    const fixture = await loadFixture();
+    await signIn(page);
+
+    for (const releaseId of fixture.releaseIds) {
+      await page.goto(`/repositories/${fixture.repositoryId}/releases/${releaseId}`);
+      await waitForLiveView(page);
+
+      const review = page.locator("#release-draft-review");
+      await expect(review).toBeVisible();
+      const version = review.locator('input[name="release[version]"]');
+      const currentVersion = await version.inputValue();
+      const chosenVersion = currentVersion || "v1.0.0";
+      await version.fill(chosenVersion);
+      await review.getByRole("button", {name: "Save draft version"}).click();
+      await expect(review).toBeVisible();
+
+      page.once("dialog", dialog => dialog.accept());
+      await review.getByRole("button", {name: "Publish release"}).click();
+      await expect(page.locator("#release-draft-review")).toHaveCount(0);
+      await expect(page.locator("#release-page-state")).toHaveCount(0);
+      await expect(page.getByRole("main").getByText("published", {exact: true})).toBeVisible();
+    }
+  });
+
+  test("shows build history, build detail, and published release provenance", async ({
+    page
+  }) => {
+    const fixture = await loadFixture();
+    await signIn(page);
+
+    await page.goto(`/repositories/${fixture.repositoryId}/builds`);
+    await waitForLiveView(page);
+    await expect(page.getByRole("heading", {name: "Build history"})).toBeVisible();
+    await expect(page.locator("#builds article")).toHaveCount(fixture.buildIds.length);
+    await expect(page.locator("#builds")).toContainText("succeeded");
+
+    await page.goto(
+      `/repositories/${fixture.repositoryId}/builds/${fixture.buildIds[0]}`
+    );
+    await waitForLiveView(page);
+    await expect(page.getByText("Agent release build", {exact: true})).toBeVisible();
+    await expect(page.locator("#build-provenance")).toContainText("refs/heads/main");
+    await expect(page.getByRole("main").getByText("succeeded", {exact: true}).first()).toBeVisible();
+    await expect(page.locator("#build-logs")).toContainText("No logs were returned.");
+
+    await page.goto(`/repositories/${fixture.repositoryId}/releases`);
+    await waitForLiveView(page);
+    await expect(page.locator("#releases article")).toHaveCount(fixture.releaseIds.length);
+    await expect(page.locator("#releases")).toContainText("published");
+
+    await page.goto(
+      `/repositories/${fixture.repositoryId}/releases/${fixture.releaseIds[0]}`
+    );
+    await waitForLiveView(page);
+    await expect(page.locator("#release-provenance")).toBeVisible();
+    await expect(page.locator("#release-artifacts article")).toHaveCount(1);
+    await expect(page.locator("#release-agents article")).toHaveCount(1);
+  });
+
+  test("shows a completed immutable-input verification mismatch", async ({page}) => {
+    const fixture = await loadFixture();
+    await signIn(page);
+
+    const successfulBuild = browserJourneyBuild ?? {
+      repositoryId: fixture.repositoryId,
+      id: await verifiableBuildId()
+    };
+    const eventCount = await countBuildChangedEvents(successfulBuild.id);
+    await seedVerificationMismatch(successfulBuild.id);
+    await expect.poll(() => countBuildChangedEvents(successfulBuild.id)).toBe(eventCount + 1);
+
+    await page.goto(`/repositories/${successfulBuild.repositoryId}/builds/${successfulBuild.id}`);
+    await waitForLiveView(page);
+    const verifications = page.locator("#build-verifications");
+    await expect(verifications).toContainText("Verification mismatch");
+    await expect(verifications).toContainText(
+      "The rebuilt artifact manifest differs from the immutable release manifest."
+    );
+    await expect(verifications).toContainText("expected/agent.wasm");
+    await expect(verifications).toContainText("actual/agent.wasm");
+  });
+
+  test("shows failed retries, verification requests, and LiveView reconnect recovery", async ({
+    page
+  }) => {
+    const fixture = await loadFixture();
+    const failedBuildId = await seedFailedBuild(fixture);
+    await signIn(page);
+
+    await page.goto(`/repositories/${fixture.repositoryId}/builds/${failedBuildId}`);
+    await waitForLiveView(page);
+    await expect(
+      page.getByRole("main").getByText("failed", {exact: true}).first()
+    ).toBeVisible();
+    await expect(page.locator("#build-provenance")).toContainText("fixture_build_failed");
+    await expect(page.getByRole("button", {name: "Retry attempt"})).toBeVisible();
+    await page.getByRole("button", {name: "Retry attempt"}).click();
+    await expect(page.getByText("Build retry queued.")).toBeVisible();
+    await expect.poll(() => countOutboxEvents(failedBuildId, "build.retry_requested.v1")).toBe(1);
+
+    const successfulBuild = browserJourneyBuild ?? {
+      repositoryId: fixture.repositoryId,
+      id: await verifiableBuildId()
+    };
+    await page.goto(`/repositories/${successfulBuild.repositoryId}/builds/${successfulBuild.id}`);
+    await waitForLiveView(page);
+    await expect(
+      page.getByRole("button", {name: "Rebuild for verification"})
+    ).toBeVisible();
+
+    page.once("dialog", dialog => dialog.accept());
+    await page.getByRole("button", {name: "Rebuild for verification"}).click();
+    await expect(page.getByText("Verification rebuild queued.")).toBeVisible();
+    await expect
+      .poll(() => countOutboxEvents(successfulBuild.id, "build.verify_requested.v1"))
+      .toBe(1);
+
+    await page.evaluate(() => window.liveSocket.disconnect());
+    await page.evaluate(() => window.liveSocket.connect());
+    await waitForLiveView(page);
+    await expect(page.locator("#build-provenance")).toContainText(successfulBuild.id);
+  });
+
   test("ready, empty, form, and error states are accessible", async ({
     page
   }) => {
@@ -231,10 +492,10 @@ test.describe.serial("release, instance, secret, and live-review product journey
   });
 });
 
-async function signIn(page: import("@playwright/test").Page) {
+async function signIn(page: import("@playwright/test").Page, account = "reviewer") {
   await page.goto("/");
   await page.getByTestId("oidc-login").click();
-  await page.locator('input[name="login"]').fill("reviewer");
+  await page.locator('input[name="login"]').fill(account);
   await page.getByRole("button", {name: "Continue as Ada Reviewer"}).click();
   await expect(page).toHaveURL(/\/organizations$/);
   await waitForLiveView(page);
@@ -278,7 +539,7 @@ async function loadFixture() {
   const releaseClient = new pg.Client({connectionString: databaseUrl});
   await releaseClient.connect();
   const releases = await releaseClient.query(
-    `SELECT release_agent.id
+    `SELECT release.id AS release_id, release_agent.id
      FROM release_agents release_agent
      JOIN releases release ON release.id = release_agent.release_id
      WHERE release.repository_id = $1
@@ -286,12 +547,118 @@ async function loadFixture() {
     [result.rows[0].repository_id]
   );
   await releaseClient.end();
+  const builds = await queryBuilds(result.rows[0].repository_id);
   return {
     organizationId: result.rows[0].organization_id,
     projectId: result.rows[0].project_id,
     repositoryId: result.rows[0].repository_id,
-    releaseAgents: releases.rows.map(row => row.id)
+    releaseIds: releases.rows.map(row => row.release_id),
+    releaseAgents: releases.rows.map(row => row.id),
+    buildIds: builds.map(row => row.id),
+    sourceCommit: builds[0].source_commit
   };
+}
+
+async function queryBuilds(repositoryId: string) {
+  const client = new pg.Client({connectionString: databaseUrl});
+  await client.connect();
+  const result = await client.query(
+    `SELECT id, source_commit
+     FROM build_requests
+     WHERE repository_id = $1
+     ORDER BY created_at, id`,
+    [repositoryId]
+  );
+  await client.end();
+  return result.rows as Array<{id: string; source_commit: string}>;
+}
+
+async function verifiableBuildId() {
+  const client = new pg.Client({connectionString: databaseUrl});
+  await client.connect();
+  const result = await client.query(
+    `SELECT request.id
+       FROM build_requests request
+       JOIN build_executions execution ON execution.build_request_id = request.id
+      WHERE request.state = 'succeeded' AND execution.state = 'drafted'
+      ORDER BY request.created_at DESC, request.id DESC
+      LIMIT 1`
+  );
+  await client.end();
+  expect(result.rows).toHaveLength(1);
+  return result.rows[0].id as string;
+}
+
+async function seedFailedBuild(fixture: Awaited<ReturnType<typeof loadFixture>>) {
+  const buildId = randomUUID();
+  const client = new pg.Client({connectionString: databaseUrl});
+  await client.connect();
+  await client.query(
+    `INSERT INTO build_requests
+       (id, repository_id, source_commit, source_ref, build_definition_hash,
+        state, build_trigger, agent_key, build_declaration, build_policy,
+        declared_artifacts, started_at, completed_at)
+     VALUES ($1, $2, $3, 'refs/heads/main', $4, 'failed', 'manual',
+             'browser-reviewer', '{}'::jsonb, '{}'::jsonb, '[]'::jsonb,
+             now() - interval '1 second', now())`,
+    [buildId, fixture.repositoryId, fixture.sourceCommit, Buffer.alloc(32, 17)]
+  );
+  await client.query(
+    `INSERT INTO build_executions
+       (build_request_id, vm_id, release_id, release_agent_id, release_version,
+        state, failure_code, logs, started_at, completed_at)
+     VALUES ($1, $2, $3, $4, 'fixture-failed', 'failed', 'fixture_build_failed',
+             '[{"stream":"stderr","text":"fixture build failed"}]'::jsonb,
+             now() - interval '1 second', now())`,
+    [buildId, `fixture-failed-${buildId}`, randomUUID(), randomUUID()]
+  );
+  await client.end();
+  return buildId;
+}
+
+async function seedVerificationMismatch(buildId: string) {
+  const client = new pg.Client({connectionString: databaseUrl});
+  await client.connect();
+  await client.query(
+    `INSERT INTO build_verifications
+       (id, build_request_id, state, expected_manifest, actual_manifest,
+        failure_code, created_at, completed_at)
+     VALUES ($1, $2, 'failed', $3::jsonb, $4::jsonb, 'manifest_mismatch',
+             now() - interval '1 second', now())`,
+    [
+      randomUUID(),
+      buildId,
+      JSON.stringify([{path: "expected/agent.wasm", content_hash: "expected"}]),
+      JSON.stringify([{path: "actual/agent.wasm", content_hash: "actual"}])
+    ]
+  );
+  await client.end();
+}
+
+async function countOutboxEvents(buildId: string, eventType: string) {
+  const client = new pg.Client({connectionString: databaseUrl});
+  await client.connect();
+  const result = await client.query(
+    `SELECT count(*)::integer AS count
+       FROM outbox
+      WHERE aggregate_id = $1 AND event_type = $2`,
+    [buildId, eventType]
+  );
+  await client.end();
+  return result.rows[0].count as number;
+}
+
+async function countBuildChangedEvents(buildId: string) {
+  const client = new pg.Client({connectionString: databaseUrl});
+  await client.connect();
+  const result = await client.query(
+    `SELECT count(*)::integer AS count
+       FROM application_events
+      WHERE aggregate_type = 'build' AND aggregate_id = $1 AND event_type = 'build.changed'`,
+    [buildId]
+  );
+  await client.end();
+  return result.rows[0].count as number;
 }
 
 async function latestInstanceId(projectId: string) {
@@ -486,7 +853,12 @@ async function latestProposal(repositoryId: string) {
   return result.rows[0];
 }
 
-function pushCommit(repositoryId: string, message: string, clone = false) {
+function pushCommit(
+  repositoryId: string,
+  message: string,
+  clone = false,
+  includeBuild = false
+) {
   const work = mkdtempSync(path.join(tmpdir(), "hephaestus-ui-e2e-"));
   try {
     const token = execFileSync("curl", ["--fail", "--silent", `${oidcUrl}/test/git-token`], {
@@ -512,9 +884,10 @@ function pushCommit(repositoryId: string, message: string, clone = false) {
     writeFileSync(path.join(work, "input.txt"), `${message}\n`);
     mkdirSync(path.join(work, "reports"), {recursive: true});
     writeFileSync(path.join(work, "reports/result.txt"), "waiting for agent\n");
-    writeFileSync(path.join(work, "agent.toml"), agentConfig());
+    writeFileSync(path.join(work, "agent.toml"), agentConfig(includeBuild));
     git(["add", "."], work);
     git(["commit", "-m", message], work);
+    const sourceCommit = git(["rev-parse", "HEAD"], work);
     if (!clone) git(["remote", "add", "origin", remote], work);
     git(
       [
@@ -526,6 +899,7 @@ function pushCommit(repositoryId: string, message: string, clone = false) {
       ],
       work
     );
+    return sourceCommit;
   } finally {
     rmSync(work, {recursive: true, force: true});
   }
@@ -535,7 +909,9 @@ function git(arguments_: string[], cwd = process.cwd()) {
   return execFileSync("git", arguments_, {cwd, encoding: "utf8"}).trim();
 }
 
-function agentConfig() {
+function agentConfig(includeBuild = false) {
+  if (includeBuild) return buildAgentConfig();
+
   return `
 version = 1
 [agent]
@@ -548,7 +924,7 @@ working_directory = "/workspace/work"
 vcpus = 1
 memory_mib = 128
 [root_image]
-reference = "fixture-root@sha256:e2e"
+reference = "fixture-root@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 [workspace]
 mount = true
 path = "/workspace/repo"
@@ -563,4 +939,138 @@ profile = "disabled"
 push = true
 refs = ["refs/heads/main"]
 `.trimStart();
+}
+
+function buildAgentConfig() {
+  return `
+version = 2
+[agent]
+name = "browser-built-agent"
+key = "browser-built-agent"
+[build]
+command = "/bin/sh"
+arguments = ["-c", "mkdir -p /workspace/output/reports && printf 'built browser artifact\\n' > /workspace/output/reports/result.txt"]
+working_directory = "/workspace/source"
+root_image = "fixture-root@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+triggers = ["refs/heads/main"]
+[build.resources]
+vcpus = 1
+memory_mib = 128
+[build.network]
+profile = "disabled"
+[[build.artifacts]]
+path = "reports/result.txt"
+kind = "file"
+media_type = "text/plain"
+[guest]
+command = "bin/browser-built-agent"
+arguments = []
+working_directory = "bin"
+[resources]
+vcpus = 1
+memory_mib = 128
+[root_image]
+reference = "fixture-root@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+[workspace]
+mount = true
+path = "/workspace/repo"
+read_only = true
+[state_volume]
+enabled = true
+[results]
+declared_files = ["reports/result.txt"]
+[network]
+profile = "disabled"
+[triggers]
+push = true
+refs = ["refs/heads/main"]
+`.trimStart();
+}
+
+async function waitForBuild(repositoryId: string, sourceCommit: string) {
+  await expect
+    .poll(
+      async () => {
+        const client = new pg.Client({connectionString: databaseUrl});
+        await client.connect();
+        const result = await client.query(
+          `SELECT id, state
+           FROM build_requests
+           WHERE repository_id = $1 AND source_commit = $2
+           ORDER BY created_at DESC LIMIT 1`,
+          [repositoryId, sourceCommit]
+        );
+        await client.end();
+        return result.rows[0] ?? null;
+      },
+      {timeout: 90_000, intervals: [250, 500, 1_000, 2_000]}
+    )
+    .toEqual(expect.objectContaining({state: "succeeded"}));
+
+  const client = new pg.Client({connectionString: databaseUrl});
+  await client.connect();
+  const result = await client.query(
+    `SELECT id, state
+     FROM build_requests
+     WHERE repository_id = $1 AND source_commit = $2
+     ORDER BY created_at DESC LIMIT 1`,
+    [repositoryId, sourceCommit]
+  );
+  await client.end();
+  return result.rows[0] as {id: string; state: string};
+}
+
+async function waitForDraftRelease(buildId: string) {
+  await expect
+    .poll(
+      async () => {
+        const client = new pg.Client({connectionString: databaseUrl});
+        await client.connect();
+        const result = await client.query(
+          `SELECT release.id, release_agent.id AS release_agent_id, release.state
+           FROM releases release
+           JOIN release_agents release_agent ON release_agent.release_id = release.id
+           WHERE release.build_request_id = $1
+           ORDER BY release.created_at DESC LIMIT 1`,
+          [buildId]
+        );
+        await client.end();
+        return result.rows[0] ?? null;
+      },
+      {timeout: 90_000, intervals: [250, 500, 1_000, 2_000]}
+    )
+    .toEqual(expect.objectContaining({state: "draft"}));
+
+  const client = new pg.Client({connectionString: databaseUrl});
+  await client.connect();
+  const result = await client.query(
+    `SELECT release.id, release_agent.id AS release_agent_id, release.state
+     FROM releases release
+     JOIN release_agents release_agent ON release_agent.release_id = release.id
+     WHERE release.build_request_id = $1
+     ORDER BY release.created_at DESC LIMIT 1`,
+    [buildId]
+  );
+  await client.end();
+  return result.rows[0] as {id: string; release_agent_id: string; state: string};
+}
+
+function writeJourneyEvidence(ids: Record<string, string>) {
+  const directory = process.env.HEPHAESTUS_E2E_EVIDENCE_DIR;
+  if (!directory) return;
+  mkdirSync(directory, {recursive: true});
+  writeFileSync(
+    path.join(directory, "real-build-journey-ids.json"),
+    `${JSON.stringify(ids, null, 2)}\n`
+  );
+}
+
+async function captureJourneyScreenshot(
+  page: import("@playwright/test").Page,
+  filename: string
+) {
+  const directory = process.env.HEPHAESTUS_E2E_EVIDENCE_DIR;
+  if (!directory) return;
+  mkdirSync(directory, {recursive: true});
+  await page.screenshot({path: path.join(directory, filename), fullPage: true});
 }

@@ -6,12 +6,14 @@ use identity_domain::AuthenticatedIdentity;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use sqlx::{FromRow, PgPool};
+use sqlx::{FromRow, PgPool, Postgres, Transaction};
 use std::collections::BTreeMap;
-use time::OffsetDateTime;
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use uuid::Uuid;
 
 const BUILD_REQUESTED_SUBJECT: &str = "hephaestus.build.requested.v1";
+const BUILD_RETRY_REQUESTED_SUBJECT: &str = "hephaestus.build.retry.requested.v1";
+const BUILD_VERIFY_REQUESTED_SUBJECT: &str = "hephaestus.build.verify.requested.v1";
 
 /// Transport-neutral build lifecycle state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,6 +35,7 @@ pub struct BuildMetric {
 /// Authorized build representation returned to a transport adapter.
 pub struct BuildView {
     pub id: Uuid,
+    pub repository_id: Uuid,
     pub state: BuildState,
     pub exit_code: Option<i32>,
     pub failure_code: Option<String>,
@@ -40,6 +43,114 @@ pub struct BuildView {
     pub metrics: Vec<BuildMetric>,
     pub created_at: OffsetDateTime,
     pub updated_at: OffsetDateTime,
+    pub source_commit: String,
+    pub source_ref: String,
+    pub build_definition_hash: String,
+    pub release_id: Option<Uuid>,
+    pub release_state: Option<String>,
+    pub release_version: Option<String>,
+    pub artifact_count: u32,
+    pub trigger: String,
+    pub agent_key: Option<String>,
+    pub image_id: Option<Uuid>,
+    pub image_key: Option<String>,
+    pub image_reference: Option<String>,
+    pub configuration_hash: Option<String>,
+    pub parsed_declaration: Value,
+    pub build_policy: Value,
+    pub started_at: Option<OffsetDateTime>,
+    pub completed_at: Option<OffsetDateTime>,
+    pub duration_milliseconds: Option<i64>,
+    pub timeline: Vec<BuildTimelineEntry>,
+    pub declared_artifacts: Vec<DeclaredArtifactView>,
+    pub produced_artifacts: Vec<ProducedArtifactView>,
+    pub artifact_manifest: Value,
+    pub verifications: Vec<BuildVerificationView>,
+}
+
+/// One durable lifecycle observation for a build.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BuildTimelineEntry {
+    pub from_state: Option<String>,
+    pub to_state: String,
+    pub reason: String,
+    pub occurred_at: OffsetDateTime,
+}
+
+/// One output declared by the immutable build configuration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeclaredArtifactView {
+    pub path: String,
+    pub kind: String,
+    pub media_type: Option<String>,
+}
+
+/// One output imported from a completed build.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProducedArtifactView {
+    pub path: String,
+    pub kind: String,
+    pub mode: u32,
+    pub sha256: String,
+    pub size_bytes: u64,
+    pub media_type: String,
+}
+
+/// One immutable-input verification execution retained for a build.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BuildVerificationView {
+    pub state: String,
+    pub expected_manifest: Value,
+    pub actual_manifest: Option<Value>,
+    pub failure_code: Option<String>,
+    pub created_at: OffsetDateTime,
+    pub completed_at: Option<OffsetDateTime>,
+}
+
+#[derive(Clone, Copy)]
+pub struct BuildPage {
+    pub size: i64,
+    pub after: Option<Uuid>,
+}
+
+pub struct BuildPageResult {
+    pub builds: Vec<BuildView>,
+    pub next: Option<Uuid>,
+}
+
+impl BuildState {
+    pub const fn is_terminal(self) -> bool {
+        matches!(self, Self::Succeeded | Self::Failed | Self::Cancelled)
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Queued => "queued",
+            Self::Running => "running",
+            Self::Succeeded => "succeeded",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+        }
+    }
+}
+
+pub fn encode_cursor(value: Uuid) -> String {
+    value.to_string()
+}
+
+pub fn decode_cursor(value: &str) -> Option<Uuid> {
+    Uuid::parse_str(value).ok()
+}
+
+/// A resumable cursor for the latest authorized build projection.
+pub fn build_cursor(build: &BuildView) -> String {
+    format!(
+        "v1:build:{}:{}:{}:{}",
+        build.id,
+        build.updated_at.unix_timestamp_nanos(),
+        build.state.as_str(),
+        build.logs.len()
+    )
 }
 
 /// Validated build request supplied by a transport adapter.
@@ -74,11 +185,31 @@ pub enum BuildError {
     #[error("build persistence failed")]
     Persistence(#[source] sqlx::Error),
     /// Stored configuration could not be decoded.
-    #[error("stored build configuration is invalid")]
+    #[error("stored build configuration is invalid: {0}")]
     Serialization(#[source] serde_json::Error),
 }
 
+/// Typed failures for build actions that have additional lifecycle semantics.
+#[derive(Debug, thiserror::Error)]
+pub enum BuildActionError {
+    #[error(transparent)]
+    Application(#[from] BuildError),
+    /// The current lifecycle state does not permit retry.
+    #[error("build retry is not allowed in the current lifecycle state")]
+    RetryNotAllowed,
+    /// Retrying requires an attempt-reset capability not granted to the app role.
+    #[error("retry is unavailable until durable build-attempt reset is supported")]
+    RetryUnavailable,
+    /// Verification requires a successful immutable input.
+    #[error("verification rebuild requires a successful build")]
+    VerificationNotAllowed,
+    /// Verification needs durable comparison storage that is not in this schema.
+    #[error("verification rebuild is unavailable until manifest comparison is durable")]
+    VerificationUnavailable,
+}
+
 /// Executes build operations under transaction-local RLS identity.
+#[derive(Clone)]
 pub struct BuildApplication {
     pool: PgPool,
 }
@@ -97,14 +228,67 @@ impl BuildApplication {
             .await
             .map_err(BuildError::Persistence)?;
         let row = sqlx::query_as::<_, BuildRow>(
-            "SELECT request.id, request.state, execution.exit_code,
+            "SELECT request.id, request.repository_id, request.state, execution.exit_code,
                     execution.failure_code, execution.logs, execution.metrics,
                     request.created_at,
                     COALESCE(execution.updated_at, request.completed_at,
-                             request.started_at, request.created_at) AS updated_at
+                             request.started_at, request.created_at) AS updated_at,
+                    request.source_commit, request.source_ref,
+                    encode(request.build_definition_hash, 'hex') AS build_definition_hash,
+                    request.build_trigger, request.agent_key,
+                    (SELECT image_id FROM build_request_images
+                      WHERE build_request_id = request.id
+                        AND execution_context = 'build') AS image_id,
+                    (SELECT image_key FROM build_request_images
+                      WHERE build_request_id = request.id
+                        AND execution_context = 'build') AS image_key,
+                    (SELECT image_reference FROM build_request_images
+                      WHERE build_request_id = request.id
+                        AND execution_context = 'build') AS image_reference,
+                    encode(request.configuration_hash, 'hex') AS configuration_hash,
+                    request.build_declaration, request.build_policy,
+                    request.declared_artifacts, execution.started_at,
+                    COALESCE(execution.completed_at, request.completed_at) AS completed_at,
+                    execution.artifact_manifest,
+                    release.id AS release_id, release.state AS release_state,
+                    release.version AS release_version,
+                    (SELECT count(*) FROM release_artifacts artifact
+                     WHERE artifact.release_id = release.id)::bigint AS artifact_count
+                    ,COALESCE((SELECT jsonb_agg(
+                        jsonb_build_object(
+                            'from_state', transition.from_state,
+                            'to_state', transition.to_state,
+                            'reason', transition.reason,
+                            'occurred_at', transition.occurred_at
+                        ) ORDER BY transition.occurred_at, transition.id
+                    ) FROM build_state_transitions transition
+                    WHERE transition.build_request_id = request.id), '[]'::jsonb) AS timeline
+                    ,COALESCE((SELECT jsonb_agg(
+                        jsonb_build_object(
+                            'path', artifact.path,
+                            'kind', artifact.kind,
+                            'mode', artifact.mode,
+                            'sha256', encode(artifact.content_hash, 'hex'),
+                            'size_bytes', artifact.size_bytes,
+                            'media_type', artifact.media_type
+                        ) ORDER BY artifact.path, artifact.id
+                    ) FROM release_artifacts artifact
+                    WHERE artifact.release_id = release.id), '[]'::jsonb) AS produced_artifacts
+                    ,COALESCE((SELECT jsonb_agg(
+                        jsonb_build_object(
+                            'state', verification.state,
+                            'expected_manifest', verification.expected_manifest,
+                            'actual_manifest', verification.actual_manifest,
+                            'failure_code', verification.failure_code,
+                            'created_at', verification.created_at,
+                            'completed_at', verification.completed_at
+                        ) ORDER BY verification.created_at DESC, verification.id DESC
+                    ) FROM build_verifications verification
+                    WHERE verification.build_request_id = request.id), '[]'::jsonb) AS verifications
              FROM build_requests request
              LEFT JOIN build_executions execution
                ON execution.build_request_id = request.id
+             LEFT JOIN releases release ON release.build_request_id = request.id
              WHERE request.id = $1",
         )
         .bind(id)
@@ -117,6 +301,243 @@ impl BuildApplication {
             .await
             .map_err(BuildError::Persistence)?;
         row.try_into()
+    }
+
+    pub async fn list_builds(
+        &self,
+        identity: &AuthenticatedIdentity,
+        repository_id: Uuid,
+        page: BuildPage,
+    ) -> Result<BuildPageResult, BuildError> {
+        let mut transaction = begin_actor_transaction(&self.pool, identity)
+            .await
+            .map_err(BuildError::Persistence)?;
+        let rows = sqlx::query_as::<_, BuildRow>(
+            "SELECT request.id, request.repository_id, request.state, execution.exit_code,
+                    execution.failure_code, execution.logs, execution.metrics,
+                    request.created_at,
+                    COALESCE(execution.updated_at, request.completed_at,
+                             request.started_at, request.created_at) AS updated_at,
+                    request.source_commit, request.source_ref,
+                    encode(request.build_definition_hash, 'hex') AS build_definition_hash,
+                    request.build_trigger, request.agent_key,
+                    (SELECT image_id FROM build_request_images
+                      WHERE build_request_id = request.id
+                        AND execution_context = 'build') AS image_id,
+                    (SELECT image_key FROM build_request_images
+                      WHERE build_request_id = request.id
+                        AND execution_context = 'build') AS image_key,
+                    (SELECT image_reference FROM build_request_images
+                      WHERE build_request_id = request.id
+                        AND execution_context = 'build') AS image_reference,
+                    encode(request.configuration_hash, 'hex') AS configuration_hash,
+                    request.build_declaration, request.build_policy,
+                    request.declared_artifacts, execution.started_at,
+                    COALESCE(execution.completed_at, request.completed_at) AS completed_at,
+                    execution.artifact_manifest,
+                    release.id AS release_id, release.state AS release_state,
+                    release.version AS release_version,
+                    (SELECT count(*) FROM release_artifacts artifact
+                     WHERE artifact.release_id = release.id)::bigint AS artifact_count
+                    ,COALESCE((SELECT jsonb_agg(
+                        jsonb_build_object(
+                            'from_state', transition.from_state,
+                            'to_state', transition.to_state,
+                            'reason', transition.reason,
+                            'occurred_at', transition.occurred_at
+                        ) ORDER BY transition.occurred_at, transition.id
+                    ) FROM build_state_transitions transition
+                    WHERE transition.build_request_id = request.id), '[]'::jsonb) AS timeline
+                    ,COALESCE((SELECT jsonb_agg(
+                        jsonb_build_object(
+                            'path', artifact.path,
+                            'kind', artifact.kind,
+                            'mode', artifact.mode,
+                            'sha256', encode(artifact.content_hash, 'hex'),
+                            'size_bytes', artifact.size_bytes,
+                            'media_type', artifact.media_type
+                        ) ORDER BY artifact.path, artifact.id
+                    ) FROM release_artifacts artifact
+                    WHERE artifact.release_id = release.id), '[]'::jsonb) AS produced_artifacts
+                    ,COALESCE((SELECT jsonb_agg(
+                        jsonb_build_object(
+                            'state', verification.state,
+                            'expected_manifest', verification.expected_manifest,
+                            'actual_manifest', verification.actual_manifest,
+                            'failure_code', verification.failure_code,
+                            'created_at', verification.created_at,
+                            'completed_at', verification.completed_at
+                        ) ORDER BY verification.created_at DESC, verification.id DESC
+                    ) FROM build_verifications verification
+                    WHERE verification.build_request_id = request.id), '[]'::jsonb) AS verifications
+             FROM build_requests request
+             LEFT JOIN build_executions execution
+               ON execution.build_request_id = request.id
+             LEFT JOIN releases release ON release.build_request_id = request.id
+             WHERE request.repository_id = $1
+               AND ($2::uuid IS NULL OR (request.created_at, request.id) <
+                    (SELECT cursor.created_at, cursor.id
+                     FROM build_requests cursor WHERE cursor.id = $2))
+             ORDER BY request.created_at DESC, request.id DESC
+             LIMIT $3",
+        )
+        .bind(repository_id)
+        .bind(page.after)
+        .bind(page.size + 1)
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(BuildError::Persistence)?;
+        transaction
+            .commit()
+            .await
+            .map_err(BuildError::Persistence)?;
+        let size = usize::try_from(page.size).map_err(|_| BuildError::InvalidStoredData)?;
+        let has_more = rows.len() > size;
+        let builds: Vec<BuildView> = rows
+            .into_iter()
+            .take(size)
+            .map(TryInto::try_into)
+            .collect::<Result<Vec<_>, BuildError>>()?;
+        let next = has_more
+            .then(|| builds.last().map(|build| build.id))
+            .flatten();
+        Ok(BuildPageResult { builds, next })
+    }
+
+    /// Revalidates the build before reporting whether retry is possible.
+    ///
+    /// Queues a retry through the committed forge outbox. The trusted build
+    /// worker owns execution reset and records the archived attempt.
+    pub async fn retry_build(
+        &self,
+        identity: &AuthenticatedIdentity,
+        id: Uuid,
+    ) -> Result<RequestedBuild, BuildActionError> {
+        let mut transaction = begin_actor_transaction(&self.pool, identity)
+            .await
+            .map_err(|error| BuildActionError::Application(BuildError::Persistence(error)))?;
+        let row: Option<(Uuid, String, OffsetDateTime)> = sqlx::query_as(
+            "SELECT id, state, created_at
+               FROM build_requests
+              WHERE id = $1
+              FOR UPDATE",
+        )
+        .bind(id)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|error| BuildActionError::Application(BuildError::Persistence(error)))?;
+        let Some((id, state, created_at)) = row else {
+            return Err(BuildActionError::Application(BuildError::NotFound));
+        };
+        if !matches!(state.as_str(), "failed" | "cancelled") {
+            return Err(BuildActionError::RetryNotAllowed);
+        }
+        let now = OffsetDateTime::now_utc();
+        sqlx::query(
+            "UPDATE build_requests
+                SET state = 'queued', started_at = NULL, completed_at = NULL,
+                    diagnostics = '[]'::jsonb
+              WHERE id = $1",
+        )
+        .bind(id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|error| BuildActionError::Application(BuildError::Persistence(error)))?;
+        let event_id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO outbox
+                (id, aggregate_type, aggregate_id, subject, event_type, payload,
+                 occurred_at)
+             VALUES ($1, 'forge', $2, $3, 'build.retry_requested.v1', $4, $5)",
+        )
+        .bind(event_id)
+        .bind(id)
+        .bind(BUILD_RETRY_REQUESTED_SUBJECT)
+        .bind(json!({
+            "schema_version": 1,
+            "message_id": event_id,
+            "idempotency_key": event_id,
+            "request_id": identity.request_id,
+            "build_request_id": id,
+        }))
+        .bind(now)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|error| BuildActionError::Application(BuildError::Persistence(error)))?;
+        transaction
+            .commit()
+            .await
+            .map_err(|error| BuildActionError::Application(BuildError::Persistence(error)))?;
+        Ok(RequestedBuild {
+            id,
+            state: BuildState::Queued,
+            created_at,
+            updated_at: now,
+        })
+    }
+
+    /// Queues a verification rebuild over the same immutable build inputs.
+    pub async fn rebuild_for_verification(
+        &self,
+        identity: &AuthenticatedIdentity,
+        id: Uuid,
+    ) -> Result<RequestedBuild, BuildActionError> {
+        let build = self
+            .get_build(identity, id)
+            .await
+            .map_err(BuildActionError::Application)?;
+        if build.state != BuildState::Succeeded {
+            return Err(BuildActionError::VerificationNotAllowed);
+        }
+        let mut transaction = begin_actor_transaction(&self.pool, identity)
+            .await
+            .map_err(|error| BuildActionError::Application(BuildError::Persistence(error)))?;
+        // The verification command leaves the immutable build state unchanged,
+        // but clients still need a committed build event as the mutation
+        // receipt and LiveView invalidation. Touching diagnostics deliberately
+        // invokes the build-request application-event trigger without
+        // fabricating a lifecycle transition.
+        sqlx::query(
+            "UPDATE build_requests
+                SET diagnostics = diagnostics
+              WHERE id = $1",
+        )
+        .bind(id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|error| BuildActionError::Application(BuildError::Persistence(error)))?;
+        let event_id = Uuid::new_v4();
+        let now = OffsetDateTime::now_utc();
+        sqlx::query(
+            "INSERT INTO outbox
+                (id, aggregate_type, aggregate_id, subject, event_type, payload,
+                 occurred_at)
+             VALUES ($1, 'forge', $2, $3, 'build.verify_requested.v1', $4, $5)",
+        )
+        .bind(event_id)
+        .bind(id)
+        .bind(BUILD_VERIFY_REQUESTED_SUBJECT)
+        .bind(json!({
+            "schema_version": 1,
+            "message_id": event_id,
+            "idempotency_key": event_id,
+            "request_id": identity.request_id,
+            "build_request_id": id,
+        }))
+        .bind(now)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|error| BuildActionError::Application(BuildError::Persistence(error)))?;
+        transaction
+            .commit()
+            .await
+            .map_err(|error| BuildActionError::Application(BuildError::Persistence(error)))?;
+        Ok(RequestedBuild {
+            id: build.id,
+            state: build.state,
+            created_at: build.created_at,
+            updated_at: now,
+        })
     }
 
     // The transaction intentionally keeps validation, durable request creation,
@@ -159,14 +580,31 @@ impl BuildApplication {
         if actual_build_hash != request.build_definition_hash {
             return Err(BuildError::FailedPrecondition);
         }
+        let build = config
+            .build
+            .as_ref()
+            .ok_or(BuildError::FailedPrecondition)?;
+        let resolved_build_image = resolve_image(&mut transaction, &build.image).await?;
+        let resolved_guest_image = resolve_image(&mut transaction, &config.guest.image).await?;
+        let build_declaration = serde_json::to_value(build).map_err(BuildError::Serialization)?;
+        let build_policy = json!({
+            "resources": build.resources,
+            "network": build.network,
+        });
+        let declared_artifacts =
+            serde_json::to_value(&build.artifacts).map_err(BuildError::Serialization)?;
+        let agent_key = config.agent.key.as_deref();
 
         let requested_id = Uuid::new_v4();
         let now = OffsetDateTime::now_utc();
         let row: (Uuid, OffsetDateTime, String, OffsetDateTime) = sqlx::query_as(
             "INSERT INTO build_requests
              (id, repository_id, source_commit, source_ref, origin_receive_id,
-              build_definition_hash, state, created_by, created_at)
-             VALUES ($1, $2, $3, $4, $5, $6, 'queued', $7, $8)
+              build_definition_hash, state, created_by, created_at, build_trigger,
+              agent_key,
+              configuration_hash, build_declaration, build_policy, declared_artifacts)
+             VALUES ($1, $2, $3, $4, $5, $6, 'queued', $7, $8, 'manual', $9,
+                     decode($10, 'hex'), $11, $12, $13)
              ON CONFLICT
                (repository_id, source_commit, source_ref, build_definition_hash)
              DO UPDATE SET repository_id = EXCLUDED.repository_id
@@ -181,7 +619,29 @@ impl BuildApplication {
         .bind(request.build_definition_hash.as_slice())
         .bind(identity.user_id.as_uuid())
         .bind(now)
+        .bind(agent_key)
+        .bind(&configuration_hash)
+        .bind(build_declaration)
+        .bind(build_policy)
+        .bind(declared_artifacts)
         .fetch_one(&mut *transaction)
+        .await
+        .map_err(BuildError::Persistence)?;
+        sqlx::query(
+            "INSERT INTO build_request_images
+             (build_request_id, execution_context, image_id, image_key, image_reference)
+             VALUES ($1, 'build', $2, $3, $4),
+                    ($1, 'guest', $5, $6, $7)
+             ON CONFLICT (build_request_id, execution_context) DO NOTHING",
+        )
+        .bind(row.0)
+        .bind(resolved_build_image.id)
+        .bind(&resolved_build_image.key)
+        .bind(&resolved_build_image.reference)
+        .bind(resolved_guest_image.id)
+        .bind(&resolved_guest_image.key)
+        .bind(&resolved_guest_image.reference)
+        .execute(&mut *transaction)
         .await
         .map_err(BuildError::Persistence)?;
         sqlx::query(
@@ -241,9 +701,33 @@ impl BuildApplication {
     }
 }
 
+#[derive(Debug, FromRow)]
+struct ResolvedImageRow {
+    id: Uuid,
+    key: String,
+    reference: String,
+}
+
+async fn resolve_image(
+    transaction: &mut Transaction<'_, Postgres>,
+    selection: &agent_config::ImageSelection,
+) -> Result<ResolvedImageRow, BuildError> {
+    let row = sqlx::query_as::<_, ResolvedImageRow>(
+        "SELECT id, key, image_reference AS reference FROM oci_images
+          WHERE key = $1 AND availability_state = 'available'",
+    )
+    .bind(&selection.key)
+    .fetch_optional(&mut **transaction)
+    .await
+    .map_err(BuildError::Persistence)?;
+    let row = row.ok_or(BuildError::FailedPrecondition)?;
+    Ok(row)
+}
+
 #[derive(FromRow)]
 struct BuildRow {
     id: Uuid,
+    repository_id: Uuid,
     state: String,
     exit_code: Option<i32>,
     failure_code: Option<String>,
@@ -251,6 +735,28 @@ struct BuildRow {
     metrics: Option<Value>,
     created_at: OffsetDateTime,
     updated_at: OffsetDateTime,
+    source_commit: String,
+    source_ref: String,
+    build_definition_hash: String,
+    build_trigger: String,
+    agent_key: Option<String>,
+    image_id: Option<Uuid>,
+    image_key: Option<String>,
+    image_reference: Option<String>,
+    configuration_hash: Option<String>,
+    build_declaration: Option<Value>,
+    build_policy: Option<Value>,
+    declared_artifacts: Option<Value>,
+    started_at: Option<OffsetDateTime>,
+    completed_at: Option<OffsetDateTime>,
+    artifact_manifest: Option<Value>,
+    release_id: Option<Uuid>,
+    release_state: Option<String>,
+    release_version: Option<String>,
+    artifact_count: i64,
+    timeline: Option<Value>,
+    produced_artifacts: Option<Value>,
+    verifications: Option<Value>,
 }
 
 #[derive(FromRow)]
@@ -272,6 +778,114 @@ struct StoredMetric {
     value: f64,
     #[serde(default)]
     labels: BTreeMap<String, String>,
+}
+
+#[derive(Deserialize)]
+struct StoredTimelineEntry {
+    from_state: Option<String>,
+    to_state: String,
+    reason: String,
+    occurred_at: String,
+}
+
+impl TryFrom<StoredTimelineEntry> for BuildTimelineEntry {
+    type Error = BuildError;
+
+    fn try_from(value: StoredTimelineEntry) -> Result<Self, Self::Error> {
+        if value.to_state.is_empty() || value.reason.is_empty() {
+            return Err(BuildError::InvalidStoredData);
+        }
+        let occurred_at = OffsetDateTime::parse(&value.occurred_at, &Rfc3339)
+            .map_err(|_| BuildError::InvalidStoredData)?;
+        Ok(Self {
+            from_state: value.from_state,
+            to_state: value.to_state,
+            reason: value.reason,
+            occurred_at,
+        })
+    }
+}
+
+#[derive(Deserialize)]
+struct StoredDeclaredArtifact {
+    path: String,
+    kind: String,
+    media_type: Option<String>,
+}
+
+impl From<StoredDeclaredArtifact> for DeclaredArtifactView {
+    fn from(value: StoredDeclaredArtifact) -> Self {
+        Self {
+            path: value.path,
+            kind: value.kind,
+            media_type: value.media_type,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct StoredProducedArtifact {
+    path: String,
+    kind: String,
+    mode: i32,
+    sha256: String,
+    size_bytes: i64,
+    media_type: String,
+}
+
+#[derive(Deserialize)]
+struct StoredVerification {
+    state: String,
+    expected_manifest: Value,
+    actual_manifest: Option<Value>,
+    failure_code: Option<String>,
+    created_at: String,
+    completed_at: Option<String>,
+}
+
+impl TryFrom<StoredVerification> for BuildVerificationView {
+    type Error = BuildError;
+
+    fn try_from(value: StoredVerification) -> Result<Self, Self::Error> {
+        let created_at = OffsetDateTime::parse(&value.created_at, &Rfc3339)
+            .map_err(|_| BuildError::InvalidStoredData)?;
+        let completed_at = value
+            .completed_at
+            .as_deref()
+            .map(|timestamp| OffsetDateTime::parse(timestamp, &Rfc3339))
+            .transpose()
+            .map_err(|_| BuildError::InvalidStoredData)?;
+        if !matches!(value.state.as_str(), "running" | "succeeded" | "failed") {
+            return Err(BuildError::InvalidStoredData);
+        }
+        if value.state == "failed" && value.failure_code.is_none() {
+            return Err(BuildError::InvalidStoredData);
+        }
+        Ok(Self {
+            state: value.state,
+            expected_manifest: value.expected_manifest,
+            actual_manifest: value.actual_manifest,
+            failure_code: value.failure_code,
+            created_at,
+            completed_at,
+        })
+    }
+}
+
+impl TryFrom<StoredProducedArtifact> for ProducedArtifactView {
+    type Error = BuildError;
+
+    fn try_from(value: StoredProducedArtifact) -> Result<Self, Self::Error> {
+        Ok(Self {
+            path: value.path,
+            kind: value.kind,
+            mode: u32::try_from(value.mode).map_err(|_| BuildError::InvalidStoredData)?,
+            sha256: value.sha256,
+            size_bytes: u64::try_from(value.size_bytes)
+                .map_err(|_| BuildError::InvalidStoredData)?,
+            media_type: value.media_type,
+        })
+    }
 }
 
 impl TryFrom<BuildRow> for BuildView {
@@ -297,8 +911,49 @@ impl TryFrom<BuildRow> for BuildView {
             labels: metric.labels,
         })
         .collect();
+        let timeline = serde_json::from_value::<Vec<StoredTimelineEntry>>(
+            row.timeline.unwrap_or_else(|| Value::Array(Vec::new())),
+        )
+        .map_err(BuildError::Serialization)?
+        .into_iter()
+        .map(BuildTimelineEntry::try_from)
+        .collect::<Result<Vec<_>, _>>()?;
+        let declared_artifacts = serde_json::from_value::<Vec<StoredDeclaredArtifact>>(
+            row.declared_artifacts
+                .unwrap_or_else(|| Value::Array(Vec::new())),
+        )
+        .map_err(BuildError::Serialization)?
+        .into_iter()
+        .map(DeclaredArtifactView::from)
+        .collect();
+        let produced_artifacts = serde_json::from_value::<Vec<StoredProducedArtifact>>(
+            row.produced_artifacts
+                .unwrap_or_else(|| Value::Array(Vec::new())),
+        )
+        .map_err(BuildError::Serialization)?
+        .into_iter()
+        .map(ProducedArtifactView::try_from)
+        .collect::<Result<Vec<_>, _>>()?;
+        let verifications = serde_json::from_value::<Vec<StoredVerification>>(
+            row.verifications
+                .unwrap_or_else(|| Value::Array(Vec::new())),
+        )
+        .map_err(BuildError::Serialization)?
+        .into_iter()
+        .map(BuildVerificationView::try_from)
+        .collect::<Result<Vec<_>, _>>()?;
+        let duration_milliseconds = row.started_at.map(|started| {
+            let milliseconds = row
+                .completed_at
+                .unwrap_or_else(OffsetDateTime::now_utc)
+                .unix_timestamp_nanos()
+                .saturating_sub(started.unix_timestamp_nanos())
+                / 1_000_000;
+            i64::try_from(milliseconds.max(0)).unwrap_or(i64::MAX)
+        });
         Ok(Self {
             id: row.id,
+            repository_id: row.repository_id,
             state,
             exit_code: row.exit_code,
             failure_code: row.failure_code,
@@ -306,6 +961,36 @@ impl TryFrom<BuildRow> for BuildView {
             metrics,
             created_at: row.created_at,
             updated_at: row.updated_at,
+            source_commit: row.source_commit,
+            source_ref: row.source_ref,
+            build_definition_hash: row.build_definition_hash,
+            release_id: row.release_id,
+            release_state: row.release_state,
+            release_version: row.release_version,
+            artifact_count: u32::try_from(row.artifact_count)
+                .map_err(|_| BuildError::InvalidStoredData)?,
+            trigger: row.build_trigger,
+            agent_key: row.agent_key,
+            image_id: row.image_id,
+            image_key: row.image_key,
+            image_reference: row.image_reference,
+            configuration_hash: row.configuration_hash,
+            parsed_declaration: row
+                .build_declaration
+                .unwrap_or_else(|| Value::Object(serde_json::Map::new())),
+            build_policy: row
+                .build_policy
+                .unwrap_or_else(|| Value::Object(serde_json::Map::new())),
+            started_at: row.started_at,
+            completed_at: row.completed_at,
+            duration_milliseconds,
+            timeline,
+            declared_artifacts,
+            produced_artifacts,
+            artifact_manifest: row
+                .artifact_manifest
+                .unwrap_or_else(|| Value::Array(Vec::new())),
+            verifications,
         })
     }
 }
@@ -355,7 +1040,12 @@ fn encode_hash(value: &[u8; 32]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::decode_hash;
+    use super::{
+        BuildActionError, BuildState, BuildVerificationView, BuildView, build_cursor,
+        decode_cursor, decode_hash, encode_cursor,
+    };
+    use time::OffsetDateTime;
+    use uuid::Uuid;
 
     #[test]
     fn hash_decoder_requires_canonical_sha256_hex() {
@@ -363,5 +1053,75 @@ mod tests {
         assert!(decode_hash(&"AB".repeat(32)).is_none());
         assert!(decode_hash("ab").is_none());
         assert!(decode_hash(&"gg".repeat(32)).is_none());
+    }
+
+    #[test]
+    fn build_page_cursor_round_trips_opaque_uuid() {
+        let id = Uuid::new_v4();
+        assert_eq!(decode_cursor(&encode_cursor(id)), Some(id));
+        assert!(decode_cursor("not-a-uuid").is_none());
+    }
+
+    #[test]
+    fn build_watch_cursor_contains_the_authoritative_projection_version() {
+        let id = Uuid::new_v4();
+        let view = BuildView {
+            id,
+            repository_id: Uuid::new_v4(),
+            state: BuildState::Running,
+            exit_code: None,
+            failure_code: None,
+            logs: vec![String::from("[stdout] compiling")],
+            metrics: Vec::new(),
+            created_at: OffsetDateTime::UNIX_EPOCH,
+            updated_at: OffsetDateTime::UNIX_EPOCH,
+            source_commit: String::from("a"),
+            source_ref: String::from("refs/heads/main"),
+            build_definition_hash: String::from("b"),
+            release_id: None,
+            release_state: None,
+            release_version: None,
+            artifact_count: 0,
+            trigger: String::from("manual"),
+            agent_key: None,
+            image_id: None,
+            image_key: None,
+            image_reference: None,
+            configuration_hash: None,
+            parsed_declaration: serde_json::json!({}),
+            build_policy: serde_json::json!({}),
+            started_at: None,
+            completed_at: None,
+            duration_milliseconds: None,
+            timeline: Vec::new(),
+            declared_artifacts: Vec::new(),
+            produced_artifacts: Vec::new(),
+            artifact_manifest: serde_json::json!([]),
+            verifications: vec![BuildVerificationView {
+                state: String::from("failed"),
+                expected_manifest: serde_json::json!([{"path": "expected"}]),
+                actual_manifest: Some(serde_json::json!([{"path": "actual"}])),
+                failure_code: Some(String::from("manifest_mismatch")),
+                created_at: OffsetDateTime::UNIX_EPOCH,
+                completed_at: Some(OffsetDateTime::UNIX_EPOCH),
+            }],
+        };
+        assert_eq!(build_cursor(&view), format!("v1:build:{id}:0:running:1"));
+        assert!(!BuildState::Running.is_terminal());
+        assert!(BuildState::Failed.is_terminal());
+    }
+
+    #[test]
+    fn unsupported_actions_keep_precise_durable_reasons() {
+        assert!(
+            BuildActionError::RetryUnavailable
+                .to_string()
+                .contains("build-attempt")
+        );
+        assert!(
+            BuildActionError::VerificationUnavailable
+                .to_string()
+                .contains("manifest comparison")
+        );
     }
 }
