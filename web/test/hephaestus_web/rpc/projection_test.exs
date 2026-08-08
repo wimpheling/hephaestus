@@ -14,6 +14,11 @@ defmodule HephaestusWeb.RPC.ProjectionTest do
   alias Hephaestus.Secret.V1.SecretSummary
   alias Hephaestus.Run.V1.{ResultProposal, Run, RunMetrics, RunResult}
 
+  alias Hephaestus.Pat.V1.{
+    CreatePersonalAccessTokenResponse,
+    PersonalAccessTokenValue
+  }
+
   alias Hephaestus.Image.V1.{
     RegistryAvailabilityState,
     RegistryEvidence,
@@ -69,6 +74,15 @@ defmodule HephaestusWeb.RPC.ProjectionTest do
     }
 
     assert %{"labels" => %{"phase" => "update"}} = Projection.to_value(metric)
+  end
+
+  test "preserves the reviewed one-time PAT value for the transient UI effect" do
+    response = %CreatePersonalAccessTokenResponse{
+      value: %PersonalAccessTokenValue{value: "one-time-sentinel"}
+    }
+
+    assert %{"value" => %{"value" => "one-time-sentinel"}} =
+             Projection.to_value(response)
   end
 
   test "projects a run result proposal after nested messages are normalized" do

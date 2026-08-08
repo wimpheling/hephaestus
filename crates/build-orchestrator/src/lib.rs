@@ -487,6 +487,7 @@ impl BuildExecutor {
                 env: BTreeMap::new(),
                 working_dir: Some(PathBuf::from(&build.working_directory)),
             },
+            runtime_authority: None,
             labels: BTreeMap::from([
                 (String::from("hephaestus.kind"), String::from("build")),
                 (

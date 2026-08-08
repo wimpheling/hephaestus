@@ -32,6 +32,7 @@ defmodule HephaestusWebWeb.Router do
       live "/organizations", OrganizationLive
       live "/organizations/:organization_id", OrganizationWorkspaceLive, :projects
       live "/images", ImageCatalogLive, :index
+      live "/settings/git-credentials", PersonalAccessTokensLive, :index
       live "/organizations/:organization_id/projects/new", ProjectNewLive, :new_project
       live "/organizations/:organization_id/secrets", OrganizationSecretsLive, :secrets
 

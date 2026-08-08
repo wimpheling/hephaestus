@@ -61,6 +61,10 @@ fn environment_config() -> Result<AppConfig, Box<dyn Error>> {
     let secret_mount_root = path("HEPHAESTUS_SECRET_RUNTIME_ROOT")?;
     let secret_broker_socket = env::var_os("HEPHAESTUS_SECRET_BROKER_SOCKET")
         .map_or_else(|| runtime_root.join("secret-broker.sock"), PathBuf::from);
+    let runtime_authority_handoff_root = env::var_os("HEPHAESTUS_RUNTIME_AUTHORITY_HANDOFF_ROOT")
+        .map_or_else(|| runtime_root.join("authority-handoffs"), PathBuf::from);
+    let runtime_authority_handoff_key =
+        fixed_key(path("HEPHAESTUS_RUNTIME_AUTHORITY_HANDOFF_KEY_FILE")?)?;
     let vm_backend = match backend_name.as_str() {
         "fake" => VmBackendConfig::Fake,
         "fixture" => VmBackendConfig::FixtureResult,
@@ -141,6 +145,7 @@ fn environment_config() -> Result<AppConfig, Box<dyn Error>> {
         ),
         repository_root: repository_root.clone(),
         git_http_backend: path("HEPHAESTUS_GIT_HTTP_BACKEND")?,
+        git_pre_receive_hook: path("HEPHAESTUS_GIT_PRE_RECEIVE_HOOK")?,
         git_http_limits: git_http::GitHttpLimits::default(),
         oidc: OidcConfig {
             issuer: required("HEPHAESTUS_OIDC_ISSUER")?,
@@ -188,6 +193,12 @@ fn environment_config() -> Result<AppConfig, Box<dyn Error>> {
             runtime_root: runtime_root.join("exact-runs"),
             release_artifact_root: artifact_root.join("releases"),
         },
+        runtime_authority_handoff_root,
+        runtime_authority_handoff_key,
+        runtime_authority_session_ttl: Duration::from_secs(optional_u64(
+            "HEPHAESTUS_RUNTIME_AUTHORITY_SESSION_TTL_SECONDS",
+            3_600,
+        )?),
         build_workspace_root: workspace_root.join("isolated-builds"),
         build_timeout: Duration::from_secs(15 * 60),
         secret_mounts: EphemeralSecretConfig {
@@ -214,6 +225,14 @@ fn environment_config() -> Result<AppConfig, Box<dyn Error>> {
         startup_timeout: Duration::from_secs(30),
         shutdown_timeout: Duration::from_secs(30),
     })
+}
+
+fn fixed_key(path: PathBuf) -> Result<[u8; 32], Box<dyn Error>> {
+    let bytes = Zeroizing::new(std::fs::read(path)?);
+    bytes
+        .as_slice()
+        .try_into()
+        .map_err(|_| "runtime authority handoff key must contain exactly 32 bytes".into())
 }
 
 fn required(name: &str) -> Result<String, Box<dyn Error>> {

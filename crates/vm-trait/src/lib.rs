@@ -5,6 +5,12 @@ use std::{
     collections::BTreeMap, error::Error, net::IpAddr, path::PathBuf, sync::Arc, time::Duration,
 };
 use tokio::sync::broadcast;
+use uuid::Uuid;
+
+/// Fixed size of an opaque runtime-authority bearer credential.
+pub const RUNTIME_AUTHORITY_CREDENTIAL_BYTES: usize = 32;
+/// Fixed size of a separately discriminated runtime Git bearer.
+pub const RUNTIME_GIT_CREDENTIAL_BYTES: usize = 32;
 
 /// A stable identifier for a virtual machine.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -36,8 +42,105 @@ pub struct VmSpec {
     pub network: NetworkMode,
     /// The initial command run inside the guest.
     pub command: GuestCommand,
+    /// Sensitive one-run authority delivered through the authenticated guest
+    /// bootstrap stream, never through environment variables or host mounts.
+    pub runtime_authority: Option<RuntimeAuthorityBootstrap>,
     /// Caller-defined metadata associated with the VM.
     pub labels: BTreeMap<String, String>,
+}
+
+/// Sensitive authority delivered once to trusted guest bootstrap code.
+///
+/// Debug output is deliberately redacted. Clones exist only because provider
+/// specifications cross asynchronous worker boundaries; every dropped copy
+/// is overwritten best-effort.
+#[derive(Clone)]
+pub struct RuntimeAuthorityBootstrap {
+    session_id: Uuid,
+    generation: u64,
+    credential: [u8; RUNTIME_AUTHORITY_CREDENTIAL_BYTES],
+    runtime_git_credential: Option<[u8; RUNTIME_GIT_CREDENTIAL_BYTES]>,
+}
+
+impl RuntimeAuthorityBootstrap {
+    /// Creates an exact bootstrap payload. Providers reject generation zero.
+    #[must_use]
+    pub const fn new(
+        session_id: Uuid,
+        generation: u64,
+        credential: [u8; RUNTIME_AUTHORITY_CREDENTIAL_BYTES],
+    ) -> Self {
+        Self {
+            session_id,
+            generation,
+            credential,
+            runtime_git_credential: None,
+        }
+    }
+
+    /// Adds the separate exact-run Git bearer to the authenticated bootstrap.
+    #[must_use]
+    pub const fn with_runtime_git_credential(
+        mut self,
+        credential: [u8; RUNTIME_GIT_CREDENTIAL_BYTES],
+    ) -> Self {
+        self.runtime_git_credential = Some(credential);
+        self
+    }
+
+    /// Returns the exact runtime session identifier.
+    #[must_use]
+    pub const fn session_id(&self) -> Uuid {
+        self.session_id
+    }
+
+    /// Returns the exact issuance generation.
+    #[must_use]
+    pub const fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// Exposes bearer bytes only to the provider's authenticated bootstrap
+    /// transport conversion.
+    #[must_use]
+    pub const fn credential(&self) -> &[u8; RUNTIME_AUTHORITY_CREDENTIAL_BYTES] {
+        &self.credential
+    }
+
+    /// Exposes the optional Git bearer only to authenticated bootstrap
+    /// transport conversion.
+    #[must_use]
+    pub const fn runtime_git_credential(&self) -> Option<&[u8; RUNTIME_GIT_CREDENTIAL_BYTES]> {
+        self.runtime_git_credential.as_ref()
+    }
+}
+
+impl std::fmt::Debug for RuntimeAuthorityBootstrap {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RuntimeAuthorityBootstrap")
+            .field("session_id", &self.session_id)
+            .field("generation", &self.generation)
+            .field("credential", &"[REDACTED]")
+            .field(
+                "runtime_git_credential",
+                &self.runtime_git_credential.as_ref().map(|_| "[REDACTED]"),
+            )
+            .finish()
+    }
+}
+
+impl Drop for RuntimeAuthorityBootstrap {
+    fn drop(&mut self) {
+        for byte in &mut self.credential {
+            *std::hint::black_box(byte) = 0;
+        }
+        if let Some(credential) = &mut self.runtime_git_credential {
+            for byte in credential {
+                *std::hint::black_box(byte) = 0;
+            }
+        }
+    }
 }
 
 /// The host-backed filesystem from which a guest boots.
@@ -172,6 +275,14 @@ pub enum VmEvent {
     },
     /// The guest bootstrap accepted the command and is ready to execute it.
     Ready,
+    /// Trusted guest bootstrap persisted the exact runtime credential and
+    /// acknowledged its session and issuance generation.
+    RuntimeAuthorityAcknowledged {
+        /// Exact runtime session identifier.
+        session_id: Uuid,
+        /// Exact issuance generation received by the guest.
+        generation: u64,
+    },
     /// The guest emitted output.
     Log {
         /// Output channel on which the bytes were emitted.

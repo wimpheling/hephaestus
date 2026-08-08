@@ -11,6 +11,7 @@ pub(crate) mod event;
 mod identity;
 mod instance;
 mod organization;
+mod pat;
 mod project;
 mod release;
 mod repository;
@@ -229,6 +230,12 @@ pub(crate) fn service(
         pool.clone(),
         storage,
         MediatorAuthenticator::new(mediator_signing_key),
+    );
+    let router = pat::register(
+        router,
+        pool.clone(),
+        MediatorAuthenticator::new(mediator_signing_key),
+        mutation_receipts.clone(),
     );
     let router = build::register(
         router,

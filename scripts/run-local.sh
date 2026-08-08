@@ -469,7 +469,7 @@ wait_for_url \
     "${local_root}/logs/oidc.log"
 
 cd "${repo_root}"
-cargo build -p hephaestus-app --bins
+cargo build -p hephaestus-app --bins -p git-http --bin pre-receive
 
 readonly database_url="postgres://postgres:postgres@127.0.0.1:${local_postgres_port}/hephaestus?sslmode=disable"
 HEPHAESTUS_DATABASE_URL="${database_url}" \
@@ -484,6 +484,7 @@ export HEPHAESTUS_NATS_URL="nats://127.0.0.1:54222"
 export HEPHAESTUS_HTTP_LISTEN="127.0.0.1:8080"
 export HEPHAESTUS_REPOSITORY_ROOT="${local_root}/repositories"
 export HEPHAESTUS_GIT_HTTP_BACKEND="$(git --exec-path)/git-http-backend"
+export HEPHAESTUS_GIT_PRE_RECEIVE_HOOK="${repo_root}/target/debug/pre-receive"
 export HEPHAESTUS_OIDC_ISSUER="http://127.0.0.1:5556"
 export HEPHAESTUS_OIDC_AUDIENCE="hephaestus-git"
 export HEPHAESTUS_OIDC_ALGORITHM="HS256"

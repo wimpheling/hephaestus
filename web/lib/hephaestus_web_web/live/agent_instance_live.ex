@@ -10,6 +10,7 @@ defmodule HephaestusWebWeb.AgentInstanceLive do
     "set-attachment",
     "remove-attachment",
     "revise-instance",
+    "revise-capabilities",
     "create-update",
     "recover-update",
     "bind-secret"
@@ -46,6 +47,7 @@ defmodule HephaestusWebWeb.AgentInstanceLive do
     end
   end
 
+  @impl true
   def handle_info({ref, event}, %{assigns: %{snapshot_task: %Task{ref: ref}}} = socket) do
     Process.demonitor(ref, [:flush])
     {state, effects} = AgentInstanceState.reduce(socket.assigns.page_state, event)
@@ -127,6 +129,7 @@ defmodule HephaestusWebWeb.AgentInstanceLive do
         revision_form={to_form(@presentation.forms.revision, as: :revision)}
         update_form={to_form(@presentation.forms.update, as: :update)}
         binding_form={to_form(@presentation.forms.binding, as: :binding)}
+        capability_form={to_form(@presentation.forms.capabilities, as: :capabilities)}
         organization_index_destination={@presentation.destinations[:organization_index]}
         organization_destination={@presentation.destinations[:organization]}
         project_agents_destination={@presentation.destinations[:project_agents]}
@@ -139,6 +142,7 @@ defmodule HephaestusWebWeb.AgentInstanceLive do
         set_attachment_event="set-attachment"
         remove_attachment_event="remove-attachment"
         revise_instance_event="revise-instance"
+        revise_capabilities_event="revise-capabilities"
         create_update_event="create-update"
         recover_update_event="recover-update"
         bind_secret_event="bind-secret"

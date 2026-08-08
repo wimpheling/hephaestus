@@ -29,6 +29,7 @@ fn reflection_inventory_contains_every_application_service_and_method() {
         "hephaestus.identity.v1.IdentityService",
         "hephaestus.instance.v1.AgentInstanceService",
         "hephaestus.organization.v1.OrganizationService",
+        "hephaestus.pat.v1.PersonalAccessTokenService",
         "hephaestus.project.v1.ProjectService",
         "hephaestus.release.v1.ReleaseService",
         "hephaestus.repository.v1.RepositoryService",
@@ -51,7 +52,7 @@ fn reflection_inventory_contains_every_application_service_and_method() {
             .iter()
             .map(|service| service.methods().len())
             .sum::<usize>(),
-        64
+        68
     );
 
     let reflector = connectrpc_reflection::Reflector::from_descriptor_pool(pool)
@@ -347,7 +348,7 @@ fn every_method_declares_auth_kind_limits_and_retry_policy() {
         }
     }
 
-    assert_eq!(methods, 64, "review the policy when adding an RPC method");
+    assert_eq!(methods, 68, "review the policy when adding an RPC method");
 }
 
 #[test]
@@ -891,6 +892,7 @@ fn application_payloads_are_typed_and_responses_are_secret_safe() {
     let allowed_bytes = BTreeSet::from([
         "hephaestus.artifact.v1.StreamArtifactResponse.contents",
         "hephaestus.repository_browser.v1.StreamFileResponse.contents",
+        "hephaestus.pat.v1.PersonalAccessTokenValue.value",
         "hephaestus.secret.v1.SecretValue.value",
     ]);
 
@@ -935,7 +937,10 @@ fn application_payloads_are_typed_and_responses_are_secret_safe() {
 
     assert_eq!(
         sensitive_fields(&pool),
-        BTreeSet::from(["hephaestus.secret.v1.SecretValue.value".to_owned(),])
+        BTreeSet::from([
+            "hephaestus.pat.v1.PersonalAccessTokenValue.value".to_owned(),
+            "hephaestus.secret.v1.SecretValue.value".to_owned(),
+        ])
     );
     for service in pool
         .services()
@@ -944,24 +949,33 @@ fn application_payloads_are_typed_and_responses_are_secret_safe() {
     {
         for method in service.methods() {
             let mut visited = BTreeSet::new();
-            assert_eq!(
-                reachable_sensitive_field(&pool, pool.message(method.output()), &mut visited),
-                None,
-                "{}/{} exposes a sensitive field",
-                service.full_name(),
-                method.name()
-            );
+            let qualified = format!("{}/{}", service.full_name(), method.name());
+            let found =
+                reachable_sensitive_field(&pool, pool.message(method.output()), &mut visited);
+            if matches!(
+                qualified.as_str(),
+                "hephaestus.pat.v1.PersonalAccessTokenService/CreatePersonalAccessToken"
+                    | "hephaestus.pat.v1.PersonalAccessTokenService/RotatePersonalAccessToken"
+            ) {
+                assert_eq!(
+                    found.as_deref(),
+                    Some("hephaestus.pat.v1.PersonalAccessTokenValue.value"),
+                    "{qualified} must expose only its reviewed one-time bearer value"
+                );
+            } else {
+                assert_eq!(found, None, "{qualified} exposes a sensitive field");
+            }
         }
     }
 }
 
 #[test]
-fn sensitive_fields_are_annotated_request_only_and_error_safe() {
+fn sensitive_fields_are_annotated_and_reachable_only_at_reviewed_boundaries() {
     let pool = pool();
     let sensitive = sensitive_fields(&pool);
     assert_eq!(
         sensitive.len(),
-        1,
+        2,
         "review every sensitive descriptor field"
     );
     for qualified in sensitive {
@@ -989,12 +1003,31 @@ fn sensitive_fields_are_annotated_request_only_and_error_safe() {
                     .map(|method| pool.message(method.input()))
             })
             .collect::<Vec<_>>();
-        assert!(
-            request_roots.iter().any(|request| {
-                message_reaches_named_message(&pool, request, message_name, &mut BTreeSet::new())
-            }),
-            "{qualified} is not reachable from a request"
-        );
+        if qualified == "hephaestus.pat.v1.PersonalAccessTokenValue.value" {
+            assert!(
+                !request_roots.iter().any(|request| {
+                    message_reaches_named_message(
+                        &pool,
+                        request,
+                        message_name,
+                        &mut BTreeSet::new(),
+                    )
+                }),
+                "{qualified} must never be accepted in a request"
+            );
+        } else {
+            assert!(
+                request_roots.iter().any(|request| {
+                    message_reaches_named_message(
+                        &pool,
+                        request,
+                        message_name,
+                        &mut BTreeSet::new(),
+                    )
+                }),
+                "{qualified} is not reachable from a request"
+            );
+        }
     }
 
     for error_message in [

@@ -178,6 +178,7 @@ defmodule HephaestusWebWeb.DesignSystem.Components.Structure do
       "bind-secret",
       "create-attachment",
       "create-secret",
+      "create-personal-access-token",
       "create-update",
       "grant-secret",
       "import-agent",
@@ -186,6 +187,8 @@ defmodule HephaestusWebWeb.DesignSystem.Components.Structure do
       "remove-attachment",
       "revise-instance",
       "revoke-secret",
+      "revoke-personal-access-token",
+      "rotate-personal-access-token",
       "rotate-secret",
       "set-attachment",
       "set-secret-enabled",
@@ -267,6 +270,7 @@ defmodule HephaestusWebWeb.DesignSystem.Components.Structure do
       phx-value-enabled={@event_payload[:enabled]}
       phx-value-kind={@event_payload[:kind]}
       phx-value-secret_id={@event_payload[:secret_id]}
+      phx-value-token_id={@event_payload[:token_id]}
       phx-value-update_id={@event_payload[:update_id]}
       disabled={@disabled}
       class={action_class(@variant, @current)}
@@ -503,7 +507,15 @@ defmodule HephaestusWebWeb.DesignSystem.Components.Structure do
     |> Map.new()
   end
 
-  @event_payload_keys [:action, :attachment_id, :enabled, :kind, :secret_id, :update_id]
+  @event_payload_keys [
+    :action,
+    :attachment_id,
+    :enabled,
+    :kind,
+    :secret_id,
+    :token_id,
+    :update_id
+  ]
 
   defp validate_event_payload!(assigns) do
     payload =

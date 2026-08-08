@@ -1,0 +1,24 @@
+[package]
+name = "runtime-git-authority-postgres"
+description = "PostgreSQL adapter for exact-run Git credentials"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[package.metadata.hephaestus]
+layer = "adapter"
+context = "authorization"
+postgres_adapter = true
+database_context = "authorization"
+
+[dependencies]
+async-trait.workspace = true
+capability-domain = { path = "../capability-domain" }
+git-capability-domain = { path = "../git-capability-domain" }
+runtime-git-authority = { path = "../runtime-git-authority" }
+sqlx.workspace = true
+time.workspace = true
+uuid.workspace = true
+
+[lints]
+workspace = true

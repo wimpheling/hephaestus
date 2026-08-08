@@ -22,7 +22,7 @@ only agent output mechanism.
 | Repository authority | Trigger routing and repository resource authority are distinct. A repository push may start a run without granting the runtime Git access, and a Git resource grant need not be a trigger. |
 | Guest contract | A bound repository is delivered as an ordinary Git worktree with a capability-scoped Hephaestus remote. The guest uses standard Git commands; it receives no human credential or canonical storage mount. |
 | Publication | A permitted guest push uses the normal Git receive path and capability checks. Proposal/result refs remain host-owned controlled publication. |
-| Session safety | A session agent may fast-forward only its declared session ref from the exact triggering commit. Runtime-originated pushes are attributed and do not recursively trigger that attachment. |
+| Trigger-safe writes | A runtime binding may require a fast-forward only from its exact triggering commit. The repository/release defines the meaning of that constraint; runtime-originated pushes are attributed and do not recursively trigger that attachment. |
 | Network | The Hephaestus Git endpoint is an internal capability endpoint, not external Internet egress. |
 
 ## Dependencies
@@ -69,8 +69,32 @@ only agent output mechanism.
     boundaries.
 
 - [ ] **5. Verify migration and security**
-  - [ ] Add real Git/runtime tests for allowed session fast-forward, denied
+  - [ ] Add real Git/runtime tests for allowed triggering-commit fast-forward, denied
     repository/ref/path/delete/force pushes, source-repository denial,
     expired and revoked capability denial, and no recursive self-trigger.
   - [ ] Preserve and update existing proposal-result golden coverage.
   - [ ] Run the repository quality gate and Git credential sentinel scans.
+
+## Verify and document
+
+- Document the two publication modes, trigger-versus-resource authority,
+  capability-scoped remote bootstrap, receive attribution, and recursive
+  trigger suppression.
+- Run the real Git/runtime integration suite against the production receive
+  path, with PostgreSQL-backed authorization where applicable. Cover migration
+  of existing attachments and proposal-mode compatibility as well as the
+  permitted and denied transitions listed above.
+- Run `cargo fmt --all -- --check`,
+  `cargo clippy --workspace --all-targets --all-features`,
+  `cargo test --workspace --all-features`, and
+  `cargo doc --workspace --all-features --no-deps`.
+- Before repository handoff, run `git diff --check` and `cargo dev quality`.
+
+## Completion evidence
+
+The completed task records representative runtime Git transcripts for an
+allowed push and each denied boundary; migration fixtures for existing
+proposal-mode attachments; receive audit records with instance, revision, and
+run attribution; and proof that capability material is absent from guest logs
+and durable run records. It also records the verification commands, results,
+and any explicitly justified test-environment exclusions.

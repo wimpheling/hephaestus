@@ -661,6 +661,7 @@ impl VmSpecFactory for StateSpecFactory {
                 ]),
                 working_dir: None,
             },
+            runtime_authority: None,
             labels,
         })
     }

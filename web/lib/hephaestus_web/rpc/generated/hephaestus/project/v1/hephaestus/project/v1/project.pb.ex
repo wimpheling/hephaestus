@@ -131,6 +131,12 @@ defmodule Hephaestus.Project.V1.ReleaseAgentOption do
   field(:source_commit, 9, type: :string, json_name: "sourceCommit")
   field(:repository_id, 10, type: Hephaestus.Common.V1.OpaqueId, json_name: "repositoryId")
   field(:repository_name, 11, type: :string, json_name: "repositoryName")
+
+  field(:capability_requirements, 12,
+    repeated: true,
+    type: Hephaestus.Instance.V1.CapabilityRequirement,
+    json_name: "capabilityRequirements"
+  )
 end
 
 defmodule Hephaestus.Project.V1.GetProjectRequest do

@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 use identity_domain::AuthenticatedIdentity;
 use identity_domain::UserId;
-use runtime_types::RunId;
+use runtime_types::{AgentInstanceId, RunId};
 use serde::{Deserialize, Serialize};
 use std::{error::Error, fmt, str::FromStr};
 use uuid::Uuid;
@@ -36,6 +36,8 @@ pub enum Subject {
     User(UserId),
     /// One authenticated exact runtime run.
     Run(RunId),
+    /// One durable agent instance acting through an exact capability binding.
+    AgentInstance(AgentInstanceId),
 }
 
 impl Subject {
@@ -45,6 +47,7 @@ impl Subject {
         match self {
             Self::User(_) => "user",
             Self::Run(_) => "run",
+            Self::AgentInstance(_) => "agent_instance",
         }
     }
 
@@ -54,6 +57,7 @@ impl Subject {
         match self {
             Self::User(id) => id.to_string(),
             Self::Run(id) => id.to_string(),
+            Self::AgentInstance(id) => id.to_string(),
         }
     }
 }
@@ -240,6 +244,44 @@ pub enum Permission {
     CanBindBrokeredSecret,
     /// Bind a raw-delivery import at a target.
     CanBindRawSecret,
+    /// Grant an agent instance an explicit capability on a resource.
+    CanGrantAgentCapability,
+    /// Inspect a resource through an exact agent capability binding.
+    AgentInspect,
+    /// Configure a resource through an exact agent capability binding.
+    AgentConfigure,
+    /// Execute a resource operation through an exact agent capability binding.
+    AgentExecute,
+    /// Update a resource through an exact agent capability binding.
+    AgentUpdate,
+    /// Pause a resource through an exact agent capability binding.
+    AgentPause,
+    /// Recover a resource through an exact agent capability binding.
+    AgentRecover,
+    /// Read a repository through an exact agent capability binding.
+    AgentGitRead,
+    /// Create a repository ref through an exact agent capability binding.
+    AgentCreateRef,
+    /// Fast-forward a repository ref through an exact agent capability binding.
+    AgentUpdateRef,
+    /// Force-update a repository ref through an exact agent capability binding.
+    AgentForceUpdateRef,
+    /// Delete a repository ref through an exact agent capability binding.
+    AgentDeleteRef,
+    /// Create a repository tag through an exact agent capability binding.
+    AgentCreateTag,
+    /// Delete a repository tag through an exact agent capability binding.
+    AgentDeleteTag,
+    /// Trigger a run through an exact agent capability binding.
+    AgentTriggerRun,
+    /// Manage attachments through an exact agent capability binding.
+    AgentManageAttachments,
+    /// Cancel a run through an exact agent capability binding.
+    AgentCancel,
+    /// Attach a state volume through an exact agent capability binding.
+    AgentAttach,
+    /// Restore a state volume through an exact agent capability binding.
+    AgentRestore,
 }
 
 impl Permission {
@@ -278,6 +320,25 @@ impl Permission {
             Self::CanAcceptSecretImport => "can_accept_secret_import",
             Self::CanBindBrokeredSecret => "can_bind_brokered_secret",
             Self::CanBindRawSecret => "can_bind_raw_secret",
+            Self::CanGrantAgentCapability => "can_grant_agent_capability",
+            Self::AgentInspect => "agent_inspect",
+            Self::AgentConfigure => "agent_configure",
+            Self::AgentExecute => "agent_execute",
+            Self::AgentUpdate => "agent_update",
+            Self::AgentPause => "agent_pause",
+            Self::AgentRecover => "agent_recover",
+            Self::AgentGitRead => "agent_git_read",
+            Self::AgentCreateRef => "agent_create_ref",
+            Self::AgentUpdateRef => "agent_update_ref",
+            Self::AgentForceUpdateRef => "agent_force_update_ref",
+            Self::AgentDeleteRef => "agent_delete_ref",
+            Self::AgentCreateTag => "agent_create_tag",
+            Self::AgentDeleteTag => "agent_delete_tag",
+            Self::AgentTriggerRun => "agent_trigger_run",
+            Self::AgentManageAttachments => "agent_manage_attachments",
+            Self::AgentCancel => "agent_cancel",
+            Self::AgentAttach => "agent_attach",
+            Self::AgentRestore => "agent_restore",
         }
     }
 }
@@ -318,6 +379,25 @@ impl FromStr for Permission {
             "can_accept_secret_import" => Ok(Self::CanAcceptSecretImport),
             "can_bind_brokered_secret" => Ok(Self::CanBindBrokeredSecret),
             "can_bind_raw_secret" => Ok(Self::CanBindRawSecret),
+            "can_grant_agent_capability" => Ok(Self::CanGrantAgentCapability),
+            "agent_inspect" => Ok(Self::AgentInspect),
+            "agent_configure" => Ok(Self::AgentConfigure),
+            "agent_execute" => Ok(Self::AgentExecute),
+            "agent_update" => Ok(Self::AgentUpdate),
+            "agent_pause" => Ok(Self::AgentPause),
+            "agent_recover" => Ok(Self::AgentRecover),
+            "agent_git_read" => Ok(Self::AgentGitRead),
+            "agent_create_ref" => Ok(Self::AgentCreateRef),
+            "agent_update_ref" => Ok(Self::AgentUpdateRef),
+            "agent_force_update_ref" => Ok(Self::AgentForceUpdateRef),
+            "agent_delete_ref" => Ok(Self::AgentDeleteRef),
+            "agent_create_tag" => Ok(Self::AgentCreateTag),
+            "agent_delete_tag" => Ok(Self::AgentDeleteTag),
+            "agent_trigger_run" => Ok(Self::AgentTriggerRun),
+            "agent_manage_attachments" => Ok(Self::AgentManageAttachments),
+            "agent_cancel" => Ok(Self::AgentCancel),
+            "agent_attach" => Ok(Self::AgentAttach),
+            "agent_restore" => Ok(Self::AgentRestore),
             _ => Err(AuthzError::UnknownPermission(value.to_owned())),
         }
     }
@@ -371,7 +451,8 @@ impl AuthzError {
 
 #[cfg(test)]
 mod tests {
-    use super::{ObjectType, Permission};
+    use super::{ObjectType, Permission, Subject};
+    use runtime_types::AgentInstanceId;
     use std::str::FromStr;
 
     #[test]
@@ -393,6 +474,22 @@ mod tests {
             Permission::from_str("can_revoke").expect("known permission"),
             Permission::CanRevoke
         );
+        assert_eq!(
+            Permission::from_str("can_grant_agent_capability").expect("known permission"),
+            Permission::CanGrantAgentCapability
+        );
+        assert_eq!(
+            Permission::from_str("agent_update_ref").expect("known permission"),
+            Permission::AgentUpdateRef
+        );
         assert!(Permission::from_str("owner").is_err());
+    }
+
+    #[test]
+    fn agent_instance_subject_uses_canonical_model_name() {
+        let id = AgentInstanceId::new();
+        let subject = Subject::AgentInstance(id);
+        assert_eq!(subject.object_type(), "agent_instance");
+        assert_eq!(subject.id(), id.to_string());
     }
 }

@@ -56,6 +56,7 @@ defmodule HephaestusWeb.RPC.Projection do
     REGISTRY_EVIDENCE_STATE_
     DEPENDENCY_POLICY_
     PROJECT_BUILDER_STATUS_
+    GIT_OPERATION_
   )
 
   @spec to_value(term()) :: term()

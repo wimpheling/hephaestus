@@ -4,6 +4,7 @@ package hephaestus.project.v1;
 
 import "google/protobuf/timestamp.proto";
 import "hephaestus/common/v1/common.proto";
+import "hephaestus/instance/v1/instance.proto";
 import "hephaestus/options/v1/options.proto";
 
 service ProjectService {
@@ -123,6 +124,7 @@ message ReleaseAgentOption {
   string source_commit = 9;
   hephaestus.common.v1.OpaqueId repository_id = 10;
   string repository_name = 11;
+  repeated hephaestus.instance.v1.CapabilityRequirement capability_requirements = 12;
 }
 
 message GetProjectRequest {

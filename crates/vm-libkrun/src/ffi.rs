@@ -692,6 +692,7 @@ mod tests {
                 env: BTreeMap::new(),
                 working_dir: Some(Path::new("/").to_path_buf()),
             },
+            runtime_authority: None,
             labels: BTreeMap::new(),
         }
     }

@@ -7,6 +7,10 @@ use authz_postgres::{
     AUTHORIZATION_MODEL_VERSION, PostgresMelangeAuthorizer, audit_decision,
     begin_actor_transaction, begin_runtime_transaction,
 };
+use capability_domain::{
+    CapabilityBinding, CapabilityBindingId, CapabilityOperation, CapabilityRequirement,
+    CapabilityRequirementId, CapabilityResource, CapabilityResourceKind, CapabilitySlotKey,
+};
 use forge_domain::{CommitSha, GitRef, ProjectId};
 use identity_domain::{AuthenticatedIdentity, OrganizationId};
 use release_domain::{AgentAttachmentId, AgentInstanceId, AgentInstanceRevisionId};
@@ -759,6 +763,7 @@ impl<K: KeyProvider + Send + Sync> SecretService<K> {
                       revision.effective_runtime_policy,
                       revision.effective_policy_hash,
                       revision.platform_policy_version,
+                      revision.publication_repository_binding_id,
                       agent.secret_slot_schema
                FROM agent_instances AS instance
                JOIN agent_instance_revisions AS revision
@@ -832,14 +837,48 @@ impl<K: KeyProvider + Send + Sync> SecretService<K> {
                 .chain(std::iter::once(command.slot.as_str())),
         )?;
         let runnable = diagnostics.as_array().is_some_and(std::vec::Vec::is_empty);
+        let carried_capabilities: Vec<CarriedCapabilityRow> = sqlx::query_as(
+            "SELECT binding.id AS source_binding_id, binding.requirement_id,
+                    binding.slot_key, requirement.resource_kind AS requirement_resource_kind,
+                    requirement.required_operations,
+                    requirement.optional_operations, requirement.slot_required,
+                    binding.resource_kind, binding.resource_id,
+                    binding.granted_operations, binding.authorization_model_version
+             FROM agent_capability_bindings AS binding
+             JOIN release_capability_requirements AS requirement
+               ON requirement.id = binding.requirement_id
+              AND requirement.release_agent_id = binding.release_agent_id
+             WHERE binding.instance_revision_id = $1
+             ORDER BY binding.slot_key, binding.id",
+        )
+        .bind(command.expected_revision_id.as_uuid())
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(|_| SecretServiceError::Persistence)?;
+        let cloned_capabilities = carried_capabilities
+            .iter()
+            .map(clone_capability_binding)
+            .collect::<Result<Vec<_>, _>>()?;
+        let publication_repository_binding_id = revision
+            .publication_repository_binding_id
+            .and_then(|source_id| {
+                carried_capabilities
+                    .iter()
+                    .zip(&cloned_capabilities)
+                    .find(|(binding, _)| binding.source_binding_id == source_id)
+                    .map(|(_, cloned)| cloned.id().as_uuid())
+            });
         sqlx::query(
             "INSERT INTO agent_instance_revisions
                (id, instance_id, release_agent_id, parameters, parameter_hash,
                 secret_bindings, resource_selection, network_restriction,
                 effective_runtime_policy, effective_policy_hash,
-                platform_policy_version, runnable, diagnostics, created_by)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-                       $11, $12, $13, $14)",
+                platform_policy_version, publication_mode,
+                publication_repository_binding_id, runnable, diagnostics,
+                created_by)
+               SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                      $11, publication_mode, $12, $13, $14, $15
+               FROM agent_instance_revisions WHERE id = $16",
         )
         .bind(command.new_revision_id.as_uuid())
         .bind(command.instance_id.as_uuid())
@@ -852,9 +891,11 @@ impl<K: KeyProvider + Send + Sync> SecretService<K> {
         .bind(&revision.effective_runtime_policy)
         .bind(&revision.effective_policy_hash)
         .bind(&revision.platform_policy_version)
+        .bind(publication_repository_binding_id)
         .bind(runnable)
         .bind(&diagnostics)
         .bind(identity.user_id.as_uuid())
+        .bind(command.expected_revision_id.as_uuid())
         .execute(&mut *tx)
         .await
         .map_err(|_| SecretServiceError::Persistence)?;
@@ -866,6 +907,36 @@ impl<K: KeyProvider + Send + Sync> SecretService<K> {
                 &binding,
                 identity.user_id.as_uuid(),
             )
+            .await
+            .map_err(|_| SecretServiceError::Persistence)?;
+        }
+        for (binding, cloned) in carried_capabilities.iter().zip(&cloned_capabilities) {
+            sqlx::query(
+                "INSERT INTO agent_capability_bindings
+                   (id, instance_revision_id, release_agent_id, requirement_id,
+                    requirement_hash, slot_key, resource_kind, resource_id,
+                    granted_operations, normalized_hash,
+                    authorization_model_version, created_by)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
+            )
+            .bind(cloned.id().as_uuid())
+            .bind(command.new_revision_id.as_uuid())
+            .bind(revision.release_agent_id)
+            .bind(cloned.requirement_id().as_uuid())
+            .bind(cloned.requirement_hash().as_bytes().as_slice())
+            .bind(cloned.slot().as_str())
+            .bind(cloned.resource().kind.as_str())
+            .bind(cloned.resource().id)
+            .bind(
+                cloned
+                    .granted_operations()
+                    .map(CapabilityOperation::as_str)
+                    .collect::<Vec<_>>(),
+            )
+            .bind(cloned.normalized_hash().as_bytes().as_slice())
+            .bind(&binding.authorization_model_version)
+            .bind(identity.user_id.as_uuid())
+            .execute(&mut *tx)
             .await
             .map_err(|_| SecretServiceError::Persistence)?;
         }
@@ -2034,7 +2105,96 @@ struct RevisionCloneRow {
     effective_runtime_policy: serde_json::Value,
     effective_policy_hash: Vec<u8>,
     platform_policy_version: String,
+    publication_repository_binding_id: Option<Uuid>,
     secret_slot_schema: serde_json::Value,
+}
+
+#[derive(sqlx::FromRow)]
+struct CarriedCapabilityRow {
+    source_binding_id: Uuid,
+    requirement_id: Uuid,
+    slot_key: String,
+    requirement_resource_kind: String,
+    required_operations: Vec<String>,
+    optional_operations: Vec<String>,
+    slot_required: bool,
+    resource_kind: String,
+    resource_id: Uuid,
+    granted_operations: Vec<String>,
+    authorization_model_version: String,
+}
+
+fn clone_capability_binding(
+    row: &CarriedCapabilityRow,
+) -> Result<CapabilityBinding, SecretServiceError> {
+    let requirement_kind = parse_capability_resource_kind(&row.requirement_resource_kind)?;
+    let requirement = CapabilityRequirement::new(
+        CapabilityRequirementId::from_uuid(row.requirement_id),
+        CapabilitySlotKey::parse(row.slot_key.clone())
+            .map_err(|_| SecretServiceError::InvalidStoredData)?,
+        requirement_kind,
+        row.required_operations
+            .iter()
+            .map(|operation| parse_capability_operation(operation))
+            .collect::<Result<Vec<_>, _>>()?,
+        row.optional_operations
+            .iter()
+            .map(|operation| parse_capability_operation(operation))
+            .collect::<Result<Vec<_>, _>>()?,
+        row.slot_required,
+    )
+    .map_err(|_| SecretServiceError::InvalidStoredData)?;
+    CapabilityBinding::bind(
+        CapabilityBindingId::new(),
+        &requirement,
+        CapabilityResource::new(
+            parse_capability_resource_kind(&row.resource_kind)?,
+            row.resource_id,
+        ),
+        row.granted_operations
+            .iter()
+            .map(|operation| parse_capability_operation(operation))
+            .collect::<Result<Vec<_>, _>>()?,
+    )
+    .map_err(|_| SecretServiceError::InvalidStoredData)
+}
+
+fn parse_capability_resource_kind(
+    value: &str,
+) -> Result<CapabilityResourceKind, SecretServiceError> {
+    match value {
+        "repository" => Ok(CapabilityResourceKind::Repository),
+        "project" => Ok(CapabilityResourceKind::Project),
+        "agent_instance" => Ok(CapabilityResourceKind::AgentInstance),
+        "gateway" => Ok(CapabilityResourceKind::Gateway),
+        "run" => Ok(CapabilityResourceKind::Run),
+        "state_volume" => Ok(CapabilityResourceKind::StateVolume),
+        _ => Err(SecretServiceError::InvalidStoredData),
+    }
+}
+
+fn parse_capability_operation(value: &str) -> Result<CapabilityOperation, SecretServiceError> {
+    match value {
+        "inspect" => Ok(CapabilityOperation::Inspect),
+        "configure" => Ok(CapabilityOperation::Configure),
+        "execute" => Ok(CapabilityOperation::Execute),
+        "update" => Ok(CapabilityOperation::Update),
+        "pause" => Ok(CapabilityOperation::Pause),
+        "recover" => Ok(CapabilityOperation::Recover),
+        "cancel" => Ok(CapabilityOperation::Cancel),
+        "attach" => Ok(CapabilityOperation::Attach),
+        "restore" => Ok(CapabilityOperation::Restore),
+        "git_read" => Ok(CapabilityOperation::GitRead),
+        "create_ref" => Ok(CapabilityOperation::CreateRef),
+        "update_ref" => Ok(CapabilityOperation::UpdateRef),
+        "force_update_ref" => Ok(CapabilityOperation::ForceUpdateRef),
+        "delete_ref" => Ok(CapabilityOperation::DeleteRef),
+        "create_tag" => Ok(CapabilityOperation::CreateTag),
+        "delete_tag" => Ok(CapabilityOperation::DeleteTag),
+        "trigger_run" => Ok(CapabilityOperation::TriggerRun),
+        "manage_attachments" => Ok(CapabilityOperation::ManageAttachments),
+        _ => Err(SecretServiceError::InvalidStoredData),
+    }
 }
 
 #[derive(sqlx::FromRow)]

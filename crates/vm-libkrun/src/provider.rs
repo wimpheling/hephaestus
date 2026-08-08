@@ -492,6 +492,18 @@ impl LibkrunInstance {
                 info!(vm_id = %self.id.0, "guest ready");
                 send_event(&self.events, VmEvent::Ready);
             }
+            WorkerEvent::RuntimeAuthorityAcknowledged {
+                session_id,
+                generation,
+            } => {
+                send_event(
+                    &self.events,
+                    VmEvent::RuntimeAuthorityAcknowledged {
+                        session_id,
+                        generation,
+                    },
+                );
+            }
             WorkerEvent::Log { stream, bytes } => {
                 let stream = match stream {
                     WireLogStream::Stdout => LogStream::Stdout,
@@ -1425,6 +1437,7 @@ mod tests {
                 env: BTreeMap::new(),
                 working_dir: Some(PathBuf::from("/")),
             },
+            runtime_authority: None,
             labels: BTreeMap::new(),
         }
     }

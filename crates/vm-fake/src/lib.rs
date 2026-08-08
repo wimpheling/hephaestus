@@ -167,6 +167,15 @@ impl VmInstance for FakeInstance {
 
         if let Some(ingress) = started {
             send_event(&self.events, VmEvent::Started { ingress });
+            if let Some(authority) = &self.spec.runtime_authority {
+                send_event(
+                    &self.events,
+                    VmEvent::RuntimeAuthorityAcknowledged {
+                        session_id: authority.session_id(),
+                        generation: authority.generation(),
+                    },
+                );
+            }
             send_event(&self.events, VmEvent::Ready);
         }
         Ok(())
@@ -407,6 +416,13 @@ fn validate_spec(spec: &VmSpec) -> Result<(), VmError> {
             return invalid_spec("command.env", "keys must not contain '='");
         }
     }
+    if spec
+        .runtime_authority
+        .as_ref()
+        .is_some_and(|authority| authority.generation() == 0)
+    {
+        return invalid_spec("runtime_authority.generation", "must be greater than zero");
+    }
 
     match &spec.root {
         RootFilesystem::Directory { host_path } | RootFilesystem::Disk { host_path, .. } => {
@@ -616,6 +632,7 @@ mod tests {
                 env: BTreeMap::new(),
                 working_dir: Some(PathBuf::from("/workspace")),
             },
+            runtime_authority: None,
             labels: BTreeMap::new(),
         }
     }

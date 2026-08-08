@@ -10,6 +10,9 @@ use axum::{Router, routing::get};
 use build_orchestrator::{BuildExecutionError, BuildExecutor, BuildExecutorConfig};
 use build_postgres::PgBuildRepository;
 use builder_catalog_domain::OciImageReference;
+use capability_domain::{
+    RuntimeCredentialGeneration, RuntimeInvocation, RuntimeSessionId, RuntimeSessionIdentity,
+};
 use control_plane_postgres::launch::PgRunLaunchAuthorizer;
 use control_plane_postgres::{
     ControlPlanePool, connect as connect_control_plane, load_vm_launch_contract,
@@ -23,7 +26,8 @@ use forge_service::{
 };
 use futures_util::StreamExt;
 use git_http::{
-    GitAuthenticator, GitHttpLimits, GitHttpService, OidcGitAuthenticator, PostgresGitAuthorizer,
+    CompositeGitAuthenticator, GitAuthenticator, GitHttpLimits, GitHttpService,
+    OidcGitAuthenticator, PostgresGitAuthorizer, RuntimeGitHttpAuthenticator,
 };
 use identity_application::IdempotentIdentityResolver;
 use identity_oidc::OidcVerifier;
@@ -69,11 +73,17 @@ use review_postgres::{GitRepositoryLocator, PostgresReviewRepository};
 use review_service::{NatsControlHandler, ReviewControlService, ReviewOutboxPublisher};
 use run_domain::{CancelRun, Run, RunKind};
 use run_orchestrator::{
-    NatsCommandHandler, RunCompletionError, RunCompletionObserver, RunOrchestrator, RunRepository,
-    RunSecretManager, VmSpecFactory, ensure_jetstream_topology,
+    NatsCommandHandler, PreparedRunAuthority, RunAuthorityError, RunAuthorityManager,
+    RunCompletionError, RunCompletionObserver, RunOrchestrator, RunRepository, RunSecretManager,
+    VmSpecFactory, ensure_jetstream_topology,
 };
 use run_postgres::PgRunRepository;
 use run_runtime_local::{LocalRunRuntimeConfig, LocalRunRuntimeManager};
+use runtime_authority::{RuntimeSessionIssuer, RuntimeSessionRepository};
+use runtime_authority_postgres::PgRuntimeSessionRepository;
+use runtime_git_authority::{RuntimeGitAuthorityError, RuntimeGitCredentialIssuer};
+use runtime_git_authority_postgres::PgRuntimeGitCredentialRepository;
+use runtime_handoff_local::{EncryptedFileHandoffStore, EncryptedFileRuntimeGitHandoffStore};
 use runtime_types::{CommandId, RunId};
 use secret_application::BrokerAdapter;
 use secret_broker::{BrokerExecutor, BrokerServer, ServiceBrokerExecutor};
@@ -91,6 +101,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
+use time::OffsetDateTime;
 use tokio::{
     sync::{Semaphore, broadcast, oneshot, watch},
     task::{JoinHandle, JoinSet},
@@ -109,7 +120,7 @@ use workspace_local::{LocalWorkspaceConfig, LocalWorkspaceManager};
 use workspace_postgres::PgWorkspaceMetadataRepository;
 
 /// Ordered database migration expected by this application version.
-pub const EXPECTED_DATABASE_MIGRATION: i64 = 21;
+pub const EXPECTED_DATABASE_MIGRATION: i64 = 30;
 
 /// OIDC issuer configuration used for bearer-token authentication.
 pub struct OidcConfig {
@@ -206,6 +217,8 @@ pub struct AppConfig {
     pub repository_root: PathBuf,
     /// Absolute native `git-http-backend` executable.
     pub git_http_backend: PathBuf,
+    /// Absolute host-owned runtime Git `pre-receive` executable.
+    pub git_pre_receive_hook: PathBuf,
     /// Git transaction limits.
     pub git_http_limits: GitHttpLimits,
     /// OIDC verifier settings.
@@ -218,6 +231,12 @@ pub struct AppConfig {
     pub workspaces: LocalWorkspaceConfig,
     /// Exact release-artifact and host-context runtime filesystem settings.
     pub run_runtime: LocalRunRuntimeConfig,
+    /// Private persistent root for encrypted, temporary authority handoffs.
+    pub runtime_authority_handoff_root: PathBuf,
+    /// Host-loaded encryption key for runtime-authority handoff envelopes.
+    pub runtime_authority_handoff_key: [u8; 32],
+    /// Maximum lifetime of one exact runtime-authority session.
+    pub runtime_authority_session_ttl: Duration,
     /// Private transient root for isolated build source and output trees.
     pub build_workspace_root: PathBuf,
     /// Maximum wall-clock time for one isolated build.
@@ -259,6 +278,13 @@ impl AppConfig {
                 "git_http_backend must be absolute",
             )));
         }
+        if !self.git_pre_receive_hook.is_absolute()
+            || self.git_pre_receive_hook.file_name() != Some(std::ffi::OsStr::new("pre-receive"))
+        {
+            return Err(AppError::Configuration(String::from(
+                "git_pre_receive_hook must be an absolute path named pre-receive",
+            )));
+        }
         if self.rpc_mediator_signing_key == [0; 32] {
             return Err(AppError::Configuration(String::from(
                 "RPC mediator authentication key must not be all-zero",
@@ -277,6 +303,17 @@ impl AppConfig {
                 "git_http_backend must be an executable file",
             )));
         }
+        let hook = std::fs::symlink_metadata(&self.git_pre_receive_hook).map_err(|error| {
+            AppError::Configuration(format!("git_pre_receive_hook cannot be inspected: {error}"))
+        })?;
+        if hook.file_type().is_symlink()
+            || !hook.is_file()
+            || hook.permissions().mode() & 0o111 == 0
+        {
+            return Err(AppError::Configuration(String::from(
+                "git_pre_receive_hook must be a non-symlink executable file",
+            )));
+        }
         if !self.repository_root.is_absolute() {
             return Err(AppError::Configuration(String::from(
                 "repository_root must be absolute",
@@ -285,6 +322,14 @@ impl AppConfig {
         if !self.build_workspace_root.is_absolute() || self.build_timeout.is_zero() {
             return Err(AppError::Configuration(String::from(
                 "isolated build root must be absolute and timeout must be positive",
+            )));
+        }
+        if !self.runtime_authority_handoff_root.is_absolute()
+            || self.runtime_authority_handoff_key == [0; 32]
+            || self.runtime_authority_session_ttl.is_zero()
+        {
+            return Err(AppError::Configuration(String::from(
+                "runtime authority handoff root/key and positive session TTL are required",
             )));
         }
         self.validate_oci_builder()?;
@@ -400,9 +445,10 @@ pub struct HephaestusApp {
     forge: Arc<PgForgeRepository>,
     storage: Arc<GitStorage>,
     identity_store: Arc<PostgresIdentityStore>,
-    git_authenticator: Arc<OidcGitAuthenticator>,
+    git_authenticator: Arc<dyn GitAuthenticator>,
     git_authorizer: Arc<PostgresGitAuthorizer>,
     git_backend: PathBuf,
+    git_pre_receive_hook: PathBuf,
     git_limits: GitHttpLimits,
     registry: RegistryConfig,
     http_listen: SocketAddr,
@@ -709,7 +755,7 @@ impl RegistryNotificationInbox for PostgresRegistryNotificationInbox {
 }
 
 async fn registry_caller_authentication(
-    axum::extract::State(authenticator): axum::extract::State<Arc<OidcGitAuthenticator>>,
+    axum::extract::State(authenticator): axum::extract::State<Arc<dyn GitAuthenticator>>,
     mut request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
@@ -726,8 +772,13 @@ async fn registry_caller_authentication(
         *response.status_mut() = http::StatusCode::UNAUTHORIZED;
         return response;
     };
+    let Some(identity) = principal.human_identity().cloned() else {
+        let mut response = axum::response::Response::new(axum::body::Body::empty());
+        *response.status_mut() = http::StatusCode::UNAUTHORIZED;
+        return response;
+    };
     request.headers_mut().remove(http::header::AUTHORIZATION);
-    request.extensions_mut().insert(principal.identity);
+    request.extensions_mut().insert(identity);
     next.run(request).await
 }
 
@@ -879,6 +930,14 @@ impl HephaestusApp {
             config.secret_mounts,
         )
         .await?;
+        let runtime_git_credentials = PgRuntimeGitCredentialRepository::new(pool.clone());
+        let runtime_authority = Arc::new(PgRunAuthorityManager::new(
+            pool.clone(),
+            runtime_git_credentials.clone(),
+            config.runtime_authority_handoff_root,
+            config.runtime_authority_handoff_key,
+            config.runtime_authority_session_ttl,
+        )?);
         let secret_broker_executor: Arc<dyn BrokerExecutor> = Arc::new(ServiceBrokerExecutor::new(
             secret_runtime,
             config.secret_broker_adapter,
@@ -964,6 +1023,7 @@ impl HephaestusApp {
             .with_workspace_manager(workspaces)
             .with_runtime_manager(run_runtime)
             .with_launch_authorizer(launch_authorizer)
+            .with_authority_manager(runtime_authority)
             .with_secret_manager(secret_mounts)
             .with_completion_observer(completion),
         );
@@ -975,10 +1035,21 @@ impl HephaestusApp {
             config.oidc.decoding_key,
         ));
         let identity_store = Arc::new(PostgresIdentityStore::new(pool.clone()));
-        let git_authenticator = Arc::new(OidcGitAuthenticator::new(
+        let oidc_git_authenticator = Arc::new(OidcGitAuthenticator::new(
             verifier,
             Arc::clone(&identity_store) as Arc<dyn identity_application::VerifiedIdentityMapper>,
         ));
+        let git_authenticator: Arc<dyn GitAuthenticator> = Arc::new(
+            CompositeGitAuthenticator::new(
+                oidc_git_authenticator,
+                Arc::new(pat_postgres::PostgresPersonalAccessTokenService::new(
+                    pool.clone(),
+                )),
+            )
+            .with_runtime_git(Arc::new(RuntimeGitHttpAuthenticator::new(Arc::new(
+                runtime_git_credentials,
+            )))),
+        );
         let git_authorizer = Arc::new(PostgresGitAuthorizer::new(Arc::new(
             authz_postgres::PostgresGitAuthorizer::new(pool.clone()),
         )));
@@ -997,6 +1068,7 @@ impl HephaestusApp {
             git_authenticator,
             git_authorizer,
             git_backend: config.git_http_backend,
+            git_pre_receive_hook: config.git_pre_receive_hook,
             git_limits: config.git_http_limits,
             registry: config.registry,
             http_listen: config.http_listen,
@@ -1073,6 +1145,7 @@ impl HephaestusApp {
             self.git_backend,
             self.git_limits,
         )
+        .and_then(|service| service.with_runtime_receive_hook(self.git_pre_receive_hook))
         .map_err(component("Git HTTP configuration"))?;
         let command_state = application::commands::InternalCommandState::new(
             Arc::clone(&self.release_service),
@@ -1998,6 +2071,223 @@ impl RunEventKind {
     }
 }
 
+struct PgRunAuthorityManager {
+    repository: PgRuntimeSessionRepository,
+    issuer: RuntimeSessionIssuer<PgRuntimeSessionRepository, EncryptedFileHandoffStore>,
+    git_issuer: RuntimeGitCredentialIssuer<
+        PgRuntimeGitCredentialRepository,
+        EncryptedFileRuntimeGitHandoffStore,
+    >,
+    session_ttl: time::Duration,
+}
+
+impl PgRunAuthorityManager {
+    fn new(
+        pool: PgPool,
+        git_repository: PgRuntimeGitCredentialRepository,
+        handoff_root: PathBuf,
+        handoff_key: [u8; 32],
+        session_ttl: Duration,
+    ) -> Result<Self, AppError> {
+        let repository = PgRuntimeSessionRepository::new(pool);
+        let handoff = EncryptedFileHandoffStore::new(handoff_root.clone(), handoff_key)
+            .map_err(component("runtime authority handoff"))?;
+        let git_handoff = EncryptedFileRuntimeGitHandoffStore::new(handoff_root, handoff_key)
+            .map_err(component("runtime Git authority handoff"))?;
+        let session_ttl = time::Duration::try_from(session_ttl).map_err(|error| {
+            AppError::Configuration(format!("runtime authority session TTL is invalid: {error}"))
+        })?;
+        Ok(Self {
+            issuer: RuntimeSessionIssuer::new(repository.clone(), handoff),
+            git_issuer: RuntimeGitCredentialIssuer::new(git_repository, git_handoff),
+            repository,
+            session_ttl,
+        })
+    }
+
+    async fn snapshot(
+        &self,
+        run: &Run,
+    ) -> Result<capability_domain::AuthorizationSnapshot, RunAuthorityError> {
+        self.repository
+            .resolve_snapshot(run, authz_postgres::AUTHORIZATION_MODEL_VERSION)
+            .await
+            .map_err(authority_error)
+    }
+}
+
+#[async_trait]
+impl RunAuthorityManager for PgRunAuthorityManager {
+    async fn prepare(&self, run: &Run) -> Result<PreparedRunAuthority, RunAuthorityError> {
+        let snapshot = self.snapshot(run).await?;
+        if !self
+            .repository
+            .live_authorized(run, &snapshot)
+            .await
+            .map_err(authority_error)?
+        {
+            return Err(RunAuthorityError::redacted(
+                "live capability authority was denied",
+            ));
+        }
+        let session_id = RuntimeSessionId::from_uuid(run.id.as_uuid());
+        let existing = self
+            .repository
+            .find(session_id)
+            .await
+            .map_err(authority_error)?;
+        let issued_at = existing
+            .as_ref()
+            .map_or_else(OffsetDateTime::now_utc, |session| session.issued_at);
+        let expires_at = existing
+            .as_ref()
+            .map_or(issued_at + self.session_ttl, |session| session.expires_at);
+        let identity = RuntimeSessionIdentity::new(
+            session_id,
+            snapshot.principal(),
+            RuntimeInvocation::Run(run.id),
+            &snapshot,
+            issued_at,
+            expires_at,
+        )
+        .map_err(|_| RunAuthorityError::redacted("runtime identity is invalid"))?;
+        let issued = self
+            .issuer
+            .issue(
+                &snapshot,
+                &identity,
+                run.attachment_id
+                    .map(runtime_types::AgentAttachmentId::as_uuid),
+                OffsetDateTime::now_utc(),
+            )
+            .await
+            .map_err(authority_error)?;
+        let runtime_git = match self
+            .git_issuer
+            .issue(
+                issued.session.id,
+                issued.session.generation,
+                issued.session.expires_at,
+                OffsetDateTime::now_utc(),
+            )
+            .await
+        {
+            Ok(issued) => Some(issued),
+            Err(RuntimeGitAuthorityError::NotFound) => None,
+            Err(error) => return Err(runtime_git_authority_error(error)),
+        };
+        let mut bootstrap = vm_trait::RuntimeAuthorityBootstrap::new(
+            issued.session.id.as_uuid(),
+            issued.session.generation.get(),
+            *issued.credential.expose(),
+        );
+        if let Some(runtime_git) = &runtime_git {
+            bootstrap = bootstrap.with_runtime_git_credential(*runtime_git.credential.expose());
+        }
+        Ok(PreparedRunAuthority {
+            bootstrap: Some(bootstrap),
+        })
+    }
+
+    async fn reauthorize(&self, run: &Run) -> Result<(), RunAuthorityError> {
+        let snapshot = self.snapshot(run).await?;
+        if self
+            .repository
+            .live_authorized(run, &snapshot)
+            .await
+            .map_err(authority_error)?
+        {
+            Ok(())
+        } else {
+            Err(RunAuthorityError::redacted(
+                "live capability authority was revoked",
+            ))
+        }
+    }
+
+    async fn acknowledge(
+        &self,
+        run: &Run,
+        session_id: Uuid,
+        generation: u64,
+    ) -> Result<(), RunAuthorityError> {
+        if session_id != run.id.as_uuid() {
+            return Err(RunAuthorityError::redacted(
+                "runtime session does not match the exact run",
+            ));
+        }
+        let generation = RuntimeCredentialGeneration::new(generation)
+            .map_err(|_| RunAuthorityError::redacted("runtime generation is invalid"))?;
+        self.issuer
+            .acknowledge(
+                RuntimeSessionId::from_uuid(session_id),
+                generation,
+                OffsetDateTime::now_utc(),
+            )
+            .await
+            .map_err(authority_error)?;
+        self.git_issuer
+            .acknowledge_or_revoke(RuntimeSessionId::from_uuid(session_id), generation)
+            .map_err(runtime_git_authority_error)?;
+        Ok(())
+    }
+
+    async fn revoke_after_guest(&self, run_id: RunId) -> Result<(), RunAuthorityError> {
+        let session_id = RuntimeSessionId::from_uuid(run_id.as_uuid());
+        let Some(session) = self
+            .repository
+            .find(session_id)
+            .await
+            .map_err(authority_error)?
+        else {
+            return Ok(());
+        };
+        if matches!(
+            session.status,
+            capability_domain::RuntimeSessionStatus::Expired
+        ) {
+            self.issuer
+                .recover_expired(OffsetDateTime::now_utc())
+                .await
+                .map_err(authority_error)?;
+            self.git_issuer
+                .recover_expired(OffsetDateTime::now_utc())
+                .map_err(runtime_git_authority_error)?;
+            return Ok(());
+        }
+        self.issuer
+            .revoke(session_id, OffsetDateTime::now_utc(), "run guest destroyed")
+            .await
+            .map_err(authority_error)?;
+        self.git_issuer
+            .acknowledge_or_revoke(session_id, session.generation)
+            .map_err(runtime_git_authority_error)?;
+        Ok(())
+    }
+
+    async fn recover(&self) -> Result<usize, RunAuthorityError> {
+        let recovered = self
+            .issuer
+            .recover_expired(OffsetDateTime::now_utc())
+            .await
+            .map_err(authority_error)?;
+        let git_recovered = self
+            .git_issuer
+            .recover_expired(OffsetDateTime::now_utc())
+            .map_err(runtime_git_authority_error)?;
+        usize::try_from(recovered.max(git_recovered))
+            .map_err(|_| RunAuthorityError::redacted("recovery count overflowed"))
+    }
+}
+
+fn authority_error(error: runtime_authority::RuntimeAuthorityError) -> RunAuthorityError {
+    RunAuthorityError::redacted(error.to_string())
+}
+
+fn runtime_git_authority_error(error: RuntimeGitAuthorityError) -> RunAuthorityError {
+    RunAuthorityError::redacted(error.to_string())
+}
+
 struct PgAgentVmSpecFactory {
     pool: PgPool,
     root_images: BTreeMap<String, RootFilesystem>,
@@ -2156,6 +2446,7 @@ impl VmSpecFactory for PgAgentVmSpecFactory {
                 env,
                 working_dir: Some(working_directory.into()),
             },
+            runtime_authority: None,
             labels,
         })
     }
@@ -2241,6 +2532,7 @@ struct ResultFixtureInstance {
     output: Option<PathBuf>,
     exit_code: i32,
     uncertain_exit: bool,
+    runtime_authority: Option<(Uuid, u64)>,
     events: broadcast::Sender<VmEvent>,
     exit: watch::Sender<Option<VmExit>>,
 }
@@ -2290,6 +2582,10 @@ impl ResultFixtureInstance {
             0
         };
         let uncertain_exit = spec.command.args.iter().any(|value| value == "uncertain");
+        let runtime_authority = spec
+            .runtime_authority
+            .as_ref()
+            .map(|authority| (authority.session_id(), authority.generation()));
         let (events, _) = broadcast::channel(16);
         let (exit, _) = watch::channel(None);
         Ok(Self {
@@ -2298,6 +2594,7 @@ impl ResultFixtureInstance {
             output,
             exit_code,
             uncertain_exit,
+            runtime_authority,
             events,
             exit,
         })
@@ -2314,6 +2611,12 @@ impl VmInstance for ResultFixtureInstance {
         drop(self.events.send(VmEvent::Started {
             ingress: Vec::new(),
         }));
+        if let Some((session_id, generation)) = self.runtime_authority {
+            drop(self.events.send(VmEvent::RuntimeAuthorityAcknowledged {
+                session_id,
+                generation,
+            }));
+        }
         drop(self.events.send(VmEvent::Ready));
         if let Some(work) = &self.work {
             tokio::fs::write(

@@ -13,6 +13,7 @@ context = "vm"
 async-trait.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+uuid.workspace = true
 
 [lints]
 workspace = true

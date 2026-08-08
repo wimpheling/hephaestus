@@ -16,6 +16,7 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.AgentInstancePage do
   attr :revision_form, :any, required: true
   attr :update_form, :any, required: true
   attr :binding_form, :any, required: true
+  attr :capability_form, :any, required: true
   attr :organization_index_destination, :string, default: nil
   attr :organization_destination, :string, default: nil
   attr :project_agents_destination, :string, default: nil
@@ -28,6 +29,7 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.AgentInstancePage do
   attr :set_attachment_event, :string, required: true, values: ["set-attachment"]
   attr :remove_attachment_event, :string, required: true, values: ["remove-attachment"]
   attr :revise_instance_event, :string, required: true, values: ["revise-instance"]
+  attr :revise_capabilities_event, :string, required: true, values: ["revise-capabilities"]
   attr :create_update_event, :string, required: true, values: ["create-update"]
   attr :recover_update_event, :string, required: true, values: ["recover-update"]
   attr :bind_secret_event, :string, required: true, values: ["bind-secret"]
@@ -99,10 +101,13 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.AgentInstancePage do
         instance={@instance}
         revision_form={@revision_form}
         binding_form={@binding_form}
+        capability_form={@capability_form}
         revise_event={@revise_instance_event}
+        revise_capabilities_event={@revise_capabilities_event}
         bind_event={@bind_secret_event}
       />
       <.revision_history revisions={@revisions} />
+      <.capability_inspection instance={@instance} />
       <.attachment_section
         instance={@instance}
         attachments={@attachments}
@@ -156,7 +161,9 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.AgentInstancePage do
   attr :instance, :map, required: true
   attr :revision_form, :any, required: true
   attr :binding_form, :any, required: true
+  attr :capability_form, :any, required: true
   attr :revise_event, :string, required: true, values: ["revise-instance"]
+  attr :revise_capabilities_event, :string, required: true, values: ["revise-capabilities"]
   attr :bind_event, :string, required: true, values: ["bind-secret"]
 
   defp management(assigns) do
@@ -165,6 +172,190 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.AgentInstancePage do
       <.revision_form instance={@instance} form={@revision_form} event={@revise_event} />
       <.binding_forms instance={@instance} form={@binding_form} event={@bind_event} />
     </.frame>
+    <.capability_form
+      instance={@instance}
+      form={@capability_form}
+      event={@revise_capabilities_event}
+    />
+    """
+  end
+
+  attr :instance, :map, required: true
+  attr :form, :any, required: true
+  attr :event, :string, required: true, values: ["revise-capabilities"]
+
+  defp capability_form(assigns) do
+    assigns = assign(assigns, :requirements, active_capability_requirements(assigns.instance))
+
+    ~H"""
+    <.frame as="section" id="capability-permission-panel" variant={:panel}>
+      <.page_heading
+        eyebrow="Release requirements"
+        title="Capability permissions"
+        description="Select an exact resource and explicitly confirm the operations delegated to this agent. Saving creates a new immutable revision."
+        level="h2"
+      />
+      <.text :if={@requirements == []} as="p" variant={:empty}>
+        This release declares no external capability slots.
+      </.text>
+      <.form_container
+        :if={@requirements != []}
+        for={@form}
+        id="revise-capabilities"
+        submit={@event}
+      >
+        <.frame
+          :for={requirement <- @requirements}
+          as="article"
+          id={"capability-slot-#{requirement["slot_key"]}"}
+          variant={:binding_form}
+        >
+          <.frame as="header" variant={:summary_header}>
+            <.text as="strong">{requirement["slot_key"]}</.text>
+            <.tag tone={if(requirement["slot_required"], do: "warning", else: "neutral")}>
+              {if(requirement["slot_required"], do: "required", else: "optional")}
+            </.tag>
+          </.frame>
+          <.text as="p">{requirement["purpose"]}</.text>
+          <.text as="small" variant={:muted}>
+            {requirement["resource_kind"]} · required: {Enum.join(
+              requirement["required_operations"],
+              ", "
+            )}
+          </.text>
+          <.input
+            id={"capability-resource-#{requirement["slot_key"]}"}
+            name={"capabilities[slots][#{requirement["slot_key"]}][resource_id]"}
+            type="select"
+            label="Exact grantable resource"
+            prompt={if(requirement["slot_required"], do: "Choose a resource", else: "Leave unbound")}
+            options={capability_resource_options(@instance, requirement)}
+            value={bound_resource(@instance, requirement["slot_key"])}
+            required={requirement["slot_required"]}
+          />
+          <.input
+            :for={operation <- requirement["optional_operations"]}
+            id={"capability-operation-#{requirement["slot_key"]}-#{operation}"}
+            name={"capabilities[slots][#{requirement["slot_key"]}][optional_operations][#{operation}]"}
+            type="checkbox"
+            label={"Also grant #{operation}"}
+            value="true"
+            checked={bound_operation?(@instance, requirement["slot_key"], operation)}
+          />
+          <.frame variant={:confirmation}>
+            <.text as="small">
+              Required and selected optional operations are granted only on the exact resource above.
+            </.text>
+          </.frame>
+        </.frame>
+        <.action interaction={:submit} variant={:primary}>Confirm capability revision</.action>
+      </.form_container>
+    </.frame>
+    """
+  end
+
+  attr :instance, :map, required: true
+
+  defp capability_inspection(assigns) do
+    ~H"""
+    <.page_heading
+      eyebrow="Authority provenance"
+      title="Capabilities and runtime evidence"
+      level="h2"
+    />
+    <.frame as="section" id="capability-metrics" variant={:instance_overview}>
+      <.frame as="article" variant={:metric}>
+        <.text as="small" variant={:muted}>Runtime sessions</.text>
+        <.text as="strong">{get_in(@instance, ["capability_metrics", "sessions_issued"]) || 0}</.text>
+      </.frame>
+      <.frame as="article" variant={:metric}>
+        <.text as="small" variant={:muted}>Capability calls</.text>
+        <.text as="strong">
+          {get_in(@instance, ["capability_metrics", "capability_calls"]) || 0}
+        </.text>
+      </.frame>
+      <.frame as="article" variant={:metric}>
+        <.text as="small" variant={:muted}>Ceiling denials</.text>
+        <.text as="strong">{get_in(@instance, ["capability_metrics", "ceiling_denials"]) || 0}</.text>
+      </.frame>
+      <.frame as="article" variant={:metric}>
+        <.text as="small" variant={:muted}>Live denials</.text>
+        <.text as="strong">
+          {get_in(@instance, ["capability_metrics", "live_authorization_denials"]) || 0}
+        </.text>
+      </.frame>
+    </.frame>
+    <.resource_list id="capability-binding-history" layout={:projects}>
+      <:header>
+        <.text as="span" variant={:sr_only}>Capability binding history</.text>
+      </:header>
+      <:empty>No capability bindings have been granted.</:empty>
+      <.frame
+        :for={binding <- @instance["capability_bindings"] || []}
+        as="article"
+        id={"capability-binding-#{binding["id"]}"}
+        variant={:table_row}
+      >
+        <.frame variant={:resource_detail}>
+          <.text as="strong">{binding["slot_key"]} → {binding["resource_name"]}</.text>
+          <.text as="small" variant={:muted}>
+            granted by {binding["grantor_name"]} · {Enum.join(binding["granted_operations"], ", ")}
+          </.text>
+        </.frame>
+        <.tag tone={if(binding["live"], do: "success", else: "danger")}>
+          {if(binding["live"], do: "live", else: "revoked or historical")}
+        </.tag>
+        <.text as="small" variant={:muted}>
+          {if(binding["last_used_at"], do: "used #{binding["last_used_at"]}", else: "never used")}
+        </.text>
+      </.frame>
+    </.resource_list>
+    <.resource_list id="runtime-authority-sessions" layout={:projects}>
+      <:header>
+        <.text as="span" variant={:sr_only}>Runtime authority sessions</.text>
+      </:header>
+      <:empty>No runtime authority sessions have been issued.</:empty>
+      <.frame
+        :for={session <- @instance["runtime_sessions"] || []}
+        as="article"
+        id={"runtime-session-#{session["id"]}"}
+        variant={:table_row}
+      >
+        <.frame variant={:resource_detail}>
+          <.text as="strong">run {short_id(session["run_id"])}</.text>
+          <.text as="small" variant={:muted}>
+            revision {short_id(session["instance_revision_id"])} · snapshot {short_id(
+              session["snapshot_id"]
+            )}
+          </.text>
+        </.frame>
+        <.tag tone={state_tone(session["status"])}>{session["status"]}</.tag>
+        <.text as="small" variant={:muted}>expires {session["expires_at"]}</.text>
+      </.frame>
+    </.resource_list>
+    <.resource_list id="capability-audit-evidence" layout={:projects}>
+      <:header>
+        <.text as="span" variant={:sr_only}>Recent redacted capability evidence</.text>
+      </:header>
+      <:empty>No capability decisions have been recorded.</:empty>
+      <.frame
+        :for={event <- @instance["capability_audit"] || []}
+        as="article"
+        id={"capability-audit-#{event["id"]}"}
+        variant={:table_row}
+      >
+        <.text as="strong">{event["slot_key"]} · {event["operation"]}</.text>
+        <.tag tone={
+          if(event["decision"] == "deny" || event["outcome"] == "failed",
+            do: "danger",
+            else: "success"
+          )
+        }>
+          {event["decision"] || event["outcome"]}
+        </.tag>
+        <.text as="small" variant={:muted}>{event["reason_code"]}</.text>
+      </.frame>
+    </.resource_list>
     """
   end
 
@@ -342,6 +533,15 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.AgentInstancePage do
         <.tag tone={if(revision["runnable"], do: "success", else: "danger")}>
           {if(revision["runnable"], do: "runnable", else: "invalid")}
         </.tag>
+        <.frame :if={(revision["diagnostics"] || []) != []} variant={:resource_detail}>
+          <.text
+            :for={diagnostic <- revision["diagnostics"] || []}
+            as="small"
+            variant={:muted}
+          >
+            {diagnostic["field"]}: {diagnostic["message"]}
+          </.text>
+        </.frame>
       </.frame>
     </.resource_list>
     """
@@ -465,6 +665,20 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.AgentInstancePage do
       <.text as="p">
         Release-owned runtime changes are shown as immutable candidate provenance. Unsupported state-capability changes and hookless stateful migrations remain invalid with stable diagnostics.
       </.text>
+      <.frame
+        :for={candidate <- @instance["update_candidates"]}
+        id={"candidate-capability-diff-#{candidate["id"]}"}
+        variant={:resource_detail}
+      >
+        <.text as="strong">{candidate["display_name"]} capability diff</.text>
+        <.text
+          :for={change <- capability_diff(@instance, candidate)}
+          as="small"
+          variant={:muted}
+        >
+          {change}
+        </.text>
+      </.frame>
       <.form_container for={@form} id="create-update" submit={@create_event}>
         <.input
           field={@form[:release_agent_id]}
@@ -606,6 +820,46 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.AgentInstancePage do
       }
   end
 
+  defp active_capability_requirements(instance) do
+    release_agent_id = active_revision(instance)["release_agent_id"]
+
+    Enum.filter(
+      instance["capability_requirements"] || [],
+      &(&1["release_agent_id"] == release_agent_id)
+    )
+  end
+
+  defp capability_resource_options(instance, requirement) do
+    instance["capability_resource_options"]
+    |> List.wrap()
+    |> Enum.filter(&(&1["slot_key"] == requirement["slot_key"]))
+    |> Enum.map(fn resource ->
+      operations = Enum.join(resource["grantable_operations"], ", ")
+      {"#{resource["display_name"]} · #{operations}", resource["id"]}
+    end)
+  end
+
+  defp active_capability_binding(instance, slot) do
+    Enum.find(instance["capability_bindings"] || [], fn binding ->
+      binding["instance_revision_id"] == instance["active_revision_id"] &&
+        binding["slot_key"] == slot
+    end)
+  end
+
+  defp bound_resource(instance, slot) do
+    case active_capability_binding(instance, slot) do
+      nil -> ""
+      binding -> binding["resource_id"]
+    end
+  end
+
+  defp bound_operation?(instance, slot, operation) do
+    case active_capability_binding(instance, slot) do
+      nil -> false
+      binding -> operation in binding["granted_operations"]
+    end
+  end
+
   defp parameter_type(declaration) do
     get_in(declaration, ["value_type", "type"]) || declaration["type"] || "string"
   end
@@ -680,6 +934,26 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.AgentInstancePage do
 
   defp candidate_options(candidates) do
     Enum.map(candidates, &{"#{&1["display_name"]} · #{&1["release_version"]}", &1["id"]})
+  end
+
+  defp capability_diff(instance, candidate) do
+    current = Map.new(active_capability_requirements(instance), &{&1["slot_key"], &1})
+    proposed = Map.new(candidate["capability_requirements"] || [], &{&1["slot_key"], &1})
+
+    changes =
+      proposed
+      |> Enum.flat_map(fn {slot, requirement} ->
+        case current[slot] do
+          nil ->
+            ["new #{slot}: #{Enum.join(requirement["required_operations"], ", ")}"]
+
+          prior ->
+            added = requirement["required_operations"] -- prior["required_operations"]
+            if added == [], do: [], else: ["#{slot} newly requires #{Enum.join(added, ", ")}"]
+        end
+      end)
+
+    if changes == [], do: ["No newly required capability operations."], else: changes
   end
 
   defp candidate_schema(instance) do

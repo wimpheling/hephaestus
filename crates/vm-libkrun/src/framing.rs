@@ -92,7 +92,7 @@ mod tests {
     use super::{read_sync, write_sync};
     use crate::protocol::{
         GuestCommandMessage, GuestLogStream, GuestMessage, GuestMount, HostMessage, MAX_FRAME_SIZE,
-        PROTOCOL_VERSION,
+        PROTOCOL_VERSION, RuntimeAuthorityMessage,
     };
     use serde::Serialize;
     use std::{collections::BTreeMap, io::Cursor, path::PathBuf};
@@ -132,6 +132,12 @@ mod tests {
                     read_only: false,
                 }],
                 state_volume: None,
+                runtime_authority: Some(Box::new(RuntimeAuthorityMessage {
+                    session_id: uuid::Uuid::nil(),
+                    generation: 1,
+                    credential: [0xA5; vm_trait::RUNTIME_AUTHORITY_CREDENTIAL_BYTES],
+                    runtime_git_credential: Some([0xB6; vm_trait::RUNTIME_GIT_CREDENTIAL_BYTES]),
+                })),
             },
             HostMessage::Cancel { timeout_ms: 500 },
             HostMessage::HealthPing { nonce: 42 },
@@ -142,12 +148,30 @@ mod tests {
     }
 
     #[test]
+    fn runtime_authority_debug_output_redacts_bearer_bytes() {
+        let message = RuntimeAuthorityMessage {
+            session_id: uuid::Uuid::nil(),
+            generation: 1,
+            credential: [0xA5; vm_trait::RUNTIME_AUTHORITY_CREDENTIAL_BYTES],
+            runtime_git_credential: Some([0xB6; vm_trait::RUNTIME_GIT_CREDENTIAL_BYTES]),
+        };
+        let debug = format!("{message:?}");
+        assert!(debug.contains("[REDACTED]"));
+        assert!(!debug.contains("165"));
+        assert!(!debug.contains("182"));
+    }
+
+    #[test]
     fn every_guest_message_round_trips() {
         let messages = [
             GuestMessage::Hello {
                 version: PROTOCOL_VERSION,
             },
             GuestMessage::Ready,
+            GuestMessage::RuntimeAuthorityAcknowledged {
+                session_id: uuid::Uuid::nil(),
+                generation: 1,
+            },
             GuestMessage::Log {
                 stream: GuestLogStream::Stderr,
                 bytes: vec![0, 0xff, b'\n'],

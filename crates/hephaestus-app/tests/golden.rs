@@ -161,6 +161,20 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
     let mut transient_runtime_roots = backend_fixture.transient_runtime_roots;
     transient_runtime_roots.push(root.join("workspaces"));
     let backend = git_backend().await;
+    let git_pre_receive_hook = root.join("git-hooks/pre-receive");
+    std::fs::create_dir_all(
+        git_pre_receive_hook
+            .parent()
+            .expect("Git hook has a parent directory"),
+    )
+    .expect("Git hook directory");
+    std::fs::write(&git_pre_receive_hook, b"#!/bin/sh\nexit 1\n")
+        .expect("write fail-closed Git hook fixture");
+    std::fs::set_permissions(
+        &git_pre_receive_hook,
+        std::os::unix::fs::PermissionsExt::from_mode(0o700),
+    )
+    .expect("Git hook fixture mode");
     let secret_mount_root = root.join("secret-mounts");
     std::fs::create_dir(&secret_mount_root).expect("secret mount root");
     std::fs::set_permissions(
@@ -177,6 +191,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
         ),
         repository_root: repository_root.clone(),
         git_http_backend: backend,
+        git_pre_receive_hook,
         git_http_limits: git_http::GitHttpLimits::default(),
         oidc: OidcConfig {
             issuer: String::from(ISSUER),
@@ -228,6 +243,9 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             runtime_root: root.join("run-runtime"),
             release_artifact_root: root.join("release-artifacts"),
         },
+        runtime_authority_handoff_root: root.join("runtime-authority-handoffs"),
+        runtime_authority_handoff_key: [0x39; 32],
+        runtime_authority_session_ttl: Duration::from_secs(3_600),
         build_workspace_root: root.join("isolated-builds"),
         build_timeout: Duration::from_secs(30),
         secret_mounts: EphemeralSecretConfig {

@@ -128,6 +128,162 @@ defmodule Hephaestus.Instance.V1.InstanceRevision do
   field(:release_agent_name, 19, type: :string, json_name: "releaseAgentName")
 end
 
+defmodule Hephaestus.Instance.V1.CapabilityRequirement do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.instance.v1.CapabilityRequirement",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:id, 1, type: Hephaestus.Common.V1.OpaqueId)
+  field(:release_agent_id, 2, type: Hephaestus.Common.V1.OpaqueId, json_name: "releaseAgentId")
+  field(:slot_key, 3, type: :string, json_name: "slotKey")
+  field(:purpose, 4, type: :string)
+  field(:resource_kind, 5, type: :string, json_name: "resourceKind")
+  field(:required_operations, 6, repeated: true, type: :string, json_name: "requiredOperations")
+  field(:optional_operations, 7, repeated: true, type: :string, json_name: "optionalOperations")
+  field(:slot_required, 8, type: :bool, json_name: "slotRequired")
+end
+
+defmodule Hephaestus.Instance.V1.CapabilityResourceOption do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.instance.v1.CapabilityResourceOption",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:id, 1, type: Hephaestus.Common.V1.OpaqueId)
+  field(:resource_kind, 2, type: :string, json_name: "resourceKind")
+  field(:display_name, 3, type: :string, json_name: "displayName")
+  field(:grantable_operations, 4, repeated: true, type: :string, json_name: "grantableOperations")
+  field(:slot_key, 5, type: :string, json_name: "slotKey")
+end
+
+defmodule Hephaestus.Instance.V1.CapabilityBinding do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.instance.v1.CapabilityBinding",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:id, 1, type: Hephaestus.Common.V1.OpaqueId)
+
+  field(:instance_revision_id, 2,
+    type: Hephaestus.Common.V1.OpaqueId,
+    json_name: "instanceRevisionId"
+  )
+
+  field(:requirement_id, 3, type: Hephaestus.Common.V1.OpaqueId, json_name: "requirementId")
+  field(:slot_key, 4, type: :string, json_name: "slotKey")
+  field(:resource_kind, 5, type: :string, json_name: "resourceKind")
+  field(:resource_id, 6, type: Hephaestus.Common.V1.OpaqueId, json_name: "resourceId")
+  field(:resource_name, 7, type: :string, json_name: "resourceName")
+  field(:granted_operations, 8, repeated: true, type: :string, json_name: "grantedOperations")
+  field(:grantor_id, 9, type: Hephaestus.Common.V1.OpaqueId, json_name: "grantorId")
+  field(:grantor_name, 10, type: :string, json_name: "grantorName")
+  field(:authorization_model_version, 11, type: :string, json_name: "authorizationModelVersion")
+  field(:created_at, 12, type: Google.Protobuf.Timestamp, json_name: "createdAt")
+  field(:live, 13, type: :bool)
+
+  field(:last_used_at, 14,
+    proto3_optional: true,
+    type: Google.Protobuf.Timestamp,
+    json_name: "lastUsedAt"
+  )
+end
+
+defmodule Hephaestus.Instance.V1.RuntimeAuthoritySession do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.instance.v1.RuntimeAuthoritySession",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:id, 1, type: Hephaestus.Common.V1.OpaqueId)
+  field(:run_id, 2, type: Hephaestus.Common.V1.OpaqueId, json_name: "runId")
+
+  field(:instance_revision_id, 3,
+    type: Hephaestus.Common.V1.OpaqueId,
+    json_name: "instanceRevisionId"
+  )
+
+  field(:snapshot_id, 4, type: Hephaestus.Common.V1.OpaqueId, json_name: "snapshotId")
+  field(:status, 5, type: :string)
+  field(:issued_at, 6, type: Google.Protobuf.Timestamp, json_name: "issuedAt")
+  field(:expires_at, 7, type: Google.Protobuf.Timestamp, json_name: "expiresAt")
+
+  field(:acknowledged_at, 8,
+    proto3_optional: true,
+    type: Google.Protobuf.Timestamp,
+    json_name: "acknowledgedAt"
+  )
+
+  field(:revoked_at, 9,
+    proto3_optional: true,
+    type: Google.Protobuf.Timestamp,
+    json_name: "revokedAt"
+  )
+
+  field(:revocation_reason, 10, type: :string, json_name: "revocationReason")
+end
+
+defmodule Hephaestus.Instance.V1.CapabilityAuditRecord do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.instance.v1.CapabilityAuditRecord",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:id, 1, type: Hephaestus.Common.V1.OpaqueId)
+  field(:run_id, 2, type: Hephaestus.Common.V1.OpaqueId, json_name: "runId")
+
+  field(:runtime_session_id, 3,
+    type: Hephaestus.Common.V1.OpaqueId,
+    json_name: "runtimeSessionId"
+  )
+
+  field(:snapshot_id, 4, type: Hephaestus.Common.V1.OpaqueId, json_name: "snapshotId")
+  field(:binding_id, 5, type: Hephaestus.Common.V1.OpaqueId, json_name: "bindingId")
+  field(:slot_key, 6, type: :string, json_name: "slotKey")
+  field(:resource_kind, 7, type: :string, json_name: "resourceKind")
+  field(:resource_id, 8, type: Hephaestus.Common.V1.OpaqueId, json_name: "resourceId")
+  field(:operation, 9, type: :string)
+  field(:event_kind, 10, type: :string, json_name: "eventKind")
+  field(:decision, 11, type: :string)
+  field(:outcome, 12, type: :string)
+  field(:reason_code, 13, type: :string, json_name: "reasonCode")
+  field(:authorization_model_version, 14, type: :string, json_name: "authorizationModelVersion")
+  field(:occurred_at, 15, type: Google.Protobuf.Timestamp, json_name: "occurredAt")
+end
+
+defmodule Hephaestus.Instance.V1.CapabilityMetrics do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.instance.v1.CapabilityMetrics",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:sessions_issued, 1, type: :uint64, json_name: "sessionsIssued")
+  field(:sessions_active, 2, type: :uint64, json_name: "sessionsActive")
+  field(:sessions_expired, 3, type: :uint64, json_name: "sessionsExpired")
+  field(:sessions_revoked, 4, type: :uint64, json_name: "sessionsRevoked")
+  field(:capability_calls, 5, type: :uint64, json_name: "capabilityCalls")
+  field(:ceiling_denials, 6, type: :uint64, json_name: "ceilingDenials")
+  field(:live_authorization_denials, 7, type: :uint64, json_name: "liveAuthorizationDenials")
+  field(:invalid_revisions, 8, type: :uint64, json_name: "invalidRevisions")
+
+  field(:average_revocation_latency_milliseconds, 9,
+    type: :uint64,
+    json_name: "averageRevocationLatencyMilliseconds"
+  )
+end
+
 defmodule Hephaestus.Instance.V1.Attachment do
   @moduledoc false
 
@@ -286,6 +442,12 @@ defmodule Hephaestus.Instance.V1.UpdateCandidate do
   field(:update_hook, 7, type: Hephaestus.Common.V1.UpdateHook, json_name: "updateHook")
   field(:release_id, 8, type: Hephaestus.Common.V1.OpaqueId, json_name: "releaseId")
   field(:release_version, 9, type: :string, json_name: "releaseVersion")
+
+  field(:capability_requirements, 10,
+    repeated: true,
+    type: Hephaestus.Instance.V1.CapabilityRequirement,
+    json_name: "capabilityRequirements"
+  )
 end
 
 defmodule Hephaestus.Instance.V1.RecentRun do
@@ -361,6 +523,41 @@ defmodule Hephaestus.Instance.V1.AgentInstance do
     repeated: true,
     type: Hephaestus.Instance.V1.RecentRun,
     json_name: "recentRuns"
+  )
+
+  field(:capability_requirements, 23,
+    repeated: true,
+    type: Hephaestus.Instance.V1.CapabilityRequirement,
+    json_name: "capabilityRequirements"
+  )
+
+  field(:capability_resource_options, 24,
+    repeated: true,
+    type: Hephaestus.Instance.V1.CapabilityResourceOption,
+    json_name: "capabilityResourceOptions"
+  )
+
+  field(:capability_bindings, 25,
+    repeated: true,
+    type: Hephaestus.Instance.V1.CapabilityBinding,
+    json_name: "capabilityBindings"
+  )
+
+  field(:runtime_sessions, 26,
+    repeated: true,
+    type: Hephaestus.Instance.V1.RuntimeAuthoritySession,
+    json_name: "runtimeSessions"
+  )
+
+  field(:capability_audit, 27,
+    repeated: true,
+    type: Hephaestus.Instance.V1.CapabilityAuditRecord,
+    json_name: "capabilityAudit"
+  )
+
+  field(:capability_metrics, 28,
+    type: Hephaestus.Instance.V1.CapabilityMetrics,
+    json_name: "capabilityMetrics"
   )
 end
 
@@ -662,6 +859,57 @@ defmodule Hephaestus.Instance.V1.BindSecretResponse do
   field(:receipt, 3, type: Hephaestus.Common.V1.MutationReceipt)
 end
 
+defmodule Hephaestus.Instance.V1.CapabilityBindingSelection do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.instance.v1.CapabilityBindingSelection",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:slot_key, 1, type: :string, json_name: "slotKey")
+  field(:resource_kind, 2, type: :string, json_name: "resourceKind")
+  field(:resource_id, 3, type: Hephaestus.Common.V1.OpaqueId, json_name: "resourceId")
+  field(:granted_operations, 4, repeated: true, type: :string, json_name: "grantedOperations")
+end
+
+defmodule Hephaestus.Instance.V1.ReviseCapabilitiesRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.instance.v1.ReviseCapabilitiesRequest",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:context, 1, type: Hephaestus.Common.V1.RequestContext)
+  field(:instance_id, 2, type: Hephaestus.Common.V1.OpaqueId, json_name: "instanceId")
+
+  field(:expected_revision_id, 3,
+    type: Hephaestus.Common.V1.OpaqueId,
+    json_name: "expectedRevisionId"
+  )
+
+  field(:bindings, 4, repeated: true, type: Hephaestus.Instance.V1.CapabilityBindingSelection)
+end
+
+defmodule Hephaestus.Instance.V1.ReviseCapabilitiesResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.instance.v1.ReviseCapabilitiesResponse",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:instance_revision_id, 1,
+    type: Hephaestus.Common.V1.OpaqueId,
+    json_name: "instanceRevisionId"
+  )
+
+  field(:runnable, 2, type: :bool)
+  field(:diagnostics, 3, repeated: true, type: Hephaestus.Common.V1.Diagnostic)
+  field(:receipt, 4, type: Hephaestus.Common.V1.MutationReceipt)
+end
+
 defmodule Hephaestus.Instance.V1.AgentInstanceService.Service do
   @moduledoc false
 
@@ -721,6 +969,12 @@ defmodule Hephaestus.Instance.V1.AgentInstanceService.Service do
     :BindSecret,
     Hephaestus.Instance.V1.BindSecretRequest,
     Hephaestus.Instance.V1.BindSecretResponse
+  )
+
+  rpc(
+    :ReviseCapabilities,
+    Hephaestus.Instance.V1.ReviseCapabilitiesRequest,
+    Hephaestus.Instance.V1.ReviseCapabilitiesResponse
   )
 end
 

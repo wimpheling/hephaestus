@@ -15,9 +15,11 @@ use rpc_proto::messages::hephaestus::{
         UpdateHook, parameter_default, parameter_type, parameter_value,
     },
     instance::v1::{
-        AgentInstance, AgentUpdate, Attachment, GetInstanceRequest, GetInstanceResponse, RecentRun,
-        RecoveryDecision, RefSelector, RepositoryOption, SecretImport, TriggerPolicy,
-        UpdateCandidate, UpdateEvent, ref_selector, update_event,
+        AgentInstance, AgentUpdate, Attachment, CapabilityAuditRecord, CapabilityBinding,
+        CapabilityMetrics, CapabilityRequirement, CapabilityResourceOption, GetInstanceRequest,
+        GetInstanceResponse, RecentRun, RecoveryDecision, RefSelector, RepositoryOption,
+        RuntimeAuthoritySession, SecretImport, TriggerPolicy, UpdateCandidate, UpdateEvent,
+        ref_selector, update_event,
     },
     secret::v1::{
         AuthorityState, DeliveryMode, DeliveryPhase, SecretPolicy, SecretState, SecretTarget,
@@ -70,6 +72,21 @@ fn ensure_response_bound(response: &GetInstanceResponse) -> Result<(), RpcError>
 // The generated response intentionally projects the complete bounded instance snapshot.
 #[allow(clippy::too_many_lines)]
 fn project(snapshot: InstanceSnapshot) -> Result<AgentInstance, RpcError> {
+    let capability_requirements = snapshot
+        .capability_requirements
+        .into_iter()
+        .map(|row| CapabilityRequirement {
+            id: opaque(row.id).into(),
+            release_agent_id: opaque(row.release_agent_id).into(),
+            slot_key: row.slot_key,
+            purpose: row.purpose,
+            resource_kind: row.resource_kind,
+            required_operations: row.required_operations,
+            optional_operations: row.optional_operations,
+            slot_required: row.slot_required,
+            ..Default::default()
+        })
+        .collect::<Vec<_>>();
     let revisions = snapshot
         .revisions
         .into_iter()
@@ -197,6 +214,16 @@ fn project(snapshot: InstanceSnapshot) -> Result<AgentInstance, RpcError> {
                 update_hook: update_hook(row.update_hook.as_ref()).into(),
                 release_id: opaque(row.release_id).into(),
                 release_version: row.release_version,
+                capability_requirements: capability_requirements
+                    .iter()
+                    .filter(|requirement| {
+                        requirement
+                            .release_agent_id
+                            .as_option()
+                            .is_some_and(|id| id.value == row.id.to_string())
+                    })
+                    .cloned()
+                    .collect(),
                 ..Default::default()
             })
         })
@@ -217,6 +244,91 @@ fn project(snapshot: InstanceSnapshot) -> Result<AgentInstance, RpcError> {
             ..Default::default()
         })
         .collect();
+    let capability_resource_options = snapshot
+        .capability_resources
+        .into_iter()
+        .map(|row| CapabilityResourceOption {
+            id: opaque(row.id).into(),
+            slot_key: row.slot_key,
+            resource_kind: row.resource_kind,
+            display_name: row.display_name,
+            grantable_operations: row.grantable_operations,
+            ..Default::default()
+        })
+        .collect();
+    let capability_bindings = snapshot
+        .capability_bindings
+        .into_iter()
+        .map(|row| CapabilityBinding {
+            id: opaque(row.id).into(),
+            instance_revision_id: opaque(row.instance_revision_id).into(),
+            requirement_id: opaque(row.requirement_id).into(),
+            slot_key: row.slot_key,
+            resource_kind: row.resource_kind,
+            resource_id: opaque(row.resource_id).into(),
+            resource_name: row.resource_name,
+            granted_operations: row.granted_operations,
+            grantor_id: opaque(row.grantor_id).into(),
+            grantor_name: row.grantor_name,
+            authorization_model_version: row.authorization_model_version,
+            created_at: timestamp(row.created_at).into(),
+            live: row.live,
+            last_used_at: row.last_used_at.map(timestamp).into(),
+            ..Default::default()
+        })
+        .collect();
+    let runtime_sessions = snapshot
+        .runtime_sessions
+        .into_iter()
+        .map(|row| RuntimeAuthoritySession {
+            id: opaque(row.id).into(),
+            run_id: opaque(row.run_id).into(),
+            instance_revision_id: opaque(row.instance_revision_id).into(),
+            snapshot_id: opaque(row.snapshot_id).into(),
+            status: row.status,
+            issued_at: timestamp(row.issued_at).into(),
+            expires_at: timestamp(row.expires_at).into(),
+            acknowledged_at: row.acknowledged_at.map(timestamp).into(),
+            revoked_at: row.revoked_at.map(timestamp).into(),
+            revocation_reason: row.revocation_reason.unwrap_or_default(),
+            ..Default::default()
+        })
+        .collect();
+    let capability_audit = snapshot
+        .capability_audit
+        .into_iter()
+        .map(|row| CapabilityAuditRecord {
+            id: opaque(row.id).into(),
+            run_id: opaque(row.run_id).into(),
+            runtime_session_id: opaque(row.runtime_session_id).into(),
+            snapshot_id: opaque(row.snapshot_id).into(),
+            binding_id: opaque(row.binding_id).into(),
+            slot_key: row.slot_key,
+            resource_kind: row.resource_kind,
+            resource_id: opaque(row.resource_id).into(),
+            operation: row.operation,
+            event_kind: row.event_kind,
+            decision: row.decision.unwrap_or_default(),
+            outcome: row.outcome.unwrap_or_default(),
+            reason_code: row.reason_code.unwrap_or_default(),
+            authorization_model_version: row.authorization_model_version,
+            occurred_at: timestamp(row.occurred_at).into(),
+            ..Default::default()
+        })
+        .collect();
+    let metrics = snapshot.capability_metrics;
+    let capability_metrics = CapabilityMetrics {
+        sessions_issued: metrics.sessions_issued,
+        sessions_active: metrics.sessions_active,
+        sessions_expired: metrics.sessions_expired,
+        sessions_revoked: metrics.sessions_revoked,
+        capability_calls: metrics.capability_calls,
+        ceiling_denials: metrics.ceiling_denials,
+        live_authorization_denials: metrics.live_authorization_denials,
+        invalid_revisions: metrics.invalid_revisions,
+        average_revocation_latency_milliseconds: metrics.average_revocation_latency_milliseconds,
+        ..Default::default()
+    };
     let row = snapshot.instance;
     Ok(AgentInstance {
         id: opaque(row.id).into(),
@@ -241,6 +353,12 @@ fn project(snapshot: InstanceSnapshot) -> Result<AgentInstance, RpcError> {
         secret_imports,
         update_candidates,
         recent_runs,
+        capability_requirements,
+        capability_resource_options,
+        capability_bindings,
+        runtime_sessions,
+        capability_audit,
+        capability_metrics: capability_metrics.into(),
         ..Default::default()
     })
 }

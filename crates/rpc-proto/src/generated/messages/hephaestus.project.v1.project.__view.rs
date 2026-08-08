@@ -2487,6 +2487,13 @@ pub struct ReleaseAgentOptionView<'a> {
     >,
     /// Field 11: `repository_name`
     pub repository_name: &'a str,
+    /// Field 12: `capability_requirements`
+    pub capability_requirements: ::buffa::RepeatedView<
+        'a,
+        super::super::super::super::instance::v1::__buffa::view::CapabilityRequirementView<
+            'a,
+        >,
+    >,
     pub __buffa_unknown_fields: ::buffa::UnknownFieldsView<'a>,
 }
 impl<'a> ::buffa::MessageView<'a> for ReleaseAgentOptionView<'a> {
@@ -2665,6 +2672,21 @@ impl<'a> ::buffa::MessageView<'a> for ReleaseAgentOptionView<'a> {
                         )?,
                     );
             }
+            12u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                let __sub_ctx = ctx.descend()?;
+                let sub = ::buffa::types::borrow_bytes(&mut cur)?;
+                view.capability_requirements
+                    .push(
+                        <super::super::super::super::instance::v1::__buffa::view::CapabilityRequirementView as ::buffa::MessageView>::decode_view_ctx(
+                            sub,
+                            __sub_ctx,
+                        )?,
+                    );
+            }
             _ => {
                 ::buffa::encoding::skip_field_depth(tag, &mut cur, ctx.depth())?;
                 let span_len = before_tag.len() - cur.len();
@@ -2734,6 +2756,11 @@ impl<'a> ::buffa::MessageView<'a> for ReleaseAgentOptionView<'a> {
                 None => ::buffa::MessageField::none(),
             },
             repository_name: self.repository_name.to_string(),
+            capability_requirements: self
+                .capability_requirements
+                .iter()
+                .map(|v| v.to_owned_from_source(__buffa_src))
+                .collect::<::core::result::Result<_, ::buffa::DecodeError>>()?,
             __buffa_unknown_fields: self.__buffa_unknown_fields.to_owned()?.into(),
             ..::core::default::Default::default()
         })
@@ -2813,6 +2840,14 @@ impl<'a> ::buffa::ViewEncode<'a> for ReleaseAgentOptionView<'a> {
                 += 1u32
                     + ::buffa::types::string_encoded_len(&self.repository_name) as u32;
         }
+        for v in &self.capability_requirements {
+            let __slot = __cache.reserve();
+            let inner_size = v.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
         size
     }
@@ -2862,6 +2897,10 @@ impl<'a> ::buffa::ViewEncode<'a> for ReleaseAgentOptionView<'a> {
         }
         if !self.repository_name.is_empty() {
             ::buffa::types::put_string_field(11u32, &self.repository_name, buf);
+        }
+        for v in &self.capability_requirements {
+            ::buffa::types::put_len_delimited_header(12u32, __cache.consume_next(), buf);
+            v.write_to(__cache, buf);
         }
         self.__buffa_unknown_fields.write_to(buf);
     }
@@ -2925,6 +2964,13 @@ impl<'__a> ::serde::Serialize for ReleaseAgentOptionView<'__a> {
         }
         if !::buffa::json_helpers::skip_if::is_empty_str(self.repository_name) {
             __map.serialize_entry("repositoryName", self.repository_name)?;
+        }
+        if !self.capability_requirements.is_empty() {
+            __map
+                .serialize_entry(
+                    "capabilityRequirements",
+                    &*self.capability_requirements,
+                )?;
         }
         __map.end()
     }
@@ -3103,6 +3149,18 @@ impl ReleaseAgentOptionOwnedView {
     #[must_use]
     pub fn repository_name(&self) -> &'_ str {
         self.0.reborrow().repository_name
+    }
+    /// Field 12: `capability_requirements`
+    #[must_use]
+    pub fn capability_requirements(
+        &self,
+    ) -> &::buffa::RepeatedView<
+        '_,
+        super::super::super::super::instance::v1::__buffa::view::CapabilityRequirementView<
+            '_,
+        >,
+    > {
+        &self.0.reborrow().capability_requirements
     }
 }
 impl ::core::convert::From<::buffa::OwnedView<ReleaseAgentOptionView<'static>>>

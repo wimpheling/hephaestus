@@ -20,6 +20,7 @@ defmodule HephaestusWebWeb.AgentInstanceState do
     "set-attachment",
     "remove-attachment",
     "revise-instance",
+    "revise-capabilities",
     "create-update",
     "recover-update",
     "bind-secret"
@@ -58,7 +59,8 @@ defmodule HephaestusWebWeb.AgentInstanceState do
         attachment: %{},
         revision: %{},
         update: %{},
-        binding: %{}
+        binding: %{},
+        capabilities: %{}
       }
     }
   end
@@ -256,6 +258,9 @@ defmodule HephaestusWebWeb.AgentInstanceState do
       |> Map.put("instance_id", instance["id"])
       |> Map.put("expected_revision_id", instance["active_revision_id"])
     end)
+    |> Map.update("capabilities", %{"instance_id" => instance["id"]}, fn attributes ->
+      Map.put(attributes, "instance_id", instance["id"])
+    end)
   end
 
   defp execute_command(identity, "create-attachment", %{"attachment" => attributes}) do
@@ -334,6 +339,31 @@ defmodule HephaestusWebWeb.AgentInstanceState do
       end
     else
       {:error, _reason} -> :access_revoked
+    end
+  end
+
+  defp execute_command(identity, "revise-capabilities", %{"capabilities" => attributes}) do
+    instance_id = attributes["instance_id"]
+
+    with {:ok, instance} <- Client.get_instance(identity, instance_id),
+         revision <- active_revision(instance),
+         requirements <- active_capability_requirements(instance, revision),
+         {:ok, bindings} <-
+           capability_selections(instance, requirements, attributes["slots"] || %{}) do
+      execute_and_reload(
+        identity,
+        "revise_capabilities",
+        %{
+          "instance_id" => instance_id,
+          "expected_revision_id" => revision["id"],
+          "bindings" => bindings
+        },
+        instance_id,
+        "Capability permissions activated in a new immutable revision."
+      )
+    else
+      {:error, :not_found} -> :access_revoked
+      {:error, reason} -> {:error, command_error(reason)}
     end
   end
 
@@ -461,6 +491,62 @@ defmodule HephaestusWebWeb.AgentInstanceState do
   defp execute_rpc(identity, "bind_secret", attributes),
     do: Client.bind_secret(identity, attributes)
 
+  defp execute_rpc(identity, "revise_capabilities", attributes),
+    do:
+      Client.revise_capabilities(
+        identity,
+        attributes["instance_id"],
+        attributes["expected_revision_id"],
+        attributes["bindings"]
+      )
+
+  defp active_capability_requirements(instance, revision) do
+    Enum.filter(
+      instance["capability_requirements"] || [],
+      &(&1["release_agent_id"] == revision["release_agent_id"])
+    )
+  end
+
+  defp capability_selections(instance, requirements, submitted) do
+    Enum.reduce_while(requirements, {:ok, []}, fn requirement, {:ok, selections} ->
+      selected = submitted[requirement["slot_key"]] || %{}
+      resource_id = selected["resource_id"]
+
+      if resource_id in [nil, ""] do
+        if requirement["slot_required"] do
+          {:halt, {:error, {:missing_capability, requirement["slot_key"]}}}
+        else
+          {:cont, {:ok, selections}}
+        end
+      else
+        option =
+          Enum.find(instance["capability_resource_options"] || [], fn option ->
+            option["slot_key"] == requirement["slot_key"] && option["id"] == resource_id
+          end)
+
+        optional =
+          (selected["optional_operations"] || %{})
+          |> Enum.filter(fn {_operation, enabled} -> enabled == "true" end)
+          |> Enum.map(&elem(&1, 0))
+
+        grantable = (option && option["grantable_operations"]) || []
+
+        if option && Enum.all?(optional, &(&1 in grantable)) do
+          binding = %{
+            "slot_key" => requirement["slot_key"],
+            "resource_kind" => requirement["resource_kind"],
+            "resource_id" => resource_id,
+            "granted_operations" => Enum.uniq(requirement["required_operations"] ++ optional)
+          }
+
+          {:cont, {:ok, [binding | selections]}}
+        else
+          {:halt, {:error, {:invalid_capability, requirement["slot_key"]}}}
+        end
+      end
+    end)
+  end
+
   defp active_revision(instance) do
     Enum.find(instance["revisions"], &(&1["id"] == instance["active_revision_id"])) ||
       List.first(instance["revisions"]) ||
@@ -535,6 +621,13 @@ defmodule HephaestusWebWeb.AgentInstanceState do
   defp command_error({:rejected, _status}), do: "Command was denied or failed validation."
   defp command_error({:unavailable, _reason}), do: "Command service is temporarily unavailable."
   defp command_error({:invalid_parameter, name}), do: "Parameter #{name} is invalid."
+
+  defp command_error({:missing_capability, slot}),
+    do: "Required capability #{slot} needs an exact resource selection."
+
+  defp command_error({:invalid_capability, slot}),
+    do: "Capability #{slot} includes an unavailable resource or permission."
+
   defp command_error(_reason), do: "Command could not be completed."
 
   defp deliver_watch(response, owner, generation) do

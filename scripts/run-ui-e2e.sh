@@ -226,7 +226,8 @@ wait_for_url "${oidc_url}/.well-known/openid-configuration" \
     "${fixture_root}/oidc.log"
 
 cd "${repo_root}"
-cargo build -p hephaestus-app --bins -p bootstrap-postgres --bin hephaestus-e2e-seed
+cargo build -p hephaestus-app --bins -p bootstrap-postgres --bin hephaestus-e2e-seed \
+    -p git-http --bin pre-receive
 HEPHAESTUS_DATABASE_URL="${database_url}" \
 HEPHAESTUS_REPOSITORY_ROOT="${fixture_root}/repositories" \
 HEPHAESTUS_ARTIFACT_ROOT="${fixture_root}/artifacts" \
@@ -239,6 +240,7 @@ export HEPHAESTUS_NATS_URL="nats://127.0.0.1:${nats_port}"
 export HEPHAESTUS_HTTP_LISTEN="127.0.0.1:${daemon_port}"
 export HEPHAESTUS_REPOSITORY_ROOT="${fixture_root}/repositories"
 export HEPHAESTUS_GIT_HTTP_BACKEND="$(git --exec-path)/git-http-backend"
+export HEPHAESTUS_GIT_PRE_RECEIVE_HOOK="${repo_root}/target/debug/pre-receive"
 export HEPHAESTUS_OIDC_ISSUER="${oidc_url}"
 export HEPHAESTUS_OIDC_AUDIENCE="hephaestus-git"
 export HEPHAESTUS_OIDC_ALGORITHM="HS256"

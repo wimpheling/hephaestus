@@ -29,19 +29,19 @@ types and principals.
 
 ## Implementation checklist
 
-- [ ] **1. Define one Git capability grammar**
-  - [ ] Define normalized repository IDs, Git operation scopes, ref globs,
+- [x] **1. Define one Git capability grammar**
+  - [x] Define normalized repository IDs, Git operation scopes, ref globs,
     changed-path globs, fast-forward/force-update rules, tag/ref creation and
     deletion rules, expiry, and bounded transfer limits.
-  - [ ] Define deterministic matching semantics, including case, Unicode,
+  - [x] Define deterministic matching semantics, including case, Unicode,
     `**`, ref namespaces, empty matches, additions, deletions, renames,
     merges, and new branches.
-  - [ ] Reject ambiguous, broad, malformed, or conflicting scopes by default.
-  - [ ] Add exhaustive unit and property tests for scope normalization and
+  - [x] Reject ambiguous, broad, malformed, or conflicting scopes by default.
+  - [x] Add exhaustive unit and property tests for scope normalization and
     matching.
 
 - [ ] **2. Add developer personal access tokens**
-  - [ ] Define a versioned opaque PAT format, token identifier, hash/verifier,
+  - [x] Define a versioned opaque PAT format, token identifier, hash/verifier,
     user ownership, explicit scopes, optional repository restrictions, expiry,
     created/revoked/last-used timestamps, and audit metadata.
   - [ ] Add authenticated UI and API flows to create, list safe metadata for,
@@ -81,3 +81,26 @@ types and principals.
 - Giving agent guests a user PAT, broad Git write access, or path-restricted
   raw Git reads.
 - Reusing the local `/test/git-token` fixture outside development.
+
+## Verify and document
+
+- Document the capability grammar, matching rules, PAT lifecycle, runtime
+  capability lifecycle, and the distinction between read and write scope.
+- Run unit and property coverage for normalized scope matching, plus real Git
+  smart-HTTP integration coverage for the allowed and denied cases in this
+  plan. Run PostgreSQL-backed persistence, expiry, rotation, revocation, and
+  audit-redaction coverage where those paths require the production adapter.
+- Run `cargo fmt --all -- --check`,
+  `cargo clippy --workspace --all-targets --all-features`,
+  `cargo test --workspace --all-features`, and
+  `cargo doc --workspace --all-features --no-deps`.
+- Before repository handoff, run `git diff --check` and `cargo dev quality`.
+
+## Completion evidence
+
+The completed task records the capability grammar version; allowed and denied
+scope fixtures; smart-HTTP clone, fetch, and receive results; PAT rotation and
+revocation evidence; exact-run capability expiry and cross-run replay-denial
+evidence; and audit records proving that token plaintext is absent. It also
+records the commands above, their results, and any explicitly justified test
+environment exclusions.

@@ -4,12 +4,15 @@ use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, path::PathBuf};
 
 /// Current host-to-guest protocol version.
-pub const PROTOCOL_VERSION: u16 = 3;
+pub const PROTOCOL_VERSION: u16 = 5;
 
 /// `AF_VSOCK` port used by `heph-init` to connect to the host worker.
 pub const GUEST_VSOCK_PORT: u32 = 19_000;
 /// Dedicated guest-to-host secret broker port.
 pub const SECRET_BROKER_VSOCK_PORT: u32 = 19_001;
+/// Guest-private file populated from the authenticated runtime-authority
+/// bootstrap payload before the workload starts.
+pub const GUEST_RUNTIME_AUTHORITY_PATH: &str = "/run/hephaestus-authority/session.json";
 
 /// Maximum encoded protocol frame size.
 pub const MAX_FRAME_SIZE: usize = 16 * 1024 * 1024;
@@ -40,6 +43,9 @@ pub enum HostMessage {
         mounts: Vec<GuestMount>,
         /// Persistent agent-state volume to locate by filesystem UUID.
         state_volume: Option<GuestStateVolume>,
+        /// Sensitive one-run authority delivered only on this authenticated
+        /// host-to-guest bootstrap stream.
+        runtime_authority: Option<Box<RuntimeAuthorityMessage>>,
     },
     /// Requests graceful cancellation.
     Cancel {
@@ -64,6 +70,13 @@ pub enum GuestMessage {
     },
     /// Reports that the command and mounts were accepted.
     Ready,
+    /// Confirms that guest bootstrap persisted the exact authority payload.
+    RuntimeAuthorityAcknowledged {
+        /// Exact runtime session identifier.
+        session_id: uuid::Uuid,
+        /// Exact issuance generation received by the guest.
+        generation: u64,
+    },
     /// Carries an uninterpreted command output chunk.
     Log {
         /// Output stream that produced the chunk.
@@ -104,6 +117,47 @@ pub enum GuestMessage {
         /// Human-readable diagnostic.
         message: String,
     },
+}
+
+/// Sensitive runtime authority carried only by the bootstrap stream.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct RuntimeAuthorityMessage {
+    /// Exact runtime session identifier.
+    pub session_id: uuid::Uuid,
+    /// Exact positive issuance generation.
+    pub generation: u64,
+    /// Opaque bearer bytes.
+    pub credential: [u8; vm_trait::RUNTIME_AUTHORITY_CREDENTIAL_BYTES],
+    /// Separate exact-run Git bearer, when runtime Git is bound.
+    pub runtime_git_credential: Option<[u8; vm_trait::RUNTIME_GIT_CREDENTIAL_BYTES]>,
+}
+
+impl std::fmt::Debug for RuntimeAuthorityMessage {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RuntimeAuthorityMessage")
+            .field("session_id", &self.session_id)
+            .field("generation", &self.generation)
+            .field("credential", &"[REDACTED]")
+            .field(
+                "runtime_git_credential",
+                &self.runtime_git_credential.as_ref().map(|_| "[REDACTED]"),
+            )
+            .finish()
+    }
+}
+
+impl Drop for RuntimeAuthorityMessage {
+    fn drop(&mut self) {
+        for byte in &mut self.credential {
+            *std::hint::black_box(byte) = 0;
+        }
+        if let Some(credential) = &mut self.runtime_git_credential {
+            for byte in credential {
+                *std::hint::black_box(byte) = 0;
+            }
+        }
+    }
 }
 
 /// Command representation transmitted to `heph-init`.

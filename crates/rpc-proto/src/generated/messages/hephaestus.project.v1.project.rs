@@ -1514,6 +1514,16 @@ pub struct ReleaseAgentOption {
         skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
     )]
     pub repository_name: ::buffa::alloc::string::String,
+    /// Field 12: `capability_requirements`
+    #[serde(
+        rename = "capabilityRequirements",
+        alias = "capability_requirements",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_vec",
+        deserialize_with = "::buffa::json_helpers::null_as_default"
+    )]
+    pub capability_requirements: ::buffa::alloc::vec::Vec<
+        super::super::instance::v1::CapabilityRequirement,
+    >,
     #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
@@ -1532,6 +1542,7 @@ impl ::core::fmt::Debug for ReleaseAgentOption {
             .field("source_commit", &self.source_commit)
             .field("repository_id", &self.repository_id)
             .field("repository_name", &self.repository_name)
+            .field("capability_requirements", &self.capability_requirements)
             .finish()
     }
 }
@@ -1628,6 +1639,14 @@ impl ::buffa::Message for ReleaseAgentOption {
                 += 1u32
                     + ::buffa::types::string_encoded_len(&self.repository_name) as u32;
         }
+        for v in &self.capability_requirements {
+            let __slot = __cache.reserve();
+            let inner_size = v.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
         size
     }
@@ -1676,6 +1695,10 @@ impl ::buffa::Message for ReleaseAgentOption {
         }
         if !self.repository_name.is_empty() {
             ::buffa::types::put_string_field(11u32, &self.repository_name, buf);
+        }
+        for v in &self.capability_requirements {
+            ::buffa::types::put_len_delimited_header(12u32, __cache.consume_next(), buf);
+            v.write_to(__cache, buf);
         }
         self.__buffa_unknown_fields.write_to(buf);
     }
@@ -1787,6 +1810,15 @@ impl ::buffa::Message for ReleaseAgentOption {
                 )?;
                 ::buffa::types::merge_string(&mut self.repository_name, buf)?;
             }
+            12u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                let mut elem = ::core::default::Default::default();
+                ::buffa::Message::merge_length_delimited(&mut elem, buf, ctx)?;
+                self.capability_requirements.push(elem);
+            }
             _ => {
                 self.__buffa_unknown_fields
                     .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
@@ -1806,6 +1838,7 @@ impl ::buffa::Message for ReleaseAgentOption {
         self.source_commit.clear();
         self.repository_id = ::buffa::MessageField::none();
         self.repository_name.clear();
+        self.capability_requirements.clear();
         self.__buffa_unknown_fields.clear();
     }
 }

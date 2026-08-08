@@ -20,6 +20,9 @@ tuples:
   - user: user:maintainer
     relation: maintainer
     object: project:forge
+  - user: user:capability-granter
+    relation: capability_granter
+    object: project:forge
   - user: user:project-secret-manager
     relation: secret_manager
     object: project:forge
@@ -56,6 +59,32 @@ tuples:
   - user: release_agent:reviewer-v1
     relation: release_agent
     object: agent_instance:reviewer
+  # These relations are emitted only by exact active-revision capability
+  # bindings. They are deliberately independent of project membership.
+  - user: agent_instance:reviewer
+    relation: agent_inspect
+    object: project:forge
+  - user: agent_instance:reviewer
+    relation: agent_execute
+    object: project:forge
+  - user: agent_instance:reviewer
+    relation: agent_inspect
+    object: repository:private
+  - user: agent_instance:reviewer
+    relation: agent_git_read
+    object: repository:private
+  - user: agent_instance:reviewer
+    relation: agent_update_ref
+    object: repository:private
+  - user: agent_instance:reviewer
+    relation: agent_inspect
+    object: agent_instance:reviewer
+  - user: agent_instance:reviewer
+    relation: agent_cancel
+    object: run:one
+  - user: agent_instance:reviewer
+    relation: agent_restore
+    object: state_volume:builder-state
   - user: organization:acme
     relation: owner
     object: secret:model-token
@@ -202,6 +231,64 @@ tests:
         assertions:
           can_read: false
           can_write: false
+
+  - name: capability grants are explicit and have no ambient agent authority
+    check:
+      - user: user:capability-granter
+        object: project:forge
+        assertions:
+          can_grant_agent_capability: true
+          can_manage: false
+      - user: user:maintainer
+        object: project:forge
+        assertions:
+          can_grant_agent_capability: false
+          can_manage: true
+      - user: user:member
+        object: project:forge
+        assertions:
+          can_grant_agent_capability: false
+      - user: user:capability-granter
+        object: repository:private
+        assertions:
+          can_grant_agent_capability: true
+      - user: user:member
+        object: repository:private
+        assertions:
+          can_grant_agent_capability: false
+      - user: agent_instance:reviewer
+        object: project:forge
+        assertions:
+          agent_inspect: true
+          agent_execute: true
+          agent_configure: false
+      - user: agent_instance:reviewer
+        object: repository:private
+        assertions:
+          agent_inspect: true
+          agent_git_read: true
+          agent_update_ref: true
+          agent_force_update_ref: false
+      - user: agent_instance:reviewer
+        object: repository:public
+        assertions:
+          agent_inspect: false
+          agent_git_read: false
+      - user: agent_instance:reviewer
+        object: run:one
+        assertions:
+          agent_cancel: true
+          agent_recover: false
+      - user: agent_instance:reviewer
+        object: state_volume:builder-state
+        assertions:
+          agent_restore: true
+          agent_attach: false
+      - user: agent_instance:unbound
+        object: repository:private
+        assertions:
+          agent_inspect: false
+          agent_git_read: false
 
   - name: secret permissions are explicit and mode separated
     check:

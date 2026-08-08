@@ -99,6 +99,16 @@ service AgentInstanceService {
     option (hephaestus.options.v1.max_request_bytes) = 65536;
     option (hephaestus.options.v1.max_response_bytes) = 8192;
   }
+  rpc ReviseCapabilities(ReviseCapabilitiesRequest) returns (ReviseCapabilitiesResponse) {
+    option (hephaestus.options.v1.authorization) = {
+      permission: "instance.revise_capabilities"
+      audience: "/hephaestus.instance.v1.AgentInstanceService/ReviseCapabilities"
+      actor_source: ACTOR_SOURCE_MEDIATOR_JWT_METADATA
+    };
+    option (hephaestus.options.v1.operation_kind) = OPERATION_KIND_MUTATION;
+    option (hephaestus.options.v1.max_request_bytes) = 131072;
+    option (hephaestus.options.v1.max_response_bytes) = 16384;
+  }
 }
 
 enum TriggerPolicy {
@@ -149,6 +159,79 @@ message InstanceRevision {
   string release_version = 17;
   string release_state = 18;
   string release_agent_name = 19;
+}
+message CapabilityRequirement {
+  hephaestus.common.v1.OpaqueId id = 1;
+  hephaestus.common.v1.OpaqueId release_agent_id = 2;
+  string slot_key = 3;
+  string purpose = 4;
+  string resource_kind = 5;
+  repeated string required_operations = 6;
+  repeated string optional_operations = 7;
+  bool slot_required = 8;
+}
+message CapabilityResourceOption {
+  hephaestus.common.v1.OpaqueId id = 1;
+  string resource_kind = 2;
+  string display_name = 3;
+  repeated string grantable_operations = 4;
+  string slot_key = 5;
+}
+message CapabilityBinding {
+  hephaestus.common.v1.OpaqueId id = 1;
+  hephaestus.common.v1.OpaqueId instance_revision_id = 2;
+  hephaestus.common.v1.OpaqueId requirement_id = 3;
+  string slot_key = 4;
+  string resource_kind = 5;
+  hephaestus.common.v1.OpaqueId resource_id = 6;
+  string resource_name = 7;
+  repeated string granted_operations = 8;
+  hephaestus.common.v1.OpaqueId grantor_id = 9;
+  string grantor_name = 10;
+  string authorization_model_version = 11;
+  google.protobuf.Timestamp created_at = 12;
+  bool live = 13;
+  optional google.protobuf.Timestamp last_used_at = 14;
+}
+message RuntimeAuthoritySession {
+  hephaestus.common.v1.OpaqueId id = 1;
+  hephaestus.common.v1.OpaqueId run_id = 2;
+  hephaestus.common.v1.OpaqueId instance_revision_id = 3;
+  hephaestus.common.v1.OpaqueId snapshot_id = 4;
+  string status = 5;
+  google.protobuf.Timestamp issued_at = 6;
+  google.protobuf.Timestamp expires_at = 7;
+  optional google.protobuf.Timestamp acknowledged_at = 8;
+  optional google.protobuf.Timestamp revoked_at = 9;
+  string revocation_reason = 10;
+}
+message CapabilityAuditRecord {
+  hephaestus.common.v1.OpaqueId id = 1;
+  hephaestus.common.v1.OpaqueId run_id = 2;
+  hephaestus.common.v1.OpaqueId runtime_session_id = 3;
+  hephaestus.common.v1.OpaqueId snapshot_id = 4;
+  hephaestus.common.v1.OpaqueId binding_id = 5;
+  string slot_key = 6;
+  string resource_kind = 7;
+  hephaestus.common.v1.OpaqueId resource_id = 8;
+  string operation = 9;
+  string event_kind = 10;
+  string decision = 11;
+  string outcome = 12;
+  string reason_code = 13;
+  string authorization_model_version = 14;
+  google.protobuf.Timestamp occurred_at = 15;
+}
+message CapabilityMetrics {
+  uint64 sessions_issued = 1;
+  uint64 sessions_active = 2;
+  uint64 sessions_expired = 3;
+  uint64 sessions_revoked = 4;
+  uint64 capability_calls = 5;
+  uint64 ceiling_denials = 6;
+  uint64 live_authorization_denials = 7;
+  uint64 invalid_revisions = 8;
+  uint64 average_revocation_latency_milliseconds = 9;
 }
 message Attachment {
   hephaestus.common.v1.OpaqueId id = 1;
@@ -208,6 +291,7 @@ message UpdateCandidate {
   hephaestus.common.v1.UpdateHook update_hook = 7;
   hephaestus.common.v1.OpaqueId release_id = 8;
   string release_version = 9;
+  repeated CapabilityRequirement capability_requirements = 10;
 }
 message RecentRun {
   hephaestus.common.v1.OpaqueId id = 1;
@@ -243,6 +327,12 @@ message AgentInstance {
   repeated SecretImport secret_imports = 20;
   repeated UpdateCandidate update_candidates = 21;
   repeated RecentRun recent_runs = 22;
+  repeated CapabilityRequirement capability_requirements = 23;
+  repeated CapabilityResourceOption capability_resource_options = 24;
+  repeated CapabilityBinding capability_bindings = 25;
+  repeated RuntimeAuthoritySession runtime_sessions = 26;
+  repeated CapabilityAuditRecord capability_audit = 27;
+  CapabilityMetrics capability_metrics = 28;
 }
 
 message GetInstanceRequest {
@@ -346,4 +436,22 @@ message BindSecretResponse {
   hephaestus.common.v1.OpaqueId binding_id = 1;
   hephaestus.common.v1.OpaqueId instance_revision_id = 2;
   hephaestus.common.v1.MutationReceipt receipt = 3;
+}
+message CapabilityBindingSelection {
+  string slot_key = 1;
+  string resource_kind = 2;
+  hephaestus.common.v1.OpaqueId resource_id = 3;
+  repeated string granted_operations = 4;
+}
+message ReviseCapabilitiesRequest {
+  hephaestus.common.v1.RequestContext context = 1;
+  hephaestus.common.v1.OpaqueId instance_id = 2;
+  hephaestus.common.v1.OpaqueId expected_revision_id = 3;
+  repeated CapabilityBindingSelection bindings = 4;
+}
+message ReviseCapabilitiesResponse {
+  hephaestus.common.v1.OpaqueId instance_revision_id = 1;
+  bool runnable = 2;
+  repeated hephaestus.common.v1.Diagnostic diagnostics = 3;
+  hephaestus.common.v1.MutationReceipt receipt = 4;
 }
