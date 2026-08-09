@@ -33,6 +33,7 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.AgentInstancePage do
   attr :create_update_event, :string, required: true, values: ["create-update"]
   attr :recover_update_event, :string, required: true, values: ["recover-update"]
   attr :bind_secret_event, :string, required: true, values: ["bind-secret"]
+  attr :control_mailbox_event, :string, required: true, values: ["control-mailbox"]
 
   @doc "Renders an agent instance from route-provided presentation data."
   def agent_instance(assigns) do
@@ -108,6 +109,10 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.AgentInstancePage do
       />
       <.revision_history revisions={@revisions} />
       <.capability_inspection instance={@instance} />
+      <.mailbox_deliveries
+        instance={@instance}
+        control_event={@control_mailbox_event}
+      />
       <.attachment_section
         instance={@instance}
         attachments={@attachments}
@@ -128,6 +133,53 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.AgentInstancePage do
         destination={@run_destination}
       />
     </.frame>
+    """
+  end
+
+  attr :instance, :map, required: true
+  attr :control_event, :string, required: true, values: ["control-mailbox"]
+
+  defp mailbox_deliveries(assigns) do
+    ~H"""
+    <.resource_list id="mailbox-delivery-controls" layout={:projects}>
+      <:header>
+        <.text as="span" variant={:sr_only}>Mailbox delivery controls</.text>
+      </:header>
+      <:empty>No accepted mailbox events are visible for this agent.</:empty>
+      <.frame
+        :for={delivery <- @instance["mailbox_deliveries"] || []}
+        as="article"
+        id={"mailbox-control-#{delivery["event_id"]}"}
+        variant={:table_row}
+      >
+        <.text as="small" variant={:muted}>
+          event {short_id(delivery["event_id"])} · {delivery["disposition"]}
+        </.text>
+        <.frame :if={@instance["can_recover"]} variant={:resource_detail}>
+          <button
+            type="button"
+            phx-click={@control_event}
+            phx-value-mailbox_id={delivery["mailbox_id"]}
+            phx-value-event_id={delivery["event_id"]}
+            phx-value-action="retry"
+          >Retry</button>
+          <button
+            type="button"
+            phx-click={@control_event}
+            phx-value-mailbox_id={delivery["mailbox_id"]}
+            phx-value-event_id={delivery["event_id"]}
+            phx-value-action="cancel"
+          >Cancel</button>
+          <button
+            type="button"
+            phx-click={@control_event}
+            phx-value-mailbox_id={delivery["mailbox_id"]}
+            phx-value-event_id={delivery["event_id"]}
+            phx-value-action="dead_letter"
+          >Dead-letter</button>
+        </.frame>
+      </.frame>
+    </.resource_list>
     """
   end
 

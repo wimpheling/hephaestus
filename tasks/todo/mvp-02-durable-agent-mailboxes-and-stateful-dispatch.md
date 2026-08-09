@@ -176,13 +176,16 @@ distributed lock, or general workflow engine.
   - [x] Add read-only inspection for an event's current disposition, attempts,
     denial reason, bound revision, state volume, fenced lease, dispatch order,
     state-access outcome, and next recovery action.
+  - [x] Expose bounded, authorized operator controls for pause, resume, retry,
+    cancel, and dead-letter through the supported application RPC/UI boundary;
+    retain the PostgreSQL audit record as the authoritative control evidence.
   - [ ] Reauthorize live subscriptions before publishing mailbox or delivery
     updates.
 
 - [ ] **7. Verify and document**
   - [x] Document envelope limits, delivery semantics, revision-binding time,
     stateful serialization, retry policy, sleep/wake behavior, and recovery.
-  - [ ] Document the PostgreSQL authority, transactional-outbox, JetStream
+  - [x] Document the PostgreSQL authority, transactional-outbox, JetStream
     transport, run-orchestrator, and fenced-volume-lease responsibility
     boundaries.
   - [ ] Run `cargo fmt --all -- --check`.

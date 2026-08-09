@@ -622,6 +622,198 @@ impl ::buffa::Enumeration for RemovalState {
         &[Self::REMOVAL_STATE_UNSPECIFIED, Self::REMOVAL_STATE_REMOVED]
     }
 }
+/// A supported, idempotent-at-the-state-boundary operator recovery action.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[repr(i32)]
+pub enum MailboxControlAction {
+    MAILBOX_CONTROL_ACTION_UNSPECIFIED = 0i32,
+    MAILBOX_CONTROL_ACTION_PAUSE = 1i32,
+    MAILBOX_CONTROL_ACTION_RESUME = 2i32,
+    MAILBOX_CONTROL_ACTION_RETRY = 3i32,
+    MAILBOX_CONTROL_ACTION_CANCEL = 4i32,
+    MAILBOX_CONTROL_ACTION_DEAD_LETTER = 5i32,
+}
+impl MailboxControlAction {
+    ///Idiomatic alias for [`Self::MAILBOX_CONTROL_ACTION_UNSPECIFIED`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Unspecified: Self = Self::MAILBOX_CONTROL_ACTION_UNSPECIFIED;
+    ///Idiomatic alias for [`Self::MAILBOX_CONTROL_ACTION_PAUSE`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Pause: Self = Self::MAILBOX_CONTROL_ACTION_PAUSE;
+    ///Idiomatic alias for [`Self::MAILBOX_CONTROL_ACTION_RESUME`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Resume: Self = Self::MAILBOX_CONTROL_ACTION_RESUME;
+    ///Idiomatic alias for [`Self::MAILBOX_CONTROL_ACTION_RETRY`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Retry: Self = Self::MAILBOX_CONTROL_ACTION_RETRY;
+    ///Idiomatic alias for [`Self::MAILBOX_CONTROL_ACTION_CANCEL`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Cancel: Self = Self::MAILBOX_CONTROL_ACTION_CANCEL;
+    ///Idiomatic alias for [`Self::MAILBOX_CONTROL_ACTION_DEAD_LETTER`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const DeadLetter: Self = Self::MAILBOX_CONTROL_ACTION_DEAD_LETTER;
+}
+impl ::core::default::Default for MailboxControlAction {
+    fn default() -> Self {
+        Self::MAILBOX_CONTROL_ACTION_UNSPECIFIED
+    }
+}
+impl ::serde::Serialize for MailboxControlAction {
+    fn serialize<S: ::serde::Serializer>(
+        &self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        s.serialize_str(::buffa::Enumeration::proto_name(self))
+    }
+}
+impl<'de> ::serde::Deserialize<'de> for MailboxControlAction {
+    fn deserialize<D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        struct _V;
+        impl ::serde::de::Visitor<'_> for _V {
+            type Value = MailboxControlAction;
+            fn expecting(
+                &self,
+                f: &mut ::core::fmt::Formatter<'_>,
+            ) -> ::core::fmt::Result {
+                f.write_str(
+                    concat!(
+                        "a string, integer, or null for ",
+                        stringify!(MailboxControlAction)
+                    ),
+                )
+            }
+            fn visit_str<E: ::serde::de::Error>(
+                self,
+                v: &str,
+            ) -> ::core::result::Result<MailboxControlAction, E> {
+                <MailboxControlAction as ::buffa::Enumeration>::from_proto_name(v)
+                    .ok_or_else(|| { ::serde::de::Error::unknown_variant(v, &[]) })
+            }
+            fn visit_i64<E: ::serde::de::Error>(
+                self,
+                v: i64,
+            ) -> ::core::result::Result<MailboxControlAction, E> {
+                let v32 = i32::try_from(v)
+                    .map_err(|_| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("enum value {v} out of i32 range"),
+                        )
+                    })?;
+                <MailboxControlAction as ::buffa::Enumeration>::from_i32(v32)
+                    .ok_or_else(|| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("unknown enum value {v32}"),
+                        )
+                    })
+            }
+            fn visit_u64<E: ::serde::de::Error>(
+                self,
+                v: u64,
+            ) -> ::core::result::Result<MailboxControlAction, E> {
+                let v32 = i32::try_from(v)
+                    .map_err(|_| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("enum value {v} out of i32 range"),
+                        )
+                    })?;
+                <MailboxControlAction as ::buffa::Enumeration>::from_i32(v32)
+                    .ok_or_else(|| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("unknown enum value {v32}"),
+                        )
+                    })
+            }
+            fn visit_unit<E: ::serde::de::Error>(
+                self,
+            ) -> ::core::result::Result<MailboxControlAction, E> {
+                ::core::result::Result::Ok(::core::default::Default::default())
+            }
+        }
+        d.deserialize_any(_V)
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for MailboxControlAction {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+impl ::buffa::Enumeration for MailboxControlAction {
+    fn from_i32(value: i32) -> ::core::option::Option<Self> {
+        match value {
+            0i32 => {
+                ::core::option::Option::Some(Self::MAILBOX_CONTROL_ACTION_UNSPECIFIED)
+            }
+            1i32 => ::core::option::Option::Some(Self::MAILBOX_CONTROL_ACTION_PAUSE),
+            2i32 => ::core::option::Option::Some(Self::MAILBOX_CONTROL_ACTION_RESUME),
+            3i32 => ::core::option::Option::Some(Self::MAILBOX_CONTROL_ACTION_RETRY),
+            4i32 => ::core::option::Option::Some(Self::MAILBOX_CONTROL_ACTION_CANCEL),
+            5i32 => {
+                ::core::option::Option::Some(Self::MAILBOX_CONTROL_ACTION_DEAD_LETTER)
+            }
+            _ => ::core::option::Option::None,
+        }
+    }
+    fn to_i32(&self) -> i32 {
+        *self as i32
+    }
+    fn proto_name(&self) -> &'static str {
+        match self {
+            Self::MAILBOX_CONTROL_ACTION_UNSPECIFIED => {
+                "MAILBOX_CONTROL_ACTION_UNSPECIFIED"
+            }
+            Self::MAILBOX_CONTROL_ACTION_PAUSE => "MAILBOX_CONTROL_ACTION_PAUSE",
+            Self::MAILBOX_CONTROL_ACTION_RESUME => "MAILBOX_CONTROL_ACTION_RESUME",
+            Self::MAILBOX_CONTROL_ACTION_RETRY => "MAILBOX_CONTROL_ACTION_RETRY",
+            Self::MAILBOX_CONTROL_ACTION_CANCEL => "MAILBOX_CONTROL_ACTION_CANCEL",
+            Self::MAILBOX_CONTROL_ACTION_DEAD_LETTER => {
+                "MAILBOX_CONTROL_ACTION_DEAD_LETTER"
+            }
+        }
+    }
+    fn from_proto_name(name: &str) -> ::core::option::Option<Self> {
+        match name {
+            "MAILBOX_CONTROL_ACTION_UNSPECIFIED" => {
+                ::core::option::Option::Some(Self::MAILBOX_CONTROL_ACTION_UNSPECIFIED)
+            }
+            "MAILBOX_CONTROL_ACTION_PAUSE" => {
+                ::core::option::Option::Some(Self::MAILBOX_CONTROL_ACTION_PAUSE)
+            }
+            "MAILBOX_CONTROL_ACTION_RESUME" => {
+                ::core::option::Option::Some(Self::MAILBOX_CONTROL_ACTION_RESUME)
+            }
+            "MAILBOX_CONTROL_ACTION_RETRY" => {
+                ::core::option::Option::Some(Self::MAILBOX_CONTROL_ACTION_RETRY)
+            }
+            "MAILBOX_CONTROL_ACTION_CANCEL" => {
+                ::core::option::Option::Some(Self::MAILBOX_CONTROL_ACTION_CANCEL)
+            }
+            "MAILBOX_CONTROL_ACTION_DEAD_LETTER" => {
+                ::core::option::Option::Some(Self::MAILBOX_CONTROL_ACTION_DEAD_LETTER)
+            }
+            _ => ::core::option::Option::None,
+        }
+    }
+    fn values() -> &'static [Self] {
+        &[
+            Self::MAILBOX_CONTROL_ACTION_UNSPECIFIED,
+            Self::MAILBOX_CONTROL_ACTION_PAUSE,
+            Self::MAILBOX_CONTROL_ACTION_RESUME,
+            Self::MAILBOX_CONTROL_ACTION_RETRY,
+            Self::MAILBOX_CONTROL_ACTION_CANCEL,
+            Self::MAILBOX_CONTROL_ACTION_DEAD_LETTER,
+        ]
+    }
+}
 #[derive(Clone, PartialEq, Default)]
 #[derive(::serde::Serialize)]
 #[serde(default)]
@@ -6293,6 +6485,15 @@ pub struct MailboxDeliveryInspection {
         skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
     )]
     pub event_id: ::buffa::MessageField<super::super::common::v1::OpaqueId>,
+    /// Opaque control target; this is not an application envelope identifier.
+    ///
+    /// Field 14: `mailbox_id`
+    #[serde(
+        rename = "mailboxId",
+        alias = "mailbox_id",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub mailbox_id: ::buffa::MessageField<super::super::common::v1::OpaqueId>,
     /// Field 2: `disposition`
     #[serde(
         rename = "disposition",
@@ -6393,6 +6594,7 @@ impl ::core::fmt::Debug for MailboxDeliveryInspection {
     fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         f.debug_struct("MailboxDeliveryInspection")
             .field("event_id", &self.event_id)
+            .field("mailbox_id", &self.mailbox_id)
             .field("disposition", &self.disposition)
             .field("logical_attempt_count", &self.logical_attempt_count)
             .field("denial_code", &self.denial_code)
@@ -6516,6 +6718,14 @@ impl ::buffa::Message for MailboxDeliveryInspection {
                 += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
                     + inner_size;
         }
+        if self.mailbox_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.mailbox_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
         size
     }
@@ -6570,6 +6780,10 @@ impl ::buffa::Message for MailboxDeliveryInspection {
         if self.updated_at.is_set() {
             ::buffa::types::put_len_delimited_header(13u32, __cache.consume_next(), buf);
             self.updated_at.write_to(__cache, buf);
+        }
+        if self.mailbox_id.is_set() {
+            ::buffa::types::put_len_delimited_header(14u32, __cache.consume_next(), buf);
+            self.mailbox_id.write_to(__cache, buf);
         }
         self.__buffa_unknown_fields.write_to(buf);
     }
@@ -6699,6 +6913,17 @@ impl ::buffa::Message for MailboxDeliveryInspection {
                     ctx,
                 )?;
             }
+            14u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.mailbox_id.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
             _ => {
                 self.__buffa_unknown_fields
                     .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
@@ -6720,6 +6945,7 @@ impl ::buffa::Message for MailboxDeliveryInspection {
         self.next_eligible_at = ::buffa::MessageField::none();
         self.next_recovery_action.clear();
         self.updated_at = ::buffa::MessageField::none();
+        self.mailbox_id = ::buffa::MessageField::none();
         self.__buffa_unknown_fields.clear();
     }
 }
@@ -12237,5 +12463,359 @@ pub const __REVISE_CAPABILITIES_RESPONSE_JSON_ANY: ::buffa::type_registry::JsonA
     type_url: "type.googleapis.com/hephaestus.instance.v1.ReviseCapabilitiesResponse",
     to_json: ::buffa::type_registry::any_to_json::<ReviseCapabilitiesResponse>,
     from_json: ::buffa::type_registry::any_from_json::<ReviseCapabilitiesResponse>,
+    is_wkt: false,
+};
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct ControlMailboxRequest {
+    /// Field 1: `context`
+    #[serde(
+        rename = "context",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub context: ::buffa::MessageField<super::super::common::v1::RequestContext>,
+    /// Field 2: `mailbox_id`
+    #[serde(
+        rename = "mailboxId",
+        alias = "mailbox_id",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub mailbox_id: ::buffa::MessageField<super::super::common::v1::OpaqueId>,
+    /// Required for retry, cancel, and dead-letter; omitted for pause/resume.
+    ///
+    /// Field 3: `event_id`
+    #[serde(
+        rename = "eventId",
+        alias = "event_id",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub event_id: ::buffa::MessageField<super::super::common::v1::OpaqueId>,
+    /// Field 4: `action`
+    #[serde(
+        rename = "action",
+        with = "::buffa::json_helpers::proto_enum",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_default_enum_value"
+    )]
+    pub action: ::buffa::EnumValue<MailboxControlAction>,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for ControlMailboxRequest {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("ControlMailboxRequest")
+            .field("context", &self.context)
+            .field("mailbox_id", &self.mailbox_id)
+            .field("event_id", &self.event_id)
+            .field("action", &self.action)
+            .finish()
+    }
+}
+impl ControlMailboxRequest {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.instance.v1.ControlMailboxRequest";
+}
+::buffa::impl_default_instance!(ControlMailboxRequest);
+impl ::buffa::MessageName for ControlMailboxRequest {
+    const PACKAGE: &'static str = "hephaestus.instance.v1";
+    const NAME: &'static str = "ControlMailboxRequest";
+    const FULL_NAME: &'static str = "hephaestus.instance.v1.ControlMailboxRequest";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.instance.v1.ControlMailboxRequest";
+}
+impl ::buffa::Message for ControlMailboxRequest {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if self.context.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.context.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.mailbox_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.mailbox_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.event_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.event_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        {
+            let val = self.action.to_i32();
+            if val != 0 {
+                size += 1u32 + ::buffa::types::int32_encoded_len(val) as u32;
+            }
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        __cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if self.context.is_set() {
+            ::buffa::types::put_len_delimited_header(1u32, __cache.consume_next(), buf);
+            self.context.write_to(__cache, buf);
+        }
+        if self.mailbox_id.is_set() {
+            ::buffa::types::put_len_delimited_header(2u32, __cache.consume_next(), buf);
+            self.mailbox_id.write_to(__cache, buf);
+        }
+        if self.event_id.is_set() {
+            ::buffa::types::put_len_delimited_header(3u32, __cache.consume_next(), buf);
+            self.event_id.write_to(__cache, buf);
+        }
+        {
+            let val = self.action.to_i32();
+            if val != 0 {
+                ::buffa::types::put_int32_field(4u32, val, buf);
+            }
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.context.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.mailbox_id.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            3u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.event_id.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            4u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.action = ::buffa::EnumValue::from(
+                    ::buffa::types::decode_int32(buf)?,
+                );
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.context = ::buffa::MessageField::none();
+        self.mailbox_id = ::buffa::MessageField::none();
+        self.event_id = ::buffa::MessageField::none();
+        self.action = ::buffa::EnumValue::from(0);
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for ControlMailboxRequest {
+    const PROTO_FQN: &'static str = "hephaestus.instance.v1.ControlMailboxRequest";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for ControlMailboxRequest {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __CONTROL_MAILBOX_REQUEST_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/hephaestus.instance.v1.ControlMailboxRequest",
+    to_json: ::buffa::type_registry::any_to_json::<ControlMailboxRequest>,
+    from_json: ::buffa::type_registry::any_from_json::<ControlMailboxRequest>,
+    is_wkt: false,
+};
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct ControlMailboxResponse {
+    /// Whether this request changed the durable state. A false value is a safe,
+    /// non-disclosing no-op, not evidence that a particular event exists.
+    ///
+    /// Field 1: `changed`
+    #[serde(
+        rename = "changed",
+        with = "::buffa::json_helpers::proto_bool",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_false"
+    )]
+    pub changed: bool,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for ControlMailboxResponse {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("ControlMailboxResponse").field("changed", &self.changed).finish()
+    }
+}
+impl ControlMailboxResponse {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.instance.v1.ControlMailboxResponse";
+}
+::buffa::impl_default_instance!(ControlMailboxResponse);
+impl ::buffa::MessageName for ControlMailboxResponse {
+    const PACKAGE: &'static str = "hephaestus.instance.v1";
+    const NAME: &'static str = "ControlMailboxResponse";
+    const FULL_NAME: &'static str = "hephaestus.instance.v1.ControlMailboxResponse";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.instance.v1.ControlMailboxResponse";
+}
+impl ::buffa::Message for ControlMailboxResponse {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, _cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if self.changed {
+            size += 1u32 + ::buffa::types::BOOL_ENCODED_LEN as u32;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        _cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if self.changed {
+            ::buffa::types::put_bool_field(1u32, self.changed, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.changed = ::buffa::types::decode_bool(buf)?;
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.changed = false;
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for ControlMailboxResponse {
+    const PROTO_FQN: &'static str = "hephaestus.instance.v1.ControlMailboxResponse";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for ControlMailboxResponse {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __CONTROL_MAILBOX_RESPONSE_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/hephaestus.instance.v1.ControlMailboxResponse",
+    to_json: ::buffa::type_registry::any_to_json::<ControlMailboxResponse>,
+    from_json: ::buffa::type_registry::any_from_json::<ControlMailboxResponse>,
     is_wkt: false,
 };

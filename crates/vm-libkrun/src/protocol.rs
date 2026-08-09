@@ -4,7 +4,19 @@ use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, path::PathBuf};
 
 /// Current host-to-guest protocol version.
-pub const PROTOCOL_VERSION: u16 = 5;
+pub const PROTOCOL_VERSION: u16 = 6;
+/// Maximum private HTTP body carried by the authenticated control protocol.
+pub const MAX_PRIVATE_HTTP_BODY_BYTES: usize = 1_048_576;
+/// Maximum private HTTP headers carried by one request or response.
+pub const MAX_PRIVATE_HTTP_HEADERS: usize = 64;
+/// VM label which opts a released command into the one-request gateway ABI.
+///
+/// This is deliberately an exact contract value rather than a generic
+/// networking switch: ordinary VM commands must never receive control-plane
+/// HTTP frames on their standard input.
+pub const GATEWAY_HANDLER_CONTRACT_LABEL: &str = "hephaestus.gateway.handler-contract";
+/// The only gateway handler contract understood by this protocol version.
+pub const GATEWAY_HANDLER_CONTRACT_V1: &str = "http.v1";
 
 /// `AF_VSOCK` port used by `heph-init` to connect to the host worker.
 pub const GUEST_VSOCK_PORT: u32 = 19_000;
@@ -46,6 +58,8 @@ pub enum HostMessage {
         /// Sensitive one-run authority delivered only on this authenticated
         /// host-to-guest bootstrap stream.
         runtime_authority: Option<Box<RuntimeAuthorityMessage>>,
+        /// Whether `command` is a one-request private HTTP gateway handler.
+        gateway_handler: bool,
     },
     /// Requests graceful cancellation.
     Cancel {
@@ -56,6 +70,13 @@ pub enum HostMessage {
     HealthPing {
         /// Opaque value echoed by the guest.
         nonce: u64,
+    },
+    /// Invokes one gateway handler request over the authenticated control channel.
+    PrivateHttpRequest {
+        /// Correlates the exact guest response.
+        request_id: u64,
+        /// Complete bounded request.
+        request: PrivateHttpRequestMessage,
     },
 }
 
@@ -117,6 +138,36 @@ pub enum GuestMessage {
         /// Human-readable diagnostic.
         message: String,
     },
+    /// Returns exactly one bounded gateway handler response.
+    PrivateHttpResponse {
+        /// Correlates the exact host request.
+        request_id: u64,
+        /// Complete bounded response.
+        response: PrivateHttpResponseMessage,
+    },
+}
+
+/// Wire representation of a complete canonical private HTTP request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrivateHttpRequestMessage {
+    /// Uppercase canonical HTTP method.
+    pub method: String,
+    /// Normalized absolute path and optional query.
+    pub path_and_query: String,
+    /// Bounded canonical header name/value pairs.
+    pub headers: Vec<(String, String)>,
+    /// Complete bounded body.
+    pub body: Vec<u8>,
+}
+/// Wire representation of a complete canonical private HTTP response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrivateHttpResponseMessage {
+    /// Three-digit HTTP status.
+    pub status: u16,
+    /// Bounded canonical header name/value pairs.
+    pub headers: Vec<(String, String)>,
+    /// Complete bounded body.
+    pub body: Vec<u8>,
 }
 
 /// Sensitive runtime authority carried only by the bootstrap stream.

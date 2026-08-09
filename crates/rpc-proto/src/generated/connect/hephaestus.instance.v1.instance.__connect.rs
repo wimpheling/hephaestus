@@ -118,6 +118,18 @@ pub type OwnedReviseCapabilitiesResponseView = ::buffa::view::OwnedView<
         'static,
     >,
 >;
+///Shorthand for `OwnedView<ControlMailboxRequestView<'static>>`.
+pub type OwnedControlMailboxRequestView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::instance::v1::__buffa::view::ControlMailboxRequestView<
+        'static,
+    >,
+>;
+///Shorthand for `OwnedView<ControlMailboxResponseView<'static>>`.
+pub type OwnedControlMailboxResponseView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::instance::v1::__buffa::view::ControlMailboxResponseView<
+        'static,
+    >,
+>;
 impl ::connectrpc::Encodable<
     crate::messages::hephaestus::instance::v1::GetInstanceResponse,
 >
@@ -398,6 +410,34 @@ for ::buffa::view::OwnedView<
         ::connectrpc::__codegen::encode_view_body(self.reborrow(), codec)
     }
 }
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::instance::v1::ControlMailboxResponse,
+>
+for crate::messages::hephaestus::instance::v1::__buffa::view::ControlMailboxResponseView<
+    '_,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self, codec)
+    }
+}
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::instance::v1::ControlMailboxResponse,
+>
+for ::buffa::view::OwnedView<
+    crate::messages::hephaestus::instance::v1::__buffa::view::ControlMailboxResponseView<
+        'static,
+    >,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self.reborrow(), codec)
+    }
+}
 /// Full service name for this service.
 pub const AGENT_INSTANCE_SERVICE_SERVICE_NAME: &str = "hephaestus.instance.v1.AgentInstanceService";
 /// Static [`Spec`](::connectrpc::Spec) for the server-side `GetInstance` RPC.
@@ -487,6 +527,15 @@ pub const AGENT_INSTANCE_SERVICE_BIND_SECRET_SPEC: ::connectrpc::Spec = ::connec
 /// [`RequestContext::spec`](::connectrpc::RequestContext::spec).
 pub const AGENT_INSTANCE_SERVICE_REVISE_CAPABILITIES_SPEC: ::connectrpc::Spec = ::connectrpc::Spec::server(
         "/hephaestus.instance.v1.AgentInstanceService/ReviseCapabilities",
+        ::connectrpc::StreamType::Unary,
+    )
+    .with_idempotency_level(::connectrpc::IdempotencyLevel::Unknown);
+/// Static [`Spec`](::connectrpc::Spec) for the server-side `ControlMailbox` RPC.
+///
+/// The dispatcher surfaces this on
+/// [`RequestContext::spec`](::connectrpc::RequestContext::spec).
+pub const AGENT_INSTANCE_SERVICE_CONTROL_MAILBOX_SPEC: ::connectrpc::Spec = ::connectrpc::Spec::server(
+        "/hephaestus.instance.v1.AgentInstanceService/ControlMailbox",
         ::connectrpc::StreamType::Unary,
     )
     .with_idempotency_level(::connectrpc::IdempotencyLevel::Unknown);
@@ -768,6 +817,30 @@ pub trait AgentInstanceService: Send + Sync + 'static {
         Output = ::connectrpc::ServiceResult<
             impl ::connectrpc::Encodable<
                 crate::messages::hephaestus::instance::v1::ReviseCapabilitiesResponse,
+            > + Send + use<'a, Self>,
+        >,
+    > + Send;
+    /// Applies one recovery control to a durable mailbox without exposing its
+    /// opaque event body. Authorization is rechecked against the owning instance.
+    ///
+    /// `'a` lets the response body borrow from `&self` (e.g. server-resident state).
+    ///
+    /// `request` is borrowed from the request body and is valid for the
+    /// duration of the call; message fields are read directly on it
+    /// (zero-copy). The response cannot borrow from `request` — use
+    /// `.to_owned_message()` (or copy the specific fields) for anything
+    /// returned, stored, or moved into `tokio::spawn`.
+    fn control_mailbox<'a>(
+        &'a self,
+        ctx: ::connectrpc::RequestContext,
+        request: ::connectrpc::ServiceRequest<
+            '_,
+            crate::messages::hephaestus::instance::v1::ControlMailboxRequest,
+        >,
+    ) -> impl ::std::future::Future<
+        Output = ::connectrpc::ServiceResult<
+            impl ::connectrpc::Encodable<
+                crate::messages::hephaestus::instance::v1::ControlMailboxResponse,
             > + Send + use<'a, Self>,
         >,
     > + Send;
@@ -1093,6 +1166,35 @@ impl<S: AgentInstanceService> AgentInstanceServiceExt for S {
                 },
             )
             .with_spec(AGENT_INSTANCE_SERVICE_REVISE_CAPABILITIES_SPEC)
+            .route_view(
+                AGENT_INSTANCE_SERVICE_SERVICE_NAME,
+                "ControlMailbox",
+                {
+                    let svc = ::std::sync::Arc::clone(&self);
+                    ::connectrpc::view_handler_fn(move |
+                        ctx,
+                        req: ::buffa::view::OwnedView<
+                            crate::messages::hephaestus::instance::v1::__buffa::view::ControlMailboxRequestView<
+                                'static,
+                            >,
+                        >,
+                        format|
+                    {
+                        let svc = ::std::sync::Arc::clone(&svc);
+                        async move {
+                            let sreq = ::connectrpc::ServiceRequest::<
+                                crate::messages::hephaestus::instance::v1::ControlMailboxRequest,
+                            >::from_parts(req.reborrow(), req.bytes());
+                            svc.control_mailbox(ctx, sreq)
+                                .await?
+                                .encode::<
+                                    crate::messages::hephaestus::instance::v1::ControlMailboxResponse,
+                                >(format)
+                        }
+                    })
+                },
+            )
+            .with_spec(AGENT_INSTANCE_SERVICE_CONTROL_MAILBOX_SPEC)
     }
 }
 /// Type-inference marker used by [`Router::add_service`](::connectrpc::Router::add_service).
@@ -1208,6 +1310,12 @@ for AgentInstanceServiceServer<T> {
                 Some(
                     ::connectrpc::dispatcher::codegen::MethodDescriptor::unary(false)
                         .with_spec(AGENT_INSTANCE_SERVICE_REVISE_CAPABILITIES_SPEC),
+                )
+            }
+            "ControlMailbox" => {
+                Some(
+                    ::connectrpc::dispatcher::codegen::MethodDescriptor::unary(false)
+                        .with_spec(AGENT_INSTANCE_SERVICE_CONTROL_MAILBOX_SPEC),
                 )
             }
             _ => None,
@@ -1433,6 +1541,27 @@ for AgentInstanceServiceServer<T> {
                         .await?
                         .encode::<
                             crate::messages::hephaestus::instance::v1::ReviseCapabilitiesResponse,
+                        >(format)
+                })
+            }
+            "ControlMailbox" => {
+                let svc = ::std::sync::Arc::clone(&self.inner);
+                Box::pin(async move {
+                    let body = ::connectrpc::dispatcher::codegen::request_proto_bytes::<
+                        crate::messages::hephaestus::instance::v1::ControlMailboxRequest,
+                    >(request.encoded()?, format)?;
+                    let req: crate::messages::hephaestus::instance::v1::__buffa::view::ControlMailboxRequestView<
+                        '_,
+                    > = ::connectrpc::dispatcher::codegen::decode_borrowed_request_view(
+                        &body,
+                    )?;
+                    let req = ::connectrpc::ServiceRequest::<
+                        crate::messages::hephaestus::instance::v1::ControlMailboxRequest,
+                    >::from_parts(&req, &body);
+                    svc.control_mailbox(ctx, req)
+                        .await?
+                        .encode::<
+                            crate::messages::hephaestus::instance::v1::ControlMailboxResponse,
                         >(format)
                 })
             }
@@ -2014,6 +2143,51 @@ where
                 &self.config,
                 AGENT_INSTANCE_SERVICE_SERVICE_NAME,
                 "ReviseCapabilities",
+                request,
+                options,
+            )
+            .await
+    }
+    /// Call the ControlMailbox RPC. Sends a request to /hephaestus.instance.v1.AgentInstanceService/ControlMailbox.
+    pub async fn control_mailbox(
+        &self,
+        request: crate::messages::hephaestus::instance::v1::ControlMailboxRequest,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::instance::v1::__buffa::view::ControlMailboxResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        self.control_mailbox_with_options(
+                request,
+                ::connectrpc::client::CallOptions::default(),
+            )
+            .await
+    }
+    /// Call the ControlMailbox RPC with explicit per-call options. Options override [`ClientConfig`](::connectrpc::client::ClientConfig) defaults.
+    pub async fn control_mailbox_with_options(
+        &self,
+        request: crate::messages::hephaestus::instance::v1::ControlMailboxRequest,
+        options: ::connectrpc::client::CallOptions,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::instance::v1::__buffa::view::ControlMailboxResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        ::connectrpc::client::call_unary(
+                &self.transport,
+                &self.config,
+                AGENT_INSTANCE_SERVICE_SERVICE_NAME,
+                "ControlMailbox",
                 request,
                 options,
             )

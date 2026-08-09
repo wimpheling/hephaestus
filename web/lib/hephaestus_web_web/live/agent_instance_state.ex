@@ -23,7 +23,8 @@ defmodule HephaestusWebWeb.AgentInstanceState do
     "revise-capabilities",
     "create-update",
     "recover-update",
-    "bind-secret"
+    "bind-secret",
+    "control-mailbox"
   ]
 
   defstruct status: :initial,
@@ -120,6 +121,15 @@ defmodule HephaestusWebWeb.AgentInstanceState do
         {:ok, instance}
       }) do
     state |> snapshot_data(instance) |> ProductEventReducer.snapshot_complete()
+  end
+
+  def reduce(%__MODULE__{stream_generation: generation} = state, {
+        :command_completed,
+        generation,
+        {:ok, :reload, message}
+      }) do
+    {state, effects} = begin_load(state, :stale)
+    {state, [{:flash, :info, message} | effects]}
   end
 
   def reduce(%__MODULE__{stream_generation: generation} = state, {
@@ -431,6 +441,18 @@ defmodule HephaestusWebWeb.AgentInstanceState do
         attributes["instance_id"],
         "Secret binding activated in a new immutable revision."
       )
+    end
+  end
+
+  defp execute_command(identity, "control-mailbox", attributes) do
+    case Client.control_mailbox(
+           identity,
+           attributes["mailbox_id"],
+           attributes["event_id"],
+           attributes["action"]
+         ) do
+      {:ok, _response} -> {:ok, :reload, "Mailbox control applied."}
+      {:error, reason} -> {:error, command_error(reason)}
     end
   end
 

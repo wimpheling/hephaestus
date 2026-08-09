@@ -43,6 +43,7 @@ identity-domain = { path = "../identity-domain" }
 identity-application = { path = "../identity-application" }
 identity-postgres = { path = "../identity-postgres" }
 mailbox-dispatch = { path = "../mailbox-dispatch" }
+mailbox-domain = { path = "../mailbox-domain" }
 mailbox-postgres = { path = "../mailbox-postgres" }
 http.workspace = true
 hmac.workspace = true

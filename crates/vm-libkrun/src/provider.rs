@@ -11,6 +11,8 @@ use crate::{
     },
 };
 use async_trait::async_trait;
+use bytes::Bytes;
+use http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
 use std::{
     collections::{HashMap, HashSet},
     error::Error,
@@ -38,6 +40,7 @@ use vm_trait::{
 
 const EVENT_CAPACITY: usize = 256;
 const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(20);
+const PRIVATE_HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Fedora/Linux VM provider backed by a dedicated libkrun worker per VM.
 #[derive(Clone)]
@@ -143,6 +146,10 @@ impl LibkrunProvider {
             wall_clock_seconds = self.inner.config.limits.wall_clock_timeout.as_secs(),
             "provisioning VM resources"
         );
+        let private_http_enabled = spec
+            .labels
+            .get(crate::protocol::GATEWAY_HANDLER_CONTRACT_LABEL)
+            .is_some_and(|value| value == crate::protocol::GATEWAY_HANDLER_CONTRACT_V1);
         let worker = match self
             .inner
             .worker_spawner
@@ -176,6 +183,9 @@ impl LibkrunProvider {
                 cgroup,
             })),
             provider_ids: Arc::clone(&self.inner),
+            private_http_enabled,
+            private_http_waiters: Mutex::new(HashMap::new()),
+            next_private_http_request: AtomicU64::new(1),
         });
         instance.spawn_event_forwarder();
         instance.spawn_process_monitor();
@@ -195,6 +205,10 @@ struct LibkrunInstance {
     events: broadcast::Sender<VmEvent>,
     resources: Mutex<Option<OwnedResources>>,
     provider_ids: Arc<ProviderInner>,
+    private_http_enabled: bool,
+    private_http_waiters:
+        Mutex<HashMap<u64, oneshot::Sender<Result<vm_trait::PrivateHttpResponse, VmError>>>>,
+    next_private_http_request: AtomicU64,
 }
 
 #[derive(Clone)]
@@ -322,6 +336,55 @@ impl VmInstance for LibkrunInstance {
 
     async fn wait(&self) -> Result<VmExit, VmError> {
         self.wait_for_terminal().await
+    }
+
+    async fn invoke_private_http(
+        &self,
+        request: vm_trait::PrivateHttpRequest,
+    ) -> Result<vm_trait::PrivateHttpResponse, VmError> {
+        if !self.private_http_enabled {
+            return Err(VmError::Unsupported {
+                feature: "private HTTP requires the declared http.v1 gateway handler contract"
+                    .to_owned(),
+                provider: PROVIDER_NAME.to_owned(),
+            });
+        }
+        let request = private_http_request_message(request)?;
+        let request_id = self
+            .next_private_http_request
+            .fetch_add(1, Ordering::Relaxed);
+        if request_id == 0 {
+            return Err(VmError::InvalidState(
+                "private HTTP request identifier overflowed",
+            ));
+        }
+        let (sender, receiver) = oneshot::channel();
+        self.private_http_waiters
+            .lock()
+            .await
+            .insert(request_id, sender);
+        if let Err(error) = self
+            .worker
+            .request(WorkerCommand::InvokePrivateHttp {
+                request_id,
+                request,
+            })
+            .await
+        {
+            self.private_http_waiters.lock().await.remove(&request_id);
+            return Err(error);
+        }
+        match timeout(PRIVATE_HTTP_TIMEOUT, receiver).await {
+            Ok(Ok(response)) => response,
+            Ok(Err(error)) => Err(provider_error("private-http-response", error)),
+            Err(_) => {
+                self.private_http_waiters.lock().await.remove(&request_id);
+                Err(unavailable_error(
+                    "private HTTP handler",
+                    "response timed out",
+                ))
+            }
+        }
     }
 
     fn subscribe_events(&self) -> broadcast::Receiver<VmEvent> {
@@ -539,6 +602,20 @@ impl LibkrunInstance {
                     message = %failure.message,
                     "worker backend failure"
                 );
+                self.fail_private_http_waiters("guest control channel failed")
+                    .await;
+            }
+            WorkerEvent::PrivateHttpResponse {
+                request_id,
+                response,
+            } => {
+                let response = private_http_response(response);
+                let waiter = self.private_http_waiters.lock().await.remove(&request_id);
+                if let Some(waiter) = waiter {
+                    let _sent = waiter.send(response);
+                } else {
+                    warn!(vm_id = %self.id.0, request_id, "discarding unmatched private HTTP response");
+                }
             }
         }
     }
@@ -557,6 +634,15 @@ impl LibkrunInstance {
             }
         }
         send_event(&self.events, VmEvent::Exited(exit));
+        self.fail_private_http_waiters("guest exited before private HTTP response")
+            .await;
+    }
+
+    async fn fail_private_http_waiters(&self, reason: &str) {
+        let waiters = std::mem::take(&mut *self.private_http_waiters.lock().await);
+        for (_, waiter) in waiters {
+            let _sent = waiter.send(Err(unavailable_error("private HTTP handler", reason)));
+        }
     }
 
     async fn force_cleanup(&self, was_started: bool) -> Result<(), VmError> {
@@ -596,6 +682,111 @@ impl LibkrunInstance {
         self.provider_ids.ids.lock().await.remove(&self.id);
         Ok(())
     }
+}
+
+fn private_http_request_message(
+    request: vm_trait::PrivateHttpRequest,
+) -> Result<crate::protocol::PrivateHttpRequestMessage, VmError> {
+    if request.body.len() > crate::protocol::MAX_PRIVATE_HTTP_BODY_BYTES {
+        return Err(invalid_private_http(
+            "private HTTP request body exceeds provider limit".to_owned(),
+        ));
+    }
+    let headers = private_http_headers(&request.headers, "request")?;
+    let method = request.method.as_str();
+    if method.is_empty() || method.bytes().any(|byte| !byte.is_ascii_uppercase()) {
+        return Err(invalid_private_http(
+            "private HTTP method must be uppercase ASCII".to_owned(),
+        ));
+    }
+    if !request.path_and_query.starts_with('/') || request.path_and_query.contains('\0') {
+        return Err(invalid_private_http(
+            "private HTTP path must be an absolute non-NUL path".to_owned(),
+        ));
+    }
+    Ok(crate::protocol::PrivateHttpRequestMessage {
+        method: method.to_owned(),
+        path_and_query: request.path_and_query,
+        headers,
+        body: request.body.to_vec(),
+    })
+}
+
+fn invalid_private_http(reason: impl Into<String>) -> VmError {
+    VmError::InvalidSpec {
+        field: "private_http".to_owned(),
+        reason: reason.into(),
+    }
+}
+
+fn private_http_response(
+    response: crate::protocol::PrivateHttpResponseMessage,
+) -> Result<vm_trait::PrivateHttpResponse, VmError> {
+    if response.body.len() > crate::protocol::MAX_PRIVATE_HTTP_BODY_BYTES {
+        return Err(invalid_private_http(
+            "private HTTP response body exceeds provider limit".to_owned(),
+        ));
+    }
+    let status = StatusCode::from_u16(response.status)
+        .map_err(|_| invalid_private_http("private HTTP response status is invalid".to_owned()))?;
+    let headers = private_http_header_pairs(response.headers, "response")?;
+    Ok(vm_trait::PrivateHttpResponse {
+        status,
+        headers,
+        body: Bytes::from(response.body),
+    })
+}
+
+fn private_http_headers(
+    headers: &HeaderMap,
+    direction: &str,
+) -> Result<Vec<(String, String)>, VmError> {
+    if headers.len() > crate::protocol::MAX_PRIVATE_HTTP_HEADERS {
+        return Err(invalid_private_http(format!(
+            "private HTTP {direction} has too many headers"
+        )));
+    }
+    headers
+        .iter()
+        .map(|(name, value)| {
+            let value = value.to_str().map_err(|_| {
+                invalid_private_http(format!("private HTTP {direction} header is not UTF-8"))
+            })?;
+            if value.contains(['\r', '\n', '\0']) {
+                return Err(invalid_private_http(format!(
+                    "private HTTP {direction} header contains control characters"
+                )));
+            }
+            Ok((name.as_str().to_owned(), value.to_owned()))
+        })
+        .collect()
+}
+
+fn private_http_header_pairs(
+    headers: Vec<(String, String)>,
+    direction: &str,
+) -> Result<HeaderMap, VmError> {
+    if headers.len() > crate::protocol::MAX_PRIVATE_HTTP_HEADERS {
+        return Err(invalid_private_http(format!(
+            "private HTTP {direction} has too many headers"
+        )));
+    }
+    let mut parsed = HeaderMap::with_capacity(headers.len());
+    for (name, value) in headers {
+        if value.contains(['\r', '\n', '\0']) {
+            return Err(invalid_private_http(format!(
+                "private HTTP {direction} header contains control characters"
+            )));
+        }
+        let name = HeaderName::from_bytes(name.as_bytes()).map_err(|_| {
+            invalid_private_http(format!("private HTTP {direction} header name is invalid"))
+        })?;
+        let value = HeaderValue::from_str(&value).map_err(|_| {
+            invalid_private_http(format!("private HTTP {direction} header value is invalid"))
+        })?;
+        parsed.append(name, value);
+    }
+    Ok(parsed)
 }
 
 async fn wait_start_result(
@@ -1062,25 +1253,26 @@ mod tests {
     };
     use crate::{
         config::LibkrunConfig,
+        protocol::PrivateHttpResponseMessage,
         worker::{WireError, WireErrorKind, WorkerCommand, WorkerEvent},
     };
     use async_trait::async_trait;
     use std::{
-        collections::{BTreeMap, HashSet},
+        collections::{BTreeMap, HashMap, HashSet},
         fs,
         os::unix::fs::PermissionsExt as _,
         path::PathBuf,
         sync::{
             Arc,
-            atomic::{AtomicUsize, Ordering},
+            atomic::{AtomicU64, AtomicUsize, Ordering},
         },
         time::Duration,
     };
     use tempfile::TempDir;
     use tokio::sync::{Mutex, Notify, broadcast, watch};
     use vm_trait::{
-        DiskFormat, GuestCommand, NetworkMode, RootFilesystem, StopMode, VmDisk, VmError, VmEvent,
-        VmId, VmInstance, VmProvider, VmResources, VmSpec,
+        DiskFormat, GuestCommand, NetworkMode, PrivateHttpRequest, RootFilesystem, StopMode,
+        VmDisk, VmError, VmEvent, VmId, VmInstance, VmProvider, VmResources, VmSpec,
     };
 
     #[test]
@@ -1294,6 +1486,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn private_http_response_is_correlated_to_its_waiter() {
+        let temp = TempDir::new().unwrap();
+        let worker = Arc::new(MockWorker::new());
+        let instance = instance(&temp, worker);
+        instance.start().await.unwrap();
+        let response = instance
+            .invoke_private_http(PrivateHttpRequest {
+                method: http::Method::POST,
+                path_and_query: "/gateway/echo".to_owned(),
+                headers: http::HeaderMap::new(),
+                body: bytes::Bytes::from_static(b"request"),
+            })
+            .await
+            .unwrap();
+        assert_eq!(response.status, http::StatusCode::CREATED);
+        assert_eq!(response.body, bytes::Bytes::from_static(b"response"));
+    }
+
+    #[tokio::test]
     async fn worker_crash_without_exit_event_is_cached_and_forwarded_once() {
         let temp = TempDir::new().unwrap();
         let worker = Arc::new(MockWorker::new());
@@ -1414,6 +1625,9 @@ mod tests {
             events,
             resources: Mutex::new(None),
             provider_ids,
+            private_http_enabled: true,
+            private_http_waiters: Mutex::new(HashMap::new()),
+            next_private_http_request: AtomicU64::new(1),
         });
         instance.spawn_event_forwarder();
         instance.spawn_process_monitor();
@@ -1581,6 +1795,16 @@ mod tests {
                     }));
                 }
                 WorkerCommand::Configure { .. } | WorkerCommand::Health { .. } => {}
+                WorkerCommand::InvokePrivateHttp { request_id, .. } => {
+                    drop(self.events.send(WorkerEvent::PrivateHttpResponse {
+                        request_id,
+                        response: PrivateHttpResponseMessage {
+                            status: 201,
+                            headers: Vec::new(),
+                            body: b"response".to_vec(),
+                        },
+                    }));
+                }
             }
             Ok(())
         }

@@ -3,9 +3,11 @@ use crate::{
     framing::{read_sync, write_sync},
     network::{PasstProcess, WorkerNetworkError},
     protocol::{
-        GuestCommandMessage, GuestLogStream, GuestMessage, GuestMount, GuestStateVolume,
-        HostMessage, MAX_LOG_CHUNK_SIZE, MAX_METRIC_LABELS, MAX_METRIC_TEXT_SIZE,
-        MAX_RESULT_MESSAGE_SIZE, PROTOCOL_VERSION, RuntimeAuthorityMessage,
+        GATEWAY_HANDLER_CONTRACT_LABEL, GATEWAY_HANDLER_CONTRACT_V1, GuestCommandMessage,
+        GuestLogStream, GuestMessage, GuestMount, GuestStateVolume, HostMessage,
+        MAX_LOG_CHUNK_SIZE, MAX_METRIC_LABELS, MAX_METRIC_TEXT_SIZE, MAX_PRIVATE_HTTP_BODY_BYTES,
+        MAX_PRIVATE_HTTP_HEADERS, MAX_RESULT_MESSAGE_SIZE, PROTOCOL_VERSION,
+        RuntimeAuthorityMessage,
     },
     validation::{PreparedForward, PreparedSpec},
 };
@@ -55,6 +57,10 @@ pub enum WorkerCommand {
     Health {
         nonce: u64,
     },
+    InvokePrivateHttp {
+        request_id: u64,
+        request: crate::protocol::PrivateHttpRequestMessage,
+    },
     Destroy,
 }
 
@@ -99,6 +105,13 @@ pub enum WorkerEvent {
         signal: Option<i32>,
     },
     BackendFailure(WireError),
+    /// A bounded private HTTP response from the gateway guest handler.
+    PrivateHttpResponse {
+        /// Correlates the exact host request.
+        request_id: u64,
+        /// Bounded canonical response.
+        response: crate::protocol::PrivateHttpResponseMessage,
+    },
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -182,6 +195,16 @@ fn run(
                     .as_ref()
                     .ok_or_else(|| WireError::invalid_state("worker is not configured"))
                     .and_then(|configured| configured.health(nonce));
+                send_response(writer, request.request_id, result)?;
+            }
+            WorkerCommand::InvokePrivateHttp {
+                request_id,
+                request: private_request,
+            } => {
+                let result = runtime
+                    .as_ref()
+                    .ok_or_else(|| WireError::invalid_state("worker is not configured"))
+                    .and_then(|configured| configured.private_http(request_id, private_request));
                 send_response(writer, request.request_id, result)?;
             }
             WorkerCommand::Destroy => {
@@ -308,6 +331,27 @@ impl WorkerRuntime {
         drop(guest);
         result
     }
+
+    fn private_http(
+        &self,
+        request_id: u64,
+        request: crate::protocol::PrivateHttpRequestMessage,
+    ) -> Result<(), WireError> {
+        let mut guest = lock(&self.guest);
+        let stream = guest
+            .as_mut()
+            .ok_or_else(|| WireError::unavailable("guest control channel is not ready"))?;
+        let result = write_sync(
+            stream,
+            &HostMessage::PrivateHttpRequest {
+                request_id,
+                request,
+            },
+        )
+        .map_err(|error| WireError::io(&error));
+        drop(guest);
+        result
+    }
 }
 
 impl StartedVmm {
@@ -421,6 +465,10 @@ fn handle_guest(
             runtime_git_credential: authority.runtime_git_credential,
         })
     });
+    let gateway_handler = spec
+        .labels
+        .get(GATEWAY_HANDLER_CONTRACT_LABEL)
+        .is_some_and(|value| value == GATEWAY_HANDLER_CONTRACT_V1);
     let expected_authority_ack = runtime_authority
         .as_ref()
         .map(|authority| (authority.session_id, authority.generation));
@@ -432,6 +480,7 @@ fn handle_guest(
             mounts,
             state_volume,
             runtime_authority,
+            gateway_handler,
         },
     )?;
 
@@ -475,6 +524,13 @@ fn handle_guest(
                 code,
                 message,
             }),
+            GuestMessage::PrivateHttpResponse {
+                request_id,
+                response,
+            } => WorkerEvent::PrivateHttpResponse {
+                request_id,
+                response,
+            },
         };
         let exited = matches!(event, WorkerEvent::Exited { .. });
         send_message(writer, &WorkerMessage::Event(event))?;
@@ -569,6 +625,16 @@ fn validate_guest_message(message: &GuestMessage) -> io::Result<()> {
             io::ErrorKind::InvalidData,
             "guest exit cannot contain both code and signal",
         )),
+        GuestMessage::PrivateHttpResponse { response, .. }
+            if !(100..=599).contains(&response.status)
+                || response.body.len() > MAX_PRIVATE_HTTP_BODY_BYTES
+                || response.headers.len() > MAX_PRIVATE_HTTP_HEADERS =>
+        {
+            Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "private HTTP response exceeds protocol limits",
+            ))
+        }
         _ => Ok(()),
     }
 }

@@ -34,10 +34,12 @@ defmodule HephaestusWeb.RPC.Client do
     AgentInstanceService,
     BindSecretRequest,
     CapabilityBindingSelection,
+    ControlMailboxRequest,
     CreateAttachmentRequest,
     CreateUpdateRequest,
     GetInstanceRequest,
     ImportAgentRequest,
+    MailboxControlAction,
     RecoverUpdateRequest,
     RecoveryAction,
     RefSelector,
@@ -878,6 +880,18 @@ defmodule HephaestusWeb.RPC.Client do
         &AgentInstanceService.Stub.recover_update/3
       )
 
+  def control_mailbox(identity, mailbox_id, event_id, action) do
+    attributes = [mailbox_id: id(mailbox_id), action: mailbox_control_action!(action)]
+
+    mutation(
+      identity,
+      "/hephaestus.instance.v1.AgentInstanceService/ControlMailbox",
+      ControlMailboxRequest,
+      if(event_id, do: [event_id: id(event_id) | attributes], else: attributes),
+      &AgentInstanceService.Stub.control_mailbox/3
+    )
+  end
+
   def bind_secret(identity, attributes) do
     mutation(
       identity,
@@ -1196,6 +1210,21 @@ defmodule HephaestusWeb.RPC.Client do
   defp recovery_action!("retry"), do: RecoveryAction.value(:RECOVERY_ACTION_RETRY)
   defp recovery_action!("reject"), do: RecoveryAction.value(:RECOVERY_ACTION_REJECT)
   defp recovery_action!("resume"), do: RecoveryAction.value(:RECOVERY_ACTION_RESUME)
+
+  defp mailbox_control_action!("pause"),
+    do: MailboxControlAction.value(:MAILBOX_CONTROL_ACTION_PAUSE)
+
+  defp mailbox_control_action!("resume"),
+    do: MailboxControlAction.value(:MAILBOX_CONTROL_ACTION_RESUME)
+
+  defp mailbox_control_action!("retry"),
+    do: MailboxControlAction.value(:MAILBOX_CONTROL_ACTION_RETRY)
+
+  defp mailbox_control_action!("cancel"),
+    do: MailboxControlAction.value(:MAILBOX_CONTROL_ACTION_CANCEL)
+
+  defp mailbox_control_action!("dead_letter"),
+    do: MailboxControlAction.value(:MAILBOX_CONTROL_ACTION_DEAD_LETTER)
 
   defp runtime_policy(policy) do
     %RuntimePolicy{

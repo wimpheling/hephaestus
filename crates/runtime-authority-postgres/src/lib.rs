@@ -10,7 +10,9 @@ use capability_domain::{
 };
 use run_domain::Run;
 use runtime_authority::{
-    NewRuntimeSession, RuntimeAuthorityError, RuntimeSessionRepository, StoredRuntimeSession,
+    GatewayRuntimeAuthorityIssuer, GatewayRuntimeSessionRequest, NewRuntimeSession,
+    RuntimeAuthorityError, RuntimeHandoffStore, RuntimeSessionIssuer, RuntimeSessionRepository,
+    StoredRuntimeSession,
 };
 use sqlx::{FromRow, PgPool, Postgres, Transaction};
 use time::OffsetDateTime;
@@ -181,6 +183,258 @@ impl PgRuntimeSessionRepository {
         .map_err(storage)?
         .ok_or(RuntimeAuthorityError::NotFound)
     }
+}
+
+/// `PostgreSQL` storage for gateway-only runtime snapshots and sessions.
+///
+/// This deliberately implements the same generic session repository contract
+/// as agent runs while targeting the gateway-specific immutable tables.
+#[derive(Clone)]
+pub struct PgGatewayRuntimeSessionRepository {
+    pool: PgPool,
+}
+
+impl PgGatewayRuntimeSessionRepository {
+    /// Creates a gateway session repository over a worker-role pool.
+    #[must_use]
+    pub const fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+
+    async fn locked(
+        transaction: &mut Transaction<'_, Postgres>,
+        session_id: RuntimeSessionId,
+    ) -> Result<SessionRow, RuntimeAuthorityError> {
+        sqlx::query_as::<_, SessionRow>(
+            "SELECT id, snapshot_id, identity_hash, issuance_generation,
+                    status, issued_at, expires_at, acknowledged_at, revoked_at
+             FROM gateway_runtime_authority_sessions WHERE id = $1 FOR UPDATE",
+        )
+        .bind(session_id.as_uuid())
+        .fetch_optional(&mut **transaction)
+        .await
+        .map_err(storage)?
+        .ok_or(RuntimeAuthorityError::NotFound)
+    }
+}
+
+#[async_trait]
+impl RuntimeSessionRepository for PgGatewayRuntimeSessionRepository {
+    async fn find(
+        &self,
+        session_id: RuntimeSessionId,
+    ) -> Result<Option<StoredRuntimeSession>, RuntimeAuthorityError> {
+        sqlx::query_as::<_, SessionRow>(
+            "SELECT id, snapshot_id, identity_hash, issuance_generation,
+                    status, issued_at, expires_at, acknowledged_at, revoked_at
+             FROM gateway_runtime_authority_sessions WHERE id = $1",
+        )
+        .bind(session_id.as_uuid())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(storage)?
+        .map(TryInto::try_into)
+        .transpose()
+    }
+
+    async fn create(
+        &self,
+        session: NewRuntimeSession<'_>,
+    ) -> Result<StoredRuntimeSession, RuntimeAuthorityError> {
+        let principal = session.identity.principal();
+        let (WorkloadKind::Gateway, RuntimeInvocation::Gateway(invocation_id)) =
+            (principal.kind, session.identity.invocation())
+        else {
+            return Err(RuntimeAuthorityError::IdentityMismatch);
+        };
+        if session.snapshot.bindings().next().is_some() {
+            // Gateway capability binding persistence is introduced separately;
+            // never claim a copied ceiling we cannot prove exactly yet.
+            return Err(RuntimeAuthorityError::Persistence);
+        }
+        let mut transaction = self.pool.begin().await.map_err(storage)?;
+        sqlx::query(
+            "INSERT INTO gateway_authorization_snapshots
+                (id, invocation_id, gateway_id, gateway_revision_id,
+                 authorization_model_version, normalized_hash)
+             VALUES ($1, $2, $3, $4, $5, $6)",
+        )
+        .bind(session.snapshot.id().as_uuid())
+        .bind(invocation_id.as_uuid())
+        .bind(principal.id)
+        .bind(principal.revision_id)
+        .bind(session.snapshot.authorization_model_version())
+        .bind(session.snapshot.normalized_hash().as_bytes().as_slice())
+        .execute(&mut *transaction)
+        .await
+        .map_err(storage)?;
+        let generation = i64::try_from(session.generation.get()).map_err(storage)?;
+        sqlx::query(
+            "INSERT INTO gateway_runtime_authority_sessions
+                (id, snapshot_id, invocation_id, gateway_id, gateway_revision_id,
+                 identity_hash, snapshot_hash, issuance_generation, credential_hash,
+                 status, issued_at, expires_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
+                     'pending_handoff', $10, $11)",
+        )
+        .bind(session.identity.id().as_uuid())
+        .bind(session.snapshot.id().as_uuid())
+        .bind(invocation_id.as_uuid())
+        .bind(principal.id)
+        .bind(principal.revision_id)
+        .bind(session.identity.normalized_hash().as_bytes().as_slice())
+        .bind(session.snapshot.normalized_hash().as_bytes().as_slice())
+        .bind(generation)
+        .bind(session.credential_hash.as_bytes().as_slice())
+        .bind(session.identity.issued_at())
+        .bind(session.identity.expires_at())
+        .execute(&mut *transaction)
+        .await
+        .map_err(storage)?;
+        transaction.commit().await.map_err(storage)?;
+        Ok(StoredRuntimeSession {
+            id: session.identity.id(),
+            snapshot_id: session.snapshot.id(),
+            identity_hash: session.identity.normalized_hash(),
+            generation: session.generation,
+            status: RuntimeSessionStatus::PendingHandoff,
+            issued_at: session.identity.issued_at(),
+            expires_at: session.identity.expires_at(),
+            acknowledged_at: None,
+            revoked_at: None,
+        })
+    }
+
+    async fn acknowledge(
+        &self,
+        session_id: RuntimeSessionId,
+        generation: RuntimeCredentialGeneration,
+        acknowledged_at: OffsetDateTime,
+    ) -> Result<StoredRuntimeSession, RuntimeAuthorityError> {
+        let mut transaction = self.pool.begin().await.map_err(storage)?;
+        let current = Self::locked(&mut transaction, session_id).await?;
+        if generation_from_i64(current.issuance_generation)? != generation {
+            return Err(RuntimeAuthorityError::GenerationMismatch);
+        }
+        match parse_status(&current.status)? {
+            RuntimeSessionStatus::PendingHandoff
+                if acknowledged_at >= current.issued_at && acknowledged_at < current.expires_at =>
+            {
+                sqlx::query("UPDATE gateway_runtime_authority_sessions SET status = 'active', acknowledged_at = $2, updated_at = $2 WHERE id = $1")
+                    .bind(session_id.as_uuid()).bind(acknowledged_at).execute(&mut *transaction).await.map_err(storage)?;
+            }
+            RuntimeSessionStatus::Active => {}
+            RuntimeSessionStatus::PendingHandoff
+            | RuntimeSessionStatus::Revoked
+            | RuntimeSessionStatus::Expired => {
+                return Err(RuntimeAuthorityError::SessionNotPending);
+            }
+        }
+        transaction.commit().await.map_err(storage)?;
+        self.find(session_id)
+            .await?
+            .ok_or(RuntimeAuthorityError::Persistence)
+    }
+
+    async fn revoke(
+        &self,
+        session_id: RuntimeSessionId,
+        revoked_at: OffsetDateTime,
+        reason: &str,
+    ) -> Result<StoredRuntimeSession, RuntimeAuthorityError> {
+        if reason.is_empty() || reason.len() > 256 {
+            return Err(RuntimeAuthorityError::Persistence);
+        }
+        let mut transaction = self.pool.begin().await.map_err(storage)?;
+        let current = Self::locked(&mut transaction, session_id).await?;
+        if revoked_at < current.issued_at {
+            return Err(RuntimeAuthorityError::Persistence);
+        }
+        match parse_status(&current.status)? {
+            RuntimeSessionStatus::PendingHandoff | RuntimeSessionStatus::Active => {
+                sqlx::query("UPDATE gateway_runtime_authority_sessions SET status = 'revoked', revoked_at = $2, revocation_reason = $3, updated_at = $2 WHERE id = $1")
+                    .bind(session_id.as_uuid()).bind(revoked_at).bind(reason).execute(&mut *transaction).await.map_err(storage)?;
+            }
+            RuntimeSessionStatus::Revoked => {}
+            RuntimeSessionStatus::Expired => return Err(RuntimeAuthorityError::SessionNotPending),
+        }
+        transaction.commit().await.map_err(storage)?;
+        self.find(session_id)
+            .await?
+            .ok_or(RuntimeAuthorityError::Persistence)
+    }
+
+    async fn expire(&self, now: OffsetDateTime) -> Result<u64, RuntimeAuthorityError> {
+        sqlx::query("UPDATE gateway_runtime_authority_sessions SET status = 'expired', updated_at = $1 WHERE status IN ('pending_handoff', 'active') AND expires_at <= $1")
+            .bind(now).execute(&self.pool).await.map(|result| result.rows_affected()).map_err(storage)
+    }
+}
+
+/// Gateway authority issuer built from the common session/handoff machinery.
+pub struct PgGatewayRuntimeAuthorityIssuer<H> {
+    issuer: RuntimeSessionIssuer<PgGatewayRuntimeSessionRepository, H>,
+    authorization_model_version: String,
+}
+
+impl<H> PgGatewayRuntimeAuthorityIssuer<H>
+where
+    H: RuntimeHandoffStore,
+{
+    /// Constructs an issuer using the explicit authorization model version.
+    #[must_use]
+    pub fn new(pool: PgPool, handoff: H, authorization_model_version: impl Into<String>) -> Self {
+        Self {
+            issuer: RuntimeSessionIssuer::new(
+                PgGatewayRuntimeSessionRepository::new(pool),
+                handoff,
+            ),
+            authorization_model_version: authorization_model_version.into(),
+        }
+    }
+}
+
+#[async_trait]
+impl<H> GatewayRuntimeAuthorityIssuer for PgGatewayRuntimeAuthorityIssuer<H>
+where
+    H: RuntimeHandoffStore,
+{
+    async fn issue_gateway(
+        &self,
+        request: GatewayRuntimeSessionRequest,
+    ) -> Result<StoredRuntimeSession, RuntimeAuthorityError> {
+        let snapshot = gateway_snapshot(request, &self.authorization_model_version)?;
+        let identity = capability_domain::RuntimeSessionIdentity::new(
+            RuntimeSessionId::from_uuid(request.invocation_id.as_uuid()),
+            snapshot.principal(),
+            RuntimeInvocation::Gateway(request.invocation_id),
+            &snapshot,
+            request.issued_at,
+            request.expires_at,
+        )
+        .map_err(|_| RuntimeAuthorityError::Persistence)?;
+        let issued = self
+            .issuer
+            .issue(&snapshot, &identity, None, request.issued_at)
+            .await?;
+        Ok(issued.session)
+    }
+}
+
+fn gateway_snapshot(
+    request: GatewayRuntimeSessionRequest,
+    authorization_model_version: &str,
+) -> Result<AuthorizationSnapshot, RuntimeAuthorityError> {
+    AuthorizationSnapshot::new(
+        AuthorizationSnapshotId::from_uuid(request.invocation_id.as_uuid()),
+        WorkloadPrincipal::new(
+            WorkloadKind::Gateway,
+            request.gateway_id,
+            request.gateway_revision_id,
+        ),
+        authorization_model_version,
+        Vec::new(),
+    )
+    .map_err(|_| RuntimeAuthorityError::Persistence)
 }
 
 fn stored_binding(
@@ -587,4 +841,29 @@ fn parse_status(value: &str) -> Result<RuntimeSessionStatus, RuntimeAuthorityErr
 
 fn storage<T>(_: T) -> RuntimeAuthorityError {
     RuntimeAuthorityError::Persistence
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use time::Duration;
+
+    #[test]
+    fn gateway_snapshot_is_a_gateway_principal_with_no_ambient_authority() {
+        let invocation_id = capability_domain::GatewayInvocationId::new();
+        let snapshot = gateway_snapshot(
+            GatewayRuntimeSessionRequest {
+                invocation_id,
+                gateway_id: Uuid::new_v4(),
+                gateway_revision_id: Uuid::new_v4(),
+                issued_at: OffsetDateTime::now_utc(),
+                expires_at: OffsetDateTime::now_utc() + Duration::seconds(30),
+            },
+            "gateway-test-v1",
+        )
+        .expect("valid gateway snapshot");
+        assert_eq!(snapshot.id().as_uuid(), invocation_id.as_uuid());
+        assert_eq!(snapshot.principal().kind, WorkloadKind::Gateway);
+        assert_eq!(snapshot.bindings().len(), 0);
+    }
 }

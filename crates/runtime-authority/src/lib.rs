@@ -12,6 +12,36 @@ use capability_domain::{
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+/// Exact non-secret request to issue authority for one gateway invocation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GatewayRuntimeSessionRequest {
+    /// Session and invocation identity. Gateway sessions are one-to-one with
+    /// their accepted invocation and never masquerade as agent runs.
+    pub invocation_id: capability_domain::GatewayInvocationId,
+    /// Durable gateway workload identity.
+    pub gateway_id: Uuid,
+    /// Exact immutable gateway revision selected at acceptance.
+    pub gateway_revision_id: Uuid,
+    /// Session issuance timestamp.
+    pub issued_at: OffsetDateTime,
+    /// Exclusive session expiry timestamp.
+    pub expires_at: OffsetDateTime,
+}
+
+/// Trusted control-plane port for gateway invocation authority issuance.
+///
+/// The returned credential is retained by the host-side handoff adapter and is
+/// intentionally not exposed through this port. A later VM transport receives
+/// it only through the normal bootstrap channel.
+#[async_trait]
+pub trait GatewayRuntimeAuthorityIssuer: Send + Sync {
+    /// Persists an immutable gateway snapshot and pending runtime session.
+    async fn issue_gateway(
+        &self,
+        request: GatewayRuntimeSessionRequest,
+    ) -> Result<StoredRuntimeSession, RuntimeAuthorityError>;
+}
+
 /// Immutable input persisted while issuing one runtime session.
 pub struct NewRuntimeSession<'a> {
     /// Exact immutable authority ceiling.

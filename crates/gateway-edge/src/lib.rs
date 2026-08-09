@@ -17,6 +17,7 @@ use std::{
 };
 use tokio::time::timeout;
 use uuid::Uuid;
+use vm_trait::{PrivateHttpRequest, PrivateHttpResponse, VmInstance};
 
 /// Reserved public path prefix owned by gateway routing.
 pub const GATEWAY_NAMESPACE: &str = "/gateway/";
@@ -38,6 +39,12 @@ impl GatewayConfigRevision {
     #[must_use]
     pub fn new() -> Self {
         Self(Uuid::new_v4())
+    }
+
+    /// Reconstitutes a control-plane-derived configuration revision.
+    #[must_use]
+    pub const fn from_uuid(value: Uuid) -> Self {
+        Self(value)
     }
 }
 
@@ -318,6 +325,68 @@ pub trait GatewayVmHandler: Send + Sync {
     ) -> Result<GatewayResponse, GatewayEdgeError>;
 }
 
+/// Starts an exact released gateway VM.  Gateway control-plane code supplies
+/// the immutable release mount and capability bootstrap; this edge crate never
+/// selects a release from public request data.
+#[async_trait]
+pub trait GatewayVmLauncher: Send + Sync {
+    /// Starts and returns an isolated VM for the exact immutable route binding.
+    async fn launch(
+        &self,
+        route: &GatewayRouteBinding,
+    ) -> Result<Arc<dyn VmInstance>, GatewayEdgeError>;
+}
+
+/// Bridges canonical gateway HTTP to a VM provider's private host-to-guest
+/// handler transport.  It does not create a guest listener or port forward.
+pub struct PrivateHttpVmGatewayHandler<L> {
+    launcher: L,
+}
+
+impl<L> PrivateHttpVmGatewayHandler<L> {
+    /// Creates an adapter from the release-aware VM launcher.
+    #[must_use]
+    pub const fn new(launcher: L) -> Self {
+        Self { launcher }
+    }
+}
+
+#[async_trait]
+impl<L> GatewayVmHandler for PrivateHttpVmGatewayHandler<L>
+where
+    L: GatewayVmLauncher,
+{
+    async fn invoke(
+        &self,
+        route: &GatewayRouteBinding,
+        request: GatewayRequest,
+    ) -> Result<GatewayResponse, GatewayEdgeError> {
+        let instance = self.launcher.launch(route).await?;
+        let invocation = async {
+            instance
+                .start()
+                .await
+                .map_err(|_| GatewayEdgeError::HandlerUnavailable)?;
+            let response = instance
+                .invoke_private_http(PrivateHttpRequest {
+                    method: request.method,
+                    path_and_query: request.path_and_query,
+                    headers: request.headers,
+                    body: request.body,
+                })
+                .await
+                .map_err(|_| GatewayEdgeError::HandlerUnavailable)?;
+            Ok::<_, GatewayEdgeError>(gateway_response(response))
+        }
+        .await;
+        let cleanup = instance.destroy().await;
+        if cleanup.is_err() && invocation.is_ok() {
+            return Err(GatewayEdgeError::HandlerUnavailable);
+        }
+        invocation
+    }
+}
+
 /// Durable audit/session boundary for one invocation.  The control plane owns
 /// its authority snapshot and never accepts these values from the public edge.
 #[async_trait]
@@ -503,7 +572,7 @@ fn validate_request(
     {
         return Err(GatewayEdgeError::Contract("ambiguous request path"));
     }
-    if !request.path_and_query.starts_with(&route.public_path()) {
+    if !request_targets_route(route, &request.path_and_query) {
         return Err(GatewayEdgeError::Contract("route mismatch"));
     }
     if !route.methods.contains(&request.method) {
@@ -524,6 +593,17 @@ fn validate_request(
         return Err(GatewayEdgeError::Contract("forbidden request header"));
     }
     Ok(())
+}
+
+fn request_targets_route(route: &GatewayRouteBinding, path_and_query: &str) -> bool {
+    let path = path_and_query
+        .split_once('?')
+        .map_or(path_and_query, |(path, _)| path);
+    let public_path = route.public_path();
+    path == public_path
+        || path
+            .strip_prefix(&public_path)
+            .is_some_and(|suffix| suffix.starts_with('/'))
 }
 
 fn validate_response(
@@ -561,6 +641,14 @@ fn empty_response(status: StatusCode) -> GatewayResponse {
     }
 }
 
+fn gateway_response(response: PrivateHttpResponse) -> GatewayResponse {
+    GatewayResponse {
+        status: response.status,
+        headers: response.headers,
+        body: response.body,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -568,6 +656,10 @@ mod tests {
     use std::sync::{
         Mutex,
         atomic::{AtomicUsize, Ordering},
+    };
+    use vm_fake::{FakeProvider, PrivateHttpResponder};
+    use vm_trait::{
+        GuestCommand, NetworkMode, RootFilesystem, VmError, VmProvider, VmResources, VmSpec,
     };
 
     fn limits() -> GatewayLimits {
@@ -660,6 +752,76 @@ mod tests {
             Ok(())
         }
     }
+
+    struct EchoHandler;
+    #[async_trait]
+    impl GatewayVmHandler for EchoHandler {
+        async fn invoke(
+            &self,
+            _: &GatewayRouteBinding,
+            request: GatewayRequest,
+        ) -> Result<GatewayResponse, GatewayEdgeError> {
+            let mut headers = HeaderMap::new();
+            headers.insert("content-type", HeaderValue::from_static("text/plain"));
+            headers.insert("x-gateway-request-id", HeaderValue::from_static("trusted"));
+            Ok(GatewayResponse {
+                status: StatusCode::ACCEPTED,
+                headers,
+                body: request.body,
+            })
+        }
+    }
+
+    struct PrivateEcho;
+    #[async_trait]
+    impl PrivateHttpResponder for PrivateEcho {
+        async fn invoke(
+            &self,
+            request: PrivateHttpRequest,
+        ) -> Result<PrivateHttpResponse, VmError> {
+            Ok(PrivateHttpResponse {
+                status: StatusCode::CREATED,
+                headers: HeaderMap::new(),
+                body: request.body,
+            })
+        }
+    }
+
+    struct FakeGatewayLauncher {
+        provider: FakeProvider,
+    }
+    #[async_trait]
+    impl GatewayVmLauncher for FakeGatewayLauncher {
+        async fn launch(
+            &self,
+            route: &GatewayRouteBinding,
+        ) -> Result<Arc<dyn VmInstance>, GatewayEdgeError> {
+            self.provider
+                .provision(VmSpec {
+                    id: vm_trait::VmId(format!("gateway-{}", route.route_id)),
+                    root: RootFilesystem::Directory {
+                        host_path: "/gateway/release-root".into(),
+                    },
+                    disks: Vec::new(),
+                    mounts: Vec::new(),
+                    resources: VmResources {
+                        vcpus: 1,
+                        memory_mib: 64,
+                    },
+                    network: NetworkMode::Disabled,
+                    command: GuestCommand {
+                        program: "/gateway/handler".to_owned(),
+                        args: Vec::new(),
+                        env: BTreeMap::new(),
+                        working_dir: None,
+                    },
+                    runtime_authority: None,
+                    labels: BTreeMap::new(),
+                })
+                .await
+                .map_err(|_| GatewayEdgeError::HandlerUnavailable)
+        }
+    }
     #[tokio::test]
     async fn reconciliation_is_deterministic_and_idempotent() {
         let admin = Arc::new(Admin(Mutex::new(Vec::new())));
@@ -737,5 +899,51 @@ mod tests {
             dispatcher.dispatch(inbound).await.response.status,
             StatusCode::BAD_REQUEST
         );
+    }
+
+    #[tokio::test]
+    async fn shared_caddy_seam_relays_bounded_status_headers_and_body() {
+        let provider = LocalCaddyGatewayProvider::new(
+            Admin(Mutex::new(Vec::new())),
+            GatewayDispatcher::new(Resolver(route()), EchoHandler, Recorder),
+        );
+        let response = provider
+            .forward(request("/gateway/echo?source=caddy"))
+            .await;
+        assert_ne!(response.invocation_id, Uuid::nil());
+        assert_eq!(response.response.status, StatusCode::ACCEPTED);
+        assert_eq!(response.response.body, Bytes::from_static(b"ok"));
+        assert_eq!(
+            response.response.headers.get("x-gateway-request-id"),
+            Some(&HeaderValue::from_static("trusted"))
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatcher_does_not_treat_a_prefix_collision_as_its_route() {
+        let handler = Handler {
+            calls: AtomicUsize::new(0),
+            delay: Duration::ZERO,
+        };
+        let dispatcher = GatewayDispatcher::new(Resolver(route()), handler, Recorder);
+        assert_eq!(
+            dispatcher
+                .dispatch(request("/gateway/echo-unrelated"))
+                .await
+                .response
+                .status,
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatcher_bridges_to_a_private_vm_http_handler_without_networking() {
+        let handler = PrivateHttpVmGatewayHandler::new(FakeGatewayLauncher {
+            provider: FakeProvider::new().with_private_http_responder(Arc::new(PrivateEcho)),
+        });
+        let dispatcher = GatewayDispatcher::new(Resolver(route()), handler, Recorder);
+        let response = dispatcher.dispatch(request("/gateway/echo")).await;
+        assert_eq!(response.response.status, StatusCode::CREATED);
+        assert_eq!(response.response.body, Bytes::from_static(b"ok"));
     }
 }

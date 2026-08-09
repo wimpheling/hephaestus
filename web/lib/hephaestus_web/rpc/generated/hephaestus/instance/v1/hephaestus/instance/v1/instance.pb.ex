@@ -56,6 +56,23 @@ defmodule Hephaestus.Instance.V1.RemovalState do
   field(:REMOVAL_STATE_REMOVED, 1)
 end
 
+defmodule Hephaestus.Instance.V1.MailboxControlAction do
+  @moduledoc false
+
+  use Protobuf,
+    enum: true,
+    full_name: "hephaestus.instance.v1.MailboxControlAction",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:MAILBOX_CONTROL_ACTION_UNSPECIFIED, 0)
+  field(:MAILBOX_CONTROL_ACTION_PAUSE, 1)
+  field(:MAILBOX_CONTROL_ACTION_RESUME, 2)
+  field(:MAILBOX_CONTROL_ACTION_RETRY, 3)
+  field(:MAILBOX_CONTROL_ACTION_CANCEL, 4)
+  field(:MAILBOX_CONTROL_ACTION_DEAD_LETTER, 5)
+end
+
 defmodule Hephaestus.Instance.V1.RefSelector do
   @moduledoc false
 
@@ -483,6 +500,7 @@ defmodule Hephaestus.Instance.V1.MailboxDeliveryInspection do
     syntax: :proto3
 
   field(:event_id, 1, type: Hephaestus.Common.V1.OpaqueId, json_name: "eventId")
+  field(:mailbox_id, 14, type: Hephaestus.Common.V1.OpaqueId, json_name: "mailboxId")
   field(:disposition, 2, type: :string)
   field(:logical_attempt_count, 3, type: :uint32, json_name: "logicalAttemptCount")
   field(:denial_code, 4, type: :string, json_name: "denialCode")
@@ -944,6 +962,37 @@ defmodule Hephaestus.Instance.V1.ReviseCapabilitiesResponse do
   field(:receipt, 4, type: Hephaestus.Common.V1.MutationReceipt)
 end
 
+defmodule Hephaestus.Instance.V1.ControlMailboxRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.instance.v1.ControlMailboxRequest",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:context, 1, type: Hephaestus.Common.V1.RequestContext)
+  field(:mailbox_id, 2, type: Hephaestus.Common.V1.OpaqueId, json_name: "mailboxId")
+
+  field(:event_id, 3,
+    proto3_optional: true,
+    type: Hephaestus.Common.V1.OpaqueId,
+    json_name: "eventId"
+  )
+
+  field(:action, 4, type: Hephaestus.Instance.V1.MailboxControlAction, enum: true)
+end
+
+defmodule Hephaestus.Instance.V1.ControlMailboxResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.instance.v1.ControlMailboxResponse",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:changed, 1, type: :bool)
+end
+
 defmodule Hephaestus.Instance.V1.AgentInstanceService.Service do
   @moduledoc false
 
@@ -1009,6 +1058,12 @@ defmodule Hephaestus.Instance.V1.AgentInstanceService.Service do
     :ReviseCapabilities,
     Hephaestus.Instance.V1.ReviseCapabilitiesRequest,
     Hephaestus.Instance.V1.ReviseCapabilitiesResponse
+  )
+
+  rpc(
+    :ControlMailbox,
+    Hephaestus.Instance.V1.ControlMailboxRequest,
+    Hephaestus.Instance.V1.ControlMailboxResponse
   )
 end
 

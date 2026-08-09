@@ -109,6 +109,18 @@ service AgentInstanceService {
     option (hephaestus.options.v1.max_request_bytes) = 131072;
     option (hephaestus.options.v1.max_response_bytes) = 16384;
   }
+  // Applies one recovery control to a durable mailbox without exposing its
+  // opaque event body. Authorization is rechecked against the owning instance.
+  rpc ControlMailbox(ControlMailboxRequest) returns (ControlMailboxResponse) {
+    option (hephaestus.options.v1.authorization) = {
+      permission: "instance.recover"
+      audience: "/hephaestus.instance.v1.AgentInstanceService/ControlMailbox"
+      actor_source: ACTOR_SOURCE_MEDIATOR_JWT_METADATA
+    };
+    option (hephaestus.options.v1.operation_kind) = OPERATION_KIND_MUTATION;
+    option (hephaestus.options.v1.max_request_bytes) = 8192;
+    option (hephaestus.options.v1.max_response_bytes) = 4096;
+  }
 }
 
 enum TriggerPolicy {
@@ -132,6 +144,15 @@ enum RecoveryDecision {
 enum RemovalState {
   REMOVAL_STATE_UNSPECIFIED = 0;
   REMOVAL_STATE_REMOVED = 1;
+}
+// A supported, idempotent-at-the-state-boundary operator recovery action.
+enum MailboxControlAction {
+  MAILBOX_CONTROL_ACTION_UNSPECIFIED = 0;
+  MAILBOX_CONTROL_ACTION_PAUSE = 1;
+  MAILBOX_CONTROL_ACTION_RESUME = 2;
+  MAILBOX_CONTROL_ACTION_RETRY = 3;
+  MAILBOX_CONTROL_ACTION_CANCEL = 4;
+  MAILBOX_CONTROL_ACTION_DEAD_LETTER = 5;
 }
 message RefSelector {
   oneof selector {
@@ -309,6 +330,8 @@ message RecentRun {
 // context through this operator projection.
 message MailboxDeliveryInspection {
   hephaestus.common.v1.OpaqueId event_id = 1;
+  // Opaque control target; this is not an application envelope identifier.
+  hephaestus.common.v1.OpaqueId mailbox_id = 14;
   string disposition = 2;
   uint32 logical_attempt_count = 3;
   string denial_code = 4;
@@ -473,4 +496,16 @@ message ReviseCapabilitiesResponse {
   bool runnable = 2;
   repeated hephaestus.common.v1.Diagnostic diagnostics = 3;
   hephaestus.common.v1.MutationReceipt receipt = 4;
+}
+message ControlMailboxRequest {
+  hephaestus.common.v1.RequestContext context = 1;
+  hephaestus.common.v1.OpaqueId mailbox_id = 2;
+  // Required for retry, cancel, and dead-letter; omitted for pause/resume.
+  optional hephaestus.common.v1.OpaqueId event_id = 3;
+  MailboxControlAction action = 4;
+}
+message ControlMailboxResponse {
+  // Whether this request changed the durable state. A false value is a safe,
+  // non-disclosing no-op, not evidence that a particular event exists.
+  bool changed = 1;
 }

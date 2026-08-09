@@ -9254,6 +9254,12 @@ pub struct MailboxDeliveryInspectionView<'a> {
     pub event_id: ::buffa::MessageFieldView<
         super::super::super::super::common::v1::__buffa::view::OpaqueIdView<'a>,
     >,
+    /// Opaque control target; this is not an application envelope identifier.
+    ///
+    /// Field 14: `mailbox_id`
+    pub mailbox_id: ::buffa::MessageFieldView<
+        super::super::super::super::common::v1::__buffa::view::OpaqueIdView<'a>,
+    >,
     /// Field 2: `disposition`
     pub disposition: &'a str,
     /// Field 3: `logical_attempt_count`
@@ -9330,6 +9336,27 @@ impl<'a> ::buffa::MessageView<'a> for MailboxDeliveryInspectionView<'a> {
                     }
                     None => {
                         view.event_id = ::buffa::MessageFieldView::set(
+                            <super::super::super::super::common::v1::__buffa::view::OpaqueIdView as ::buffa::MessageView>::decode_view_ctx(
+                                sub,
+                                __sub_ctx,
+                            )?,
+                        );
+                    }
+                }
+            }
+            14u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                let __sub_ctx = ctx.descend()?;
+                let sub = ::buffa::types::borrow_bytes(&mut cur)?;
+                match view.mailbox_id.as_mut() {
+                    Some(existing) => {
+                        ::buffa::MessageView::merge_into_view(existing, sub, __sub_ctx)?
+                    }
+                    None => {
+                        view.mailbox_id = ::buffa::MessageFieldView::set(
                             <super::super::super::super::common::v1::__buffa::view::OpaqueIdView as ::buffa::MessageView>::decode_view_ctx(
                                 sub,
                                 __sub_ctx,
@@ -9528,6 +9555,14 @@ impl<'a> ::buffa::MessageView<'a> for MailboxDeliveryInspectionView<'a> {
                 }
                 None => ::buffa::MessageField::none(),
             },
+            mailbox_id: match self.mailbox_id.as_option() {
+                Some(v) => {
+                    ::buffa::MessageField::<
+                        super::super::super::super::common::v1::OpaqueId,
+                    >::some(v.to_owned_from_source(__buffa_src)?)
+                }
+                None => ::buffa::MessageField::none(),
+            },
             disposition: self.disposition.to_string(),
             logical_attempt_count: self.logical_attempt_count,
             denial_code: self.denial_code.to_string(),
@@ -9669,6 +9704,14 @@ impl<'a> ::buffa::ViewEncode<'a> for MailboxDeliveryInspectionView<'a> {
                 += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
                     + inner_size;
         }
+        if self.mailbox_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.mailbox_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
         size
     }
@@ -9725,6 +9768,10 @@ impl<'a> ::buffa::ViewEncode<'a> for MailboxDeliveryInspectionView<'a> {
             ::buffa::types::put_len_delimited_header(13u32, __cache.consume_next(), buf);
             self.updated_at.write_to(__cache, buf);
         }
+        if self.mailbox_id.is_set() {
+            ::buffa::types::put_len_delimited_header(14u32, __cache.consume_next(), buf);
+            self.mailbox_id.write_to(__cache, buf);
+        }
         self.__buffa_unknown_fields.write_to(buf);
     }
 }
@@ -9749,6 +9796,11 @@ impl<'__a> ::serde::Serialize for MailboxDeliveryInspectionView<'__a> {
         {
             if let ::core::option::Option::Some(__v) = self.event_id.as_option() {
                 __map.serialize_entry("eventId", __v)?;
+            }
+        }
+        {
+            if let ::core::option::Option::Some(__v) = self.mailbox_id.as_option() {
+                __map.serialize_entry("mailboxId", __v)?;
             }
         }
         if !::buffa::json_helpers::skip_if::is_empty_str(self.disposition) {
@@ -9917,6 +9969,17 @@ impl MailboxDeliveryInspectionOwnedView {
         super::super::super::super::common::v1::__buffa::view::OpaqueIdView<'_>,
     > {
         &self.0.reborrow().event_id
+    }
+    /// Opaque control target; this is not an application envelope identifier.
+    ///
+    /// Field 14: `mailbox_id`
+    #[must_use]
+    pub fn mailbox_id(
+        &self,
+    ) -> &::buffa::MessageFieldView<
+        super::super::super::super::common::v1::__buffa::view::OpaqueIdView<'_>,
+    > {
+        &self.0.reborrow().mailbox_id
     }
     /// Field 2: `disposition`
     #[must_use]
@@ -20474,6 +20537,707 @@ impl ::buffa::HasMessageView for super::super::ReviseCapabilitiesResponse {
     type ViewHandle = ReviseCapabilitiesResponseOwnedView;
 }
 impl ::serde::Serialize for ReviseCapabilitiesResponseOwnedView {
+    fn serialize<__S: ::serde::Serializer>(
+        &self,
+        __s: __S,
+    ) -> ::core::result::Result<__S::Ok, __S::Error> {
+        ::serde::Serialize::serialize(&self.0, __s)
+    }
+}
+#[derive(Clone, Debug, Default)]
+pub struct ControlMailboxRequestView<'a> {
+    /// Field 1: `context`
+    pub context: ::buffa::MessageFieldView<
+        super::super::super::super::common::v1::__buffa::view::RequestContextView<'a>,
+    >,
+    /// Field 2: `mailbox_id`
+    pub mailbox_id: ::buffa::MessageFieldView<
+        super::super::super::super::common::v1::__buffa::view::OpaqueIdView<'a>,
+    >,
+    /// Required for retry, cancel, and dead-letter; omitted for pause/resume.
+    ///
+    /// Field 3: `event_id`
+    pub event_id: ::buffa::MessageFieldView<
+        super::super::super::super::common::v1::__buffa::view::OpaqueIdView<'a>,
+    >,
+    /// Field 4: `action`
+    pub action: ::buffa::EnumValue<super::super::MailboxControlAction>,
+    pub __buffa_unknown_fields: ::buffa::UnknownFieldsView<'a>,
+}
+impl<'a> ::buffa::MessageView<'a> for ControlMailboxRequestView<'a> {
+    type Owned = super::super::ControlMailboxRequest;
+    fn decode_view(buf: &'a [u8]) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        let __limit = ::core::cell::Cell::new(::buffa::DEFAULT_UNKNOWN_FIELD_LIMIT);
+        <Self as ::buffa::MessageView>::decode_view_ctx(
+            buf,
+            ::buffa::DecodeContext::new(::buffa::RECURSION_LIMIT, &__limit),
+        )
+    }
+    fn decode_view_with_ctx(
+        buf: &'a [u8],
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        <Self as ::buffa::MessageView>::decode_view_ctx(buf, ctx)
+    }
+    fn merge_view_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        cur: &'a [u8],
+        before_tag: &'a [u8],
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<&'a [u8], ::buffa::DecodeError> {
+        let _ = ctx;
+        #[allow(unused_variables)]
+        let view = self;
+        let mut cur = cur;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                let __sub_ctx = ctx.descend()?;
+                let sub = ::buffa::types::borrow_bytes(&mut cur)?;
+                match view.context.as_mut() {
+                    Some(existing) => {
+                        ::buffa::MessageView::merge_into_view(existing, sub, __sub_ctx)?
+                    }
+                    None => {
+                        view.context = ::buffa::MessageFieldView::set(
+                            <super::super::super::super::common::v1::__buffa::view::RequestContextView as ::buffa::MessageView>::decode_view_ctx(
+                                sub,
+                                __sub_ctx,
+                            )?,
+                        );
+                    }
+                }
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                let __sub_ctx = ctx.descend()?;
+                let sub = ::buffa::types::borrow_bytes(&mut cur)?;
+                match view.mailbox_id.as_mut() {
+                    Some(existing) => {
+                        ::buffa::MessageView::merge_into_view(existing, sub, __sub_ctx)?
+                    }
+                    None => {
+                        view.mailbox_id = ::buffa::MessageFieldView::set(
+                            <super::super::super::super::common::v1::__buffa::view::OpaqueIdView as ::buffa::MessageView>::decode_view_ctx(
+                                sub,
+                                __sub_ctx,
+                            )?,
+                        );
+                    }
+                }
+            }
+            3u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                let __sub_ctx = ctx.descend()?;
+                let sub = ::buffa::types::borrow_bytes(&mut cur)?;
+                match view.event_id.as_mut() {
+                    Some(existing) => {
+                        ::buffa::MessageView::merge_into_view(existing, sub, __sub_ctx)?
+                    }
+                    None => {
+                        view.event_id = ::buffa::MessageFieldView::set(
+                            <super::super::super::super::common::v1::__buffa::view::OpaqueIdView as ::buffa::MessageView>::decode_view_ctx(
+                                sub,
+                                __sub_ctx,
+                            )?,
+                        );
+                    }
+                }
+            }
+            4u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                view.action = ::buffa::EnumValue::from(
+                    ::buffa::types::decode_int32(&mut cur)?,
+                );
+            }
+            _ => {
+                ::buffa::encoding::skip_field_depth(tag, &mut cur, ctx.depth())?;
+                let span_len = before_tag.len() - cur.len();
+                view.__buffa_unknown_fields.push_record(before_tag, span_len, ctx)?;
+            }
+        }
+        ::core::result::Result::Ok(cur)
+    }
+    fn to_owned_message(
+        &self,
+    ) -> ::core::result::Result<
+        super::super::ControlMailboxRequest,
+        ::buffa::DecodeError,
+    > {
+        self.to_owned_from_source(None)
+    }
+    #[allow(clippy::useless_conversion, clippy::needless_update)]
+    fn to_owned_from_source(
+        &self,
+        __buffa_src: ::core::option::Option<&::buffa::bytes::Bytes>,
+    ) -> ::core::result::Result<
+        super::super::ControlMailboxRequest,
+        ::buffa::DecodeError,
+    > {
+        #[allow(unused_imports)]
+        use ::buffa::alloc::string::ToString as _;
+        let _ = __buffa_src;
+        ::core::result::Result::Ok(super::super::ControlMailboxRequest {
+            context: match self.context.as_option() {
+                Some(v) => {
+                    ::buffa::MessageField::<
+                        super::super::super::super::common::v1::RequestContext,
+                    >::some(v.to_owned_from_source(__buffa_src)?)
+                }
+                None => ::buffa::MessageField::none(),
+            },
+            mailbox_id: match self.mailbox_id.as_option() {
+                Some(v) => {
+                    ::buffa::MessageField::<
+                        super::super::super::super::common::v1::OpaqueId,
+                    >::some(v.to_owned_from_source(__buffa_src)?)
+                }
+                None => ::buffa::MessageField::none(),
+            },
+            event_id: match self.event_id.as_option() {
+                Some(v) => {
+                    ::buffa::MessageField::<
+                        super::super::super::super::common::v1::OpaqueId,
+                    >::some(v.to_owned_from_source(__buffa_src)?)
+                }
+                None => ::buffa::MessageField::none(),
+            },
+            action: self.action,
+            __buffa_unknown_fields: self.__buffa_unknown_fields.to_owned()?.into(),
+            ..::core::default::Default::default()
+        })
+    }
+}
+impl<'a> ::buffa::ViewEncode<'a> for ControlMailboxRequestView<'a> {
+    #[allow(clippy::needless_borrow, clippy::let_and_return)]
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if self.context.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.context.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.mailbox_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.mailbox_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.event_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.event_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        {
+            let val = self.action.to_i32();
+            if val != 0 {
+                size += 1u32 + ::buffa::types::int32_encoded_len(val) as u32;
+            }
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    #[allow(clippy::needless_borrow)]
+    fn write_to(
+        &self,
+        __cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if self.context.is_set() {
+            ::buffa::types::put_len_delimited_header(1u32, __cache.consume_next(), buf);
+            self.context.write_to(__cache, buf);
+        }
+        if self.mailbox_id.is_set() {
+            ::buffa::types::put_len_delimited_header(2u32, __cache.consume_next(), buf);
+            self.mailbox_id.write_to(__cache, buf);
+        }
+        if self.event_id.is_set() {
+            ::buffa::types::put_len_delimited_header(3u32, __cache.consume_next(), buf);
+            self.event_id.write_to(__cache, buf);
+        }
+        {
+            let val = self.action.to_i32();
+            if val != 0 {
+                ::buffa::types::put_int32_field(4u32, val, buf);
+            }
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+}
+/// Serializes this view as protobuf JSON.
+///
+/// Implicit-presence fields with default values are omitted, `required`
+/// fields are always emitted, explicit-presence (`optional`) fields are
+/// emitted only when set, bytes fields are base64-encoded, and enum
+/// values are their proto name strings.
+///
+/// This impl uses `serialize_map(None)` because the number of emitted
+/// fields depends on default-omission rules; serializers that require
+/// known map lengths (e.g. `bincode`) will return a runtime error.
+/// Use the owned message type for those formats.
+impl<'__a> ::serde::Serialize for ControlMailboxRequestView<'__a> {
+    fn serialize<__S: ::serde::Serializer>(
+        &self,
+        __s: __S,
+    ) -> ::core::result::Result<__S::Ok, __S::Error> {
+        use ::serde::ser::SerializeMap as _;
+        let mut __map = __s.serialize_map(::core::option::Option::None)?;
+        {
+            if let ::core::option::Option::Some(__v) = self.context.as_option() {
+                __map.serialize_entry("context", __v)?;
+            }
+        }
+        {
+            if let ::core::option::Option::Some(__v) = self.mailbox_id.as_option() {
+                __map.serialize_entry("mailboxId", __v)?;
+            }
+        }
+        {
+            if let ::core::option::Option::Some(__v) = self.event_id.as_option() {
+                __map.serialize_entry("eventId", __v)?;
+            }
+        }
+        if !::buffa::json_helpers::skip_if::is_default_enum_value(&self.action) {
+            __map.serialize_entry("action", &self.action)?;
+        }
+        __map.end()
+    }
+}
+impl<'a> ::buffa::MessageName for ControlMailboxRequestView<'a> {
+    const PACKAGE: &'static str = "hephaestus.instance.v1";
+    const NAME: &'static str = "ControlMailboxRequest";
+    const FULL_NAME: &'static str = "hephaestus.instance.v1.ControlMailboxRequest";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.instance.v1.ControlMailboxRequest";
+}
+::buffa::impl_default_view_instance!(ControlMailboxRequestView);
+::buffa::impl_view_reborrow!(ControlMailboxRequestView);
+/** Self-contained, `'static` owned view of a `ControlMailboxRequest` message.
+
+ Wraps [`::buffa::OwnedView`]`<`[`ControlMailboxRequestView`]`<'static>>`: the decoded view and the [`::buffa::bytes::Bytes`] buffer it borrows from travel together, so the handle is `'static` and `Send + Sync` — suitable for async handlers, spawned tasks, and anywhere a `'static` bound is required.
+
+ Field accessors return borrows tied to `&self`. Use [`Self::view`] to get the full [`ControlMailboxRequestView`] when you need struct patterns, iteration helpers, or to pass the view to lifetime-parameterised code.*/
+#[derive(Clone, Debug)]
+pub struct ControlMailboxRequestOwnedView(
+    ::buffa::OwnedView<ControlMailboxRequestView<'static>>,
+);
+impl ControlMailboxRequestOwnedView {
+    /// Decode an owned view from a [`::buffa::bytes::Bytes`] buffer.
+    ///
+    /// The view borrows directly from the buffer's data; the buffer is
+    /// retained inside the returned handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`::buffa::DecodeError`] if the buffer contains invalid
+    /// protobuf data.
+    pub fn decode(
+        bytes: ::buffa::bytes::Bytes,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        ::core::result::Result::Ok(
+            ControlMailboxRequestOwnedView(::buffa::OwnedView::decode(bytes)?),
+        )
+    }
+    /// Decode with custom [`::buffa::DecodeOptions`] (recursion limit,
+    /// max message size).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`::buffa::DecodeError`] if the buffer is invalid or
+    /// exceeds the configured limits.
+    pub fn decode_with_options(
+        bytes: ::buffa::bytes::Bytes,
+        opts: &::buffa::DecodeOptions,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        ::core::result::Result::Ok(
+            ControlMailboxRequestOwnedView(
+                ::buffa::OwnedView::decode_with_options(bytes, opts)?,
+            ),
+        )
+    }
+    /// Build from an owned message via an encode → decode round-trip.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`::buffa::DecodeError`] if the re-encoded bytes are
+    /// somehow invalid (should not happen for well-formed messages).
+    pub fn from_owned(
+        msg: &super::super::ControlMailboxRequest,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        ::core::result::Result::Ok(
+            ControlMailboxRequestOwnedView(::buffa::OwnedView::from_owned(msg)?),
+        )
+    }
+    /// Borrow the full [`ControlMailboxRequestView`] with its lifetime tied to `&self`.
+    #[must_use]
+    pub fn view(&self) -> &ControlMailboxRequestView<'_> {
+        self.0.reborrow()
+    }
+    /// Convert to the owned message type.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if re-materializing preserved unknown fields
+    /// fails (e.g. the unknown-field limit is exceeded).
+    pub fn to_owned_message(
+        &self,
+    ) -> ::core::result::Result<
+        super::super::ControlMailboxRequest,
+        ::buffa::DecodeError,
+    > {
+        self.0.to_owned_message()
+    }
+    /// The underlying bytes buffer.
+    #[must_use]
+    pub fn bytes(&self) -> &::buffa::bytes::Bytes {
+        self.0.bytes()
+    }
+    /// Consume the handle, returning the underlying bytes buffer.
+    #[must_use]
+    pub fn into_bytes(self) -> ::buffa::bytes::Bytes {
+        self.0.into_bytes()
+    }
+    /// Field 1: `context`
+    #[must_use]
+    pub fn context(
+        &self,
+    ) -> &::buffa::MessageFieldView<
+        super::super::super::super::common::v1::__buffa::view::RequestContextView<'_>,
+    > {
+        &self.0.reborrow().context
+    }
+    /// Field 2: `mailbox_id`
+    #[must_use]
+    pub fn mailbox_id(
+        &self,
+    ) -> &::buffa::MessageFieldView<
+        super::super::super::super::common::v1::__buffa::view::OpaqueIdView<'_>,
+    > {
+        &self.0.reborrow().mailbox_id
+    }
+    /// Required for retry, cancel, and dead-letter; omitted for pause/resume.
+    ///
+    /// Field 3: `event_id`
+    #[must_use]
+    pub fn event_id(
+        &self,
+    ) -> &::buffa::MessageFieldView<
+        super::super::super::super::common::v1::__buffa::view::OpaqueIdView<'_>,
+    > {
+        &self.0.reborrow().event_id
+    }
+    /// Field 4: `action`
+    #[must_use]
+    pub fn action(&self) -> ::buffa::EnumValue<super::super::MailboxControlAction> {
+        self.0.reborrow().action
+    }
+}
+impl ::core::convert::From<::buffa::OwnedView<ControlMailboxRequestView<'static>>>
+for ControlMailboxRequestOwnedView {
+    fn from(inner: ::buffa::OwnedView<ControlMailboxRequestView<'static>>) -> Self {
+        ControlMailboxRequestOwnedView(inner)
+    }
+}
+impl ::core::convert::From<ControlMailboxRequestOwnedView>
+for ::buffa::OwnedView<ControlMailboxRequestView<'static>> {
+    fn from(wrapper: ControlMailboxRequestOwnedView) -> Self {
+        wrapper.0
+    }
+}
+impl ::core::convert::AsRef<::buffa::OwnedView<ControlMailboxRequestView<'static>>>
+for ControlMailboxRequestOwnedView {
+    fn as_ref(&self) -> &::buffa::OwnedView<ControlMailboxRequestView<'static>> {
+        &self.0
+    }
+}
+impl ::buffa::HasMessageView for super::super::ControlMailboxRequest {
+    type View<'a> = ControlMailboxRequestView<'a>;
+    type ViewHandle = ControlMailboxRequestOwnedView;
+}
+impl ::serde::Serialize for ControlMailboxRequestOwnedView {
+    fn serialize<__S: ::serde::Serializer>(
+        &self,
+        __s: __S,
+    ) -> ::core::result::Result<__S::Ok, __S::Error> {
+        ::serde::Serialize::serialize(&self.0, __s)
+    }
+}
+#[derive(Clone, Debug, Default)]
+pub struct ControlMailboxResponseView<'a> {
+    /// Whether this request changed the durable state. A false value is a safe,
+    /// non-disclosing no-op, not evidence that a particular event exists.
+    ///
+    /// Field 1: `changed`
+    pub changed: bool,
+    pub __buffa_unknown_fields: ::buffa::UnknownFieldsView<'a>,
+}
+impl<'a> ::buffa::MessageView<'a> for ControlMailboxResponseView<'a> {
+    type Owned = super::super::ControlMailboxResponse;
+    fn decode_view(buf: &'a [u8]) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        let __limit = ::core::cell::Cell::new(::buffa::DEFAULT_UNKNOWN_FIELD_LIMIT);
+        <Self as ::buffa::MessageView>::decode_view_ctx(
+            buf,
+            ::buffa::DecodeContext::new(::buffa::RECURSION_LIMIT, &__limit),
+        )
+    }
+    fn decode_view_with_ctx(
+        buf: &'a [u8],
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        <Self as ::buffa::MessageView>::decode_view_ctx(buf, ctx)
+    }
+    fn merge_view_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        cur: &'a [u8],
+        before_tag: &'a [u8],
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<&'a [u8], ::buffa::DecodeError> {
+        let _ = ctx;
+        #[allow(unused_variables)]
+        let view = self;
+        let mut cur = cur;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                view.changed = ::buffa::types::decode_bool(&mut cur)?;
+            }
+            _ => {
+                ::buffa::encoding::skip_field_depth(tag, &mut cur, ctx.depth())?;
+                let span_len = before_tag.len() - cur.len();
+                view.__buffa_unknown_fields.push_record(before_tag, span_len, ctx)?;
+            }
+        }
+        ::core::result::Result::Ok(cur)
+    }
+    fn to_owned_message(
+        &self,
+    ) -> ::core::result::Result<
+        super::super::ControlMailboxResponse,
+        ::buffa::DecodeError,
+    > {
+        self.to_owned_from_source(None)
+    }
+    #[allow(clippy::useless_conversion, clippy::needless_update)]
+    fn to_owned_from_source(
+        &self,
+        __buffa_src: ::core::option::Option<&::buffa::bytes::Bytes>,
+    ) -> ::core::result::Result<
+        super::super::ControlMailboxResponse,
+        ::buffa::DecodeError,
+    > {
+        #[allow(unused_imports)]
+        use ::buffa::alloc::string::ToString as _;
+        let _ = __buffa_src;
+        ::core::result::Result::Ok(super::super::ControlMailboxResponse {
+            changed: self.changed,
+            __buffa_unknown_fields: self.__buffa_unknown_fields.to_owned()?.into(),
+            ..::core::default::Default::default()
+        })
+    }
+}
+impl<'a> ::buffa::ViewEncode<'a> for ControlMailboxResponseView<'a> {
+    #[allow(clippy::needless_borrow, clippy::let_and_return)]
+    fn compute_size(&self, _cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if self.changed {
+            size += 1u32 + ::buffa::types::BOOL_ENCODED_LEN as u32;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    #[allow(clippy::needless_borrow)]
+    fn write_to(
+        &self,
+        _cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if self.changed {
+            ::buffa::types::put_bool_field(1u32, self.changed, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+}
+/// Serializes this view as protobuf JSON.
+///
+/// Implicit-presence fields with default values are omitted, `required`
+/// fields are always emitted, explicit-presence (`optional`) fields are
+/// emitted only when set, bytes fields are base64-encoded, and enum
+/// values are their proto name strings.
+///
+/// This impl uses `serialize_map(None)` because the number of emitted
+/// fields depends on default-omission rules; serializers that require
+/// known map lengths (e.g. `bincode`) will return a runtime error.
+/// Use the owned message type for those formats.
+impl<'__a> ::serde::Serialize for ControlMailboxResponseView<'__a> {
+    fn serialize<__S: ::serde::Serializer>(
+        &self,
+        __s: __S,
+    ) -> ::core::result::Result<__S::Ok, __S::Error> {
+        use ::serde::ser::SerializeMap as _;
+        let mut __map = __s.serialize_map(::core::option::Option::None)?;
+        if self.changed {
+            __map.serialize_entry("changed", &self.changed)?;
+        }
+        __map.end()
+    }
+}
+impl<'a> ::buffa::MessageName for ControlMailboxResponseView<'a> {
+    const PACKAGE: &'static str = "hephaestus.instance.v1";
+    const NAME: &'static str = "ControlMailboxResponse";
+    const FULL_NAME: &'static str = "hephaestus.instance.v1.ControlMailboxResponse";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.instance.v1.ControlMailboxResponse";
+}
+::buffa::impl_default_view_instance!(ControlMailboxResponseView);
+::buffa::impl_view_reborrow!(ControlMailboxResponseView);
+/** Self-contained, `'static` owned view of a `ControlMailboxResponse` message.
+
+ Wraps [`::buffa::OwnedView`]`<`[`ControlMailboxResponseView`]`<'static>>`: the decoded view and the [`::buffa::bytes::Bytes`] buffer it borrows from travel together, so the handle is `'static` and `Send + Sync` — suitable for async handlers, spawned tasks, and anywhere a `'static` bound is required.
+
+ Field accessors return borrows tied to `&self`. Use [`Self::view`] to get the full [`ControlMailboxResponseView`] when you need struct patterns, iteration helpers, or to pass the view to lifetime-parameterised code.*/
+#[derive(Clone, Debug)]
+pub struct ControlMailboxResponseOwnedView(
+    ::buffa::OwnedView<ControlMailboxResponseView<'static>>,
+);
+impl ControlMailboxResponseOwnedView {
+    /// Decode an owned view from a [`::buffa::bytes::Bytes`] buffer.
+    ///
+    /// The view borrows directly from the buffer's data; the buffer is
+    /// retained inside the returned handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`::buffa::DecodeError`] if the buffer contains invalid
+    /// protobuf data.
+    pub fn decode(
+        bytes: ::buffa::bytes::Bytes,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        ::core::result::Result::Ok(
+            ControlMailboxResponseOwnedView(::buffa::OwnedView::decode(bytes)?),
+        )
+    }
+    /// Decode with custom [`::buffa::DecodeOptions`] (recursion limit,
+    /// max message size).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`::buffa::DecodeError`] if the buffer is invalid or
+    /// exceeds the configured limits.
+    pub fn decode_with_options(
+        bytes: ::buffa::bytes::Bytes,
+        opts: &::buffa::DecodeOptions,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        ::core::result::Result::Ok(
+            ControlMailboxResponseOwnedView(
+                ::buffa::OwnedView::decode_with_options(bytes, opts)?,
+            ),
+        )
+    }
+    /// Build from an owned message via an encode → decode round-trip.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`::buffa::DecodeError`] if the re-encoded bytes are
+    /// somehow invalid (should not happen for well-formed messages).
+    pub fn from_owned(
+        msg: &super::super::ControlMailboxResponse,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        ::core::result::Result::Ok(
+            ControlMailboxResponseOwnedView(::buffa::OwnedView::from_owned(msg)?),
+        )
+    }
+    /// Borrow the full [`ControlMailboxResponseView`] with its lifetime tied to `&self`.
+    #[must_use]
+    pub fn view(&self) -> &ControlMailboxResponseView<'_> {
+        self.0.reborrow()
+    }
+    /// Convert to the owned message type.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if re-materializing preserved unknown fields
+    /// fails (e.g. the unknown-field limit is exceeded).
+    pub fn to_owned_message(
+        &self,
+    ) -> ::core::result::Result<
+        super::super::ControlMailboxResponse,
+        ::buffa::DecodeError,
+    > {
+        self.0.to_owned_message()
+    }
+    /// The underlying bytes buffer.
+    #[must_use]
+    pub fn bytes(&self) -> &::buffa::bytes::Bytes {
+        self.0.bytes()
+    }
+    /// Consume the handle, returning the underlying bytes buffer.
+    #[must_use]
+    pub fn into_bytes(self) -> ::buffa::bytes::Bytes {
+        self.0.into_bytes()
+    }
+    /// Whether this request changed the durable state. A false value is a safe,
+    /// non-disclosing no-op, not evidence that a particular event exists.
+    ///
+    /// Field 1: `changed`
+    #[must_use]
+    pub fn changed(&self) -> bool {
+        self.0.reborrow().changed
+    }
+}
+impl ::core::convert::From<::buffa::OwnedView<ControlMailboxResponseView<'static>>>
+for ControlMailboxResponseOwnedView {
+    fn from(inner: ::buffa::OwnedView<ControlMailboxResponseView<'static>>) -> Self {
+        ControlMailboxResponseOwnedView(inner)
+    }
+}
+impl ::core::convert::From<ControlMailboxResponseOwnedView>
+for ::buffa::OwnedView<ControlMailboxResponseView<'static>> {
+    fn from(wrapper: ControlMailboxResponseOwnedView) -> Self {
+        wrapper.0
+    }
+}
+impl ::core::convert::AsRef<::buffa::OwnedView<ControlMailboxResponseView<'static>>>
+for ControlMailboxResponseOwnedView {
+    fn as_ref(&self) -> &::buffa::OwnedView<ControlMailboxResponseView<'static>> {
+        &self.0
+    }
+}
+impl ::buffa::HasMessageView for super::super::ControlMailboxResponse {
+    type View<'a> = ControlMailboxResponseView<'a>;
+    type ViewHandle = ControlMailboxResponseOwnedView;
+}
+impl ::serde::Serialize for ControlMailboxResponseOwnedView {
     fn serialize<__S: ::serde::Serializer>(
         &self,
         __s: __S,

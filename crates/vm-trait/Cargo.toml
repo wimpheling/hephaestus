@@ -11,6 +11,8 @@ context = "vm"
 
 [dependencies]
 async-trait.workspace = true
+bytes.workspace = true
+http.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 uuid.workspace = true

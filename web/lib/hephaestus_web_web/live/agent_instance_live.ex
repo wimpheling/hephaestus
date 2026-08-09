@@ -146,6 +146,7 @@ defmodule HephaestusWebWeb.AgentInstanceLive do
         create_update_event="create-update"
         recover_update_event="recover-update"
         bind_secret_event="bind-secret"
+        control_mailbox_event="control-mailbox"
       />
     </Layouts.app>
     """

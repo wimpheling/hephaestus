@@ -1,6 +1,8 @@
 //! Provider-neutral virtual machine abstractions for the Hephaestus runtime.
 
 use async_trait::async_trait;
+use bytes::Bytes;
+use http::{HeaderMap, Method, StatusCode};
 use std::{
     collections::BTreeMap, error::Error, net::IpAddr, path::PathBuf, sync::Arc, time::Duration,
 };
@@ -261,6 +263,36 @@ pub struct GuestCommand {
     pub working_dir: Option<PathBuf>,
 }
 
+/// One complete host-to-guest request on the VM's private control transport.
+///
+/// This is not a guest network listener, a port forward, or a public socket.
+/// The provider carries it only after it has started an exact VM through its
+/// authenticated private host/guest channel.  Bodies are intentionally
+/// complete in memory: streaming, trailers, upgrades, and `WebSockets` are not
+/// part of this operation.
+#[derive(Debug, Clone)]
+pub struct PrivateHttpRequest {
+    /// Canonical HTTP method selected by the trusted host dispatcher.
+    pub method: Method,
+    /// Normalized absolute path and optional query.
+    pub path_and_query: String,
+    /// Bounded canonical request headers.
+    pub headers: HeaderMap,
+    /// Complete bounded request body.
+    pub body: Bytes,
+}
+
+/// One complete guest-to-host response on the VM's private control transport.
+#[derive(Debug, Clone)]
+pub struct PrivateHttpResponse {
+    /// HTTP status selected by guest application code.
+    pub status: StatusCode,
+    /// Bounded canonical response headers.
+    pub headers: HeaderMap,
+    /// Complete bounded response body.
+    pub body: Bytes,
+}
+
 /// A best-effort, live VM lifecycle event.
 ///
 /// Event receivers can lag or disconnect. Consumers that require durable logs
@@ -481,6 +513,27 @@ pub trait VmInstance: Send + Sync + 'static {
     /// Returns [`VmError::InvalidState`] if waiting is not valid in the
     /// instance's current state, or another [`VmError`] if monitoring fails.
     async fn wait(&self) -> Result<VmExit, VmError>;
+
+    /// Invokes a bounded HTTP handler through the provider's private
+    /// host-to-guest transport.
+    ///
+    /// Providers that have not implemented the authenticated handler protocol
+    /// must fail closed with [`VmError::Unsupported`].  This method never
+    /// creates a guest listener or broadens [`NetworkMode`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the VM is not running, private handler transport is
+    /// unsupported, or the provider cannot complete the bounded exchange.
+    async fn invoke_private_http(
+        &self,
+        _request: PrivateHttpRequest,
+    ) -> Result<PrivateHttpResponse, VmError> {
+        Err(VmError::Unsupported {
+            feature: "private HTTP handler transport".to_owned(),
+            provider: "unspecified".to_owned(),
+        })
+    }
 
     /// Subscribes to best-effort live lifecycle and log events.
     ///

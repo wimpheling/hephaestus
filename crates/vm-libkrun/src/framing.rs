@@ -138,9 +138,19 @@ mod tests {
                     credential: [0xA5; vm_trait::RUNTIME_AUTHORITY_CREDENTIAL_BYTES],
                     runtime_git_credential: Some([0xB6; vm_trait::RUNTIME_GIT_CREDENTIAL_BYTES]),
                 })),
+                gateway_handler: true,
             },
             HostMessage::Cancel { timeout_ms: 500 },
             HostMessage::HealthPing { nonce: 42 },
+            HostMessage::PrivateHttpRequest {
+                request_id: 7,
+                request: crate::protocol::PrivateHttpRequestMessage {
+                    method: String::from("POST"),
+                    path_and_query: String::from("/gateway/test"),
+                    headers: vec![(String::from("content-type"), String::from("text/plain"))],
+                    body: vec![1, 2, 3],
+                },
+            },
         ];
         for message in messages {
             round_trip(&message);
@@ -192,6 +202,14 @@ mod tests {
             GuestMessage::Error {
                 code: String::from("guest-test"),
                 message: String::from("deliberate error"),
+            },
+            GuestMessage::PrivateHttpResponse {
+                request_id: 7,
+                response: crate::protocol::PrivateHttpResponseMessage {
+                    status: 201,
+                    headers: Vec::new(),
+                    body: vec![4, 5, 6],
+                },
             },
         ];
         for message in messages {

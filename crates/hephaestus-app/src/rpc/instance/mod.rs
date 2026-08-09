@@ -16,6 +16,8 @@ use capability_domain::{
 };
 use connectrpc::{RequestContext, Response, ServiceRequest, ServiceResult};
 use control_plane_postgres::ControlPlanePool as PgPool;
+use mailbox_domain::{MailboxEventId, MailboxId};
+use mailbox_postgres::{MailboxOperatorAction, PostgresMailboxRepository};
 use release_domain::{
     InstanceName, NetworkAccess, ParameterName, ParameterValue, RefSelector, RuntimePolicy,
     TriggerPolicy,
@@ -29,9 +31,10 @@ use rpc_proto::{
             RuntimePolicy as ProtoRuntimePolicy, parameter_value,
         },
         instance::v1::{
-            BindSecretRequest, BindSecretResponse, CreateAttachmentRequest,
-            CreateAttachmentResponse, CreateUpdateRequest, CreateUpdateResponse,
-            GetInstanceRequest, GetInstanceResponse, ImportAgentRequest, ImportAgentResponse,
+            BindSecretRequest, BindSecretResponse, ControlMailboxRequest, ControlMailboxResponse,
+            CreateAttachmentRequest, CreateAttachmentResponse, CreateUpdateRequest,
+            CreateUpdateResponse, GetInstanceRequest, GetInstanceResponse, ImportAgentRequest,
+            ImportAgentResponse, MailboxControlAction as ProtoMailboxControlAction,
             RecoverUpdateRequest, RecoverUpdateResponse, RecoveryAction, RecoveryDecision,
             RemovalState, RemoveAttachmentRequest, RemoveAttachmentResponse,
             ReviseCapabilitiesRequest, ReviseCapabilitiesResponse, ReviseInstanceRequest,
@@ -49,6 +52,7 @@ use uuid::Uuid;
 /// Generated instance service backed by the existing release application.
 pub struct InstanceRpc {
     application: InstanceApplication,
+    pool: PgPool,
     commands: InternalCommandState,
     authenticator: MediatorAuthenticator,
     receipts: MutationReceipts,
@@ -56,14 +60,15 @@ pub struct InstanceRpc {
 
 impl InstanceRpc {
     /// Creates an instance service using the shared application command state.
-    pub const fn new(
+    pub fn new(
         pool: PgPool,
         commands: InternalCommandState,
         authenticator: MediatorAuthenticator,
         receipts: MutationReceipts,
     ) -> Self {
         Self {
-            application: InstanceApplication::new(pool),
+            application: InstanceApplication::new(pool.clone()),
+            pool,
             commands,
             authenticator,
             receipts,
@@ -99,6 +104,49 @@ impl AgentInstanceService for InstanceRpc {
         request: ServiceRequest<'_, GetInstanceRequest>,
     ) -> ServiceResult<GetInstanceResponse> {
         get_instance::handle(self, ctx, request).await
+    }
+
+    async fn control_mailbox(
+        &self,
+        ctx: RequestContext,
+        request: ServiceRequest<'_, ControlMailboxRequest>,
+    ) -> ServiceResult<ControlMailboxResponse> {
+        let request = request.to_owned_message();
+        let identity = mutation(
+            &ctx,
+            &self.authenticator,
+            "ControlMailbox",
+            &request.context,
+        )?;
+        let action = match request.action.as_known() {
+            Some(ProtoMailboxControlAction::Pause) => MailboxOperatorAction::Pause,
+            Some(ProtoMailboxControlAction::Resume) => MailboxOperatorAction::Resume,
+            Some(ProtoMailboxControlAction::Retry) => MailboxOperatorAction::Retry,
+            Some(ProtoMailboxControlAction::Cancel) => MailboxOperatorAction::Cancel,
+            Some(ProtoMailboxControlAction::DeadLetter) => MailboxOperatorAction::DeadLetter,
+            Some(ProtoMailboxControlAction::Unspecified) | None => {
+                return Err(into_connect_error(RpcError::InvalidArgument));
+            }
+        };
+        let result = PostgresMailboxRepository::new(self.pool.clone())
+            .operate(
+                &identity,
+                action,
+                parse_id::<MailboxId>(request.mailbox_id.as_option())?,
+                request
+                    .event_id
+                    .as_option()
+                    .map(|value| parse_id::<MailboxEventId>(Some(value)))
+                    .transpose()?,
+            )
+            .await
+            // The repository deliberately does not disclose whether an
+            // inaccessible mailbox or event exists.
+            .map_err(|_| into_connect_error(RpcError::NotFound))?;
+        Response::ok(ControlMailboxResponse {
+            changed: result.changed,
+            ..Default::default()
+        })
     }
 
     async fn import_agent(

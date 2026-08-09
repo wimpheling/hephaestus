@@ -1446,6 +1446,8 @@ dependencies = [
  "thiserror 2.0.19",
  "tokio",
  "uuid",
+ "vm-fake",
+ "vm-trait",
 ]
 
 [[package]]
@@ -1453,15 +1455,22 @@ name = "gateway-postgres"
 version = "0.1.0"
 dependencies = [
  "agent-config",
+ "async-trait",
  "authz-domain",
  "authz-postgres",
+ "capability-domain",
  "forge-domain",
  "gateway-domain",
+ "gateway-edge",
+ "http",
  "identity-domain",
  "release-domain",
+ "runtime-authority",
  "serde_json",
  "sqlx",
  "thiserror 2.0.19",
+ "time",
+ "tokio",
  "uuid",
 ]
 
@@ -2300,6 +2309,7 @@ dependencies = [
  "identity-postgres",
  "jsonwebtoken",
  "mailbox-dispatch",
+ "mailbox-domain",
  "mailbox-postgres",
  "oci-builder-postgres",
  "oci-builder-runtime-local",
@@ -5409,6 +5419,8 @@ name = "vm-fake"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "bytes",
+ "http",
  "tempfile",
  "tokio",
  "vm-conformance",
@@ -5420,7 +5432,9 @@ name = "vm-libkrun"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "bytes",
  "ciborium",
+ "http",
  "libc",
  "libloading",
  "runtime-types",
@@ -5445,6 +5459,8 @@ name = "vm-trait"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "bytes",
+ "http",
  "thiserror 2.0.19",
  "tokio",
  "uuid",

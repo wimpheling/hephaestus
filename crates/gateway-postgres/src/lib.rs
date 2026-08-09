@@ -7,15 +7,283 @@
 //! It deliberately does not open a listener or derive provider configuration.
 
 use agent_config::{Diagnostic, RepositoryGatewaysConfig, parse_repository_gateways};
+use async_trait::async_trait;
 use authz_domain::{AuthorizationDecision, ObjectRef, ObjectType, Permission, Subject};
 use authz_postgres::{PostgresMelangeAuthorizer, audit_decision, begin_actor_transaction};
 use forge_domain::{ProjectId, RepositoryId};
 use gateway_domain::{Exposure, GatewayDeclaration, GatewayId, GatewayRevisionId, HttpMethod};
+use gateway_edge::{
+    GatewayConfigRevision, GatewayDesiredConfiguration, GatewayEdgeError, GatewayInvocationOutcome,
+    GatewayInvocationRecorder, GatewayLimits, GatewayRouteBinding, GatewayRouteResolver,
+};
+use http::Method;
 use identity_domain::AuthenticatedIdentity;
 use release_domain::ReleaseId;
+use runtime_authority::{GatewayRuntimeAuthorityIssuer, GatewayRuntimeSessionRequest};
 use sqlx::{PgPool, Postgres, Transaction};
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
+use time::OffsetDateTime;
 use uuid::Uuid;
+
+/// Private worker adapter from authoritative gateway rows to the edge ports.
+///
+/// It never trusts a route identifier supplied by Caddy: resolution starts with
+/// the canonical request path and selects only an enabled route of the active
+/// immutable revision. Invocation rows retain correlation/lifecycle evidence
+/// only; payloads remain at the private HTTP boundary.
+#[derive(Clone)]
+pub struct PostgresGatewayEdgeAuthority {
+    pool: PgPool,
+    limits: GatewayLimits,
+    runtime_authority: Option<Arc<dyn GatewayRuntimeAuthorityIssuer>>,
+    session_ttl: Duration,
+}
+
+impl PostgresGatewayEdgeAuthority {
+    /// Creates the worker-side route and invocation adapter with explicit
+    /// bounded HTTP limits.
+    #[must_use]
+    pub const fn new(pool: PgPool, limits: GatewayLimits) -> Self {
+        Self {
+            pool,
+            limits,
+            runtime_authority: None,
+            session_ttl: Duration::from_secs(30),
+        }
+    }
+
+    /// Attaches the generic gateway-session issuer used by a production
+    /// dispatcher. The basic constructor remains useful for reconciliation
+    /// workers that never accept public traffic.
+    ///
+    /// # Errors
+    ///
+    /// Returns an unavailable edge error when the requested session lifetime
+    /// is zero and therefore cannot form a bounded session identity.
+    pub fn with_runtime_authority(
+        mut self,
+        runtime_authority: Arc<dyn GatewayRuntimeAuthorityIssuer>,
+        session_ttl: Duration,
+    ) -> Result<Self, GatewayEdgeError> {
+        if session_ttl.is_zero() {
+            return Err(GatewayEdgeError::Unavailable);
+        }
+        self.runtime_authority = Some(runtime_authority);
+        self.session_ttl = session_ttl;
+        Ok(self)
+    }
+
+    /// Reconstructs the complete enabled desired route set from `PostgreSQL`.
+    /// A caller supplies the derived revision after recording its desired hash;
+    /// no provider configuration becomes authoritative.
+    ///
+    /// # Errors
+    ///
+    /// Returns an unavailable edge error when authoritative rows cannot be
+    /// read or contain an invalid persisted HTTP vocabulary.
+    pub async fn desired_configuration(
+        &self,
+        revision: GatewayConfigRevision,
+    ) -> Result<GatewayDesiredConfiguration, GatewayEdgeError> {
+        Ok(GatewayDesiredConfiguration {
+            revision,
+            routes: self.active_routes().await?,
+        })
+    }
+
+    async fn active_routes(&self) -> Result<Vec<GatewayRouteBinding>, GatewayEdgeError> {
+        let rows = sqlx::query_as::<_, ActiveRouteRow>(
+            "SELECT route.id AS route_id, route.gateway_revision_id, route.path, route.methods
+             FROM gateway_routes AS route
+             JOIN gateways AS gateway ON gateway.id = route.gateway_id
+             WHERE gateway.lifecycle = 'enabled'
+               AND gateway.active_revision_id = route.gateway_revision_id
+               AND route.enabled
+             ORDER BY route.path, route.id",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|_| GatewayEdgeError::Unavailable)?;
+        rows.into_iter()
+            .map(|row| active_route(row, self.limits))
+            .collect()
+    }
+}
+
+#[async_trait]
+impl GatewayRouteResolver for PostgresGatewayEdgeAuthority {
+    async fn resolve(
+        &self,
+        path_and_query: &str,
+    ) -> Result<Option<GatewayRouteBinding>, GatewayEdgeError> {
+        let path = canonical_request_path(path_and_query)?;
+        let mut candidates = self.active_routes().await?;
+        candidates.retain(|route| route_matches(route, path));
+        candidates.sort_by(|left, right| {
+            right
+                .path_prefix
+                .len()
+                .cmp(&left.path_prefix.len())
+                .then_with(|| left.route_id.cmp(&right.route_id))
+        });
+        Ok(candidates.into_iter().next())
+    }
+}
+
+#[async_trait]
+impl GatewayInvocationRecorder for PostgresGatewayEdgeAuthority {
+    async fn accepted(
+        &self,
+        route: &GatewayRouteBinding,
+        request_id: Uuid,
+    ) -> Result<Uuid, GatewayEdgeError> {
+        let invocation_id = Uuid::new_v4();
+        let accepted = sqlx::query_as::<_, AcceptedInvocationRow>(
+            "INSERT INTO gateway_invocations
+                 (id, gateway_id, gateway_revision_id, gateway_route_id, project_id, request_id, outcome)
+             SELECT $1, route.gateway_id, route.gateway_revision_id, route.id, route.project_id, $2, 'accepted'
+             FROM gateway_routes AS route
+             JOIN gateways AS gateway ON gateway.id = route.gateway_id
+             WHERE route.id = $3
+               AND route.gateway_revision_id = $4
+               AND route.enabled
+               AND gateway.lifecycle = 'enabled'
+               AND gateway.active_revision_id = route.gateway_revision_id
+             RETURNING gateway_id, gateway_revision_id",
+        )
+        .bind(invocation_id)
+        .bind(request_id)
+        .bind(route.route_id)
+        .bind(route.gateway_revision_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|_| GatewayEdgeError::Unavailable)?;
+        let Some(accepted) = accepted else {
+            return Err(GatewayEdgeError::Unavailable);
+        };
+        if let Some(issuer) = &self.runtime_authority {
+            let issued_at = OffsetDateTime::now_utc();
+            let issued = issuer
+                .issue_gateway(GatewayRuntimeSessionRequest {
+                    invocation_id: capability_domain::GatewayInvocationId::from_uuid(invocation_id),
+                    gateway_id: accepted.gateway_id,
+                    gateway_revision_id: accepted.gateway_revision_id,
+                    issued_at,
+                    expires_at: issued_at
+                        + time::Duration::try_from(self.session_ttl)
+                            .map_err(|_| GatewayEdgeError::Unavailable)?,
+                })
+                .await;
+            if issued.is_err() {
+                let _: bool =
+                    sqlx::query_scalar("SELECT gateway_invocation_complete($1, 'rejected')")
+                        .bind(invocation_id)
+                        .fetch_one(&self.pool)
+                        .await
+                        .map_err(|_| GatewayEdgeError::Unavailable)?;
+                return Err(GatewayEdgeError::Unavailable);
+            }
+        }
+        Ok(invocation_id)
+    }
+
+    async fn completed(
+        &self,
+        invocation_id: Uuid,
+        outcome: GatewayInvocationOutcome,
+    ) -> Result<(), GatewayEdgeError> {
+        let completed: bool = sqlx::query_scalar("SELECT gateway_invocation_complete($1, $2)")
+            .bind(invocation_id)
+            .bind(outcome_name(outcome))
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|_| GatewayEdgeError::Unavailable)?;
+        if completed {
+            Ok(())
+        } else {
+            Err(GatewayEdgeError::Unavailable)
+        }
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct ActiveRouteRow {
+    route_id: Uuid,
+    gateway_revision_id: Uuid,
+    path: String,
+    methods: Vec<String>,
+}
+
+#[derive(sqlx::FromRow)]
+struct AcceptedInvocationRow {
+    gateway_id: Uuid,
+    gateway_revision_id: Uuid,
+}
+
+fn active_route(
+    row: ActiveRouteRow,
+    limits: GatewayLimits,
+) -> Result<GatewayRouteBinding, GatewayEdgeError> {
+    let methods = row
+        .methods
+        .into_iter()
+        .map(|method| persisted_method(&method))
+        .collect::<Result<_, _>>()?;
+    let path_prefix = row
+        .path
+        .strip_prefix('/')
+        .ok_or(GatewayEdgeError::Unavailable)?
+        .to_owned();
+    let binding = GatewayRouteBinding {
+        route_id: row.route_id,
+        gateway_revision_id: row.gateway_revision_id,
+        path_prefix,
+        methods,
+        limits,
+    };
+    binding.validate()?;
+    Ok(binding)
+}
+
+fn persisted_method(value: &str) -> Result<Method, GatewayEdgeError> {
+    match value {
+        "GET" => Ok(Method::GET),
+        "POST" => Ok(Method::POST),
+        "PUT" => Ok(Method::PUT),
+        "PATCH" => Ok(Method::PATCH),
+        "DELETE" => Ok(Method::DELETE),
+        "HEAD" => Ok(Method::HEAD),
+        "OPTIONS" => Ok(Method::OPTIONS),
+        _ => Err(GatewayEdgeError::Unavailable),
+    }
+}
+
+fn canonical_request_path(path_and_query: &str) -> Result<&str, GatewayEdgeError> {
+    let path = path_and_query
+        .split_once('?')
+        .map_or(path_and_query, |(path, _)| path);
+    if !path.starts_with('/') || path.contains(['#', '%']) || path.contains("//") {
+        return Err(GatewayEdgeError::Contract("ambiguous request path"));
+    }
+    Ok(path)
+}
+
+fn route_matches(route: &GatewayRouteBinding, path: &str) -> bool {
+    let public = route.public_path();
+    path == public
+        || path
+            .strip_prefix(&public)
+            .is_some_and(|suffix| suffix.starts_with('/'))
+}
+
+const fn outcome_name(outcome: GatewayInvocationOutcome) -> &'static str {
+    match outcome {
+        GatewayInvocationOutcome::Completed => "completed",
+        GatewayInvocationOutcome::Failed => "failed",
+        GatewayInvocationOutcome::TimedOut => "timed_out",
+        GatewayInvocationOutcome::Rejected => "rejected",
+    }
+}
 
 /// Trusted request to install all valid declarations in one exact manifest.
 #[derive(Debug, Clone)]
@@ -328,6 +596,7 @@ const fn method_name(method: HttpMethod) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{collections::BTreeSet, time::Duration};
 
     #[test]
     fn parses_only_validated_repository_gateway_source() {
@@ -356,5 +625,52 @@ methods = ["POST"]
             exposure_name(Exposure::HephAuthenticated),
             "heph_authenticated"
         );
+    }
+
+    fn edge_limits() -> GatewayLimits {
+        GatewayLimits {
+            max_request_body_bytes: 1024,
+            max_response_body_bytes: 1024,
+            max_request_headers: 16,
+            max_response_headers: 16,
+            max_path_and_query_bytes: 1024,
+            execution_timeout: Duration::from_secs(1),
+        }
+    }
+
+    #[test]
+    fn edge_resolution_selects_the_longest_exact_path_segment() {
+        let short = GatewayRouteBinding {
+            route_id: Uuid::new_v4(),
+            gateway_revision_id: Uuid::new_v4(),
+            path_prefix: String::from("telegram"),
+            methods: BTreeSet::from([Method::POST]),
+            limits: edge_limits(),
+        };
+        let nested = GatewayRouteBinding {
+            route_id: Uuid::new_v4(),
+            gateway_revision_id: Uuid::new_v4(),
+            path_prefix: String::from("telegram/updates"),
+            methods: BTreeSet::from([Method::POST]),
+            limits: edge_limits(),
+        };
+        assert!(route_matches(&short, "/gateway/telegram"));
+        assert!(route_matches(&nested, "/gateway/telegram/updates"));
+        assert!(!route_matches(&short, "/gateway/telegram-bot"));
+        assert_eq!(
+            canonical_request_path("/gateway/telegram/updates?offset=1").expect("path"),
+            "/gateway/telegram/updates"
+        );
+    }
+
+    #[test]
+    fn edge_route_conversion_rejects_unknown_persisted_method() {
+        let row = ActiveRouteRow {
+            route_id: Uuid::new_v4(),
+            gateway_revision_id: Uuid::new_v4(),
+            path: String::from("/telegram"),
+            methods: vec![String::from("CONNECT")],
+        };
+        assert!(active_route(row, edge_limits()).is_err());
     }
 }

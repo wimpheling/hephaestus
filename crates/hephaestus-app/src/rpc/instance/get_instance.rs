@@ -322,6 +322,7 @@ fn project(snapshot: InstanceSnapshot) -> Result<AgentInstance, RpcError> {
         .map(|row| {
             Ok(MailboxDeliveryInspection {
                 event_id: opaque(row.event_id).into(),
+                mailbox_id: opaque(row.mailbox_id).into(),
                 disposition: row.disposition,
                 logical_attempt_count: u32::try_from(row.logical_attempt_count)
                     .map_err(|_| RpcError::Internal)?,

@@ -243,6 +243,7 @@ pub struct CapabilityMetricsRow {
 #[derive(FromRow)]
 pub struct MailboxDeliveryInspectionRow {
     pub event_id: Uuid,
+    pub mailbox_id: Uuid,
     pub disposition: String,
     pub logical_attempt_count: i32,
     pub denial_code: Option<String>,
@@ -470,7 +471,7 @@ impl InstanceApplication {
         .await
         .map_err(InstanceQueryError::Persistence)?;
         let mailbox_deliveries: Vec<MailboxDeliveryInspectionRow> = sqlx::query_as(
-            "SELECT delivery.event_id, delivery.disposition,
+            "SELECT delivery.event_id, delivery.mailbox_id, delivery.disposition,
                     delivery.logical_attempt_count, delivery.denial_code,
                     attempt.instance_revision_id, attempt.state_volume_id,
                     attempt.lease_id, attempt.lease_fencing_token,

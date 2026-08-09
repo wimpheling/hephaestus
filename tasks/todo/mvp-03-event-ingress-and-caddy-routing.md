@@ -51,6 +51,9 @@ scale-to-zero VM snapshots, platform-specific Telegram semantics, arbitrary
 Caddy admin access, custom domains, certificate lifecycle management, or a
 V8/WebAssembly/Unikraft runtime bakeoff.
 
+Persistent guest web servers and their local-development workflow are tracked
+separately in [Persistent gateway service runtime and development workflow](persistent-gateway-service-runtime-and-development-workflow.md).
+
 ## Implementation checklist
 
 - [ ] **1. Specify gateway declarations and the HTTP contract**
@@ -114,6 +117,26 @@ V8/WebAssembly/Unikraft runtime bakeoff.
 
 - [ ] **4. Implement the GatewayDispatcher and synchronous invocation**
   - [ ] **Invoke bounded HTTP handlers**
+    - [x] Bind the dispatcher route resolver and invocation recorder to the
+      persisted enabled gateway revision, authorization snapshot, and runtime
+      session; a provider trait or unit-only recorder alone is insufficient.
+    - [x] Extend runtime authority with a durable, short-lived gateway
+      invocation session and immutable snapshot. Do not synthesize a normal
+      agent run merely to reuse run-shaped persistence.
+    - [x] Define and implement the bounded private-HTTP VM handler transport
+      used after dispatch. The existing VM lifecycle/provisioning interface is
+      not itself an HTTP request/response protocol.
+    - [x] Bind route resolution and invocation lifecycle recording to the
+      authoritative enabled PostgreSQL revision. Resolution starts from the
+      normalized request path, selects the longest exact path segment, and
+      rechecks the active revision/lifecycle while atomically accepting the
+      invocation; persisted evidence contains only IDs, correlation, and
+      terminal outcome.
+    - [ ] Extend that persisted bridge with the M03.1 gateway authorization
+      snapshot and generic runtime-session issuance/acknowledgement handoff.
+      The existing generic session tables are run-shaped, so this requires the
+      deliberate gateway-session persistence extension rather than fabricating
+      a run or weakening the session ceiling.
     - [ ] Resolve the exact enabled gateway route without trusting
       producer-controlled forwarding headers or route metadata.
     - [ ] Enforce method, route, body, header, timeout, and rate limits before
@@ -163,8 +186,9 @@ V8/WebAssembly/Unikraft runtime bakeoff.
     instance/revision, runtime session, provider translation, and request IDs.
   - [ ] Measure accepted, rejected, limited, cancelled, timed out, failed, and
     completed requests without high-cardinality public data.
-  - [ ] Add authorized project UI for gateway route binding, gateway revision,
-    lifecycle, recent ingress, denials, and recovery.
+  - [ ] Add authorized project UI and supported RPC controls for gateway
+    installation, route binding, gateway revision, lifecycle, recent ingress,
+    denials, and recovery.
   - [ ] Reauthorize live route and ingress subscriptions and never expose
     request bodies to unauthorized viewers.
 

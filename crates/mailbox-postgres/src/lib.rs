@@ -129,6 +129,14 @@ impl PostgresMailboxRepository {
     /// record share one transaction.  Operators need `can_recover` on the
     /// owning agent instance; callers without that permission receive the same
     /// non-disclosing unavailable result as an unknown event.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MailboxPersistenceError`] when the request shape is invalid,
+    /// the actor lacks recovery authority, or the durable transaction fails.
+    // This is intentionally one transaction so authorization, worker-only
+    // transition, outbox enqueue, and audit cannot be observed separately.
+    #[allow(clippy::too_many_lines)]
     pub async fn operate(
         &self,
         identity: &AuthenticatedIdentity,
@@ -225,7 +233,7 @@ impl PostgresMailboxRepository {
                 changed
             }
             MailboxOperatorAction::Retry => {
-                let id = event_id.expect("validated event action");
+                let id = event_id.ok_or(MailboxPersistenceError::Unavailable)?;
                 let changed = sqlx::query(
                     "UPDATE mailbox_deliveries SET disposition = 'retryable', next_eligible_at = now(),
                          terminal_at = NULL, denial_code = NULL, updated_at = now()
@@ -246,7 +254,7 @@ impl PostgresMailboxRepository {
                 changed
             }
             MailboxOperatorAction::Cancel => {
-                let id = event_id.expect("validated event action");
+                let id = event_id.ok_or(MailboxPersistenceError::Unavailable)?;
                 let changed = sqlx::query(
                     "UPDATE mailbox_deliveries SET disposition = 'cancelled', terminal_at = now(), updated_at = now()
                      WHERE event_id = $1 AND mailbox_id = $2
@@ -266,7 +274,7 @@ impl PostgresMailboxRepository {
                 changed
             }
             MailboxOperatorAction::DeadLetter => {
-                let id = event_id.expect("validated event action");
+                let id = event_id.ok_or(MailboxPersistenceError::Unavailable)?;
                 sqlx::query(
                     "UPDATE mailbox_deliveries SET disposition = 'dead_lettered', terminal_at = now(), updated_at = now()
                      WHERE event_id = $1 AND mailbox_id = $2

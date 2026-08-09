@@ -70,6 +70,8 @@ pub mod __buffa {
         reg.register_json_any(super::__CAPABILITY_BINDING_SELECTION_JSON_ANY);
         reg.register_json_any(super::__REVISE_CAPABILITIES_REQUEST_JSON_ANY);
         reg.register_json_any(super::__REVISE_CAPABILITIES_RESPONSE_JSON_ANY);
+        reg.register_json_any(super::__CONTROL_MAILBOX_REQUEST_JSON_ANY);
+        reg.register_json_any(super::__CONTROL_MAILBOX_RESPONSE_JSON_ANY);
     }
 }
 #[doc(inline)]
@@ -224,5 +226,13 @@ pub use self::__buffa::view::ReviseCapabilitiesRequestOwnedView;
 pub use self::__buffa::view::ReviseCapabilitiesResponseView;
 #[doc(inline)]
 pub use self::__buffa::view::ReviseCapabilitiesResponseOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::ControlMailboxRequestView;
+#[doc(inline)]
+pub use self::__buffa::view::ControlMailboxRequestOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::ControlMailboxResponseView;
+#[doc(inline)]
+pub use self::__buffa::view::ControlMailboxResponseOwnedView;
 #[doc(inline)]
 pub use self::__buffa::register_types;
