@@ -188,6 +188,8 @@ pub struct RepositoryGatewaysConfig {
 pub struct RepositoryGatewayConfig {
     /// Stable repository-scoped gateway name.
     pub name: String,
+    /// Exact released agent key whose immutable runtime contract handles HTTP.
+    pub agent_name: String,
     /// Versioned handler contract. Only `http.v1` is currently supported.
     pub handler_contract: String,
     /// Whether the future provider exposes the route publicly or through
@@ -218,6 +220,9 @@ impl RepositoryGatewayConfig {
             .collect::<Result<Vec<_>, _>>()?;
         Ok(GatewayDeclaration {
             name: GatewayName::parse(self.name.clone())?,
+            agent_name: GatewayName::parse(self.agent_name.clone())?
+                .as_str()
+                .to_owned(),
             handler_contract: self.handler_contract.clone(),
             exposure: self.exposure,
             routes,
@@ -2391,6 +2396,7 @@ version = 1
 
 [[gateways]]
 name = "telegram"
+agent_name = "telegram-handler"
 handler_contract = "http.v1"
 exposure = "public"
 secret_slots = ["telegram_secret", "provider_token"]
@@ -2402,6 +2408,7 @@ methods = ["POST", "GET"]
 
 [[gateways]]
 name = "health"
+agent_name = "health-handler"
 handler_contract = "http.v1"
 exposure = "heph_authenticated"
 
@@ -2414,6 +2421,7 @@ version = 1
 
 [[gateways]]
 name = "health"
+agent_name = "health-handler"
 handler_contract = "http.v1"
 exposure = "heph_authenticated"
 
@@ -2423,6 +2431,7 @@ methods = ["GET"]
 
 [[gateways]]
 name = "telegram"
+agent_name = "telegram-handler"
 handler_contract = "http.v1"
 exposure = "public"
 secret_slots = ["provider_token", "telegram_secret"]
@@ -2460,6 +2469,7 @@ methods = ["GET", "POST"]
 version = 1
 [[gateways]]
 name = "echo"
+agent_name = "echo-handler"
 handler_contract = "http.v1"
 exposure = "public"
 [[gateways.routes]]
@@ -2467,6 +2477,7 @@ path = "/echo"
 methods = ["POST"]
 [[gateways]]
 name = "echo"
+agent_name = "echo-handler"
 handler_contract = "http.v1"
 exposure = "public"
 [[gateways.routes]]
@@ -2486,6 +2497,7 @@ methods = ["POST"]
 version = 1
 [[gateways]]
 name = "echo"
+agent_name = "echo-handler"
 handler_contract = "http.v1"
 exposure = "public"
 webhook_secret = "must-never-be-accepted"

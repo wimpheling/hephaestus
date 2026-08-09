@@ -48,6 +48,7 @@ sqlx = { version = "0.8.6", default-features = false, features = [
     "uuid",
 ] }
 thiserror = "2"
+subtle = "2"
 # Keep the audited release fixed independently of the workspace's RPC-driven
 # Rust 1.88 floor.
 time = { version = "=0.3.45", features = ["serde"] }

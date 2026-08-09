@@ -1,5 +1,7 @@
 //! Opt-in hardware integration tests for the Fedora libkrun backend.
 
+use bytes::Bytes;
+use http::{HeaderMap, HeaderValue, Method, StatusCode};
 use runtime_types::RunId;
 use secret_domain::{SecretSlotKey, SecretValue};
 use secret_runtime::{EphemeralSecretConfig, RawSecretFile, materialize};
@@ -16,8 +18,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use vm_conformance::ProviderHarness;
 use vm_libkrun::{LibkrunConfig, LibkrunProvider};
 use vm_trait::{
-    DiskFormat, GuestCommand, LogStream, NetworkMode, PortForward, PortProtocol, RootFilesystem,
-    StopMode, VmDisk, VmError, VmEvent, VmId, VmMount, VmProvider, VmResources, VmSpec,
+    DiskFormat, GuestCommand, LogStream, NetworkMode, PortForward, PortProtocol,
+    PrivateHttpRequest, RootFilesystem, StopMode, VmDisk, VmError, VmEvent, VmId, VmMount,
+    VmProvider, VmResources, VmSpec,
 };
 
 const ENABLE_FLAG: &str = "HEPHAESTUS_LIBKRUN_INTEGRATION";
@@ -219,6 +222,42 @@ async fn boots_and_exercises_guest_runtime_without_privilege_escalation() {
         "destroy removed caller-owned state disk"
     );
     assert!(!runtime_root.join(&persisted_id).exists());
+
+    let gateway = provider
+        .provision(private_http_spec(rootfs.clone()))
+        .await
+        .expect("provision private HTTP gateway VM");
+    let gateway_id = gateway.id().0.clone();
+    gateway
+        .start()
+        .await
+        .expect("start private HTTP gateway VM");
+    let mut request_headers = HeaderMap::new();
+    request_headers.insert("content-type", HeaderValue::from_static("text/plain"));
+    let response = gateway
+        .invoke_private_http(PrivateHttpRequest {
+            method: Method::POST,
+            path_and_query: "/gateway/proof?mode=real".to_owned(),
+            headers: request_headers,
+            body: Bytes::from_static(b"gateway-real-vm-request"),
+        })
+        .await
+        .expect("complete private HTTP request through real guest control channel");
+    assert_eq!(response.status, StatusCode::CREATED);
+    assert_eq!(
+        response.headers.get("content-type"),
+        Some(&HeaderValue::from_static("text/plain"))
+    );
+    assert_eq!(
+        response.body,
+        Bytes::from_static(b"gateway-real-vm-response")
+    );
+    gateway
+        .destroy()
+        .await
+        .expect("destroy private HTTP gateway VM");
+    assert!(!runtime_root.join(&gateway_id).exists());
+    assert!(!cgroup_root_for_assertion.join(&gateway_id).exists());
     assert!(!cgroup_root_for_assertion.join(&persisted_id).exists());
 
     let graceful = provider
@@ -591,6 +630,31 @@ fn mode_spec(rootfs: PathBuf, id: &str, argument: &str, network: NetworkMode) ->
         },
         runtime_authority: None,
         labels: BTreeMap::from([("test".to_owned(), id.to_owned())]),
+    }
+}
+
+fn private_http_spec(rootfs: PathBuf) -> VmSpec {
+    VmSpec {
+        id: VmId(format!("integration-private-http-{}", std::process::id())),
+        root: RootFilesystem::Directory { host_path: rootfs },
+        disks: Vec::new(),
+        mounts: Vec::new(),
+        resources: VmResources {
+            vcpus: 1,
+            memory_mib: 512,
+        },
+        network: NetworkMode::Disabled,
+        command: GuestCommand {
+            program: "/usr/libexec/hephaestus/integration-check".to_owned(),
+            args: vec!["--private-http-handler".to_owned()],
+            env: BTreeMap::new(),
+            working_dir: Some(PathBuf::from("/")),
+        },
+        runtime_authority: None,
+        labels: BTreeMap::from([(
+            "hephaestus.gateway.handler-contract".to_owned(),
+            "http.v1".to_owned(),
+        )]),
     }
 }
 

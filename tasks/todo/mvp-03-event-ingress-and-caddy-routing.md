@@ -54,6 +54,27 @@ V8/WebAssembly/Unikraft runtime bakeoff.
 Persistent guest web servers and their local-development workflow are tracked
 separately in [Persistent gateway service runtime and development workflow](persistent-gateway-service-runtime-and-development-workflow.md).
 
+## Implementation status (2026-08-09)
+
+Implemented foundations include repository `heph.gateways.toml` declarations
+with required `agent_name`, immutable gateway/revision/route persistence,
+gateway authorization relations, exact release-agent resolution, invocation
+sessions, host-only inbound secret leases, the bounded dispatcher, private
+HTTP VM ABI, daemon composition, and Caddy reconciliation.
+
+Real proof currently covers a rootless libkrun private-HTTP exchange with the
+guest network disabled, plus a disposable shared-Caddy smoke test covering
+forwarding, route update, tombstone removal, and platform-route preservation.
+The Caddy provider now owns one explicitly marked gateway subroute in an
+operator-supplied complete baseline rather than replacing platform routes.
+
+The remaining unchecked work is lifecycle/management completion evidence:
+broader PostgreSQL route/RLS races, adversarial Caddy-to-real-dispatch tests,
+cutover/draining and crash recovery, gateway UI/metrics/live subscription
+authorization, brokered-secret end-to-end proof with MVP 04, and the full
+repository-quality gate. Persistent guest web servers remain deliberately out
+of scope in the linked follow-up.
+
 ## Implementation checklist
 
 - [ ] **1. Specify gateway declarations and the HTTP contract**

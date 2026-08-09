@@ -6,10 +6,18 @@ mod event_cursor;
 pub mod rpc;
 
 use async_trait::async_trait;
-use axum::{Router, routing::get};
+use axum::{
+    Router,
+    body::Body,
+    extract::{ConnectInfo, State},
+    http::Request,
+    response::Response,
+    routing::{any, get},
+};
 use build_orchestrator::{BuildExecutionError, BuildExecutor, BuildExecutorConfig};
 use build_postgres::PgBuildRepository;
 use builder_catalog_domain::OciImageReference;
+use bytes::Bytes;
 use capability_domain::{
     RuntimeCredentialGeneration, RuntimeInvocation, RuntimeSessionId, RuntimeSessionIdentity,
 };
@@ -25,6 +33,14 @@ use forge_service::{
     ForgeNatsOutboxPublisher, GitStorage, ensure_build_consumer, ensure_forge_jetstream_topology,
 };
 use futures_util::StreamExt;
+use gateway_edge::{
+    GatewayConfigRevision, GatewayDispatcher, GatewayInboundSecretResolver, GatewayLimits,
+    GatewayRequest, GatewayRequestDispatcher, GatewayRuntimeLauncher, GatewayRuntimeService,
+    GatewayScheme, LocalCaddyAdministration, LocalCaddyConfigurationTemplate,
+    LocalCaddyGatewayProvider, PrivateHttpVmGatewayHandler, TrustedRequestMetadata,
+    UNTRUSTED_FORWARDING_HEADERS,
+};
+use gateway_postgres::{PostgresGatewayEdgeAuthority, PostgresGatewayReleaseResolver};
 use git_http::{
     CompositeGitAuthenticator, GitAuthenticator, GitHttpLimits, GitHttpService,
     OidcGitAuthenticator, PostgresGitAuthorizer, RuntimeGitHttpAuthenticator,
@@ -84,8 +100,11 @@ use run_orchestrator::{
 };
 use run_postgres::PgRunRepository;
 use run_runtime_local::{LocalRunRuntimeConfig, LocalRunRuntimeManager};
-use runtime_authority::{RuntimeSessionIssuer, RuntimeSessionRepository};
-use runtime_authority_postgres::PgRuntimeSessionRepository;
+use runtime_authority::{
+    GatewayRuntimeAuthorityIssuer, RuntimeHandoffStore, RuntimeSessionIssuer,
+    RuntimeSessionRepository,
+};
+use runtime_authority_postgres::{PgGatewayRuntimeAuthorityIssuer, PgRuntimeSessionRepository};
 use runtime_git_authority::{RuntimeGitAuthorityError, RuntimeGitCredentialIssuer};
 use runtime_git_authority_postgres::PgRuntimeGitCredentialRepository;
 use runtime_handoff_local::{EncryptedFileHandoffStore, EncryptedFileRuntimeGitHandoffStore};
@@ -93,7 +112,7 @@ use runtime_types::{CommandId, RunId};
 use secret_application::BrokerAdapter;
 use secret_broker::{BrokerExecutor, BrokerServer, ServiceBrokerExecutor};
 use secret_postgres::initialize_manager;
-use secret_postgres::{SecretRuntimeService, SecretService};
+use secret_postgres::{GatewayIngressSecretResolver, SecretRuntimeService, SecretService};
 use secret_runtime::EphemeralSecretConfig;
 use secret_store::{EncryptedStore, LocalKeyProvider};
 use serde::Deserialize;
@@ -125,7 +144,7 @@ use workspace_local::{LocalWorkspaceConfig, LocalWorkspaceManager};
 use workspace_postgres::PgWorkspaceMetadataRepository;
 
 /// Ordered database migration expected by this application version.
-pub const EXPECTED_DATABASE_MIGRATION: i64 = 34;
+pub const EXPECTED_DATABASE_MIGRATION: i64 = 40;
 
 /// OIDC issuer configuration used for bearer-token authentication.
 pub struct OidcConfig {
@@ -152,6 +171,25 @@ pub struct RegistryConfig {
     pub reconciliation_lease: Duration,
     /// Interval for both inbox draining and missed-event full reconciliation.
     pub reconciliation_interval: Duration,
+}
+
+/// Optional shared-Caddy gateway edge configuration.
+///
+/// When absent, the daemon does not create a gateway listener or attempt to
+/// administer Caddy. This preserves the explicit operator boundary while
+/// allowing deployments that do not expose repository gateways.
+#[derive(Clone)]
+pub struct GatewayEdgeConfig {
+    /// Private loopback Caddy administration endpoint.
+    pub caddy_admin_url: String,
+    /// Complete operator-owned shared-Caddy JSON baseline.
+    pub caddy_configuration_template: Vec<u8>,
+    /// Existing shared-Caddy server containing the dedicated gateway subroute.
+    pub caddy_server_name: String,
+    /// Private loopback HTTP listener used only by the local Caddy process.
+    pub dispatcher_listen: SocketAddr,
+    /// Canonical public authority recorded as trusted gateway metadata.
+    pub public_authority: String,
 }
 
 /// Configured VM backend.
@@ -230,6 +268,8 @@ pub struct AppConfig {
     pub oidc: OidcConfig,
     /// Forge-owned OCI registry token-service settings.
     pub registry: RegistryConfig,
+    /// Optional repository-gateway edge owned by the same daemon process.
+    pub gateway_edge: Option<GatewayEdgeConfig>,
     /// Local persistent-volume settings.
     pub volumes: LocalVolumeConfig,
     /// Exact-commit workspace and durable result storage settings.
@@ -338,6 +378,68 @@ impl AppConfig {
             )));
         }
         self.validate_oci_builder()?;
+        self.validate_gateway_edge()?;
+        self.validate_root_images()?;
+        if self.runtime_policy.version.trim().is_empty()
+            || self.runtime_policy.max_vcpus == 0
+            || self.runtime_policy.max_memory_mib == 0
+        {
+            return Err(AppError::Configuration(String::from(
+                "runtime policy version and positive resource ceilings are required",
+            )));
+        }
+        if self.worker_concurrency == 0 {
+            return Err(AppError::Configuration(String::from(
+                "worker_concurrency must be greater than zero",
+            )));
+        }
+        if self.outbox_batch_size <= 0 {
+            return Err(AppError::Configuration(String::from(
+                "outbox_batch_size must be greater than zero",
+            )));
+        }
+        self.validate_registry()?;
+        if self.startup_timeout.is_zero() || self.shutdown_timeout.is_zero() {
+            return Err(AppError::Configuration(String::from(
+                "startup and shutdown timeouts must be greater than zero",
+            )));
+        }
+        Ok(())
+    }
+
+    fn validate_registry(&self) -> Result<(), AppError> {
+        if self.registry.reconciliation_lease.is_zero()
+            || self.registry.reconciliation_interval.is_zero()
+        {
+            return Err(AppError::Configuration(String::from(
+                "registry reconciliation durations must be greater than zero",
+            )));
+        }
+        Ok(())
+    }
+
+    fn validate_gateway_edge(&self) -> Result<(), AppError> {
+        let Some(gateway) = &self.gateway_edge else {
+            return Ok(());
+        };
+        if !gateway.dispatcher_listen.ip().is_loopback()
+            || gateway.public_authority.trim().is_empty()
+        {
+            return Err(AppError::Configuration(String::from(
+                "gateway dispatcher must bind loopback and use a non-empty public authority",
+            )));
+        }
+        LocalCaddyAdministration::new(&gateway.caddy_admin_url)
+            .map_err(|error| AppError::Configuration(error.to_string()))?;
+        LocalCaddyConfigurationTemplate::new(
+            &gateway.caddy_configuration_template,
+            gateway.caddy_server_name.clone(),
+        )
+        .map_err(|error| AppError::Configuration(error.to_string()))?;
+        Ok(())
+    }
+
+    fn validate_root_images(&self) -> Result<(), AppError> {
         if self.root_images.is_empty() {
             return Err(AppError::Configuration(String::from(
                 "at least one root image mapping is required",
@@ -378,41 +480,6 @@ impl AppConfig {
                     "root image {reference:?} materialization path must be {expected}"
                 )));
             }
-        }
-        if self.runtime_policy.version.trim().is_empty()
-            || self.runtime_policy.max_vcpus == 0
-            || self.runtime_policy.max_memory_mib == 0
-        {
-            return Err(AppError::Configuration(String::from(
-                "runtime policy version and positive resource ceilings are required",
-            )));
-        }
-        if self.worker_concurrency == 0 {
-            return Err(AppError::Configuration(String::from(
-                "worker_concurrency must be greater than zero",
-            )));
-        }
-        if self.outbox_batch_size <= 0 {
-            return Err(AppError::Configuration(String::from(
-                "outbox_batch_size must be greater than zero",
-            )));
-        }
-        self.validate_registry()?;
-        if self.startup_timeout.is_zero() || self.shutdown_timeout.is_zero() {
-            return Err(AppError::Configuration(String::from(
-                "startup and shutdown timeouts must be greater than zero",
-            )));
-        }
-        Ok(())
-    }
-
-    fn validate_registry(&self) -> Result<(), AppError> {
-        if self.registry.reconciliation_lease.is_zero()
-            || self.registry.reconciliation_interval.is_zero()
-        {
-            return Err(AppError::Configuration(String::from(
-                "registry reconciliation durations must be greater than zero",
-            )));
         }
         Ok(())
     }
@@ -473,11 +540,41 @@ pub struct HephaestusApp {
     internal_platform_policy_version: String,
     secret_broker_socket: PathBuf,
     secret_broker_executor: Arc<dyn BrokerExecutor>,
+    gateway_edge: Option<GatewayEdgeRuntime>,
     worker_concurrency: usize,
     outbox_poll_interval: Duration,
     outbox_batch_size: i64,
     startup_timeout: Duration,
     shutdown_timeout: Duration,
+}
+
+/// Runtime-owned dependencies for the optional shared-Caddy gateway edge.
+struct GatewayEdgeRuntime {
+    authority: PostgresGatewayEdgeAuthority,
+    provider: Arc<dyn gateway_edge::GatewayProvider>,
+    dispatcher: Arc<dyn GatewayRequestDispatcher>,
+    dispatcher_listen: SocketAddr,
+    public_authority: String,
+}
+
+/// Narrow provider adapter used only after the gateway release resolver has
+/// selected an exact immutable launch specification.
+#[derive(Clone)]
+struct ProviderGatewayRuntimeLauncher {
+    provider: Arc<dyn VmProvider>,
+}
+
+#[async_trait]
+impl GatewayRuntimeLauncher for ProviderGatewayRuntimeLauncher {
+    async fn provision_gateway(
+        &self,
+        spec: VmSpec,
+    ) -> Result<Arc<dyn VmInstance>, gateway_edge::GatewayEdgeError> {
+        self.provider
+            .provision(spec)
+            .await
+            .map_err(|_| gateway_edge::GatewayEdgeError::HandlerUnavailable)
+    }
 }
 
 struct OciBuilderWorkers {
@@ -930,6 +1027,11 @@ impl HephaestusApp {
             LocalRunRuntimeManager::initialize(run_repository.clone(), config.run_runtime)
                 .map_err(component("run runtime initialization"))?,
         );
+        let gateway_edge_config = config.gateway_edge.take();
+        let gateway_secret_keys = config.secret_keys.clone();
+        let gateway_handoff_root = config.runtime_authority_handoff_root.clone();
+        let gateway_handoff_key = config.runtime_authority_handoff_key;
+        let gateway_root_images = config.root_images.clone();
         let (secret_mounts, secret_runtime, secret_service) = build_secret_mount_manager(
             pool.clone(),
             &config.database_url,
@@ -969,6 +1071,69 @@ impl HephaestusApp {
             VmBackendConfig::Libkrun(provider) => {
                 Arc::new(LibkrunProvider::new(*provider).map_err(component("libkrun provider"))?)
             }
+        };
+        let gateway_edge = if let Some(gateway) = gateway_edge_config {
+            let issuer_handoff =
+                EncryptedFileHandoffStore::new(gateway_handoff_root.clone(), gateway_handoff_key)
+                    .map_err(component("gateway runtime authority handoff"))?;
+            let issuer: Arc<dyn GatewayRuntimeAuthorityIssuer> =
+                Arc::new(PgGatewayRuntimeAuthorityIssuer::new(
+                    pool.clone(),
+                    issuer_handoff,
+                    authz_postgres::AUTHORIZATION_MODEL_VERSION,
+                ));
+            let authority = PostgresGatewayEdgeAuthority::new(pool.clone(), gateway_limits())
+                .with_runtime_authority(issuer, Duration::from_secs(30))
+                .map_err(component("gateway runtime authority"))?;
+            let resolver_handoff: Arc<dyn RuntimeHandoffStore> = Arc::new(
+                EncryptedFileHandoffStore::new(gateway_handoff_root, gateway_handoff_key)
+                    .map_err(component("gateway runtime resolver handoff"))?,
+            );
+            let releases = PostgresGatewayReleaseResolver::new(
+                pool.clone(),
+                gateway_root_images,
+                resolver_handoff,
+            );
+            let runtime = GatewayRuntimeService::new(
+                releases,
+                ProviderGatewayRuntimeLauncher {
+                    provider: Arc::clone(&provider),
+                },
+            );
+            let handler = PrivateHttpVmGatewayHandler::new(runtime);
+            let ingress_pool = connect_control_plane(&config.database_url, 4)
+                .await
+                .map_err(component("gateway secret resolver PostgreSQL connection"))?;
+            let inbound: Arc<dyn GatewayInboundSecretResolver> =
+                Arc::new(GatewayIngressSecretResolver::new(
+                    ingress_pool,
+                    EncryptedStore::new(gateway_secret_keys),
+                ));
+            let dispatcher: Arc<dyn GatewayRequestDispatcher> = Arc::new(
+                GatewayDispatcher::new(authority.clone(), handler, authority.clone())
+                    .with_inbound_secret_resolver(inbound),
+            );
+            let administration = LocalCaddyAdministration::new(&gateway.caddy_admin_url)
+                .map_err(component("gateway Caddy administration"))?;
+            let template = LocalCaddyConfigurationTemplate::new(
+                &gateway.caddy_configuration_template,
+                gateway.caddy_server_name,
+            )
+            .map_err(component("gateway Caddy configuration template"))?;
+            let provider: Arc<dyn gateway_edge::GatewayProvider> = Arc::new(
+                LocalCaddyGatewayProvider::new(administration, Arc::clone(&dispatcher))
+                    .with_dispatcher_upstream(gateway.dispatcher_listen.to_string())
+                    .with_configuration_template(template),
+            );
+            Some(GatewayEdgeRuntime {
+                authority,
+                provider,
+                dispatcher,
+                dispatcher_listen: gateway.dispatcher_listen,
+                public_authority: gateway.public_authority,
+            })
+        } else {
+            None
         };
         let release_authorizer = Arc::new(authz_postgres::PostgresMelangeAuthorizer);
         let release_service = Arc::new(ReleaseService::new(
@@ -1103,6 +1268,7 @@ impl HephaestusApp {
             internal_platform_policy_version,
             secret_broker_socket: config.secret_broker_socket,
             secret_broker_executor,
+            gateway_edge,
             worker_concurrency: config.worker_concurrency,
             outbox_poll_interval: config.outbox_poll_interval,
             outbox_batch_size: config.outbox_batch_size,
@@ -1226,6 +1392,30 @@ impl HephaestusApp {
             }),
         )
         .router();
+        let gateway_listener = if let Some(gateway) = &self.gateway_edge {
+            let listener = tokio::net::TcpListener::bind(gateway.dispatcher_listen)
+                .await
+                .map_err(component("gateway private dispatcher listener"))?;
+            let desired = gateway
+                .authority
+                .desired_configuration(GatewayConfigRevision::new())
+                .await
+                .map_err(component("gateway desired configuration"))?;
+            gateway
+                .provider
+                .reconcile(&desired)
+                .await
+                .map_err(component("gateway Caddy reconciliation"))?;
+            Some((
+                listener,
+                PrivateGatewayDispatcherState {
+                    dispatcher: Arc::clone(&gateway.dispatcher),
+                    public_authority: gateway.public_authority.clone(),
+                },
+            ))
+        } else {
+            None
+        };
         let router = Router::new()
             .route("/healthz", get(|| async { "ok" }))
             .merge(git.router())
@@ -1252,7 +1442,7 @@ impl HephaestusApp {
         }
 
         let cancellation = CancellationToken::new();
-        let mut tasks = Vec::with_capacity(7);
+        let mut tasks = Vec::with_capacity(8);
         let (broker_ready_tx, broker_ready_rx) = oneshot::channel();
         let broker_cancel = cancellation.clone();
         tasks.push(tokio::spawn(async move {
@@ -1268,6 +1458,32 @@ impl HephaestusApp {
             }
             result
         }));
+        let gateway_ready_rx = if let Some((listener, state)) = gateway_listener {
+            let (gateway_ready_tx, gateway_ready_rx) = oneshot::channel();
+            let gateway_cancel = cancellation.clone();
+            tasks.push(tokio::spawn(async move {
+                if gateway_ready_tx.send(()).is_err() {
+                    return Ok(());
+                }
+                let result = axum::serve(
+                    listener,
+                    Router::new()
+                        .fallback(any(private_gateway_dispatch))
+                        .with_state(state)
+                        .into_make_service_with_connect_info::<SocketAddr>(),
+                )
+                .with_graceful_shutdown(gateway_cancel.clone().cancelled_owned())
+                .await
+                .map_err(|error| error.to_string());
+                if !gateway_cancel.is_cancelled() {
+                    gateway_cancel.cancel();
+                }
+                result
+            }));
+            Some(gateway_ready_rx)
+        } else {
+            None
+        };
         let (http_ready_tx, http_ready_rx) = oneshot::channel();
         let http_cancel = cancellation.clone();
         tasks.push(tokio::spawn(async move {
@@ -1446,6 +1662,11 @@ impl HephaestusApp {
             http_ready_rx
                 .await
                 .map_err(|_| AppError::Readiness(String::from("HTTP task exited")))?;
+            if let Some(gateway_ready_rx) = gateway_ready_rx {
+                gateway_ready_rx.await.map_err(|_| {
+                    AppError::Readiness(String::from("gateway private dispatcher task exited"))
+                })?;
+            }
             publisher_ready_rx
                 .await
                 .map_err(|_| AppError::Readiness(String::from("outbox task exited")))?;
@@ -1505,6 +1726,97 @@ impl HephaestusApp {
             shutdown_timeout: self.shutdown_timeout,
         })
     }
+}
+
+const MAX_PRIVATE_GATEWAY_REQUEST_BYTES: usize = 2 * 1024 * 1024;
+
+#[derive(Clone)]
+struct PrivateGatewayDispatcherState {
+    dispatcher: Arc<dyn GatewayRequestDispatcher>,
+    public_authority: String,
+}
+
+const fn gateway_limits() -> GatewayLimits {
+    GatewayLimits {
+        max_request_body_bytes: MAX_PRIVATE_GATEWAY_REQUEST_BYTES,
+        max_response_body_bytes: MAX_PRIVATE_GATEWAY_REQUEST_BYTES,
+        max_request_headers: 128,
+        max_response_headers: 128,
+        max_path_and_query_bytes: 8 * 1024,
+        execution_timeout: Duration::from_secs(30),
+    }
+}
+
+async fn private_gateway_dispatch(
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    State(state): State<PrivateGatewayDispatcherState>,
+    request: Request<Body>,
+) -> Response {
+    if !peer.ip().is_loopback() {
+        return gateway_http_response(
+            http::StatusCode::FORBIDDEN,
+            http::HeaderMap::new(),
+            Bytes::new(),
+        );
+    }
+    let path_and_query = request
+        .uri()
+        .path_and_query()
+        .map_or_else(|| String::from("/"), ToString::to_string);
+    let method = request.method().clone();
+    let mut headers = request.headers().clone();
+    for name in UNTRUSTED_FORWARDING_HEADERS {
+        headers.remove(name);
+    }
+    for name in [
+        http::header::CONNECTION,
+        http::header::PROXY_AUTHENTICATE,
+        http::header::PROXY_AUTHORIZATION,
+        http::header::TE,
+        http::header::TRAILER,
+        http::header::TRANSFER_ENCODING,
+        http::header::UPGRADE,
+    ] {
+        headers.remove(name);
+    }
+    headers.remove("keep-alive");
+    let Ok(body) =
+        axum::body::to_bytes(request.into_body(), MAX_PRIVATE_GATEWAY_REQUEST_BYTES).await
+    else {
+        return gateway_http_response(
+            http::StatusCode::PAYLOAD_TOO_LARGE,
+            http::HeaderMap::new(),
+            Bytes::new(),
+        );
+    };
+    let response = state
+        .dispatcher
+        .dispatch(GatewayRequest {
+            method,
+            path_and_query,
+            headers,
+            body,
+            trusted: TrustedRequestMetadata {
+                scheme: GatewayScheme::Https,
+                authority: state.public_authority,
+                client_address: peer.ip(),
+                request_id: Uuid::new_v4(),
+            },
+        })
+        .await
+        .response;
+    gateway_http_response(response.status, response.headers, response.body)
+}
+
+fn gateway_http_response(
+    status: http::StatusCode,
+    headers: http::HeaderMap,
+    body: Bytes,
+) -> Response {
+    let mut response = Response::new(Body::from(body));
+    *response.status_mut() = status;
+    *response.headers_mut() = headers;
+    response
 }
 
 async fn reap_failed_start(tasks: Vec<JoinHandle<Result<(), String>>>) {

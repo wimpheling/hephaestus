@@ -387,6 +387,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "brokered-egress-domain"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.19",
+ "uuid",
+]
+
+[[package]]
 name = "bstr"
 version = "1.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1441,8 +1452,10 @@ dependencies = [
  "async-trait",
  "bytes",
  "http",
+ "reqwest",
  "serde",
  "serde_json",
+ "subtle",
  "thiserror 2.0.19",
  "tokio",
  "uuid",
@@ -1466,12 +1479,14 @@ dependencies = [
  "identity-domain",
  "release-domain",
  "runtime-authority",
+ "serde",
  "serde_json",
  "sqlx",
  "thiserror 2.0.19",
  "time",
  "tokio",
  "uuid",
+ "vm-trait",
 ]
 
 [[package]]
@@ -2289,6 +2304,7 @@ dependencies = [
  "builder-catalog-application",
  "builder-catalog-domain",
  "builder-catalog-postgres",
+ "bytes",
  "capability-domain",
  "connectrpc",
  "connectrpc-reflection",
@@ -2299,6 +2315,8 @@ dependencies = [
  "forge-postgres",
  "forge-service",
  "futures-util",
+ "gateway-edge",
+ "gateway-postgres",
  "git-capability-domain",
  "git-http",
  "hmac",
@@ -2882,6 +2900,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.19",
+ "tracing",
  "uuid",
 ]
 
@@ -2902,17 +2921,22 @@ dependencies = [
 name = "mailbox-postgres"
 version = "0.1.0"
 dependencies = [
+ "async-nats",
  "async-trait",
  "authz-postgres",
+ "futures-util",
  "identity-domain",
  "mailbox-dispatch",
  "mailbox-domain",
  "run-domain",
  "runtime-types",
  "serde_json",
+ "serial_test",
  "sha2",
  "sqlx",
  "thiserror 2.0.19",
+ "time",
+ "tokio",
  "uuid",
 ]
 
@@ -4244,6 +4268,8 @@ name = "secret-broker"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "brokered-egress-domain",
+ "reqwest",
  "runtime-types",
  "secret-application",
  "secret-domain",
@@ -4255,6 +4281,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -4281,6 +4308,8 @@ dependencies = [
  "authz-postgres",
  "capability-domain",
  "forge-domain",
+ "gateway-edge",
+ "http",
  "identity-domain",
  "release-domain",
  "run-domain",

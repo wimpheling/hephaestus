@@ -50,6 +50,24 @@ adapters, arbitrary HTTP methods/credential locations, generic credential
 fetch, direct guest egress, WebSockets, streaming, or arbitrary TLS proxy
 configuration.
 
+## Implementation status (2026-08-09)
+
+Implemented foundations include typed immutable placeholder rules, outbound
+runtime lease snapshots, route-scoped inbound gateway leases, value-free audit
+records, `NetworkMode::BrokerOnly`, a strict HTTPS-only brokered adapter, and
+constant-time inbound header rewrite before VM delivery. Outbound use rechecks
+the exact lease, active binding, version, destination, and rule before and
+after upstream use; it fails closed on rotation or revocation. The adapter
+also rejects an upstream response that contains the resolved credential.
+
+Focused domain, broker, secret-adapter, dispatcher, and sentinel tests pass.
+The remaining acceptance work is real PostgreSQL/proxy/libkrun end-to-end
+evidence, full gateway/daemon composition proof, and the full quality gate.
+Fresh PostgreSQL verification is currently blocked by a concrete failing
+existing secret authorization test: an unauthorized create returns
+`Persistence` instead of the expected `AuthorizationDenied`. This must be
+fixed before MVP 04 can be marked complete.
+
 ## Implementation checklist
 
 - [ ] **1. Define placeholder-substitution contracts**
@@ -121,6 +139,9 @@ configuration.
   - [ ] Run `cargo doc --workspace --all-features --no-deps`.
   - [ ] Run real-PostgreSQL, real-libkrun, proxy, TLS, DNS-bypass, and
     failure-injection scenarios.
+  - [ ] Fix the fresh-PostgreSQL secret authorization diagnostic before using
+    it as brokered-rule authority evidence: unauthorized secret creation must
+    return `AuthorizationDenied`, not a generic persistence failure.
   - [ ] Run secret-sentinel scans, `git diff --check`, and `cargo dev quality`.
 
 ## Completion evidence

@@ -637,6 +637,12 @@ impl MailboxDispatchStore for PostgresMailboxRepository {
                 .rows_affected()
                     == 1
             }
+            // Dispatch has no separate pre-claim state transition: the
+            // following `claim_dispatch` transaction atomically rechecks
+            // eligibility and creates the one durable run.  Accepting this
+            // committed identifier-only command here lets the JetStream
+            // handler acknowledge only after that compare-and-swap succeeds.
+            MAILBOX_DISPATCH_SUBJECT => false,
             _ => {
                 return Err(MailboxDispatchStoreError(
                     "unsupported mailbox subject".to_owned(),

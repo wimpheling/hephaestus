@@ -14,16 +14,23 @@ use forge_domain::{ProjectId, RepositoryId};
 use gateway_domain::{Exposure, GatewayDeclaration, GatewayId, GatewayRevisionId, HttpMethod};
 use gateway_edge::{
     GatewayConfigRevision, GatewayDesiredConfiguration, GatewayEdgeError, GatewayInvocationOutcome,
-    GatewayInvocationRecorder, GatewayLimits, GatewayRouteBinding, GatewayRouteResolver,
+    GatewayInvocationRecorder, GatewayLimits, GatewayReleaseResolver, GatewayRouteBinding,
+    GatewayRouteResolver,
 };
 use http::Method;
 use identity_domain::AuthenticatedIdentity;
 use release_domain::ReleaseId;
-use runtime_authority::{GatewayRuntimeAuthorityIssuer, GatewayRuntimeSessionRequest};
+use runtime_authority::{
+    GatewayRuntimeAuthorityIssuer, GatewayRuntimeSessionRequest, RuntimeHandoffStore,
+};
+use serde::Deserialize;
 use sqlx::{PgPool, Postgres, Transaction};
-use std::{sync::Arc, time::Duration};
+use std::{collections::BTreeMap, path::PathBuf, sync::Arc, time::Duration};
 use time::OffsetDateTime;
 use uuid::Uuid;
+use vm_trait::{
+    GuestCommand, NetworkMode, RootFilesystem, RuntimeAuthorityBootstrap, VmId, VmResources, VmSpec,
+};
 
 /// Private worker adapter from authoritative gateway rows to the edge ports.
 ///
@@ -174,7 +181,7 @@ impl GatewayInvocationRecorder for PostgresGatewayEdgeAuthority {
                             .map_err(|_| GatewayEdgeError::Unavailable)?,
                 })
                 .await;
-            if issued.is_err() {
+            let Ok(issued) = issued else {
                 let _: bool =
                     sqlx::query_scalar("SELECT gateway_invocation_complete($1, 'rejected')")
                         .bind(invocation_id)
@@ -182,7 +189,35 @@ impl GatewayInvocationRecorder for PostgresGatewayEdgeAuthority {
                         .await
                         .map_err(|_| GatewayEdgeError::Unavailable)?;
                 return Err(GatewayEdgeError::Unavailable);
-            }
+            };
+            // Leases are derived only after the exact gateway runtime session
+            // exists. Their trigger rechecks invocation, revision, route,
+            // import, selected version, and active lifecycle ceilings.
+            sqlx::query(
+                "INSERT INTO gateway_secret_leases
+                     (id, runtime_session_id, invocation_id, binding_id,
+                      secret_version_id, rule_id, expires_at)
+                 SELECT gen_random_uuid(), $1, $2, binding.id,
+                        binding.secret_version_id, rule.id, session.expires_at
+                 FROM gateway_runtime_authority_sessions AS session
+                 JOIN gateway_invocations AS invocation ON invocation.id = session.invocation_id
+                 JOIN gateway_brokered_secret_rules AS rule
+                   ON rule.gateway_revision_id = invocation.gateway_revision_id
+                  AND rule.gateway_route_id = invocation.gateway_route_id
+                 JOIN gateway_secret_bindings AS binding
+                   ON binding.id = rule.binding_id
+                  AND binding.gateway_revision_id = invocation.gateway_revision_id
+                 WHERE session.id = $1 AND session.invocation_id = $2
+                   AND session.status IN ('pending_handoff', 'active')
+                   AND session.expires_at > now()
+                   AND binding.status = 'active'
+                 ON CONFLICT (invocation_id, rule_id) DO NOTHING",
+            )
+            .bind(issued.id.as_uuid())
+            .bind(invocation_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|_| GatewayEdgeError::Unavailable)?;
         }
         Ok(invocation_id)
     }
@@ -204,6 +239,172 @@ impl GatewayInvocationRecorder for PostgresGatewayEdgeAuthority {
             Err(GatewayEdgeError::Unavailable)
         }
     }
+}
+
+/// Production resolver for the exact released agent selected by a gateway revision.
+///
+/// It accepts only an already-recorded invocation ID; public request data cannot
+/// influence image, command, resource, or bootstrap selection.
+pub struct PostgresGatewayReleaseResolver {
+    pool: PgPool,
+    root_images: BTreeMap<String, RootFilesystem>,
+    handoff: Arc<dyn RuntimeHandoffStore>,
+}
+
+impl PostgresGatewayReleaseResolver {
+    /// Creates a resolver over operator-materialized immutable root filesystems
+    /// and the same host-only handoff store used to issue gateway sessions.
+    #[must_use]
+    pub fn new(
+        pool: PgPool,
+        root_images: BTreeMap<String, RootFilesystem>,
+        handoff: Arc<dyn RuntimeHandoffStore>,
+    ) -> Self {
+        Self {
+            pool,
+            root_images,
+            handoff,
+        }
+    }
+}
+
+#[async_trait]
+impl GatewayReleaseResolver for PostgresGatewayReleaseResolver {
+    async fn resolve_launch(
+        &self,
+        route: &GatewayRouteBinding,
+        invocation_id: Uuid,
+    ) -> Result<VmSpec, GatewayEdgeError> {
+        let row = sqlx::query_as::<_, GatewayLaunchRow>(
+            "SELECT agent.runtime_contract, session.issuance_generation
+             FROM gateway_invocations AS invocation
+             JOIN gateway_revisions AS revision
+               ON revision.id = invocation.gateway_revision_id
+              AND revision.gateway_id = invocation.gateway_id
+             JOIN release_agents AS agent
+               ON agent.id = revision.release_agent_id
+              AND agent.release_id = revision.release_id
+              AND agent.agent_key = revision.release_agent_key
+             JOIN releases AS release
+               ON release.id = revision.release_id
+              AND release.repository_id = revision.repository_id
+             JOIN gateway_runtime_authority_sessions AS session
+               ON session.invocation_id = invocation.id
+              AND session.gateway_id = invocation.gateway_id
+              AND session.gateway_revision_id = invocation.gateway_revision_id
+             WHERE invocation.id = $1
+               AND invocation.gateway_route_id = $2
+               AND invocation.gateway_revision_id = $3
+               AND invocation.outcome = 'accepted'
+               AND revision.handler_contract = 'http.v1'
+               AND release.state = 'published'
+               AND session.status = 'pending_handoff'
+               AND session.expires_at > now()",
+        )
+        .bind(invocation_id)
+        .bind(route.route_id)
+        .bind(route.gateway_revision_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|_| GatewayEdgeError::Unavailable)?
+        .ok_or(GatewayEdgeError::HandlerUnavailable)?;
+        let contract: GatewayRuntimeContract = serde_json::from_value(row.runtime_contract)
+            .map_err(|_| GatewayEdgeError::Unavailable)?;
+        // MVP-03 gateway VMs are stateless one-request handlers. They cannot
+        // silently acquire a volume or general network listener merely because
+        // the source agent also supports those modes elsewhere.
+        if contract.requires_state
+            || !matches!(contract.policy_ceiling.network, GatewayNetwork::Disabled)
+        {
+            return Err(GatewayEdgeError::HandlerUnavailable);
+        }
+        let root = self
+            .root_images
+            .get(&contract.image_reference)
+            .cloned()
+            .ok_or(GatewayEdgeError::HandlerUnavailable)?;
+        let generation = u64::try_from(row.issuance_generation)
+            .ok()
+            .and_then(|value| capability_domain::RuntimeCredentialGeneration::new(value).ok())
+            .ok_or(GatewayEdgeError::Unavailable)?;
+        let session_id = capability_domain::RuntimeSessionId::from_uuid(invocation_id);
+        let credential = self
+            .handoff
+            .open(session_id, generation, OffsetDateTime::now_utc())
+            .map_err(|_| GatewayEdgeError::HandlerUnavailable)?;
+        Ok(VmSpec {
+            id: VmId(format!("gateway-{invocation_id}")),
+            root,
+            disks: Vec::new(),
+            mounts: Vec::new(),
+            resources: VmResources {
+                vcpus: contract.policy_ceiling.vcpus,
+                memory_mib: contract.policy_ceiling.memory_mib,
+            },
+            network: NetworkMode::Disabled,
+            command: GuestCommand {
+                program: format!("/release/{}", contract.command),
+                args: contract.arguments,
+                env: BTreeMap::new(),
+                working_dir: Some(PathBuf::from(format!(
+                    "/release/{}",
+                    contract.working_directory
+                ))),
+            },
+            runtime_authority: Some(RuntimeAuthorityBootstrap::new(
+                invocation_id,
+                generation.get(),
+                *credential.expose(),
+            )),
+            labels: BTreeMap::from([
+                (String::from("hephaestus.kind"), String::from("gateway")),
+                (
+                    String::from("hephaestus.gateway-invocation"),
+                    invocation_id.to_string(),
+                ),
+                (
+                    String::from("hephaestus.gateway-route"),
+                    route.route_id.to_string(),
+                ),
+                (
+                    String::from("hephaestus.gateway-revision"),
+                    route.gateway_revision_id.to_string(),
+                ),
+            ]),
+        })
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct GatewayLaunchRow {
+    runtime_contract: serde_json::Value,
+    issuance_generation: i64,
+}
+
+#[derive(Deserialize)]
+struct GatewayRuntimeContract {
+    #[serde(alias = "executable")]
+    command: String,
+    arguments: Vec<String>,
+    working_directory: String,
+    image_reference: String,
+    requires_state: bool,
+    policy_ceiling: GatewayPolicyCeiling,
+}
+
+#[derive(Deserialize)]
+struct GatewayPolicyCeiling {
+    vcpus: u8,
+    memory_mib: u32,
+    network: GatewayNetwork,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum GatewayNetwork {
+    Disabled,
+    BrokerOnly,
+    Egress,
 }
 
 #[derive(sqlx::FromRow)]
@@ -378,6 +579,11 @@ impl PostgresGatewayInstaller {
             let normalized_hash = declaration
                 .validate()
                 .map_err(|_| GatewayInstallError::Unavailable)?;
+            // A gateway is always released code, never a floating repository
+            // command.  Resolve the symbolic manifest key before writing the
+            // immutable revision so later dispatch cannot silently select a
+            // different agent in the same release.
+            let release_agent = resolve_release_agent(&mut tx, &command, &declaration).await?;
             installed.push(
                 install_declaration(
                     &mut tx,
@@ -385,6 +591,7 @@ impl PostgresGatewayInstaller {
                     command.project_id,
                     command.repository_id,
                     command.release_id,
+                    release_agent,
                     declaration,
                     normalized_hash,
                 )
@@ -444,6 +651,46 @@ impl PostgresGatewayInstaller {
     }
 }
 
+/// Exact released agent selected by a repository gateway declaration.
+#[derive(Debug, Clone)]
+struct ReleaseAgentBinding {
+    id: Uuid,
+    key: String,
+}
+
+async fn resolve_release_agent(
+    tx: &mut Transaction<'_, Postgres>,
+    command: &InstallGatewayManifest,
+    declaration: &GatewayDeclaration,
+) -> Result<ReleaseAgentBinding, GatewayInstallError> {
+    let release_id = command.release_id.ok_or(GatewayInstallError::Unavailable)?;
+    sqlx::query_as::<_, ReleaseAgentBindingRow>(
+        "SELECT agent.id, agent.agent_key AS key
+         FROM release_agents AS agent
+         JOIN releases AS release ON release.id = agent.release_id
+         WHERE agent.release_id = $1
+           AND agent.agent_key = $2
+           AND release.repository_id = $3
+           AND release.state = 'published'",
+    )
+    .bind(release_id.as_uuid())
+    .bind(&declaration.agent_name)
+    .bind(command.repository_id.as_uuid())
+    .fetch_optional(&mut **tx)
+    .await?
+    .map(|row| ReleaseAgentBinding {
+        id: row.id,
+        key: row.key,
+    })
+    .ok_or(GatewayInstallError::Unavailable)
+}
+
+#[derive(sqlx::FromRow)]
+struct ReleaseAgentBindingRow {
+    id: Uuid,
+    key: String,
+}
+
 fn parse_manifest(source: &[u8]) -> Result<RepositoryGatewaysConfig, GatewayInstallError> {
     let parsed = parse_repository_gateways(source);
     parsed.config.ok_or(GatewayInstallError::InvalidManifest {
@@ -487,6 +734,7 @@ async fn install_declaration(
     project_id: ProjectId,
     repository_id: RepositoryId,
     release_id: Option<ReleaseId>,
+    release_agent: ReleaseAgentBinding,
     declaration: GatewayDeclaration,
     normalized_hash: [u8; 32],
 ) -> Result<InstalledGateway, GatewayInstallError> {
@@ -510,9 +758,10 @@ async fn install_declaration(
     let revision_id = GatewayRevisionId::new();
     let inserted_revision: Option<Uuid> = sqlx::query_scalar(
         "INSERT INTO gateway_revisions
-            (id, gateway_id, project_id, repository_id, release_id, handler_contract,
-             exposure, parameters, secret_slots, normalized_hash, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            (id, gateway_id, project_id, repository_id, release_id, release_agent_id,
+             release_agent_key, handler_contract, exposure, parameters, secret_slots,
+             normalized_hash, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
          ON CONFLICT (gateway_id, normalized_hash) DO NOTHING
          RETURNING id",
     )
@@ -521,6 +770,8 @@ async fn install_declaration(
     .bind(project_id.as_uuid())
     .bind(repository_id.as_uuid())
     .bind(release_id.map(ReleaseId::as_uuid))
+    .bind(release_agent.id)
+    .bind(release_agent.key)
     .bind(&declaration.handler_contract)
     .bind(exposure_name(declaration.exposure))
     .bind(&declaration.parameters)
@@ -605,6 +856,7 @@ version = 1
 
 [[gateways]]
 name = "telegram"
+agent_name = "telegram-handler"
 handler_contract = "http.v1"
 exposure = "public"
 parameters = {}

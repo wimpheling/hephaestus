@@ -25,12 +25,14 @@ http.workspace = true
 identity-domain = { path = "../identity-domain" }
 release-domain = { path = "../release-domain" }
 runtime-authority = { path = "../runtime-authority" }
+serde.workspace = true
 serde_json.workspace = true
 sqlx.workspace = true
 time.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 thiserror.workspace = true
 uuid.workspace = true
+vm-trait = { path = "../vm-trait" }
 
 [lints]
 workspace = true

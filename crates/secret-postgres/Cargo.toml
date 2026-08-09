@@ -20,6 +20,8 @@ authz-domain = { path = "../authz-domain" }
 authz-postgres = { path = "../authz-postgres" }
 capability-domain = { path = "../capability-domain" }
 forge-domain = { path = "../forge-domain" }
+gateway-edge = { path = "../gateway-edge" }
+http.workspace = true
 identity-domain = { path = "../identity-domain" }
 release-domain = { path = "../release-domain" }
 run-domain = { path = "../run-domain" }

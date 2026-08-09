@@ -2,7 +2,8 @@
 
 use builder_catalog_domain::OciImageReference;
 use hephaestus_app::{
-    AppConfig, HephaestusApp, OciBuilderWorkerConfig, OidcConfig, RegistryConfig, VmBackendConfig,
+    AppConfig, GatewayEdgeConfig, HephaestusApp, OciBuilderWorkerConfig, OidcConfig,
+    RegistryConfig, VmBackendConfig,
 };
 use jsonwebtoken::{Algorithm, DecodingKey};
 use oci_builder_runtime_local::LocalOciRuntimeConfig;
@@ -106,6 +107,7 @@ fn environment_config() -> Result<AppConfig, Box<dyn Error>> {
         _ => return Err(String::from("unsupported configured OIDC algorithm").into()),
     };
     let http_listen = required("HEPHAESTUS_HTTP_LISTEN")?.parse::<SocketAddr>()?;
+    let gateway_edge = gateway_edge_from_environment()?;
     let secret_keys = load_secret_keys(
         &path("HEPHAESTUS_SECRET_KEY_DIRECTORY")?,
         required("HEPHAESTUS_SECRET_KEY_REFERENCE")?,
@@ -171,6 +173,7 @@ fn environment_config() -> Result<AppConfig, Box<dyn Error>> {
                 5_000,
             )?),
         },
+        gateway_edge,
         volumes: LocalVolumeConfig {
             volume_root,
             transient_runtime_roots: vec![
@@ -225,6 +228,21 @@ fn environment_config() -> Result<AppConfig, Box<dyn Error>> {
         startup_timeout: Duration::from_secs(30),
         shutdown_timeout: Duration::from_secs(30),
     })
+}
+
+fn gateway_edge_from_environment() -> Result<Option<GatewayEdgeConfig>, Box<dyn Error>> {
+    let Some(caddy_admin_url) = env::var_os("HEPHAESTUS_CADDY_ADMIN_URL") else {
+        return Ok(None);
+    };
+    Ok(Some(GatewayEdgeConfig {
+        caddy_admin_url: caddy_admin_url
+            .into_string()
+            .map_err(|_| "HEPHAESTUS_CADDY_ADMIN_URL must be valid UTF-8")?,
+        dispatcher_listen: required("HEPHAESTUS_GATEWAY_DISPATCHER_LISTEN")?.parse()?,
+        public_authority: required("HEPHAESTUS_GATEWAY_PUBLIC_AUTHORITY")?,
+        caddy_configuration_template: std::fs::read(path("HEPHAESTUS_CADDY_CONFIGURATION_FILE")?)?,
+        caddy_server_name: required("HEPHAESTUS_CADDY_SERVER_NAME")?,
+    }))
 }
 
 fn fixed_key(path: PathBuf) -> Result<[u8; 32], Box<dyn Error>> {

@@ -225,6 +225,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             reconciliation_lease: Duration::from_secs(30),
             reconciliation_interval: Duration::from_secs(30),
         },
+        gateway_edge: None,
         volumes: LocalVolumeConfig {
             volume_root: backend_fixture.volume_root,
             transient_runtime_roots,

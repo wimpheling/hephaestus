@@ -30,11 +30,14 @@ build-orchestrator = { path = "../build-orchestrator" }
 build-postgres = { path = "../build-postgres" }
 buffa.workspace = true
 buffa-types.workspace = true
+bytes.workspace = true
 event-application = { path = "../event-application" }
 event-postgres = { path = "../event-postgres" }
 forge-service = { path = "../forge-service" }
 forge-postgres = { path = "../forge-postgres" }
 forge-domain = { path = "../forge-domain" }
+gateway-edge = { path = "../gateway-edge" }
+gateway-postgres = { path = "../gateway-postgres" }
 futures-util.workspace = true
 git-http = { path = "../git-http" }
 git-capability-domain = { path = "../git-capability-domain" }

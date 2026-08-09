@@ -94,6 +94,14 @@ identifier!(
     SecretRuntimeSessionId,
     "A stable identifier for one authenticated runtime secret session."
 );
+identifier!(
+    GatewaySecretBindingId,
+    "A stable identifier for an immutable gateway-revision secret binding."
+);
+identifier!(
+    GatewaySecretLeaseId,
+    "A stable identifier for one gateway invocation secret lease."
+);
 
 macro_rules! bounded_key {
     ($name:ident, $description:literal, $minimum:expr, $maximum:expr) => {
@@ -554,6 +562,28 @@ pub struct SecretLease {
     pub status: AuthorityStatus,
     /// Whether raw material may already have been observed by the guest.
     pub raw_material_observed: bool,
+}
+
+/// Short-lived secret authority for one exact gateway invocation.
+///
+/// The gateway's existing opaque runtime-session credential authenticates this
+/// lease; this record deliberately adds no second credential and no plaintext.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GatewaySecretLease {
+    /// Lease identifier.
+    pub id: GatewaySecretLeaseId,
+    /// Exact public gateway invocation UUID.
+    pub invocation_id: Uuid,
+    /// Exact immutable gateway-secret binding.
+    pub binding_id: GatewaySecretBindingId,
+    /// Exact immutable secret version selected for this invocation.
+    pub secret_version_id: SecretVersionId,
+    /// Exact immutable inbound substitution rule UUID.
+    pub brokered_rule_id: Uuid,
+    /// Expiration inherited from the gateway runtime authority session.
+    pub expires_at: OffsetDateTime,
+    /// Current authority status.
+    pub status: AuthorityStatus,
 }
 
 /// Stable non-sensitive reason that secret resolution failed.

@@ -190,6 +190,13 @@ impl MailboxOutboxPublisher {
             .await?;
         let count = rows.len();
         for row in rows {
+            tracing::debug!(
+                mailbox_event_id = %row.command.event_id,
+                mailbox_operation_id = %row.command.operation_id,
+                mailbox_outbox_id = %row.id,
+                subject = %row.subject,
+                "publishing durable mailbox command"
+            );
             let payload = serde_json::to_vec(&row.command)?;
             let mut headers = HeaderMap::new();
             headers.insert("Nats-Msg-Id", row.id.to_string());
@@ -206,6 +213,12 @@ impl MailboxOutboxPublisher {
                     self.store
                         .mark_outbox_published(row.id, row.claim_token)
                         .await?;
+                    tracing::debug!(
+                        mailbox_event_id = %row.command.event_id,
+                        mailbox_operation_id = %row.command.operation_id,
+                        mailbox_outbox_id = %row.id,
+                        "published durable mailbox command"
+                    );
                 }
                 Err(error) => {
                     self.store
@@ -301,9 +314,23 @@ impl MailboxCommandHandler {
         if !MAILBOX_COMMAND_SUBJECTS.contains(&subject) {
             return Err(MailboxCommandError::UnknownSubject(subject.to_owned()));
         }
+        tracing::debug!(
+            mailbox_event_id = %command.event_id,
+            mailbox_operation_id = %command.operation_id,
+            subject,
+            "applying durable mailbox command"
+        );
         self.store.apply_command(subject, command).await?;
         if subject == MAILBOX_DISPATCH_SUBJECT {
             if let Some(run) = self.store.claim_dispatch(command).await? {
+                tracing::info!(
+                    mailbox_event_id = %command.event_id,
+                    mailbox_operation_id = %command.operation_id,
+                    run_id = %run.run_id,
+                    instance_id = %run.instance_id,
+                    instance_revision_id = %run.instance_revision_id,
+                    "starting mailbox-dispatched run"
+                );
                 self.orchestrator.start_run(&run).await?;
             }
         }

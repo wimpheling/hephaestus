@@ -9,6 +9,7 @@ use std::{
     path::Path,
     time::Duration,
 };
+use vm_libkrun::protocol::{PrivateHttpRequestMessage, PrivateHttpResponseMessage};
 
 fn main() {
     if let Err(error) = run() {
@@ -19,6 +20,7 @@ fn main() {
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     match std::env::args().nth(1).as_deref() {
+        Some("--private-http-handler") => return private_http_handler().map_err(Into::into),
         Some("--serve-http") => return serve_http().map_err(Into::into),
         Some("--expect-network-disabled") => return expect_network_disabled(),
         Some("--ignore-cancellation") => return ignore_cancellation(),
@@ -63,6 +65,32 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     verify_udp_dns()?;
     println!("udp=ok");
     Ok(())
+}
+
+/// Minimal released-command fixture for the real one-request gateway ABI.
+/// It deliberately has no network listener: the host can only reach it over
+/// the authenticated private control channel via `heph-init`.
+fn private_http_handler() -> io::Result<()> {
+    let request: PrivateHttpRequestMessage =
+        ciborium::from_reader(io::stdin().lock()).map_err(io::Error::other)?;
+    if request.method != "POST" || request.path_and_query != "/gateway/proof?mode=real" {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "unexpected private HTTP request",
+        ));
+    }
+    if request.body != b"gateway-real-vm-request" {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "private HTTP body was not delivered exactly",
+        ));
+    }
+    let response = PrivateHttpResponseMessage {
+        status: 201,
+        headers: vec![("content-type".to_owned(), "text/plain".to_owned())],
+        body: b"gateway-real-vm-response".to_vec(),
+    };
+    ciborium::into_writer(&response, io::stdout().lock()).map_err(io::Error::other)
 }
 
 fn verify_disk() -> Result<(), Box<dyn std::error::Error>> {

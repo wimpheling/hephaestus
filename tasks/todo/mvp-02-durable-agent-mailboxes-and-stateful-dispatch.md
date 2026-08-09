@@ -51,6 +51,24 @@ interactive terminals.
 It does not implement a message broker, consensus protocol, distributed log,
 distributed lock, or general workflow engine.
 
+## Implementation status (2026-08-09)
+
+The bounded domain contract, authoritative PostgreSQL records, transactional
+outbox, identifier-only JetStream transport, daemon loops, operator controls,
+redacted inspection UI, and bounded tracing are implemented. The real
+`scripts/test-mailbox-postgres-nats.sh` harness passes against disposable
+PostgreSQL 17 and NATS JetStream, covering concurrent deduplication, outbox
+publication, NAK redelivery, durable-consumer recreation, one-run claiming,
+recovery to retryable, RLS tenant isolation, and tombstone retention.
+
+The remaining unchecked acceptance work is deliberate: full dispatch-time
+reauthorization/runtime-authority issuance, all stateful run-gate and fenced
+lease races through mailbox dispatch, payload-retention cleanup policy,
+failure injection around real VM/provider boundaries, metrics/live
+subscriptions, and the full repository-quality gate. A real libkrun mailbox
+journey has not yet been added; existing libkrun tests prove the underlying run
+and lease lifecycle, not mailbox-to-VM delivery.
+
 ## Implementation checklist
 
 - [x] **1. Define mailbox and delivery contracts**

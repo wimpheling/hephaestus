@@ -25,5 +25,12 @@ sqlx.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
 
+[dev-dependencies]
+async-nats.workspace = true
+futures-util.workspace = true
+serial_test = "3"
+time.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
 [lints]
 workspace = true

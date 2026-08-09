@@ -230,6 +230,8 @@ impl RouteIntent {
 pub struct GatewayDeclaration {
     /// Stable name.
     pub name: GatewayName,
+    /// Exact release-agent key selected as the immutable handler target.
+    pub agent_name: String,
     /// Must equal [`HTTP_HANDLER_CONTRACT_V1`].
     pub handler_contract: String,
     /// Exposure policy.
@@ -251,6 +253,10 @@ impl GatewayDeclaration {
         if self.handler_contract != HTTP_HANDLER_CONTRACT_V1 {
             return Err(GatewayError::UnsupportedHandlerContract);
         }
+        // Keep the target selector in the same repository-key grammar as
+        // gateway names even when callers construct the domain value directly
+        // rather than using `agent-config`.
+        GatewayName::parse(self.agent_name.clone())?;
         if self.routes.is_empty()
             || self.routes.len() > MAX_ROUTES
             || self.parameters.is_null()
@@ -315,6 +321,7 @@ mod tests {
     fn validates_a_gateway() {
         let declaration = GatewayDeclaration {
             name: GatewayName::parse("telegram").unwrap(),
+            agent_name: String::from("telegram-handler"),
             handler_contract: HTTP_HANDLER_CONTRACT_V1.into(),
             exposure: Exposure::Public,
             routes: vec![

@@ -12,6 +12,10 @@ use capability_domain::{
     CapabilityRequirementId, CapabilityResource, CapabilityResourceKind, CapabilitySlotKey,
 };
 use forge_domain::{CommitSha, GitRef, ProjectId};
+use gateway_edge::{
+    GatewayEdgeError, GatewayInboundSecretResolver, GatewayRouteBinding, InboundGatewaySecretRule,
+};
+use http::{HeaderName, HeaderValue};
 use identity_domain::{AuthenticatedIdentity, OrganizationId};
 use release_domain::{AgentAttachmentId, AgentInstanceId, AgentInstanceRevisionId};
 use runtime_types::RunId;
@@ -41,6 +45,103 @@ pub struct SecretRuntimeService<K> {
     resolver_pool: PgPool,
     encrypted_store: EncryptedStore<K>,
     authorizer: Arc<PostgresMelangeAuthorizer>,
+}
+
+/// Host-only resolver for declared inbound gateway webhook-secret rules.
+/// It decrypts an exact live invocation lease only long enough to build the
+/// edge's non-serializable constant-time matcher.
+#[derive(Clone)]
+pub struct GatewayIngressSecretResolver<K> {
+    resolver_pool: PgPool,
+    encrypted_store: EncryptedStore<K>,
+}
+
+impl<K: KeyProvider + Send + Sync> GatewayIngressSecretResolver<K> {
+    /// Creates the resolver over the narrow worker pool and host KMS provider.
+    #[must_use]
+    pub const fn new(resolver_pool: PgPool, encrypted_store: EncryptedStore<K>) -> Self {
+        Self {
+            resolver_pool,
+            encrypted_store,
+        }
+    }
+}
+
+#[async_trait]
+impl<K: KeyProvider + Send + Sync> GatewayInboundSecretResolver
+    for GatewayIngressSecretResolver<K>
+{
+    async fn rules_for_invocation(
+        &self,
+        invocation_id: Uuid,
+        route: &GatewayRouteBinding,
+    ) -> Result<Vec<InboundGatewaySecretRule>, GatewayEdgeError> {
+        let mut transaction = self
+            .resolver_pool
+            .begin()
+            .await
+            .map_err(|_| GatewayEdgeError::Unavailable)?;
+        sqlx::query("SET LOCAL ROLE hephaestus_worker")
+            .execute(&mut *transaction)
+            .await
+            .map_err(|_| GatewayEdgeError::Unavailable)?;
+        let rows = sqlx::query_as::<_, GatewayEncryptedVersionRow>(
+            "SELECT rule.header_name,
+                    secret.id AS secret_id, version.id AS version_id, version.sequence,
+                    secret.organization_id, secret.project_id,
+                    version.algorithm, version.key_reference, version.data_nonce,
+                    version.ciphertext, version.wrap_nonce, version.wrapped_data_key,
+                    version.associated_data_hash, version.content_length
+             FROM gateway_secret_leases AS lease
+             JOIN gateway_runtime_authority_sessions AS session
+               ON session.id = lease.runtime_session_id
+              AND session.invocation_id = lease.invocation_id
+             JOIN gateway_invocations AS invocation ON invocation.id = lease.invocation_id
+             JOIN gateway_brokered_secret_rules AS rule ON rule.id = lease.rule_id
+             JOIN gateway_secret_bindings AS binding ON binding.id = lease.binding_id
+             JOIN secret_versions AS version ON version.id = lease.secret_version_id
+             JOIN secrets AS secret ON secret.id = version.secret_id
+             JOIN secret_imports AS imported ON imported.id = binding.import_id
+             JOIN secret_grants AS granted ON granted.id = imported.grant_id
+             WHERE lease.invocation_id = $1
+               AND rule.gateway_route_id = $2
+               AND invocation.gateway_revision_id = $3
+               AND rule.gateway_revision_id = invocation.gateway_revision_id
+               AND binding.gateway_revision_id = invocation.gateway_revision_id
+               AND lease.secret_version_id = binding.secret_version_id
+               AND lease.status = 'active' AND lease.expires_at > now()
+               AND session.status IN ('pending_handoff', 'active') AND session.expires_at > now()
+               AND binding.status = 'active' AND imported.status = 'active'
+               AND granted.status = 'active' AND secret.status = 'active'
+               AND version.status = 'active' AND version.revoked_at IS NULL
+               AND version.purged_at IS NULL",
+        )
+        .bind(invocation_id)
+        .bind(route.route_id)
+        .bind(route.gateway_revision_id)
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|_| GatewayEdgeError::Unavailable)?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| GatewayEdgeError::Unavailable)?;
+        rows.into_iter()
+            .map(|row| {
+                let header = HeaderName::from_bytes(row.header_name.as_bytes())
+                    .map_err(|_| GatewayEdgeError::Unavailable)?;
+                let (context, encrypted) = gateway_encrypted_version(row)?;
+                let value = self
+                    .encrypted_store
+                    .resolve(&context, &encrypted)
+                    .map_err(|_| GatewayEdgeError::Unavailable)?;
+                let placeholder =
+                    HeaderValue::from_str(&format!("heph-placeholder:v1:{}", context.version_id))
+                        .map_err(|_| GatewayEdgeError::Unavailable)?;
+                InboundGatewaySecretRule::new(header, value.expose().to_vec(), placeholder)
+            })
+            .collect()
+    }
 }
 
 impl<K: KeyProvider + Send + Sync> SecretService<K> {
@@ -92,8 +193,7 @@ impl<K: KeyProvider + Send + Sync> SecretService<K> {
             Permission::CanWriteSecretValue,
             ObjectRef::new(owner_type, owner_id),
         )
-        .await
-        .map_err(|_| SecretServiceError::Persistence)?;
+        .await?;
         if let Some((aggregate_id, secondary_id)) =
             existing_command(&mut tx, command.command_key, "create")
                 .await
@@ -209,8 +309,7 @@ impl<K: KeyProvider + Send + Sync> SecretService<K> {
             Permission::Rotate,
             ObjectRef::new(ObjectType::Secret, command.secret_id.as_uuid()),
         )
-        .await
-        .map_err(|_| SecretServiceError::Persistence)?;
+        .await?;
         if let Some((_aggregate_id, secondary_id)) =
             existing_command(&mut tx, command.command_key, "rotate")
                 .await
@@ -335,8 +434,7 @@ impl<K: KeyProvider + Send + Sync> SecretService<K> {
             Permission::ManageGrants,
             ObjectRef::new(ObjectType::Secret, command.secret_id.as_uuid()),
         )
-        .await
-        .map_err(|_| SecretServiceError::Persistence)?;
+        .await?;
         if let Some((aggregate_id, _)) = existing_command(&mut tx, command.command_key, "grant")
             .await
             .map_err(|_| SecretServiceError::Persistence)?
@@ -456,8 +554,7 @@ impl<K: KeyProvider + Send + Sync> SecretService<K> {
             Permission::CanAcceptSecretImport,
             ObjectRef::new(target.object_type, target.id),
         )
-        .await
-        .map_err(|_| SecretServiceError::Persistence)?;
+        .await?;
         if let Some((aggregate_id, _)) = existing_command(&mut tx, command.command_key, "accept")
             .await
             .map_err(|_| SecretServiceError::Persistence)?
@@ -563,16 +660,14 @@ impl<K: KeyProvider + Send + Sync> SecretService<K> {
             Permission::ManageGrants,
             ObjectRef::new(ObjectType::Secret, command.secret_id.as_uuid()),
         )
-        .await
-        .map_err(|_| SecretServiceError::Persistence)?;
+        .await?;
         self.require(
             &mut tx,
             identity,
             Permission::CanAcceptSecretImport,
             ObjectRef::new(target.object_type, target.id),
         )
-        .await
-        .map_err(|_| SecretServiceError::Persistence)?;
+        .await?;
         if let Some((aggregate_id, secondary_id)) =
             existing_command(&mut tx, command.command_key, "grant_accept")
                 .await
@@ -738,11 +833,9 @@ impl<K: KeyProvider + Send + Sync> SecretService<K> {
             Permission::CanManage,
             ObjectRef::new(ObjectType::AgentInstance, command.instance_id.as_uuid()),
         )
-        .await
-        .map_err(|_| SecretServiceError::Persistence)?;
+        .await?;
         self.require_binding_mode(&mut tx, identity, command.import_id, command.mode)
-            .await
-            .map_err(|_| SecretServiceError::Persistence)?;
+            .await?;
         if let Some((_binding_id, revision_id)) =
             existing_command(&mut tx, command.command_key, "bind")
                 .await
@@ -794,8 +887,7 @@ impl<K: KeyProvider + Send + Sync> SecretService<K> {
             &import,
             &command,
         )
-        .await
-        .map_err(|_| SecretServiceError::Persistence)?;
+        .await?;
 
         let carried: Vec<CarriedBindingRow> = sqlx::query_as(
             "SELECT import_id, slot_key, delivery_mode, phases,
@@ -816,8 +908,7 @@ impl<K: KeyProvider + Send + Sync> SecretService<K> {
             let mode = parse_mode(&binding.delivery_mode)?;
             let import_id = SecretImportId::from_uuid(binding.import_id);
             self.require_binding_mode(&mut tx, identity, import_id, mode)
-                .await
-                .map_err(|_| SecretServiceError::Persistence)?;
+                .await?;
             let live = load_eligible_import(&mut tx, import_id)
                 .await
                 .map_err(|_| SecretServiceError::Persistence)?;
@@ -1086,8 +1177,7 @@ impl<K: KeyProvider + Send + Sync> SecretService<K> {
                 Permission::CanExecute,
                 ObjectRef::new(ObjectType::AgentAttachment, attachment_id.as_uuid()),
             )
-            .await
-            .map_err(|_| SecretServiceError::Persistence)?;
+            .await?;
         } else {
             self.require(
                 &mut tx,
@@ -1095,8 +1185,7 @@ impl<K: KeyProvider + Send + Sync> SecretService<K> {
                 Permission::CanUpdate,
                 ObjectRef::new(ObjectType::AgentInstance, command.instance_id.as_uuid()),
             )
-            .await
-            .map_err(|_| SecretServiceError::Persistence)?;
+            .await?;
         }
         if existing_command(&mut tx, command.command_key, "resolve")
             .await
@@ -1219,8 +1308,7 @@ impl<K: KeyProvider + Send + Sync> SecretService<K> {
             Permission::CanUse,
             ObjectRef::new(ObjectType::ReleaseAgent, exact.release_agent_id),
         )
-        .await
-        .map_err(|_| SecretServiceError::Persistence)?;
+        .await?;
 
         let bindings: Vec<DispatchBindingRow> = sqlx::query_as(
             "SELECT binding.id AS binding_id, binding.slot_key,
@@ -1401,6 +1489,36 @@ impl<K: KeyProvider + Send + Sync> SecretService<K> {
             .execute(&mut *tx)
             .await
             .map_err(|_| SecretServiceError::Persistence)?;
+            // A brokered HTTPS rule is optional because the legacy semantic
+            // broker remains supported. When one exists, its immutable rule
+            // and selected version are copied into this exact runtime lease;
+            // `https_v1` requests without this snapshot fail closed.
+            if binding.delivery_mode == "brokered" {
+                sqlx::query(
+                    "INSERT INTO brokered_secret_lease_snapshots
+                       (id, lease_id, runtime_session_id, run_id, binding_id,
+                        secret_version_id, rule_id, destination_origin,
+                        location_kind, header_name, header_prefix, rule_hash)
+                     SELECT $1, $2, $3, $4, rule.binding_id,
+                            rule.secret_version_id, rule.id, rule.destination_origin,
+                            rule.location_kind, rule.header_name, rule.header_prefix,
+                            rule.normalized_hash
+                       FROM brokered_secret_rules AS rule
+                       WHERE rule.binding_id = $5
+                         AND rule.instance_revision_id = $6
+                         AND rule.secret_version_id = $7",
+                )
+                .bind(Uuid::new_v4())
+                .bind(lease_id.as_uuid())
+                .bind(command.session_id.as_uuid())
+                .bind(command.run_id.as_uuid())
+                .bind(binding.binding_id)
+                .bind(command.instance_revision_id.as_uuid())
+                .bind(binding.version_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(|_| SecretServiceError::Persistence)?;
+            }
             audit_resolution(&mut tx, identity, &binding, lease_id, command.run_id)
                 .await
                 .map_err(|_| SecretServiceError::Persistence)?;
@@ -1472,8 +1590,7 @@ impl<K: KeyProvider + Send + Sync> SecretService<K> {
             permission,
             ObjectRef::new(ObjectType::Secret, secret_id.as_uuid()),
         )
-        .await
-        .map_err(|_| SecretServiceError::Persistence)?;
+        .await?;
         if existing_command(&mut tx, command_key, operation)
             .await
             .map_err(|_| SecretServiceError::Persistence)?
@@ -1567,8 +1684,7 @@ impl<K: KeyProvider + Send + Sync> SecretService<K> {
             Permission::Revoke,
             ObjectRef::new(ObjectType::Secret, secret_id.as_uuid()),
         )
-        .await
-        .map_err(|_| SecretServiceError::Persistence)?;
+        .await?;
         if existing_command(&mut tx, command_key, "revoke")
             .await
             .map_err(|_| SecretServiceError::Persistence)?
@@ -1710,8 +1826,7 @@ impl<K: KeyProvider + Send + Sync> SecretService<K> {
             Permission::Purge,
             ObjectRef::new(ObjectType::Secret, secret_id.as_uuid()),
         )
-        .await
-        .map_err(|_| SecretServiceError::Persistence)?;
+        .await?;
         if existing_command(&mut tx, command_key, "purge")
             .await
             .map_err(|_| SecretServiceError::Persistence)?
@@ -1909,12 +2024,10 @@ impl<K: KeyProvider + Send + Sync> SecretRuntimeService<K> {
     ) -> Result<ResolvedRawSecret, SecretServiceError> {
         let session = self
             .authenticate_session(credential, claimed_run_id)
-            .await
-            .map_err(|_| SecretServiceError::Persistence)?;
+            .await?;
         let lease = self
             .authorize_runtime_lease(&session, &slot, DeliveryMode::Raw, Permission::ReceiveRaw)
-            .await
-            .map_err(|_| SecretServiceError::Persistence)?;
+            .await?;
         let (context, encrypted) = load_runtime_version(
             &self.resolver_pool,
             &session,
@@ -1959,8 +2072,7 @@ impl<K: KeyProvider + Send + Sync> SecretRuntimeService<K> {
         validate_broker_request(request)?;
         let session = self
             .authenticate_session(credential, request.run_id)
-            .await
-            .map_err(|_| SecretServiceError::Persistence)?;
+            .await?;
         let lease = self
             .authorize_runtime_lease(
                 &session,
@@ -1968,8 +2080,7 @@ impl<K: KeyProvider + Send + Sync> SecretRuntimeService<K> {
                 DeliveryMode::Brokered,
                 Permission::UseBrokered,
             )
-            .await
-            .map_err(|_| SecretServiceError::Persistence)?;
+            .await?;
         if !lease.destinations.is_empty()
             && !lease
                 .destinations
@@ -1978,6 +2089,8 @@ impl<K: KeyProvider + Send + Sync> SecretRuntimeService<K> {
         {
             return Err(SecretServiceError::BrokerRequestDenied);
         }
+        self.authorize_brokered_https_snapshot(&session, &lease, request)
+            .await?;
         let (context, encrypted) = load_runtime_version(
             &self.resolver_pool,
             &session,
@@ -1986,8 +2099,7 @@ impl<K: KeyProvider + Send + Sync> SecretRuntimeService<K> {
             false,
             "broker_call_started",
         )
-        .await
-        .map_err(|_| SecretServiceError::Persistence)?;
+        .await?;
         let value = self.encrypted_store.resolve(&context, &encrypted)?;
         let response = adapter
             .invoke(
@@ -2011,6 +2123,8 @@ impl<K: KeyProvider + Send + Sync> SecretRuntimeService<K> {
         )
         .await
         .map_err(|_| SecretServiceError::Persistence)?;
+        self.authorize_brokered_https_snapshot(&session, &lease, request)
+            .await?;
         record_runtime_use(
             &self.resolver_pool,
             &session,
@@ -2090,6 +2204,61 @@ impl<K: KeyProvider + Send + Sync> SecretRuntimeService<K> {
             .await
             .map_err(|_| SecretServiceError::Persistence)?;
         Ok(lease)
+    }
+
+    /// Checks the immutable HTTPS rule snapshot for the generic broker
+    /// operation. Legacy semantic broker operations deliberately retain their
+    /// existing authority path; `https_v1` never does.
+    async fn authorize_brokered_https_snapshot(
+        &self,
+        session: &RuntimeSessionRow,
+        lease: &RuntimeLeaseAuthorizationRow,
+        request: &BrokerRequest,
+    ) -> Result<(), SecretServiceError> {
+        if request.operation != "https_v1" {
+            return Ok(());
+        }
+        let value: serde_json::Value = serde_json::from_slice(&request.body)
+            .map_err(|_| SecretServiceError::BrokerRequestDenied)?;
+        let rule_id = value
+            .get("rule_id")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|value| Uuid::parse_str(value).ok())
+            .ok_or(SecretServiceError::BrokerRequestDenied)?;
+        let origin = format!("https://{}", request.destination);
+        let found: Option<Uuid> = sqlx::query_scalar(
+            "SELECT snapshot.id
+               FROM brokered_secret_lease_snapshots AS snapshot
+               JOIN secret_leases AS exact_lease ON exact_lease.id = snapshot.lease_id
+               JOIN agent_secret_bindings AS binding ON binding.id = snapshot.binding_id
+               JOIN secret_versions AS version ON version.id = snapshot.secret_version_id
+               JOIN secrets AS secret ON secret.id = version.secret_id
+               WHERE snapshot.lease_id = $1
+                 AND snapshot.runtime_session_id = $2
+                 AND snapshot.run_id = $3
+                 AND snapshot.rule_id = $4
+                 AND snapshot.destination_origin = $5
+                 AND snapshot.binding_id = exact_lease.binding_id
+                 AND snapshot.secret_version_id = exact_lease.secret_version_id
+                 AND binding.status = 'active'
+                 AND version.status = 'active'
+                 AND secret.status = 'active'
+                 AND secret.active_version_id = snapshot.secret_version_id
+                 AND exact_lease.status = 'active' AND exact_lease.expires_at > now()",
+        )
+        .bind(lease.lease_id)
+        .bind(session.session_id)
+        .bind(session.run_id)
+        .bind(rule_id)
+        .bind(origin)
+        .fetch_optional(&self.authorization_pool)
+        .await
+        .map_err(|_| SecretServiceError::Persistence)?;
+        if found.is_some() {
+            Ok(())
+        } else {
+            Err(SecretServiceError::BrokerRequestDenied)
+        }
     }
 }
 
@@ -2264,6 +2433,24 @@ struct RuntimeLeaseAuthorizationRow {
 
 #[derive(sqlx::FromRow)]
 struct RuntimeEncryptedVersionRow {
+    secret_id: Uuid,
+    version_id: Uuid,
+    sequence: i64,
+    organization_id: Option<Uuid>,
+    project_id: Option<Uuid>,
+    algorithm: String,
+    key_reference: String,
+    data_nonce: Vec<u8>,
+    ciphertext: Vec<u8>,
+    wrap_nonce: Vec<u8>,
+    wrapped_data_key: Vec<u8>,
+    associated_data_hash: Vec<u8>,
+    content_length: i32,
+}
+
+#[derive(sqlx::FromRow)]
+struct GatewayEncryptedVersionRow {
+    header_name: String,
     secret_id: Uuid,
     version_id: Uuid,
     sequence: i64,
@@ -2646,6 +2833,46 @@ fn encrypted_version(
             .map_err(|_| SecretServiceError::InvalidStoredData)?,
         content_length: u32::try_from(row.content_length)
             .map_err(|_| SecretServiceError::InvalidStoredData)?,
+    };
+    Ok((context, encrypted))
+}
+
+fn gateway_encrypted_version(
+    row: GatewayEncryptedVersionRow,
+) -> Result<(VersionContext, EncryptedSecretVersion), GatewayEdgeError> {
+    let owner = match (row.organization_id, row.project_id) {
+        (Some(id), None) => SecretOwner::Organization(OrganizationId::from_uuid(id)),
+        (None, Some(id)) => SecretOwner::Project(ProjectId::from_uuid(id)),
+        _ => return Err(GatewayEdgeError::Unavailable),
+    };
+    let version_id = SecretVersionId::from_uuid(row.version_id);
+    let context = VersionContext {
+        owner,
+        secret_id: SecretId::from_uuid(row.secret_id),
+        version_id,
+        sequence: u64::try_from(row.sequence).map_err(|_| GatewayEdgeError::Unavailable)?,
+        media_type: String::from("application/octet-stream"),
+    };
+    let encrypted = EncryptedSecretVersion {
+        version_id,
+        algorithm: row.algorithm,
+        key_reference: row.key_reference,
+        data_nonce: row
+            .data_nonce
+            .try_into()
+            .map_err(|_| GatewayEdgeError::Unavailable)?,
+        ciphertext: row.ciphertext,
+        wrap_nonce: row
+            .wrap_nonce
+            .try_into()
+            .map_err(|_| GatewayEdgeError::Unavailable)?,
+        wrapped_data_key: row.wrapped_data_key,
+        associated_data_hash: row
+            .associated_data_hash
+            .try_into()
+            .map_err(|_| GatewayEdgeError::Unavailable)?,
+        content_length: u32::try_from(row.content_length)
+            .map_err(|_| GatewayEdgeError::Unavailable)?,
     };
     Ok((context, encrypted))
 }

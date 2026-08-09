@@ -1,9 +1,9 @@
 -- Durable gateway declarations are the authority. Provider configuration is
 -- derived state and is deliberately absent from this migration.
 
-CREATE FUNCTION gateway_text_array_is_unique(values text[]) RETURNS boolean
+CREATE FUNCTION gateway_text_array_is_unique(input_values text[]) RETURNS boolean
 LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
-    SELECT cardinality(values) = (SELECT count(DISTINCT value) FROM unnest(values) AS value)
+    SELECT cardinality(input_values) = (SELECT count(DISTINCT value) FROM unnest(input_values) AS value)
 $$;
 REVOKE ALL ON FUNCTION gateway_text_array_is_unique(text[]) FROM PUBLIC;
 
