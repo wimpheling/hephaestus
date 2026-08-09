@@ -6279,6 +6279,479 @@ pub const __RECENT_RUN_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa:
     from_json: ::buffa::type_registry::any_from_json::<RecentRun>,
     is_wkt: false,
 };
+/// Redacted scheduling evidence for a durable mailbox event. The platform
+/// never returns the event envelope, headers, body, producer identity, or trace
+/// context through this operator projection.
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct MailboxDeliveryInspection {
+    /// Field 1: `event_id`
+    #[serde(
+        rename = "eventId",
+        alias = "event_id",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub event_id: ::buffa::MessageField<super::super::common::v1::OpaqueId>,
+    /// Field 2: `disposition`
+    #[serde(
+        rename = "disposition",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub disposition: ::buffa::alloc::string::String,
+    /// Field 3: `logical_attempt_count`
+    #[serde(
+        rename = "logicalAttemptCount",
+        alias = "logical_attempt_count",
+        with = "::buffa::json_helpers::uint32",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_u32"
+    )]
+    pub logical_attempt_count: u32,
+    /// Field 4: `denial_code`
+    #[serde(
+        rename = "denialCode",
+        alias = "denial_code",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub denial_code: ::buffa::alloc::string::String,
+    /// Field 5: `instance_revision_id`
+    #[serde(
+        rename = "instanceRevisionId",
+        alias = "instance_revision_id",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub instance_revision_id: ::buffa::MessageField<super::super::common::v1::OpaqueId>,
+    /// Field 6: `state_volume_id`
+    #[serde(
+        rename = "stateVolumeId",
+        alias = "state_volume_id",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub state_volume_id: ::buffa::MessageField<super::super::common::v1::OpaqueId>,
+    /// Field 7: `lease_id`
+    #[serde(
+        rename = "leaseId",
+        alias = "lease_id",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub lease_id: ::buffa::MessageField<super::super::common::v1::OpaqueId>,
+    /// Field 8: `lease_fencing_token`
+    #[serde(
+        rename = "leaseFencingToken",
+        alias = "lease_fencing_token",
+        with = "::buffa::json_helpers::uint64",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_u64"
+    )]
+    pub lease_fencing_token: u64,
+    /// Field 9: `dispatch_sequence`
+    #[serde(
+        rename = "dispatchSequence",
+        alias = "dispatch_sequence",
+        with = "::buffa::json_helpers::uint64",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_u64"
+    )]
+    pub dispatch_sequence: u64,
+    /// Field 10: `state_access_outcome`
+    #[serde(
+        rename = "stateAccessOutcome",
+        alias = "state_access_outcome",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub state_access_outcome: ::buffa::alloc::string::String,
+    /// Field 11: `next_eligible_at`
+    #[serde(
+        rename = "nextEligibleAt",
+        alias = "next_eligible_at",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub next_eligible_at: ::buffa::MessageField<
+        ::buffa_types::google::protobuf::Timestamp,
+    >,
+    /// Field 12: `next_recovery_action`
+    #[serde(
+        rename = "nextRecoveryAction",
+        alias = "next_recovery_action",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub next_recovery_action: ::buffa::alloc::string::String,
+    /// Field 13: `updated_at`
+    #[serde(
+        rename = "updatedAt",
+        alias = "updated_at",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub updated_at: ::buffa::MessageField<::buffa_types::google::protobuf::Timestamp>,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for MailboxDeliveryInspection {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("MailboxDeliveryInspection")
+            .field("event_id", &self.event_id)
+            .field("disposition", &self.disposition)
+            .field("logical_attempt_count", &self.logical_attempt_count)
+            .field("denial_code", &self.denial_code)
+            .field("instance_revision_id", &self.instance_revision_id)
+            .field("state_volume_id", &self.state_volume_id)
+            .field("lease_id", &self.lease_id)
+            .field("lease_fencing_token", &self.lease_fencing_token)
+            .field("dispatch_sequence", &self.dispatch_sequence)
+            .field("state_access_outcome", &self.state_access_outcome)
+            .field("next_eligible_at", &self.next_eligible_at)
+            .field("next_recovery_action", &self.next_recovery_action)
+            .field("updated_at", &self.updated_at)
+            .finish()
+    }
+}
+impl MailboxDeliveryInspection {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.instance.v1.MailboxDeliveryInspection";
+}
+::buffa::impl_default_instance!(MailboxDeliveryInspection);
+impl ::buffa::MessageName for MailboxDeliveryInspection {
+    const PACKAGE: &'static str = "hephaestus.instance.v1";
+    const NAME: &'static str = "MailboxDeliveryInspection";
+    const FULL_NAME: &'static str = "hephaestus.instance.v1.MailboxDeliveryInspection";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.instance.v1.MailboxDeliveryInspection";
+}
+impl ::buffa::Message for MailboxDeliveryInspection {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if self.event_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.event_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if !self.disposition.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.disposition) as u32;
+        }
+        if self.logical_attempt_count != 0u32 {
+            size
+                += 1u32
+                    + ::buffa::types::uint32_encoded_len(self.logical_attempt_count)
+                        as u32;
+        }
+        if !self.denial_code.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.denial_code) as u32;
+        }
+        if self.instance_revision_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.instance_revision_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.state_volume_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.state_volume_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.lease_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.lease_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.lease_fencing_token != 0u64 {
+            size
+                += 1u32
+                    + ::buffa::types::uint64_encoded_len(self.lease_fencing_token)
+                        as u32;
+        }
+        if self.dispatch_sequence != 0u64 {
+            size
+                += 1u32
+                    + ::buffa::types::uint64_encoded_len(self.dispatch_sequence) as u32;
+        }
+        if !self.state_access_outcome.is_empty() {
+            size
+                += 1u32
+                    + ::buffa::types::string_encoded_len(&self.state_access_outcome)
+                        as u32;
+        }
+        if self.next_eligible_at.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.next_eligible_at.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if !self.next_recovery_action.is_empty() {
+            size
+                += 1u32
+                    + ::buffa::types::string_encoded_len(&self.next_recovery_action)
+                        as u32;
+        }
+        if self.updated_at.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.updated_at.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        __cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if self.event_id.is_set() {
+            ::buffa::types::put_len_delimited_header(1u32, __cache.consume_next(), buf);
+            self.event_id.write_to(__cache, buf);
+        }
+        if !self.disposition.is_empty() {
+            ::buffa::types::put_string_field(2u32, &self.disposition, buf);
+        }
+        if self.logical_attempt_count != 0u32 {
+            ::buffa::types::put_uint32_field(3u32, self.logical_attempt_count, buf);
+        }
+        if !self.denial_code.is_empty() {
+            ::buffa::types::put_string_field(4u32, &self.denial_code, buf);
+        }
+        if self.instance_revision_id.is_set() {
+            ::buffa::types::put_len_delimited_header(5u32, __cache.consume_next(), buf);
+            self.instance_revision_id.write_to(__cache, buf);
+        }
+        if self.state_volume_id.is_set() {
+            ::buffa::types::put_len_delimited_header(6u32, __cache.consume_next(), buf);
+            self.state_volume_id.write_to(__cache, buf);
+        }
+        if self.lease_id.is_set() {
+            ::buffa::types::put_len_delimited_header(7u32, __cache.consume_next(), buf);
+            self.lease_id.write_to(__cache, buf);
+        }
+        if self.lease_fencing_token != 0u64 {
+            ::buffa::types::put_uint64_field(8u32, self.lease_fencing_token, buf);
+        }
+        if self.dispatch_sequence != 0u64 {
+            ::buffa::types::put_uint64_field(9u32, self.dispatch_sequence, buf);
+        }
+        if !self.state_access_outcome.is_empty() {
+            ::buffa::types::put_string_field(10u32, &self.state_access_outcome, buf);
+        }
+        if self.next_eligible_at.is_set() {
+            ::buffa::types::put_len_delimited_header(11u32, __cache.consume_next(), buf);
+            self.next_eligible_at.write_to(__cache, buf);
+        }
+        if !self.next_recovery_action.is_empty() {
+            ::buffa::types::put_string_field(12u32, &self.next_recovery_action, buf);
+        }
+        if self.updated_at.is_set() {
+            ::buffa::types::put_len_delimited_header(13u32, __cache.consume_next(), buf);
+            self.updated_at.write_to(__cache, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.event_id.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.disposition, buf)?;
+            }
+            3u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.logical_attempt_count = ::buffa::types::decode_uint32(buf)?;
+            }
+            4u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.denial_code, buf)?;
+            }
+            5u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.instance_revision_id.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            6u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.state_volume_id.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            7u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.lease_id.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            8u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.lease_fencing_token = ::buffa::types::decode_uint64(buf)?;
+            }
+            9u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.dispatch_sequence = ::buffa::types::decode_uint64(buf)?;
+            }
+            10u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.state_access_outcome, buf)?;
+            }
+            11u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.next_eligible_at.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            12u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.next_recovery_action, buf)?;
+            }
+            13u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.updated_at.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.event_id = ::buffa::MessageField::none();
+        self.disposition.clear();
+        self.logical_attempt_count = 0u32;
+        self.denial_code.clear();
+        self.instance_revision_id = ::buffa::MessageField::none();
+        self.state_volume_id = ::buffa::MessageField::none();
+        self.lease_id = ::buffa::MessageField::none();
+        self.lease_fencing_token = 0u64;
+        self.dispatch_sequence = 0u64;
+        self.state_access_outcome.clear();
+        self.next_eligible_at = ::buffa::MessageField::none();
+        self.next_recovery_action.clear();
+        self.updated_at = ::buffa::MessageField::none();
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for MailboxDeliveryInspection {
+    const PROTO_FQN: &'static str = "hephaestus.instance.v1.MailboxDeliveryInspection";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for MailboxDeliveryInspection {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __MAILBOX_DELIVERY_INSPECTION_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/hephaestus.instance.v1.MailboxDeliveryInspection",
+    to_json: ::buffa::type_registry::any_to_json::<MailboxDeliveryInspection>,
+    from_json: ::buffa::type_registry::any_from_json::<MailboxDeliveryInspection>,
+    is_wkt: false,
+};
 #[derive(Clone, PartialEq, Default)]
 #[derive(::serde::Serialize, ::serde::Deserialize)]
 #[serde(default)]
@@ -6492,6 +6965,14 @@ pub struct AgentInstance {
         skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
     )]
     pub capability_metrics: ::buffa::MessageField<CapabilityMetrics>,
+    /// Field 29: `mailbox_deliveries`
+    #[serde(
+        rename = "mailboxDeliveries",
+        alias = "mailbox_deliveries",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_vec",
+        deserialize_with = "::buffa::json_helpers::null_as_default"
+    )]
+    pub mailbox_deliveries: ::buffa::alloc::vec::Vec<MailboxDeliveryInspection>,
     #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
@@ -6527,6 +7008,7 @@ impl ::core::fmt::Debug for AgentInstance {
             .field("runtime_sessions", &self.runtime_sessions)
             .field("capability_audit", &self.capability_audit)
             .field("capability_metrics", &self.capability_metrics)
+            .field("mailbox_deliveries", &self.mailbox_deliveries)
             .finish()
     }
 }
@@ -6741,6 +7223,14 @@ impl ::buffa::Message for AgentInstance {
                 += 2u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
                     + inner_size;
         }
+        for v in &self.mailbox_deliveries {
+            let __slot = __cache.reserve();
+            let inner_size = v.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 2u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
         size
     }
@@ -6854,6 +7344,10 @@ impl ::buffa::Message for AgentInstance {
         if self.capability_metrics.is_set() {
             ::buffa::types::put_len_delimited_header(28u32, __cache.consume_next(), buf);
             self.capability_metrics.write_to(__cache, buf);
+        }
+        for v in &self.mailbox_deliveries {
+            ::buffa::types::put_len_delimited_header(29u32, __cache.consume_next(), buf);
+            v.write_to(__cache, buf);
         }
         self.__buffa_unknown_fields.write_to(buf);
     }
@@ -7120,6 +7614,15 @@ impl ::buffa::Message for AgentInstance {
                     ctx,
                 )?;
             }
+            29u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                let mut elem = ::core::default::Default::default();
+                ::buffa::Message::merge_length_delimited(&mut elem, buf, ctx)?;
+                self.mailbox_deliveries.push(elem);
+            }
             _ => {
                 self.__buffa_unknown_fields
                     .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
@@ -7156,6 +7659,7 @@ impl ::buffa::Message for AgentInstance {
         self.runtime_sessions.clear();
         self.capability_audit.clear();
         self.capability_metrics = ::buffa::MessageField::none();
+        self.mailbox_deliveries.clear();
         self.__buffa_unknown_fields.clear();
     }
 }

@@ -676,6 +676,7 @@ impl LocalWorkspaceManager {
                 requires_state: row.requires_state,
                 volume_id: None,
                 lease_id: None,
+                lease_fencing_token: None,
                 vm_id: None,
                 state: RunState::Running,
                 outcome: None,

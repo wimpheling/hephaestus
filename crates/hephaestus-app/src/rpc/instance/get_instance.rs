@@ -17,9 +17,9 @@ use rpc_proto::messages::hephaestus::{
     instance::v1::{
         AgentInstance, AgentUpdate, Attachment, CapabilityAuditRecord, CapabilityBinding,
         CapabilityMetrics, CapabilityRequirement, CapabilityResourceOption, GetInstanceRequest,
-        GetInstanceResponse, RecentRun, RecoveryDecision, RefSelector, RepositoryOption,
-        RuntimeAuthoritySession, SecretImport, TriggerPolicy, UpdateCandidate, UpdateEvent,
-        ref_selector, update_event,
+        GetInstanceResponse, MailboxDeliveryInspection, RecentRun, RecoveryDecision, RefSelector,
+        RepositoryOption, RuntimeAuthoritySession, SecretImport, TriggerPolicy, UpdateCandidate,
+        UpdateEvent, ref_selector, update_event,
     },
     secret::v1::{
         AuthorityState, DeliveryMode, DeliveryPhase, SecretPolicy, SecretState, SecretTarget,
@@ -316,6 +316,39 @@ fn project(snapshot: InstanceSnapshot) -> Result<AgentInstance, RpcError> {
             ..Default::default()
         })
         .collect();
+    let mailbox_deliveries = snapshot
+        .mailbox_deliveries
+        .into_iter()
+        .map(|row| {
+            Ok(MailboxDeliveryInspection {
+                event_id: opaque(row.event_id).into(),
+                disposition: row.disposition,
+                logical_attempt_count: u32::try_from(row.logical_attempt_count)
+                    .map_err(|_| RpcError::Internal)?,
+                denial_code: row.denial_code.unwrap_or_default(),
+                instance_revision_id: row.instance_revision_id.map(opaque).into(),
+                state_volume_id: row.state_volume_id.map(opaque).into(),
+                lease_id: row.lease_id.map(opaque).into(),
+                lease_fencing_token: row
+                    .lease_fencing_token
+                    .map(u64::try_from)
+                    .transpose()
+                    .map_err(|_| RpcError::Internal)?
+                    .unwrap_or_default(),
+                dispatch_sequence: row
+                    .dispatch_sequence
+                    .map(u64::try_from)
+                    .transpose()
+                    .map_err(|_| RpcError::Internal)?
+                    .unwrap_or_default(),
+                state_access_outcome: row.state_access_outcome.unwrap_or_default(),
+                next_eligible_at: row.next_eligible_at.map(timestamp).into(),
+                next_recovery_action: row.next_recovery_action,
+                updated_at: timestamp(row.updated_at).into(),
+                ..Default::default()
+            })
+        })
+        .collect::<Result<Vec<_>, RpcError>>()?;
     let metrics = snapshot.capability_metrics;
     let capability_metrics = CapabilityMetrics {
         sessions_issued: metrics.sessions_issued,
@@ -359,6 +392,7 @@ fn project(snapshot: InstanceSnapshot) -> Result<AgentInstance, RpcError> {
         runtime_sessions,
         capability_audit,
         capability_metrics: capability_metrics.into(),
+        mailbox_deliveries,
         ..Default::default()
     })
 }

@@ -49,8 +49,10 @@ version = "0.1.0"
 dependencies = [
  "capability-domain",
  "forge-domain",
+ "gateway-domain",
  "git-capability-domain",
  "serde",
+ "serde_json",
  "sha2",
  "toml",
  "uuid",
@@ -1422,6 +1424,48 @@ dependencies = [
 ]
 
 [[package]]
+name = "gateway-domain"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.19",
+ "uuid",
+]
+
+[[package]]
+name = "gateway-edge"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "http",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "gateway-postgres"
+version = "0.1.0"
+dependencies = [
+ "agent-config",
+ "authz-domain",
+ "authz-postgres",
+ "forge-domain",
+ "gateway-domain",
+ "identity-domain",
+ "release-domain",
+ "serde_json",
+ "sqlx",
+ "thiserror 2.0.19",
+ "uuid",
+]
+
+[[package]]
 name = "generic-array"
 version = "0.14.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2255,6 +2299,8 @@ dependencies = [
  "identity-oidc",
  "identity-postgres",
  "jsonwebtoken",
+ "mailbox-dispatch",
+ "mailbox-postgres",
  "oci-builder-postgres",
  "oci-builder-runtime-local",
  "oci-builder-worker",
@@ -2813,6 +2859,52 @@ name = "log"
 version = "0.4.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
+
+[[package]]
+name = "mailbox-dispatch"
+version = "0.1.0"
+dependencies = [
+ "async-nats",
+ "async-trait",
+ "mailbox-domain",
+ "run-domain",
+ "run-orchestrator",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "uuid",
+]
+
+[[package]]
+name = "mailbox-domain"
+version = "0.1.0"
+dependencies = [
+ "runtime-types",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.19",
+ "time",
+ "uuid",
+]
+
+[[package]]
+name = "mailbox-postgres"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "authz-postgres",
+ "identity-domain",
+ "mailbox-dispatch",
+ "mailbox-domain",
+ "run-domain",
+ "runtime-types",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "thiserror 2.0.19",
+ "uuid",
+]
 
 [[package]]
 name = "matchers"

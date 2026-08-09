@@ -1,0 +1,29 @@
+[package]
+name = "gateway-postgres"
+description = "PostgreSQL installation authority for repository-declared HTTP gateways"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[package.metadata.hephaestus]
+layer = "adapter"
+context = "gateway"
+allow_cross_context_dependencies = ["authz-postgres"]
+postgres_adapter = true
+database_context = "gateway"
+
+[dependencies]
+agent-config = { path = "../agent-config" }
+authz-domain = { path = "../authz-domain" }
+authz-postgres = { path = "../authz-postgres" }
+forge-domain = { path = "../forge-domain" }
+gateway-domain = { path = "../gateway-domain" }
+identity-domain = { path = "../identity-domain" }
+release-domain = { path = "../release-domain" }
+serde_json.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+[lints]
+workspace = true

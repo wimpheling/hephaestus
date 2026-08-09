@@ -73,11 +73,16 @@ no implicit mailbox, repository, state-volume, Caddy, or agent authority.
 Mailbox, gateway, and generic egress/secret bindings will use this same
 capability contract in their respective MVP tasks.
 
+The concrete gateway-principal and invocation-session evidence is implemented
+by [MVP 03.1](../todo/mvp-03.1-gateway-principals-and-authority.md), before MVP 03
+adds public HTTP routing.
+
 ## Dependencies
 
 - [`reusable-agent-releases-and-instances.md`](../done/reusable-agent-releases-and-instances.md)
 - [`manage-delegate-and-deliver-secrets.md`](../done/manage-delegate-and-deliver-secrets.md)
-- [`define-own-the-loop-agent-platform.md`](define-own-the-loop-agent-platform.md)
+- [`define-own-the-loop-agent-platform.md`](../todo/define-own-the-loop-agent-platform.md)
+- [`mvp-03.1-gateway-principals-and-authority.md`](../todo/mvp-03.1-gateway-principals-and-authority.md)
 
 ## Non-goals
 

@@ -474,6 +474,34 @@ defmodule Hephaestus.Instance.V1.RecentRun do
   field(:updated_at, 9, type: Google.Protobuf.Timestamp, json_name: "updatedAt")
 end
 
+defmodule Hephaestus.Instance.V1.MailboxDeliveryInspection do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.instance.v1.MailboxDeliveryInspection",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:event_id, 1, type: Hephaestus.Common.V1.OpaqueId, json_name: "eventId")
+  field(:disposition, 2, type: :string)
+  field(:logical_attempt_count, 3, type: :uint32, json_name: "logicalAttemptCount")
+  field(:denial_code, 4, type: :string, json_name: "denialCode")
+
+  field(:instance_revision_id, 5,
+    type: Hephaestus.Common.V1.OpaqueId,
+    json_name: "instanceRevisionId"
+  )
+
+  field(:state_volume_id, 6, type: Hephaestus.Common.V1.OpaqueId, json_name: "stateVolumeId")
+  field(:lease_id, 7, type: Hephaestus.Common.V1.OpaqueId, json_name: "leaseId")
+  field(:lease_fencing_token, 8, type: :uint64, json_name: "leaseFencingToken")
+  field(:dispatch_sequence, 9, type: :uint64, json_name: "dispatchSequence")
+  field(:state_access_outcome, 10, type: :string, json_name: "stateAccessOutcome")
+  field(:next_eligible_at, 11, type: Google.Protobuf.Timestamp, json_name: "nextEligibleAt")
+  field(:next_recovery_action, 12, type: :string, json_name: "nextRecoveryAction")
+  field(:updated_at, 13, type: Google.Protobuf.Timestamp, json_name: "updatedAt")
+end
+
 defmodule Hephaestus.Instance.V1.AgentInstance do
   @moduledoc false
 
@@ -558,6 +586,12 @@ defmodule Hephaestus.Instance.V1.AgentInstance do
   field(:capability_metrics, 28,
     type: Hephaestus.Instance.V1.CapabilityMetrics,
     json_name: "capabilityMetrics"
+  )
+
+  field(:mailbox_deliveries, 29,
+    repeated: true,
+    type: Hephaestus.Instance.V1.MailboxDeliveryInspection,
+    json_name: "mailboxDeliveries"
   )
 end
 

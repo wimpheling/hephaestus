@@ -47,6 +47,7 @@ pub mod __buffa {
         reg.register_json_any(super::__SECRET_IMPORT_JSON_ANY);
         reg.register_json_any(super::__UPDATE_CANDIDATE_JSON_ANY);
         reg.register_json_any(super::__RECENT_RUN_JSON_ANY);
+        reg.register_json_any(super::__MAILBOX_DELIVERY_INSPECTION_JSON_ANY);
         reg.register_json_any(super::__AGENT_INSTANCE_JSON_ANY);
         reg.register_json_any(super::__GET_INSTANCE_REQUEST_JSON_ANY);
         reg.register_json_any(super::__GET_INSTANCE_RESPONSE_JSON_ANY);
@@ -131,6 +132,10 @@ pub use self::__buffa::view::UpdateCandidateOwnedView;
 pub use self::__buffa::view::RecentRunView;
 #[doc(inline)]
 pub use self::__buffa::view::RecentRunOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::MailboxDeliveryInspectionView;
+#[doc(inline)]
+pub use self::__buffa::view::MailboxDeliveryInspectionOwnedView;
 #[doc(inline)]
 pub use self::__buffa::view::AgentInstanceView;
 #[doc(inline)]

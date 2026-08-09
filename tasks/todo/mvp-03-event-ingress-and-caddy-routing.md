@@ -38,7 +38,8 @@ code. Selecting or optimizing a fast isolate runtime is deliberately deferred.
 
 ## Dependencies
 
-- [`mvp-01-agent-principals-capabilities-and-runtime-authority.md`](mvp-01-agent-principals-capabilities-and-runtime-authority.md)
+- [`mvp-01-agent-principals-capabilities-and-runtime-authority.md`](../done/mvp-01-agent-principals-capabilities-and-runtime-authority.md)
+- [`mvp-03.1-gateway-principals-and-authority.md`](mvp-03.1-gateway-principals-and-authority.md)
 - [`mvp-04-brokered-model-and-outbound-capabilities.md`](mvp-04-brokered-model-and-outbound-capabilities.md)
 - [`define-own-the-loop-agent-platform.md`](define-own-the-loop-agent-platform.md)
 
@@ -73,7 +74,7 @@ V8/WebAssembly/Unikraft runtime bakeoff.
     - [ ] Define released gateway installation, immutable revision,
       capability binding, update, pause, failure, recovery, and removal
       semantics using existing release primitives where possible.
-    - [ ] Define the host-side `GatewayProvider` contract for route
+    - [x] Define the host-side `GatewayProvider` contract for route
       reconciliation and provider request/response translation. Make
       `LocalCaddyGatewayProvider` the only MVP implementation.
     - [ ] Ensure gateway runtime policy cannot include repository mounts,

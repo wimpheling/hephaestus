@@ -33,6 +33,11 @@ use identity_application::IdempotentIdentityResolver;
 use identity_oidc::OidcVerifier;
 use identity_postgres::PostgresIdentityStore;
 use jsonwebtoken::{Algorithm, DecodingKey};
+use mailbox_dispatch::{
+    MailboxCommandHandler, MailboxDispatchStore, MailboxOutboxPublisher, MailboxRunCompletion,
+    MailboxRunResources, NatsMailboxCommandHandler, ensure_mailbox_jetstream_topology,
+};
+use mailbox_postgres::PostgresMailboxRepository;
 use oci_builder_postgres::{PgOciImageProductionJobStore, PgRepositoryOciImagePublicationStore};
 use oci_builder_runtime_local::{
     ForgeZotOciPublisher, ForgeZotPublicationConfig, LocalOciRuntime, LocalOciRuntimeConfig,
@@ -73,9 +78,9 @@ use review_postgres::{GitRepositoryLocator, PostgresReviewRepository};
 use review_service::{NatsControlHandler, ReviewControlService, ReviewOutboxPublisher};
 use run_domain::{CancelRun, Run, RunKind};
 use run_orchestrator::{
-    NatsCommandHandler, PreparedRunAuthority, RunAuthorityError, RunAuthorityManager,
-    RunCompletionError, RunCompletionObserver, RunOrchestrator, RunRepository, RunSecretManager,
-    VmSpecFactory, ensure_jetstream_topology,
+    CompositeRunCompletionObserver, NatsCommandHandler, PreparedRunAuthority, RunAuthorityError,
+    RunAuthorityManager, RunCompletionError, RunCompletionObserver, RunOrchestrator, RunRepository,
+    RunSecretManager, VmSpecFactory, ensure_jetstream_topology,
 };
 use run_postgres::PgRunRepository;
 use run_runtime_local::{LocalRunRuntimeConfig, LocalRunRuntimeManager};
@@ -120,7 +125,7 @@ use workspace_local::{LocalWorkspaceConfig, LocalWorkspaceManager};
 use workspace_postgres::PgWorkspaceMetadataRepository;
 
 /// Ordered database migration expected by this application version.
-pub const EXPECTED_DATABASE_MIGRATION: i64 = 30;
+pub const EXPECTED_DATABASE_MIGRATION: i64 = 34;
 
 /// OIDC issuer configuration used for bearer-token authentication.
 pub struct OidcConfig {
@@ -453,6 +458,7 @@ pub struct HephaestusApp {
     registry: RegistryConfig,
     http_listen: SocketAddr,
     run_repository: Arc<PgRunRepository>,
+    mailbox_repository: Arc<PostgresMailboxRepository>,
     review_repository: Arc<PostgresReviewRepository>,
     review_control: ReviewControlService,
     orchestrator: Arc<RunOrchestrator>,
@@ -887,6 +893,7 @@ impl HephaestusApp {
                 .with_authorizer(Arc::new(authz_postgres::PostgresMelangeAuthorizer)),
         );
         let run_repository = Arc::new(PgRunRepository::new(pool.clone()));
+        let mailbox_repository = Arc::new(PostgresMailboxRepository::new(pool.clone()));
         let review_repository = Arc::new(PostgresReviewRepository::new(pool.clone()));
         let review_locator = Arc::new(GitRepositoryLocator::new(Arc::clone(&storage)));
         let review_control = ReviewControlService::new(
@@ -1008,10 +1015,15 @@ impl HephaestusApp {
         });
         let launch_authorizer =
             Arc::new(PgRunLaunchAuthorizer::new(pool.clone(), release_authorizer));
-        let completion = Arc::new(UpdateRunCompletion {
+        let update_completion = Arc::new(UpdateRunCompletion {
             pool: pool.clone(),
             releases: Arc::clone(&release_service),
         });
+        let mailbox_store: Arc<dyn MailboxDispatchStore> = mailbox_repository.clone();
+        let completion = Arc::new(CompositeRunCompletionObserver::new(vec![
+            update_completion,
+            Arc::new(MailboxRunCompletion::new(Arc::clone(&mailbox_store))),
+        ]));
         let orchestrator = Arc::new(
             RunOrchestrator::new(
                 run_repository.clone(),
@@ -1023,6 +1035,9 @@ impl HephaestusApp {
             .with_workspace_manager(workspaces)
             .with_runtime_manager(run_runtime)
             .with_launch_authorizer(launch_authorizer)
+            .with_resource_observer(Arc::new(MailboxRunResources::new(Arc::clone(
+                &mailbox_store,
+            ))))
             .with_authority_manager(runtime_authority)
             .with_secret_manager(secret_mounts)
             .with_completion_observer(completion),
@@ -1073,6 +1088,7 @@ impl HephaestusApp {
             registry: config.registry,
             http_listen: config.http_listen,
             run_repository,
+            mailbox_repository,
             review_repository,
             review_control,
             orchestrator,
@@ -1132,6 +1148,9 @@ impl HephaestusApp {
         let consumer = ensure_jetstream_topology(&self.jetstream)
             .await
             .map_err(component("run JetStream topology"))?;
+        let mailbox_consumer = ensure_mailbox_jetstream_topology(&self.jetstream)
+            .await
+            .map_err(component("mailbox JetStream topology"))?;
         let broker = BrokerServer::bind(
             self.secret_broker_socket,
             Arc::clone(&self.secret_broker_executor),
@@ -1285,6 +1304,10 @@ impl HephaestusApp {
                 )),
                 self.rpc_mediator_signing_key,
             ),
+            mailbox_publisher: MailboxOutboxPublisher::new(
+                self.jetstream.clone(),
+                self.mailbox_repository.clone(),
+            ),
             forge: Arc::clone(&self.forge),
             poll_interval: self.outbox_poll_interval,
             batch_size: self.outbox_batch_size,
@@ -1292,6 +1315,24 @@ impl HephaestusApp {
         tasks.push(tokio::spawn(async move {
             outbox.run(publisher_cancel, publisher_ready_tx).await;
             Ok(())
+        }));
+
+        let (mailbox_recovery_ready_tx, mailbox_recovery_ready_rx) = oneshot::channel();
+        let mailbox_recovery_cancel = cancellation.clone();
+        let mailbox_recovery_store: Arc<dyn MailboxDispatchStore> = self.mailbox_repository.clone();
+        let mailbox_recovery_interval = self.outbox_poll_interval;
+        tasks.push(tokio::spawn(async move {
+            let result = mailbox_recovery_loop(
+                mailbox_recovery_store,
+                mailbox_recovery_interval,
+                mailbox_recovery_cancel.clone(),
+                mailbox_recovery_ready_tx,
+            )
+            .await;
+            if result.is_err() {
+                mailbox_recovery_cancel.cancel();
+            }
+            result
         }));
 
         let (secret_reconcile_ready_tx, secret_reconcile_ready_rx) = oneshot::channel();
@@ -1310,6 +1351,28 @@ impl HephaestusApp {
             .await;
             if result.is_err() {
                 secret_reconcile_cancel.cancel();
+            }
+            result
+        }));
+
+        let (mailbox_consumer_ready_tx, mailbox_consumer_ready_rx) = oneshot::channel();
+        let mailbox_consumer_cancel = cancellation.clone();
+        let mailbox_handler = NatsMailboxCommandHandler::new(MailboxCommandHandler::new(
+            self.mailbox_repository.clone(),
+            Arc::clone(&self.orchestrator),
+        ));
+        let mailbox_concurrency = self.worker_concurrency;
+        tasks.push(tokio::spawn(async move {
+            let result = mailbox_command_loop(
+                mailbox_consumer,
+                mailbox_handler,
+                mailbox_concurrency,
+                mailbox_consumer_cancel.clone(),
+                mailbox_consumer_ready_tx,
+            )
+            .await;
+            if result.is_err() {
+                mailbox_consumer_cancel.cancel();
             }
             result
         }));
@@ -1386,6 +1449,9 @@ impl HephaestusApp {
             publisher_ready_rx
                 .await
                 .map_err(|_| AppError::Readiness(String::from("outbox task exited")))?;
+            mailbox_recovery_ready_rx
+                .await
+                .map_err(|_| AppError::Readiness(String::from("mailbox recovery task exited")))?;
             secret_reconcile_ready_rx.await.map_err(|_| {
                 AppError::Readiness(String::from("secret reconciliation task exited"))
             })?;
@@ -1395,6 +1461,9 @@ impl HephaestusApp {
             consumer_ready_rx
                 .await
                 .map_err(|_| AppError::Readiness(String::from("consumer task exited")))?;
+            mailbox_consumer_ready_rx
+                .await
+                .map_err(|_| AppError::Readiness(String::from("mailbox consumer task exited")))?;
             Ok::<(), AppError>(())
         };
         match tokio::time::timeout(self.startup_timeout, readiness).await {
@@ -1428,6 +1497,7 @@ impl HephaestusApp {
             jetstream: self.jetstream,
             forge: self.forge,
             run_repository: self.run_repository,
+            mailbox_repository: self.mailbox_repository,
             review_repository: self.review_repository,
             orchestrator: self.orchestrator,
             outbox_batch_size: self.outbox_batch_size,
@@ -1514,6 +1584,7 @@ struct OutboxWorker {
     release_publisher: ReleaseOutboxPublisher,
     review_publisher: ReviewOutboxPublisher,
     event_publisher: event_adapter::EventPublisher,
+    mailbox_publisher: MailboxOutboxPublisher,
     forge: Arc<PgForgeRepository>,
     poll_interval: Duration,
     batch_size: i64,
@@ -1560,6 +1631,9 @@ impl OutboxWorker {
                     if let Err(error) = self.event_publisher.publish_pending(self.batch_size).await {
                         tracing::warn!(%error, "product-event outbox publication pass failed");
                     }
+                    if let Err(error) = self.mailbox_publisher.publish_pending(self.batch_size).await {
+                        tracing::warn!(%error, "mailbox outbox publication pass failed");
+                    }
                 }
             }
         }
@@ -1582,6 +1656,28 @@ async fn secret_revocation_loop(
             () = cancellation.cancelled() => return Ok(()),
             () = tokio::time::sleep(poll_interval) => {
                 reconcile_revoked_raw_runs(&pool, orchestrator.as_ref()).await?;
+            }
+        }
+    }
+}
+
+async fn mailbox_recovery_loop(
+    store: Arc<dyn MailboxDispatchStore>,
+    poll_interval: Duration,
+    cancellation: CancellationToken,
+    ready: oneshot::Sender<()>,
+) -> Result<(), String> {
+    store.recover().await.map_err(|error| error.to_string())?;
+    if ready.send(()).is_err() {
+        return Ok(());
+    }
+    loop {
+        tokio::select! {
+            () = cancellation.cancelled() => return Ok(()),
+            () = tokio::time::sleep(poll_interval) => {
+                if let Err(error) = store.recover().await {
+                    tracing::warn!(%error, "mailbox recovery pass failed");
+                }
             }
         }
     }
@@ -1845,6 +1941,60 @@ fn completion_error(error: impl std::fmt::Display) -> RunCompletionError {
 // Rust 1.85 Clippy incorrectly reports Tokio's private select expansion as
 // redundant public crate visibility.
 #[allow(clippy::redundant_pub_crate)]
+async fn mailbox_command_loop(
+    consumer: async_nats::jetstream::consumer::PullConsumer,
+    handler: NatsMailboxCommandHandler,
+    concurrency: usize,
+    cancellation: CancellationToken,
+    ready: oneshot::Sender<()>,
+) -> Result<(), String> {
+    let mut messages = consumer
+        .messages()
+        .await
+        .map_err(|error| error.to_string())?;
+    let permits = Arc::new(Semaphore::new(concurrency));
+    let mut commands = JoinSet::new();
+    if ready.send(()).is_err() {
+        return Ok(());
+    }
+    loop {
+        tokio::select! {
+            () = cancellation.cancelled() => break,
+            delivery = messages.next() => {
+                let Some(delivery) = delivery else {
+                    return Err(String::from("mailbox command stream ended"));
+                };
+                let message = delivery.map_err(|error| error.to_string())?;
+                let permit = Arc::clone(&permits)
+                    .acquire_owned()
+                    .await
+                    .map_err(|error| error.to_string())?;
+                let handler = handler.clone();
+                commands.spawn(async move {
+                    let _permit = permit;
+                    if let Err(error) = handler.handle(&message).await {
+                        tracing::warn!(%error, "mailbox command was not acknowledged");
+                    }
+                });
+            }
+            result = commands.join_next(), if !commands.is_empty() => {
+                if let Some(Err(error)) = result {
+                    tracing::warn!(%error, "mailbox command task panicked");
+                }
+            }
+        }
+    }
+    while let Some(result) = commands.join_next().await {
+        if let Err(error) = result {
+            tracing::warn!(%error, "mailbox command task panicked while draining");
+        }
+    }
+    Ok(())
+}
+
+// Rust 1.85 Clippy incorrectly reports Tokio's private select expansion as
+// redundant public crate visibility.
+#[allow(clippy::redundant_pub_crate)]
 async fn command_loop(
     consumer: async_nats::jetstream::consumer::PullConsumer,
     handler: NatsCommandHandler,
@@ -1912,6 +2062,7 @@ pub struct RunningHephaestus {
     jetstream: async_nats::jetstream::Context,
     forge: Arc<PgForgeRepository>,
     run_repository: Arc<PgRunRepository>,
+    mailbox_repository: Arc<PostgresMailboxRepository>,
     review_repository: Arc<PostgresReviewRepository>,
     orchestrator: Arc<RunOrchestrator>,
     outbox_batch_size: i64,
@@ -2026,6 +2177,8 @@ impl RunningHephaestus {
             )),
             self.product_event_cursor_key,
         );
+        let mailbox_publisher =
+            MailboxOutboxPublisher::new(self.jetstream.clone(), self.mailbox_repository.clone());
         for _pass in 0..100 {
             let forge = forge_publisher
                 .publish_pending(self.forge.as_ref(), self.outbox_batch_size)
@@ -2043,7 +2196,11 @@ impl RunningHephaestus {
                 .publish_pending(self.outbox_batch_size)
                 .await
                 .map_err(component("final product-event outbox flush"))?;
-            if forge == 0 && releases == 0 && reviews == 0 && events == 0 {
+            let mailboxes = mailbox_publisher
+                .publish_pending(self.outbox_batch_size)
+                .await
+                .map_err(component("final mailbox outbox flush"))?;
+            if forge == 0 && releases == 0 && reviews == 0 && events == 0 && mailboxes == 0 {
                 return Ok(());
             }
         }

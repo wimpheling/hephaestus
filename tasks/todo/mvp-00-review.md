@@ -32,7 +32,7 @@ session after revocation. Failure-injection coverage must span credential
 generation, session/hash commit, envelope persistence, bootstrap delivery,
 guest acknowledgement, envelope deletion, and guest start.
 
-Affected plan: [MVP 01](mvp-01-agent-principals-capabilities-and-runtime-authority.md).
+Affected plan: [MVP 01](../done/mvp-01-agent-principals-capabilities-and-runtime-authority.md).
 
 ## 2. Assign authoritative ownership of gateway identity and authority
 
@@ -57,7 +57,7 @@ forgery tests so a gateway cannot impersonate an agent instance or obtain its
 authority, plus reconciliation tests proving that gateway routes share the
 existing Caddy deployment without affecting platform-owned routes.
 
-Affected plans: [MVP 01](mvp-01-agent-principals-capabilities-and-runtime-authority.md),
+Affected plans: [MVP 01](../done/mvp-01-agent-principals-capabilities-and-runtime-authority.md),
 [MVP 02](mvp-02-durable-agent-mailboxes-and-stateful-dispatch.md), and
 [MVP 03](mvp-03-event-ingress-and-caddy-routing.md).
 
@@ -125,7 +125,7 @@ MVP 06 uses it for its model API and MVP 05 uses it for its model and Telegram
 APIs; only MVP 05 requires MVP 03 for its public gateway. MVP 05 now explicitly
 depends on MVP 01.2 for the selected runtime-Git/proposal-publication migration.
 
-Affected plans: [MVP 01.2](mvp-01.2-replace-controlled-result-publication-with-runtime-git.md),
+Affected plans: [MVP 01.2](../done/mvp-01.2-replace-controlled-result-publication-with-runtime-git.md),
 [MVP 04](mvp-04-brokered-model-and-outbound-capabilities.md),
 [MVP 05](mvp-05-golden-cooking-agent-journey.md), and
 [MVP 06](mvp-06-git-backed-session-chat-journey.md).
@@ -152,8 +152,8 @@ checks (`cargo fmt --all -- --check`,
 real-Git, PostgreSQL, runtime, browser, egress, security, and migration
 evidence, and requires recorded results or an explicit justified exclusion.
 
-Affected plans: [MVP 01.1](mvp-01.1-git-capabilities-and-developer-personal-access-tokens.md),
-[MVP 01.2](mvp-01.2-replace-controlled-result-publication-with-runtime-git.md),
+Affected plans: [MVP 01.1](../done/mvp-01.1-git-capabilities-and-developer-personal-access-tokens.md),
+[MVP 01.2](../done/mvp-01.2-replace-controlled-result-publication-with-runtime-git.md),
 and [MVP 06](mvp-06-git-backed-session-chat-journey.md).
 
 ## 11. Decide Git-backed chat retention and fork privacy semantics

@@ -43,6 +43,44 @@ pub trait RunLaunchAuthorizer: Send + Sync + 'static {
     async fn authorize(&self, run: &Run) -> Result<(), RunAuthorizationError>;
 }
 
+/// Persists exact resources bound to a run before guest provisioning.
+///
+/// This runs after the fenced volume lease is acquired and the durable run is
+/// bound, but before live authorization and VM provisioning. Domain adapters
+/// use it to retain delivery-attempt resource evidence.
+#[async_trait]
+pub trait RunResourceObserver: Send + Sync + 'static {
+    /// Records the exact run resource evidence idempotently.
+    async fn record(&self, run: &Run) -> Result<(), RunResourceObservationError>;
+}
+
+/// Redacted failure while recording pre-provisioning resource evidence.
+#[derive(Debug, thiserror::Error)]
+#[error("run resource observation failed: {message}")]
+pub struct RunResourceObservationError {
+    message: String,
+}
+
+impl RunResourceObservationError {
+    /// Creates a non-disclosing resource-observation failure.
+    #[must_use]
+    pub fn redacted(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct DisabledRunResourceObserver;
+
+#[async_trait]
+impl RunResourceObserver for DisabledRunResourceObserver {
+    async fn record(&self, _run: &Run) -> Result<(), RunResourceObservationError> {
+        Ok(())
+    }
+}
+
 /// Lifecycle boundary for one exact run's generic runtime authority session.
 ///
 /// The concrete adapter owns authorization-snapshot resolution, durable
@@ -183,6 +221,43 @@ pub trait RunCompletionObserver: Send + Sync + 'static {
     async fn recover(&self) -> Result<usize, RunCompletionError>;
 }
 
+/// Runs several independent post-cleanup observers in a fixed order.
+///
+/// A run may have more than one durable owner of its terminal outcome. For
+/// example, the release updater reconciles update hooks while a mailbox
+/// dispatcher records the delivery disposition of normal runs. Keeping those
+/// concerns as separate observers avoids teaching the VM orchestrator either
+/// domain, while still making recovery execute every durable completion step.
+pub struct CompositeRunCompletionObserver {
+    observers: Vec<Arc<dyn RunCompletionObserver>>,
+}
+
+impl CompositeRunCompletionObserver {
+    /// Creates an ordered completion-observer chain.
+    #[must_use]
+    pub fn new(observers: Vec<Arc<dyn RunCompletionObserver>>) -> Self {
+        Self { observers }
+    }
+}
+
+#[async_trait]
+impl RunCompletionObserver for CompositeRunCompletionObserver {
+    async fn after_cleanup(&self, run: &Run) -> Result<(), RunCompletionError> {
+        for observer in &self.observers {
+            observer.after_cleanup(run).await?;
+        }
+        Ok(())
+    }
+
+    async fn recover(&self) -> Result<usize, RunCompletionError> {
+        let mut recovered = 0;
+        for observer in &self.observers {
+            recovered += observer.recover().await?;
+        }
+        Ok(recovered)
+    }
+}
+
 #[derive(Debug)]
 struct DisabledRunCompletionObserver;
 
@@ -309,6 +384,7 @@ pub struct RunOrchestrator {
     workspaces: Arc<dyn RunWorkspaceManager>,
     runtimes: Arc<dyn RunRuntimeManager>,
     launch_authorizer: Arc<dyn RunLaunchAuthorizer>,
+    resource_observer: Arc<dyn RunResourceObserver>,
     authority: Arc<dyn RunAuthorityManager>,
     secrets: Arc<dyn RunSecretManager>,
     completion: Arc<dyn RunCompletionObserver>,
@@ -336,6 +412,7 @@ impl RunOrchestrator {
             workspaces: Arc::new(DisabledWorkspaceManager),
             runtimes: Arc::new(DisabledRunRuntimeManager),
             launch_authorizer: Arc::new(DisabledRunLaunchAuthorizer),
+            resource_observer: Arc::new(DisabledRunResourceObserver),
             authority: Arc::new(DisabledRunAuthorityManager),
             secrets: Arc::new(DisabledRunSecretManager),
             completion: Arc::new(DisabledRunCompletionObserver),
@@ -367,6 +444,14 @@ impl RunOrchestrator {
         launch_authorizer: Arc<dyn RunLaunchAuthorizer>,
     ) -> Self {
         self.launch_authorizer = launch_authorizer;
+        self
+    }
+
+    /// Installs an idempotent pre-provisioning observer for exact run
+    /// resource evidence.
+    #[must_use]
+    pub fn with_resource_observer(mut self, observer: Arc<dyn RunResourceObserver>) -> Self {
+        self.resource_observer = observer;
         self
     }
 
@@ -449,9 +534,16 @@ impl RunOrchestrator {
         let vm_id = VmId(command.run_id.to_string());
         let volume_id = attachment.as_ref().map(|value| value.volume.id);
         let lease_id = attachment.as_ref().map(|value| value.lease.id);
+        let lease_fencing_token = attachment.as_ref().map(|value| value.lease.fencing_token);
         let run = self
             .repository
-            .bind_resources(command.run_id, volume_id, lease_id, &vm_id.0)
+            .bind_resources(
+                command.run_id,
+                volume_id,
+                lease_id,
+                lease_fencing_token,
+                &vm_id.0,
+            )
             .await?;
         if run.cancel_requested_at.is_some() {
             return self
@@ -532,6 +624,16 @@ impl RunOrchestrator {
             .bootstrap
             .as_ref()
             .map(|bootstrap| (bootstrap.session_id(), bootstrap.generation()));
+        if let Err(error) = self.resource_observer.record(&run).await {
+            return self
+                .fail_with_resources(
+                    command.run_id,
+                    attachment.as_ref().map(|value| &value.lease),
+                    None,
+                    &error.to_string(),
+                )
+                .await;
+        }
         let mut spec = match self.build_spec(&run, attachment.as_ref(), mounts).await {
             Ok(spec) => spec,
             Err(error) => {

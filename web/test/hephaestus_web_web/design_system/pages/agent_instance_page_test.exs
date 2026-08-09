@@ -39,7 +39,7 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.AgentInstancePageTest do
       secret-binding-panel instance-revisions create-attachment-panel instance-attachments
       capability-permission-panel capability-metrics capability-binding-history
       runtime-authority-sessions capability-audit-evidence create-update-panel instance-updates
-      instance-recent-runs
+      mailbox-delivery-evidence instance-recent-runs
     ) do
       assert html =~ ~s(id="#{id}")
     end
@@ -79,6 +79,35 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.AgentInstancePageTest do
     assert html =~ ~s(phx-click="recover-update")
     assert html =~ ~s(phx-value-update_id="update-1")
     assert html =~ ~s(phx-value-action="retry")
+  end
+
+  test "renders mailbox scheduling evidence without application payload data" do
+    instance =
+      instance()
+      |> Map.put("mailbox_deliveries", [
+        %{
+          "event_id" => "event-1",
+          "disposition" => "retryable",
+          "logical_attempt_count" => 2,
+          "instance_revision_id" => "revision-1",
+          "dispatch_sequence" => 4,
+          "next_recovery_action" => "wait_for_retry",
+          "next_eligible_at" => "2026-08-08T12:00:00Z",
+          "denial_code" => "",
+          "state_access_outcome" => "completed_access",
+          "payload" => "must-not-render",
+          "selected_headers" => %{"authorization" => "must-not-render"}
+        }
+      ])
+
+    html = render_component(&AgentInstancePage.agent_instance/1, %{assigns() | instance: instance})
+
+    assert html =~ ~s(id="mailbox-delivery-evidence")
+    assert html =~ ~s(id="mailbox-delivery-event-1")
+    assert html =~ "attempt 2"
+    assert html =~ "wait_for_retry"
+    refute html =~ "must-not-render"
+    refute html =~ "authorization"
   end
 
   defp assigns do

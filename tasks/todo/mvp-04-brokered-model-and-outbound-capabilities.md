@@ -38,7 +38,7 @@ inbound:  API real secret → authorized gateway route → placeholder → VM
 
 ## Dependencies
 
-- [`mvp-01-agent-principals-capabilities-and-runtime-authority.md`](mvp-01-agent-principals-capabilities-and-runtime-authority.md)
+- [`mvp-01-agent-principals-capabilities-and-runtime-authority.md`](../done/mvp-01-agent-principals-capabilities-and-runtime-authority.md)
 - [`manage-delegate-and-deliver-secrets.md`](../done/manage-delegate-and-deliver-secrets.md)
 - [`define-own-the-loop-agent-platform.md`](define-own-the-loop-agent-platform.md)
 

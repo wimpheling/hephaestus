@@ -56,6 +56,7 @@ pub trait RunRepository: Send + Sync + 'static {
         run_id: RunId,
         volume_id: Option<VolumeId>,
         lease_id: Option<LeaseId>,
+        lease_fencing_token: Option<i64>,
         vm_id: &str,
     ) -> Result<Run, RepositoryError>;
     /// Applies one valid state transition and records its bounded run event.

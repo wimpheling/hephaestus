@@ -5,6 +5,9 @@ use capability_domain::{
     CapabilityResourceKind, CapabilitySlotKey,
 };
 use forge_domain::GitRef;
+use gateway_domain::{
+    Exposure, GatewayDeclaration, GatewayName, HttpMethod, RouteIntent, RoutePath,
+};
 use git_capability_domain::{
     BranchRefPolicy, BranchUpdatePolicy, ChangedPathGlob, GitCapabilityCeiling,
     GitCapabilityCeilingInput, GitCapabilityError, GitOperation, RefGlob, RefMutationPermission,
@@ -126,6 +129,13 @@ pub struct ImageSelection {
 /// Schema version for a repository's OCI image manifest.
 pub const REPOSITORY_OCI_IMAGES_VERSION: u32 = 1;
 
+/// Schema version for a repository's gateway manifest.
+///
+/// Gateway declarations intentionally live in their own repository-level
+/// manifest. They are siblings of release `agent.toml` files rather than a
+/// field on an agent, so installing a gateway never makes it an agent subtype.
+pub const REPOSITORY_GATEWAYS_VERSION: u32 = 1;
+
 /// Repository-owned OCI image definitions read from `heph.images.toml`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -159,6 +169,79 @@ pub struct RepositoryOciImageBuildConfig {
     pub context: String,
     /// Platform image selected as the immutable base during production.
     pub base: ImageSelection,
+}
+
+/// Repository-owned gateway declarations read from `heph.gateways.toml`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RepositoryGatewaysConfig {
+    /// Manifest schema version.
+    pub version: u32,
+    /// Gateway workloads declared by this repository.
+    #[serde(default)]
+    pub gateways: Vec<RepositoryGatewayConfig>,
+}
+
+/// One repository-local gateway declaration.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RepositoryGatewayConfig {
+    /// Stable repository-scoped gateway name.
+    pub name: String,
+    /// Versioned handler contract. Only `http.v1` is currently supported.
+    pub handler_contract: String,
+    /// Whether the future provider exposes the route publicly or through
+    /// Hephaestus authentication.
+    pub exposure: Exposure,
+    /// Bounded route requests owned by this declaration.
+    pub routes: Vec<RepositoryGatewayRouteConfig>,
+    /// Typed, non-secret declaration parameters.
+    #[serde(default)]
+    pub parameters: toml::Table,
+    /// Symbolic brokered-secret slots only, never tenant secret values.
+    #[serde(default)]
+    pub secret_slots: Vec<String>,
+}
+
+impl RepositoryGatewayConfig {
+    /// Converts the repository source form into the shared gateway contract.
+    ///
+    /// # Errors
+    ///
+    /// Returns a gateway-domain error when the declaration exceeds the
+    /// bounded HTTP gateway contract.
+    pub fn to_declaration(&self) -> Result<GatewayDeclaration, gateway_domain::GatewayError> {
+        let routes = self
+            .routes
+            .iter()
+            .map(RepositoryGatewayRouteConfig::to_intent)
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(GatewayDeclaration {
+            name: GatewayName::parse(self.name.clone())?,
+            handler_contract: self.handler_contract.clone(),
+            exposure: self.exposure,
+            routes,
+            parameters: serde_json::to_value(&self.parameters)
+                .map_err(|_| gateway_domain::GatewayError::InvalidDeclaration)?,
+            secret_slots: self.secret_slots.clone(),
+        })
+    }
+}
+
+/// One bounded route in a repository gateway declaration.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RepositoryGatewayRouteConfig {
+    /// Canonical route path.
+    pub path: String,
+    /// HTTP methods accepted on this route.
+    pub methods: Vec<HttpMethod>,
+}
+
+impl RepositoryGatewayRouteConfig {
+    fn to_intent(&self) -> Result<RouteIntent, gateway_domain::GatewayError> {
+        RouteIntent::new(RoutePath::parse(self.path.clone())?, self.methods.clone())
+    }
 }
 
 /// One declared build output.
@@ -774,6 +857,19 @@ pub struct ParsedRepositoryOciImages {
     pub diagnostics: Vec<Diagnostic>,
 }
 
+/// Result of parsing one repository `heph.gateways.toml` manifest.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedRepositoryGateways {
+    /// Hash of the exact source bytes.
+    pub hash: ConfigHash,
+    /// Hash of deterministic normalized configuration serialization.
+    pub normalized_hash: Option<ConfigHash>,
+    /// Validated manifest, absent on failure.
+    pub config: Option<RepositoryGatewaysConfig>,
+    /// Structured parser and validation diagnostics.
+    pub diagnostics: Vec<Diagnostic>,
+}
+
 /// Parses and validates `agent.toml`.
 #[must_use]
 pub fn parse(source: &[u8]) -> ParsedConfig {
@@ -881,6 +977,72 @@ pub fn parse_repository_oci_images(source: &[u8]) -> ParsedRepositoryOciImages {
     }
 }
 
+/// Parses and validates a repository's root-level `heph.gateways.toml`.
+///
+/// This only accepts declarative, non-secret gateway intent. Installing the
+/// immutable gateway revision and selecting its exact capability bindings are
+/// control-plane actions; opening a listener is deliberately outside this
+/// parser.
+#[must_use]
+pub fn parse_repository_gateways(source: &[u8]) -> ParsedRepositoryGateways {
+    let source_hash = hash(source);
+    let text = match std::str::from_utf8(source) {
+        Ok(text) => text,
+        Err(error) => {
+            return ParsedRepositoryGateways {
+                hash: source_hash,
+                normalized_hash: None,
+                config: None,
+                diagnostics: vec![Diagnostic {
+                    code: String::from("invalid_utf8"),
+                    path: None,
+                    message: error.to_string(),
+                }],
+            };
+        }
+    };
+    let config = match toml::from_str::<RepositoryGatewaysConfig>(text) {
+        Ok(config) => config,
+        Err(error) => {
+            return ParsedRepositoryGateways {
+                hash: source_hash,
+                normalized_hash: None,
+                config: None,
+                diagnostics: vec![Diagnostic {
+                    code: String::from("invalid_toml"),
+                    path: error
+                        .span()
+                        .map(|span| format!("bytes {}..{}", span.start, span.end)),
+                    message: error.message().to_owned(),
+                }],
+            };
+        }
+    };
+    let mut diagnostics = validate_repository_gateways(&config);
+    let normalized_hash = if diagnostics.is_empty() {
+        let normalized = normalized_repository_gateways(config.clone());
+        toml::to_string(&normalized).map_or_else(
+            |_| {
+                diagnostics.push(Diagnostic {
+                    code: String::from("normalization_failed"),
+                    path: None,
+                    message: String::from("validated gateway manifest could not be normalized"),
+                });
+                None
+            },
+            |normalized| Some(hash(normalized.as_bytes())),
+        )
+    } else {
+        None
+    };
+    ParsedRepositoryGateways {
+        hash: source_hash,
+        normalized_hash,
+        config: diagnostics.is_empty().then_some(config),
+        diagnostics,
+    }
+}
+
 fn hash(source: &[u8]) -> ConfigHash {
     let digest = Sha256::digest(source);
     let mut value = String::with_capacity(64);
@@ -898,6 +1060,24 @@ fn normalized_config(mut config: AgentConfig) -> AgentConfig {
     config
         .capability_slots
         .sort_unstable_by(|left, right| left.key.cmp(&right.key));
+    config
+}
+
+fn normalized_repository_gateways(
+    mut config: RepositoryGatewaysConfig,
+) -> RepositoryGatewaysConfig {
+    for gateway in &mut config.gateways {
+        gateway.secret_slots.sort_unstable();
+        for route in &mut gateway.routes {
+            route.methods.sort_unstable();
+        }
+        gateway
+            .routes
+            .sort_unstable_by(|left, right| left.path.cmp(&right.path));
+    }
+    config
+        .gateways
+        .sort_unstable_by(|left, right| left.name.cmp(&right.name));
     config
 }
 
@@ -971,6 +1151,67 @@ fn validate_repository_oci_images(config: &RepositoryOciImagesConfig) -> Vec<Dia
                 format!("images[{index}].build.base.key"),
                 "base image keys must be lowercase and at most 64 characters",
             );
+        }
+    }
+    diagnostics
+}
+
+fn validate_repository_gateways(config: &RepositoryGatewaysConfig) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    if config.version != REPOSITORY_GATEWAYS_VERSION {
+        diagnostic(
+            &mut diagnostics,
+            "unsupported_repository_gateways_version",
+            "version",
+            format!(
+                "repository gateway version {} is unsupported; expected {REPOSITORY_GATEWAYS_VERSION}",
+                config.version
+            ),
+        );
+        return diagnostics;
+    }
+    if config.gateways.len() > 64 {
+        diagnostic(
+            &mut diagnostics,
+            "too_many_repository_gateways",
+            "gateways",
+            "a repository may define at most 64 gateways",
+        );
+    }
+    let mut names = HashSet::new();
+    for (gateway_index, gateway) in config.gateways.iter().enumerate() {
+        if GatewayName::parse(gateway.name.clone()).is_err() {
+            diagnostic(
+                &mut diagnostics,
+                "invalid_repository_gateway_name",
+                format!("gateways[{gateway_index}].name"),
+                "gateway names must be lowercase and at most 64 characters",
+            );
+        } else if !names.insert(&gateway.name) {
+            diagnostic(
+                &mut diagnostics,
+                "duplicate_repository_gateway_name",
+                format!("gateways[{gateway_index}].name"),
+                "gateway names must be unique within a repository",
+            );
+        }
+        match gateway.to_declaration() {
+            Ok(declaration) => {
+                if declaration.validate().is_err() {
+                    diagnostic(
+                        &mut diagnostics,
+                        "invalid_repository_gateway_declaration",
+                        format!("gateways[{gateway_index}]"),
+                        "gateway declarations must use the supported HTTP contract with unique bounded routes and symbolic secret slots",
+                    );
+                }
+            }
+            Err(_) => diagnostic(
+                &mut diagnostics,
+                "invalid_repository_gateway_declaration",
+                format!("gateways[{gateway_index}]"),
+                "gateway declarations must use valid names, routes, and non-empty method sets",
+            ),
         }
     }
     diagnostics
@@ -1551,7 +1792,7 @@ const fn default_true() -> bool {
 mod tests {
     use super::{
         PublicationMode, REPOSITORY_OCI_IMAGES_VERSION, REUSABLE_RELEASE_VERSION, parse,
-        parse_repository_oci_images,
+        parse_repository_gateways, parse_repository_oci_images,
     };
     use forge_domain::GitRef;
 
@@ -2141,6 +2382,121 @@ base = {{ key = "typescript-node-ubuntu" }}
         let images = parsed.config.expect("valid repository OCI images");
         assert_eq!(images.images.len(), 1);
         assert_eq!(images.images[0].build.base.key, "typescript-node-ubuntu");
+    }
+
+    #[test]
+    fn parses_repository_gateway_manifest_and_normalizes_declarations() {
+        let first = r#"
+version = 1
+
+[[gateways]]
+name = "telegram"
+handler_contract = "http.v1"
+exposure = "public"
+secret_slots = ["telegram_secret", "provider_token"]
+parameters = { bot = "build-notifier", enabled = true }
+
+[[gateways.routes]]
+path = "/telegram/updates"
+methods = ["POST", "GET"]
+
+[[gateways]]
+name = "health"
+handler_contract = "http.v1"
+exposure = "heph_authenticated"
+
+[[gateways.routes]]
+path = "/health"
+methods = ["GET"]
+"#;
+        let second = r#"
+version = 1
+
+[[gateways]]
+name = "health"
+handler_contract = "http.v1"
+exposure = "heph_authenticated"
+
+[[gateways.routes]]
+path = "/health"
+methods = ["GET"]
+
+[[gateways]]
+name = "telegram"
+handler_contract = "http.v1"
+exposure = "public"
+secret_slots = ["provider_token", "telegram_secret"]
+parameters = { bot = "build-notifier", enabled = true }
+
+[[gateways.routes]]
+path = "/telegram/updates"
+methods = ["GET", "POST"]
+"#;
+        let parsed = parse_repository_gateways(first.as_bytes());
+        assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+        let config = parsed.config.expect("valid gateway manifest");
+        assert_eq!(config.gateways.len(), 2);
+        assert_eq!(
+            config.gateways[0]
+                .to_declaration()
+                .expect("valid declaration")
+                .validate()
+                .expect("normalizable declaration")
+                .len(),
+            32
+        );
+        let reordered = parse_repository_gateways(second.as_bytes());
+        assert!(
+            reordered.diagnostics.is_empty(),
+            "{:?}",
+            reordered.diagnostics
+        );
+        assert_eq!(parsed.normalized_hash, reordered.normalized_hash);
+    }
+
+    #[test]
+    fn rejects_ambiguous_or_secret_bearing_repository_gateway_manifests() {
+        let duplicate = r#"
+version = 1
+[[gateways]]
+name = "echo"
+handler_contract = "http.v1"
+exposure = "public"
+[[gateways.routes]]
+path = "/echo"
+methods = ["POST"]
+[[gateways]]
+name = "echo"
+handler_contract = "http.v1"
+exposure = "public"
+[[gateways.routes]]
+path = "/echo-two"
+methods = ["POST"]
+"#;
+        let parsed = parse_repository_gateways(duplicate.as_bytes());
+        assert!(parsed.config.is_none());
+        assert!(
+            parsed
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "duplicate_repository_gateway_name")
+        );
+
+        let secret = r#"
+version = 1
+[[gateways]]
+name = "echo"
+handler_contract = "http.v1"
+exposure = "public"
+webhook_secret = "must-never-be-accepted"
+[[gateways.routes]]
+path = "/echo"
+methods = ["POST"]
+"#;
+        let parsed = parse_repository_gateways(secret.as_bytes());
+        assert!(parsed.config.is_none());
+        assert_eq!(parsed.diagnostics[0].code, "invalid_toml");
+        assert!(!format!("{:?}", parsed.diagnostics).contains("must-never-be-accepted"));
     }
 
     #[test]

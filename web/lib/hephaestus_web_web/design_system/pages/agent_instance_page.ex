@@ -356,6 +356,45 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.AgentInstancePage do
         <.text as="small" variant={:muted}>{event["reason_code"]}</.text>
       </.frame>
     </.resource_list>
+    <.resource_list id="mailbox-delivery-evidence" layout={:projects}>
+      <:header>
+        <.text as="span" variant={:sr_only}>Mailbox delivery evidence</.text>
+      </:header>
+      <:empty>No accepted mailbox events are visible for this agent.</:empty>
+      <.frame
+        :for={delivery <- @instance["mailbox_deliveries"] || []}
+        as="article"
+        id={"mailbox-delivery-#{delivery["event_id"]}"}
+        variant={:table_row}
+      >
+        <.frame variant={:resource_detail}>
+          <.text as="strong">event {short_id(delivery["event_id"])}</.text>
+          <.text as="small" variant={:muted}>
+            attempt {delivery["logical_attempt_count"]} · revision {short_id(
+              delivery["instance_revision_id"]
+            )}
+            <span :if={delivery["dispatch_sequence"] > 0}>
+              · dispatch #{delivery["dispatch_sequence"]}
+            </span>
+          </.text>
+        </.frame>
+        <.tag tone={state_tone(delivery["disposition"])}>{delivery["disposition"]}</.tag>
+        <.frame variant={:resource_detail}>
+          <.text as="small" variant={:muted}>
+            {delivery["next_recovery_action"]}
+            <span :if={delivery["next_eligible_at"]}>
+              · eligible {delivery["next_eligible_at"]}
+            </span>
+          </.text>
+          <.text :if={delivery["denial_code"] != ""} as="small" variant={:muted}>
+            denial: {delivery["denial_code"]}
+          </.text>
+          <.text :if={delivery["state_access_outcome"] != ""} as="small" variant={:muted}>
+            state access: {delivery["state_access_outcome"]}
+          </.text>
+        </.frame>
+      </.frame>
+    </.resource_list>
     """
   end
 

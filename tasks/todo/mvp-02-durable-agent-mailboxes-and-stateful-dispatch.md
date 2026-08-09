@@ -36,7 +36,7 @@ from durable application state rather than arbitrary process checkpoints.
 
 ## Dependencies
 
-- [`mvp-01-agent-principals-capabilities-and-runtime-authority.md`](mvp-01-agent-principals-capabilities-and-runtime-authority.md)
+- [`mvp-01-agent-principals-capabilities-and-runtime-authority.md`](../done/mvp-01-agent-principals-capabilities-and-runtime-authority.md)
 - [`reusable-agent-releases-and-instances.md`](../done/reusable-agent-releases-and-instances.md)
 - [`define-own-the-loop-agent-platform.md`](define-own-the-loop-agent-platform.md)
 
@@ -53,42 +53,42 @@ distributed lock, or general workflow engine.
 
 ## Implementation checklist
 
-- [ ] **1. Define mailbox and delivery contracts**
-  - [ ] **Add stable bounded domain types**
-    - [ ] Add provider-neutral mailbox, event, delivery-attempt, disposition,
+- [x] **1. Define mailbox and delivery contracts**
+  - [x] **Add stable bounded domain types**
+    - [x] Add provider-neutral mailbox, event, delivery-attempt, disposition,
       body-reference, producer, and deduplication identifiers and values.
-    - [ ] Define bounded methods, routes, selected headers, content metadata,
+    - [x] Define bounded methods, routes, selected headers, content metadata,
       receive timestamps, trace context, and opaque payload references.
-    - [ ] Define pending, eligible, leased, running, delivered, retryable,
+    - [x] Define pending, eligible, leased, running, delivered, retryable,
       denied, dead-lettered, and cancelled lifecycle transitions.
-    - [ ] Define a monotonic per-instance dispatch sequence and bounded
+    - [x] Define a monotonic per-instance dispatch sequence and bounded
       state-access outcomes for no state, completed access, failed access, and
       uncertain access.
-    - [ ] Define deterministic identities for publish, dispatch, attempt,
+    - [x] Define deterministic identities for publish, dispatch, attempt,
       retry, cancellation, and dead-letter operations.
-    - [ ] Add domain tests for validation, bounds, serialization, transitions,
+    - [x] Add domain tests for validation, bounds, serialization, transitions,
       deterministic identities, and malformed envelopes.
 
 - [ ] **2. Persist mailboxes and events transactionally**
   - [ ] **Add authoritative PostgreSQL records**
-    - [ ] Add agent-instance-owned mailboxes, immutable accepted events, delivery
+    - [x] Add agent-instance-owned mailboxes, immutable accepted events, delivery
       state, attempts, dispositions, payload references, and tombstone-safe
       provenance.
-    - [ ] Enforce project and instance boundaries, immutable producer
+    - [x] Enforce project and instance boundaries, immutable producer
       identity, unique deduplication keys in their declared scope, and bounded
       attempt state.
-    - [ ] Write mailbox events and wake/dispatch outbox commands in the same
+    - [x] Write mailbox events and wake/dispatch outbox commands in the same
       transaction as acceptance or eligibility transitions.
-    - [ ] Apply forced RLS and exact mailbox publish, consume, inspect, retry,
+    - [x] Apply forced RLS and exact mailbox publish, consume, inspect, retry,
       and recover permissions.
     - [ ] Add real-PostgreSQL tests for concurrent duplicate publication,
       rollback, RLS, tenant isolation, visibility, and tombstone retention.
   - [ ] **Store bounded payloads safely**
-    - [ ] Store each accepted body in PostgreSQL under an opaque body ID with
+    - [x] Store each accepted body in PostgreSQL under an opaque body ID with
       its exact byte length and integrity hash in the acceptance transaction.
-    - [ ] Enforce encoded and decoded size limits before commit and reject
+    - [x] Enforce encoded and decoded size limits before commit and reject
       content-type confusion, malformed compression, and decompression bombs.
-    - [ ] Put only the opaque mailbox-event and body IDs in commands, logs,
+    - [x] Put only the opaque mailbox-event and body IDs in commands, logs,
       traces, and NATS payloads.
     - [ ] Preserve payload bytes until every live delivery or audit retention
       requirement permits cleanup.
@@ -173,14 +173,14 @@ distributed lock, or general workflow engine.
     snapshot, lease, and command identifiers.
   - [ ] Measure acceptance-to-dispatch latency, queue depth, active stateful
     runs, retries, dead letters, denials, and reconciliation outcomes.
-  - [ ] Add read-only inspection for an event's current disposition, attempts,
+  - [x] Add read-only inspection for an event's current disposition, attempts,
     denial reason, bound revision, state volume, fenced lease, dispatch order,
     state-access outcome, and next recovery action.
   - [ ] Reauthorize live subscriptions before publishing mailbox or delivery
     updates.
 
 - [ ] **7. Verify and document**
-  - [ ] Document envelope limits, delivery semantics, revision-binding time,
+  - [x] Document envelope limits, delivery semantics, revision-binding time,
     stateful serialization, retry policy, sleep/wake behavior, and recovery.
   - [ ] Document the PostgreSQL authority, transactional-outbox, JetStream
     transport, run-orchestrator, and fenced-volume-lease responsibility

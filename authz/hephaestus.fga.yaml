@@ -59,6 +59,12 @@ tuples:
   - user: release_agent:reviewer-v1
     relation: release_agent
     object: agent_instance:reviewer
+  - user: project:forge
+    relation: project
+    object: gateway:telegram
+  - user: gateway:telegram
+    relation: gateway
+    object: gateway_revision:telegram-v1
   # These relations are emitted only by exact active-revision capability
   # bindings. They are deliberately independent of project membership.
   - user: agent_instance:reviewer
@@ -218,6 +224,42 @@ tests:
           can_read: true
           can_attach: false
           can_restore: false
+
+  - name: gateway and immutable revision inheritance
+    check:
+      - user: user:maintainer
+        object: gateway:telegram
+        assertions:
+          can_read: true
+          can_manage: true
+          can_execute: true
+          can_update: true
+          can_recover: true
+      - user: user:member
+        object: gateway:telegram
+        assertions:
+          can_read: true
+          can_manage: false
+          can_execute: false
+      - user: user:maintainer
+        object: gateway_revision:telegram-v1
+        assertions:
+          can_read: true
+          can_manage: true
+          can_execute: true
+          can_update: true
+          can_recover: true
+      - user: user:member
+        object: gateway_revision:telegram-v1
+        assertions:
+          can_read: true
+          can_manage: false
+          can_execute: false
+      - user: user:outsider
+        object: gateway_revision:telegram-v1
+        assertions:
+          can_read: false
+          can_manage: false
 
   - name: revoked membership has no residual grant
     check:

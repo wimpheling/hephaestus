@@ -17,6 +17,7 @@ const MAX_CAPABILITY_RESOURCES: usize = 400;
 const MAX_CAPABILITY_BINDINGS: usize = 400;
 const MAX_RUNTIME_SESSIONS: usize = 100;
 const MAX_CAPABILITY_AUDIT: usize = 200;
+const MAX_MAILBOX_DELIVERIES: usize = 100;
 
 #[derive(Debug, thiserror::Error)]
 pub enum InstanceQueryError {
@@ -234,6 +235,28 @@ pub struct CapabilityMetricsRow {
     pub average_revocation_latency_milliseconds: u64,
 }
 
+/// Redacted, authorized delivery evidence for one accepted mailbox event.
+///
+/// The application read model deliberately excludes the envelope, selected
+/// headers, payload body, producer key, and trace context. Operators need the
+/// scheduler's durable outcome, not the application-owned request content.
+#[derive(FromRow)]
+pub struct MailboxDeliveryInspectionRow {
+    pub event_id: Uuid,
+    pub disposition: String,
+    pub logical_attempt_count: i32,
+    pub denial_code: Option<String>,
+    pub instance_revision_id: Option<Uuid>,
+    pub state_volume_id: Option<Uuid>,
+    pub lease_id: Option<Uuid>,
+    pub lease_fencing_token: Option<i64>,
+    pub dispatch_sequence: Option<i64>,
+    pub state_access_outcome: Option<String>,
+    pub next_eligible_at: Option<OffsetDateTime>,
+    pub next_recovery_action: String,
+    pub updated_at: OffsetDateTime,
+}
+
 pub struct InstanceSnapshot {
     pub instance: InstanceRow,
     pub revisions: Vec<RevisionRow>,
@@ -249,6 +272,7 @@ pub struct InstanceSnapshot {
     pub runtime_sessions: Vec<RuntimeSessionRow>,
     pub capability_audit: Vec<CapabilityAuditRow>,
     pub capability_metrics: CapabilityMetricsRow,
+    pub mailbox_deliveries: Vec<MailboxDeliveryInspectionRow>,
 }
 
 pub struct InstanceApplication {
@@ -445,6 +469,42 @@ impl InstanceApplication {
         .fetch_all(&mut *tx)
         .await
         .map_err(InstanceQueryError::Persistence)?;
+        let mailbox_deliveries: Vec<MailboxDeliveryInspectionRow> = sqlx::query_as(
+            "SELECT delivery.event_id, delivery.disposition,
+                    delivery.logical_attempt_count, delivery.denial_code,
+                    attempt.instance_revision_id, attempt.state_volume_id,
+                    attempt.lease_id, attempt.lease_fencing_token,
+                    delivery.dispatch_sequence, attempt.state_access_outcome,
+                    delivery.next_eligible_at,
+                    CASE delivery.disposition
+                      WHEN 'pending' THEN 'wait_for_eligibility'
+                      WHEN 'eligible' THEN 'dispatch'
+                      WHEN 'leased' THEN 'reconcile_claim'
+                      WHEN 'running' THEN 'reconcile_run'
+                      WHEN 'retryable' THEN 'wait_for_retry'
+                      WHEN 'denied' THEN 'operator_retry_after_authorization_change'
+                      WHEN 'dead_lettered' THEN 'operator_retry_or_cancel'
+                      ELSE 'none'
+                    END AS next_recovery_action,
+                    delivery.updated_at
+             FROM mailbox_deliveries AS delivery
+             LEFT JOIN LATERAL (
+                 SELECT attempt.instance_revision_id, attempt.state_volume_id,
+                        attempt.lease_id, attempt.lease_fencing_token,
+                        attempt.state_access_outcome
+                 FROM mailbox_delivery_attempts AS attempt
+                 WHERE attempt.event_id = delivery.event_id
+                 ORDER BY attempt.attempt_number DESC, attempt.id DESC
+                 LIMIT 1
+             ) AS attempt ON true
+             WHERE delivery.instance_id = $1
+             ORDER BY delivery.updated_at DESC, delivery.event_id DESC
+             LIMIT 101",
+        )
+        .bind(instance_id)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(InstanceQueryError::Persistence)?;
         let count = |value: usize| u64::try_from(value).unwrap_or(u64::MAX);
         let capability_metrics = CapabilityMetricsRow {
             sessions_issued: count(runtime_sessions.len()),
@@ -504,6 +564,7 @@ impl InstanceApplication {
             || capability_bindings.len() > MAX_CAPABILITY_BINDINGS
             || runtime_sessions.len() > MAX_RUNTIME_SESSIONS
             || capability_audit.len() > MAX_CAPABILITY_AUDIT
+            || mailbox_deliveries.len() > MAX_MAILBOX_DELIVERIES
         {
             return Err(InstanceQueryError::ResponseTooLarge);
         }
@@ -523,6 +584,7 @@ impl InstanceApplication {
             runtime_sessions,
             capability_audit,
             capability_metrics,
+            mailbox_deliveries,
         })
     }
 }

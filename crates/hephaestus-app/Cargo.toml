@@ -42,6 +42,8 @@ identity-oidc = { path = "../identity-oidc" }
 identity-domain = { path = "../identity-domain" }
 identity-application = { path = "../identity-application" }
 identity-postgres = { path = "../identity-postgres" }
+mailbox-dispatch = { path = "../mailbox-dispatch" }
+mailbox-postgres = { path = "../mailbox-postgres" }
 http.workspace = true
 hmac.workspace = true
 jsonwebtoken.workspace = true

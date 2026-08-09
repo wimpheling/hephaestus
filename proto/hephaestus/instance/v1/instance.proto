@@ -304,6 +304,24 @@ message RecentRun {
   google.protobuf.Timestamp created_at = 8;
   google.protobuf.Timestamp updated_at = 9;
 }
+// Redacted scheduling evidence for a durable mailbox event. The platform
+// never returns the event envelope, headers, body, producer identity, or trace
+// context through this operator projection.
+message MailboxDeliveryInspection {
+  hephaestus.common.v1.OpaqueId event_id = 1;
+  string disposition = 2;
+  uint32 logical_attempt_count = 3;
+  string denial_code = 4;
+  hephaestus.common.v1.OpaqueId instance_revision_id = 5;
+  hephaestus.common.v1.OpaqueId state_volume_id = 6;
+  hephaestus.common.v1.OpaqueId lease_id = 7;
+  uint64 lease_fencing_token = 8;
+  uint64 dispatch_sequence = 9;
+  string state_access_outcome = 10;
+  google.protobuf.Timestamp next_eligible_at = 11;
+  string next_recovery_action = 12;
+  google.protobuf.Timestamp updated_at = 13;
+}
 message AgentInstance {
   hephaestus.common.v1.OpaqueId id = 1;
   string name = 2;
@@ -333,6 +351,7 @@ message AgentInstance {
   repeated RuntimeAuthoritySession runtime_sessions = 26;
   repeated CapabilityAuditRecord capability_audit = 27;
   CapabilityMetrics capability_metrics = 28;
+  repeated MailboxDeliveryInspection mailbox_deliveries = 29;
 }
 
 message GetInstanceRequest {

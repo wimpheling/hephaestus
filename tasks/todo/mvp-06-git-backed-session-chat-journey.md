@@ -29,7 +29,7 @@ universal prompt, workflow, form, or session protocol.
 
 ## Dependencies
 
-- [`mvp-01.2-replace-controlled-result-publication-with-runtime-git.md`](mvp-01.2-replace-controlled-result-publication-with-runtime-git.md)
+- [`mvp-01.2-replace-controlled-result-publication-with-runtime-git.md`](../done/mvp-01.2-replace-controlled-result-publication-with-runtime-git.md)
 - [MVP 04: destination-bound HTTPS egress](mvp-04-brokered-model-and-outbound-capabilities.md)
 
 ## Implementation checklist

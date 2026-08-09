@@ -3,12 +3,32 @@
 use async_trait::async_trait;
 use run_domain::{CancelRun, Run, RunKind, RunOutcome, RunState, StartRun};
 use run_orchestrator::{
-    CreateRunResult, OrchestratorError, PreparedRunAuthority, PreparedRunRuntime,
-    PreparedRunSecrets, RepositoryError, RunAuthorityError, RunAuthorityManager,
-    RunAuthorizationError, RunCompletionError, RunCompletionObserver, RunLaunchAuthorizer,
-    RunOrchestrator, RunRepository, RunRuntimeError, RunRuntimeManager, RunSecretError,
-    RunSecretManager, StoredVmEvent, VmSpecFactory,
+    CompositeRunCompletionObserver, CreateRunResult, OrchestratorError, PreparedRunAuthority,
+    PreparedRunRuntime, PreparedRunSecrets, RepositoryError, RunAuthorityError,
+    RunAuthorityManager, RunAuthorizationError, RunCompletionError, RunCompletionObserver,
+    RunLaunchAuthorizer, RunOrchestrator, RunRepository, RunResourceObservationError,
+    RunResourceObserver, RunRuntimeError, RunRuntimeManager, RunSecretError, RunSecretManager,
+    StoredVmEvent, VmSpecFactory,
 };
+
+#[tokio::test]
+async fn composite_completion_runs_every_observer_and_sums_recovery() {
+    let first = Arc::new(CountingCompletion::new(2));
+    let second = Arc::new(CountingCompletion::new(3));
+    let observer = CompositeRunCompletionObserver::new(vec![first.clone(), second.clone()]);
+    let run = test_run();
+
+    observer
+        .after_cleanup(&run)
+        .await
+        .expect("completion observers should run");
+    assert_eq!(first.completions.load(Ordering::SeqCst), 1);
+    assert_eq!(second.completions.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        observer.recover().await.expect("recovery should succeed"),
+        5
+    );
+}
 use runtime_types::{
     AgentAttachmentId, AgentInstanceId, AgentInstanceRevisionId, CommandId, LeaseId,
     ReleaseAgentId, ReleaseId, RunId, VolumeId,
@@ -18,7 +38,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc, Mutex as StdMutex, MutexGuard,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
 };
 use time::OffsetDateTime;
@@ -64,6 +84,9 @@ async fn destroys_vm_before_releasing_lease_and_deduplicates_start() {
         32 * 1024 * 1024,
     )
     .with_launch_authorizer(Arc::new(RecordingLaunchAuthorizer {
+        log: Arc::clone(&log),
+    }))
+    .with_resource_observer(Arc::new(RecordingResourceObserver {
         log: Arc::clone(&log),
     }))
     .with_runtime_manager(Arc::new(RecordingRuntimeManager {
@@ -818,6 +841,19 @@ impl RunLaunchAuthorizer for RecordingLaunchAuthorizer {
     }
 }
 
+struct RecordingResourceObserver {
+    log: Arc<StdMutex<Vec<&'static str>>>,
+}
+
+#[async_trait]
+impl RunResourceObserver for RecordingResourceObserver {
+    async fn record(&self, run: &Run) -> Result<(), RunResourceObservationError> {
+        assert_eq!(run.lease_fencing_token, Some(1));
+        lock(&self.log).push("resource-recorded");
+        Ok(())
+    }
+}
+
 struct DenyLaunchAuthorizer;
 
 #[async_trait]
@@ -872,6 +908,59 @@ impl RunSecretManager for RevokeBeforeProvisionSecrets {
 
 struct RecordingCompletion {
     log: Arc<StdMutex<Vec<&'static str>>>,
+}
+
+struct CountingCompletion {
+    completions: AtomicUsize,
+    recovered: usize,
+}
+
+impl CountingCompletion {
+    const fn new(recovered: usize) -> Self {
+        Self {
+            completions: AtomicUsize::new(0),
+            recovered,
+        }
+    }
+}
+
+#[async_trait]
+impl RunCompletionObserver for CountingCompletion {
+    async fn after_cleanup(&self, _run: &Run) -> Result<(), RunCompletionError> {
+        self.completions.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+
+    async fn recover(&self) -> Result<usize, RunCompletionError> {
+        Ok(self.recovered)
+    }
+}
+
+fn test_run() -> Run {
+    let now = OffsetDateTime::now_utc();
+    Run {
+        id: RunId::new(),
+        instance_id: AgentInstanceId::new(),
+        instance_revision_id: AgentInstanceRevisionId::new(),
+        release_id: ReleaseId::new(),
+        release_agent_id: ReleaseAgentId::new(),
+        attachment_id: None,
+        kind: RunKind::Normal,
+        requires_state: false,
+        command_id: CommandId::new(),
+        volume_id: None,
+        lease_id: None,
+        lease_fencing_token: None,
+        vm_id: None,
+        state: RunState::CleanedUp,
+        outcome: Some(RunOutcome::Succeeded),
+        exit: None,
+        failure: None,
+        cancel_requested_at: None,
+        created_at: now,
+        updated_at: now,
+        state_version: 0,
+    }
 }
 
 #[async_trait]
@@ -959,6 +1048,7 @@ impl MemoryRepository {
                 requires_state: command.requires_state,
                 volume_id: None,
                 lease_id: None,
+                lease_fencing_token: None,
                 vm_id: None,
                 state: RunState::Queued,
                 outcome: None,
@@ -997,11 +1087,13 @@ impl RunRepository for MemoryRepository {
         _run_id: RunId,
         volume_id: Option<VolumeId>,
         lease_id: Option<LeaseId>,
+        lease_fencing_token: Option<i64>,
         vm_id: &str,
     ) -> Result<Run, RepositoryError> {
         let mut run = self.run.lock().await;
         run.volume_id = volume_id;
         run.lease_id = lease_id;
+        run.lease_fencing_token = lease_fencing_token;
         run.vm_id = Some(vm_id.to_owned());
         Ok(run.clone())
     }
@@ -1410,10 +1502,15 @@ fn assert_launch_order(log: &StdMutex<Vec<&'static str>>) {
         .iter()
         .position(|entry| *entry == "provision")
         .expect("VM provision");
+    let resource_recorded = entries
+        .iter()
+        .position(|entry| *entry == "resource-recorded")
+        .expect("resource evidence");
     drop(entries);
     assert_eq!(authorization.len(), 2);
     assert!(authorization[0] < runtime_prepare);
     assert!(runtime_prepare < authority_prepare);
-    assert!(authority_prepare < authorization[1]);
+    assert!(authority_prepare < resource_recorded);
+    assert!(resource_recorded < authorization[1]);
     assert!(authorization[1] < authority_reauthorize && authority_reauthorize < provision);
 }

@@ -86,6 +86,10 @@ pub enum ObjectType {
     ReleaseAgent,
     /// Project-owned reusable agent instance.
     AgentInstance,
+    /// Project-owned HTTP gateway workload.
+    Gateway,
+    /// Immutable HTTP gateway declaration revision.
+    GatewayRevision,
     /// Repository/ref attachment.
     AgentAttachment,
     /// Agent instance update.
@@ -117,6 +121,8 @@ impl ObjectType {
             Self::Release => "release",
             Self::ReleaseAgent => "release_agent",
             Self::AgentInstance => "agent_instance",
+            Self::Gateway => "gateway",
+            Self::GatewayRevision => "gateway_revision",
             Self::AgentAttachment => "agent_attachment",
             Self::AgentUpdate => "agent_update",
             Self::Secret => "secret",
@@ -143,6 +149,8 @@ impl FromStr for ObjectType {
             "release" => Ok(Self::Release),
             "release_agent" => Ok(Self::ReleaseAgent),
             "agent_instance" => Ok(Self::AgentInstance),
+            "gateway" => Ok(Self::Gateway),
+            "gateway_revision" => Ok(Self::GatewayRevision),
             "agent_attachment" => Ok(Self::AgentAttachment),
             "agent_update" => Ok(Self::AgentUpdate),
             "secret" => Ok(Self::Secret),
@@ -464,6 +472,10 @@ mod tests {
         assert_eq!(
             ObjectType::from_str("repository_oci_image").expect("known type"),
             ObjectType::RepositoryOciImage
+        );
+        assert_eq!(
+            ObjectType::from_str("gateway_revision").expect("known type"),
+            ObjectType::GatewayRevision
         );
         assert!(ObjectType::from_str("unknown").is_err());
         assert_eq!(

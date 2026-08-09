@@ -9245,6 +9245,790 @@ impl ::serde::Serialize for RecentRunOwnedView {
         ::serde::Serialize::serialize(&self.0, __s)
     }
 }
+/// Redacted scheduling evidence for a durable mailbox event. The platform
+/// never returns the event envelope, headers, body, producer identity, or trace
+/// context through this operator projection.
+#[derive(Clone, Debug, Default)]
+pub struct MailboxDeliveryInspectionView<'a> {
+    /// Field 1: `event_id`
+    pub event_id: ::buffa::MessageFieldView<
+        super::super::super::super::common::v1::__buffa::view::OpaqueIdView<'a>,
+    >,
+    /// Field 2: `disposition`
+    pub disposition: &'a str,
+    /// Field 3: `logical_attempt_count`
+    pub logical_attempt_count: u32,
+    /// Field 4: `denial_code`
+    pub denial_code: &'a str,
+    /// Field 5: `instance_revision_id`
+    pub instance_revision_id: ::buffa::MessageFieldView<
+        super::super::super::super::common::v1::__buffa::view::OpaqueIdView<'a>,
+    >,
+    /// Field 6: `state_volume_id`
+    pub state_volume_id: ::buffa::MessageFieldView<
+        super::super::super::super::common::v1::__buffa::view::OpaqueIdView<'a>,
+    >,
+    /// Field 7: `lease_id`
+    pub lease_id: ::buffa::MessageFieldView<
+        super::super::super::super::common::v1::__buffa::view::OpaqueIdView<'a>,
+    >,
+    /// Field 8: `lease_fencing_token`
+    pub lease_fencing_token: u64,
+    /// Field 9: `dispatch_sequence`
+    pub dispatch_sequence: u64,
+    /// Field 10: `state_access_outcome`
+    pub state_access_outcome: &'a str,
+    /// Field 11: `next_eligible_at`
+    pub next_eligible_at: ::buffa::MessageFieldView<
+        ::buffa_types::google::protobuf::__buffa::view::TimestampView<'a>,
+    >,
+    /// Field 12: `next_recovery_action`
+    pub next_recovery_action: &'a str,
+    /// Field 13: `updated_at`
+    pub updated_at: ::buffa::MessageFieldView<
+        ::buffa_types::google::protobuf::__buffa::view::TimestampView<'a>,
+    >,
+    pub __buffa_unknown_fields: ::buffa::UnknownFieldsView<'a>,
+}
+impl<'a> ::buffa::MessageView<'a> for MailboxDeliveryInspectionView<'a> {
+    type Owned = super::super::MailboxDeliveryInspection;
+    fn decode_view(buf: &'a [u8]) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        let __limit = ::core::cell::Cell::new(::buffa::DEFAULT_UNKNOWN_FIELD_LIMIT);
+        <Self as ::buffa::MessageView>::decode_view_ctx(
+            buf,
+            ::buffa::DecodeContext::new(::buffa::RECURSION_LIMIT, &__limit),
+        )
+    }
+    fn decode_view_with_ctx(
+        buf: &'a [u8],
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        <Self as ::buffa::MessageView>::decode_view_ctx(buf, ctx)
+    }
+    fn merge_view_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        cur: &'a [u8],
+        before_tag: &'a [u8],
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<&'a [u8], ::buffa::DecodeError> {
+        let _ = ctx;
+        #[allow(unused_variables)]
+        let view = self;
+        let mut cur = cur;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                let __sub_ctx = ctx.descend()?;
+                let sub = ::buffa::types::borrow_bytes(&mut cur)?;
+                match view.event_id.as_mut() {
+                    Some(existing) => {
+                        ::buffa::MessageView::merge_into_view(existing, sub, __sub_ctx)?
+                    }
+                    None => {
+                        view.event_id = ::buffa::MessageFieldView::set(
+                            <super::super::super::super::common::v1::__buffa::view::OpaqueIdView as ::buffa::MessageView>::decode_view_ctx(
+                                sub,
+                                __sub_ctx,
+                            )?,
+                        );
+                    }
+                }
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                view.disposition = ::buffa::types::borrow_str(&mut cur)?;
+            }
+            3u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                view.logical_attempt_count = ::buffa::types::decode_uint32(&mut cur)?;
+            }
+            4u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                view.denial_code = ::buffa::types::borrow_str(&mut cur)?;
+            }
+            5u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                let __sub_ctx = ctx.descend()?;
+                let sub = ::buffa::types::borrow_bytes(&mut cur)?;
+                match view.instance_revision_id.as_mut() {
+                    Some(existing) => {
+                        ::buffa::MessageView::merge_into_view(existing, sub, __sub_ctx)?
+                    }
+                    None => {
+                        view.instance_revision_id = ::buffa::MessageFieldView::set(
+                            <super::super::super::super::common::v1::__buffa::view::OpaqueIdView as ::buffa::MessageView>::decode_view_ctx(
+                                sub,
+                                __sub_ctx,
+                            )?,
+                        );
+                    }
+                }
+            }
+            6u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                let __sub_ctx = ctx.descend()?;
+                let sub = ::buffa::types::borrow_bytes(&mut cur)?;
+                match view.state_volume_id.as_mut() {
+                    Some(existing) => {
+                        ::buffa::MessageView::merge_into_view(existing, sub, __sub_ctx)?
+                    }
+                    None => {
+                        view.state_volume_id = ::buffa::MessageFieldView::set(
+                            <super::super::super::super::common::v1::__buffa::view::OpaqueIdView as ::buffa::MessageView>::decode_view_ctx(
+                                sub,
+                                __sub_ctx,
+                            )?,
+                        );
+                    }
+                }
+            }
+            7u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                let __sub_ctx = ctx.descend()?;
+                let sub = ::buffa::types::borrow_bytes(&mut cur)?;
+                match view.lease_id.as_mut() {
+                    Some(existing) => {
+                        ::buffa::MessageView::merge_into_view(existing, sub, __sub_ctx)?
+                    }
+                    None => {
+                        view.lease_id = ::buffa::MessageFieldView::set(
+                            <super::super::super::super::common::v1::__buffa::view::OpaqueIdView as ::buffa::MessageView>::decode_view_ctx(
+                                sub,
+                                __sub_ctx,
+                            )?,
+                        );
+                    }
+                }
+            }
+            8u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                view.lease_fencing_token = ::buffa::types::decode_uint64(&mut cur)?;
+            }
+            9u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                view.dispatch_sequence = ::buffa::types::decode_uint64(&mut cur)?;
+            }
+            10u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                view.state_access_outcome = ::buffa::types::borrow_str(&mut cur)?;
+            }
+            11u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                let __sub_ctx = ctx.descend()?;
+                let sub = ::buffa::types::borrow_bytes(&mut cur)?;
+                match view.next_eligible_at.as_mut() {
+                    Some(existing) => {
+                        ::buffa::MessageView::merge_into_view(existing, sub, __sub_ctx)?
+                    }
+                    None => {
+                        view.next_eligible_at = ::buffa::MessageFieldView::set(
+                            <::buffa_types::google::protobuf::__buffa::view::TimestampView as ::buffa::MessageView>::decode_view_ctx(
+                                sub,
+                                __sub_ctx,
+                            )?,
+                        );
+                    }
+                }
+            }
+            12u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                view.next_recovery_action = ::buffa::types::borrow_str(&mut cur)?;
+            }
+            13u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                let __sub_ctx = ctx.descend()?;
+                let sub = ::buffa::types::borrow_bytes(&mut cur)?;
+                match view.updated_at.as_mut() {
+                    Some(existing) => {
+                        ::buffa::MessageView::merge_into_view(existing, sub, __sub_ctx)?
+                    }
+                    None => {
+                        view.updated_at = ::buffa::MessageFieldView::set(
+                            <::buffa_types::google::protobuf::__buffa::view::TimestampView as ::buffa::MessageView>::decode_view_ctx(
+                                sub,
+                                __sub_ctx,
+                            )?,
+                        );
+                    }
+                }
+            }
+            _ => {
+                ::buffa::encoding::skip_field_depth(tag, &mut cur, ctx.depth())?;
+                let span_len = before_tag.len() - cur.len();
+                view.__buffa_unknown_fields.push_record(before_tag, span_len, ctx)?;
+            }
+        }
+        ::core::result::Result::Ok(cur)
+    }
+    fn to_owned_message(
+        &self,
+    ) -> ::core::result::Result<
+        super::super::MailboxDeliveryInspection,
+        ::buffa::DecodeError,
+    > {
+        self.to_owned_from_source(None)
+    }
+    #[allow(clippy::useless_conversion, clippy::needless_update)]
+    fn to_owned_from_source(
+        &self,
+        __buffa_src: ::core::option::Option<&::buffa::bytes::Bytes>,
+    ) -> ::core::result::Result<
+        super::super::MailboxDeliveryInspection,
+        ::buffa::DecodeError,
+    > {
+        #[allow(unused_imports)]
+        use ::buffa::alloc::string::ToString as _;
+        let _ = __buffa_src;
+        ::core::result::Result::Ok(super::super::MailboxDeliveryInspection {
+            event_id: match self.event_id.as_option() {
+                Some(v) => {
+                    ::buffa::MessageField::<
+                        super::super::super::super::common::v1::OpaqueId,
+                    >::some(v.to_owned_from_source(__buffa_src)?)
+                }
+                None => ::buffa::MessageField::none(),
+            },
+            disposition: self.disposition.to_string(),
+            logical_attempt_count: self.logical_attempt_count,
+            denial_code: self.denial_code.to_string(),
+            instance_revision_id: match self.instance_revision_id.as_option() {
+                Some(v) => {
+                    ::buffa::MessageField::<
+                        super::super::super::super::common::v1::OpaqueId,
+                    >::some(v.to_owned_from_source(__buffa_src)?)
+                }
+                None => ::buffa::MessageField::none(),
+            },
+            state_volume_id: match self.state_volume_id.as_option() {
+                Some(v) => {
+                    ::buffa::MessageField::<
+                        super::super::super::super::common::v1::OpaqueId,
+                    >::some(v.to_owned_from_source(__buffa_src)?)
+                }
+                None => ::buffa::MessageField::none(),
+            },
+            lease_id: match self.lease_id.as_option() {
+                Some(v) => {
+                    ::buffa::MessageField::<
+                        super::super::super::super::common::v1::OpaqueId,
+                    >::some(v.to_owned_from_source(__buffa_src)?)
+                }
+                None => ::buffa::MessageField::none(),
+            },
+            lease_fencing_token: self.lease_fencing_token,
+            dispatch_sequence: self.dispatch_sequence,
+            state_access_outcome: self.state_access_outcome.to_string(),
+            next_eligible_at: match self.next_eligible_at.as_option() {
+                Some(v) => {
+                    ::buffa::MessageField::<
+                        ::buffa_types::google::protobuf::Timestamp,
+                    >::some(v.to_owned_from_source(__buffa_src)?)
+                }
+                None => ::buffa::MessageField::none(),
+            },
+            next_recovery_action: self.next_recovery_action.to_string(),
+            updated_at: match self.updated_at.as_option() {
+                Some(v) => {
+                    ::buffa::MessageField::<
+                        ::buffa_types::google::protobuf::Timestamp,
+                    >::some(v.to_owned_from_source(__buffa_src)?)
+                }
+                None => ::buffa::MessageField::none(),
+            },
+            __buffa_unknown_fields: self.__buffa_unknown_fields.to_owned()?.into(),
+            ..::core::default::Default::default()
+        })
+    }
+}
+impl<'a> ::buffa::ViewEncode<'a> for MailboxDeliveryInspectionView<'a> {
+    #[allow(clippy::needless_borrow, clippy::let_and_return)]
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if self.event_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.event_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if !self.disposition.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.disposition) as u32;
+        }
+        if self.logical_attempt_count != 0u32 {
+            size
+                += 1u32
+                    + ::buffa::types::uint32_encoded_len(self.logical_attempt_count)
+                        as u32;
+        }
+        if !self.denial_code.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.denial_code) as u32;
+        }
+        if self.instance_revision_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.instance_revision_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.state_volume_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.state_volume_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.lease_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.lease_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.lease_fencing_token != 0u64 {
+            size
+                += 1u32
+                    + ::buffa::types::uint64_encoded_len(self.lease_fencing_token)
+                        as u32;
+        }
+        if self.dispatch_sequence != 0u64 {
+            size
+                += 1u32
+                    + ::buffa::types::uint64_encoded_len(self.dispatch_sequence) as u32;
+        }
+        if !self.state_access_outcome.is_empty() {
+            size
+                += 1u32
+                    + ::buffa::types::string_encoded_len(&self.state_access_outcome)
+                        as u32;
+        }
+        if self.next_eligible_at.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.next_eligible_at.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if !self.next_recovery_action.is_empty() {
+            size
+                += 1u32
+                    + ::buffa::types::string_encoded_len(&self.next_recovery_action)
+                        as u32;
+        }
+        if self.updated_at.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.updated_at.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    #[allow(clippy::needless_borrow)]
+    fn write_to(
+        &self,
+        __cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if self.event_id.is_set() {
+            ::buffa::types::put_len_delimited_header(1u32, __cache.consume_next(), buf);
+            self.event_id.write_to(__cache, buf);
+        }
+        if !self.disposition.is_empty() {
+            ::buffa::types::put_string_field(2u32, &self.disposition, buf);
+        }
+        if self.logical_attempt_count != 0u32 {
+            ::buffa::types::put_uint32_field(3u32, self.logical_attempt_count, buf);
+        }
+        if !self.denial_code.is_empty() {
+            ::buffa::types::put_string_field(4u32, &self.denial_code, buf);
+        }
+        if self.instance_revision_id.is_set() {
+            ::buffa::types::put_len_delimited_header(5u32, __cache.consume_next(), buf);
+            self.instance_revision_id.write_to(__cache, buf);
+        }
+        if self.state_volume_id.is_set() {
+            ::buffa::types::put_len_delimited_header(6u32, __cache.consume_next(), buf);
+            self.state_volume_id.write_to(__cache, buf);
+        }
+        if self.lease_id.is_set() {
+            ::buffa::types::put_len_delimited_header(7u32, __cache.consume_next(), buf);
+            self.lease_id.write_to(__cache, buf);
+        }
+        if self.lease_fencing_token != 0u64 {
+            ::buffa::types::put_uint64_field(8u32, self.lease_fencing_token, buf);
+        }
+        if self.dispatch_sequence != 0u64 {
+            ::buffa::types::put_uint64_field(9u32, self.dispatch_sequence, buf);
+        }
+        if !self.state_access_outcome.is_empty() {
+            ::buffa::types::put_string_field(10u32, &self.state_access_outcome, buf);
+        }
+        if self.next_eligible_at.is_set() {
+            ::buffa::types::put_len_delimited_header(11u32, __cache.consume_next(), buf);
+            self.next_eligible_at.write_to(__cache, buf);
+        }
+        if !self.next_recovery_action.is_empty() {
+            ::buffa::types::put_string_field(12u32, &self.next_recovery_action, buf);
+        }
+        if self.updated_at.is_set() {
+            ::buffa::types::put_len_delimited_header(13u32, __cache.consume_next(), buf);
+            self.updated_at.write_to(__cache, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+}
+/// Serializes this view as protobuf JSON.
+///
+/// Implicit-presence fields with default values are omitted, `required`
+/// fields are always emitted, explicit-presence (`optional`) fields are
+/// emitted only when set, bytes fields are base64-encoded, and enum
+/// values are their proto name strings.
+///
+/// This impl uses `serialize_map(None)` because the number of emitted
+/// fields depends on default-omission rules; serializers that require
+/// known map lengths (e.g. `bincode`) will return a runtime error.
+/// Use the owned message type for those formats.
+impl<'__a> ::serde::Serialize for MailboxDeliveryInspectionView<'__a> {
+    fn serialize<__S: ::serde::Serializer>(
+        &self,
+        __s: __S,
+    ) -> ::core::result::Result<__S::Ok, __S::Error> {
+        use ::serde::ser::SerializeMap as _;
+        let mut __map = __s.serialize_map(::core::option::Option::None)?;
+        {
+            if let ::core::option::Option::Some(__v) = self.event_id.as_option() {
+                __map.serialize_entry("eventId", __v)?;
+            }
+        }
+        if !::buffa::json_helpers::skip_if::is_empty_str(self.disposition) {
+            __map.serialize_entry("disposition", self.disposition)?;
+        }
+        if !::buffa::json_helpers::skip_if::is_zero_u32(&self.logical_attempt_count) {
+            __map
+                .serialize_entry(
+                    "logicalAttemptCount",
+                    &::buffa::json_helpers::ProtoJson(&self.logical_attempt_count),
+                )?;
+        }
+        if !::buffa::json_helpers::skip_if::is_empty_str(self.denial_code) {
+            __map.serialize_entry("denialCode", self.denial_code)?;
+        }
+        {
+            if let ::core::option::Option::Some(__v) = self
+                .instance_revision_id
+                .as_option()
+            {
+                __map.serialize_entry("instanceRevisionId", __v)?;
+            }
+        }
+        {
+            if let ::core::option::Option::Some(__v) = self.state_volume_id.as_option() {
+                __map.serialize_entry("stateVolumeId", __v)?;
+            }
+        }
+        {
+            if let ::core::option::Option::Some(__v) = self.lease_id.as_option() {
+                __map.serialize_entry("leaseId", __v)?;
+            }
+        }
+        if !::buffa::json_helpers::skip_if::is_zero_u64(&self.lease_fencing_token) {
+            __map
+                .serialize_entry(
+                    "leaseFencingToken",
+                    &::buffa::json_helpers::ProtoJson(&self.lease_fencing_token),
+                )?;
+        }
+        if !::buffa::json_helpers::skip_if::is_zero_u64(&self.dispatch_sequence) {
+            __map
+                .serialize_entry(
+                    "dispatchSequence",
+                    &::buffa::json_helpers::ProtoJson(&self.dispatch_sequence),
+                )?;
+        }
+        if !::buffa::json_helpers::skip_if::is_empty_str(self.state_access_outcome) {
+            __map.serialize_entry("stateAccessOutcome", self.state_access_outcome)?;
+        }
+        {
+            if let ::core::option::Option::Some(__v) = self.next_eligible_at.as_option()
+            {
+                __map.serialize_entry("nextEligibleAt", __v)?;
+            }
+        }
+        if !::buffa::json_helpers::skip_if::is_empty_str(self.next_recovery_action) {
+            __map.serialize_entry("nextRecoveryAction", self.next_recovery_action)?;
+        }
+        {
+            if let ::core::option::Option::Some(__v) = self.updated_at.as_option() {
+                __map.serialize_entry("updatedAt", __v)?;
+            }
+        }
+        __map.end()
+    }
+}
+impl<'a> ::buffa::MessageName for MailboxDeliveryInspectionView<'a> {
+    const PACKAGE: &'static str = "hephaestus.instance.v1";
+    const NAME: &'static str = "MailboxDeliveryInspection";
+    const FULL_NAME: &'static str = "hephaestus.instance.v1.MailboxDeliveryInspection";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.instance.v1.MailboxDeliveryInspection";
+}
+::buffa::impl_default_view_instance!(MailboxDeliveryInspectionView);
+::buffa::impl_view_reborrow!(MailboxDeliveryInspectionView);
+/** Self-contained, `'static` owned view of a `MailboxDeliveryInspection` message.
+
+ Wraps [`::buffa::OwnedView`]`<`[`MailboxDeliveryInspectionView`]`<'static>>`: the decoded view and the [`::buffa::bytes::Bytes`] buffer it borrows from travel together, so the handle is `'static` and `Send + Sync` — suitable for async handlers, spawned tasks, and anywhere a `'static` bound is required.
+
+ Field accessors return borrows tied to `&self`. Use [`Self::view`] to get the full [`MailboxDeliveryInspectionView`] when you need struct patterns, iteration helpers, or to pass the view to lifetime-parameterised code.*/
+#[derive(Clone, Debug)]
+pub struct MailboxDeliveryInspectionOwnedView(
+    ::buffa::OwnedView<MailboxDeliveryInspectionView<'static>>,
+);
+impl MailboxDeliveryInspectionOwnedView {
+    /// Decode an owned view from a [`::buffa::bytes::Bytes`] buffer.
+    ///
+    /// The view borrows directly from the buffer's data; the buffer is
+    /// retained inside the returned handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`::buffa::DecodeError`] if the buffer contains invalid
+    /// protobuf data.
+    pub fn decode(
+        bytes: ::buffa::bytes::Bytes,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        ::core::result::Result::Ok(
+            MailboxDeliveryInspectionOwnedView(::buffa::OwnedView::decode(bytes)?),
+        )
+    }
+    /// Decode with custom [`::buffa::DecodeOptions`] (recursion limit,
+    /// max message size).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`::buffa::DecodeError`] if the buffer is invalid or
+    /// exceeds the configured limits.
+    pub fn decode_with_options(
+        bytes: ::buffa::bytes::Bytes,
+        opts: &::buffa::DecodeOptions,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        ::core::result::Result::Ok(
+            MailboxDeliveryInspectionOwnedView(
+                ::buffa::OwnedView::decode_with_options(bytes, opts)?,
+            ),
+        )
+    }
+    /// Build from an owned message via an encode → decode round-trip.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`::buffa::DecodeError`] if the re-encoded bytes are
+    /// somehow invalid (should not happen for well-formed messages).
+    pub fn from_owned(
+        msg: &super::super::MailboxDeliveryInspection,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        ::core::result::Result::Ok(
+            MailboxDeliveryInspectionOwnedView(::buffa::OwnedView::from_owned(msg)?),
+        )
+    }
+    /// Borrow the full [`MailboxDeliveryInspectionView`] with its lifetime tied to `&self`.
+    #[must_use]
+    pub fn view(&self) -> &MailboxDeliveryInspectionView<'_> {
+        self.0.reborrow()
+    }
+    /// Convert to the owned message type.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if re-materializing preserved unknown fields
+    /// fails (e.g. the unknown-field limit is exceeded).
+    pub fn to_owned_message(
+        &self,
+    ) -> ::core::result::Result<
+        super::super::MailboxDeliveryInspection,
+        ::buffa::DecodeError,
+    > {
+        self.0.to_owned_message()
+    }
+    /// The underlying bytes buffer.
+    #[must_use]
+    pub fn bytes(&self) -> &::buffa::bytes::Bytes {
+        self.0.bytes()
+    }
+    /// Consume the handle, returning the underlying bytes buffer.
+    #[must_use]
+    pub fn into_bytes(self) -> ::buffa::bytes::Bytes {
+        self.0.into_bytes()
+    }
+    /// Field 1: `event_id`
+    #[must_use]
+    pub fn event_id(
+        &self,
+    ) -> &::buffa::MessageFieldView<
+        super::super::super::super::common::v1::__buffa::view::OpaqueIdView<'_>,
+    > {
+        &self.0.reborrow().event_id
+    }
+    /// Field 2: `disposition`
+    #[must_use]
+    pub fn disposition(&self) -> &'_ str {
+        self.0.reborrow().disposition
+    }
+    /// Field 3: `logical_attempt_count`
+    #[must_use]
+    pub fn logical_attempt_count(&self) -> u32 {
+        self.0.reborrow().logical_attempt_count
+    }
+    /// Field 4: `denial_code`
+    #[must_use]
+    pub fn denial_code(&self) -> &'_ str {
+        self.0.reborrow().denial_code
+    }
+    /// Field 5: `instance_revision_id`
+    #[must_use]
+    pub fn instance_revision_id(
+        &self,
+    ) -> &::buffa::MessageFieldView<
+        super::super::super::super::common::v1::__buffa::view::OpaqueIdView<'_>,
+    > {
+        &self.0.reborrow().instance_revision_id
+    }
+    /// Field 6: `state_volume_id`
+    #[must_use]
+    pub fn state_volume_id(
+        &self,
+    ) -> &::buffa::MessageFieldView<
+        super::super::super::super::common::v1::__buffa::view::OpaqueIdView<'_>,
+    > {
+        &self.0.reborrow().state_volume_id
+    }
+    /// Field 7: `lease_id`
+    #[must_use]
+    pub fn lease_id(
+        &self,
+    ) -> &::buffa::MessageFieldView<
+        super::super::super::super::common::v1::__buffa::view::OpaqueIdView<'_>,
+    > {
+        &self.0.reborrow().lease_id
+    }
+    /// Field 8: `lease_fencing_token`
+    #[must_use]
+    pub fn lease_fencing_token(&self) -> u64 {
+        self.0.reborrow().lease_fencing_token
+    }
+    /// Field 9: `dispatch_sequence`
+    #[must_use]
+    pub fn dispatch_sequence(&self) -> u64 {
+        self.0.reborrow().dispatch_sequence
+    }
+    /// Field 10: `state_access_outcome`
+    #[must_use]
+    pub fn state_access_outcome(&self) -> &'_ str {
+        self.0.reborrow().state_access_outcome
+    }
+    /// Field 11: `next_eligible_at`
+    #[must_use]
+    pub fn next_eligible_at(
+        &self,
+    ) -> &::buffa::MessageFieldView<
+        ::buffa_types::google::protobuf::__buffa::view::TimestampView<'_>,
+    > {
+        &self.0.reborrow().next_eligible_at
+    }
+    /// Field 12: `next_recovery_action`
+    #[must_use]
+    pub fn next_recovery_action(&self) -> &'_ str {
+        self.0.reborrow().next_recovery_action
+    }
+    /// Field 13: `updated_at`
+    #[must_use]
+    pub fn updated_at(
+        &self,
+    ) -> &::buffa::MessageFieldView<
+        ::buffa_types::google::protobuf::__buffa::view::TimestampView<'_>,
+    > {
+        &self.0.reborrow().updated_at
+    }
+}
+impl ::core::convert::From<::buffa::OwnedView<MailboxDeliveryInspectionView<'static>>>
+for MailboxDeliveryInspectionOwnedView {
+    fn from(inner: ::buffa::OwnedView<MailboxDeliveryInspectionView<'static>>) -> Self {
+        MailboxDeliveryInspectionOwnedView(inner)
+    }
+}
+impl ::core::convert::From<MailboxDeliveryInspectionOwnedView>
+for ::buffa::OwnedView<MailboxDeliveryInspectionView<'static>> {
+    fn from(wrapper: MailboxDeliveryInspectionOwnedView) -> Self {
+        wrapper.0
+    }
+}
+impl ::core::convert::AsRef<::buffa::OwnedView<MailboxDeliveryInspectionView<'static>>>
+for MailboxDeliveryInspectionOwnedView {
+    fn as_ref(&self) -> &::buffa::OwnedView<MailboxDeliveryInspectionView<'static>> {
+        &self.0
+    }
+}
+impl ::buffa::HasMessageView for super::super::MailboxDeliveryInspection {
+    type View<'a> = MailboxDeliveryInspectionView<'a>;
+    type ViewHandle = MailboxDeliveryInspectionOwnedView;
+}
+impl ::serde::Serialize for MailboxDeliveryInspectionOwnedView {
+    fn serialize<__S: ::serde::Serializer>(
+        &self,
+        __s: __S,
+    ) -> ::core::result::Result<__S::Ok, __S::Error> {
+        ::serde::Serialize::serialize(&self.0, __s)
+    }
+}
 #[derive(Clone, Debug, Default)]
 pub struct AgentInstanceView<'a> {
     /// Field 1: `id`
@@ -9354,6 +10138,11 @@ pub struct AgentInstanceView<'a> {
     /// Field 28: `capability_metrics`
     pub capability_metrics: ::buffa::MessageFieldView<
         super::super::__buffa::view::CapabilityMetricsView<'a>,
+    >,
+    /// Field 29: `mailbox_deliveries`
+    pub mailbox_deliveries: ::buffa::RepeatedView<
+        'a,
+        super::super::__buffa::view::MailboxDeliveryInspectionView<'a>,
     >,
     pub __buffa_unknown_fields: ::buffa::UnknownFieldsView<'a>,
 }
@@ -9788,6 +10577,21 @@ impl<'a> ::buffa::MessageView<'a> for AgentInstanceView<'a> {
                         )?,
                     );
             }
+            29u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                let __sub_ctx = ctx.descend()?;
+                let sub = ::buffa::types::borrow_bytes(&mut cur)?;
+                view.mailbox_deliveries
+                    .push(
+                        <super::super::__buffa::view::MailboxDeliveryInspectionView as ::buffa::MessageView>::decode_view_ctx(
+                            sub,
+                            __sub_ctx,
+                        )?,
+                    );
+            }
             _ => {
                 ::buffa::encoding::skip_field_depth(tag, &mut cur, ctx.depth())?;
                 let span_len = before_tag.len() - cur.len();
@@ -9942,6 +10746,11 @@ impl<'a> ::buffa::MessageView<'a> for AgentInstanceView<'a> {
                 }
                 None => ::buffa::MessageField::none(),
             },
+            mailbox_deliveries: self
+                .mailbox_deliveries
+                .iter()
+                .map(|v| v.to_owned_from_source(__buffa_src))
+                .collect::<::core::result::Result<_, ::buffa::DecodeError>>()?,
             __buffa_unknown_fields: self.__buffa_unknown_fields.to_owned()?.into(),
             ..::core::default::Default::default()
         })
@@ -10139,6 +10948,14 @@ impl<'a> ::buffa::ViewEncode<'a> for AgentInstanceView<'a> {
                 += 2u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
                     + inner_size;
         }
+        for v in &self.mailbox_deliveries {
+            let __slot = __cache.reserve();
+            let inner_size = v.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 2u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
         size
     }
@@ -10253,6 +11070,10 @@ impl<'a> ::buffa::ViewEncode<'a> for AgentInstanceView<'a> {
         if self.capability_metrics.is_set() {
             ::buffa::types::put_len_delimited_header(28u32, __cache.consume_next(), buf);
             self.capability_metrics.write_to(__cache, buf);
+        }
+        for v in &self.mailbox_deliveries {
+            ::buffa::types::put_len_delimited_header(29u32, __cache.consume_next(), buf);
+            v.write_to(__cache, buf);
         }
         self.__buffa_unknown_fields.write_to(buf);
     }
@@ -10388,6 +11209,9 @@ impl<'__a> ::serde::Serialize for AgentInstanceView<'__a> {
             {
                 __map.serialize_entry("capabilityMetrics", __v)?;
             }
+        }
+        if !self.mailbox_deliveries.is_empty() {
+            __map.serialize_entry("mailboxDeliveries", &*self.mailbox_deliveries)?;
         }
         __map.end()
     }
@@ -10697,6 +11521,16 @@ impl AgentInstanceOwnedView {
         super::super::__buffa::view::CapabilityMetricsView<'_>,
     > {
         &self.0.reborrow().capability_metrics
+    }
+    /// Field 29: `mailbox_deliveries`
+    #[must_use]
+    pub fn mailbox_deliveries(
+        &self,
+    ) -> &::buffa::RepeatedView<
+        '_,
+        super::super::__buffa::view::MailboxDeliveryInspectionView<'_>,
+    > {
+        &self.0.reborrow().mailbox_deliveries
     }
 }
 impl ::core::convert::From<::buffa::OwnedView<AgentInstanceView<'static>>>

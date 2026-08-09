@@ -789,7 +789,7 @@ MVP 06 chat journey
 
 - [ ] **1. Establish agent principals and runtime authority**
   - [ ] Complete
-    [MVP 01: Agent capability requirements and instance permissions](mvp-01-agent-principals-capabilities-and-runtime-authority.md).
+    [MVP 01: Agent capability requirements and instance permissions](../done/mvp-01-agent-principals-capabilities-and-runtime-authority.md).
   - [ ] Verify the completed task extends the existing OpenFGA/Mélange, RLS,
     release, and secret-runtime models rather than creating parallel authority.
 

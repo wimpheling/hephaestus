@@ -154,6 +154,39 @@ type agent_instance
     define agent_pause: [agent_instance]
     define agent_recover: [agent_instance]
 
+# A gateway is a project-owned workload principal.  Edge/provider authority
+# is intentionally absent: only its own lifecycle and explicit capability
+# relations are represented here.
+type gateway
+  relations
+    define project: [project]
+    define can_read: can_read from project
+    define can_manage: can_manage from project
+    define can_execute: can_write from project
+    define can_update: can_manage from project
+    define can_recover: can_manage from project
+    define can_grant_agent_capability: can_manage from project
+    define agent_inspect: [agent_instance]
+    define agent_configure: [agent_instance]
+    define agent_execute: [agent_instance]
+    define agent_update: [agent_instance]
+    define agent_pause: [agent_instance]
+    define agent_recover: [agent_instance]
+
+# A revision is immutable declaration data owned by exactly one gateway.  It
+# intentionally inherits only human lifecycle/inspection authority; workloads
+# receive authority against the durable gateway capability, not a mutable
+# routing implementation detail.
+type gateway_revision
+  relations
+    define gateway: [gateway]
+    define can_read: can_read from gateway
+    define can_manage: can_manage from gateway
+    define can_execute: can_execute from gateway
+    define can_update: can_update from gateway
+    define can_recover: can_recover from gateway
+    define can_grant_agent_capability: can_grant_agent_capability from gateway
+
 type agent_attachment
   relations
     define instance: [agent_instance]

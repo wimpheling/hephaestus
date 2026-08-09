@@ -1,0 +1,19 @@
+[package]
+name = "gateway-edge"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Private Caddy gateway reconciliation and bounded HTTP dispatch contracts"
+
+[dependencies]
+async-trait.workspace = true
+bytes.workspace = true
+http.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "time"] }
+uuid.workspace = true
+
+[lints]
+workspace = true
