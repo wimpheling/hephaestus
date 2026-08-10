@@ -81,7 +81,7 @@ impl VmProvider for ResultGuestProvider {
 
 struct ResultGuestInstance {
     id: VmId,
-    work: PathBuf,
+    work: Option<PathBuf>,
     runtime_authority: Option<(uuid::Uuid, u64)>,
     events: broadcast::Sender<VmEvent>,
     exit: watch::Sender<Option<VmExit>>,
@@ -92,31 +92,35 @@ impl ResultGuestInstance {
         let source = spec
             .mounts
             .iter()
-            .find(|mount| mount.tag == "repository-source")
-            .ok_or_else(|| VmError::InvalidSpec {
-                field: String::from("mounts"),
-                reason: String::from("repository source mount is missing"),
-            })?;
-        if !source.read_only {
-            return Err(VmError::InvalidSpec {
-                field: String::from("mounts"),
-                reason: String::from("repository source mount is writable"),
-            });
-        }
+            .find(|mount| mount.tag == "repository-source");
         let work = spec
             .mounts
             .iter()
-            .find(|mount| mount.tag == "repository-work")
-            .ok_or_else(|| VmError::InvalidSpec {
-                field: String::from("mounts"),
-                reason: String::from("repository work mount is missing"),
-            })?;
-        if work.read_only {
-            return Err(VmError::InvalidSpec {
-                field: String::from("mounts"),
-                reason: String::from("repository work mount is read-only"),
-            });
-        }
+            .find(|mount| mount.tag == "repository-work");
+        let work = match (source, work) {
+            (Some(source), Some(work)) => {
+                if !source.read_only {
+                    return Err(VmError::InvalidSpec {
+                        field: String::from("mounts"),
+                        reason: String::from("repository source mount is writable"),
+                    });
+                }
+                if work.read_only {
+                    return Err(VmError::InvalidSpec {
+                        field: String::from("mounts"),
+                        reason: String::from("repository work mount is read-only"),
+                    });
+                }
+                Some(work.host_path.clone())
+            }
+            (None, None) => None,
+            _ => {
+                return Err(VmError::InvalidSpec {
+                    field: String::from("mounts"),
+                    reason: String::from("repository source and work mounts must be paired"),
+                });
+            }
+        };
         let runtime_authority = spec
             .runtime_authority
             .as_ref()
@@ -125,7 +129,7 @@ impl ResultGuestInstance {
         let (exit, _) = watch::channel(None);
         Ok(Self {
             id: spec.id,
-            work: work.host_path.clone(),
+            work,
             runtime_authority,
             events,
             exit,
@@ -150,12 +154,14 @@ impl VmInstance for ResultGuestInstance {
             });
         }
         let _ready = self.events.send(VmEvent::Ready);
-        tokio::fs::write(self.work.join("input.txt"), "agent edit\n")
-            .await
-            .map_err(test_vm_error)?;
-        tokio::fs::write(self.work.join("reports/result.txt"), "durable report\n")
-            .await
-            .map_err(test_vm_error)?;
+        if let Some(work) = &self.work {
+            tokio::fs::write(work.join("input.txt"), "agent edit\n")
+                .await
+                .map_err(test_vm_error)?;
+            tokio::fs::write(work.join("reports/result.txt"), "durable report\n")
+                .await
+                .map_err(test_vm_error)?;
+        }
         let _finalize = self.events.send(VmEvent::FinalizeResult {
             message: String::from("golden agent result"),
         });

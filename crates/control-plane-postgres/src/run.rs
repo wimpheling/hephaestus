@@ -230,6 +230,14 @@ pub async fn recoverable_update_hook_run_ids(pool: &PgPool) -> Result<Vec<Uuid>,
     .await
 }
 
+/// Returns whether an update-kind run is the exact hook run for an update.
+pub async fn is_update_hook_run(pool: &PgPool, run_id: Uuid) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM agent_updates WHERE hook_run_id = $1)")
+        .bind(run_id)
+        .fetch_one(pool)
+        .await
+}
+
 impl RunApplication {
     pub const fn new(pool: PgPool, result_artifact_root: PathBuf) -> Self {
         Self {

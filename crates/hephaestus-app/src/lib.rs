@@ -23,8 +23,8 @@ use capability_domain::{
 };
 use control_plane_postgres::launch::PgRunLaunchAuthorizer;
 use control_plane_postgres::{
-    ControlPlanePool, connect as connect_control_plane, load_vm_launch_contract,
-    recoverable_update_hook_run_ids,
+    ControlPlanePool, connect as connect_control_plane, is_update_hook_run,
+    load_vm_launch_contract, recoverable_update_hook_run_ids,
 };
 use event_postgres::{ReleaseOutboxPublisher, ensure_release_jetstream_topology};
 use forge_postgres::PgForgeRepository;
@@ -2202,6 +2202,12 @@ struct UpdateRunCompletion {
 impl UpdateRunCompletion {
     async fn apply(&self, run: &Run) -> Result<bool, RunCompletionError> {
         if run.kind != RunKind::Update {
+            return Ok(false);
+        }
+        let is_update_hook = is_update_hook_run(&self.pool, run.id.as_uuid())
+            .await
+            .map_err(completion_error)?;
+        if !is_update_hook {
             return Ok(false);
         }
         self.releases
