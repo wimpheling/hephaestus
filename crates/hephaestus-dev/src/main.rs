@@ -6,12 +6,14 @@ mod checks;
 mod cli;
 mod context;
 mod diagnostics;
+mod platform_images;
 mod process;
 mod state;
 mod supervisor;
+mod zot;
 
 use clap::Parser;
-use cli::{CacheCommand, Cli, Command, StateCommand};
+use cli::{CacheCommand, Cli, Command, PlatformImageCommand, StateCommand};
 use context::DevContext;
 use std::process::ExitCode;
 
@@ -47,6 +49,14 @@ fn execute() -> process::Result<()> {
                 Ok(())
             }
             CacheCommand::Clean(selection) => cache::clean(&context, &selection),
+        },
+        Some(Command::PlatformImages { command }) => match command {
+            PlatformImageCommand::Status => platform_images::status(&context),
+            PlatformImageCommand::Build(arguments) => platform_images::build(&context, &arguments),
+            PlatformImageCommand::Publish(arguments) => {
+                platform_images::publish(&context, &arguments)
+            }
+            PlatformImageCommand::Clean(arguments) => platform_images::clean(&context, &arguments),
         },
         Some(Command::Check { command }) => checks::run(&context, command),
         Some(Command::Quality) => checks::quality(&context),

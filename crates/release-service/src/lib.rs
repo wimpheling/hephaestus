@@ -1,6 +1,10 @@
 //! Provider-neutral release command DTOs and workflow ports.
 
+use capability_domain::{
+    CapabilityBindingId, CapabilityOperation, CapabilityResource, CapabilitySlotKey,
+};
 use forge_domain::{ProjectId, RepositoryId};
+use git_capability_domain::GitCapabilityCeiling;
 use release_domain::{
     AgentAttachmentId, AgentInstanceId, AgentInstanceRevisionId, AgentUpdateId, ArtifactKind,
     ArtifactPath, BuildRequestId, ContentHash, InstanceName, ParameterName, ParameterValue,
@@ -131,6 +135,60 @@ pub struct ReviseInstance {
     pub platform_policy: RuntimePolicy,
     /// Current platform policy version.
     pub platform_policy_version: String,
+}
+
+/// One explicit exact resource selection for a released capability slot.
+#[derive(Debug, Clone)]
+pub struct CapabilityBindingSelection {
+    /// Stable binding identity retained by historical revisions and runs.
+    pub binding_id: CapabilityBindingId,
+    /// Symbolic release slot being satisfied.
+    pub slot: CapabilitySlotKey,
+    /// Exact selected Hephaestus resource.
+    pub resource: CapabilityResource,
+    /// Explicit operation ceiling granted to the workload.
+    pub granted_operations: Vec<CapabilityOperation>,
+    /// Optional exact Git authority rules selected below the release ceiling.
+    /// `None` selects the exact release ceiling for a typed Git slot. A value
+    /// may only narrow that ceiling. This remains absent for non-Git slots.
+    pub git_authority: Option<GitCapabilityCeiling>,
+}
+
+/// Creates a new immutable instance revision with a complete capability set.
+#[derive(Debug, Clone)]
+pub struct ReviseInstanceCapabilities {
+    /// Idempotency identity.
+    pub command_key: ReleaseCommandKey,
+    /// Parent project-owned instance.
+    pub instance_id: AgentInstanceId,
+    /// Compare-and-swap expected active revision.
+    pub expected_revision_id: AgentInstanceRevisionId,
+    /// Stable new immutable revision.
+    pub new_revision_id: AgentInstanceRevisionId,
+    /// Complete desired binding set; omitted optional slots remain unbound.
+    pub bindings: Vec<CapabilityBindingSelection>,
+    /// Canonical authorization model used to evaluate each grant.
+    pub authorization_model_version: String,
+}
+
+/// Durable result of a capability revision operation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CapabilityRevisionResult {
+    /// Newly activated immutable revision.
+    pub revision_id: AgentInstanceRevisionId,
+    /// Whether all revision requirements are currently satisfied.
+    pub runnable: bool,
+    /// Stable non-sensitive diagnostics for unmet requirements.
+    pub diagnostics: Vec<CapabilityRevisionDiagnostic>,
+}
+
+/// One stable non-sensitive capability revision diagnostic.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CapabilityRevisionDiagnostic {
+    /// Machine-readable diagnostic code.
+    pub code: String,
+    /// Symbolic release capability slot.
+    pub slot: CapabilitySlotKey,
 }
 
 /// Creates a fully resolved candidate release update and closes the normal run

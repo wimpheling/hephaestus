@@ -44,6 +44,10 @@ pub mod product_event {
         IdentityProfileChanged(
             ::buffa::alloc::boxed::Box<super::super::super::IdentityProfileChanged>,
         ),
+        RegistryPublicationChanged(
+            ::buffa::alloc::boxed::Box<super::super::super::RegistryPublicationChanged>,
+        ),
+        GatewayChanged(::buffa::alloc::boxed::Box<super::super::super::GatewayChanged>),
     }
     impl ::buffa::Oneof for Payload {}
     impl From<super::super::super::IdentityOrganizationsChanged> for Payload {
@@ -216,6 +220,27 @@ pub mod product_event {
             Self::Some(Payload::from(v))
         }
     }
+    impl From<super::super::super::RegistryPublicationChanged> for Payload {
+        fn from(v: super::super::super::RegistryPublicationChanged) -> Self {
+            Self::RegistryPublicationChanged(::buffa::alloc::boxed::Box::new(v))
+        }
+    }
+    impl From<super::super::super::RegistryPublicationChanged>
+    for ::core::option::Option<Payload> {
+        fn from(v: super::super::super::RegistryPublicationChanged) -> Self {
+            Self::Some(Payload::from(v))
+        }
+    }
+    impl From<super::super::super::GatewayChanged> for Payload {
+        fn from(v: super::super::super::GatewayChanged) -> Self {
+            Self::GatewayChanged(::buffa::alloc::boxed::Box::new(v))
+        }
+    }
+    impl From<super::super::super::GatewayChanged> for ::core::option::Option<Payload> {
+        fn from(v: super::super::super::GatewayChanged) -> Self {
+            Self::Some(Payload::from(v))
+        }
+    }
     impl serde::Serialize for Payload {
         fn serialize<S: serde::Serializer>(
             &self,
@@ -271,6 +296,12 @@ pub mod product_event {
                 }
                 Self::IdentityProfileChanged(v) => {
                     map.serialize_entry("identityProfileChanged", v)?;
+                }
+                Self::RegistryPublicationChanged(v) => {
+                    map.serialize_entry("registryPublicationChanged", v)?;
+                }
+                Self::GatewayChanged(v) => {
+                    map.serialize_entry("gatewayChanged", v)?;
                 }
             }
             map.end()

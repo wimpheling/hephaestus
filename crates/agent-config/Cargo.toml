@@ -10,10 +10,15 @@ layer = "application"
 context = "platform"
 
 [dependencies]
+capability-domain = { path = "../capability-domain" }
+git-capability-domain = { path = "../git-capability-domain" }
 forge-domain = { path = "../forge-domain" }
+gateway-domain = { path = "../gateway-domain" }
 serde.workspace = true
+serde_json.workspace = true
 sha2.workspace = true
 toml.workspace = true
+uuid.workspace = true
 
 [lints]
 workspace = true

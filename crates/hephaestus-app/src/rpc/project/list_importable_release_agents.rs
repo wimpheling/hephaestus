@@ -12,6 +12,7 @@ use rpc_proto::messages::hephaestus::{
         SecretSlotDeliveryMode, SecretSlotPhase, StringParameterConstraints, parameter_default,
         parameter_type,
     },
+    instance::v1::CapabilityRequirement,
     project::v1::{
         ListImportableReleaseAgentsRequest, ListImportableReleaseAgentsResponse, ReleaseAgentOption,
     },
@@ -68,8 +69,40 @@ fn release_agent_option(row: ReleaseAgentRow) -> Result<ReleaseAgentOption, RpcE
         source_commit: row.source_commit,
         repository_id: opaque(row.repository_id).into(),
         repository_name: row.repository_name,
+        capability_requirements: capability_requirements(&row.capability_requirements)?,
         ..Default::default()
     })
+}
+
+fn capability_requirements(
+    value: &serde_json::Value,
+) -> Result<Vec<CapabilityRequirement>, RpcError> {
+    value
+        .as_array()
+        .ok_or(RpcError::Internal)?
+        .iter()
+        .map(|item| {
+            Ok(CapabilityRequirement {
+                id: super::opaque(uuid(item, "id")?).into(),
+                release_agent_id: super::opaque(uuid(item, "release_agent_id")?).into(),
+                slot_key: string(item, "slot_key")?,
+                purpose: string(item, "purpose")?,
+                resource_kind: string(item, "resource_kind")?,
+                required_operations: strings(item, "required_operations")?,
+                optional_operations: strings(item, "optional_operations")?,
+                slot_required: boolean(item, "slot_required"),
+                ..Default::default()
+            })
+        })
+        .collect()
+}
+
+fn uuid(value: &serde_json::Value, key: &str) -> Result<uuid::Uuid, RpcError> {
+    value
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .and_then(|value| uuid::Uuid::parse_str(value).ok())
+        .ok_or(RpcError::Internal)
 }
 
 fn parameter_schema(value: &serde_json::Value) -> Result<Vec<ParameterDeclaration>, RpcError> {
@@ -245,7 +278,7 @@ fn integer(value: &serde_json::Value, key: &str) -> Result<i64, RpcError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parameter_schema, runtime_contract, secret_slot_schema};
+    use super::{capability_requirements, parameter_schema, runtime_contract, secret_slot_schema};
     use rpc_proto::messages::hephaestus::common::v1::{
         NetworkPolicy, parameter_default, parameter_type,
     };
@@ -341,5 +374,21 @@ mod tests {
             Some(NetworkPolicy::BrokerOnly.into())
         );
         assert!(contract.requires_state);
+
+        let requirements = capability_requirements(&json!([{
+            "id": "c68b4174-8438-4a38-bca3-922040176226",
+            "release_agent_id": "f03a4989-391c-41e1-95ee-f5567909e798",
+            "slot_key": "source_repository",
+            "purpose": "Read source and publish reviewed changes",
+            "resource_kind": "repository",
+            "required_operations": ["git_read"],
+            "optional_operations": ["update_ref"],
+            "slot_required": true
+        }]))
+        .expect("durable capability requirements");
+        assert_eq!(requirements[0].slot_key, "source_repository");
+        assert_eq!(requirements[0].required_operations, ["git_read"]);
+        assert_eq!(requirements[0].optional_operations, ["update_ref"]);
+        assert!(requirements[0].slot_required);
     }
 }

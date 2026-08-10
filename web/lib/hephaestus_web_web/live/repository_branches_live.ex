@@ -4,7 +4,7 @@ defmodule HephaestusWebWeb.RepositoryBranchesLive do
   alias HephaestusWebWeb.DesignSystem.Pages.RepositoryBranchesPage
   alias HephaestusWebWeb.{RepositoryBranchesState, RepositoryLiveSupport}
 
-  @stream_mode :page_scoped
+  @stream_mode :none
 
   @impl true
   def mount(%{"repository_id" => repository_id}, _session, socket) do

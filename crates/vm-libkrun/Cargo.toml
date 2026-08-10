@@ -14,12 +14,17 @@ integration-guest = []
 
 [dependencies]
 async-trait.workspace = true
+brokered-egress-client = { path = "../brokered-egress-client" }
 ciborium.workspace = true
+bytes.workspace = true
+http.workspace = true
 libloading.workspace = true
 libc.workspace = true
 rustix.workspace = true
 rusqlite.workspace = true
+runtime-types = { path = "../runtime-types" }
 serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = [
     "fs",
@@ -34,6 +39,7 @@ tokio = { workspace = true, features = [
 tracing.workspace = true
 uuid.workspace = true
 vm-trait.workspace = true
+zeroize.workspace = true
 
 [[bin]]
 name = "heph-integration-check"
@@ -41,11 +47,13 @@ path = "src/bin/heph-integration-check.rs"
 required-features = ["integration-guest"]
 
 [dev-dependencies]
-runtime-types = { path = "../runtime-types" }
+async-trait.workspace = true
+secret-broker = { path = "../secret-broker" }
 secret-domain = { path = "../secret-domain" }
 secret-runtime = { path = "../secret-runtime" }
 tempfile = "3"
 tokio = { workspace = true, features = ["rt-multi-thread", "test-util"] }
+tokio-util.workspace = true
 vm-conformance = { path = "../vm-conformance" }
 
 [lints]

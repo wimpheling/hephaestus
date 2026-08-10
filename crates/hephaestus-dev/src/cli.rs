@@ -38,6 +38,11 @@ pub enum Command {
         #[command(subcommand)]
         command: CacheCommand,
     },
+    /// Explicitly build and install reviewed platform builder images.
+    PlatformImages {
+        #[command(subcommand)]
+        command: PlatformImageCommand,
+    },
     /// Run repository quality and architecture checks.
     Check {
         #[command(subcommand)]
@@ -155,6 +160,9 @@ pub struct StateSelection {
     /// NATS durable stream volume.
     #[arg(long)]
     pub nats: bool,
+    /// Forge-owned Zot OCI registry storage, configuration, and verifier.
+    #[arg(long)]
+    pub zot: bool,
     /// Bare Git repositories.
     #[arg(long)]
     pub repositories: bool,
@@ -170,7 +178,7 @@ pub struct StateSelection {
     /// Local secret-wrapping keyring.
     #[arg(long)]
     pub secret_keys: bool,
-    /// Pinned Fedora guest root filesystem and guest bootstrap.
+    /// Configured immutable OCI images and their guest bootstrap.
     #[arg(long)]
     pub rootfs: bool,
     /// Seeded identity, organization, repository, release, and metadata fixture.
@@ -194,6 +202,7 @@ impl StateSelection {
             || match resource {
                 StateResource::Postgresql => self.postgresql,
                 StateResource::Nats => self.nats,
+                StateResource::Zot => self.zot,
                 StateResource::Repositories => self.repositories,
                 StateResource::Artifacts => self.artifacts,
                 StateResource::AgentVolumes => self.agent_volumes,
@@ -209,6 +218,7 @@ impl StateSelection {
     const fn none_selected(&self) -> bool {
         !(self.postgresql
             || self.nats
+            || self.zot
             || self.repositories
             || self.artifacts
             || self.agent_volumes
@@ -226,6 +236,7 @@ impl StateSelection {
 pub enum StateResource {
     Postgresql,
     Nats,
+    Zot,
     Repositories,
     Artifacts,
     AgentVolumes,
@@ -237,9 +248,10 @@ pub enum StateResource {
     Logs,
 }
 
-pub const STATE_RESOURCES: [StateResource; 11] = [
+pub const STATE_RESOURCES: [StateResource; 12] = [
     StateResource::Postgresql,
     StateResource::Nats,
+    StateResource::Zot,
     StateResource::Repositories,
     StateResource::Artifacts,
     StateResource::AgentVolumes,
@@ -257,6 +269,45 @@ pub enum CacheCommand {
     List,
     /// Delete selected regenerable caches.
     Clean(CacheSelection),
+}
+
+#[derive(Debug, Subcommand)]
+pub enum PlatformImageCommand {
+    /// Show persisted local platform image release and installation state.
+    Status,
+    /// Build the four reviewed platform images into a fresh private local release directory.
+    Build(PlatformImageBuildArgs),
+    /// Publish one reviewed local release, approve it, and provision its catalog.
+    Publish(PlatformImagePublishArgs),
+    /// Remove one completed local platform-image installation receipt.
+    Clean(PlatformImageCleanArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct PlatformImageBuildArgs {
+    /// Immutable source URI recorded in the release provenance.
+    #[arg(long)]
+    pub source: String,
+    /// Exact lowercase source commit (40 or 64 hexadecimal characters).
+    #[arg(long)]
+    pub revision: String,
+    /// Exact UTC RFC3339 creation time recorded in the release provenance.
+    #[arg(long)]
+    pub created: String,
+}
+
+#[derive(Debug, Args)]
+pub struct PlatformImagePublishArgs {
+    /// Immutable release revision previously created by `platform-images build`.
+    #[arg(long)]
+    pub revision: String,
+}
+
+#[derive(Debug, Args)]
+pub struct PlatformImageCleanArgs {
+    /// Immutable release revision whose private installation receipt is removed.
+    #[arg(long)]
+    pub revision: String,
 }
 
 #[derive(Debug, Args)]
@@ -307,6 +358,7 @@ pub enum LogComponent {
     Web,
     Daemon,
     Oidc,
+    Zot,
 }
 
 #[derive(Debug, Args)]
@@ -335,6 +387,7 @@ mod tests {
             panic!("expected state clean");
         };
         assert!(selection.selected(StateResource::Postgresql));
+        assert!(selection.selected(StateResource::Zot));
         assert!(selection.selected(StateResource::Rootfs));
         assert!(selection.selected(StateResource::Logs));
     }
@@ -351,6 +404,7 @@ mod tests {
             panic!("expected state reinit");
         };
         assert!(selection.selected(StateResource::Postgresql));
+        assert!(!selection.selected(StateResource::Zot));
         assert!(selection.selected(StateResource::Fixtures));
         assert!(!selection.selected(StateResource::Rootfs));
     }

@@ -90,6 +90,18 @@ pub mod product_event {
                 super::super::super::super::__buffa::view::IdentityProfileChangedView<'a>,
             >,
         ),
+        RegistryPublicationChanged(
+            ::buffa::alloc::boxed::Box<
+                super::super::super::super::__buffa::view::RegistryPublicationChangedView<
+                    'a,
+                >,
+            >,
+        ),
+        GatewayChanged(
+            ::buffa::alloc::boxed::Box<
+                super::super::super::super::__buffa::view::GatewayChangedView<'a>,
+            >,
+        ),
     }
 }
 pub mod watch_identity_response {

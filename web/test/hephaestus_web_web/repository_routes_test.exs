@@ -34,6 +34,17 @@ defmodule HephaestusWebWeb.RepositoryRoutesTest do
              {RepositoryAgentsLive, :agents}
   end
 
+  test "repository build list and detail resolve to explicit LiveView actions" do
+    repository_builds_live = Module.concat(HephaestusWebWeb, "RepositoryBuildsLive")
+    build_live = Module.concat(HephaestusWebWeb, "BuildLive")
+
+    assert live_action("/repositories/#{@repository_id}/builds") ==
+             {repository_builds_live, :builds}
+
+    assert live_action("/repositories/#{@repository_id}/builds/build-1") ==
+             {build_live, :show}
+  end
+
   test "file paths remain route data rather than a query-time revision expression" do
     route =
       Phoenix.Router.route_info(

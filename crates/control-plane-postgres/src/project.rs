@@ -30,6 +30,7 @@ pub enum ProjectError {
 pub struct ProjectRow {
     pub id: Uuid,
     pub name: String,
+    pub description: String,
     pub organization_id: Uuid,
     pub organization_name: String,
 }
@@ -78,6 +79,7 @@ pub struct ReleaseAgentRow {
     pub source_commit: String,
     pub repository_id: Uuid,
     pub repository_name: String,
+    pub capability_requirements: Value,
 }
 
 pub struct PageResult<T> {
@@ -103,7 +105,9 @@ impl ProjectApplication {
         let mut tx = self.transaction(identity).await?;
         require_permission(&mut tx, "can_read", "project", project_id).await?;
         let row = sqlx::query_as(
-            "SELECT project.id, project.name, organization.id AS organization_id,
+            "SELECT project.id, project.name,
+                    COALESCE(project.settings->>'description', '') AS description,
+                    organization.id AS organization_id,
                     organization.name AS organization_name
              FROM projects project
              JOIN organizations organization ON organization.id = project.organization_id
@@ -205,7 +209,21 @@ impl ProjectApplication {
                     release_agent.runtime_contract, release_agent.requires_state,
                     release.id AS release_id, release.version AS release_version,
                     release.source_commit, repository.id AS repository_id,
-                    repository.name AS repository_name
+                    repository.name AS repository_name,
+                    COALESCE((
+                      SELECT jsonb_agg(jsonb_build_object(
+                        'id', requirement.id,
+                        'release_agent_id', requirement.release_agent_id,
+                        'slot_key', requirement.slot_key,
+                        'purpose', requirement.purpose,
+                        'resource_kind', requirement.resource_kind,
+                        'required_operations', requirement.required_operations,
+                        'optional_operations', requirement.optional_operations,
+                        'slot_required', requirement.slot_required
+                      ) ORDER BY requirement.slot_key)
+                      FROM release_capability_requirements AS requirement
+                      WHERE requirement.release_agent_id = release_agent.id
+                    ), '[]'::jsonb) AS capability_requirements
              FROM release_agents release_agent
              JOIN releases release ON release.id = release_agent.release_id
              JOIN repositories repository ON repository.id = release.repository_id

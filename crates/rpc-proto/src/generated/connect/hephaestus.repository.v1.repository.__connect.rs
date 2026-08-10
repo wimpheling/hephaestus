@@ -1,3 +1,15 @@
+///Shorthand for `OwnedView<CreateRepositoryRequestView<'static>>`.
+pub type OwnedCreateRepositoryRequestView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::repository::v1::__buffa::view::CreateRepositoryRequestView<
+        'static,
+    >,
+>;
+///Shorthand for `OwnedView<CreateRepositoryResponseView<'static>>`.
+pub type OwnedCreateRepositoryResponseView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::repository::v1::__buffa::view::CreateRepositoryResponseView<
+        'static,
+    >,
+>;
 ///Shorthand for `OwnedView<GetRepositoryRequestView<'static>>`.
 pub type OwnedGetRepositoryRequestView = ::buffa::view::OwnedView<
     crate::messages::hephaestus::repository::v1::__buffa::view::GetRepositoryRequestView<
@@ -22,6 +34,34 @@ pub type OwnedListRepositoryInstancesResponseView = ::buffa::view::OwnedView<
         'static,
     >,
 >;
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::repository::v1::CreateRepositoryResponse,
+>
+for crate::messages::hephaestus::repository::v1::__buffa::view::CreateRepositoryResponseView<
+    '_,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self, codec)
+    }
+}
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::repository::v1::CreateRepositoryResponse,
+>
+for ::buffa::view::OwnedView<
+    crate::messages::hephaestus::repository::v1::__buffa::view::CreateRepositoryResponseView<
+        'static,
+    >,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self.reborrow(), codec)
+    }
+}
 impl ::connectrpc::Encodable<
     crate::messages::hephaestus::repository::v1::GetRepositoryResponse,
 >
@@ -80,6 +120,15 @@ for ::buffa::view::OwnedView<
 }
 /// Full service name for this service.
 pub const REPOSITORY_SERVICE_SERVICE_NAME: &str = "hephaestus.repository.v1.RepositoryService";
+/// Static [`Spec`](::connectrpc::Spec) for the server-side `CreateRepository` RPC.
+///
+/// The dispatcher surfaces this on
+/// [`RequestContext::spec`](::connectrpc::RequestContext::spec).
+pub const REPOSITORY_SERVICE_CREATE_REPOSITORY_SPEC: ::connectrpc::Spec = ::connectrpc::Spec::server(
+        "/hephaestus.repository.v1.RepositoryService/CreateRepository",
+        ::connectrpc::StreamType::Unary,
+    )
+    .with_idempotency_level(::connectrpc::IdempotencyLevel::Unknown);
 /// Static [`Spec`](::connectrpc::Spec) for the server-side `GetRepository` RPC.
 ///
 /// The dispatcher surfaces this on
@@ -149,6 +198,29 @@ pub const REPOSITORY_SERVICE_LIST_REPOSITORY_INSTANCES_SPEC: ::connectrpc::Spec 
 /// example` doc.
 #[allow(clippy::type_complexity)]
 pub trait RepositoryService: Send + Sync + 'static {
+    /// Handle the CreateRepository RPC.
+    ///
+    /// `'a` lets the response body borrow from `&self` (e.g. server-resident state).
+    ///
+    /// `request` is borrowed from the request body and is valid for the
+    /// duration of the call; message fields are read directly on it
+    /// (zero-copy). The response cannot borrow from `request` — use
+    /// `.to_owned_message()` (or copy the specific fields) for anything
+    /// returned, stored, or moved into `tokio::spawn`.
+    fn create_repository<'a>(
+        &'a self,
+        ctx: ::connectrpc::RequestContext,
+        request: ::connectrpc::ServiceRequest<
+            '_,
+            crate::messages::hephaestus::repository::v1::CreateRepositoryRequest,
+        >,
+    ) -> impl ::std::future::Future<
+        Output = ::connectrpc::ServiceResult<
+            impl ::connectrpc::Encodable<
+                crate::messages::hephaestus::repository::v1::CreateRepositoryResponse,
+            > + Send + use<'a, Self>,
+        >,
+    > + Send;
     /// Handle the GetRepository RPC.
     ///
     /// `'a` lets the response body borrow from `&self` (e.g. server-resident state).
@@ -227,6 +299,35 @@ impl<S: RepositoryService> RepositoryServiceExt for S {
         router: ::connectrpc::Router,
     ) -> ::connectrpc::Router {
         router
+            .route_view(
+                REPOSITORY_SERVICE_SERVICE_NAME,
+                "CreateRepository",
+                {
+                    let svc = ::std::sync::Arc::clone(&self);
+                    ::connectrpc::view_handler_fn(move |
+                        ctx,
+                        req: ::buffa::view::OwnedView<
+                            crate::messages::hephaestus::repository::v1::__buffa::view::CreateRepositoryRequestView<
+                                'static,
+                            >,
+                        >,
+                        format|
+                    {
+                        let svc = ::std::sync::Arc::clone(&svc);
+                        async move {
+                            let sreq = ::connectrpc::ServiceRequest::<
+                                crate::messages::hephaestus::repository::v1::CreateRepositoryRequest,
+                            >::from_parts(req.reborrow(), req.bytes());
+                            svc.create_repository(ctx, sreq)
+                                .await?
+                                .encode::<
+                                    crate::messages::hephaestus::repository::v1::CreateRepositoryResponse,
+                                >(format)
+                        }
+                    })
+                },
+            )
+            .with_spec(REPOSITORY_SERVICE_CREATE_REPOSITORY_SPEC)
             .route_view_idempotent(
                 REPOSITORY_SERVICE_SERVICE_NAME,
                 "GetRepository",
@@ -339,6 +440,12 @@ impl<T: RepositoryService> ::connectrpc::Dispatcher for RepositoryServiceServer<
     ) -> Option<::connectrpc::dispatcher::codegen::MethodDescriptor> {
         let method = path.strip_prefix("hephaestus.repository.v1.RepositoryService/")?;
         match method {
+            "CreateRepository" => {
+                Some(
+                    ::connectrpc::dispatcher::codegen::MethodDescriptor::unary(false)
+                        .with_spec(REPOSITORY_SERVICE_CREATE_REPOSITORY_SPEC),
+                )
+            }
             "GetRepository" => {
                 Some(
                     ::connectrpc::dispatcher::codegen::MethodDescriptor::unary(true)
@@ -367,6 +474,27 @@ impl<T: RepositoryService> ::connectrpc::Dispatcher for RepositoryServiceServer<
         };
         let _ = (&ctx, &request, &format);
         match method {
+            "CreateRepository" => {
+                let svc = ::std::sync::Arc::clone(&self.inner);
+                Box::pin(async move {
+                    let body = ::connectrpc::dispatcher::codegen::request_proto_bytes::<
+                        crate::messages::hephaestus::repository::v1::CreateRepositoryRequest,
+                    >(request.encoded()?, format)?;
+                    let req: crate::messages::hephaestus::repository::v1::__buffa::view::CreateRepositoryRequestView<
+                        '_,
+                    > = ::connectrpc::dispatcher::codegen::decode_borrowed_request_view(
+                        &body,
+                    )?;
+                    let req = ::connectrpc::ServiceRequest::<
+                        crate::messages::hephaestus::repository::v1::CreateRepositoryRequest,
+                    >::from_parts(&req, &body);
+                    svc.create_repository(ctx, req)
+                        .await?
+                        .encode::<
+                            crate::messages::hephaestus::repository::v1::CreateRepositoryResponse,
+                        >(format)
+                })
+            }
             "GetRepository" => {
                 let svc = ::std::sync::Arc::clone(&self.inner);
                 Box::pin(async move {
@@ -479,7 +607,7 @@ impl<T: RepositoryService> ::connectrpc::Dispatcher for RepositoryServiceServer<
 /// let config = ClientConfig::new(uri).with_protocol(Protocol::Grpc);
 ///
 /// let client = RepositoryServiceClient::new(conn, config);
-/// let response = client.get_repository(request).await?;
+/// let response = client.create_repository(request).await?;
 /// ```
 ///
 /// # Example (Connect / HTTP/1.1 or ALPN)
@@ -491,7 +619,7 @@ impl<T: RepositoryService> ::connectrpc::Dispatcher for RepositoryServiceServer<
 /// let config = ClientConfig::new("http://localhost:8080".parse()?);
 ///
 /// let client = RepositoryServiceClient::new(http, config);
-/// let response = client.get_repository(request).await?;
+/// let response = client.create_repository(request).await?;
 /// ```
 ///
 /// # Working with the response
@@ -501,7 +629,7 @@ impl<T: RepositoryService> ::connectrpc::Dispatcher for RepositoryServiceServer<
 /// message, so field access is zero-copy:
 ///
 /// ```rust,ignore
-/// let resp = client.get_repository(request).await?;
+/// let resp = client.create_repository(request).await?;
 /// let name: &str = resp.view().name;  // borrow into the response buffer
 /// ```
 ///
@@ -509,7 +637,7 @@ impl<T: RepositoryService> ::connectrpc::Dispatcher for RepositoryServiceServer<
 /// [`into_owned()`](::connectrpc::client::UnaryResponse::into_owned):
 ///
 /// ```rust,ignore
-/// let owned = client.get_repository(request).await?.into_owned();
+/// let owned = client.create_repository(request).await?.into_owned();
 /// ```
 ///
 /// [`into_view()`](::connectrpc::client::UnaryResponse::into_view) keeps the
@@ -541,6 +669,51 @@ where
     /// Get a mutable reference to the client configuration.
     pub fn config_mut(&mut self) -> &mut ::connectrpc::client::ClientConfig {
         &mut self.config
+    }
+    /// Call the CreateRepository RPC. Sends a request to /hephaestus.repository.v1.RepositoryService/CreateRepository.
+    pub async fn create_repository(
+        &self,
+        request: crate::messages::hephaestus::repository::v1::CreateRepositoryRequest,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::repository::v1::__buffa::view::CreateRepositoryResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        self.create_repository_with_options(
+                request,
+                ::connectrpc::client::CallOptions::default(),
+            )
+            .await
+    }
+    /// Call the CreateRepository RPC with explicit per-call options. Options override [`ClientConfig`](::connectrpc::client::ClientConfig) defaults.
+    pub async fn create_repository_with_options(
+        &self,
+        request: crate::messages::hephaestus::repository::v1::CreateRepositoryRequest,
+        options: ::connectrpc::client::CallOptions,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::repository::v1::__buffa::view::CreateRepositoryResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        ::connectrpc::client::call_unary(
+                &self.transport,
+                &self.config,
+                REPOSITORY_SERVICE_SERVICE_NAME,
+                "CreateRepository",
+                request,
+                options,
+            )
+            .await
     }
     /// Call the GetRepository RPC. Sends a request to /hephaestus.repository.v1.RepositoryService/GetRepository.
     pub async fn get_repository(

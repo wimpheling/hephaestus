@@ -13,6 +13,7 @@ allow_cross_context_dependencies = ["release-artifact-store", "release-postgres"
 [dependencies]
 async-trait.workspace = true
 agent-config = { path = "../agent-config" }
+builder-catalog-application = { path = "../builder-catalog-application" }
 release-artifact-store = { path = "../release-artifact-store" }
 release-domain = { path = "../release-domain" }
 release-postgres = { path = "../release-postgres" }
@@ -29,6 +30,7 @@ vm-trait.workspace = true
 
 [dev-dependencies]
 async-trait.workspace = true
+builder-catalog-domain = { path = "../builder-catalog-domain" }
 serial_test = "3"
 tempfile = "3"
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

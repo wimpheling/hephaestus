@@ -102,6 +102,15 @@ impl ProductEventOutbox for PostgresProductEventOutbox {
     async fn mark_failed(&self, event_id: Uuid, message: &str) -> Result<(), MutationReceiptError> {
         sqlx::query("UPDATE product_event_outbox SET attempts=attempts+1,last_error=left($2,2048) WHERE event_id=$1 AND published_at IS NULL").bind(event_id).bind(message).execute(&self.pool).await.map_err(MutationReceiptError::provider).map(|_| ())
     }
+    async fn dead_letter(&self, event_id: Uuid, reason: &str) -> Result<(), MutationReceiptError> {
+        sqlx::query("UPDATE product_event_outbox SET dead_lettered_at=COALESCE(dead_lettered_at,now()),terminal_reason=left($2,2048),last_error=left($2,2048) WHERE event_id=$1 AND published_at IS NULL")
+            .bind(event_id)
+            .bind(reason)
+            .execute(&self.pool)
+            .await
+            .map_err(MutationReceiptError::provider)
+            .map(|_| ())
+    }
 }
 
 #[derive(sqlx::FromRow)]

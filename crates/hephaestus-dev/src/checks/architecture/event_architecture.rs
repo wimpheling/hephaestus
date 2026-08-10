@@ -16,7 +16,7 @@ const RULES: [&str; 9] = [
     "EVT-TYPED-ONEOF-PAYLOAD",
 ];
 
-const PAYLOAD_VARIANTS: [&str; 16] = [
+const PAYLOAD_VARIANTS: [&str; 18] = [
     "identity_organizations_changed",
     "organization_changed",
     "project_changed",
@@ -33,6 +33,8 @@ const PAYLOAD_VARIANTS: [&str; 16] = [
     "agent_secret_binding_changed",
     "artifact_changed",
     "identity_profile_changed",
+    "registry_publication_changed",
+    "gateway_changed",
 ];
 
 #[derive(Deserialize)]

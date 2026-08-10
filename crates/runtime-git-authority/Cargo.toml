@@ -1,0 +1,24 @@
+[package]
+name = "runtime-git-authority"
+description = "Exact-run Git credential issuance and authentication contracts"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[package.metadata.hephaestus]
+layer = "application"
+context = "authorization"
+
+[dependencies]
+async-trait.workspace = true
+base64.workspace = true
+capability-domain = { path = "../capability-domain" }
+git-capability-domain = { path = "../git-capability-domain" }
+sha2.workspace = true
+thiserror.workspace = true
+time.workspace = true
+uuid.workspace = true
+zeroize.workspace = true
+
+[lints]
+workspace = true

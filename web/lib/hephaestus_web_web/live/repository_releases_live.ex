@@ -4,7 +4,8 @@ defmodule HephaestusWebWeb.RepositoryReleasesLive do
   alias HephaestusWebWeb.DesignSystem.Pages.RepositoryReleasesPage
   alias HephaestusWebWeb.{RepositoryLiveSupport, RepositoryReleasesState}
 
-  @stream_mode :page_scoped
+  # Release history is a finite browse view; details own any live status updates.
+  @stream_mode :none
 
   @impl true
   def mount(%{"repository_id" => repository_id}, _session, socket) do

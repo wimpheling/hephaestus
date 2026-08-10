@@ -7,9 +7,9 @@ mod nats;
 mod storage;
 
 pub use nats::{
-    BUILD_REQUESTED_SUBJECT, ForgeNatsOutboxPublisher, ForgeOutboxPublishError,
-    INSTANCE_RUN_REQUESTED_SUBJECT, RUN_START_SUBJECT, ensure_build_consumer,
-    ensure_forge_jetstream_topology,
+    BUILD_REQUESTED_SUBJECT, BUILD_RETRY_REQUESTED_SUBJECT, BUILD_VERIFY_REQUESTED_SUBJECT,
+    ForgeNatsOutboxPublisher, ForgeOutboxPublishError, INSTANCE_RUN_REQUESTED_SUBJECT,
+    RUN_START_SUBJECT, ensure_build_consumer, ensure_forge_jetstream_topology,
 };
 pub use storage::{GitStorage, GitStorageError};
 

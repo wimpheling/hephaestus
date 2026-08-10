@@ -12,8 +12,8 @@ use std::{
 };
 use tokio::sync::{broadcast, watch};
 use vm_trait::{
-    NetworkMode, PortForward, PortProtocol, RootFilesystem, StopMode, VmError, VmEvent, VmExit,
-    VmId, VmInstance, VmProvider, VmSpec,
+    NetworkMode, PortForward, PortProtocol, PrivateHttpRequest, PrivateHttpResponse,
+    RootFilesystem, StopMode, VmError, VmEvent, VmExit, VmId, VmInstance, VmProvider, VmSpec,
 };
 
 const EVENT_CAPACITY: usize = 64;
@@ -39,6 +39,23 @@ impl FakeProvider {
             inner: Arc::new(ProviderInner::default()),
         }
     }
+
+    /// Configures a deterministic private HTTP guest handler for instances
+    /// provisioned by this provider.  It remains available with
+    /// [`NetworkMode::Disabled`], proving this path does not require a guest
+    /// listener or port forwarding.
+    #[must_use]
+    pub fn with_private_http_responder(self, responder: Arc<dyn PrivateHttpResponder>) -> Self {
+        *lock(&self.inner.private_http_responder) = Some(responder);
+        self
+    }
+}
+
+/// Deterministic private guest handler used by [`FakeProvider`] tests.
+#[async_trait]
+pub trait PrivateHttpResponder: Send + Sync {
+    /// Handles one complete private HTTP request.
+    async fn invoke(&self, request: PrivateHttpRequest) -> Result<PrivateHttpResponse, VmError>;
 }
 
 impl Default for FakeProvider {
@@ -87,11 +104,22 @@ impl VmProvider for FakeProvider {
     }
 }
 
-#[derive(Default)]
 struct ProviderInner {
     ids: Mutex<HashSet<VmId>>,
     ports: Mutex<HashSet<PortBinding>>,
     next_port: AtomicU16,
+    private_http_responder: Mutex<Option<Arc<dyn PrivateHttpResponder>>>,
+}
+
+impl Default for ProviderInner {
+    fn default() -> Self {
+        Self {
+            ids: Mutex::new(HashSet::new()),
+            ports: Mutex::new(HashSet::new()),
+            next_port: AtomicU16::new(0),
+            private_http_responder: Mutex::new(None),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -167,6 +195,15 @@ impl VmInstance for FakeInstance {
 
         if let Some(ingress) = started {
             send_event(&self.events, VmEvent::Started { ingress });
+            if let Some(authority) = &self.spec.runtime_authority {
+                send_event(
+                    &self.events,
+                    VmEvent::RuntimeAuthorityAcknowledged {
+                        session_id: authority.session_id(),
+                        generation: authority.generation(),
+                    },
+                );
+            }
             send_event(&self.events, VmEvent::Ready);
         }
         Ok(())
@@ -211,6 +248,22 @@ impl VmInstance for FakeInstance {
                     source: Box::new(source),
                 })?;
         }
+    }
+
+    async fn invoke_private_http(
+        &self,
+        request: PrivateHttpRequest,
+    ) -> Result<PrivateHttpResponse, VmError> {
+        if !matches!(&*lock(&self.state), InstanceState::Running { .. }) {
+            return Err(VmError::InvalidState("private HTTP requires a running VM"));
+        }
+        let responder = lock(&self.provider.private_http_responder)
+            .clone()
+            .ok_or_else(|| VmError::Unsupported {
+                feature: "private HTTP handler transport".to_owned(),
+                provider: "fake".to_owned(),
+            })?;
+        responder.invoke(request).await
     }
 
     fn subscribe_events(&self) -> broadcast::Receiver<VmEvent> {
@@ -407,6 +460,13 @@ fn validate_spec(spec: &VmSpec) -> Result<(), VmError> {
             return invalid_spec("command.env", "keys must not contain '='");
         }
     }
+    if spec
+        .runtime_authority
+        .as_ref()
+        .is_some_and(|authority| authority.generation() == 0)
+    {
+        return invalid_spec("runtime_authority.generation", "must be greater than zero");
+    }
 
     match &spec.root {
         RootFilesystem::Directory { host_path } | RootFilesystem::Disk { host_path, .. } => {
@@ -523,7 +583,10 @@ fn invalid_spec<T>(field: &str, reason: &str) -> Result<T, VmError> {
 
 #[cfg(test)]
 mod tests {
-    use super::FakeProvider;
+    use super::{FakeProvider, PrivateHttpResponder};
+    use async_trait::async_trait;
+    use bytes::Bytes;
+    use http::{HeaderMap, StatusCode};
     use std::{
         collections::BTreeMap,
         fs,
@@ -534,8 +597,9 @@ mod tests {
     use tempfile::TempDir;
     use vm_conformance::ProviderHarness;
     use vm_trait::{
-        DiskFormat, GuestCommand, NetworkMode, PortForward, PortProtocol, RootFilesystem, VmDisk,
-        VmError, VmId, VmMount, VmProvider, VmResources, VmSpec,
+        DiskFormat, GuestCommand, NetworkMode, PortForward, PortProtocol, PrivateHttpRequest,
+        PrivateHttpResponse, RootFilesystem, VmDisk, VmError, VmId, VmMount, VmProvider,
+        VmResources, VmSpec,
     };
 
     struct FakeHarness {
@@ -616,6 +680,7 @@ mod tests {
                 env: BTreeMap::new(),
                 working_dir: Some(PathBuf::from("/workspace")),
             },
+            runtime_authority: None,
             labels: BTreeMap::new(),
         }
     }
@@ -630,5 +695,42 @@ mod tests {
             provider.provision(invalid).await,
             Err(VmError::InvalidSpec { field, .. }) if field == "command.working_dir"
         ));
+    }
+
+    struct EchoPrivateHttp;
+
+    #[async_trait]
+    impl PrivateHttpResponder for EchoPrivateHttp {
+        async fn invoke(
+            &self,
+            request: PrivateHttpRequest,
+        ) -> Result<PrivateHttpResponse, VmError> {
+            Ok(PrivateHttpResponse {
+                status: StatusCode::CREATED,
+                headers: HeaderMap::new(),
+                body: request.body,
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn private_http_works_without_guest_networking() {
+        let provider = FakeProvider::new().with_private_http_responder(Arc::new(EchoPrivateHttp));
+        let mut request_spec = spec("private-http");
+        request_spec.network = NetworkMode::Disabled;
+        let instance = provider.provision(request_spec).await.expect("provision");
+        instance.start().await.expect("start");
+        let response = instance
+            .invoke_private_http(PrivateHttpRequest {
+                method: http::Method::POST,
+                path_and_query: "/gateway/echo".to_owned(),
+                headers: HeaderMap::new(),
+                body: Bytes::from_static(b"private"),
+            })
+            .await
+            .expect("private handler response");
+        assert_eq!(response.status, StatusCode::CREATED);
+        assert_eq!(response.body, Bytes::from_static(b"private"));
+        instance.destroy().await.expect("destroy");
     }
 }

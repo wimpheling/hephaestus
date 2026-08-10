@@ -5,8 +5,10 @@ use serde_json::json;
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use time::OffsetDateTime;
 use tokio::sync::Mutex;
+use uuid::Uuid;
 use vm_trait::{
-    DiskFormat, StopMode, VmDisk, VmError, VmEvent, VmExit, VmId, VmInstance, VmProvider, VmSpec,
+    DiskFormat, RuntimeAuthorityBootstrap, StopMode, VmDisk, VmError, VmEvent, VmExit, VmId,
+    VmInstance, VmProvider, VmSpec,
 };
 use volume_trait::{
     INSTANCE_STATE_DISK_ID, VolumeAttachment, VolumeError, VolumeLease, VolumeStore,
@@ -39,6 +41,127 @@ pub trait RunRuntimeManager: Send + Sync + 'static {
 pub trait RunLaunchAuthorizer: Send + Sync + 'static {
     /// Rechecks the exact run, attachment/update, and release authority.
     async fn authorize(&self, run: &Run) -> Result<(), RunAuthorizationError>;
+}
+
+/// Persists exact resources bound to a run before guest provisioning.
+///
+/// This runs after the fenced volume lease is acquired and the durable run is
+/// bound, but before live authorization and VM provisioning. Domain adapters
+/// use it to retain delivery-attempt resource evidence.
+#[async_trait]
+pub trait RunResourceObserver: Send + Sync + 'static {
+    /// Records the exact run resource evidence idempotently.
+    async fn record(&self, run: &Run) -> Result<(), RunResourceObservationError>;
+}
+
+/// Redacted failure while recording pre-provisioning resource evidence.
+#[derive(Debug, thiserror::Error)]
+#[error("run resource observation failed: {message}")]
+pub struct RunResourceObservationError {
+    message: String,
+}
+
+impl RunResourceObservationError {
+    /// Creates a non-disclosing resource-observation failure.
+    #[must_use]
+    pub fn redacted(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct DisabledRunResourceObserver;
+
+#[async_trait]
+impl RunResourceObserver for DisabledRunResourceObserver {
+    async fn record(&self, _run: &Run) -> Result<(), RunResourceObservationError> {
+        Ok(())
+    }
+}
+
+/// Lifecycle boundary for one exact run's generic runtime authority session.
+///
+/// The concrete adapter owns authorization-snapshot resolution, durable
+/// hash-only session issuance, and the host-only encrypted handoff. The
+/// orchestrator deliberately never handles bearer bytes.
+#[async_trait]
+pub trait RunAuthorityManager: Send + Sync + 'static {
+    /// Resolves the immutable capability ceiling and stages one exact session
+    /// for bootstrap delivery.
+    async fn prepare(&self, run: &Run) -> Result<PreparedRunAuthority, RunAuthorityError>;
+    /// Rechecks live authority immediately before VM provisioning.
+    async fn reauthorize(&self, run: &Run) -> Result<(), RunAuthorityError>;
+    /// Records a guest acknowledgement already matched to the exact staged
+    /// session and issuance generation by the orchestrator.
+    async fn acknowledge(
+        &self,
+        run: &Run,
+        session_id: Uuid,
+        generation: u64,
+    ) -> Result<(), RunAuthorityError>;
+    /// Revokes the session and destroys any remaining handoff after the guest
+    /// has been destroyed.
+    async fn revoke_after_guest(&self, run_id: RunId) -> Result<(), RunAuthorityError>;
+    /// Reconciles expired sessions and orphan host-only handoffs.
+    async fn recover(&self) -> Result<usize, RunAuthorityError>;
+}
+
+/// Sensitive authority staged for provider bootstrap delivery.
+#[derive(Debug, Default)]
+pub struct PreparedRunAuthority {
+    /// Optional one-run bootstrap payload. Absence means the configured
+    /// manager intentionally issues no generic runtime session.
+    pub bootstrap: Option<RuntimeAuthorityBootstrap>,
+}
+
+#[derive(Debug)]
+struct DisabledRunAuthorityManager;
+
+#[async_trait]
+impl RunAuthorityManager for DisabledRunAuthorityManager {
+    async fn prepare(&self, _run: &Run) -> Result<PreparedRunAuthority, RunAuthorityError> {
+        Ok(PreparedRunAuthority::default())
+    }
+
+    async fn reauthorize(&self, _run: &Run) -> Result<(), RunAuthorityError> {
+        Ok(())
+    }
+
+    async fn acknowledge(
+        &self,
+        _run: &Run,
+        _session_id: Uuid,
+        _generation: u64,
+    ) -> Result<(), RunAuthorityError> {
+        Ok(())
+    }
+
+    async fn revoke_after_guest(&self, _run_id: RunId) -> Result<(), RunAuthorityError> {
+        Ok(())
+    }
+
+    async fn recover(&self) -> Result<usize, RunAuthorityError> {
+        Ok(0)
+    }
+}
+
+/// Redacted generic runtime-authority lifecycle failure.
+#[derive(Debug, thiserror::Error)]
+#[error("run authority operation failed: {message}")]
+pub struct RunAuthorityError {
+    message: String,
+}
+
+impl RunAuthorityError {
+    /// Creates a non-disclosing authority lifecycle failure.
+    #[must_use]
+    pub fn redacted(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -96,6 +219,43 @@ pub trait RunCompletionObserver: Send + Sync + 'static {
     async fn after_cleanup(&self, run: &Run) -> Result<(), RunCompletionError>;
     /// Reconciles cleaned runs whose domain decision was interrupted.
     async fn recover(&self) -> Result<usize, RunCompletionError>;
+}
+
+/// Runs several independent post-cleanup observers in a fixed order.
+///
+/// A run may have more than one durable owner of its terminal outcome. For
+/// example, the release updater reconciles update hooks while a mailbox
+/// dispatcher records the delivery disposition of normal runs. Keeping those
+/// concerns as separate observers avoids teaching the VM orchestrator either
+/// domain, while still making recovery execute every durable completion step.
+pub struct CompositeRunCompletionObserver {
+    observers: Vec<Arc<dyn RunCompletionObserver>>,
+}
+
+impl CompositeRunCompletionObserver {
+    /// Creates an ordered completion-observer chain.
+    #[must_use]
+    pub fn new(observers: Vec<Arc<dyn RunCompletionObserver>>) -> Self {
+        Self { observers }
+    }
+}
+
+#[async_trait]
+impl RunCompletionObserver for CompositeRunCompletionObserver {
+    async fn after_cleanup(&self, run: &Run) -> Result<(), RunCompletionError> {
+        for observer in &self.observers {
+            observer.after_cleanup(run).await?;
+        }
+        Ok(())
+    }
+
+    async fn recover(&self) -> Result<usize, RunCompletionError> {
+        let mut recovered = 0;
+        for observer in &self.observers {
+            recovered += observer.recover().await?;
+        }
+        Ok(recovered)
+    }
 }
 
 #[derive(Debug)]
@@ -224,6 +384,8 @@ pub struct RunOrchestrator {
     workspaces: Arc<dyn RunWorkspaceManager>,
     runtimes: Arc<dyn RunRuntimeManager>,
     launch_authorizer: Arc<dyn RunLaunchAuthorizer>,
+    resource_observer: Arc<dyn RunResourceObserver>,
+    authority: Arc<dyn RunAuthorityManager>,
     secrets: Arc<dyn RunSecretManager>,
     completion: Arc<dyn RunCompletionObserver>,
     active: Mutex<HashMap<RunId, Arc<dyn VmInstance>>>,
@@ -250,6 +412,8 @@ impl RunOrchestrator {
             workspaces: Arc::new(DisabledWorkspaceManager),
             runtimes: Arc::new(DisabledRunRuntimeManager),
             launch_authorizer: Arc::new(DisabledRunLaunchAuthorizer),
+            resource_observer: Arc::new(DisabledRunResourceObserver),
+            authority: Arc::new(DisabledRunAuthorityManager),
             secrets: Arc::new(DisabledRunSecretManager),
             completion: Arc::new(DisabledRunCompletionObserver),
             active: Mutex::new(HashMap::new()),
@@ -280,6 +444,22 @@ impl RunOrchestrator {
         launch_authorizer: Arc<dyn RunLaunchAuthorizer>,
     ) -> Self {
         self.launch_authorizer = launch_authorizer;
+        self
+    }
+
+    /// Installs an idempotent pre-provisioning observer for exact run
+    /// resource evidence.
+    #[must_use]
+    pub fn with_resource_observer(mut self, observer: Arc<dyn RunResourceObserver>) -> Self {
+        self.resource_observer = observer;
+        self
+    }
+
+    /// Installs generic runtime-authority issuance and handoff lifecycle
+    /// coordination.
+    #[must_use]
+    pub fn with_authority_manager(mut self, authority: Arc<dyn RunAuthorityManager>) -> Self {
+        self.authority = authority;
         self
     }
 
@@ -354,9 +534,16 @@ impl RunOrchestrator {
         let vm_id = VmId(command.run_id.to_string());
         let volume_id = attachment.as_ref().map(|value| value.volume.id);
         let lease_id = attachment.as_ref().map(|value| value.lease.id);
+        let lease_fencing_token = attachment.as_ref().map(|value| value.lease.fencing_token);
         let run = self
             .repository
-            .bind_resources(command.run_id, volume_id, lease_id, &vm_id.0)
+            .bind_resources(
+                command.run_id,
+                volume_id,
+                lease_id,
+                lease_fencing_token,
+                &vm_id.0,
+            )
             .await?;
         if run.cancel_requested_at.is_some() {
             return self
@@ -420,7 +607,34 @@ impl RunOrchestrator {
             }
         };
         mounts.extend(secrets.mounts);
-        let spec = match self.build_spec(&run, attachment.as_ref(), mounts).await {
+        let authority = match self.authority.prepare(&run).await {
+            Ok(authority) => authority,
+            Err(error) => {
+                return self
+                    .fail_with_resources(
+                        command.run_id,
+                        attachment.as_ref().map(|value| &value.lease),
+                        None,
+                        &error.to_string(),
+                    )
+                    .await;
+            }
+        };
+        let expected_authority_ack = authority
+            .bootstrap
+            .as_ref()
+            .map(|bootstrap| (bootstrap.session_id(), bootstrap.generation()));
+        if let Err(error) = self.resource_observer.record(&run).await {
+            return self
+                .fail_with_resources(
+                    command.run_id,
+                    attachment.as_ref().map(|value| &value.lease),
+                    None,
+                    &error.to_string(),
+                )
+                .await;
+        }
+        let mut spec = match self.build_spec(&run, attachment.as_ref(), mounts).await {
             Ok(spec) => spec,
             Err(error) => {
                 return self
@@ -433,6 +647,7 @@ impl RunOrchestrator {
                     .await;
             }
         };
+        spec.runtime_authority = authority.bootstrap;
         let execution_timeout = spec
             .labels
             .get("hephaestus.wall-clock-timeout-seconds")
@@ -459,6 +674,16 @@ impl RunOrchestrator {
                 .await;
         }
         if let Err(error) = self.secrets.reauthorize(&run).await {
+            return self
+                .fail_with_resources(
+                    command.run_id,
+                    attachment.as_ref().map(|value| &value.lease),
+                    None,
+                    &error.to_string(),
+                )
+                .await;
+        }
+        if let Err(error) = self.authority.reauthorize(&run).await {
             return self
                 .fail_with_resources(
                     command.run_id,
@@ -540,6 +765,26 @@ impl RunOrchestrator {
                 )
                 .await;
         }
+        if let Some(expected) = expected_authority_ack {
+            if let Err(error) = self
+                .await_runtime_authority_acknowledgement(
+                    &run,
+                    &mut events,
+                    expected,
+                    self.cancellation_timeout,
+                )
+                .await
+            {
+                return self
+                    .fail_with_resources(
+                        command.run_id,
+                        attachment.as_ref().map(|value| &value.lease),
+                        Some(instance),
+                        &error.to_string(),
+                    )
+                    .await;
+            }
+        }
         let mut lease = match attachment.as_ref() {
             Some(attachment) => match self.volumes.mark_attached(&attachment.lease).await {
                 Ok(lease) => Some(lease),
@@ -610,6 +855,7 @@ impl RunOrchestrator {
         };
         instance.destroy().await?;
         self.active.lock().await.remove(&command.run_id);
+        self.authority.revoke_after_guest(command.run_id).await?;
         self.secrets.destroy_after_guest(command.run_id).await?;
         let current = self.repository.get(command.run_id).await?;
         let mut result_failure = None;
@@ -712,6 +958,7 @@ impl RunOrchestrator {
         let mut recovered = self.workspaces.recover().await?;
         recovered += self.runtimes.recover().await?;
         recovered += self.secrets.recover().await?;
+        recovered += self.authority.recover().await?;
         recovered += self.recover_stale_leases().await?;
         for run in self.repository.recoverable_runs().await? {
             if matches!(run.state, RunState::Queued | RunState::LeasingVolume) {
@@ -818,6 +1065,53 @@ impl RunOrchestrator {
                 }
             }
         }
+    }
+
+    async fn await_runtime_authority_acknowledgement(
+        &self,
+        run: &Run,
+        events: &mut tokio::sync::broadcast::Receiver<VmEvent>,
+        expected: (Uuid, u64),
+        timeout_limit: Duration,
+    ) -> Result<(), RunAuthorityError> {
+        tokio::time::timeout(timeout_limit, async {
+            loop {
+                match events.recv().await {
+                    Ok(event) => {
+                        let acknowledgement = match &event {
+                            VmEvent::RuntimeAuthorityAcknowledged {
+                                session_id,
+                                generation,
+                            } => Some((*session_id, *generation)),
+                            _ => None,
+                        };
+                        self.persist_vm_event(run.id, event)
+                            .await
+                            .map_err(|_| RunAuthorityError::redacted("event persistence failed"))?;
+                        if let Some(actual) = acknowledgement {
+                            if actual != expected {
+                                return Err(RunAuthorityError::redacted(
+                                    "guest acknowledged a different runtime authority",
+                                ));
+                            }
+                            return self.authority.acknowledge(run, actual.0, actual.1).await;
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                        self.persist_lagged_event(run.id, skipped)
+                            .await
+                            .map_err(|_| RunAuthorityError::redacted("event persistence failed"))?;
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        return Err(RunAuthorityError::redacted(
+                            "guest authority acknowledgement channel closed",
+                        ));
+                    }
+                }
+            }
+        })
+        .await
+        .map_err(|_| RunAuthorityError::redacted("guest authority acknowledgement timed out"))?
     }
 
     async fn drain_vm_events(
@@ -935,6 +1229,7 @@ impl RunOrchestrator {
             instance.destroy().await?;
         }
         self.active.lock().await.remove(&run_id);
+        self.authority.revoke_after_guest(run_id).await?;
         self.secrets.destroy_after_guest(run_id).await?;
         self.runtimes.destroy(run_id).await?;
         self.workspaces.abandon(run_id).await?;
@@ -957,6 +1252,7 @@ impl RunOrchestrator {
     }
 
     async fn finish_recovered_run(&self, run: Run) -> Result<(), OrchestratorError> {
+        self.authority.revoke_after_guest(run.id).await?;
         self.secrets.destroy_after_guest(run.id).await?;
         self.runtimes.destroy(run.id).await?;
         self.workspaces.abandon(run.id).await?;
@@ -1003,6 +1299,13 @@ fn stored_event(event: VmEvent) -> StoredVmEvent {
             })).collect::<Vec<_>>() }),
         ),
         VmEvent::Ready => ("vm.ready", json!({})),
+        VmEvent::RuntimeAuthorityAcknowledged {
+            session_id,
+            generation,
+        } => (
+            "vm.runtime_authority_acknowledged",
+            json!({"session_id": session_id, "generation": generation}),
+        ),
         VmEvent::Log { stream, bytes } => (
             "vm.log",
             json!({"stream": format!("{stream:?}"), "bytes": bytes}),
@@ -1051,6 +1354,9 @@ pub enum OrchestratorError {
     /// Exact secret dispatch or ephemeral cleanup failed.
     #[error(transparent)]
     Secret(#[from] RunSecretError),
+    /// Generic runtime-authority issuance or cleanup failed.
+    #[error(transparent)]
+    Authority(#[from] RunAuthorityError),
     /// Post-cleanup domain result processing failed.
     #[error(transparent)]
     Completion(#[from] RunCompletionError),

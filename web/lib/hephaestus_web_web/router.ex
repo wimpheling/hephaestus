@@ -31,6 +31,9 @@ defmodule HephaestusWebWeb.Router do
       on_mount: [{HephaestusWebWeb.UserAuth, :require_authenticated}] do
       live "/organizations", OrganizationLive
       live "/organizations/:organization_id", OrganizationWorkspaceLive, :projects
+      live "/images", ImageCatalogLive, :index
+      live "/settings/git-credentials", PersonalAccessTokensLive, :index
+      live "/organizations/:organization_id/projects/new", ProjectNewLive, :new_project
       live "/organizations/:organization_id/secrets", OrganizationSecretsLive, :secrets
 
       live "/organizations/:organization_id/secrets/new",
@@ -43,7 +46,10 @@ defmodule HephaestusWebWeb.Router do
 
       live "/projects/:project_id", ProjectLive, :repositories
       live "/projects/:project_id/repositories", ProjectLive, :repositories
+      live "/projects/:project_id/repositories/new", RepositoryNewLive, :new_repository
       live "/projects/:project_id/agents", ProjectAgentsLive, :agents
+      live "/projects/:project_id/gateways", ProjectGatewaysLive, :gateways
+      live "/projects/:project_id/gateways/:gateway_id", ProjectGatewayLive, :show
       live "/projects/:project_id/agents/:instance_id", AgentInstanceLive, :show
       live "/projects/:project_id/runs", ProjectRunsLive, :runs
       live "/projects/:project_id/settings", ProjectSettingsLive, :settings
@@ -52,6 +58,8 @@ defmodule HephaestusWebWeb.Router do
       live "/repositories/:repository_id/files/*path", RepositoryFilesLive, :files
       live "/repositories/:repository_id/commits", RepositoryCommitsLive, :commits
       live "/repositories/:repository_id/branches", RepositoryBranchesLive, :branches
+      live "/repositories/:repository_id/builds", RepositoryBuildsLive, :builds
+      live "/repositories/:repository_id/builds/:build_id", BuildLive, :show
       live "/repositories/:repository_id/releases", RepositoryReleasesLive, :releases
       live "/repositories/:repository_id/releases/:release_id", ReleaseLive, :show
       live "/repositories/:repository_id/agents", RepositoryAgentsLive, :agents

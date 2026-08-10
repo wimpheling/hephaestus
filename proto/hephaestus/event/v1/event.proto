@@ -104,6 +104,10 @@ enum AggregateType {
   AGGREGATE_TYPE_AGENT_SECRET_BINDING = 14;
   AGGREGATE_TYPE_ARTIFACT = 15;
   AGGREGATE_TYPE_IDENTITY_PROFILE = 16;
+  AGGREGATE_TYPE_REGISTRY_PUBLICATION = 17;
+  // Repository-declared HTTP ingress metadata. Request bodies, headers,
+  // provider credentials, and secret values are never event payload fields.
+  AGGREGATE_TYPE_GATEWAY = 18;
 }
 
 enum ChangeKind {
@@ -238,6 +242,22 @@ message ArtifactChanged {
   LifecycleState state = 4;
 }
 
+// Safe invalidation for one immutable OCI publication. The corresponding
+// Builder Catalog snapshot supplies the immutable reference and evidence.
+// Zot callback data never crosses the product-event boundary.
+message RegistryPublicationChanged {
+  ChangeKind change = 1;
+  LifecycleState state = 2;
+}
+
+// Safe invalidation for a gateway declaration or lifecycle change. Route and
+// revision detail remains available only through the authorized gateway
+// snapshot RPC.
+message GatewayChanged {
+  ChangeKind change = 1;
+  LifecycleState state = 2;
+}
+
 // Canonical client-facing event envelope. High-volume logs, metrics, artifact
 // bytes, secret material, command parameters, and unrestricted diagnostics are
 // deliberately absent.
@@ -268,6 +288,8 @@ message ProductEvent {
     AgentSecretBindingChanged agent_secret_binding_changed = 33;
     ArtifactChanged artifact_changed = 34;
     IdentityProfileChanged identity_profile_changed = 35;
+    RegistryPublicationChanged registry_publication_changed = 36;
+    GatewayChanged gateway_changed = 37;
   }
 }
 

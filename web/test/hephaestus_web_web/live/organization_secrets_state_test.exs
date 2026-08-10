@@ -28,6 +28,17 @@ defmodule HephaestusWebWeb.OrganizationSecretsStateTest do
 
     assert unchanged == loading
     refute inspect(loading) =~ "must-not-persist"
-    assert OrganizationSecretsState.stream_mode() == :page_scoped
+    assert OrganizationSecretsState.stream_mode() == :none
+  end
+
+  test "refreshes from a finite snapshot after a receipt-confirmed command" do
+    state = OrganizationSecretsState.new(%{organization_id: "organization-1"})
+    receipt = %{committed_cursor: "cursor-1", event_id: "event-1", aggregate_version: 1}
+
+    {refreshing, effects} =
+      OrganizationSecretsState.reduce(state, {:command_succeeded, "Secret rotated.", receipt})
+
+    assert refreshing.status == :submitting
+    assert effects == [{:flash, :info, "Secret rotated."}, :snapshot]
   end
 end

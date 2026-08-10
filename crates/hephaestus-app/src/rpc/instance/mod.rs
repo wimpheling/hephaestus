@@ -7,11 +7,17 @@ use super::{
     request,
 };
 use crate::application::commands::{
-    InternalCommand, InternalCommandState, RecoveryAction as ApplicationRecoveryAction, dispatch,
+    CapabilitySelectionInput, InternalCommand, InternalCommandState,
+    RecoveryAction as ApplicationRecoveryAction, dispatch,
 };
 use crate::application::instance::InstanceApplication;
+use capability_domain::{
+    CapabilityOperation, CapabilityResource, CapabilityResourceKind, CapabilitySlotKey,
+};
 use connectrpc::{RequestContext, Response, ServiceRequest, ServiceResult};
 use control_plane_postgres::ControlPlanePool as PgPool;
+use mailbox_domain::{MailboxEventId, MailboxId};
+use mailbox_postgres::{MailboxOperatorAction, PostgresMailboxRepository};
 use release_domain::{
     InstanceName, NetworkAccess, ParameterName, ParameterValue, RefSelector, RuntimePolicy,
     TriggerPolicy,
@@ -20,23 +26,27 @@ use rpc_proto::{
     connect::hephaestus::instance::v1::AgentInstanceService,
     messages::hephaestus::{
         common::v1::{
-            NetworkPolicy, OpaqueId, Operation, OperationState,
-            ParameterValue as ProtoParameterValue, RuntimePolicy as ProtoRuntimePolicy,
-            parameter_value,
+            Diagnostic, DiagnosticCode, DiagnosticSeverity, NetworkPolicy, OpaqueId, Operation,
+            OperationState, ParameterValue as ProtoParameterValue,
+            RuntimePolicy as ProtoRuntimePolicy, parameter_value,
         },
         instance::v1::{
-            BindSecretRequest, BindSecretResponse, CreateAttachmentRequest,
-            CreateAttachmentResponse, CreateUpdateRequest, CreateUpdateResponse,
-            GetInstanceRequest, GetInstanceResponse, ImportAgentRequest, ImportAgentResponse,
-            RecoverUpdateRequest, RecoverUpdateResponse, RecoveryAction, RecoveryDecision,
-            RemovalState, RemoveAttachmentRequest, RemoveAttachmentResponse, ReviseInstanceRequest,
-            ReviseInstanceResponse, SetAttachmentEnabledRequest, SetAttachmentEnabledResponse,
+            BindSecretRequest, BindSecretResponse, ControlMailboxRequest, ControlMailboxResponse,
+            CreateAttachmentRequest, CreateAttachmentResponse, CreateUpdateRequest,
+            CreateUpdateResponse, DeclareBrokeredHttpsRuleRequest,
+            DeclareBrokeredHttpsRuleResponse, GetInstanceRequest, GetInstanceResponse,
+            ImportAgentRequest, ImportAgentResponse,
+            MailboxControlAction as ProtoMailboxControlAction, RecoverUpdateRequest,
+            RecoverUpdateResponse, RecoveryAction, RecoveryDecision, RemovalState,
+            RemoveAttachmentRequest, RemoveAttachmentResponse, ReviseCapabilitiesRequest,
+            ReviseCapabilitiesResponse, ReviseInstanceRequest, ReviseInstanceResponse,
+            SetAttachmentEnabledRequest, SetAttachmentEnabledResponse,
             TriggerPolicy as ProtoTriggerPolicy, ref_selector,
         },
         secret::v1::{DeliveryMode as ProtoDeliveryMode, DeliveryPhase},
     },
 };
-use secret_domain::{DeliveryMode, ExecutionPhase, SecretSlotKey};
+use secret_domain::{AgentSecretBindingId, DeliveryMode, ExecutionPhase, SecretSlotKey};
 use serde_json::Value;
 use std::{collections::BTreeMap, str::FromStr};
 use uuid::Uuid;
@@ -44,6 +54,7 @@ use uuid::Uuid;
 /// Generated instance service backed by the existing release application.
 pub struct InstanceRpc {
     application: InstanceApplication,
+    pool: PgPool,
     commands: InternalCommandState,
     authenticator: MediatorAuthenticator,
     receipts: MutationReceipts,
@@ -51,14 +62,15 @@ pub struct InstanceRpc {
 
 impl InstanceRpc {
     /// Creates an instance service using the shared application command state.
-    pub const fn new(
+    pub fn new(
         pool: PgPool,
         commands: InternalCommandState,
         authenticator: MediatorAuthenticator,
         receipts: MutationReceipts,
     ) -> Self {
         Self {
-            application: InstanceApplication::new(pool),
+            application: InstanceApplication::new(pool.clone()),
+            pool,
             commands,
             authenticator,
             receipts,
@@ -94,6 +106,58 @@ impl AgentInstanceService for InstanceRpc {
         request: ServiceRequest<'_, GetInstanceRequest>,
     ) -> ServiceResult<GetInstanceResponse> {
         get_instance::handle(self, ctx, request).await
+    }
+
+    async fn control_mailbox(
+        &self,
+        ctx: RequestContext,
+        request: ServiceRequest<'_, ControlMailboxRequest>,
+    ) -> ServiceResult<ControlMailboxResponse> {
+        let request = request.to_owned_message();
+        let identity = mutation(
+            &ctx,
+            &self.authenticator,
+            "ControlMailbox",
+            &request.context,
+        )?;
+        let action = match request.action.as_known() {
+            Some(ProtoMailboxControlAction::Pause) => MailboxOperatorAction::Pause,
+            Some(ProtoMailboxControlAction::Resume) => MailboxOperatorAction::Resume,
+            Some(ProtoMailboxControlAction::Retry) => MailboxOperatorAction::Retry,
+            Some(ProtoMailboxControlAction::Cancel) => MailboxOperatorAction::Cancel,
+            Some(ProtoMailboxControlAction::DeadLetter) => MailboxOperatorAction::DeadLetter,
+            Some(ProtoMailboxControlAction::Unspecified) | None => {
+                return Err(into_connect_error(RpcError::InvalidArgument));
+            }
+        };
+        let result = PostgresMailboxRepository::new(self.pool.clone())
+            .operate(
+                &identity,
+                action,
+                parse_id::<MailboxId>(request.mailbox_id.as_option())?,
+                request
+                    .event_id
+                    .as_option()
+                    .map(|value| parse_id::<MailboxEventId>(Some(value)))
+                    .transpose()?,
+            )
+            .await
+            // The repository deliberately does not disclose whether an
+            // inaccessible mailbox or event exists.
+            .map_err(|_| into_connect_error(RpcError::NotFound))?;
+        let receipt = mutation_receipt(
+            &self.receipts,
+            identity.idempotency_id,
+            identity.user_id,
+            "agent_instance",
+            "agent_instance",
+        )
+        .await?;
+        Response::ok(ControlMailboxResponse {
+            changed: result.changed,
+            receipt: receipt.into(),
+            ..Default::default()
+        })
     }
 
     async fn import_agent(
@@ -451,6 +515,168 @@ impl AgentInstanceService for InstanceRpc {
             ..Default::default()
         })
     }
+
+    async fn declare_brokered_https_rule(
+        &self,
+        ctx: RequestContext,
+        request: ServiceRequest<'_, DeclareBrokeredHttpsRuleRequest>,
+    ) -> ServiceResult<DeclareBrokeredHttpsRuleResponse> {
+        let request = request.to_owned_message();
+        let identity = mutation(
+            &ctx,
+            &self.authenticator,
+            "DeclareBrokeredHttpsRule",
+            &request.context,
+        )?;
+        let value = self
+            .execute(
+                &identity,
+                InternalCommand::DeclareBrokeredHttpsRule {
+                    binding_id: AgentSecretBindingId::from_uuid(parse_id(
+                        request.binding_id.as_option(),
+                    )?),
+                    destination: request.destination,
+                    header: request.header,
+                    header_prefix: request.header_prefix,
+                },
+            )
+            .await
+            .map_err(into_connect_error)?;
+        let receipt = mutation_receipt(
+            &self.receipts,
+            identity.idempotency_id,
+            identity.user_id,
+            "brokered_secret_rule",
+            "agent_secret_binding",
+        )
+        .await?;
+        Response::ok(DeclareBrokeredHttpsRuleResponse {
+            rule_id: opaque(json_id(&value, "rule_id")?).into(),
+            receipt: receipt.into(),
+            ..Default::default()
+        })
+    }
+
+    async fn revise_capabilities(
+        &self,
+        ctx: RequestContext,
+        request: ServiceRequest<'_, ReviseCapabilitiesRequest>,
+    ) -> ServiceResult<ReviseCapabilitiesResponse> {
+        let request = request.to_owned_message();
+        let identity = mutation(
+            &ctx,
+            &self.authenticator,
+            "ReviseCapabilities",
+            &request.context,
+        )?;
+        let instance_id = parse_id(request.instance_id.as_option())?;
+        let bindings = request
+            .bindings
+            .into_iter()
+            .map(|binding| {
+                let kind = capability_resource_kind(&binding.resource_kind)?;
+                Ok(CapabilitySelectionInput {
+                    slot: CapabilitySlotKey::parse(binding.slot_key).map_err(invalid)?,
+                    resource: CapabilityResource::new(
+                        kind,
+                        parse_id(binding.resource_id.as_option())?,
+                    ),
+                    granted_operations: binding
+                        .granted_operations
+                        .iter()
+                        .map(|operation| capability_operation(operation))
+                        .collect::<Result<Vec<_>, _>>()?,
+                })
+            })
+            .collect::<Result<Vec<_>, connectrpc::ConnectError>>()?;
+        let value = self
+            .execute(
+                &identity,
+                InternalCommand::ReviseCapabilities {
+                    instance_id,
+                    expected_revision_id: parse_id(request.expected_revision_id.as_option())?,
+                    bindings,
+                },
+            )
+            .await
+            .map_err(into_connect_error)?;
+        let receipt = mutation_receipt(
+            &self.receipts,
+            identity.idempotency_id,
+            identity.user_id,
+            "agent_instance",
+            "agent_instance",
+        )
+        .await?;
+        let diagnostics = value
+            .get("diagnostics")
+            .and_then(Value::as_array)
+            .ok_or_else(|| into_connect_error(RpcError::Internal))?
+            .iter()
+            .map(|diagnostic| Diagnostic {
+                code: DiagnosticCode::ResourceUnavailable.into(),
+                severity: DiagnosticSeverity::Error.into(),
+                field: format!(
+                    "capability_slots.{}",
+                    diagnostic
+                        .get("slot")
+                        .and_then(Value::as_str)
+                        .unwrap_or("unknown")
+                ),
+                message: String::from("Required capability binding is missing."),
+                ..Default::default()
+            })
+            .collect();
+        Response::ok(ReviseCapabilitiesResponse {
+            instance_revision_id: opaque(json_id(&value, "revision_id")?).into(),
+            runnable: value
+                .get("runnable")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            diagnostics,
+            receipt: receipt.into(),
+            ..Default::default()
+        })
+    }
+}
+
+fn capability_resource_kind(
+    value: &str,
+) -> Result<CapabilityResourceKind, connectrpc::ConnectError> {
+    match value {
+        "repository" => Ok(CapabilityResourceKind::Repository),
+        "project" => Ok(CapabilityResourceKind::Project),
+        "agent_instance" => Ok(CapabilityResourceKind::AgentInstance),
+        "gateway" => Ok(CapabilityResourceKind::Gateway),
+        "run" => Ok(CapabilityResourceKind::Run),
+        "state_volume" => Ok(CapabilityResourceKind::StateVolume),
+        _ => Err(into_connect_error(RpcError::InvalidArgument)),
+    }
+}
+
+fn capability_operation(value: &str) -> Result<CapabilityOperation, connectrpc::ConnectError> {
+    let operation = match value {
+        "inspect" => CapabilityOperation::Inspect,
+        "configure" => CapabilityOperation::Configure,
+        "execute" => CapabilityOperation::Execute,
+        "update" => CapabilityOperation::Update,
+        "pause" => CapabilityOperation::Pause,
+        "recover" => CapabilityOperation::Recover,
+        "cancel" => CapabilityOperation::Cancel,
+        "attach" => CapabilityOperation::Attach,
+        "restore" => CapabilityOperation::Restore,
+        "git_read" => CapabilityOperation::GitRead,
+        "create_ref" => CapabilityOperation::CreateRef,
+        "update_ref" => CapabilityOperation::UpdateRef,
+        "force_update_ref" => CapabilityOperation::ForceUpdateRef,
+        "delete_ref" => CapabilityOperation::DeleteRef,
+        "create_tag" => CapabilityOperation::CreateTag,
+        "delete_tag" => CapabilityOperation::DeleteTag,
+        "trigger_run" => CapabilityOperation::TriggerRun,
+        "manage_attachments" => CapabilityOperation::ManageAttachments,
+        _ => return Err(into_connect_error(RpcError::InvalidArgument)),
+    };
+    Ok(operation)
 }
 
 fn mutation(

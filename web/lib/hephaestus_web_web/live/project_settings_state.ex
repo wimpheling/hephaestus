@@ -1,10 +1,10 @@
 defmodule HephaestusWebWeb.ProjectSettingsState do
   @moduledoc "State, forms, and command effects for project settings."
 
-  alias HephaestusWeb.RPC.{Client, ProductEvents}
+  alias HephaestusWeb.RPC.Client
   alias HephaestusWebWeb.ProductEventReducer
 
-  @stream_mode :page_scoped
+  @stream_mode :none
   @statuses [
     :initial,
     :loading,
@@ -44,33 +44,9 @@ defmodule HephaestusWebWeb.ProjectSettingsState do
 
   def statuses, do: @statuses
   def stream_mode, do: @stream_mode
-  def begin_watch(state), do: ProductEventReducer.begin_watch(state)
-  def watch_scope(state), do: {:project, state.data.project_id}
-
-  def watch(identity, state, owner, generation) do
-    ProductEvents.watch(
-      identity,
-      watch_scope(state),
-      ProductEventReducer.committed_cursor(state.cursor),
-      &deliver_watch(&1, owner, generation)
-    )
-  end
-
   def accept_import_message, do: "Live secret reference accepted."
   def create_secret_message, do: "Secret encrypted and stored."
   def grant_message, do: "Bounded secret grant offered."
-
-  def reduce(state, {:watch, response}) do
-    ProductEventReducer.reduce(state, response, [
-      :project_changed,
-      :repository_changed,
-      :secret_metadata_changed,
-      :secret_grant_changed,
-      :secret_import_changed
-    ])
-  end
-
-  def reduce(state, :watch_ended), do: ProductEventReducer.reconnect(state)
 
   def reduce(state, {:load, generation}),
     do: {%{state | status: :loading, error: nil, stream_generation: generation}, [:load]}
@@ -93,10 +69,8 @@ defmodule HephaestusWebWeb.ProjectSettingsState do
 
   def reduce(state, :submitting), do: {%{state | status: :submitting, error: nil}, []}
 
-  def reduce(state, {:command_succeeded, message, receipt}) do
-    {state, effects} = ProductEventReducer.await_receipt(state, receipt)
-    {state, [{:flash, :info, message} | effects]}
-  end
+  def reduce(state, {:command_succeeded, message, _receipt}),
+    do: {%{state | status: :submitting, error: nil}, [{:flash, :info, message}, :snapshot]}
 
   def reduce(state, {:failed, reason}) do
     message = command_error("Command", reason)
@@ -349,13 +323,4 @@ defmodule HephaestusWebWeb.ProjectSettingsState do
 
   defp command_error(action, :invalid_target), do: "#{action} requires an exact target."
   defp command_error(action, _reason), do: "#{action} could not be completed."
-
-  defp deliver_watch(response, owner, generation) do
-    send(owner, {:page_watch, generation, response})
-
-    case response.item do
-      {kind, _value} when kind in [:retention_gap, :access_revoked] -> :halt
-      _item -> :cont
-    end
-  end
 end

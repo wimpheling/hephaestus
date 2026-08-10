@@ -1,0 +1,37 @@
+[package]
+name = "mailbox-postgres"
+description = "PostgreSQL authority for durable agent mailbox acceptance"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[package.metadata.hephaestus]
+layer = "adapter"
+context = "mailbox"
+allow_cross_context_dependencies = ["authz-postgres"]
+postgres_adapter = true
+database_context = "mailbox"
+
+[dependencies]
+async-trait.workspace = true
+authz-postgres = { path = "../authz-postgres" }
+identity-domain = { path = "../identity-domain" }
+mailbox-domain = { path = "../mailbox-domain" }
+mailbox-dispatch = { path = "../mailbox-dispatch" }
+run-domain = { path = "../run-domain" }
+runtime-types = { path = "../runtime-types" }
+serde_json.workspace = true
+sha2.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+async-nats.workspace = true
+futures-util.workspace = true
+serial_test = "3"
+time.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

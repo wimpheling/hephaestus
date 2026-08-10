@@ -1,0 +1,30 @@
+[package]
+name = "oci-builder-postgres"
+description = "PostgreSQL durable job adapter for isolated OCI builder workers"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[package.metadata.hephaestus]
+layer = "adapter"
+context = "build"
+postgres_adapter = true
+database_context = "build"
+allow_cross_context_dependencies = ["registry-postgres"]
+
+[dependencies]
+agent-config = { path = "../agent-config" }
+async-trait.workspace = true
+builder-catalog-domain = { path = "../builder-catalog-domain" }
+build-orchestrator = { path = "../build-orchestrator" }
+oci-builder-worker = { path = "../oci-builder-worker" }
+registry-domain = { path = "../registry-domain" }
+registry-postgres = { path = "../registry-postgres" }
+serde_json.workspace = true
+sqlx.workspace = true
+time.workspace = true
+uuid.workspace = true
+vm-trait.workspace = true
+
+[lints]
+workspace = true

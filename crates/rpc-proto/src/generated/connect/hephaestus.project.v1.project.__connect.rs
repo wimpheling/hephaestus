@@ -1,3 +1,15 @@
+///Shorthand for `OwnedView<CreateProjectRequestView<'static>>`.
+pub type OwnedCreateProjectRequestView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::project::v1::__buffa::view::CreateProjectRequestView<
+        'static,
+    >,
+>;
+///Shorthand for `OwnedView<CreateProjectResponseView<'static>>`.
+pub type OwnedCreateProjectResponseView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::project::v1::__buffa::view::CreateProjectResponseView<
+        'static,
+    >,
+>;
 ///Shorthand for `OwnedView<GetProjectRequestView<'static>>`.
 pub type OwnedGetProjectRequestView = ::buffa::view::OwnedView<
     crate::messages::hephaestus::project::v1::__buffa::view::GetProjectRequestView<
@@ -46,6 +58,34 @@ pub type OwnedListImportableReleaseAgentsResponseView = ::buffa::view::OwnedView
         'static,
     >,
 >;
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::project::v1::CreateProjectResponse,
+>
+for crate::messages::hephaestus::project::v1::__buffa::view::CreateProjectResponseView<
+    '_,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self, codec)
+    }
+}
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::project::v1::CreateProjectResponse,
+>
+for ::buffa::view::OwnedView<
+    crate::messages::hephaestus::project::v1::__buffa::view::CreateProjectResponseView<
+        'static,
+    >,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self.reborrow(), codec)
+    }
+}
 impl ::connectrpc::Encodable<
     crate::messages::hephaestus::project::v1::GetProjectResponse,
 >
@@ -158,6 +198,15 @@ for ::buffa::view::OwnedView<
 }
 /// Full service name for this service.
 pub const PROJECT_SERVICE_SERVICE_NAME: &str = "hephaestus.project.v1.ProjectService";
+/// Static [`Spec`](::connectrpc::Spec) for the server-side `CreateProject` RPC.
+///
+/// The dispatcher surfaces this on
+/// [`RequestContext::spec`](::connectrpc::RequestContext::spec).
+pub const PROJECT_SERVICE_CREATE_PROJECT_SPEC: ::connectrpc::Spec = ::connectrpc::Spec::server(
+        "/hephaestus.project.v1.ProjectService/CreateProject",
+        ::connectrpc::StreamType::Unary,
+    )
+    .with_idempotency_level(::connectrpc::IdempotencyLevel::Unknown);
 /// Static [`Spec`](::connectrpc::Spec) for the server-side `GetProject` RPC.
 ///
 /// The dispatcher surfaces this on
@@ -245,6 +294,29 @@ pub const PROJECT_SERVICE_LIST_IMPORTABLE_RELEASE_AGENTS_SPEC: ::connectrpc::Spe
 /// example` doc.
 #[allow(clippy::type_complexity)]
 pub trait ProjectService: Send + Sync + 'static {
+    /// Handle the CreateProject RPC.
+    ///
+    /// `'a` lets the response body borrow from `&self` (e.g. server-resident state).
+    ///
+    /// `request` is borrowed from the request body and is valid for the
+    /// duration of the call; message fields are read directly on it
+    /// (zero-copy). The response cannot borrow from `request` — use
+    /// `.to_owned_message()` (or copy the specific fields) for anything
+    /// returned, stored, or moved into `tokio::spawn`.
+    fn create_project<'a>(
+        &'a self,
+        ctx: ::connectrpc::RequestContext,
+        request: ::connectrpc::ServiceRequest<
+            '_,
+            crate::messages::hephaestus::project::v1::CreateProjectRequest,
+        >,
+    ) -> impl ::std::future::Future<
+        Output = ::connectrpc::ServiceResult<
+            impl ::connectrpc::Encodable<
+                crate::messages::hephaestus::project::v1::CreateProjectResponse,
+            > + Send + use<'a, Self>,
+        >,
+    > + Send;
     /// Handle the GetProject RPC.
     ///
     /// `'a` lets the response body borrow from `&self` (e.g. server-resident state).
@@ -369,6 +441,35 @@ impl<S: ProjectService> ProjectServiceExt for S {
         router: ::connectrpc::Router,
     ) -> ::connectrpc::Router {
         router
+            .route_view(
+                PROJECT_SERVICE_SERVICE_NAME,
+                "CreateProject",
+                {
+                    let svc = ::std::sync::Arc::clone(&self);
+                    ::connectrpc::view_handler_fn(move |
+                        ctx,
+                        req: ::buffa::view::OwnedView<
+                            crate::messages::hephaestus::project::v1::__buffa::view::CreateProjectRequestView<
+                                'static,
+                            >,
+                        >,
+                        format|
+                    {
+                        let svc = ::std::sync::Arc::clone(&svc);
+                        async move {
+                            let sreq = ::connectrpc::ServiceRequest::<
+                                crate::messages::hephaestus::project::v1::CreateProjectRequest,
+                            >::from_parts(req.reborrow(), req.bytes());
+                            svc.create_project(ctx, sreq)
+                                .await?
+                                .encode::<
+                                    crate::messages::hephaestus::project::v1::CreateProjectResponse,
+                                >(format)
+                        }
+                    })
+                },
+            )
+            .with_spec(PROJECT_SERVICE_CREATE_PROJECT_SPEC)
             .route_view_idempotent(
                 PROJECT_SERVICE_SERVICE_NAME,
                 "GetProject",
@@ -539,6 +640,12 @@ impl<T: ProjectService> ::connectrpc::Dispatcher for ProjectServiceServer<T> {
     ) -> Option<::connectrpc::dispatcher::codegen::MethodDescriptor> {
         let method = path.strip_prefix("hephaestus.project.v1.ProjectService/")?;
         match method {
+            "CreateProject" => {
+                Some(
+                    ::connectrpc::dispatcher::codegen::MethodDescriptor::unary(false)
+                        .with_spec(PROJECT_SERVICE_CREATE_PROJECT_SPEC),
+                )
+            }
             "GetProject" => {
                 Some(
                     ::connectrpc::dispatcher::codegen::MethodDescriptor::unary(true)
@@ -579,6 +686,27 @@ impl<T: ProjectService> ::connectrpc::Dispatcher for ProjectServiceServer<T> {
         };
         let _ = (&ctx, &request, &format);
         match method {
+            "CreateProject" => {
+                let svc = ::std::sync::Arc::clone(&self.inner);
+                Box::pin(async move {
+                    let body = ::connectrpc::dispatcher::codegen::request_proto_bytes::<
+                        crate::messages::hephaestus::project::v1::CreateProjectRequest,
+                    >(request.encoded()?, format)?;
+                    let req: crate::messages::hephaestus::project::v1::__buffa::view::CreateProjectRequestView<
+                        '_,
+                    > = ::connectrpc::dispatcher::codegen::decode_borrowed_request_view(
+                        &body,
+                    )?;
+                    let req = ::connectrpc::ServiceRequest::<
+                        crate::messages::hephaestus::project::v1::CreateProjectRequest,
+                    >::from_parts(&req, &body);
+                    svc.create_project(ctx, req)
+                        .await?
+                        .encode::<
+                            crate::messages::hephaestus::project::v1::CreateProjectResponse,
+                        >(format)
+                })
+            }
             "GetProject" => {
                 let svc = ::std::sync::Arc::clone(&self.inner);
                 Box::pin(async move {
@@ -733,7 +861,7 @@ impl<T: ProjectService> ::connectrpc::Dispatcher for ProjectServiceServer<T> {
 /// let config = ClientConfig::new(uri).with_protocol(Protocol::Grpc);
 ///
 /// let client = ProjectServiceClient::new(conn, config);
-/// let response = client.get_project(request).await?;
+/// let response = client.create_project(request).await?;
 /// ```
 ///
 /// # Example (Connect / HTTP/1.1 or ALPN)
@@ -745,7 +873,7 @@ impl<T: ProjectService> ::connectrpc::Dispatcher for ProjectServiceServer<T> {
 /// let config = ClientConfig::new("http://localhost:8080".parse()?);
 ///
 /// let client = ProjectServiceClient::new(http, config);
-/// let response = client.get_project(request).await?;
+/// let response = client.create_project(request).await?;
 /// ```
 ///
 /// # Working with the response
@@ -755,7 +883,7 @@ impl<T: ProjectService> ::connectrpc::Dispatcher for ProjectServiceServer<T> {
 /// message, so field access is zero-copy:
 ///
 /// ```rust,ignore
-/// let resp = client.get_project(request).await?;
+/// let resp = client.create_project(request).await?;
 /// let name: &str = resp.view().name;  // borrow into the response buffer
 /// ```
 ///
@@ -763,7 +891,7 @@ impl<T: ProjectService> ::connectrpc::Dispatcher for ProjectServiceServer<T> {
 /// [`into_owned()`](::connectrpc::client::UnaryResponse::into_owned):
 ///
 /// ```rust,ignore
-/// let owned = client.get_project(request).await?.into_owned();
+/// let owned = client.create_project(request).await?.into_owned();
 /// ```
 ///
 /// [`into_view()`](::connectrpc::client::UnaryResponse::into_view) keeps the
@@ -795,6 +923,51 @@ where
     /// Get a mutable reference to the client configuration.
     pub fn config_mut(&mut self) -> &mut ::connectrpc::client::ClientConfig {
         &mut self.config
+    }
+    /// Call the CreateProject RPC. Sends a request to /hephaestus.project.v1.ProjectService/CreateProject.
+    pub async fn create_project(
+        &self,
+        request: crate::messages::hephaestus::project::v1::CreateProjectRequest,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::project::v1::__buffa::view::CreateProjectResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        self.create_project_with_options(
+                request,
+                ::connectrpc::client::CallOptions::default(),
+            )
+            .await
+    }
+    /// Call the CreateProject RPC with explicit per-call options. Options override [`ClientConfig`](::connectrpc::client::ClientConfig) defaults.
+    pub async fn create_project_with_options(
+        &self,
+        request: crate::messages::hephaestus::project::v1::CreateProjectRequest,
+        options: ::connectrpc::client::CallOptions,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::project::v1::__buffa::view::CreateProjectResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        ::connectrpc::client::call_unary(
+                &self.transport,
+                &self.config,
+                PROJECT_SERVICE_SERVICE_NAME,
+                "CreateProject",
+                request,
+                options,
+            )
+            .await
     }
     /// Call the GetProject RPC. Sends a request to /hephaestus.project.v1.ProjectService/GetProject.
     pub async fn get_project(

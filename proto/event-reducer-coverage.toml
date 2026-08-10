@@ -79,3 +79,13 @@ phoenix_reducer = "artifact_changed"
 field = "identity_profile_changed"
 rust_projection = "IdentityProfileChanged"
 phoenix_reducer = "identity_profile_changed"
+
+[[variants]]
+field = "registry_publication_changed"
+rust_projection = "RegistryPublicationChanged"
+phoenix_reducer = "registry_publication_changed"
+
+[[variants]]
+field = "gateway_changed"
+rust_projection = "GatewayChanged"
+phoenix_reducer = "gateway_changed"

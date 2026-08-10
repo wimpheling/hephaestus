@@ -146,6 +146,121 @@ defmodule Hephaestus.Release.V1.GetReleaseResponse do
   field(:release, 1, type: Hephaestus.Release.V1.Release)
 end
 
+defmodule Hephaestus.Release.V1.SetDraftVersionRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.release.v1.SetDraftVersionRequest",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:context, 1, type: Hephaestus.Common.V1.RequestContext)
+  field(:release_id, 2, type: Hephaestus.Common.V1.OpaqueId, json_name: "releaseId")
+  field(:version, 3, type: :string)
+end
+
+defmodule Hephaestus.Release.V1.SetDraftVersionResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.release.v1.SetDraftVersionResponse",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:release, 1, type: Hephaestus.Release.V1.Release)
+  field(:receipt, 2, type: Hephaestus.Common.V1.MutationReceipt)
+end
+
+defmodule Hephaestus.Release.V1.PublishReleaseRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.release.v1.PublishReleaseRequest",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:context, 1, type: Hephaestus.Common.V1.RequestContext)
+  field(:release_id, 2, type: Hephaestus.Common.V1.OpaqueId, json_name: "releaseId")
+end
+
+defmodule Hephaestus.Release.V1.PublishReleaseResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.release.v1.PublishReleaseResponse",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:release, 1, type: Hephaestus.Release.V1.Release)
+  field(:receipt, 2, type: Hephaestus.Common.V1.MutationReceipt)
+end
+
+defmodule Hephaestus.Release.V1.WatchReleaseRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.release.v1.WatchReleaseRequest",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:release_id, 1, type: Hephaestus.Common.V1.OpaqueId, json_name: "releaseId")
+  field(:resume_cursor, 2, type: Hephaestus.Common.V1.Cursor, json_name: "resumeCursor")
+  field(:max_events, 3, type: :uint32, json_name: "maxEvents")
+  field(:max_total_bytes, 4, type: :uint64, json_name: "maxTotalBytes")
+end
+
+defmodule Hephaestus.Release.V1.ReleaseChange do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.release.v1.ReleaseChange",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:event_id, 1, type: Hephaestus.Common.V1.OpaqueId, json_name: "eventId")
+  field(:cursor, 2, type: Hephaestus.Common.V1.Cursor)
+  field(:release_id, 3, type: Hephaestus.Common.V1.OpaqueId, json_name: "releaseId")
+  field(:repository_id, 4, type: Hephaestus.Common.V1.OpaqueId, json_name: "repositoryId")
+  field(:aggregate_version, 5, type: :uint64, json_name: "aggregateVersion")
+  field(:change, 6, type: Hephaestus.Event.V1.ChangeKind, enum: true)
+  field(:state, 7, type: Hephaestus.Event.V1.LifecycleState, enum: true)
+  field(:occurred_at, 8, type: Google.Protobuf.Timestamp, json_name: "occurredAt")
+end
+
+defmodule Hephaestus.Release.V1.WatchReleaseResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.release.v1.WatchReleaseResponse",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  oneof(:item, 0)
+
+  field(:sequence, 1, type: :uint64)
+  field(:committed_cursor, 2, type: Hephaestus.Common.V1.Cursor, json_name: "committedCursor")
+
+  field(:snapshot_barrier, 10,
+    type: Hephaestus.Event.V1.ScopeSnapshotBarrier,
+    json_name: "snapshotBarrier",
+    oneof: 0
+  )
+
+  field(:event, 11, type: Hephaestus.Release.V1.ReleaseChange, oneof: 0)
+
+  field(:retention_gap, 12,
+    type: Hephaestus.Event.V1.RetentionGap,
+    json_name: "retentionGap",
+    oneof: 0
+  )
+
+  field(:access_revoked, 13,
+    type: Hephaestus.Event.V1.AccessRevoked,
+    json_name: "accessRevoked",
+    oneof: 0
+  )
+end
+
 defmodule Hephaestus.Release.V1.ReleaseService.Service do
   @moduledoc false
 
@@ -163,6 +278,24 @@ defmodule Hephaestus.Release.V1.ReleaseService.Service do
     :GetRelease,
     Hephaestus.Release.V1.GetReleaseRequest,
     Hephaestus.Release.V1.GetReleaseResponse
+  )
+
+  rpc(
+    :SetDraftVersion,
+    Hephaestus.Release.V1.SetDraftVersionRequest,
+    Hephaestus.Release.V1.SetDraftVersionResponse
+  )
+
+  rpc(
+    :PublishRelease,
+    Hephaestus.Release.V1.PublishReleaseRequest,
+    Hephaestus.Release.V1.PublishReleaseResponse
+  )
+
+  rpc(
+    :WatchRelease,
+    Hephaestus.Release.V1.WatchReleaseRequest,
+    stream(Hephaestus.Release.V1.WatchReleaseResponse)
   )
 end
 

@@ -1,10 +1,10 @@
 defmodule HephaestusWebWeb.OrganizationSecretsState do
   @moduledoc "State, commands, and backend effects for organization secrets."
 
-  alias HephaestusWeb.RPC.{Client, ProductEvents}
+  alias HephaestusWeb.RPC.Client
   alias HephaestusWebWeb.ProductEventReducer
 
-  @stream_mode :page_scoped
+  @stream_mode :none
   @statuses [
     :initial,
     :loading,
@@ -33,30 +33,6 @@ defmodule HephaestusWebWeb.OrganizationSecretsState do
   def statuses, do: @statuses
   def stream_mode, do: @stream_mode
 
-  def begin_watch(state), do: ProductEventReducer.begin_watch(state)
-  def watch_scope(state), do: {:organization, state.data.organization_id}
-
-  def watch(identity, state, owner, generation) do
-    ProductEvents.watch(
-      identity,
-      watch_scope(state),
-      ProductEventReducer.committed_cursor(state.cursor),
-      &deliver_watch(&1, owner, generation)
-    )
-  end
-
-  def reduce(state, {:watch, response}) do
-    ProductEventReducer.reduce(state, response, [
-      :organization_changed,
-      :secret_metadata_changed,
-      :secret_grant_changed,
-      :secret_import_changed,
-      :agent_secret_binding_changed
-    ])
-  end
-
-  def reduce(state, :watch_ended), do: ProductEventReducer.reconnect(state)
-
   def reduce(state, {:load, generation}) do
     {%{state | status: :loading, error: nil, stream_generation: generation}, [:load]}
   end
@@ -72,10 +48,8 @@ defmodule HephaestusWebWeb.OrganizationSecretsState do
 
   def reduce(state, :submitting), do: {%{state | status: :submitting, error: nil}, []}
 
-  def reduce(state, {:command_succeeded, message, receipt}) do
-    {state, effects} = ProductEventReducer.await_receipt(state, receipt)
-    {state, [{:flash, :info, message} | effects]}
-  end
+  def reduce(state, {:command_succeeded, message, _receipt}),
+    do: {%{state | status: :submitting, error: nil}, [{:flash, :info, message}, :snapshot]}
 
   def reduce(state, {:failed, reason}) do
     message = present_error(reason)
@@ -205,13 +179,4 @@ defmodule HephaestusWebWeb.OrganizationSecretsState do
 
   defp present_error({:rejected, _status}), do: "Command was denied or failed validation."
   defp present_error(_reason), do: "Command service is temporarily unavailable."
-
-  defp deliver_watch(response, owner, generation) do
-    send(owner, {:page_watch, generation, response})
-
-    case response.item do
-      {kind, _value} when kind in [:retention_gap, :access_revoked] -> :halt
-      _item -> :cont
-    end
-  end
 end

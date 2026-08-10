@@ -42,6 +42,7 @@ defmodule HephaestusWebWeb.ReleaseStateTest do
     assert ready.status == :ready
     assert presentation.state == :ready
     assert presentation.release["id"] == "release-1"
+    assert presentation.draft_version == %{"version" => "v1.0.0"}
   end
 
   test "presents reconnecting and revoked access without domain work" do
@@ -63,6 +64,7 @@ defmodule HephaestusWebWeb.ReleaseStateTest do
   defp release do
     %{
       "id" => "release-1",
+      "version" => "v1.0.0",
       "repository_id" => "repository-1",
       "organization_id" => "organization-1",
       "project_id" => "project-1",

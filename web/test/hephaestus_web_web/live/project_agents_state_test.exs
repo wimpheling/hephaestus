@@ -17,6 +17,6 @@ defmodule HephaestusWebWeb.ProjectAgentsStateTest do
     assert @covered_statuses == ProjectAgentsState.statuses()
     state = ProjectAgentsState.new(%{project_id: "project-1"})
     refute Map.has_key?(state, :parameters)
-    assert ProjectAgentsState.stream_mode() == :page_scoped
+    assert ProjectAgentsState.stream_mode() == :none
   end
 end

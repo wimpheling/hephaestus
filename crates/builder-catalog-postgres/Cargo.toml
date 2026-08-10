@@ -1,0 +1,30 @@
+[package]
+name = "builder-catalog-postgres"
+description = "PostgreSQL adapter for the platform-owned OCI image catalog"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[package.metadata.hephaestus]
+layer = "adapter"
+context = "image"
+postgres_adapter = true
+database_context = "image"
+allow_cross_context_dependencies = ["authz-postgres", "identity-domain"]
+
+[dependencies]
+async-trait.workspace = true
+authz-postgres = { path = "../authz-postgres" }
+builder-catalog-application = { path = "../builder-catalog-application" }
+builder-catalog-domain = { path = "../builder-catalog-domain" }
+identity-domain = { path = "../identity-domain" }
+serde_json.workspace = true
+sqlx.workspace = true
+time.workspace = true
+uuid.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }

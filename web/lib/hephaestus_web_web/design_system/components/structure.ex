@@ -30,6 +30,7 @@ defmodule HephaestusWebWeb.DesignSystem.Components.Structure do
       :resource_empty,
       :resource_row,
       :page_state,
+      :loading_page_state,
       :summary,
       :summary_header,
       :summary_body,
@@ -175,8 +176,10 @@ defmodule HephaestusWebWeb.DesignSystem.Components.Structure do
       nil,
       "accept-secret-import",
       "bind-secret",
+      "control-mailbox",
       "create-attachment",
       "create-secret",
+      "create-personal-access-token",
       "create-update",
       "grant-secret",
       "import-agent",
@@ -185,9 +188,15 @@ defmodule HephaestusWebWeb.DesignSystem.Components.Structure do
       "remove-attachment",
       "revise-instance",
       "revoke-secret",
+      "revoke-personal-access-token",
+      "rotate-personal-access-token",
       "rotate-secret",
       "set-attachment",
-      "set-secret-enabled"
+      "set-secret-enabled",
+      "set-draft-version",
+      "publish-release",
+      "retry-build",
+      "verification-rebuild"
     ]
 
   attr :value, :string, default: nil
@@ -261,7 +270,11 @@ defmodule HephaestusWebWeb.DesignSystem.Components.Structure do
       phx-value-attachment_id={@event_payload[:attachment_id]}
       phx-value-enabled={@event_payload[:enabled]}
       phx-value-kind={@event_payload[:kind]}
+      phx-value-mailbox_id={@event_payload[:mailbox_id]}
+      phx-value-event_id={@event_payload[:event_id]}
+      phx-value-next={@event_payload[:next]}
       phx-value-secret_id={@event_payload[:secret_id]}
+      phx-value-token_id={@event_payload[:token_id]}
       phx-value-update_id={@event_payload[:update_id]}
       disabled={@disabled}
       class={action_class(@variant, @current)}
@@ -347,6 +360,7 @@ defmodule HephaestusWebWeb.DesignSystem.Components.Structure do
   defp frame_classes(:resource_empty, _layout), do: "resource-list-empty empty-copy"
   defp frame_classes(:resource_row, _layout), do: "resource-list-row"
   defp frame_classes(:page_state, _layout), do: "empty-state"
+  defp frame_classes(:loading_page_state, _layout), do: "empty-state delayed-loading-state"
   defp frame_classes(:summary, _layout), do: "panel"
   defp frame_classes(:summary_header, _layout), do: "panel-heading"
   defp frame_classes(:summary_body, _layout), do: nil
@@ -497,7 +511,18 @@ defmodule HephaestusWebWeb.DesignSystem.Components.Structure do
     |> Map.new()
   end
 
-  @event_payload_keys [:action, :attachment_id, :enabled, :kind, :secret_id, :update_id]
+  @event_payload_keys [
+    :action,
+    :attachment_id,
+    :enabled,
+    :kind,
+    :mailbox_id,
+    :event_id,
+    :next,
+    :secret_id,
+    :token_id,
+    :update_id
+  ]
 
   defp validate_event_payload!(assigns) do
     payload =

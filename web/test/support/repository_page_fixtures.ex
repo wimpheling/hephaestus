@@ -19,6 +19,8 @@ defmodule HephaestusWebWeb.RepositoryPageFixtures do
       browse_form: %{"branch" => ""},
       branches_empty?: true,
       commits_empty?: true,
+      builds_empty?: true,
+      builds_unavailable?: false,
       releases_empty?: true,
       attached_instances_empty?: true,
       tree: %{name: "", path: "", directories: [], files: [], file_count: 0},
@@ -43,6 +45,12 @@ defmodule HephaestusWebWeb.RepositoryPageFixtures do
           label: "Branches",
           icon: "hero-code-bracket",
           destination: "/repositories/repository-1/branches"
+        },
+        %{
+          key: :builds,
+          label: "Builds",
+          icon: "hero-cpu-chip",
+          destination: "/repositories/repository-1/builds"
         },
         %{
           key: :releases,

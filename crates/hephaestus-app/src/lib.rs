@@ -6,26 +6,89 @@ mod event_cursor;
 pub mod rpc;
 
 use async_trait::async_trait;
-use axum::{Router, routing::get};
+use axum::{
+    Router,
+    body::Body,
+    extract::{ConnectInfo, State},
+    http::Request,
+    response::Response,
+    routing::{any, get},
+};
 use build_orchestrator::{BuildExecutionError, BuildExecutor, BuildExecutorConfig};
 use build_postgres::PgBuildRepository;
+use builder_catalog_domain::OciImageReference;
+use bytes::Bytes;
+use capability_domain::{
+    RuntimeCredentialGeneration, RuntimeInvocation, RuntimeSessionId, RuntimeSessionIdentity,
+};
 use control_plane_postgres::launch::PgRunLaunchAuthorizer;
 use control_plane_postgres::{
-    ControlPlanePool, connect as connect_control_plane, load_vm_launch_contract,
-    recoverable_update_hook_run_ids,
+    ControlPlanePool, connect as connect_control_plane, is_update_hook_run,
+    load_vm_launch_contract, recoverable_update_hook_run_ids,
 };
 use event_postgres::{ReleaseOutboxPublisher, ensure_release_jetstream_topology};
 use forge_postgres::PgForgeRepository;
 use forge_service::{
-    BUILD_REQUESTED_SUBJECT, ForgeNatsOutboxPublisher, GitStorage, ensure_build_consumer,
-    ensure_forge_jetstream_topology,
+    BUILD_REQUESTED_SUBJECT, BUILD_RETRY_REQUESTED_SUBJECT, BUILD_VERIFY_REQUESTED_SUBJECT,
+    ForgeNatsOutboxPublisher, GitStorage, ensure_build_consumer, ensure_forge_jetstream_topology,
 };
 use futures_util::StreamExt;
-use git_http::{GitHttpLimits, GitHttpService, OidcGitAuthenticator, PostgresGitAuthorizer};
+use gateway_edge::{
+    GatewayDispatcher, GatewayInboundSecretResolver, GatewayLimits, GatewayProvider,
+    GatewayRequest, GatewayRequestDispatcher, GatewayRuntimeLauncher, GatewayRuntimeService,
+    GatewayScheme, LocalCaddyAdministration, LocalCaddyConfigurationTemplate,
+    LocalCaddyGatewayProvider, PrivateHttpVmGatewayHandler, TrustedRequestMetadata,
+    UNTRUSTED_FORWARDING_HEADERS,
+};
+use gateway_postgres::{
+    GatewayReleaseArtifact, GatewayReleaseArtifactKind, GatewayReleaseMaterializer,
+    PostgresGatewayEdgeAuthority, PostgresGatewayReleaseResolver,
+};
+use git_http::{
+    CompositeGitAuthenticator, GitAuthenticator, GitHttpLimits, GitHttpService,
+    OidcGitAuthenticator, PostgresGitAuthorizer, RuntimeGitHttpAuthenticator,
+};
 use identity_application::IdempotentIdentityResolver;
 use identity_oidc::OidcVerifier;
 use identity_postgres::PostgresIdentityStore;
 use jsonwebtoken::{Algorithm, DecodingKey};
+use mailbox_dispatch::{
+    MailboxCommandHandler, MailboxDispatchStore, MailboxOutboxPublisher, MailboxRunCompletion,
+    MailboxRunResources, NatsMailboxCommandHandler, ensure_mailbox_jetstream_topology,
+};
+use mailbox_postgres::PostgresMailboxRepository;
+use oci_builder_postgres::{PgOciImageProductionJobStore, PgRepositoryOciImagePublicationStore};
+use oci_builder_runtime_local::{
+    ForgeZotOciPublisher, ForgeZotPublicationConfig, LocalOciRuntime, LocalOciRuntimeConfig,
+};
+use oci_builder_worker::{
+    BuildahEngine, OciImageProductionWorker, OciWorkerError, PublishedBuildahEngine,
+    RegistryPublisherTokenIssuer, RootfsMaterializationWorker,
+};
+use registry_domain::{PolicyVersion, RegistryNamespace, SupplyChainPolicy};
+use registry_http::{
+    RegistryAuthorizationError, RegistryScopeAuthorizer, RegistryTokenHttpService,
+};
+use registry_notification::{NotificationAction, NotificationObservation};
+use registry_notification_http::{
+    InboxDisposition, RegistryInboxError, RegistryNotificationHttpService,
+    RegistryNotificationInbox,
+};
+use registry_postgres::{
+    NewRegistryNotification, NotificationCompletion as PgNotificationCompletion, PgRegistryStore,
+    RegistryNotificationAction, RegistryNotificationTarget,
+};
+use registry_publisher::{ControlledOciPublisher, PublisherConfiguration, SystemCommandRunner};
+use registry_reconciler::{
+    ClaimedNotification, NotificationCompletion, NotificationInbox, ObservedTarget,
+    PublicationIntents, ReconciliationAction, ReconciliationActionExecutor,
+    ReconciliationPortError, RegistryReconciler,
+};
+use registry_token::{
+    AuthorizationDecision as RegistryAuthorizationDecision, IssuedToken, RegistryAction,
+    RepositoryActions, RepositoryName, ScopeRequest, TokenSubject, UnixTimestamp,
+};
+use registry_zot::{RegistryPullTokenProvider, ZotClientConfig, ZotClientError, ZotHttpRegistry};
 use release_artifact_store::LocalArtifactStore;
 use release_domain::BuildRequestId;
 use release_postgres::ReleaseService;
@@ -34,16 +97,28 @@ use review_postgres::{GitRepositoryLocator, PostgresReviewRepository};
 use review_service::{NatsControlHandler, ReviewControlService, ReviewOutboxPublisher};
 use run_domain::{CancelRun, Run, RunKind};
 use run_orchestrator::{
-    NatsCommandHandler, RunCompletionError, RunCompletionObserver, RunOrchestrator, RunRepository,
-    RunSecretManager, VmSpecFactory, ensure_jetstream_topology,
+    CompositeRunCompletionObserver, NatsCommandHandler, PreparedRunAuthority, RunAuthorityError,
+    RunAuthorityManager, RunCompletionError, RunCompletionObserver, RunOrchestrator, RunRepository,
+    RunRuntimeArtifact, RunRuntimeArtifactKind, RunSecretManager, VmSpecFactory,
+    ensure_jetstream_topology,
 };
 use run_postgres::PgRunRepository;
-use run_runtime_local::{LocalRunRuntimeConfig, LocalRunRuntimeManager};
+use run_runtime_local::{
+    LocalGatewayReleaseRuntime, LocalRunRuntimeConfig, LocalRunRuntimeManager,
+};
+use runtime_authority::{
+    GatewayRuntimeAuthorityIssuer, RuntimeHandoffStore, RuntimeSessionIssuer,
+    RuntimeSessionRepository,
+};
+use runtime_authority_postgres::{PgGatewayRuntimeAuthorityIssuer, PgRuntimeSessionRepository};
+use runtime_git_authority::{RuntimeGitAuthorityError, RuntimeGitCredentialIssuer};
+use runtime_git_authority_postgres::PgRuntimeGitCredentialRepository;
+use runtime_handoff_local::{EncryptedFileHandoffStore, EncryptedFileRuntimeGitHandoffStore};
 use runtime_types::{CommandId, RunId};
 use secret_application::BrokerAdapter;
 use secret_broker::{BrokerExecutor, BrokerServer, ServiceBrokerExecutor};
 use secret_postgres::initialize_manager;
-use secret_postgres::{SecretRuntimeService, SecretService};
+use secret_postgres::{GatewayIngressSecretResolver, SecretRuntimeService, SecretService};
 use secret_runtime::EphemeralSecretConfig;
 use secret_store::{EncryptedStore, LocalKeyProvider};
 use serde::Deserialize;
@@ -56,6 +131,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
+use time::OffsetDateTime;
 use tokio::{
     sync::{Semaphore, broadcast, oneshot, watch},
     task::{JoinHandle, JoinSet},
@@ -74,7 +150,7 @@ use workspace_local::{LocalWorkspaceConfig, LocalWorkspaceManager};
 use workspace_postgres::PgWorkspaceMetadataRepository;
 
 /// Ordered database migration expected by this application version.
-pub const EXPECTED_DATABASE_MIGRATION: i64 = 10;
+pub const EXPECTED_DATABASE_MIGRATION: i64 = 47;
 
 /// OIDC issuer configuration used for bearer-token authentication.
 pub struct OidcConfig {
@@ -86,6 +162,40 @@ pub struct OidcConfig {
     pub algorithm: Algorithm,
     /// Trusted decoding key resolved from the issuer's JWKS.
     pub decoding_key: DecodingKey,
+}
+
+/// Forge-owned registry token-service configuration.
+#[derive(Clone)]
+pub struct RegistryConfig {
+    /// RS256 token issuer whose private key remains in the Hephaestus process.
+    pub token_issuer: Arc<registry_token::RegistryTokenIssuer>,
+    /// Authenticator for Zot's private best-effort event callback.
+    pub notification_callback: registry_notification::CallbackCredential,
+    /// Fixed private Zot endpoint used only for authoritative digest reads.
+    pub zot: ZotClientConfig,
+    /// Lease applied to durable notification inbox claims.
+    pub reconciliation_lease: Duration,
+    /// Interval for both inbox draining and missed-event full reconciliation.
+    pub reconciliation_interval: Duration,
+}
+
+/// Optional shared-Caddy gateway edge configuration.
+///
+/// When absent, the daemon does not create a gateway listener or attempt to
+/// administer Caddy. This preserves the explicit operator boundary while
+/// allowing deployments that do not expose repository gateways.
+#[derive(Clone)]
+pub struct GatewayEdgeConfig {
+    /// Private loopback Caddy administration endpoint.
+    pub caddy_admin_url: String,
+    /// Complete operator-owned shared-Caddy JSON baseline.
+    pub caddy_configuration_template: Vec<u8>,
+    /// Existing shared-Caddy server containing the dedicated gateway subroute.
+    pub caddy_server_name: String,
+    /// Private loopback HTTP listener used only by the local Caddy process.
+    pub dispatcher_listen: SocketAddr,
+    /// Canonical public authority recorded as trusted gateway metadata.
+    pub public_authority: String,
 }
 
 /// Configured VM backend.
@@ -115,6 +225,33 @@ pub struct RuntimePolicy {
     pub allow_egress: bool,
 }
 
+/// Optional single-node OCI preparation and rootfs materialization workers.
+#[derive(Clone)]
+pub struct OciBuilderWorkerConfig {
+    /// Administrator-owned local Git/OCI/scanner runtime.
+    pub runtime: LocalOciRuntimeConfig,
+    /// Trusted post-build SBOM tooling.
+    pub publication_tooling: ForgeZotPublicationConfig,
+    /// Fixed Zot publication boundary and trusted OCI client binaries.
+    pub publisher: PublisherConfiguration,
+    /// Immutable policy revision recorded with every repository publication.
+    pub publication_policy_version: PolicyVersion,
+    /// Required evidence policy for repository builder images.
+    pub publication_policy: SupplyChainPolicy,
+    /// Stable identity for durable OCI preparation claims.
+    pub preparation_worker_name: String,
+    /// Stable daemon-local identity for rootfs materialization claims.
+    pub materialization_worker_name: String,
+    /// Private root containing materialized custom builder root filesystems.
+    pub rootfs_root: PathBuf,
+    /// Atomically rewritten digest-to-rootfs manifest for operator inspection.
+    pub root_manifest: PathBuf,
+    /// Lease duration for preparation and materialization claims.
+    pub lease: Duration,
+    /// Poll interval used when no durable OCI job is immediately available.
+    pub poll_interval: Duration,
+}
+
 /// Complete configuration consumed by the composition root.
 pub struct AppConfig {
     /// Runtime `PostgreSQL` connection string.
@@ -129,16 +266,28 @@ pub struct AppConfig {
     pub repository_root: PathBuf,
     /// Absolute native `git-http-backend` executable.
     pub git_http_backend: PathBuf,
+    /// Absolute host-owned runtime Git `pre-receive` executable.
+    pub git_pre_receive_hook: PathBuf,
     /// Git transaction limits.
     pub git_http_limits: GitHttpLimits,
     /// OIDC verifier settings.
     pub oidc: OidcConfig,
+    /// Forge-owned OCI registry token-service settings.
+    pub registry: RegistryConfig,
+    /// Optional repository-gateway edge owned by the same daemon process.
+    pub gateway_edge: Option<GatewayEdgeConfig>,
     /// Local persistent-volume settings.
     pub volumes: LocalVolumeConfig,
     /// Exact-commit workspace and durable result storage settings.
     pub workspaces: LocalWorkspaceConfig,
     /// Exact release-artifact and host-context runtime filesystem settings.
     pub run_runtime: LocalRunRuntimeConfig,
+    /// Private persistent root for encrypted, temporary authority handoffs.
+    pub runtime_authority_handoff_root: PathBuf,
+    /// Host-loaded encryption key for runtime-authority handoff envelopes.
+    pub runtime_authority_handoff_key: [u8; 32],
+    /// Maximum lifetime of one exact runtime-authority session.
+    pub runtime_authority_session_ttl: Duration,
     /// Private transient root for isolated build source and output trees.
     pub build_workspace_root: PathBuf,
     /// Maximum wall-clock time for one isolated build.
@@ -155,6 +304,8 @@ pub struct AppConfig {
     pub vm_backend: VmBackendConfig,
     /// Immutable image references resolved to provider-neutral roots.
     pub root_images: BTreeMap<String, RootFilesystem>,
+    /// Optional local worker for repository-owned OCI builders.
+    pub oci_builder: Option<OciBuilderWorkerConfig>,
     /// Current launch-time resource and network ceiling.
     pub runtime_policy: RuntimePolicy,
     /// State-volume capacity provisioned per agent.
@@ -178,6 +329,13 @@ impl AppConfig {
                 "git_http_backend must be absolute",
             )));
         }
+        if !self.git_pre_receive_hook.is_absolute()
+            || self.git_pre_receive_hook.file_name() != Some(std::ffi::OsStr::new("pre-receive"))
+        {
+            return Err(AppError::Configuration(String::from(
+                "git_pre_receive_hook must be an absolute path named pre-receive",
+            )));
+        }
         if self.rpc_mediator_signing_key == [0; 32] {
             return Err(AppError::Configuration(String::from(
                 "RPC mediator authentication key must not be all-zero",
@@ -196,6 +354,17 @@ impl AppConfig {
                 "git_http_backend must be an executable file",
             )));
         }
+        let hook = std::fs::symlink_metadata(&self.git_pre_receive_hook).map_err(|error| {
+            AppError::Configuration(format!("git_pre_receive_hook cannot be inspected: {error}"))
+        })?;
+        if hook.file_type().is_symlink()
+            || !hook.is_file()
+            || hook.permissions().mode() & 0o111 == 0
+        {
+            return Err(AppError::Configuration(String::from(
+                "git_pre_receive_hook must be a non-symlink executable file",
+            )));
+        }
         if !self.repository_root.is_absolute() {
             return Err(AppError::Configuration(String::from(
                 "repository_root must be absolute",
@@ -206,11 +375,17 @@ impl AppConfig {
                 "isolated build root must be absolute and timeout must be positive",
             )));
         }
-        if self.root_images.is_empty() {
+        if !self.runtime_authority_handoff_root.is_absolute()
+            || self.runtime_authority_handoff_key == [0; 32]
+            || self.runtime_authority_session_ttl.is_zero()
+        {
             return Err(AppError::Configuration(String::from(
-                "at least one root image mapping is required",
+                "runtime authority handoff root/key and positive session TTL are required",
             )));
         }
+        self.validate_oci_builder()?;
+        self.validate_gateway_edge()?;
+        self.validate_root_images()?;
         if self.runtime_policy.version.trim().is_empty()
             || self.runtime_policy.max_vcpus == 0
             || self.runtime_policy.max_memory_mib == 0
@@ -229,9 +404,111 @@ impl AppConfig {
                 "outbox_batch_size must be greater than zero",
             )));
         }
+        self.validate_registry()?;
         if self.startup_timeout.is_zero() || self.shutdown_timeout.is_zero() {
             return Err(AppError::Configuration(String::from(
                 "startup and shutdown timeouts must be greater than zero",
+            )));
+        }
+        Ok(())
+    }
+
+    fn validate_registry(&self) -> Result<(), AppError> {
+        if self.registry.reconciliation_lease.is_zero()
+            || self.registry.reconciliation_interval.is_zero()
+        {
+            return Err(AppError::Configuration(String::from(
+                "registry reconciliation durations must be greater than zero",
+            )));
+        }
+        Ok(())
+    }
+
+    fn validate_gateway_edge(&self) -> Result<(), AppError> {
+        let Some(gateway) = &self.gateway_edge else {
+            return Ok(());
+        };
+        if !gateway.dispatcher_listen.ip().is_loopback()
+            || gateway.public_authority.trim().is_empty()
+        {
+            return Err(AppError::Configuration(String::from(
+                "gateway dispatcher must bind loopback and use a non-empty public authority",
+            )));
+        }
+        LocalCaddyAdministration::new(&gateway.caddy_admin_url)
+            .map_err(|error| AppError::Configuration(error.to_string()))?;
+        LocalCaddyConfigurationTemplate::new(
+            &gateway.caddy_configuration_template,
+            gateway.caddy_server_name.clone(),
+        )
+        .map_err(|error| AppError::Configuration(error.to_string()))?;
+        Ok(())
+    }
+
+    fn validate_root_images(&self) -> Result<(), AppError> {
+        if self.root_images.is_empty() {
+            return Err(AppError::Configuration(String::from(
+                "at least one root image mapping is required",
+            )));
+        }
+        for (reference, root) in &self.root_images {
+            OciImageReference::parse(reference.clone()).map_err(|error| {
+                AppError::Configuration(format!(
+                    "root image reference {reference:?} is not digest-pinned: {error}"
+                ))
+            })?;
+            let (path, expected_directory) = match root {
+                RootFilesystem::Directory { host_path } => (host_path, true),
+                RootFilesystem::Disk { host_path, .. } => (host_path, false),
+                _ => {
+                    return Err(AppError::Configuration(format!(
+                        "root image {reference:?} uses an unsupported filesystem variant"
+                    )));
+                }
+            };
+            if !path.is_absolute() {
+                return Err(AppError::Configuration(format!(
+                    "root image {reference:?} materialization path must be absolute"
+                )));
+            }
+            let metadata = std::fs::symlink_metadata(path).map_err(|error| {
+                AppError::Configuration(format!(
+                    "root image {reference:?} materialization path cannot be inspected: {error}"
+                ))
+            })?;
+            if metadata.file_type().is_symlink() || metadata.is_dir() != expected_directory {
+                let expected = if expected_directory {
+                    "a non-symlink directory"
+                } else {
+                    "a non-symlink disk file"
+                };
+                return Err(AppError::Configuration(format!(
+                    "root image {reference:?} materialization path must be {expected}"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_oci_builder(&self) -> Result<(), AppError> {
+        let Some(worker) = &self.oci_builder else {
+            return Ok(());
+        };
+        if worker.runtime.repository_root != self.repository_root
+            || !worker.rootfs_root.is_absolute()
+            || !worker.root_manifest.is_absolute()
+            || worker.lease.is_zero()
+            || worker.poll_interval.is_zero()
+        {
+            return Err(AppError::Configuration(String::from(
+                "OCI builder roots, manifest, and durations must be explicit and valid",
+            )));
+        }
+        if let VmBackendConfig::Libkrun(provider) = &self.vm_backend
+            && !provider.image_roots.contains(&worker.rootfs_root)
+        {
+            return Err(AppError::Configuration(String::from(
+                "libkrun image roots must include the OCI builder rootfs root",
             )));
         }
         Ok(())
@@ -246,16 +523,20 @@ pub struct HephaestusApp {
     forge: Arc<PgForgeRepository>,
     storage: Arc<GitStorage>,
     identity_store: Arc<PostgresIdentityStore>,
-    git_authenticator: Arc<OidcGitAuthenticator>,
+    git_authenticator: Arc<dyn GitAuthenticator>,
     git_authorizer: Arc<PostgresGitAuthorizer>,
     git_backend: PathBuf,
+    git_pre_receive_hook: PathBuf,
     git_limits: GitHttpLimits,
+    registry: RegistryConfig,
     http_listen: SocketAddr,
     run_repository: Arc<PgRunRepository>,
+    mailbox_repository: Arc<PostgresMailboxRepository>,
     review_repository: Arc<PostgresReviewRepository>,
     review_control: ReviewControlService,
     orchestrator: Arc<RunOrchestrator>,
     build_executor: Arc<BuildExecutor>,
+    oci_builder_workers: Option<Arc<OciBuilderWorkers>>,
     artifact_store: LocalArtifactStore,
     result_artifact_root: PathBuf,
     release_service: Arc<ReleaseService>,
@@ -265,11 +546,453 @@ pub struct HephaestusApp {
     internal_platform_policy_version: String,
     secret_broker_socket: PathBuf,
     secret_broker_executor: Arc<dyn BrokerExecutor>,
+    gateway_edge: Option<GatewayEdgeRuntime>,
     worker_concurrency: usize,
     outbox_poll_interval: Duration,
     outbox_batch_size: i64,
     startup_timeout: Duration,
     shutdown_timeout: Duration,
+}
+
+/// Runtime-owned dependencies for the optional shared-Caddy gateway edge.
+struct GatewayEdgeRuntime {
+    authority: PostgresGatewayEdgeAuthority,
+    provider: Arc<dyn gateway_edge::GatewayProvider>,
+    dispatcher: Arc<dyn GatewayRequestDispatcher>,
+    dispatcher_listen: SocketAddr,
+    public_authority: String,
+}
+
+/// Narrow provider adapter used only after the gateway release resolver has
+/// selected an exact immutable launch specification.
+#[derive(Clone)]
+struct ProviderGatewayRuntimeLauncher {
+    provider: Arc<dyn VmProvider>,
+}
+
+#[async_trait]
+impl GatewayRuntimeLauncher for ProviderGatewayRuntimeLauncher {
+    async fn provision_gateway(
+        &self,
+        spec: VmSpec,
+    ) -> Result<Arc<dyn VmInstance>, gateway_edge::GatewayEdgeError> {
+        self.provider
+            .provision(spec)
+            .await
+            .map_err(|_| gateway_edge::GatewayEdgeError::HandlerUnavailable)
+    }
+}
+
+/// Composition adapter that gives gateway `PostgreSQL` authority the same
+/// verified local release-artifact lifecycle used by ordinary runs.
+#[derive(Clone)]
+struct LocalGatewayReleaseMaterializer {
+    runtime: LocalGatewayReleaseRuntime,
+}
+
+impl GatewayReleaseMaterializer for LocalGatewayReleaseMaterializer {
+    fn prepare(
+        &self,
+        invocation_id: Uuid,
+        artifacts: &[GatewayReleaseArtifact],
+    ) -> Result<VmMount, gateway_edge::GatewayEdgeError> {
+        let artifacts = artifacts
+            .iter()
+            .map(|artifact| RunRuntimeArtifact {
+                path: artifact.path.clone(),
+                kind: match artifact.kind {
+                    GatewayReleaseArtifactKind::Executable => RunRuntimeArtifactKind::Executable,
+                    GatewayReleaseArtifactKind::File => RunRuntimeArtifactKind::File,
+                    GatewayReleaseArtifactKind::Manifest => RunRuntimeArtifactKind::Manifest,
+                },
+                mode: artifact.mode,
+                content_hash: artifact.content_hash,
+                size_bytes: artifact.size_bytes,
+                storage_key: artifact.storage_key,
+            })
+            .collect::<Vec<_>>();
+        self.runtime
+            .prepare(invocation_id, &artifacts)
+            .map_err(|_| gateway_edge::GatewayEdgeError::HandlerUnavailable)
+    }
+
+    fn destroy(&self, invocation_id: Uuid) -> Result<(), gateway_edge::GatewayEdgeError> {
+        self.runtime
+            .destroy(invocation_id)
+            .map_err(|_| gateway_edge::GatewayEdgeError::HandlerUnavailable)
+    }
+}
+
+struct OciBuilderWorkers {
+    preparation: OciImageProductionWorker<
+        PgOciImageProductionJobStore,
+        LocalOciRuntime,
+        PublishedBuildahEngine<
+            ForgeZotOciPublisher<
+                PgRepositoryOciImagePublicationStore,
+                InternalRegistryTokens,
+                SystemCommandRunner,
+            >,
+        >,
+    >,
+    materialization: RootfsMaterializationWorker<PgOciImageProductionJobStore, LocalOciRuntime>,
+    manifest: PathBuf,
+    poll_interval: Duration,
+}
+
+#[derive(Clone)]
+struct InternalRegistryTokens {
+    issuer: Arc<registry_token::RegistryTokenIssuer>,
+}
+
+impl InternalRegistryTokens {
+    fn issue(
+        &self,
+        namespace: &RegistryNamespace,
+        actions: RepositoryActions,
+        action_text: &str,
+        subject: &str,
+    ) -> Result<IssuedToken, ()> {
+        let repository = namespace
+            .as_str()
+            .parse::<RepositoryName>()
+            .map_err(|_| ())?;
+        let request = ScopeRequest::parse(
+            self.issuer.service().as_str(),
+            &format!("repository:{repository}:{action_text}"),
+        )
+        .map_err(|_| ())?;
+        let mut authorization = RegistryAuthorizationDecision::deny_all();
+        authorization.grant(repository, actions);
+        let now =
+            u64::try_from(time::OffsetDateTime::now_utc().unix_timestamp()).map_err(|_| ())?;
+        self.issuer
+            .issue(
+                subject.parse::<TokenSubject>().map_err(|_| ())?,
+                &request,
+                &authorization,
+                UnixTimestamp::new(now),
+            )
+            .map_err(|_| ())
+    }
+}
+
+#[async_trait]
+impl RegistryPublisherTokenIssuer for InternalRegistryTokens {
+    async fn issue_pull_push(
+        &self,
+        intent: &registry_domain::PublicationIntent,
+    ) -> Result<IssuedToken, OciWorkerError> {
+        self.issue(
+            intent.reference().namespace(),
+            RepositoryActions::pull_push(),
+            "pull,push",
+            "workload:repository-builder",
+        )
+        .map_err(|()| OciWorkerError::RegistryPublication)
+    }
+}
+
+#[async_trait]
+impl RegistryPullTokenProvider for InternalRegistryTokens {
+    async fn issue_pull_token(
+        &self,
+        namespace: &RegistryNamespace,
+    ) -> Result<IssuedToken, ZotClientError> {
+        self.issue(
+            namespace,
+            RepositoryActions::pull(),
+            "pull",
+            "workload:registry-reconciler",
+        )
+        .map_err(|()| ZotClientError::Unavailable)
+    }
+}
+
+#[derive(Clone)]
+struct PostgresRegistryReconciliation {
+    store: PgRegistryStore,
+}
+
+#[async_trait]
+impl NotificationInbox for PostgresRegistryReconciliation {
+    async fn claim(
+        &self,
+        lease: Duration,
+    ) -> Result<Option<ClaimedNotification>, ReconciliationPortError> {
+        self.store
+            .claim_notification(lease)
+            .await
+            .map(|claim| {
+                claim.map(|claim| ClaimedNotification {
+                    id: claim.id,
+                    lease_token: claim.claim_token,
+                    repository_path: claim.repository_path,
+                    namespace: claim.namespace,
+                    target: claim.target.map(|target| ObservedTarget {
+                        digest: target.digest,
+                        media_type: target.media_type,
+                    }),
+                })
+            })
+            .map_err(|_| ReconciliationPortError)
+    }
+
+    async fn complete(
+        &self,
+        claim: &ClaimedNotification,
+        completion: NotificationCompletion,
+    ) -> Result<(), ReconciliationPortError> {
+        let completion = match completion {
+            NotificationCompletion::Processed => PgNotificationCompletion::Processed,
+            NotificationCompletion::Rejected { failure_code } => {
+                PgNotificationCompletion::Rejected { failure_code }
+            }
+        };
+        self.store
+            .complete_notification(claim.id, claim.lease_token, completion)
+            .await
+            .map_err(|_| ReconciliationPortError)
+    }
+}
+
+#[async_trait]
+impl PublicationIntents for PostgresRegistryReconciliation {
+    async fn for_namespace(
+        &self,
+        namespace: &RegistryNamespace,
+    ) -> Result<Vec<registry_domain::PublicationIntent>, ReconciliationPortError> {
+        self.store
+            .list_for_namespace(namespace)
+            .await
+            .map_err(|_| ReconciliationPortError)
+    }
+
+    async fn all(
+        &self,
+    ) -> Result<Vec<registry_domain::PublicationIntent>, ReconciliationPortError> {
+        self.store
+            .list_all()
+            .await
+            .map_err(|_| ReconciliationPortError)
+    }
+}
+
+#[async_trait]
+impl ReconciliationActionExecutor for PostgresRegistryReconciliation {
+    async fn apply(&self, action: &ReconciliationAction) -> Result<(), ReconciliationPortError> {
+        match action {
+            ReconciliationAction::RecordVerified {
+                intent_id,
+                verification,
+            } => {
+                self.store
+                    .record_verified(*intent_id, verification.clone())
+                    .await
+                    .map_err(|_| ReconciliationPortError)?;
+            }
+            ReconciliationAction::MarkMissing { intent_id, reason } => {
+                self.store
+                    .mark_missing(*intent_id)
+                    .await
+                    .map_err(|_| ReconciliationPortError)?;
+                tracing::warn!(publication_id = %intent_id, ?reason, "registry publication failed closed");
+            }
+            ReconciliationAction::RestoreVerified {
+                intent_id,
+                verification,
+            } => {
+                self.store
+                    .restore_verified(*intent_id, verification)
+                    .await
+                    .map_err(|_| ReconciliationPortError)?;
+            }
+            ReconciliationAction::ObservedDifferentTarget { namespace } => {
+                tracing::warn!(namespace = %namespace, "Zot notification target did not match a publication intent");
+            }
+            ReconciliationAction::OrphanNamespace { repository_path } => {
+                tracing::warn!(
+                    repository_path,
+                    "Zot notification addressed an unowned namespace"
+                );
+            }
+            ReconciliationAction::Investigate { intent_id, reason } => {
+                tracing::warn!(publication_id = %intent_id, ?reason, "registry publication requires investigation");
+            }
+        }
+        Ok(())
+    }
+}
+
+struct PostgresRegistryScopeAuthorizer {
+    store: PgRegistryStore,
+}
+
+#[async_trait]
+impl RegistryScopeAuthorizer for PostgresRegistryScopeAuthorizer {
+    async fn authorize(
+        &self,
+        identity: &identity_domain::AuthenticatedIdentity,
+        request: &registry_token::ScopeRequest,
+    ) -> Result<RegistryAuthorizationDecision, RegistryAuthorizationError> {
+        let mut decision = RegistryAuthorizationDecision::deny_all();
+        for scope in request.scopes() {
+            if !scope.actions().contains(RegistryAction::Pull) {
+                continue;
+            }
+            let Ok(namespace) = RegistryNamespace::parse(scope.repository().as_str().to_owned())
+            else {
+                continue;
+            };
+            if self
+                .store
+                .authorize_user_pull(identity, &namespace)
+                .await
+                .map_err(|_| RegistryAuthorizationError)?
+            {
+                // Human token exchange is deliberately pull-only. Trusted
+                // publishers receive push grants through the worker boundary.
+                decision.grant(
+                    scope.repository().clone(),
+                    registry_token::RepositoryActions::pull(),
+                );
+            }
+        }
+        Ok(decision)
+    }
+}
+
+struct PostgresRegistryNotificationInbox {
+    store: PgRegistryStore,
+}
+
+#[async_trait]
+impl RegistryNotificationInbox for PostgresRegistryNotificationInbox {
+    async fn ingest(
+        &self,
+        observation: NotificationObservation,
+    ) -> Result<InboxDisposition, RegistryInboxError> {
+        let target =
+            observation
+                .digest()
+                .zip(observation.media_type())
+                .map(|(digest, media_type)| RegistryNotificationTarget {
+                    digest: digest.clone(),
+                    media_type: media_type.clone(),
+                });
+        let receipt = self
+            .store
+            .ingest_notification(NewRegistryNotification {
+                event_key: observation.idempotency_key().as_str().to_owned(),
+                repository_path: observation.repository().as_str().to_owned(),
+                action: match observation.action() {
+                    NotificationAction::Push => RegistryNotificationAction::Push,
+                    NotificationAction::Delete => RegistryNotificationAction::Delete,
+                },
+                target,
+                occurred_at: observation.occurred_at(),
+                payload_sha256: *observation.payload_sha256().as_bytes(),
+            })
+            .await
+            .map_err(|_| RegistryInboxError)?;
+        Ok(if receipt.duplicate {
+            InboxDisposition::Duplicate
+        } else {
+            InboxDisposition::Accepted
+        })
+    }
+}
+
+async fn registry_caller_authentication(
+    axum::extract::State(authenticator): axum::extract::State<Arc<dyn GitAuthenticator>>,
+    mut request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let credential = request
+        .headers()
+        .get(http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    let principal = authenticator
+        .authenticate(credential.as_deref(), identity_domain::RequestId::new())
+        .await;
+    let Ok(principal) = principal else {
+        let mut response = axum::response::Response::new(axum::body::Body::empty());
+        *response.status_mut() = http::StatusCode::UNAUTHORIZED;
+        return response;
+    };
+    let Some(identity) = principal.human_identity().cloned() else {
+        let mut response = axum::response::Response::new(axum::body::Body::empty());
+        *response.status_mut() = http::StatusCode::UNAUTHORIZED;
+        return response;
+    };
+    request.headers_mut().remove(http::header::AUTHORIZATION);
+    request.extensions_mut().insert(identity);
+    next.run(request).await
+}
+
+impl OciBuilderWorkers {
+    fn initialize(
+        pool: PgPool,
+        config: OciBuilderWorkerConfig,
+        token_issuer: Arc<registry_token::RegistryTokenIssuer>,
+    ) -> Result<Self, AppError> {
+        if !config.root_manifest.is_absolute() || config.poll_interval.is_zero() {
+            return Err(AppError::Configuration(String::from(
+                "OCI builder manifest path must be absolute and poll interval must be positive",
+            )));
+        }
+        let buildah = BuildahEngine::new(
+            config.runtime.buildah_binary.clone(),
+            config.runtime.buildah_output_prefix.clone(),
+        )
+        .map_err(component("OCI Buildah configuration"))?;
+        let runtime = LocalOciRuntime::initialize(config.runtime)
+            .map_err(component("OCI local runtime configuration"))?;
+        let publication_store = PgRepositoryOciImagePublicationStore::new(
+            pool.clone(),
+            PgRegistryStore::new(pool.clone()),
+            config.publisher.authority().clone(),
+            config.publication_policy_version,
+            config.publication_policy,
+        );
+        let publication_tooling = config
+            .publication_tooling
+            .initialize()
+            .map_err(component("OCI publication tooling"))?;
+        let publisher = ForgeZotOciPublisher::new(
+            runtime.clone(),
+            publication_tooling,
+            publication_store,
+            InternalRegistryTokens {
+                issuer: token_issuer,
+            },
+            ControlledOciPublisher::new(config.publisher, SystemCommandRunner),
+        );
+        let preparation = OciImageProductionWorker::new(
+            PgOciImageProductionJobStore::new(pool.clone()),
+            runtime.clone(),
+            PublishedBuildahEngine::new(buildah, publisher),
+            config.preparation_worker_name,
+            config.materialization_worker_name.clone(),
+            config.lease,
+        )
+        .map_err(component("OCI preparation worker configuration"))?;
+        let materialization = RootfsMaterializationWorker::new(
+            PgOciImageProductionJobStore::new(pool),
+            runtime,
+            config.materialization_worker_name,
+            config.rootfs_root,
+            config.lease,
+        )
+        .map_err(component("OCI materialization worker configuration"))?;
+        Ok(Self {
+            preparation,
+            materialization,
+            manifest: config.root_manifest,
+            poll_interval: config.poll_interval,
+        })
+    }
 }
 
 impl HephaestusApp {
@@ -313,6 +1036,7 @@ impl HephaestusApp {
                 .with_authorizer(Arc::new(authz_postgres::PostgresMelangeAuthorizer)),
         );
         let run_repository = Arc::new(PgRunRepository::new(pool.clone()));
+        let mailbox_repository = Arc::new(PostgresMailboxRepository::new(pool.clone()));
         let review_repository = Arc::new(PostgresReviewRepository::new(pool.clone()));
         let review_locator = Arc::new(GitRepositoryLocator::new(Arc::clone(&storage)));
         let review_control = ReviewControlService::new(
@@ -349,6 +1073,14 @@ impl HephaestusApp {
             LocalRunRuntimeManager::initialize(run_repository.clone(), config.run_runtime)
                 .map_err(component("run runtime initialization"))?,
         );
+        let gateway_release_runtime = LocalGatewayReleaseMaterializer {
+            runtime: run_runtime.gateway_release_runtime(),
+        };
+        let gateway_edge_config = config.gateway_edge.take();
+        let gateway_secret_keys = config.secret_keys.clone();
+        let gateway_handoff_root = config.runtime_authority_handoff_root.clone();
+        let gateway_handoff_key = config.runtime_authority_handoff_key;
+        let gateway_root_images = config.root_images.clone();
         let (secret_mounts, secret_runtime, secret_service) = build_secret_mount_manager(
             pool.clone(),
             &config.database_url,
@@ -356,11 +1088,31 @@ impl HephaestusApp {
             config.secret_mounts,
         )
         .await?;
+        let runtime_git_credentials = PgRuntimeGitCredentialRepository::new(pool.clone());
+        let runtime_authority = Arc::new(PgRunAuthorityManager::new(
+            pool.clone(),
+            runtime_git_credentials.clone(),
+            config.runtime_authority_handoff_root,
+            config.runtime_authority_handoff_key,
+            config.runtime_authority_session_ttl,
+        )?);
         let secret_broker_executor: Arc<dyn BrokerExecutor> = Arc::new(ServiceBrokerExecutor::new(
             secret_runtime,
             config.secret_broker_adapter,
         ));
 
+        let oci_builder_workers = config
+            .oci_builder
+            .take()
+            .map(|worker| {
+                OciBuilderWorkers::initialize(
+                    pool.clone(),
+                    worker,
+                    Arc::clone(&config.registry.token_issuer),
+                )
+            })
+            .transpose()?
+            .map(Arc::new);
         let provider: Arc<dyn VmProvider> = match config.vm_backend {
             VmBackendConfig::Fake => Arc::new(FakeProvider::new()),
             VmBackendConfig::FixtureResult => Arc::new(ResultFixtureProvider),
@@ -368,6 +1120,70 @@ impl HephaestusApp {
             VmBackendConfig::Libkrun(provider) => {
                 Arc::new(LibkrunProvider::new(*provider).map_err(component("libkrun provider"))?)
             }
+        };
+        let gateway_edge = if let Some(gateway) = gateway_edge_config {
+            let issuer_handoff =
+                EncryptedFileHandoffStore::new(gateway_handoff_root.clone(), gateway_handoff_key)
+                    .map_err(component("gateway runtime authority handoff"))?;
+            let issuer: Arc<dyn GatewayRuntimeAuthorityIssuer> =
+                Arc::new(PgGatewayRuntimeAuthorityIssuer::new(
+                    pool.clone(),
+                    issuer_handoff,
+                    authz_postgres::AUTHORIZATION_MODEL_VERSION,
+                ));
+            let authority = PostgresGatewayEdgeAuthority::new(pool.clone(), gateway_limits())
+                .with_runtime_authority(issuer, Duration::from_secs(30))
+                .map_err(component("gateway runtime authority"))?;
+            let resolver_handoff: Arc<dyn RuntimeHandoffStore> = Arc::new(
+                EncryptedFileHandoffStore::new(gateway_handoff_root, gateway_handoff_key)
+                    .map_err(component("gateway runtime resolver handoff"))?,
+            );
+            let releases = PostgresGatewayReleaseResolver::new(
+                pool.clone(),
+                gateway_root_images,
+                resolver_handoff,
+            )
+            .with_release_materializer(Arc::new(gateway_release_runtime));
+            let runtime = GatewayRuntimeService::new(
+                releases,
+                ProviderGatewayRuntimeLauncher {
+                    provider: Arc::clone(&provider),
+                },
+            );
+            let handler = PrivateHttpVmGatewayHandler::new(runtime);
+            let ingress_pool = connect_control_plane(&config.database_url, 4)
+                .await
+                .map_err(component("gateway secret resolver PostgreSQL connection"))?;
+            let inbound: Arc<dyn GatewayInboundSecretResolver> =
+                Arc::new(GatewayIngressSecretResolver::new(
+                    ingress_pool,
+                    EncryptedStore::new(gateway_secret_keys),
+                ));
+            let dispatcher: Arc<dyn GatewayRequestDispatcher> = Arc::new(
+                GatewayDispatcher::new(authority.clone(), handler, authority.clone())
+                    .with_inbound_secret_resolver(inbound),
+            );
+            let administration = LocalCaddyAdministration::new(&gateway.caddy_admin_url)
+                .map_err(component("gateway Caddy administration"))?;
+            let template = LocalCaddyConfigurationTemplate::new(
+                &gateway.caddy_configuration_template,
+                gateway.caddy_server_name,
+            )
+            .map_err(component("gateway Caddy configuration template"))?;
+            let provider: Arc<dyn gateway_edge::GatewayProvider> = Arc::new(
+                LocalCaddyGatewayProvider::new(administration, Arc::clone(&dispatcher))
+                    .with_dispatcher_upstream(gateway.dispatcher_listen.to_string())
+                    .with_configuration_template(template),
+            );
+            Some(GatewayEdgeRuntime {
+                authority,
+                provider,
+                dispatcher,
+                dispatcher_listen: gateway.dispatcher_listen,
+                public_authority: gateway.public_authority,
+            })
+        } else {
+            None
         };
         let release_authorizer = Arc::new(authz_postgres::PostgresMelangeAuthorizer);
         let release_service = Arc::new(ReleaseService::new(
@@ -389,7 +1205,7 @@ impl HephaestusApp {
                     workspace_root: config.build_workspace_root,
                     repository_root: config.repository_root.clone(),
                     git_binary: build_git_binary,
-                    root_images: config.root_images.clone(),
+                    image_filesystems: config.root_images.clone(),
                     timeout: config.build_timeout,
                 },
             )
@@ -414,10 +1230,15 @@ impl HephaestusApp {
         });
         let launch_authorizer =
             Arc::new(PgRunLaunchAuthorizer::new(pool.clone(), release_authorizer));
-        let completion = Arc::new(UpdateRunCompletion {
+        let update_completion = Arc::new(UpdateRunCompletion {
             pool: pool.clone(),
             releases: Arc::clone(&release_service),
         });
+        let mailbox_store: Arc<dyn MailboxDispatchStore> = mailbox_repository.clone();
+        let completion = Arc::new(CompositeRunCompletionObserver::new(vec![
+            update_completion,
+            Arc::new(MailboxRunCompletion::new(Arc::clone(&mailbox_store))),
+        ]));
         let orchestrator = Arc::new(
             RunOrchestrator::new(
                 run_repository.clone(),
@@ -429,6 +1250,10 @@ impl HephaestusApp {
             .with_workspace_manager(workspaces)
             .with_runtime_manager(run_runtime)
             .with_launch_authorizer(launch_authorizer)
+            .with_resource_observer(Arc::new(MailboxRunResources::new(Arc::clone(
+                &mailbox_store,
+            ))))
+            .with_authority_manager(runtime_authority)
             .with_secret_manager(secret_mounts)
             .with_completion_observer(completion),
         );
@@ -440,10 +1265,21 @@ impl HephaestusApp {
             config.oidc.decoding_key,
         ));
         let identity_store = Arc::new(PostgresIdentityStore::new(pool.clone()));
-        let git_authenticator = Arc::new(OidcGitAuthenticator::new(
+        let oidc_git_authenticator = Arc::new(OidcGitAuthenticator::new(
             verifier,
             Arc::clone(&identity_store) as Arc<dyn identity_application::VerifiedIdentityMapper>,
         ));
+        let git_authenticator: Arc<dyn GitAuthenticator> = Arc::new(
+            CompositeGitAuthenticator::new(
+                oidc_git_authenticator,
+                Arc::new(pat_postgres::PostgresPersonalAccessTokenService::new(
+                    pool.clone(),
+                )),
+            )
+            .with_runtime_git(Arc::new(RuntimeGitHttpAuthenticator::new(Arc::new(
+                runtime_git_credentials,
+            )))),
+        );
         let git_authorizer = Arc::new(PostgresGitAuthorizer::new(Arc::new(
             authz_postgres::PostgresGitAuthorizer::new(pool.clone()),
         )));
@@ -462,13 +1298,17 @@ impl HephaestusApp {
             git_authenticator,
             git_authorizer,
             git_backend: config.git_http_backend,
+            git_pre_receive_hook: config.git_pre_receive_hook,
             git_limits: config.git_http_limits,
+            registry: config.registry,
             http_listen: config.http_listen,
             run_repository,
+            mailbox_repository,
             review_repository,
             review_control,
             orchestrator,
             build_executor,
+            oci_builder_workers,
             artifact_store,
             result_artifact_root,
             release_service,
@@ -478,6 +1318,7 @@ impl HephaestusApp {
             internal_platform_policy_version,
             secret_broker_socket: config.secret_broker_socket,
             secret_broker_executor,
+            gateway_edge,
             worker_concurrency: config.worker_concurrency,
             outbox_poll_interval: config.outbox_poll_interval,
             outbox_batch_size: config.outbox_batch_size,
@@ -523,6 +1364,9 @@ impl HephaestusApp {
         let consumer = ensure_jetstream_topology(&self.jetstream)
             .await
             .map_err(component("run JetStream topology"))?;
+        let mailbox_consumer = ensure_mailbox_jetstream_topology(&self.jetstream)
+            .await
+            .map_err(component("mailbox JetStream topology"))?;
         let broker = BrokerServer::bind(
             self.secret_broker_socket,
             Arc::clone(&self.secret_broker_executor),
@@ -531,11 +1375,12 @@ impl HephaestusApp {
         let git = GitHttpService::new(
             Arc::clone(&self.forge),
             Arc::clone(&self.storage),
-            self.git_authenticator,
+            self.git_authenticator.clone(),
             self.git_authorizer,
             self.git_backend,
             self.git_limits,
         )
+        .and_then(|service| service.with_runtime_receive_hook(self.git_pre_receive_hook))
         .map_err(component("Git HTTP configuration"))?;
         let command_state = application::commands::InternalCommandState::new(
             Arc::clone(&self.release_service),
@@ -546,6 +1391,7 @@ impl HephaestusApp {
         let rpc = rpc::service(
             rpc::ApplicationDependencies::new(
                 self.pool.clone(),
+                Arc::clone(&self.forge),
                 Arc::new(event_postgres::PostgresMutationReceiptReader::new(
                     self.pool.clone(),
                 )),
@@ -561,9 +1407,70 @@ impl HephaestusApp {
             )),
         )
         .map_err(component("Connect RPC configuration"))?;
+        let registry_store = PgRegistryStore::new(self.pool.clone());
+        let registry_reconciliation_adapter = PostgresRegistryReconciliation {
+            store: registry_store.clone(),
+        };
+        let registry_reconciler = RegistryReconciler::new(
+            registry_reconciliation_adapter.clone(),
+            registry_reconciliation_adapter.clone(),
+            ZotHttpRegistry::new(
+                self.registry.zot.clone(),
+                Arc::new(InternalRegistryTokens {
+                    issuer: Arc::clone(&self.registry.token_issuer),
+                }),
+            )
+            .map_err(component("Zot reconciliation client"))?,
+        );
+        let registry_reconciliation_lease = self.registry.reconciliation_lease;
+        let registry_reconciliation_interval = self.registry.reconciliation_interval;
+        let registry_tokens = RegistryTokenHttpService::new(
+            Arc::clone(&self.registry.token_issuer),
+            Arc::new(PostgresRegistryScopeAuthorizer {
+                store: registry_store.clone(),
+            }),
+        )
+        .router()
+        .layer(axum::middleware::from_fn_with_state(
+            Arc::clone(&self.git_authenticator),
+            registry_caller_authentication,
+        ));
+        let registry_notifications = RegistryNotificationHttpService::new(
+            self.registry.notification_callback.clone(),
+            Arc::new(PostgresRegistryNotificationInbox {
+                store: registry_store.clone(),
+            }),
+        )
+        .router();
+        let gateway_listener = if let Some(gateway) = &self.gateway_edge {
+            let listener = tokio::net::TcpListener::bind(gateway.dispatcher_listen)
+                .await
+                .map_err(component("gateway private dispatcher listener"))?;
+            let desired = gateway
+                .authority
+                .desired_configuration()
+                .await
+                .map_err(component("gateway desired configuration"))?;
+            gateway
+                .provider
+                .reconcile(&desired)
+                .await
+                .map_err(component("gateway Caddy reconciliation"))?;
+            Some((
+                listener,
+                PrivateGatewayDispatcherState {
+                    dispatcher: Arc::clone(&gateway.dispatcher),
+                    public_authority: gateway.public_authority.clone(),
+                },
+            ))
+        } else {
+            None
+        };
         let router = Router::new()
             .route("/healthz", get(|| async { "ok" }))
             .merge(git.router())
+            .merge(registry_tokens)
+            .merge(registry_notifications)
             .fallback_service(rpc)
             .layer(axum::middleware::from_fn_with_state(
                 rpc::MediatorAuthenticator::new(&self.rpc_mediator_signing_key),
@@ -576,8 +1483,30 @@ impl HephaestusApp {
             .local_addr()
             .map_err(component("HTTP listener address"))?;
 
+        if let Some(workers) = &self.oci_builder_workers {
+            workers
+                .materialization
+                .write_manifest(&workers.manifest)
+                .await
+                .map_err(component("OCI builder root manifest"))?;
+        }
+
         let cancellation = CancellationToken::new();
-        let mut tasks = Vec::with_capacity(6);
+        let mut tasks = Vec::with_capacity(8);
+        if let Some(gateway) = &self.gateway_edge {
+            let gateway_reconcile_cancel = cancellation.clone();
+            let gateway_authority = gateway.authority.clone();
+            let gateway_provider = Arc::clone(&gateway.provider);
+            tasks.push(tokio::spawn(async move {
+                gateway_reconciliation_loop(
+                    gateway_authority,
+                    gateway_provider,
+                    gateway_reconcile_cancel,
+                )
+                .await;
+                Ok(())
+            }));
+        }
         let (broker_ready_tx, broker_ready_rx) = oneshot::channel();
         let broker_cancel = cancellation.clone();
         tasks.push(tokio::spawn(async move {
@@ -593,6 +1522,32 @@ impl HephaestusApp {
             }
             result
         }));
+        let gateway_ready_rx = if let Some((listener, state)) = gateway_listener {
+            let (gateway_ready_tx, gateway_ready_rx) = oneshot::channel();
+            let gateway_cancel = cancellation.clone();
+            tasks.push(tokio::spawn(async move {
+                if gateway_ready_tx.send(()).is_err() {
+                    return Ok(());
+                }
+                let result = axum::serve(
+                    listener,
+                    Router::new()
+                        .fallback(any(private_gateway_dispatch))
+                        .with_state(state)
+                        .into_make_service_with_connect_info::<SocketAddr>(),
+                )
+                .with_graceful_shutdown(gateway_cancel.clone().cancelled_owned())
+                .await
+                .map_err(|error| error.to_string());
+                if !gateway_cancel.is_cancelled() {
+                    gateway_cancel.cancel();
+                }
+                result
+            }));
+            Some(gateway_ready_rx)
+        } else {
+            None
+        };
         let (http_ready_tx, http_ready_rx) = oneshot::channel();
         let http_cancel = cancellation.clone();
         tasks.push(tokio::spawn(async move {
@@ -629,6 +1584,10 @@ impl HephaestusApp {
                 )),
                 self.rpc_mediator_signing_key,
             ),
+            mailbox_publisher: MailboxOutboxPublisher::new(
+                self.jetstream.clone(),
+                self.mailbox_repository.clone(),
+            ),
             forge: Arc::clone(&self.forge),
             poll_interval: self.outbox_poll_interval,
             batch_size: self.outbox_batch_size,
@@ -636,6 +1595,24 @@ impl HephaestusApp {
         tasks.push(tokio::spawn(async move {
             outbox.run(publisher_cancel, publisher_ready_tx).await;
             Ok(())
+        }));
+
+        let (mailbox_recovery_ready_tx, mailbox_recovery_ready_rx) = oneshot::channel();
+        let mailbox_recovery_cancel = cancellation.clone();
+        let mailbox_recovery_store: Arc<dyn MailboxDispatchStore> = self.mailbox_repository.clone();
+        let mailbox_recovery_interval = self.outbox_poll_interval;
+        tasks.push(tokio::spawn(async move {
+            let result = mailbox_recovery_loop(
+                mailbox_recovery_store,
+                mailbox_recovery_interval,
+                mailbox_recovery_cancel.clone(),
+                mailbox_recovery_ready_tx,
+            )
+            .await;
+            if result.is_err() {
+                mailbox_recovery_cancel.cancel();
+            }
+            result
         }));
 
         let (secret_reconcile_ready_tx, secret_reconcile_ready_rx) = oneshot::channel();
@@ -658,6 +1635,28 @@ impl HephaestusApp {
             result
         }));
 
+        let (mailbox_consumer_ready_tx, mailbox_consumer_ready_rx) = oneshot::channel();
+        let mailbox_consumer_cancel = cancellation.clone();
+        let mailbox_handler = NatsMailboxCommandHandler::new(MailboxCommandHandler::new(
+            self.mailbox_repository.clone(),
+            Arc::clone(&self.orchestrator),
+        ));
+        let mailbox_concurrency = self.worker_concurrency;
+        tasks.push(tokio::spawn(async move {
+            let result = mailbox_command_loop(
+                mailbox_consumer,
+                mailbox_handler,
+                mailbox_concurrency,
+                mailbox_consumer_cancel.clone(),
+                mailbox_consumer_ready_tx,
+            )
+            .await;
+            if result.is_err() {
+                mailbox_consumer_cancel.cancel();
+            }
+            result
+        }));
+
         let (build_ready_tx, build_ready_rx) = oneshot::channel();
         let build_cancel = cancellation.clone();
         let build_executor = Arc::clone(&self.build_executor);
@@ -675,6 +1674,28 @@ impl HephaestusApp {
                 build_cancel.cancel();
             }
             result
+        }));
+
+        if let Some(workers) = &self.oci_builder_workers {
+            let oci_workers = Arc::clone(workers);
+            let oci_cancel = cancellation.clone();
+            tasks.push(tokio::spawn(async move {
+                oci_builder_loop(oci_workers, oci_cancel).await;
+                Ok(())
+            }));
+        }
+
+        let registry_reconcile_cancel = cancellation.clone();
+        tasks.push(tokio::spawn(async move {
+            registry_reconciliation_loop(
+                registry_reconciler,
+                registry_reconciliation_adapter,
+                registry_reconciliation_lease,
+                registry_reconciliation_interval,
+                registry_reconcile_cancel,
+            )
+            .await;
+            Ok(())
         }));
 
         let (consumer_ready_tx, consumer_ready_rx) = oneshot::channel();
@@ -705,9 +1726,17 @@ impl HephaestusApp {
             http_ready_rx
                 .await
                 .map_err(|_| AppError::Readiness(String::from("HTTP task exited")))?;
+            if let Some(gateway_ready_rx) = gateway_ready_rx {
+                gateway_ready_rx.await.map_err(|_| {
+                    AppError::Readiness(String::from("gateway private dispatcher task exited"))
+                })?;
+            }
             publisher_ready_rx
                 .await
                 .map_err(|_| AppError::Readiness(String::from("outbox task exited")))?;
+            mailbox_recovery_ready_rx
+                .await
+                .map_err(|_| AppError::Readiness(String::from("mailbox recovery task exited")))?;
             secret_reconcile_ready_rx.await.map_err(|_| {
                 AppError::Readiness(String::from("secret reconciliation task exited"))
             })?;
@@ -717,6 +1746,9 @@ impl HephaestusApp {
             consumer_ready_rx
                 .await
                 .map_err(|_| AppError::Readiness(String::from("consumer task exited")))?;
+            mailbox_consumer_ready_rx
+                .await
+                .map_err(|_| AppError::Readiness(String::from("mailbox consumer task exited")))?;
             Ok::<(), AppError>(())
         };
         match tokio::time::timeout(self.startup_timeout, readiness).await {
@@ -750,12 +1782,159 @@ impl HephaestusApp {
             jetstream: self.jetstream,
             forge: self.forge,
             run_repository: self.run_repository,
+            mailbox_repository: self.mailbox_repository,
             review_repository: self.review_repository,
             orchestrator: self.orchestrator,
             outbox_batch_size: self.outbox_batch_size,
             product_event_cursor_key: self.rpc_mediator_signing_key,
             shutdown_timeout: self.shutdown_timeout,
         })
+    }
+}
+
+const MAX_PRIVATE_GATEWAY_REQUEST_BYTES: usize = 2 * 1024 * 1024;
+
+#[derive(Clone)]
+struct PrivateGatewayDispatcherState {
+    dispatcher: Arc<dyn GatewayRequestDispatcher>,
+    public_authority: String,
+}
+
+const fn gateway_limits() -> GatewayLimits {
+    GatewayLimits {
+        max_request_body_bytes: MAX_PRIVATE_GATEWAY_REQUEST_BYTES,
+        max_response_body_bytes: MAX_PRIVATE_GATEWAY_REQUEST_BYTES,
+        max_request_headers: 128,
+        max_response_headers: 128,
+        max_path_and_query_bytes: 8 * 1024,
+        execution_timeout: Duration::from_secs(30),
+    }
+}
+
+async fn private_gateway_dispatch(
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    State(state): State<PrivateGatewayDispatcherState>,
+    request: Request<Body>,
+) -> Response {
+    if !peer.ip().is_loopback() {
+        return gateway_http_response(
+            http::StatusCode::FORBIDDEN,
+            http::HeaderMap::new(),
+            Bytes::new(),
+        );
+    }
+    let path_and_query = request
+        .uri()
+        .path_and_query()
+        .map_or_else(|| String::from("/"), ToString::to_string);
+    let method = request.method().clone();
+    let mut headers = request.headers().clone();
+    for name in UNTRUSTED_FORWARDING_HEADERS {
+        headers.remove(name);
+    }
+    for name in [
+        http::header::CONNECTION,
+        http::header::PROXY_AUTHENTICATE,
+        http::header::PROXY_AUTHORIZATION,
+        http::header::TE,
+        http::header::TRAILER,
+        http::header::TRANSFER_ENCODING,
+        http::header::UPGRADE,
+    ] {
+        headers.remove(name);
+    }
+    headers.remove("keep-alive");
+    let Ok(body) =
+        axum::body::to_bytes(request.into_body(), MAX_PRIVATE_GATEWAY_REQUEST_BYTES).await
+    else {
+        return gateway_http_response(
+            http::StatusCode::PAYLOAD_TOO_LARGE,
+            http::HeaderMap::new(),
+            Bytes::new(),
+        );
+    };
+    let response = state
+        .dispatcher
+        .dispatch(GatewayRequest {
+            method,
+            path_and_query,
+            headers,
+            body,
+            trusted: TrustedRequestMetadata {
+                scheme: GatewayScheme::Https,
+                authority: state.public_authority,
+                client_address: peer.ip(),
+                request_id: Uuid::new_v4(),
+            },
+        })
+        .await
+        .response;
+    gateway_http_response(response.status, response.headers, response.body)
+}
+
+fn gateway_http_response(
+    status: http::StatusCode,
+    headers: http::HeaderMap,
+    body: Bytes,
+) -> Response {
+    let mut response = Response::new(Body::from(body));
+    *response.status_mut() = status;
+    *response.headers_mut() = headers;
+    response
+}
+
+const GATEWAY_RECONCILIATION_INTERVAL: Duration = Duration::from_secs(1);
+const GATEWAY_CADDY_RECOVERY_INTERVAL: Duration = Duration::from_secs(30);
+
+/// Reconstructs Caddy exclusively from authoritative route records. Ordinary
+/// passes apply revision cutovers promptly; a bounded forced pass repairs a
+/// Caddy process which restarted after this daemon observed the same revision.
+async fn gateway_reconciliation_loop(
+    authority: PostgresGatewayEdgeAuthority,
+    provider: Arc<dyn GatewayProvider>,
+    cancellation: CancellationToken,
+) {
+    let mut reconcile = tokio::time::interval(GATEWAY_RECONCILIATION_INTERVAL);
+    reconcile.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // Avoid an immediate duplicate of the startup reconciliation while still
+    // making a daemon-owned Caddy restart recover without operator action.
+    let mut recovery = tokio::time::interval_at(
+        tokio::time::Instant::now() + GATEWAY_CADDY_RECOVERY_INTERVAL,
+        GATEWAY_CADDY_RECOVERY_INTERVAL,
+    );
+    recovery.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tokio::select! {
+            () = cancellation.cancelled() => return,
+            _ = reconcile.tick() => {
+                reconcile_gateway_once(&authority, provider.as_ref(), false).await;
+            }
+            _ = recovery.tick() => {
+                reconcile_gateway_once(&authority, provider.as_ref(), true).await;
+            }
+        }
+    }
+}
+
+async fn reconcile_gateway_once(
+    authority: &PostgresGatewayEdgeAuthority,
+    provider: &dyn GatewayProvider,
+    recover: bool,
+) {
+    let desired = match authority.desired_configuration().await {
+        Ok(desired) => desired,
+        Err(error) => {
+            tracing::warn!(%error, "gateway desired-route reconstruction failed");
+            return;
+        }
+    };
+    let result = if recover {
+        provider.recover(&desired).await
+    } else {
+        provider.reconcile(&desired).await
+    };
+    if let Err(error) = result {
+        tracing::warn!(%error, recovery = recover, "gateway Caddy reconciliation failed");
     }
 }
 
@@ -766,11 +1945,77 @@ async fn reap_failed_start(tasks: Vec<JoinHandle<Result<(), String>>>) {
     }
 }
 
+async fn oci_builder_loop(workers: Arc<OciBuilderWorkers>, cancellation: CancellationToken) {
+    let mut interval = tokio::time::interval(workers.poll_interval);
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tokio::select! {
+            () = cancellation.cancelled() => break,
+            _ = interval.tick() => {
+                oci_builder_pass(&workers).await;
+            }
+        }
+    }
+}
+
+async fn registry_reconciliation_loop(
+    reconciler: RegistryReconciler<
+        PostgresRegistryReconciliation,
+        PostgresRegistryReconciliation,
+        ZotHttpRegistry<InternalRegistryTokens>,
+    >,
+    executor: PostgresRegistryReconciliation,
+    lease: Duration,
+    poll_interval: Duration,
+    cancellation: CancellationToken,
+) {
+    let mut interval = tokio::time::interval(poll_interval);
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tokio::select! {
+            () = cancellation.cancelled() => break,
+            _ = interval.tick() => {
+                if let Err(error) = reconciler.process_next_and_apply(lease, &executor).await {
+                    tracing::warn!(%error, "registry notification reconciliation pass failed");
+                }
+                if let Err(error) = reconciler.reconcile_all_and_apply(&executor).await {
+                    // Zot availability is intentionally not forge readiness:
+                    // approved consumers remain fail-closed from durable state.
+                    tracing::warn!(%error, "registry authoritative reconciliation pass failed");
+                }
+            }
+        }
+    }
+}
+
+// The two worker outcomes and their independently durable manifest update are
+// intentionally explicit; Clippy counts the async/logging expansion as well.
+#[allow(clippy::cognitive_complexity)]
+async fn oci_builder_pass(workers: &OciBuilderWorkers) {
+    if let Err(error) = workers.preparation.run_once().await {
+        tracing::warn!(%error, "OCI preparation worker pass failed");
+    }
+    match workers.materialization.run_once().await {
+        Ok(true) => {
+            if let Err(error) = workers
+                .materialization
+                .write_manifest(&workers.manifest)
+                .await
+            {
+                tracing::warn!(%error, "OCI builder root manifest update failed");
+            }
+        }
+        Ok(false) => {}
+        Err(error) => tracing::warn!(%error, "OCI rootfs materialization worker pass failed"),
+    }
+}
+
 struct OutboxWorker {
     forge_publisher: ForgeNatsOutboxPublisher,
     release_publisher: ReleaseOutboxPublisher,
     review_publisher: ReviewOutboxPublisher,
     event_publisher: event_adapter::EventPublisher,
+    mailbox_publisher: MailboxOutboxPublisher,
     forge: Arc<PgForgeRepository>,
     poll_interval: Duration,
     batch_size: i64,
@@ -817,6 +2062,9 @@ impl OutboxWorker {
                     if let Err(error) = self.event_publisher.publish_pending(self.batch_size).await {
                         tracing::warn!(%error, "product-event outbox publication pass failed");
                     }
+                    if let Err(error) = self.mailbox_publisher.publish_pending(self.batch_size).await {
+                        tracing::warn!(%error, "mailbox outbox publication pass failed");
+                    }
                 }
             }
         }
@@ -839,6 +2087,35 @@ async fn secret_revocation_loop(
             () = cancellation.cancelled() => return Ok(()),
             () = tokio::time::sleep(poll_interval) => {
                 reconcile_revoked_raw_runs(&pool, orchestrator.as_ref()).await?;
+            }
+        }
+    }
+}
+
+async fn mailbox_recovery_loop(
+    store: Arc<dyn MailboxDispatchStore>,
+    poll_interval: Duration,
+    cancellation: CancellationToken,
+    ready: oneshot::Sender<()>,
+) -> Result<(), String> {
+    store.recover().await.map_err(|error| error.to_string())?;
+    store
+        .cleanup_expired_payloads(100)
+        .await
+        .map_err(|error| error.to_string())?;
+    if ready.send(()).is_err() {
+        return Ok(());
+    }
+    loop {
+        tokio::select! {
+            () = cancellation.cancelled() => return Ok(()),
+            () = tokio::time::sleep(poll_interval) => {
+                if let Err(error) = store.recover().await {
+                    tracing::warn!(%error, "mailbox recovery pass failed");
+                }
+                if let Err(error) = store.cleanup_expired_payloads(100).await {
+                    tracing::warn!(%error, "mailbox payload retention pass failed");
+                }
             }
         }
     }
@@ -925,6 +2202,12 @@ struct UpdateRunCompletion {
 impl UpdateRunCompletion {
     async fn apply(&self, run: &Run) -> Result<bool, RunCompletionError> {
         if run.kind != RunKind::Update {
+            return Ok(false);
+        }
+        let is_update_hook = is_update_hook_run(&self.pool, run.id.as_uuid())
+            .await
+            .map_err(completion_error)?;
+        if !is_update_hook {
             return Ok(false);
         }
         self.releases
@@ -1017,7 +2300,9 @@ async fn handle_build_message(
     executor: &BuildExecutor,
     message: &async_nats::jetstream::Message,
 ) -> Result<(), String> {
-    if message.message.subject.as_str() != BUILD_REQUESTED_SUBJECT {
+    let retry = message.message.subject.as_str() == BUILD_RETRY_REQUESTED_SUBJECT;
+    let verify = message.message.subject.as_str() == BUILD_VERIFY_REQUESTED_SUBJECT;
+    if message.message.subject.as_str() != BUILD_REQUESTED_SUBJECT && !retry && !verify {
         message
             .ack_with(async_nats::jetstream::AckKind::Term)
             .await
@@ -1034,7 +2319,23 @@ async fn handle_build_message(
             return Err(error.to_string());
         }
     };
-    let operation = executor.execute(BuildRequestId::from_uuid(payload.build_request_id));
+    let operation = async {
+        if verify {
+            executor
+                .verify(BuildRequestId::from_uuid(payload.build_request_id))
+                .await
+        } else if retry {
+            executor
+                .retry(BuildRequestId::from_uuid(payload.build_request_id))
+                .await
+                .map(|_| ())
+        } else {
+            executor
+                .execute(BuildRequestId::from_uuid(payload.build_request_id))
+                .await
+                .map(|_| ())
+        }
+    };
     tokio::pin!(operation);
     let mut progress = tokio::time::interval(Duration::from_secs(10));
     progress.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -1042,7 +2343,7 @@ async fn handle_build_message(
         tokio::select! {
             result = &mut operation => {
                 match result {
-                    Ok(_) => {
+                    Ok(()) => {
                         message.double_ack().await.map_err(|error| error.to_string())?;
                         return Ok(());
                     }
@@ -1079,6 +2380,60 @@ const fn build_delivery_requires_redelivery(error: &BuildExecutionError) -> bool
 fn completion_error(error: impl std::fmt::Display) -> RunCompletionError {
     tracing::error!(%error, "update-run completion processing failed");
     RunCompletionError::redacted("durable update result processing failed")
+}
+
+// Rust 1.85 Clippy incorrectly reports Tokio's private select expansion as
+// redundant public crate visibility.
+#[allow(clippy::redundant_pub_crate)]
+async fn mailbox_command_loop(
+    consumer: async_nats::jetstream::consumer::PullConsumer,
+    handler: NatsMailboxCommandHandler,
+    concurrency: usize,
+    cancellation: CancellationToken,
+    ready: oneshot::Sender<()>,
+) -> Result<(), String> {
+    let mut messages = consumer
+        .messages()
+        .await
+        .map_err(|error| error.to_string())?;
+    let permits = Arc::new(Semaphore::new(concurrency));
+    let mut commands = JoinSet::new();
+    if ready.send(()).is_err() {
+        return Ok(());
+    }
+    loop {
+        tokio::select! {
+            () = cancellation.cancelled() => break,
+            delivery = messages.next() => {
+                let Some(delivery) = delivery else {
+                    return Err(String::from("mailbox command stream ended"));
+                };
+                let message = delivery.map_err(|error| error.to_string())?;
+                let permit = Arc::clone(&permits)
+                    .acquire_owned()
+                    .await
+                    .map_err(|error| error.to_string())?;
+                let handler = handler.clone();
+                commands.spawn(async move {
+                    let _permit = permit;
+                    if let Err(error) = handler.handle(&message).await {
+                        tracing::warn!(%error, "mailbox command was not acknowledged");
+                    }
+                });
+            }
+            result = commands.join_next(), if !commands.is_empty() => {
+                if let Some(Err(error)) = result {
+                    tracing::warn!(%error, "mailbox command task panicked");
+                }
+            }
+        }
+    }
+    while let Some(result) = commands.join_next().await {
+        if let Err(error) = result {
+            tracing::warn!(%error, "mailbox command task panicked while draining");
+        }
+    }
+    Ok(())
 }
 
 // Rust 1.85 Clippy incorrectly reports Tokio's private select expansion as
@@ -1151,6 +2506,7 @@ pub struct RunningHephaestus {
     jetstream: async_nats::jetstream::Context,
     forge: Arc<PgForgeRepository>,
     run_repository: Arc<PgRunRepository>,
+    mailbox_repository: Arc<PostgresMailboxRepository>,
     review_repository: Arc<PostgresReviewRepository>,
     orchestrator: Arc<RunOrchestrator>,
     outbox_batch_size: i64,
@@ -1265,6 +2621,8 @@ impl RunningHephaestus {
             )),
             self.product_event_cursor_key,
         );
+        let mailbox_publisher =
+            MailboxOutboxPublisher::new(self.jetstream.clone(), self.mailbox_repository.clone());
         for _pass in 0..100 {
             let forge = forge_publisher
                 .publish_pending(self.forge.as_ref(), self.outbox_batch_size)
@@ -1282,7 +2640,11 @@ impl RunningHephaestus {
                 .publish_pending(self.outbox_batch_size)
                 .await
                 .map_err(component("final product-event outbox flush"))?;
-            if forge == 0 && releases == 0 && reviews == 0 && events == 0 {
+            let mailboxes = mailbox_publisher
+                .publish_pending(self.outbox_batch_size)
+                .await
+                .map_err(component("final mailbox outbox flush"))?;
+            if forge == 0 && releases == 0 && reviews == 0 && events == 0 && mailboxes == 0 {
                 return Ok(());
             }
         }
@@ -1310,6 +2672,223 @@ impl RunEventKind {
     }
 }
 
+struct PgRunAuthorityManager {
+    repository: PgRuntimeSessionRepository,
+    issuer: RuntimeSessionIssuer<PgRuntimeSessionRepository, EncryptedFileHandoffStore>,
+    git_issuer: RuntimeGitCredentialIssuer<
+        PgRuntimeGitCredentialRepository,
+        EncryptedFileRuntimeGitHandoffStore,
+    >,
+    session_ttl: time::Duration,
+}
+
+impl PgRunAuthorityManager {
+    fn new(
+        pool: PgPool,
+        git_repository: PgRuntimeGitCredentialRepository,
+        handoff_root: PathBuf,
+        handoff_key: [u8; 32],
+        session_ttl: Duration,
+    ) -> Result<Self, AppError> {
+        let repository = PgRuntimeSessionRepository::new(pool);
+        let handoff = EncryptedFileHandoffStore::new(handoff_root.clone(), handoff_key)
+            .map_err(component("runtime authority handoff"))?;
+        let git_handoff = EncryptedFileRuntimeGitHandoffStore::new(handoff_root, handoff_key)
+            .map_err(component("runtime Git authority handoff"))?;
+        let session_ttl = time::Duration::try_from(session_ttl).map_err(|error| {
+            AppError::Configuration(format!("runtime authority session TTL is invalid: {error}"))
+        })?;
+        Ok(Self {
+            issuer: RuntimeSessionIssuer::new(repository.clone(), handoff),
+            git_issuer: RuntimeGitCredentialIssuer::new(git_repository, git_handoff),
+            repository,
+            session_ttl,
+        })
+    }
+
+    async fn snapshot(
+        &self,
+        run: &Run,
+    ) -> Result<capability_domain::AuthorizationSnapshot, RunAuthorityError> {
+        self.repository
+            .resolve_snapshot(run, authz_postgres::AUTHORIZATION_MODEL_VERSION)
+            .await
+            .map_err(authority_error)
+    }
+}
+
+#[async_trait]
+impl RunAuthorityManager for PgRunAuthorityManager {
+    async fn prepare(&self, run: &Run) -> Result<PreparedRunAuthority, RunAuthorityError> {
+        let snapshot = self.snapshot(run).await?;
+        if !self
+            .repository
+            .live_authorized(run, &snapshot)
+            .await
+            .map_err(authority_error)?
+        {
+            return Err(RunAuthorityError::redacted(
+                "live capability authority was denied",
+            ));
+        }
+        let session_id = RuntimeSessionId::from_uuid(run.id.as_uuid());
+        let existing = self
+            .repository
+            .find(session_id)
+            .await
+            .map_err(authority_error)?;
+        let issued_at = existing
+            .as_ref()
+            .map_or_else(OffsetDateTime::now_utc, |session| session.issued_at);
+        let expires_at = existing
+            .as_ref()
+            .map_or(issued_at + self.session_ttl, |session| session.expires_at);
+        let identity = RuntimeSessionIdentity::new(
+            session_id,
+            snapshot.principal(),
+            RuntimeInvocation::Run(run.id),
+            &snapshot,
+            issued_at,
+            expires_at,
+        )
+        .map_err(|_| RunAuthorityError::redacted("runtime identity is invalid"))?;
+        let issued = self
+            .issuer
+            .issue(
+                &snapshot,
+                &identity,
+                run.attachment_id
+                    .map(runtime_types::AgentAttachmentId::as_uuid),
+                OffsetDateTime::now_utc(),
+            )
+            .await
+            .map_err(authority_error)?;
+        let runtime_git = match self
+            .git_issuer
+            .issue(
+                issued.session.id,
+                issued.session.generation,
+                issued.session.expires_at,
+                OffsetDateTime::now_utc(),
+            )
+            .await
+        {
+            Ok(issued) => Some(issued),
+            Err(RuntimeGitAuthorityError::NotFound) => None,
+            Err(error) => return Err(runtime_git_authority_error(error)),
+        };
+        let mut bootstrap = vm_trait::RuntimeAuthorityBootstrap::new(
+            issued.session.id.as_uuid(),
+            issued.session.generation.get(),
+            *issued.credential.expose(),
+        );
+        if let Some(runtime_git) = &runtime_git {
+            bootstrap = bootstrap.with_runtime_git_credential(*runtime_git.credential.expose());
+        }
+        Ok(PreparedRunAuthority {
+            bootstrap: Some(bootstrap),
+        })
+    }
+
+    async fn reauthorize(&self, run: &Run) -> Result<(), RunAuthorityError> {
+        let snapshot = self.snapshot(run).await?;
+        if self
+            .repository
+            .live_authorized(run, &snapshot)
+            .await
+            .map_err(authority_error)?
+        {
+            Ok(())
+        } else {
+            Err(RunAuthorityError::redacted(
+                "live capability authority was revoked",
+            ))
+        }
+    }
+
+    async fn acknowledge(
+        &self,
+        run: &Run,
+        session_id: Uuid,
+        generation: u64,
+    ) -> Result<(), RunAuthorityError> {
+        if session_id != run.id.as_uuid() {
+            return Err(RunAuthorityError::redacted(
+                "runtime session does not match the exact run",
+            ));
+        }
+        let generation = RuntimeCredentialGeneration::new(generation)
+            .map_err(|_| RunAuthorityError::redacted("runtime generation is invalid"))?;
+        self.issuer
+            .acknowledge(
+                RuntimeSessionId::from_uuid(session_id),
+                generation,
+                OffsetDateTime::now_utc(),
+            )
+            .await
+            .map_err(authority_error)?;
+        self.git_issuer
+            .acknowledge_or_revoke(RuntimeSessionId::from_uuid(session_id), generation)
+            .map_err(runtime_git_authority_error)?;
+        Ok(())
+    }
+
+    async fn revoke_after_guest(&self, run_id: RunId) -> Result<(), RunAuthorityError> {
+        let session_id = RuntimeSessionId::from_uuid(run_id.as_uuid());
+        let Some(session) = self
+            .repository
+            .find(session_id)
+            .await
+            .map_err(authority_error)?
+        else {
+            return Ok(());
+        };
+        if matches!(
+            session.status,
+            capability_domain::RuntimeSessionStatus::Expired
+        ) {
+            self.issuer
+                .recover_expired(OffsetDateTime::now_utc())
+                .await
+                .map_err(authority_error)?;
+            self.git_issuer
+                .recover_expired(OffsetDateTime::now_utc())
+                .map_err(runtime_git_authority_error)?;
+            return Ok(());
+        }
+        self.issuer
+            .revoke(session_id, OffsetDateTime::now_utc(), "run guest destroyed")
+            .await
+            .map_err(authority_error)?;
+        self.git_issuer
+            .acknowledge_or_revoke(session_id, session.generation)
+            .map_err(runtime_git_authority_error)?;
+        Ok(())
+    }
+
+    async fn recover(&self) -> Result<usize, RunAuthorityError> {
+        let recovered = self
+            .issuer
+            .recover_expired(OffsetDateTime::now_utc())
+            .await
+            .map_err(authority_error)?;
+        let git_recovered = self
+            .git_issuer
+            .recover_expired(OffsetDateTime::now_utc())
+            .map_err(runtime_git_authority_error)?;
+        usize::try_from(recovered.max(git_recovered))
+            .map_err(|_| RunAuthorityError::redacted("recovery count overflowed"))
+    }
+}
+
+fn authority_error(error: runtime_authority::RuntimeAuthorityError) -> RunAuthorityError {
+    RunAuthorityError::redacted(error.to_string())
+}
+
+fn runtime_git_authority_error(error: RuntimeGitAuthorityError) -> RunAuthorityError {
+    RunAuthorityError::redacted(error.to_string())
+}
+
 struct PgAgentVmSpecFactory {
     pool: PgPool,
     root_images: BTreeMap<String, RootFilesystem>,
@@ -1322,7 +2901,7 @@ struct StoredRuntimeContract {
     command: String,
     arguments: Vec<String>,
     working_directory: String,
-    root_image_digest: String,
+    image_reference: String,
 }
 
 #[derive(Deserialize)]
@@ -1388,9 +2967,9 @@ impl VmSpecFactory for PgAgentVmSpecFactory {
             serde_json::from_value(stored.effective_runtime_policy).map_err(vm_factory_error)?;
         let root = self
             .root_images
-            .get(&contract.root_image_digest)
+            .get(&contract.image_reference)
             .cloned()
-            .ok_or_else(|| invalid_spec("root_image.reference", "root image is not configured"))?;
+            .ok_or_else(|| invalid_spec("guest.image", "OCI image is not materialized"))?;
         let network_access = policy.network;
         let network = match network_access {
             StoredNetworkAccess::Disabled => NetworkMode::Disabled,
@@ -1468,6 +3047,7 @@ impl VmSpecFactory for PgAgentVmSpecFactory {
                 env,
                 working_dir: Some(working_directory.into()),
             },
+            runtime_authority: None,
             labels,
         })
     }
@@ -1550,8 +3130,10 @@ impl VmProvider for ResultFixtureProvider {
 struct ResultFixtureInstance {
     id: VmId,
     work: Option<PathBuf>,
+    output: Option<PathBuf>,
     exit_code: i32,
     uncertain_exit: bool,
+    runtime_authority: Option<(Uuid, u64)>,
     events: broadcast::Sender<VmEvent>,
     exit: watch::Sender<Option<VmExit>>,
 }
@@ -1590,19 +3172,30 @@ impl ResultFixtureInstance {
                 ));
             }
         };
+        let output = spec
+            .mounts
+            .iter()
+            .find(|mount| mount.tag == "build-output")
+            .map(|mount| mount.host_path.clone());
         let exit_code = if spec.command.args.iter().any(|value| value == "fail") {
             23
         } else {
             0
         };
         let uncertain_exit = spec.command.args.iter().any(|value| value == "uncertain");
+        let runtime_authority = spec
+            .runtime_authority
+            .as_ref()
+            .map(|authority| (authority.session_id(), authority.generation()));
         let (events, _) = broadcast::channel(16);
         let (exit, _) = watch::channel(None);
         Ok(Self {
             id: spec.id,
             work,
+            output,
             exit_code,
             uncertain_exit,
+            runtime_authority,
             events,
             exit,
         })
@@ -1619,6 +3212,12 @@ impl VmInstance for ResultFixtureInstance {
         drop(self.events.send(VmEvent::Started {
             ingress: Vec::new(),
         }));
+        if let Some((session_id, generation)) = self.runtime_authority {
+            drop(self.events.send(VmEvent::RuntimeAuthorityAcknowledged {
+                session_id,
+                generation,
+            }));
+        }
         drop(self.events.send(VmEvent::Ready));
         if let Some(work) = &self.work {
             tokio::fs::write(
@@ -1632,6 +3231,15 @@ impl VmInstance for ResultFixtureInstance {
                 .await
                 .map_err(fixture_vm_error)?;
             tokio::fs::write(reports.join("result.txt"), "durable browser E2E report\n")
+                .await
+                .map_err(fixture_vm_error)?;
+        }
+        if let Some(output) = &self.output {
+            let reports = output.join("reports");
+            tokio::fs::create_dir_all(&reports)
+                .await
+                .map_err(fixture_vm_error)?;
+            tokio::fs::write(reports.join("result.txt"), "built browser artifact\n")
                 .await
                 .map_err(fixture_vm_error)?;
         }

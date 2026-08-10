@@ -1,14 +1,24 @@
 //! Guest-side hardware integration probe for the libkrun backend.
 
+use brokered_egress_client::{BrokeredHttpsClient, WireBrokerRequest, WireBrokerStatus};
+use runtime_types::RunId;
 use rusqlite::Connection;
+use serde::Deserialize;
 use std::{
     fs,
     io::{self, Read, Write},
     net::{Shutdown, SocketAddr, TcpListener, TcpStream, ToSocketAddrs, UdpSocket},
+    os::fd::FromRawFd,
     os::unix::fs::{MetadataExt, PermissionsExt},
     path::Path,
     time::Duration,
 };
+
+const BROKERED_E2E_RULE_ID: &str = "00000000-0000-0000-0000-000000000002";
+const BROKERED_E2E_PLACEHOLDER: &str = "heph-placeholder:v1:00000000-0000-0000-0000-000000000002";
+const BROKERED_E2E_CREDENTIAL_PATH: &str = "/run/hephaestus-secrets/.runtime-credential";
+use vm_libkrun::protocol::{PrivateHttpRequestMessage, PrivateHttpResponseMessage};
+use vm_trait::RUNTIME_AUTHORITY_CREDENTIAL_BYTES;
 
 fn main() {
     if let Err(error) = run() {
@@ -19,8 +29,15 @@ fn main() {
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     match std::env::args().nth(1).as_deref() {
+        Some("--private-http-handler") => return private_http_handler().map_err(Into::into),
+        Some("--private-http-brokered-header") => {
+            return private_http_brokered_header_handler().map_err(Into::into);
+        }
         Some("--serve-http") => return serve_http().map_err(Into::into),
         Some("--expect-network-disabled") => return expect_network_disabled(),
+        Some("--expect-broker-only") => return expect_broker_only(),
+        Some("--brokered-https-e2e") => return brokered_https_e2e(),
+        Some("--expect-mailbox") => return expect_mailbox(),
         Some("--ignore-cancellation") => return ignore_cancellation(),
         Some("--state-only") => {
             verify_disk()?;
@@ -63,6 +80,79 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     verify_udp_dns()?;
     println!("udp=ok");
     Ok(())
+}
+
+fn expect_mailbox() -> Result<(), Box<dyn std::error::Error>> {
+    let envelope: serde_json::Value =
+        serde_json::from_slice(&fs::read("/run/hephaestus/mailbox-event.json")?)?;
+    if envelope["schema_version"] != 1
+        || envelope["method"] != "POST"
+        || envelope["route"] != "/mailbox/libkrun-proof"
+        || envelope["body_path"] != "/run/hephaestus/mailbox-body"
+    {
+        return Err("mailbox envelope is not the exact generic control contract".into());
+    }
+    if fs::read("/run/hephaestus/mailbox-body")? != b"real-libkrun-mailbox-body" {
+        return Err("mailbox body was not delivered exactly".into());
+    }
+    println!("mailbox=ok");
+    Ok(())
+}
+
+/// Minimal released-command fixture for the real one-request gateway ABI.
+/// It deliberately has no network listener: the host can only reach it over
+/// the authenticated private control channel via `heph-init`.
+fn private_http_handler() -> io::Result<()> {
+    let request: PrivateHttpRequestMessage =
+        ciborium::from_reader(io::stdin().lock()).map_err(io::Error::other)?;
+    if request.method != "POST" || request.path_and_query != "/gateway/proof?mode=real" {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "unexpected private HTTP request",
+        ));
+    }
+    if request.body != b"gateway-real-vm-request" {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "private HTTP body was not delivered exactly",
+        ));
+    }
+    let response = PrivateHttpResponseMessage {
+        status: 201,
+        headers: vec![("content-type".to_owned(), "text/plain".to_owned())],
+        body: b"gateway-real-vm-response".to_vec(),
+    };
+    ciborium::into_writer(&response, io::stdout().lock()).map_err(io::Error::other)
+}
+
+/// Confirms the daemon's host-only gateway resolver replaced a real inbound
+/// credential with its non-secret immutable placeholder before VM delivery.
+fn private_http_brokered_header_handler() -> io::Result<()> {
+    let request: PrivateHttpRequestMessage =
+        ciborium::from_reader(io::stdin().lock()).map_err(io::Error::other)?;
+    if request.method != "POST" || request.path_and_query != "/gateway/brokered?mode=real" {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "unexpected brokered gateway request",
+        ));
+    }
+    let placeholder = request
+        .headers
+        .iter()
+        .find(|(name, _)| name == "x-webhook-secret")
+        .map(|(_, value)| value.as_str());
+    if !placeholder.is_some_and(|value| value.starts_with("heph-placeholder:v1:")) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "gateway secret was not replaced by its placeholder",
+        ));
+    }
+    let response = PrivateHttpResponseMessage {
+        status: 201,
+        headers: vec![("content-type".to_owned(), "text/plain".to_owned())],
+        body: b"gateway-brokered-header-ok".to_vec(),
+    };
+    ciborium::into_writer(&response, io::stdout().lock()).map_err(io::Error::other)
 }
 
 fn verify_disk() -> Result<(), Box<dyn std::error::Error>> {
@@ -139,7 +229,7 @@ fn verify_mounts() -> Result<(), Box<dyn std::error::Error>> {
 
 fn verify_secrets() -> Result<(), Box<dyn std::error::Error>> {
     const SENTINEL: &str = "libkrun-secret-sentinel-8a4c";
-    let directory = Path::new("/run/hephaestus/secrets");
+    let directory = Path::new("/run/hephaestus-secrets");
     let secret = directory.join("model");
     let directory_metadata = fs::symlink_metadata(directory)?;
     let metadata = fs::symlink_metadata(&secret)?;
@@ -210,6 +300,157 @@ fn expect_network_disabled() -> Result<(), Box<dyn std::error::Error>> {
     }
     println!("network-disabled=ok");
     Ok(())
+}
+
+/// Proves the broker-only VM contract retains its dedicated vsock endpoint
+/// while denying ordinary TCP egress.
+fn expect_broker_only() -> Result<(), Box<dyn std::error::Error>> {
+    expect_network_disabled()?;
+    let mut authority = read_runtime_authority()?;
+    let request_body = serde_json::json!({
+        "rule_id": "00000000-0000-0000-0000-000000000002",
+        "method": "get",
+        "path_and_query": "/v1/probe",
+        "headers": [],
+        "body": []
+    });
+    let mut request = WireBrokerRequest {
+        credential: std::mem::take(&mut authority.credential),
+        run_id: RunId::from_uuid(authority.session_id),
+        slot: String::from("model"),
+        destination: String::from("api.example.test"),
+        operation: String::from("https_v1"),
+        body: serde_json::to_vec(&request_body)?,
+    };
+    let response = BrokeredHttpsClient::new(vsock_broker_stream()?).call(&request)?;
+    request.credential.fill(0);
+    if response.status != WireBrokerStatus::Succeeded || response.body != b"ok" {
+        return Err("unexpected broker response".into());
+    }
+    println!("broker-vsock=ok");
+    Ok(())
+}
+
+/// Exercises the real secret-runtime credential issued into the protected
+/// brokered mount by the daemon's `PostgreSQL` resolver. The provider secret is
+/// represented only by the stable placeholder in this released guest.
+fn brokered_https_e2e() -> Result<(), Box<dyn std::error::Error>> {
+    expect_network_disabled()?;
+    let authority = read_runtime_authority()?;
+    let mut credential = fs::read(BROKERED_E2E_CREDENTIAL_PATH)?;
+    if credential.len() != RUNTIME_AUTHORITY_CREDENTIAL_BYTES {
+        return Err("brokered runtime credential has an invalid length".into());
+    }
+    let request_body = serde_json::json!({
+        "rule_id": BROKERED_E2E_RULE_ID,
+        "method": "get",
+        "path_and_query": "/v1/probe",
+        "headers": [{
+            "name": "authorization",
+            "value": format!("Bearer {BROKERED_E2E_PLACEHOLDER}")
+        }],
+        "body": []
+    });
+    let mut request = WireBrokerRequest {
+        credential: std::mem::take(&mut credential),
+        // The daemon deliberately derives the generic runtime session ID from
+        // the run ID, so this guest-visible non-secret identifier safely
+        // names the exact secret-runtime lease without exposing its bearer.
+        run_id: RunId::from_uuid(authority.session_id),
+        slot: String::from("model"),
+        destination: String::from("api.example.test"),
+        operation: String::from("https_v1"),
+        body: serde_json::to_vec(&request_body)?,
+    };
+    let response = BrokeredHttpsClient::new(vsock_broker_stream()?).call(&request)?;
+    request.credential.fill(0);
+    if response.status != WireBrokerStatus::Succeeded || response.body != b"brokered-e2e-ok" {
+        return Err("unexpected brokered HTTPS response".into());
+    }
+    println!("brokered-https-e2e=ok");
+    Ok(())
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GuestRuntimeAuthority {
+    session_id: uuid::Uuid,
+    generation: u64,
+    credential_hex: String,
+}
+
+struct RuntimeAuthorityCredential {
+    session_id: uuid::Uuid,
+    credential: Vec<u8>,
+}
+
+fn read_runtime_authority() -> Result<RuntimeAuthorityCredential, Box<dyn std::error::Error>> {
+    let authority: GuestRuntimeAuthority = serde_json::from_slice(&fs::read(
+        vm_libkrun::protocol::GUEST_RUNTIME_AUTHORITY_PATH,
+    )?)?;
+    if authority.generation == 0 {
+        return Err("runtime authority generation is invalid".into());
+    }
+    if authority.credential_hex.len() != 64 {
+        return Err("runtime authority credential has an invalid length".into());
+    }
+    let mut credential = Vec::with_capacity(32);
+    for offset in (0..authority.credential_hex.len()).step_by(2) {
+        credential.push(u8::from_str_radix(
+            &authority.credential_hex[offset..offset + 2],
+            16,
+        )?);
+    }
+    Ok(RuntimeAuthorityCredential {
+        session_id: authority.session_id,
+        credential,
+    })
+}
+
+#[allow(unsafe_code)] // AF_VSOCK is exposed only through libc's raw socket ABI.
+fn vsock_broker_stream() -> io::Result<fs::File> {
+    #[repr(C)]
+    struct SockAddrVm {
+        family: libc::sa_family_t,
+        reserved: u16,
+        port: u32,
+        cid: u32,
+        zero: [u8; 4],
+    }
+
+    // SAFETY: this guest fixture creates one AF_VSOCK stream and immediately
+    // transfers its owned file descriptor to File after a checked connect.
+    let descriptor = unsafe { libc::socket(libc::AF_VSOCK, libc::SOCK_STREAM, 0) };
+    if descriptor < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let family = libc::sa_family_t::try_from(libc::AF_VSOCK)
+        .map_err(|_| io::Error::other("AF_VSOCK address family is invalid"))?;
+    let address = SockAddrVm {
+        family,
+        reserved: 0,
+        port: vm_libkrun::protocol::SECRET_BROKER_VSOCK_PORT,
+        cid: 2, // VMADDR_CID_HOST is the stable host CID for libkrun guests.
+        zero: [0; 4],
+    };
+    let length = libc::socklen_t::try_from(std::mem::size_of::<SockAddrVm>())
+        .map_err(|_| io::Error::other("vsock address is oversized"))?;
+    // SAFETY: address is a fully initialized repr(C) sockaddr_vm and its
+    // pointer remains valid for the duration of this synchronous syscall.
+    let connected = unsafe {
+        libc::connect(
+            descriptor,
+            std::ptr::from_ref(&address).cast::<libc::sockaddr>(),
+            length,
+        )
+    };
+    if connected != 0 {
+        // SAFETY: descriptor is still exclusively owned after a failed connect.
+        let _closed = unsafe { libc::close(descriptor) };
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: connect succeeded and ownership transfers exactly once into File.
+    Ok(unsafe { fs::File::from_raw_fd(descriptor) })
 }
 
 #[allow(unsafe_code)]

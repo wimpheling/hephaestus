@@ -387,6 +387,9 @@ a.resource-list-row:hover { background: color-mix(in srgb, var(--ember) 4%, tran
   text-align: center;
   font-size: .74rem;
 }
+/* Stream containers keep static children. Hide their empty copy once a row
+   arrives, instead of rendering an empty state above populated data. */
+.resource-list:has(> .resource-list-row) > .resource-list-empty { display: none; }
 .resource-primary { min-width: 0; display: flex; align-items: center; gap: .8rem; }
 .resource-primary > span, .resource-detail {
   min-width: 0;
@@ -625,6 +628,15 @@ a.resource-list-row:hover { background: color-mix(in srgb, var(--ember) 4%, tran
 .proposal-state { text-transform: capitalize; }
 .empty-state { padding: 4rem; text-align: center; color: var(--muted); }
 .empty-state strong { color: var(--ink); }
+/* Avoid a distracting spinner flash on local, sub-threshold route loads. */
+.delayed-loading-state {
+  opacity: 0;
+  animation: reveal-delayed-loading 120ms ease-out 450ms forwards;
+}
+@keyframes reveal-delayed-loading { to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .delayed-loading-state { opacity: 1; animation: none; }
+}
 
 /* Run detail */
 .run-hero { justify-content: space-between; }

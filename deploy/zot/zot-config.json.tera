@@ -1,0 +1,59 @@
+{
+  "distSpecVersion": "1.1.1",
+  "storage": {
+    "rootDirectory": "{{ zot.storage_root }}",
+    "commit": true,
+    "dedupe": true,
+    "gc": false
+  },
+  "http": {
+    "address": "{{ zot.private_address }}",
+    "port": "{{ zot.private_port }}",
+    "compat": ["docker2s2"],
+    "auth": {
+      "bearer": {
+        "realm": "{{ hephaestus.registry_token_realm }}",
+        "service": "{{ hephaestus.registry_service }}",
+        "cert": "/etc/zot/verification.crt"
+      }
+    },
+    "accessControl": {
+      "metrics": {
+        "anonymousPolicy": ["read"]
+      }
+    }
+  },
+  "log": {
+    "level": "info"
+  },
+  "extensions": {
+    "metrics": {
+      "enable": true,
+      "prometheus": {
+        "path": "/metrics"
+      }
+    },
+    "search": {
+      "enable": false
+    },
+    "sync": {
+      "enable": false
+    },
+    "events": {
+      "enable": true,
+      "sinks": [
+        {
+          "type": "http",
+          "address": "{{ hephaestus.registry_notification_sink_url }}",
+          "timeout": "5s",
+          "credentials": {
+            "token": "{{ hephaestus.registry_notification_callback_token }}"
+          }
+        }
+      ]
+    },
+    "ui": {
+      "enable": false
+    }
+  }
+}

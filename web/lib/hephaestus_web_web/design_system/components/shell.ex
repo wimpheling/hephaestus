@@ -51,10 +51,15 @@ defmodule HephaestusWebWeb.DesignSystem.Components.Shell do
         </a>
         <div class="header-actions">
           <.tag variant={:environment} tone="success" dot>local forge</.tag>
-          <div :if={@current_identity} class="identity-chip">
+          <a
+            :if={@current_identity}
+            href="/settings/git-credentials"
+            class="identity-chip"
+            aria-label="Manage Git credentials"
+          >
             <span>{@current_identity.display_name |> String.first() |> String.upcase()}</span>
             <div><strong>{@current_identity.display_name}</strong><small>authenticated</small></div>
-          </div>
+          </a>
           <.link
             :if={@current_identity}
             href={@logout_destination}

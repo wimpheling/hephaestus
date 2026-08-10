@@ -7,7 +7,7 @@ use std::{
     fs::{self, File},
     io::{self, Read, Seek, SeekFrom, Write},
     os::unix::ffi::OsStrExt,
-    os::unix::fs::chown,
+    os::unix::fs::{OpenOptionsExt, PermissionsExt, chown},
     os::unix::process::{CommandExt, ExitStatusExt},
     path::{Path, PathBuf},
     process::{Child, Command, ExitStatus, Stdio},
@@ -17,12 +17,16 @@ use std::{
 };
 use uuid::Uuid;
 use vm_libkrun::protocol::{
-    GuestLogStream, GuestMessage, GuestStateVolume, HostMessage, MAX_FRAME_SIZE, PROTOCOL_VERSION,
+    GUEST_RUNTIME_AUTHORITY_PATH, GuestLogStream, GuestMessage, GuestStateVolume, HostMessage,
+    MAX_FRAME_SIZE, MAX_PRIVATE_HTTP_BODY_BYTES, MAX_PRIVATE_HTTP_HEADERS, PROTOCOL_VERSION,
+    PrivateHttpRequestMessage, PrivateHttpResponseMessage, RuntimeAuthorityMessage,
 };
+use zeroize::Zeroizing;
 
 const CONTROL_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const AGENT_UID: u32 = 10_001;
 const AGENT_GID: u32 = 10_001;
+const RUNTIME_AUTHORITY_DIRECTORY: &str = "/run/hephaestus-authority";
 
 fn main() {
     if let Err(error) = run() {
@@ -48,6 +52,8 @@ fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         command,
         mounts,
         state_volume,
+        runtime_authority,
+        gateway_handler,
     } = read_frame(&mut control)?
     else {
         return Err("host did not send the start command".into());
@@ -56,8 +62,25 @@ fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         return Err(format!("unsupported host protocol version {version}").into());
     }
 
+    // Persist the authority before mounting the immutable runtime control tree
+    // at `/run/hephaestus`. A read-only nested virtiofs mount can otherwise
+    // make its parent unsuitable for creating the sibling authority directory
+    // on some libkrun/FUSE combinations.
+    let runtime_authority_ack = runtime_authority
+        .as_deref()
+        .map(persist_runtime_authority)
+        .transpose()?;
+
     for mount in mounts {
         if let Err(error) = mount_virtiofs(&mount.tag, &mount.guest_path, mount.read_only) {
+            let error = io::Error::new(
+                error.kind(),
+                format!(
+                    "mount {} at {}: {error}",
+                    mount.tag,
+                    mount.guest_path.display()
+                ),
+            );
             send_guest_error(&mut control, "mount", &error);
             return Err(error.into());
         }
@@ -77,6 +100,36 @@ fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             )
         })?;
         thread::sleep(Duration::from_millis(milliseconds));
+    }
+    if let Some((session_id, generation)) = runtime_authority_ack {
+        write_frame(
+            &mut control,
+            &GuestMessage::RuntimeAuthorityAcknowledged {
+                session_id,
+                generation,
+            },
+        )?;
+    }
+
+    if gateway_handler {
+        let writer = Arc::new(Mutex::new(control.try_clone()?));
+        write_message(&writer, &GuestMessage::Ready)?;
+        write_message(
+            &writer,
+            &GuestMessage::Metric {
+                name: String::from("heph_init.ready"),
+                value: 1.0,
+                labels: std::collections::BTreeMap::from([(
+                    String::from("protocol"),
+                    PROTOCOL_VERSION.to_string(),
+                )]),
+            },
+        )?;
+        gateway_handler_loop(control, &writer, &command)?;
+        if let Some(path) = mounted_state {
+            unmount(&path)?;
+        }
+        return Ok(());
     }
 
     let mut child = Command::new(&command.program);
@@ -143,6 +196,82 @@ fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     write_message(&writer, &GuestMessage::Exited { code, signal })?;
     drop(control_thread);
     Ok(())
+}
+
+#[derive(Serialize)]
+struct GuestRuntimeAuthority<'a> {
+    session_id: uuid::Uuid,
+    generation: u64,
+    credential_hex: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    runtime_git_credential: Option<&'a str>,
+}
+
+fn persist_runtime_authority(
+    authority: &RuntimeAuthorityMessage,
+) -> Result<(uuid::Uuid, u64), Box<dyn std::error::Error + Send + Sync>> {
+    if authority.generation == 0 {
+        return Err("runtime authority generation must be positive".into());
+    }
+    let directory = Path::new(RUNTIME_AUTHORITY_DIRECTORY);
+    fs::create_dir_all(directory)
+        .map_err(|error| format!("create authority directory: {error}"))?;
+    fs::set_permissions(directory, fs::Permissions::from_mode(0o700))
+        .map_err(|error| format!("seal authority directory: {error}"))?;
+    chown(directory, Some(AGENT_UID), Some(AGENT_GID))
+        .map_err(|error| format!("own authority directory: {error}"))?;
+
+    let mut credential_hex = Zeroizing::new(String::with_capacity(authority.credential.len() * 2));
+    for byte in &authority.credential {
+        use std::fmt::Write as _;
+        write!(&mut credential_hex, "{byte:02x}")?;
+    }
+    let mut runtime_git_credential = authority.runtime_git_credential.as_ref().map(|credential| {
+        let mut encoded = String::with_capacity(credential.len() * 2);
+        for byte in credential {
+            use std::fmt::Write as _;
+            // Writing to a String cannot fail.
+            let _ = write!(&mut encoded, "{byte:02x}");
+        }
+        Zeroizing::new(encoded)
+    });
+    let document = GuestRuntimeAuthority {
+        session_id: authority.session_id,
+        generation: authority.generation,
+        credential_hex: credential_hex.as_str(),
+        runtime_git_credential: runtime_git_credential
+            .as_deref()
+            .map(std::string::String::as_str),
+    };
+    let bytes = Zeroizing::new(serde_json::to_vec(&document)?);
+    match fs::symlink_metadata(GUEST_RUNTIME_AUTHORITY_PATH) {
+        Ok(metadata) if metadata.file_type().is_file() && !metadata.file_type().is_symlink() => {
+            fs::remove_file(GUEST_RUNTIME_AUTHORITY_PATH)
+                .map_err(|error| format!("remove stale authority credential: {error}"))?;
+        }
+        Ok(_) => return Err("stale authority credential is not a regular file".into()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(format!("inspect authority credential: {error}").into()),
+    }
+    let mut file = fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .mode(0o400)
+        .open(GUEST_RUNTIME_AUTHORITY_PATH)
+        .map_err(|error| format!("create authority credential: {error}"))?;
+    file.write_all(&bytes)
+        .map_err(|error| format!("write authority credential: {error}"))?;
+    file.sync_all()
+        .map_err(|error| format!("sync authority credential: {error}"))?;
+    chown(
+        Path::new(GUEST_RUNTIME_AUTHORITY_PATH),
+        Some(AGENT_UID),
+        Some(AGENT_GID),
+    )?;
+    if let Some(credential) = &mut runtime_git_credential {
+        credential.clear();
+    }
+    Ok((authority.session_id, authority.generation))
 }
 
 fn mount_state_volume(volume: &GuestStateVolume) -> io::Result<PathBuf> {
@@ -308,6 +437,187 @@ fn mount_virtiofs(tag: &str, guest_path: &Path, read_only: bool) -> io::Result<(
     } else {
         Err(io::Error::last_os_error())
     }
+}
+
+#[derive(Default)]
+struct GatewayHandlerState {
+    active: bool,
+    child_pid: Option<u32>,
+    cancelled: bool,
+}
+
+/// Serves the private, one-request gateway ABI. The host creates a fresh VM
+/// for every public request, so accepting a second request before the first
+/// handler has exited is a protocol violation rather than a queue.
+fn gateway_handler_loop(
+    mut control: File,
+    writer: &Arc<Mutex<File>>,
+    command: &vm_libkrun::protocol::GuestCommandMessage,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let state = Arc::new(Mutex::new(GatewayHandlerState::default()));
+    while let Ok(message) = read_frame::<HostMessage>(&mut control) {
+        match message {
+            HostMessage::PrivateHttpRequest {
+                request_id,
+                request,
+            } => {
+                validate_private_http_request(&request)?;
+                let mut current = lock(&state);
+                if current.active {
+                    return Err("received concurrent private HTTP requests".into());
+                }
+                current.active = true;
+                current.cancelled = false;
+                drop(current);
+                let writer = Arc::clone(writer);
+                let state = Arc::clone(&state);
+                let command = command.clone();
+                thread::spawn(move || {
+                    let result = invoke_gateway_handler(&command, &request, &state);
+                    let message = match result {
+                        Ok(response) => GuestMessage::PrivateHttpResponse {
+                            request_id,
+                            response,
+                        },
+                        Err(error) => GuestMessage::Error {
+                            code: String::from("gateway-handler"),
+                            message: bounded_error_message(&error),
+                        },
+                    };
+                    let _write_result = write_message(&writer, &message);
+                });
+            }
+            HostMessage::Cancel { .. } => {
+                let pid = {
+                    let mut current = lock(&state);
+                    current.cancelled = true;
+                    current.child_pid
+                };
+                if let Some(pid) = pid {
+                    let _signal_result = signal_process(pid, libc::SIGTERM);
+                }
+            }
+            HostMessage::HealthPing { nonce } => {
+                write_message(writer, &GuestMessage::Health { nonce })?;
+            }
+            HostMessage::Start { .. } => return Err("received duplicate start command".into()),
+            _ => return Err("received unsupported gateway control message".into()),
+        }
+    }
+    Ok(())
+}
+
+fn invoke_gateway_handler(
+    command: &vm_libkrun::protocol::GuestCommandMessage,
+    request: &PrivateHttpRequestMessage,
+    state: &Arc<Mutex<GatewayHandlerState>>,
+) -> io::Result<PrivateHttpResponseMessage> {
+    let mut child = Command::new(&command.program);
+    child
+        .args(&command.args)
+        .env_clear()
+        .envs(&command.env)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .uid(AGENT_UID)
+        .gid(AGENT_GID);
+    if let Some(working_dir) = &command.working_dir {
+        child.current_dir(working_dir);
+    }
+    let mut child = child.spawn()?;
+    let pid = child.id();
+    {
+        let mut current = lock(state);
+        current.child_pid = Some(pid);
+        if current.cancelled {
+            let _signal_result = signal_process(pid, libc::SIGTERM);
+        }
+    }
+    let outcome = (|| {
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| io::Error::other("handler stdin is unavailable"))?;
+        ciborium::into_writer(request, &mut stdin).map_err(io::Error::other)?;
+        drop(stdin);
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| io::Error::other("handler stdout is unavailable"))?;
+        let mut output = Vec::with_capacity(MAX_PRIVATE_HTTP_BODY_BYTES.min(8_192));
+        stdout
+            .take(u64::try_from(MAX_PRIVATE_HTTP_BODY_BYTES + 1).unwrap())
+            .read_to_end(&mut output)?;
+        if output.len() > MAX_PRIVATE_HTTP_BODY_BYTES {
+            // Stop a malicious handler before waiting: leaving bytes in its
+            // stdout pipe could otherwise deadlock the one-request VM.
+            let _signal_result = signal_process(pid, libc::SIGKILL);
+            let _status = child.wait()?;
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "gateway handler response exceeds protocol limit",
+            ));
+        }
+        let status = child.wait()?;
+        if !status.success() {
+            return Err(io::Error::other("gateway handler exited unsuccessfully"));
+        }
+        let response: PrivateHttpResponseMessage =
+            ciborium::from_reader(output.as_slice()).map_err(io::Error::other)?;
+        validate_private_http_response(&response)?;
+        Ok(response)
+    })();
+    let mut current = lock(state);
+    current.active = false;
+    current.child_pid = None;
+    drop(current);
+    if outcome.is_err() {
+        // Every early stdin/stdout/CBOR failure must reap the direct child;
+        // otherwise a broken handler pipe leaves a process behind until the
+        // microVM is forcibly destroyed.
+        let _signal_result = signal_process(pid, libc::SIGKILL);
+        let _wait_result = child.wait();
+    }
+    outcome
+}
+
+fn validate_private_http_request(request: &PrivateHttpRequestMessage) -> io::Result<()> {
+    if request.method.is_empty()
+        || request
+            .method
+            .bytes()
+            .any(|byte| !byte.is_ascii_uppercase())
+        || !request.path_and_query.starts_with('/')
+        || request.path_and_query.contains('\0')
+        || request.headers.len() > MAX_PRIVATE_HTTP_HEADERS
+        || request.body.len() > MAX_PRIVATE_HTTP_BODY_BYTES
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "private HTTP request violates gateway contract",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_private_http_response(response: &PrivateHttpResponseMessage) -> io::Result<()> {
+    if !(100..=599).contains(&response.status)
+        || response.headers.len() > MAX_PRIVATE_HTTP_HEADERS
+        || response.body.len() > MAX_PRIVATE_HTTP_BODY_BYTES
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "private HTTP response violates gateway contract",
+        ));
+    }
+    Ok(())
+}
+
+fn bounded_error_message(error: &io::Error) -> String {
+    let mut message = error.to_string();
+    message.truncate(1_024);
+    message
 }
 
 fn pump_logs(

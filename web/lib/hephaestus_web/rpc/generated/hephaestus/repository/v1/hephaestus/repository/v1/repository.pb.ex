@@ -1,3 +1,31 @@
+defmodule Hephaestus.Repository.V1.CreateRepositoryRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.repository.v1.CreateRepositoryRequest",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:context, 1, type: Hephaestus.Common.V1.RequestContext)
+  field(:project_id, 2, type: Hephaestus.Common.V1.OpaqueId, json_name: "projectId")
+  field(:name, 3, type: :string)
+  field(:default_branch, 4, type: :string, json_name: "defaultBranch")
+  field(:is_public, 5, type: :bool, json_name: "isPublic")
+  field(:agent_runs_enabled, 6, type: :bool, json_name: "agentRunsEnabled")
+end
+
+defmodule Hephaestus.Repository.V1.CreateRepositoryResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.repository.v1.CreateRepositoryResponse",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:repository_id, 1, type: Hephaestus.Common.V1.OpaqueId, json_name: "repositoryId")
+  field(:receipt, 2, type: Hephaestus.Common.V1.MutationReceipt)
+end
+
 defmodule Hephaestus.Repository.V1.RepositoryRun do
   @moduledoc false
 
@@ -124,6 +152,12 @@ defmodule Hephaestus.Repository.V1.RepositoryService.Service do
   use GRPC.Service,
     name: "hephaestus.repository.v1.RepositoryService",
     protoc_gen_elixir_version: "0.17.0"
+
+  rpc(
+    :CreateRepository,
+    Hephaestus.Repository.V1.CreateRepositoryRequest,
+    Hephaestus.Repository.V1.CreateRepositoryResponse
+  )
 
   rpc(
     :GetRepository,

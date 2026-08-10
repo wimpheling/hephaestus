@@ -33,9 +33,9 @@ version = 2
 name = "isolated-builder"
 key = "isolated-builder"
 [build]
+image = { key = "build" }
 command = "/usr/bin/fake-build"
 working_directory = "/workspace/source"
-root_image = "build@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 triggers = ["refs/heads/main"]
 [build.resources]
 vcpus = 1
@@ -47,13 +47,12 @@ path = "bin/agent"
 kind = "executable"
 media_type = "application/x-hephaestus-test"
 [guest]
+image = { key = "run" }
 command = "bin/agent"
 working_directory = "bin"
 [resources]
 vcpus = 1
 memory_mib = 128
-[root_image]
-reference = "run@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 [workspace]
 mount = true
 path = "/workspace/repo"
@@ -119,7 +118,7 @@ async fn exact_guest_output_becomes_one_immutable_draft() {
             workspace_root,
             repository_root,
             git_binary: fs::canonicalize("/usr/bin/git").expect("Git binary"),
-            root_images: BTreeMap::from([(
+            image_filesystems: BTreeMap::from([(
                 String::from(
                     "build@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 ),
@@ -252,21 +251,53 @@ async fn exact_guest_output_becomes_one_immutable_draft() {
         executor.execute(failed_build).await,
         Err(BuildExecutionError::Vm)
     ));
-    let failed_event: serde_json::Value = sqlx::query_scalar(
-        "SELECT payload FROM outbox
-         WHERE aggregate_type = 'release' AND aggregate_id = $1
-           AND subject = 'hephaestus.build.failed.v1'",
+    let failed_state: (String, String, String, serde_json::Value) = sqlx::query_as(
+        "SELECT request.state, execution.state, execution.failure_code, request.diagnostics
+         FROM build_requests AS request
+         JOIN build_executions AS execution
+           ON execution.build_request_id = request.id
+         WHERE request.id = $1",
     )
     .bind(failed_build.as_uuid())
     .fetch_one(&pool)
     .await
-    .expect("transactional build failure event");
-    assert_eq!(failed_event["build_request_id"], failed_build.to_string());
-    assert_eq!(failed_event["failure_code"], "vm_provision");
-    assert_eq!(failed_event["schema_version"], 1);
-    assert_eq!(failed_event["message_id"], failed_event["idempotency_key"]);
-    assert!(failed_event["request_id"].is_null());
-    assert!(failed_event["trace_id"].is_null());
+    .expect("durable build failure");
+    assert_eq!(
+        failed_state,
+        (
+            String::from("failed"),
+            String::from("failed"),
+            String::from("vm_provision"),
+            serde_json::json!([{"code": "vm_provision"}]),
+        )
+    );
+
+    let failed_event: (String, String, String, Uuid, String) = sqlx::query_as(
+        "SELECT event.event_type, event.change_kind, event.safe_state,
+                event.related_id_one, outbox.subject
+         FROM application_events AS event
+         JOIN product_event_outbox AS outbox ON outbox.event_id = event.id
+         WHERE event.aggregate_type = 'build' AND event.aggregate_id = $1
+           AND event.event_type = 'build.changed'
+           AND event.change_kind = 'state_changed'
+           AND event.safe_state = 'failed'
+         ORDER BY event.cursor DESC
+         LIMIT 1",
+    )
+    .bind(failed_build.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("canonical transactional build failure event");
+    assert_eq!(
+        failed_event,
+        (
+            String::from("build.changed"),
+            String::from("state_changed"),
+            String::from("failed"),
+            repository_id,
+            String::from("hephaestus.product.event.v1"),
+        )
+    );
 
     let denied_build = BuildRequestId::new();
     copy_build_request(&pool, build_id, denied_build, [8_u8; 32]).await;
@@ -320,8 +351,22 @@ async fn copy_build_request(
     .execute(pool)
     .await
     .expect("copy build request");
+    sqlx::query(
+        "INSERT INTO build_request_images
+         (build_request_id, execution_context, image_id, image_key, image_reference)
+         SELECT $1, execution_context, image_id, image_key, image_reference
+           FROM build_request_images WHERE build_request_id = $2",
+    )
+    .bind(destination.as_uuid())
+    .bind(source.as_uuid())
+    .execute(pool)
+    .await
+    .expect("copy image snapshots");
 }
 
+// One explicit fixture keeps the complete immutable build and image snapshot
+// provenance visible to this integration test.
+#[allow(clippy::too_many_lines)]
 async fn seed(pool: &sqlx::PgPool, repository_id: Uuid, commit: &str) -> BuildRequestId {
     let user = Uuid::new_v4();
     let organization = Uuid::new_v4();
@@ -372,6 +417,30 @@ async fn seed(pool: &sqlx::PgPool, repository_id: Uuid, commit: &str) -> BuildRe
     .execute(pool)
     .await
     .expect("repository");
+    for (key, reference) in [
+        (
+            "build",
+            "build@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ),
+        (
+            "run",
+            "run@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        ),
+    ] {
+        sqlx::query(
+            "INSERT INTO oci_images
+             (id, key, display_name, image_reference, toolchains, architectures,
+              availability_state, provenance, platform_policy_version)
+             VALUES ($1, $2, $2, $3, '[]'::jsonb, ARRAY['x86_64'],
+                     'available', '{}'::jsonb, 'test/v1')",
+        )
+        .bind(Uuid::new_v4())
+        .bind(key)
+        .bind(reference)
+        .execute(pool)
+        .await
+        .expect("OCI image");
+    }
     sqlx::query(
         "INSERT INTO git_receives
          (id, repository_id, actor_id, principal, status, accepted_at)
@@ -416,6 +485,18 @@ async fn seed(pool: &sqlx::PgPool, repository_id: Uuid, commit: &str) -> BuildRe
     .execute(pool)
     .await
     .expect("build request");
+    sqlx::query(
+        "INSERT INTO build_request_images
+         (build_request_id, execution_context, image_id, image_key, image_reference)
+         SELECT $1, context.execution_context, image.id, image.key, image.image_reference
+           FROM (VALUES ('build'::text, 'build'::text), ('guest', 'run'))
+                    AS context(execution_context, image_key)
+           JOIN oci_images AS image ON image.key = context.image_key",
+    )
+    .bind(build.as_uuid())
+    .execute(pool)
+    .await
+    .expect("build image snapshots");
     build
 }
 

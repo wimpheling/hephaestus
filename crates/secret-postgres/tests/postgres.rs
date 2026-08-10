@@ -7,8 +7,8 @@ use release_domain::AgentAttachmentId;
 use runtime_types::RunId;
 use secret_application::{
     AcceptSecretImport, BindSecret, BrokerAdapter, BrokerAdapterError, BrokerRequest,
-    BrokerResponse, BrokerStatus, CreateSecret, GrantAndAcceptSecretImport, GrantSecret,
-    ResolveRunSecrets, RotateSecret, SecretServiceError,
+    BrokerResponse, BrokerStatus, CreateSecret, DeclareBrokeredHttpsRule,
+    GrantAndAcceptSecretImport, GrantSecret, ResolveRunSecrets, RotateSecret, SecretServiceError,
 };
 use secret_domain::{
     AgentSecretBindingId, DeliveryMode, ExecutionPhase, SecretAlias, SecretCommandKey,
@@ -43,6 +43,24 @@ struct Fixture {
 struct FakeBroker {
     observed: AtomicBool,
     expected_credential: Vec<u8>,
+}
+
+struct AcceptingBroker;
+
+#[async_trait::async_trait]
+impl BrokerAdapter for AcceptingBroker {
+    async fn invoke(
+        &self,
+        _credential: &SecretValue,
+        _destination: &str,
+        _operation: &str,
+        _body: &[u8],
+    ) -> Result<BrokerResponse, BrokerAdapterError> {
+        Ok(BrokerResponse {
+            status: BrokerStatus::Succeeded,
+            body: br#"{\"result\":\"sanitized\"}"#.to_vec(),
+        })
+    }
 }
 
 #[async_trait::async_trait]
@@ -719,6 +737,29 @@ async fn encrypted_rotation_delegation_revocation_and_purge_are_atomic() {
         attachment_id,
     )
     .await;
+    let brokered_binding_id: Uuid = sqlx::query_scalar(
+        "SELECT id FROM agent_secret_bindings
+          WHERE instance_revision_id = $1 AND slot_key = 'model' AND status = 'active'",
+    )
+    .bind(repository_bound_revision_id.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("exact active brokered binding");
+    let brokered_rule_id = Uuid::new_v4();
+    service
+        .declare_brokered_https_rule(
+            &ordinary_member,
+            DeclareBrokeredHttpsRule {
+                command_key: key("declare-brokered-rule", brokered_rule_id),
+                rule_id: brokered_rule_id,
+                binding_id: AgentSecretBindingId::from_uuid(brokered_binding_id),
+                destination: String::from("https://api.example.test"),
+                header: String::from("authorization"),
+                header_prefix: Some(String::from("Bearer ")),
+            },
+        )
+        .await
+        .expect("declare exact immutable brokered HTTPS rule");
     let resolve_key = key("resolve", run_id.as_uuid());
     let authority = service
         .resolve_for_dispatch(
@@ -740,6 +781,25 @@ async fn encrypted_rotation_delegation_revocation_and_purge_are_atomic() {
         .expect("live exact authority should resolve at dispatch");
     assert_eq!(authority.leases.len(), 1);
     assert_eq!(authority.leases[0].version_id, first_version);
+    let snapshot: (Uuid, String, String, String, Option<String>) = sqlx::query_as(
+        "SELECT rule_id, destination_origin, location_kind, header_name, header_prefix
+           FROM brokered_secret_lease_snapshots
+          WHERE lease_id = $1",
+    )
+    .bind(authority.leases[0].lease_id.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("exact brokered rule snapshot");
+    assert_eq!(
+        snapshot,
+        (
+            brokered_rule_id,
+            String::from("https://api.example.test"),
+            String::from("outbound_header_prefix"),
+            String::from("authorization"),
+            Some(String::from("Bearer ")),
+        )
+    );
     assert_eq!(format!("{}", authority.credential), "[REDACTED]");
     let token_hash = authority.credential.storage_hash();
     let stored_hash: Vec<u8> = sqlx::query_scalar(
@@ -811,6 +871,48 @@ async fn encrypted_rotation_delegation_revocation_and_purge_are_atomic() {
             .any(|value| value == SENTINEL.as_bytes())
     );
     assert!(adapter.observed.load(Ordering::SeqCst));
+    let https_body = serde_json::to_vec(&json!({ "rule_id": brokered_rule_id }))
+        .expect("brokered HTTPS request");
+    let https_response = runtime
+        .use_brokered(
+            &authority.credential,
+            &BrokerRequest {
+                run_id,
+                slot: SecretSlotKey::parse("model").expect("slot should validate"),
+                destination: String::from("api.example.test"),
+                operation: String::from("https_v1"),
+                body: https_body.clone(),
+            },
+            &AcceptingBroker,
+        )
+        .await
+        .expect("exact brokered HTTPS snapshot should authorize");
+    assert_eq!(https_response.status, BrokerStatus::Succeeded);
+    for request in [
+        BrokerRequest {
+            run_id,
+            slot: SecretSlotKey::parse("model").expect("slot should validate"),
+            destination: String::from("api.example.test"),
+            operation: String::from("https_v1"),
+            body: serde_json::to_vec(&json!({ "rule_id": Uuid::new_v4() }))
+                .expect("unbound rule request"),
+        },
+        BrokerRequest {
+            run_id: RunId::new(),
+            slot: SecretSlotKey::parse("model").expect("slot should validate"),
+            destination: String::from("api.example.test"),
+            operation: String::from("https_v1"),
+            body: https_body,
+        },
+    ] {
+        assert!(matches!(
+            runtime
+                .use_brokered(&authority.credential, &request, &AcceptingBroker)
+                .await,
+            Err(SecretServiceError::BrokerRequestDenied
+                | SecretServiceError::RuntimeAuthenticationDenied)
+        ));
+    }
     let alternate_destination = runtime
         .use_brokered(
             &authority.credential,

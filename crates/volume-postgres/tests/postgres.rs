@@ -28,7 +28,7 @@ async fn creates_formats_leases_rejects_and_recovers() {
             transient_runtime_roots: Vec::new(),
             host_id: String::from("integration-host"),
             lease_duration: Duration::from_millis(2),
-            mkfs_ext4: PathBuf::from("/usr/bin/mkfs.ext4"),
+            mkfs_ext4: mkfs_ext4(),
         },
     )
     .expect("local volume configuration");
@@ -106,6 +106,17 @@ async fn creates_formats_leases_rejects_and_recovers() {
         .expect("volume reusable after recovery");
 
     cleanup(&pool, instance_id, first.id).await;
+}
+
+fn mkfs_ext4() -> PathBuf {
+    if let Some(path) = env::var_os("HEPHAESTUS_MKFS_EXT4") {
+        return PathBuf::from(path);
+    }
+    ["/usr/sbin/mkfs.ext4", "/usr/bin/mkfs.ext4"]
+        .into_iter()
+        .map(PathBuf::from)
+        .find(|path| path.is_file())
+        .expect("mkfs.ext4 must be installed for the volume integration fixture")
 }
 
 // Exact provenance is clearer here with the schema's canonical identifier names.

@@ -17,7 +17,7 @@ defmodule HephaestusWebWeb.RepositoryComponentsTest do
 
     document = LazyHTML.from_fragment(html)
 
-    assert count(document, "#repository-tabs a") == 5
+    assert count(document, "#repository-tabs a") == 6
 
     assert count(document, ~s|#repository-tabs a[aria-current="page"]|) == 1
 
@@ -93,6 +93,7 @@ defmodule HephaestusWebWeb.RepositoryComponentsTest do
         %{key: :files, label: "Files", destination: "#{root}/files?#{query}"},
         %{key: :commits, label: "Commits", destination: "#{root}/commits?#{query}"},
         %{key: :branches, label: "Branches", destination: "#{root}/branches"},
+        %{key: :builds, label: "Builds", destination: "#{root}/builds"},
         %{key: :releases, label: "Releases", destination: "#{root}/releases"},
         %{key: :agents, label: "Agents", destination: "#{root}/agents"}
       ])

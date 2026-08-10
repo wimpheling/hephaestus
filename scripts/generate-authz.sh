@@ -41,7 +41,19 @@ awk '
 ' "$generated" > "$normalized"
 {
     printf '%s\n' '-- Authoritative tuple projection for authorization model v2.'
-    tail -n +4 "$tuple_source"
+    # Keep the generated model's base tuples independent of resources that
+    # are introduced by later migrations. Those migrations can safely extend
+    # the public dispatcher view without creating a forward table reference.
+    tail -n +4 "$tuple_source" \
+        | sed '0,/CREATE OR REPLACE VIEW melange_tuples/s//CREATE OR REPLACE VIEW melange_base_tuples/'
+    cat <<'SQL'
+
+CREATE OR REPLACE VIEW melange_tuples (
+    subject_type, subject_id, relation, object_type, object_id
+) AS
+SELECT subject_type, subject_id, relation, object_type, object_id
+FROM melange_base_tuples;
+SQL
     printf '\n'
     # Initial development intentionally removes the superseded hollow-agent
     # type. Full-mode generation does not infer deleted functions, so record
@@ -69,7 +81,7 @@ awk '
     done
     printf '\n'
     cat "$normalized"
-} > "$composed"
+} | sed -E -e 's/[[:space:]]+$//' -e 's/ +\t/\t/g' > "$composed"
 
 if [[ ${1:-} == --write ]]; then
     cp "$composed" "$committed"

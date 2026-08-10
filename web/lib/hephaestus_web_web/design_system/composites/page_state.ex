@@ -27,7 +27,7 @@ defmodule HephaestusWebWeb.DesignSystem.Composites.PageState do
       :if={@state != :ready}
       as="section"
       id={@id}
-      variant={:page_state}
+      variant={if(@state == :loading, do: :loading_page_state, else: :page_state)}
       role={@role}
       aria_live={@live}
     >

@@ -1,0 +1,31 @@
+[package]
+name = "pat-postgres"
+description = "PostgreSQL service for hash-only developer personal access tokens"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[package.metadata.hephaestus]
+layer = "adapter"
+context = "forge"
+postgres_adapter = true
+database_context = "forge"
+
+[dependencies]
+forge-domain = { path = "../forge-domain" }
+getrandom = "0.3"
+git-capability-domain = { path = "../git-capability-domain" }
+identity-domain = { path = "../identity-domain" }
+pat-domain = { path = "../pat-domain" }
+sqlx.workspace = true
+thiserror.workspace = true
+time.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+serial_test = "3"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

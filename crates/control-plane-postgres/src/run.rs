@@ -223,10 +223,19 @@ pub async fn recoverable_update_hook_run_ids(pool: &PgPool) -> Result<Vec<Uuid>,
          JOIN runs AS run ON run.id = update.hook_run_id
          WHERE update.state IN ('hook_running', 'hook_committed')
            AND run.state = 'cleaned_up'
+           AND run.run_kind = 'update'
          ORDER BY update.created_at, update.id",
     )
     .fetch_all(pool)
     .await
+}
+
+/// Returns whether an update-kind run is the exact hook run for an update.
+pub async fn is_update_hook_run(pool: &PgPool, run_id: Uuid) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM agent_updates WHERE hook_run_id = $1)")
+        .bind(run_id)
+        .fetch_one(pool)
+        .await
 }
 
 impl RunApplication {

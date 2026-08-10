@@ -19,6 +19,7 @@ readonly secret_runtime_root
 postgres_container="hephaestus-ui-postgres-$$"
 nats_container="hephaestus-ui-nats-$$"
 web_container="hephaestus-ui-web-$$"
+web_setup_container="hephaestus-ui-web-setup-$$"
 oidc_pid=""
 daemon_pid=""
 base_port=$((20000 + ($$ % 10000) * 3))
@@ -30,12 +31,33 @@ readonly daemon_url="http://127.0.0.1:${daemon_port}"
 readonly web_url="http://127.0.0.1:${web_port}"
 readonly secret_sentinel="HEPHAESTUS_BROWSER_SECRET_4d7ccf"
 
+capture_web_logs() {
+    podman logs "${web_container}" >"${fixture_root}/web.log" 2>&1 || true
+}
+
+report_web_diagnostics() {
+    if podman container exists "${web_container}"; then
+        podman inspect --format \
+            'Phoenix container state: {{.State.Status}} (exit {{.State.ExitCode}})' \
+            "${web_container}" >&2 || true
+        capture_web_logs
+    fi
+    if [[ -f "${fixture_root}/web.log" ]]; then
+        tail -200 "${fixture_root}/web.log" >&2
+    fi
+}
+
 cleanup() {
     local status="$?"
     if [[ "${status}" -ne 0 ]]; then
         if [[ -f "${fixture_root}/daemon.log" ]]; then
             tail -200 "${fixture_root}/daemon.log" >&2
         fi
+        if [[ -f "${fixture_root}/web-setup.log" ]] &&
+            ! podman container exists "${web_container}"; then
+            tail -200 "${fixture_root}/web-setup.log" >&2
+        fi
+        report_web_diagnostics
         podman exec "${postgres_container}" psql --username postgres \
             --dbname hephaestus --tuples-only --command \
             "SELECT id, name, organization_id, project_id, status FROM secrets ORDER BY created_at" \
@@ -68,10 +90,9 @@ cleanup() {
             --dbname hephaestus --tuples-only --command \
             "SELECT event.scope_kind, event.scope_id, event.cursor, outbox.published_at IS NOT NULL AS published, outbox.dead_lettered_at IS NOT NULL AS dead_lettered, outbox.last_error FROM product_event_outbox outbox JOIN application_events event ON event.id = outbox.event_id ORDER BY event.occurred_at, event.cursor" \
             >&2 2>/dev/null || true
-        podman logs "${web_container}" >&2 2>/dev/null || true
     fi
     if [[ "${HEPHAESTUS_E2E_KEEP_FIXTURES:-0}" == "1" ]]; then
-        podman logs "${web_container}" >"${fixture_root}/web.log" 2>&1 || true
+        capture_web_logs
     fi
     if [[ -n "${daemon_pid}" ]]; then
         kill "${daemon_pid}" 2>/dev/null || true
@@ -81,13 +102,16 @@ cleanup() {
         kill "${oidc_pid}" 2>/dev/null || true
         wait "${oidc_pid}" 2>/dev/null || true
     fi
-    podman stop "${web_container}" >/dev/null 2>&1 || true
-    podman stop "${nats_container}" >/dev/null 2>&1 || true
-    podman stop "${postgres_container}" >/dev/null 2>&1 || true
     if [[ "${HEPHAESTUS_E2E_KEEP_FIXTURES:-0}" == "1" ]]; then
+        printf 'retained browser E2E containers: %s %s %s\n' \
+            "${postgres_container}" "${nats_container}" "${web_container}" >&2
         printf 'retained browser E2E fixtures at %s\n' "${fixture_root}" >&2
         printf 'retained secret runtime at %s\n' "${secret_runtime_root}" >&2
     else
+        podman rm --force "${web_container}" >/dev/null 2>&1 || true
+        podman rm --force "${web_setup_container}" >/dev/null 2>&1 || true
+        podman stop "${nats_container}" >/dev/null 2>&1 || true
+        podman stop "${postgres_container}" >/dev/null 2>&1 || true
         rm -rf -- "${fixture_root}"
         rm -rf -- "${secret_runtime_root}"
     fi
@@ -169,11 +193,25 @@ mkdir -p \
     "${fixture_root}/artifacts" \
     "${fixture_root}/runtime" \
     "${fixture_root}/root-image" \
-    "${fixture_root}/secret-keys"
-chmod 0700 "${fixture_root}/secret-keys" "${secret_runtime_root}"
+    "${fixture_root}/registry-credentials" \
+    "${fixture_root}/secret-keys" \
+    "${fixture_root}/screenshots"
+chmod 0700 \
+    "${fixture_root}/registry-credentials" \
+    "${fixture_root}/secret-keys" \
+    "${secret_runtime_root}"
 umask 077
 head -c 32 /dev/zero | tr '\0' '\127' >"${fixture_root}/secret-keys/e2e-v1"
 chmod 0400 "${fixture_root}/secret-keys/e2e-v1"
+head -c 32 /dev/zero | tr '\0' '\126' >"${fixture_root}/runtime-authority-handoff.key"
+chmod 0400 "${fixture_root}/runtime-authority-handoff.key"
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 \
+    -out "${fixture_root}/registry-token-private.pem" >/dev/null 2>&1
+printf '%s\n' 'browser-e2e-notification-callback-token-0123456789abcdef' \
+    >"${fixture_root}/registry-notification-token"
+chmod 0400 \
+    "${fixture_root}/registry-token-private.pem" \
+    "${fixture_root}/registry-notification-token"
 
 podman run --detach --rm \
     --name "${postgres_container}" \
@@ -214,7 +252,8 @@ wait_for_url "${oidc_url}/.well-known/openid-configuration" \
     "${fixture_root}/oidc.log"
 
 cd "${repo_root}"
-cargo build -p hephaestus-app --bins
+cargo build -p hephaestus-app --bins -p bootstrap-postgres --bin hephaestus-e2e-seed \
+    -p git-http --bin pre-receive
 HEPHAESTUS_DATABASE_URL="${database_url}" \
 HEPHAESTUS_REPOSITORY_ROOT="${fixture_root}/repositories" \
 HEPHAESTUS_ARTIFACT_ROOT="${fixture_root}/artifacts" \
@@ -227,6 +266,7 @@ export HEPHAESTUS_NATS_URL="nats://127.0.0.1:${nats_port}"
 export HEPHAESTUS_HTTP_LISTEN="127.0.0.1:${daemon_port}"
 export HEPHAESTUS_REPOSITORY_ROOT="${fixture_root}/repositories"
 export HEPHAESTUS_GIT_HTTP_BACKEND="$(git --exec-path)/git-http-backend"
+export HEPHAESTUS_GIT_PRE_RECEIVE_HOOK="${repo_root}/target/debug/pre-receive"
 export HEPHAESTUS_OIDC_ISSUER="${oidc_url}"
 export HEPHAESTUS_OIDC_AUDIENCE="hephaestus-git"
 export HEPHAESTUS_OIDC_ALGORITHM="HS256"
@@ -238,9 +278,22 @@ export HEPHAESTUS_RUNTIME_ROOT="${fixture_root}/runtime"
 export HEPHAESTUS_SECRET_RUNTIME_ROOT="${secret_runtime_root}"
 export HEPHAESTUS_SECRET_KEY_DIRECTORY="${fixture_root}/secret-keys"
 export HEPHAESTUS_SECRET_KEY_REFERENCE="e2e-v1"
+export HEPHAESTUS_RUNTIME_AUTHORITY_HANDOFF_KEY_FILE="${fixture_root}/runtime-authority-handoff.key"
 export HEPHAESTUS_RPC_MEDIATOR_SECRET="e2e-rpc-mediator-secret-with-sufficient-entropy"
-export HEPHAESTUS_ROOT_IMAGE_PATH="${fixture_root}/root-image"
-export HEPHAESTUS_ROOT_IMAGE_REFERENCE="fixture-root@sha256:e2e"
+export HEPHAESTUS_REGISTRY_TOKEN_PRIVATE_KEY="${fixture_root}/registry-token-private.pem"
+export HEPHAESTUS_REGISTRY_TOKEN_ISSUER="${daemon_url}/v1/registry/token"
+export HEPHAESTUS_REGISTRY_SERVICE="registry.browser.invalid"
+export HEPHAESTUS_REGISTRY_PRIVATE_ORIGIN="http://127.0.0.1:9/"
+export HEPHAESTUS_REGISTRY_TOKEN_KEY_ID="browser-e2e-v1"
+export HEPHAESTUS_REGISTRY_TOKEN_LIFETIME_SECONDS="300"
+export HEPHAESTUS_REGISTRY_NOTIFICATION_CALLBACK_TOKEN_FILE="${fixture_root}/registry-notification-token"
+export HEPHAESTUS_REGISTRY_RECONCILIATION_INTERVAL_MILLISECONDS="60000"
+export HEPHAESTUS_REGISTRY_CREDENTIAL_ROOT="${fixture_root}/registry-credentials"
+readonly root_image_manifest="${fixture_root}/root-image-manifest.json"
+printf '{"version":1,"roots":{"fixture-root@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa":{"kind":"directory","path":"%s"},"registry.browser.invalid/platform/images/fixture-root@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa":{"kind":"directory","path":"%s"}}}\n' \
+    "${fixture_root}/root-image" "${fixture_root}/root-image" >"${root_image_manifest}"
+unset HEPHAESTUS_ROOT_IMAGE_PATH HEPHAESTUS_ROOT_IMAGE_REFERENCE
+export HEPHAESTUS_ROOT_IMAGE_MANIFEST="${root_image_manifest}"
 export HEPHAESTUS_VM_BACKEND="fixture"
 export HEPHAESTUS_HOST_ID="browser-e2e"
 export HEPHAESTUS_MKFS_EXT4="$(command -v mkfs.ext4)"
@@ -257,7 +310,19 @@ wait_for_url "${daemon_url}/healthz" "${fixture_root}/daemon.log"
 
 # The repository may also be mounted by the persistent local server, so keep
 # one shared SELinux label across development containers.
-podman run --detach --rm \
+podman run --rm \
+    --name "${web_setup_container}" \
+    --network host \
+    --volume "${repo_root}:/workspace:z" \
+    --workdir /workspace/web \
+    --env MIX_ENV=dev \
+    docker.io/hexpm/elixir:1.18.4-erlang-27.3.4-debian-bookworm-20250428-slim \
+    sh -lc 'apt-get update -qq && apt-get install -y -qq --no-install-recommends ca-certificates >/dev/null && rm -rf /var/lib/apt/lists/* && mix local.hex --force >/dev/null && mix deps.get && mix assets.setup && mix assets.build' \
+    >"${fixture_root}/web-setup.log" 2>&1
+
+# Keep this container until cleanup. If Phoenix exits before readiness, its
+# logs and exit status remain available to the failure diagnostics.
+podman run --detach \
     --name "${web_container}" \
     --network host \
     --volume "${repo_root}:/workspace:z" \
@@ -272,7 +337,7 @@ podman run --detach --rm \
     --env HEPHAESTUS_BROWSER_OIDC_CLIENT_SECRET="development-secret" \
     --env HEPHAESTUS_BROWSER_OIDC_REDIRECT_URI="${web_url}/auth/oidc/callback" \
     docker.io/hexpm/elixir:1.18.4-erlang-27.3.4-debian-bookworm-20250428-slim \
-    sh -lc 'mix local.hex --force >/dev/null && mix clean && mix phx.server' \
+    sh -lc 'mix local.hex --force >/dev/null && mix phx.server' \
     >"${fixture_root}/web-container-id"
 wait_for_url "${web_url}/" "${fixture_root}/web.log"
 assert_web_isolation
@@ -283,9 +348,15 @@ HEPHAESTUS_REPOSITORY_ROOT="${fixture_root}/repositories" \
 HEPHAESTUS_GIT_URL="${daemon_url}" \
 HEPHAESTUS_WEB_URL="${web_url}" \
 HEPHAESTUS_OIDC_URL="${oidc_url}" \
-    npm test
+HEPHAESTUS_E2E_EVIDENCE_DIR="${fixture_root}/screenshots" \
+    bash -c '
+        if [[ -n "${HEPHAESTUS_PLAYWRIGHT_GREP:-}" ]]; then
+            exec npx playwright test --grep "${HEPHAESTUS_PLAYWRIGHT_GREP}"
+        fi
+        exec npm test
+    '
 
-podman logs "${web_container}" >"${fixture_root}/web.log" 2>&1
+capture_web_logs
 podman exec "${postgres_container}" pg_dump --username postgres --dbname hephaestus \
     >"${fixture_root}/postgres.sql"
 

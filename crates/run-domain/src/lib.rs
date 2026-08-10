@@ -115,6 +115,8 @@ pub struct Run {
     pub volume_id: Option<VolumeId>,
     /// Writable lease, once acquired.
     pub lease_id: Option<LeaseId>,
+    /// Exact monotonic fence held by `lease_id`, once acquired.
+    pub lease_fencing_token: Option<i64>,
     /// Provider-neutral VM identifier.
     pub vm_id: Option<String>,
     /// Current durable lifecycle state.

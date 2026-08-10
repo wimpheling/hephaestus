@@ -4,6 +4,8 @@ description = "PostgreSQL bootstrap and operator utilities"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+build = "src/bin/e2e_seed_build.rs"
+autobins = false
 
 [dependencies]
 agent-config = { path = "../agent-config" }
@@ -15,6 +17,8 @@ forge-service = { path = "../forge-service" }
 identity-domain = { path = "../identity-domain" }
 release-domain = { path = "../release-domain" }
 release-postgres = { path = "../release-postgres" }
+registry-domain = { path = "../registry-domain" }
+registry-postgres = { path = "../registry-postgres" }
 serde_json.workspace = true
 sha2.workspace = true
 sqlx.workspace = true

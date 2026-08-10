@@ -87,4 +87,6 @@ pub trait ProductEventOutbox: Send + Sync {
     async fn mark_published(&self, event_id: Uuid) -> Result<(), MutationReceiptError>;
     /// Records a retry failure.
     async fn mark_failed(&self, event_id: Uuid, message: &str) -> Result<(), MutationReceiptError>;
+    /// Records an unrecoverable projection failure and removes it from retry.
+    async fn dead_letter(&self, event_id: Uuid, reason: &str) -> Result<(), MutationReceiptError>;
 }

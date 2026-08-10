@@ -56,7 +56,7 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.ProjectRunsPage do
               :for={{dom_id, run} <- @runs}
               id={dom_id}
               destination={@run_destination.(run["id"])}
-              variant={:text}
+              variant={:resource_row}
             >
               <.text as="strong">{run["instance_name"]}</.text><.text as="span">
                 {run["repository_name"]}
@@ -86,6 +86,12 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.ProjectRunsPage do
         destination: "/projects/#{id}/agents"
       },
       %{key: :runs, label: "Runs", icon: "hero-play-circle", destination: "/projects/#{id}/runs"},
+      %{
+        key: :gateways,
+        label: "Gateways",
+        icon: "hero-globe-alt",
+        destination: "/projects/#{id}/gateways"
+      },
       %{
         key: :settings,
         label: "Settings",

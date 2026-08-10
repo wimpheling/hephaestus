@@ -1,0 +1,25 @@
+[package]
+name = "builder-catalog-application"
+description = "OCI image catalog application port and immutable selection resolution"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[package.metadata.hephaestus]
+layer = "application"
+context = "image"
+allow_cross_context_dependencies = ["identity-domain"]
+
+[dependencies]
+async-trait.workspace = true
+builder-catalog-domain = { path = "../builder-catalog-domain" }
+identity-domain = { path = "../identity-domain" }
+thiserror.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+time.workspace = true
+tokio = { workspace = true, features = ["macros", "rt"] }
+
+[lints]
+workspace = true

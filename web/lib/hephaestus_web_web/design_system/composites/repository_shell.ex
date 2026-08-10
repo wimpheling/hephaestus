@@ -15,7 +15,7 @@ defmodule HephaestusWebWeb.DesignSystem.Composites.RepositoryShell do
 
   attr :active, :atom,
     required: true,
-    values: [:files, :commits, :branches, :releases, :agents]
+    values: [:files, :commits, :branches, :builds, :releases, :agents]
 
   attr :organization_index_destination, :string, default: nil
   attr :organization_destination, :string, default: nil
@@ -26,13 +26,13 @@ defmodule HephaestusWebWeb.DesignSystem.Composites.RepositoryShell do
   def repository_shell(assigns) do
     ~H"""
     <.page_state
-      :if={@state != :ready}
+      :if={is_nil(@repository) or @state == :error}
       id="repository-page-state"
       state={@state}
-      title="Repository unavailable"
-      message="Resolving repository access and branch state."
+      title={state_title(@state)}
+      message={state_message(@state)}
     />
-    <.frame :if={@state == :ready} variant={:summary_body}>
+    <.frame :if={not is_nil(@repository) and @state != :error} variant={:summary_body}>
       <.breadcrumbs id="repository-breadcrumbs">
         <:item navigate={@organization_index_destination}>Organizations</:item>
         <:item navigate={@organization_destination}>{@repository["organization_name"]}</:item>
@@ -65,4 +65,11 @@ defmodule HephaestusWebWeb.DesignSystem.Composites.RepositoryShell do
 
   defp friendly_ref("refs/heads/" <> branch), do: branch
   defp friendly_ref(git_ref), do: git_ref
+
+  defp state_title(:loading), do: "Loading repository"
+  defp state_title(:reconnecting), do: "Reconnecting to repository"
+  defp state_title(_state), do: "Repository unavailable"
+
+  defp state_message(:error), do: "Repository data could not be loaded."
+  defp state_message(_state), do: "Resolving repository access and branch state."
 end

@@ -1,0 +1,125 @@
+syntax = "proto3";
+
+package hephaestus.pat.v1;
+
+import "google/protobuf/timestamp.proto";
+import "hephaestus/common/v1/common.proto";
+import "hephaestus/options/v1/options.proto";
+
+// Manages developer-owned Git personal access tokens. Browser authentication
+// remains OIDC; these credentials are accepted only at the Git boundary.
+service PersonalAccessTokenService {
+  rpc ListPersonalAccessTokens(ListPersonalAccessTokensRequest) returns (ListPersonalAccessTokensResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (hephaestus.options.v1.authorization) = {
+      permission: "personal_access_token.list"
+      audience: "/hephaestus.pat.v1.PersonalAccessTokenService/ListPersonalAccessTokens"
+      actor_source: ACTOR_SOURCE_MEDIATOR_JWT_METADATA
+    };
+    option (hephaestus.options.v1.operation_kind) = OPERATION_KIND_QUERY;
+    option (hephaestus.options.v1.max_request_bytes) = 4096;
+    option (hephaestus.options.v1.max_response_bytes) = 2097152;
+  }
+  rpc CreatePersonalAccessToken(CreatePersonalAccessTokenRequest) returns (CreatePersonalAccessTokenResponse) {
+    option (hephaestus.options.v1.authorization) = {
+      permission: "personal_access_token.create"
+      audience: "/hephaestus.pat.v1.PersonalAccessTokenService/CreatePersonalAccessToken"
+      actor_source: ACTOR_SOURCE_MEDIATOR_JWT_METADATA
+    };
+    option (hephaestus.options.v1.operation_kind) = OPERATION_KIND_MUTATION;
+    option (hephaestus.options.v1.max_request_bytes) = 32768;
+    option (hephaestus.options.v1.max_response_bytes) = 65536;
+  }
+  rpc RotatePersonalAccessToken(RotatePersonalAccessTokenRequest) returns (RotatePersonalAccessTokenResponse) {
+    option (hephaestus.options.v1.authorization) = {
+      permission: "personal_access_token.rotate"
+      audience: "/hephaestus.pat.v1.PersonalAccessTokenService/RotatePersonalAccessToken"
+      actor_source: ACTOR_SOURCE_MEDIATOR_JWT_METADATA
+    };
+    option (hephaestus.options.v1.operation_kind) = OPERATION_KIND_MUTATION;
+    option (hephaestus.options.v1.max_request_bytes) = 32768;
+    option (hephaestus.options.v1.max_response_bytes) = 65536;
+  }
+  rpc RevokePersonalAccessToken(RevokePersonalAccessTokenRequest) returns (RevokePersonalAccessTokenResponse) {
+    option (hephaestus.options.v1.authorization) = {
+      permission: "personal_access_token.revoke"
+      audience: "/hephaestus.pat.v1.PersonalAccessTokenService/RevokePersonalAccessToken"
+      actor_source: ACTOR_SOURCE_MEDIATOR_JWT_METADATA
+    };
+    option (hephaestus.options.v1.operation_kind) = OPERATION_KIND_MUTATION;
+    option (hephaestus.options.v1.max_request_bytes) = 8192;
+    option (hephaestus.options.v1.max_response_bytes) = 8192;
+  }
+}
+
+enum GitOperation {
+  GIT_OPERATION_UNSPECIFIED = 0;
+  GIT_OPERATION_DISCOVER = 1;
+  GIT_OPERATION_FETCH = 2;
+  GIT_OPERATION_RECEIVE = 3;
+}
+
+// Request-only scope declaration. Empty repository_ids means that the token
+// adds no repository narrowing; live user authorization still applies.
+message PersonalAccessTokenScope {
+  repeated GitOperation operations = 1;
+  repeated hephaestus.common.v1.OpaqueId repository_ids = 2;
+}
+
+message PersonalAccessTokenMetadata {
+  hephaestus.common.v1.OpaqueId id = 1;
+  string label = 2;
+  PersonalAccessTokenScope scope = 3;
+  google.protobuf.Timestamp created_at = 4;
+  google.protobuf.Timestamp expires_at = 5;
+  google.protobuf.Timestamp revoked_at = 6;
+  google.protobuf.Timestamp last_used_at = 7;
+}
+
+// One-time bearer material. It is deliberately available only in successful
+// create and rotate responses and must never be logged or persisted server-side.
+message PersonalAccessTokenValue {
+  bytes value = 1 [(hephaestus.options.v1.sensitive) = true];
+}
+
+message ListPersonalAccessTokensRequest {
+  hephaestus.common.v1.PageRequest page = 1;
+}
+message ListPersonalAccessTokensResponse {
+  repeated PersonalAccessTokenMetadata tokens = 1;
+  hephaestus.common.v1.PageResponse page = 2;
+}
+
+message CreatePersonalAccessTokenRequest {
+  hephaestus.common.v1.RequestContext context = 1;
+  string label = 2;
+  PersonalAccessTokenScope scope = 3;
+  google.protobuf.Timestamp expires_at = 4;
+}
+message CreatePersonalAccessTokenResponse {
+  PersonalAccessTokenMetadata token = 1;
+  PersonalAccessTokenValue value = 2;
+  hephaestus.common.v1.MutationReceipt receipt = 3;
+}
+
+message RotatePersonalAccessTokenRequest {
+  hephaestus.common.v1.RequestContext context = 1;
+  hephaestus.common.v1.OpaqueId token_id = 2;
+  string label = 3;
+  PersonalAccessTokenScope scope = 4;
+  google.protobuf.Timestamp expires_at = 5;
+}
+message RotatePersonalAccessTokenResponse {
+  PersonalAccessTokenMetadata token = 1;
+  PersonalAccessTokenValue value = 2;
+  hephaestus.common.v1.MutationReceipt receipt = 3;
+}
+
+message RevokePersonalAccessTokenRequest {
+  hephaestus.common.v1.RequestContext context = 1;
+  hephaestus.common.v1.OpaqueId token_id = 2;
+}
+message RevokePersonalAccessTokenResponse {
+  PersonalAccessTokenMetadata token = 1;
+  hephaestus.common.v1.MutationReceipt receipt = 2;
+}

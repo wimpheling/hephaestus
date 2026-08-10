@@ -3,11 +3,32 @@
 use async_trait::async_trait;
 use run_domain::{CancelRun, Run, RunKind, RunOutcome, RunState, StartRun};
 use run_orchestrator::{
-    CreateRunResult, OrchestratorError, PreparedRunRuntime, PreparedRunSecrets, RepositoryError,
-    RunAuthorizationError, RunCompletionError, RunCompletionObserver, RunLaunchAuthorizer,
-    RunOrchestrator, RunRepository, RunRuntimeError, RunRuntimeManager, RunSecretError,
-    RunSecretManager, StoredVmEvent, VmSpecFactory,
+    CompositeRunCompletionObserver, CreateRunResult, OrchestratorError, PreparedRunAuthority,
+    PreparedRunRuntime, PreparedRunSecrets, RepositoryError, RunAuthorityError,
+    RunAuthorityManager, RunAuthorizationError, RunCompletionError, RunCompletionObserver,
+    RunLaunchAuthorizer, RunOrchestrator, RunRepository, RunResourceObservationError,
+    RunResourceObserver, RunRuntimeError, RunRuntimeManager, RunSecretError, RunSecretManager,
+    StoredVmEvent, VmSpecFactory,
 };
+
+#[tokio::test]
+async fn composite_completion_runs_every_observer_and_sums_recovery() {
+    let first = Arc::new(CountingCompletion::new(2));
+    let second = Arc::new(CountingCompletion::new(3));
+    let observer = CompositeRunCompletionObserver::new(vec![first.clone(), second.clone()]);
+    let run = test_run();
+
+    observer
+        .after_cleanup(&run)
+        .await
+        .expect("completion observers should run");
+    assert_eq!(first.completions.load(Ordering::SeqCst), 1);
+    assert_eq!(second.completions.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        observer.recover().await.expect("recovery should succeed"),
+        5
+    );
+}
 use runtime_types::{
     AgentAttachmentId, AgentInstanceId, AgentInstanceRevisionId, CommandId, LeaseId,
     ReleaseAgentId, ReleaseId, RunId, VolumeId,
@@ -17,15 +38,15 @@ use std::{
     path::PathBuf,
     sync::{
         Arc, Mutex as StdMutex, MutexGuard,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
 };
 use time::OffsetDateTime;
 use tokio::sync::{Mutex, broadcast, watch};
 use uuid::Uuid;
 use vm_trait::{
-    GuestCommand, NetworkMode, RootFilesystem, StopMode, VmError, VmEvent, VmExit, VmId,
-    VmInstance, VmMount, VmProvider, VmResources, VmSpec,
+    GuestCommand, NetworkMode, RootFilesystem, RuntimeAuthorityBootstrap, StopMode, VmError,
+    VmEvent, VmExit, VmId, VmInstance, VmMount, VmProvider, VmResources, VmSpec,
 };
 use volume_trait::{
     INSTANCE_STATE_DISK_ID, Volume, VolumeAttachment, VolumeError, VolumeKind, VolumeLease,
@@ -65,8 +86,15 @@ async fn destroys_vm_before_releasing_lease_and_deduplicates_start() {
     .with_launch_authorizer(Arc::new(RecordingLaunchAuthorizer {
         log: Arc::clone(&log),
     }))
+    .with_resource_observer(Arc::new(RecordingResourceObserver {
+        log: Arc::clone(&log),
+    }))
     .with_runtime_manager(Arc::new(RecordingRuntimeManager {
         log: Arc::clone(&log),
+    }))
+    .with_authority_manager(Arc::new(RecordingAuthorityManager {
+        log: Arc::clone(&log),
+        reject_acknowledgement: false,
     }));
 
     let run = orchestrator
@@ -121,6 +149,55 @@ async fn destroys_vm_before_releasing_lease_and_deduplicates_start() {
         .expect("duplicate command");
     assert_eq!(duplicate.state, RunState::CleanedUp);
     assert_eq!(lock(&log).len(), before);
+}
+
+#[tokio::test]
+async fn missing_runtime_authority_acknowledgement_destroys_guest_before_revocation() {
+    let log = Arc::new(StdMutex::new(Vec::new()));
+    let command = normal_stateless_command();
+    let provider = Arc::new(AutoExitProvider::new(Arc::clone(&log)));
+    let orchestrator = RunOrchestrator::new(
+        Arc::new(MemoryRepository::new(&command)),
+        Arc::new(MemoryVolumeStore::new(
+            command.instance_id,
+            Arc::clone(&log),
+        )),
+        provider,
+        Arc::new(TestSpecFactory),
+        32 * 1024 * 1024,
+    )
+    .with_authority_manager(Arc::new(RecordingAuthorityManager {
+        log: Arc::clone(&log),
+        reject_acknowledgement: true,
+    }));
+
+    let run = orchestrator
+        .start_run(&command)
+        .await
+        .expect("acknowledgement failure is durably cleaned");
+
+    assert_eq!(run.state, RunState::CleanedUp);
+    assert_eq!(run.outcome, Some(RunOutcome::Failed));
+    let entries = lock(&log);
+    let started = entries
+        .iter()
+        .position(|entry| *entry == "start")
+        .expect("guest start");
+    let acknowledgement = entries
+        .iter()
+        .position(|entry| *entry == "authority-ack")
+        .expect("authority acknowledgement");
+    let destroyed = entries
+        .iter()
+        .position(|entry| *entry == "destroy")
+        .expect("guest destruction");
+    let revoked = entries
+        .iter()
+        .position(|entry| *entry == "authority-revoke")
+        .expect("authority revocation");
+    drop(entries);
+    assert!(started < acknowledgement);
+    assert!(acknowledgement < destroyed && destroyed < revoked);
 }
 
 #[tokio::test]
@@ -674,6 +751,7 @@ impl VmSpecFactory for TestSpecFactory {
                 env: BTreeMap::new(),
                 working_dir: None,
             },
+            runtime_authority: None,
             labels: BTreeMap::new(),
         })
     }
@@ -701,6 +779,56 @@ struct RecordingRuntimeManager {
     log: Arc<StdMutex<Vec<&'static str>>>,
 }
 
+struct RecordingAuthorityManager {
+    log: Arc<StdMutex<Vec<&'static str>>>,
+    reject_acknowledgement: bool,
+}
+
+#[async_trait]
+impl RunAuthorityManager for RecordingAuthorityManager {
+    async fn prepare(&self, run: &Run) -> Result<PreparedRunAuthority, RunAuthorityError> {
+        lock(&self.log).push("authority-prepare");
+        Ok(PreparedRunAuthority {
+            bootstrap: Some(RuntimeAuthorityBootstrap::new(
+                run.id.as_uuid(),
+                1,
+                [0x5A; vm_trait::RUNTIME_AUTHORITY_CREDENTIAL_BYTES],
+            )),
+        })
+    }
+
+    async fn reauthorize(&self, _run: &Run) -> Result<(), RunAuthorityError> {
+        lock(&self.log).push("authority-reauthorize");
+        Ok(())
+    }
+
+    async fn acknowledge(
+        &self,
+        _run: &Run,
+        _session_id: Uuid,
+        _generation: u64,
+    ) -> Result<(), RunAuthorityError> {
+        lock(&self.log).push("authority-ack");
+        if self.reject_acknowledgement {
+            Err(RunAuthorityError::redacted(
+                "exact issuance generation was not acknowledged",
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    async fn revoke_after_guest(&self, _run_id: RunId) -> Result<(), RunAuthorityError> {
+        lock(&self.log).push("authority-revoke");
+        Ok(())
+    }
+
+    async fn recover(&self) -> Result<usize, RunAuthorityError> {
+        lock(&self.log).push("authority-recover");
+        Ok(0)
+    }
+}
+
 struct RecordingLaunchAuthorizer {
     log: Arc<StdMutex<Vec<&'static str>>>,
 }
@@ -709,6 +837,19 @@ struct RecordingLaunchAuthorizer {
 impl RunLaunchAuthorizer for RecordingLaunchAuthorizer {
     async fn authorize(&self, _run: &Run) -> Result<(), RunAuthorizationError> {
         lock(&self.log).push("authorize");
+        Ok(())
+    }
+}
+
+struct RecordingResourceObserver {
+    log: Arc<StdMutex<Vec<&'static str>>>,
+}
+
+#[async_trait]
+impl RunResourceObserver for RecordingResourceObserver {
+    async fn record(&self, run: &Run) -> Result<(), RunResourceObservationError> {
+        assert_eq!(run.lease_fencing_token, Some(1));
+        lock(&self.log).push("resource-recorded");
         Ok(())
     }
 }
@@ -767,6 +908,59 @@ impl RunSecretManager for RevokeBeforeProvisionSecrets {
 
 struct RecordingCompletion {
     log: Arc<StdMutex<Vec<&'static str>>>,
+}
+
+struct CountingCompletion {
+    completions: AtomicUsize,
+    recovered: usize,
+}
+
+impl CountingCompletion {
+    const fn new(recovered: usize) -> Self {
+        Self {
+            completions: AtomicUsize::new(0),
+            recovered,
+        }
+    }
+}
+
+#[async_trait]
+impl RunCompletionObserver for CountingCompletion {
+    async fn after_cleanup(&self, _run: &Run) -> Result<(), RunCompletionError> {
+        self.completions.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+
+    async fn recover(&self) -> Result<usize, RunCompletionError> {
+        Ok(self.recovered)
+    }
+}
+
+fn test_run() -> Run {
+    let now = OffsetDateTime::now_utc();
+    Run {
+        id: RunId::new(),
+        instance_id: AgentInstanceId::new(),
+        instance_revision_id: AgentInstanceRevisionId::new(),
+        release_id: ReleaseId::new(),
+        release_agent_id: ReleaseAgentId::new(),
+        attachment_id: None,
+        kind: RunKind::Normal,
+        requires_state: false,
+        command_id: CommandId::new(),
+        volume_id: None,
+        lease_id: None,
+        lease_fencing_token: None,
+        vm_id: None,
+        state: RunState::CleanedUp,
+        outcome: Some(RunOutcome::Succeeded),
+        exit: None,
+        failure: None,
+        cancel_requested_at: None,
+        created_at: now,
+        updated_at: now,
+        state_version: 0,
+    }
 }
 
 #[async_trait]
@@ -854,6 +1048,7 @@ impl MemoryRepository {
                 requires_state: command.requires_state,
                 volume_id: None,
                 lease_id: None,
+                lease_fencing_token: None,
                 vm_id: None,
                 state: RunState::Queued,
                 outcome: None,
@@ -892,11 +1087,13 @@ impl RunRepository for MemoryRepository {
         _run_id: RunId,
         volume_id: Option<VolumeId>,
         lease_id: Option<LeaseId>,
+        lease_fencing_token: Option<i64>,
         vm_id: &str,
     ) -> Result<Run, RepositoryError> {
         let mut run = self.run.lock().await;
         run.volume_id = volume_id;
         run.lease_id = lease_id;
+        run.lease_fencing_token = lease_fencing_token;
         run.vm_id = Some(vm_id.to_owned());
         Ok(run.clone())
     }
@@ -1102,10 +1299,15 @@ impl VmProvider for AutoExitProvider {
 
     async fn provision(&self, spec: VmSpec) -> Result<Arc<dyn VmInstance>, VmError> {
         lock(&self.log).push("provision");
+        let runtime_authority = spec
+            .runtime_authority
+            .as_ref()
+            .map(|authority| (authority.session_id(), authority.generation()));
         *lock(&self.spec) = Some(spec.clone());
         Ok(Arc::new(AutoExitInstance::new(
             spec.id,
             Arc::clone(&self.log),
+            runtime_authority,
         )))
     }
 
@@ -1120,6 +1322,7 @@ struct AutoExitInstance {
     events: broadcast::Sender<VmEvent>,
     exit: watch::Sender<Option<VmExit>>,
     log: Arc<StdMutex<Vec<&'static str>>>,
+    runtime_authority: Option<(Uuid, u64)>,
 }
 
 struct HangingProvider {
@@ -1181,7 +1384,11 @@ impl VmInstance for HangingInstance {
 }
 
 impl AutoExitInstance {
-    fn new(id: VmId, log: Arc<StdMutex<Vec<&'static str>>>) -> Self {
+    fn new(
+        id: VmId,
+        log: Arc<StdMutex<Vec<&'static str>>>,
+        runtime_authority: Option<(Uuid, u64)>,
+    ) -> Self {
         let (events, _) = broadcast::channel(8);
         let (exit, _) = watch::channel(None);
         Self {
@@ -1189,6 +1396,7 @@ impl AutoExitInstance {
             events,
             exit,
             log,
+            runtime_authority,
         }
     }
 }
@@ -1204,6 +1412,12 @@ impl VmInstance for AutoExitInstance {
         let _started = self.events.send(VmEvent::Started {
             ingress: Vec::new(),
         });
+        if let Some((session_id, generation)) = self.runtime_authority {
+            let _acknowledgement = self.events.send(VmEvent::RuntimeAuthorityAcknowledged {
+                session_id,
+                generation,
+            });
+        }
         let _ready = self.events.send(VmEvent::Ready);
         let _finalize = self.events.send(VmEvent::FinalizeResult {
             message: String::from("test result"),
@@ -1276,12 +1490,27 @@ fn assert_launch_order(log: &StdMutex<Vec<&'static str>>) {
         .iter()
         .position(|entry| *entry == "runtime-prepare")
         .expect("runtime preparation");
+    let authority_prepare = entries
+        .iter()
+        .position(|entry| *entry == "authority-prepare")
+        .expect("authority preparation");
+    let authority_reauthorize = entries
+        .iter()
+        .position(|entry| *entry == "authority-reauthorize")
+        .expect("authority reauthorization");
     let provision = entries
         .iter()
         .position(|entry| *entry == "provision")
         .expect("VM provision");
+    let resource_recorded = entries
+        .iter()
+        .position(|entry| *entry == "resource-recorded")
+        .expect("resource evidence");
     drop(entries);
     assert_eq!(authorization.len(), 2);
     assert!(authorization[0] < runtime_prepare);
-    assert!(runtime_prepare < authorization[1] && authorization[1] < provision);
+    assert!(runtime_prepare < authority_prepare);
+    assert!(authority_prepare < resource_recorded);
+    assert!(resource_recorded < authorization[1]);
+    assert!(authorization[1] < authority_reauthorize && authority_reauthorize < provision);
 }

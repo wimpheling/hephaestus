@@ -1,5 +1,8 @@
 //! Authorized, bounded, streaming Git smart-HTTP transport.
 
+pub mod receive_hook;
+pub mod receive_policy;
+
 use async_trait::async_trait;
 use authz_domain::{AuthorizationDecision, GitRepositoryAuthorizer, GitRepositoryOperation};
 use axum::{
@@ -7,10 +10,10 @@ use axum::{
     body::Body,
     extract::{Path as AxumPath, Query, State},
     http::{HeaderMap, HeaderName, HeaderValue, Request, Response, StatusCode},
-    middleware::{self, Next},
     response::IntoResponse,
     routing::{get, post},
 };
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use bytes::{Bytes, BytesMut};
 use forge_domain::{CommitSha, GitRef, ReceiveId, RefUpdate, RepositoryId};
 use forge_postgres::PgForgeRepository;
@@ -19,13 +22,18 @@ use futures_util::StreamExt;
 use identity_application::VerifiedIdentityMapper;
 use identity_domain::{AuthenticatedIdentity, RequestId};
 use identity_oidc::OidcVerifier;
+use pat_domain::PersonalAccessToken;
+use pat_postgres::PostgresPersonalAccessTokenService;
+use runtime_git_authority::{
+    AuthenticatedRuntimeGitAuthority, RuntimeGitCredential, RuntimeGitCredentialRepository,
+};
 use std::{
     collections::{BTreeMap, HashMap},
     io,
     path::{Path, PathBuf},
     process::Stdio,
     sync::Arc,
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -33,6 +41,7 @@ use tokio::{
     sync::{Mutex, OwnedMutexGuard, mpsc},
 };
 use tokio_stream::wrappers::ReceiverStream;
+use zeroize::Zeroize;
 
 const MAX_CGI_HEADERS: usize = 32 * 1024;
 
@@ -48,13 +57,138 @@ pub enum GitOperation {
     Push,
 }
 
-/// Authenticated principal returned by an authorizer.
+/// Authenticated principal returned by a Git credential authenticator.
+///
+/// Human and runtime identities remain distinct so a runtime credential can
+/// never accidentally inherit authorization through a human identity path.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Principal {
-    /// Stable provider-neutral principal name.
-    pub name: String,
-    /// Authenticated request identity.
-    pub identity: AuthenticatedIdentity,
+#[non_exhaustive]
+pub enum Principal {
+    /// A human authenticated through OIDC or a future user credential.
+    Human(HumanPrincipal),
+    /// One exact runtime session authenticated by a future runtime credential.
+    Runtime(RuntimePrincipal),
+}
+
+impl Principal {
+    /// Creates a human principal from a verified internal identity.
+    #[must_use]
+    pub fn human(identity: AuthenticatedIdentity) -> Self {
+        Self::Human(HumanPrincipal {
+            name: identity.subject.clone(),
+            identity,
+        })
+    }
+
+    /// Creates an exact-runtime principal from opaque control-plane IDs.
+    #[must_use]
+    pub fn runtime(
+        name: impl Into<String>,
+        runtime_session_id: impl Into<String>,
+        authorization_snapshot_id: impl Into<String>,
+    ) -> Self {
+        Self::Runtime(RuntimePrincipal {
+            name: name.into(),
+            runtime_session_id: runtime_session_id.into(),
+            authorization_snapshot_id: authorization_snapshot_id.into(),
+            receive_context: None,
+            git_authority: None,
+        })
+    }
+
+    /// Creates an exact-runtime principal carrying host-resolved authority for
+    /// Git's quarantined pre-receive boundary.
+    #[must_use]
+    pub fn runtime_with_receive_context(
+        name: impl Into<String>,
+        receive_context: receive_policy::ResolvedRuntimeReceiveContext,
+    ) -> Self {
+        Self::Runtime(RuntimePrincipal {
+            name: name.into(),
+            runtime_session_id: receive_context.runtime_session_id().to_owned(),
+            authorization_snapshot_id: receive_context.authorization_snapshot_id().to_owned(),
+            receive_context: Some(receive_context),
+            git_authority: None,
+        })
+    }
+
+    /// Creates an exact runtime principal from host-authenticated Git
+    /// authority.
+    #[must_use]
+    pub fn runtime_with_git_authority(
+        name: impl Into<String>,
+        authority: AuthenticatedRuntimeGitAuthority,
+    ) -> Self {
+        Self::Runtime(RuntimePrincipal {
+            name: name.into(),
+            runtime_session_id: authority.runtime_session_id.to_string(),
+            authorization_snapshot_id: authority.authorization_snapshot_id.to_string(),
+            receive_context: None,
+            git_authority: Some(authority),
+        })
+    }
+
+    /// Returns the stable provider-neutral principal name exposed to Git.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Human(principal) => &principal.name,
+            Self::Runtime(principal) => &principal.name,
+        }
+    }
+
+    /// Returns a verified human identity, if this is a human principal.
+    #[must_use]
+    pub const fn human_identity(&self) -> Option<&AuthenticatedIdentity> {
+        match self {
+            Self::Human(principal) => Some(&principal.identity),
+            Self::Runtime(_) => None,
+        }
+    }
+}
+
+/// A verified human Git principal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HumanPrincipal {
+    name: String,
+    identity: AuthenticatedIdentity,
+}
+
+/// An exact runtime Git principal whose identifiers remain opaque to transport.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimePrincipal {
+    name: String,
+    runtime_session_id: String,
+    authorization_snapshot_id: String,
+    receive_context: Option<receive_policy::ResolvedRuntimeReceiveContext>,
+    git_authority: Option<AuthenticatedRuntimeGitAuthority>,
+}
+
+impl RuntimePrincipal {
+    /// Returns the opaque runtime-session identifier.
+    #[must_use]
+    pub fn runtime_session_id(&self) -> &str {
+        &self.runtime_session_id
+    }
+
+    /// Returns the opaque immutable authorization-snapshot identifier.
+    #[must_use]
+    pub fn authorization_snapshot_id(&self) -> &str {
+        &self.authorization_snapshot_id
+    }
+
+    /// Returns host-resolved receive authority when this runtime credential
+    /// permits a quarantined receive.
+    #[must_use]
+    pub const fn receive_context(&self) -> Option<&receive_policy::ResolvedRuntimeReceiveContext> {
+        self.receive_context.as_ref()
+    }
+
+    /// Returns complete host-resolved Git authority for this request.
+    #[must_use]
+    pub const fn git_authority(&self) -> Option<&AuthenticatedRuntimeGitAuthority> {
+        self.git_authority.as_ref()
+    }
 }
 
 /// Owned authorization input.
@@ -64,8 +198,8 @@ pub struct AuthorizationRequest {
     pub repository_id: RepositoryId,
     /// Requested operation.
     pub operation: GitOperation,
-    /// Identity established by the HTTP authentication middleware.
-    pub identity: AuthenticatedIdentity,
+    /// Principal established by the HTTP authentication middleware.
+    pub principal: Principal,
 }
 
 /// Authentication boundary used by Git HTTP middleware.
@@ -82,6 +216,28 @@ pub trait GitAuthenticator: Send + Sync + 'static {
         credential: Option<&str>,
         request_id: RequestId,
     ) -> Result<Principal, AuthenticationError>;
+
+    /// Consumes a Git HTTP credential bound to its exact repository operation.
+    ///
+    /// Authenticators without token-local Git scope delegate to
+    /// [`Self::authenticate`]. Scoped credentials override this method so the
+    /// credential cannot be accepted before its repository and operation are
+    /// known.
+    ///
+    /// # Errors
+    ///
+    /// Returns a non-sensitive error when the credential is invalid for the
+    /// exact repository operation.
+    async fn authenticate_git(
+        &self,
+        credential: Option<&str>,
+        request_id: RequestId,
+        repository_id: RepositoryId,
+        operation: GitOperation,
+    ) -> Result<Principal, AuthenticationError> {
+        let _ = (repository_id, operation);
+        self.authenticate(credential, request_id).await
+    }
 }
 
 /// Authorization boundary for every Git operation.
@@ -129,11 +285,227 @@ impl GitAuthenticator for OidcGitAuthenticator {
             .map_verified_identity(&verified, request_id, None)
             .await
             .map_err(|_| AuthenticationError::denied("the bearer identity is unavailable"))?;
-        Ok(Principal {
-            name: identity.subject.clone(),
-            identity,
-        })
+        Ok(Principal::human(identity))
     }
+}
+
+/// Exact-run Git authenticator backed by hash-only runtime credential
+/// persistence and immutable Git scope resolution.
+pub struct RuntimeGitHttpAuthenticator {
+    authority: Arc<dyn RuntimeGitCredentialRepository>,
+}
+
+impl RuntimeGitHttpAuthenticator {
+    /// Creates a runtime Git authenticator over an application boundary.
+    #[must_use]
+    pub fn new(authority: Arc<dyn RuntimeGitCredentialRepository>) -> Self {
+        Self { authority }
+    }
+}
+
+#[async_trait]
+impl GitAuthenticator for RuntimeGitHttpAuthenticator {
+    async fn authenticate(
+        &self,
+        _credential: Option<&str>,
+        _request_id: RequestId,
+    ) -> Result<Principal, AuthenticationError> {
+        Err(AuthenticationError::denied(
+            "a repository-bound runtime Git credential is required",
+        ))
+    }
+
+    async fn authenticate_git(
+        &self,
+        credential: Option<&str>,
+        _request_id: RequestId,
+        repository_id: RepositoryId,
+        operation: GitOperation,
+    ) -> Result<Principal, AuthenticationError> {
+        let credential = credential
+            .ok_or_else(|| AuthenticationError::denied("the Git credential is invalid"))?;
+        let credential = parse_basic_runtime_git(credential)?;
+        let authority = self
+            .authority
+            .authenticate(
+                credential.storage_hash(),
+                git_capability_domain::RepositoryId::new(repository_id.as_uuid()),
+                capability_operation(operation),
+                time::OffsetDateTime::now_utc(),
+            )
+            .await
+            .map_err(|_| AuthenticationError::denied("the Git credential is invalid"))?;
+        Ok(Principal::runtime_with_git_authority(
+            format!("runtime:{}", authority.runtime_session_id),
+            authority,
+        ))
+    }
+}
+
+/// Git authenticator accepting either OIDC bearer tokens or scoped developer
+/// PATs supplied by a credential helper through HTTP Basic authentication.
+pub struct CompositeGitAuthenticator {
+    oidc: Arc<dyn GitAuthenticator>,
+    personal_access_tokens: Arc<PostgresPersonalAccessTokenService>,
+    runtime_git: Option<Arc<dyn GitAuthenticator>>,
+}
+
+impl CompositeGitAuthenticator {
+    /// Creates a composite authenticator over the existing OIDC and PAT
+    /// verification boundaries.
+    #[must_use]
+    pub const fn new(
+        oidc: Arc<dyn GitAuthenticator>,
+        personal_access_tokens: Arc<PostgresPersonalAccessTokenService>,
+    ) -> Self {
+        Self {
+            oidc,
+            personal_access_tokens,
+            runtime_git: None,
+        }
+    }
+
+    /// Adds the separately discriminated exact-run Git authenticator.
+    #[must_use]
+    pub fn with_runtime_git(mut self, runtime_git: Arc<dyn GitAuthenticator>) -> Self {
+        self.runtime_git = Some(runtime_git);
+        self
+    }
+}
+
+#[async_trait]
+impl GitAuthenticator for CompositeGitAuthenticator {
+    async fn authenticate(
+        &self,
+        credential: Option<&str>,
+        request_id: RequestId,
+    ) -> Result<Principal, AuthenticationError> {
+        self.oidc.authenticate(credential, request_id).await
+    }
+
+    async fn authenticate_git(
+        &self,
+        credential: Option<&str>,
+        request_id: RequestId,
+        repository_id: RepositoryId,
+        operation: GitOperation,
+    ) -> Result<Principal, AuthenticationError> {
+        let credential = credential
+            .ok_or_else(|| AuthenticationError::denied("a Git credential is required"))?;
+        if credential.starts_with("Bearer ") {
+            return self.oidc.authenticate(Some(credential), request_id).await;
+        }
+        if basic_username(credential) == Some("heph-runtime") {
+            let runtime_git = self
+                .runtime_git
+                .as_ref()
+                .ok_or_else(|| AuthenticationError::denied("the Git credential is invalid"))?;
+            return runtime_git
+                .authenticate_git(Some(credential), request_id, repository_id, operation)
+                .await;
+        }
+        let token = parse_basic_pat(credential)?;
+        let authenticated = self
+            .personal_access_tokens
+            .authenticate(&token, pat_operation(operation), repository_id, request_id)
+            .await
+            .map_err(|_| AuthenticationError::denied("the Git credential is invalid"))?;
+        let identity = AuthenticatedIdentity::new(
+            authenticated.owner_user_id,
+            "urn:hephaestus:credential:pat",
+            format!("user:{}", authenticated.owner_user_id),
+            serde_json::json!({}),
+            request_id,
+        );
+        Ok(Principal::human(identity))
+    }
+}
+
+fn basic_username(credential: &str) -> Option<&str> {
+    const MAX_BASIC_CREDENTIAL_BYTES: usize = 1_024;
+
+    let encoded = credential
+        .strip_prefix("Basic ")
+        .filter(|encoded| !encoded.is_empty() && encoded.len() <= MAX_BASIC_CREDENTIAL_BYTES)?;
+    let mut decoded = BASE64_STANDARD.decode(encoded).ok()?;
+    let username_length = decoded.iter().position(|byte| *byte == b':')?;
+    let username = std::str::from_utf8(&decoded[..username_length]).ok()?;
+    // The returned names are static discriminators, never borrowed bearer
+    // material. Wipe the decoded Basic payload before returning.
+    let result = match username {
+        "heph-runtime" => Some("heph-runtime"),
+        "heph-pat" => Some("heph-pat"),
+        _ => None,
+    };
+    decoded.zeroize();
+    result
+}
+
+fn parse_basic_runtime_git(credential: &str) -> Result<RuntimeGitCredential, AuthenticationError> {
+    const MAX_BASIC_CREDENTIAL_BYTES: usize = 1_024;
+
+    let encoded = credential
+        .strip_prefix("Basic ")
+        .filter(|encoded| !encoded.is_empty() && encoded.len() <= MAX_BASIC_CREDENTIAL_BYTES)
+        .ok_or_else(|| AuthenticationError::denied("the Git credential is invalid"))?;
+    let mut decoded = BASE64_STANDARD
+        .decode(encoded)
+        .map_err(|_| AuthenticationError::denied("the Git credential is invalid"))?;
+    let parsed = (|| {
+        let decoded = std::str::from_utf8(&decoded)
+            .map_err(|_| AuthenticationError::denied("the Git credential is invalid"))?;
+        let (username, password) = decoded
+            .split_once(':')
+            .filter(|(_, password)| !password.contains(':'))
+            .ok_or_else(|| AuthenticationError::denied("the Git credential is invalid"))?;
+        if username != "heph-runtime" {
+            return Err(AuthenticationError::denied("the Git credential is invalid"));
+        }
+        RuntimeGitCredential::parse(password)
+            .map_err(|_| AuthenticationError::denied("the Git credential is invalid"))
+    })();
+    decoded.zeroize();
+    parsed
+}
+
+fn parse_basic_pat(credential: &str) -> Result<PersonalAccessToken, AuthenticationError> {
+    const MAX_BASIC_CREDENTIAL_BYTES: usize = 1_024;
+    const PAT_USERNAME: &str = "heph-pat";
+
+    let encoded = credential
+        .strip_prefix("Basic ")
+        .filter(|encoded| !encoded.is_empty() && encoded.len() <= MAX_BASIC_CREDENTIAL_BYTES)
+        .ok_or_else(|| AuthenticationError::denied("the Git credential is invalid"))?;
+    let mut decoded = BASE64_STANDARD
+        .decode(encoded)
+        .map_err(|_| AuthenticationError::denied("the Git credential is invalid"))?;
+    let parsed = (|| {
+        let decoded = std::str::from_utf8(&decoded)
+            .map_err(|_| AuthenticationError::denied("the Git credential is invalid"))?;
+        let (username, password) = decoded
+            .split_once(':')
+            .filter(|(_, password)| !password.contains(':'))
+            .ok_or_else(|| AuthenticationError::denied("the Git credential is invalid"))?;
+        if username != PAT_USERNAME {
+            return Err(AuthenticationError::denied("the Git credential is invalid"));
+        }
+        PersonalAccessToken::parse(password)
+            .map_err(|_| AuthenticationError::denied("the Git credential is invalid"))
+    })();
+    decoded.zeroize();
+    parsed
+}
+
+const fn pat_operation(operation: GitOperation) -> git_capability_domain::GitOperation {
+    match operation {
+        GitOperation::Clone => git_capability_domain::GitOperation::Discover,
+        GitOperation::Fetch => git_capability_domain::GitOperation::Fetch,
+        GitOperation::Push => git_capability_domain::GitOperation::Receive,
+    }
+}
+
+const fn capability_operation(operation: GitOperation) -> git_capability_domain::GitOperation {
+    pat_operation(operation)
 }
 
 /// Database-native Git authorizer backed by the generated Mélange dispatcher.
@@ -152,17 +524,35 @@ impl PostgresGitAuthorizer {
 #[async_trait]
 impl GitAuthorizer for PostgresGitAuthorizer {
     async fn authorize(&self, request: &AuthorizationRequest) -> Result<(), AuthorizationError> {
+        if let Principal::Runtime(runtime) = &request.principal {
+            let authority = runtime.git_authority().ok_or_else(|| {
+                AuthorizationError::denied("runtime Git authority is unavailable")
+            })?;
+            let now = time::OffsetDateTime::now_utc().unix_timestamp();
+            if authority.scope.repository_id().as_uuid() != request.repository_id.as_uuid()
+                || !authority.scope.is_active_at(now)
+                || !authority
+                    .scope
+                    .operations()
+                    .contains(&capability_operation(request.operation))
+            {
+                return Err(AuthorizationError::denied(
+                    "runtime Git authority does not match the request",
+                ));
+            }
+            return Ok(());
+        }
+        let identity = request
+            .principal
+            .human_identity()
+            .ok_or_else(|| AuthorizationError::denied("repository identity is unavailable"))?;
         let operation = match request.operation {
             GitOperation::Clone | GitOperation::Fetch => GitRepositoryOperation::Read,
             GitOperation::Push => GitRepositoryOperation::Write,
         };
         let decision = self
             .delegate
-            .authorize_git(
-                request.repository_id.as_uuid(),
-                operation,
-                &request.identity,
-            )
+            .authorize_git(request.repository_id.as_uuid(), operation, identity)
             .await
             .map_err(|_| AuthorizationError::denied("authorization is unavailable"))?;
         if decision == AuthorizationDecision::Deny {
@@ -239,6 +629,7 @@ pub struct GitHttpService {
     backend: PathBuf,
     limits: GitHttpLimits,
     receive_locks: Arc<Mutex<HashMap<RepositoryId, Arc<Mutex<()>>>>>,
+    runtime_receive_hook: Option<PathBuf>,
 }
 
 impl GitHttpService {
@@ -264,7 +655,23 @@ impl GitHttpService {
             backend,
             limits,
             receive_locks: Arc::new(Mutex::new(HashMap::new())),
+            runtime_receive_hook: None,
         })
+    }
+
+    /// Installs the absolute host-owned `pre-receive` executable used only for
+    /// runtime receives. Human pushes retain the repository's existing hook
+    /// configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error unless the path is absolute and names `pre-receive`.
+    pub fn with_runtime_receive_hook(mut self, hook: PathBuf) -> Result<Self, GitHttpError> {
+        if !hook.is_absolute() || hook.file_name() != Some(std::ffi::OsStr::new("pre-receive")) {
+            return Err(GitHttpError::InvalidReceiveHookPath(hook));
+        }
+        self.runtime_receive_hook = Some(hook);
+        Ok(self)
     }
 
     /// Builds Axum routes rooted at `/{repository_id}`.
@@ -275,7 +682,6 @@ impl GitHttpService {
             .route("/{repository}/git-upload-pack", post(upload_pack))
             .route("/{repository}/git-receive-pack", post(receive_pack))
             .with_state(Arc::clone(&service))
-            .layer(middleware::from_fn_with_state(service, authenticate))
     }
 
     async fn lock_receive(&self, repository_id: RepositoryId) -> OwnedMutexGuard<()> {
@@ -296,27 +702,6 @@ fn validate_backend_path(backend: &Path) -> Result<(), GitHttpError> {
     } else {
         Err(GitHttpError::InvalidBackendPath(backend.to_owned()))
     }
-}
-
-async fn authenticate(
-    State(service): State<Arc<GitHttpService>>,
-    mut request: Request<Body>,
-    next: Next,
-) -> Response<Body> {
-    let credential = request
-        .headers_mut()
-        .remove(http::header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok().map(str::to_owned));
-    let principal = match service
-        .authenticator
-        .authenticate(credential.as_deref(), RequestId::new())
-        .await
-    {
-        Ok(principal) => principal,
-        Err(error) => return error_response(StatusCode::UNAUTHORIZED, &error.to_string()),
-    };
-    request.extensions_mut().insert(principal);
-    next.run(request).await
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -388,56 +773,164 @@ async fn execute(
     operation: GitOperation,
     endpoint: &'static str,
     query: Option<String>,
-    request: Request<Body>,
+    mut request: Request<Body>,
     receive: bool,
 ) -> Response<Body> {
     let repository_id = match GitStorage::parse_route(&route) {
         Ok(id) => id,
         Err(error) => return error_response(StatusCode::BAD_REQUEST, &error.to_string()),
     };
-    let Some(principal) = request.extensions().get::<Principal>().cloned() else {
-        return error_response(StatusCode::UNAUTHORIZED, "Git authentication is required");
+    let mut credential = request
+        .headers_mut()
+        .remove(http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok().map(str::to_owned));
+    let principal = service
+        .authenticator
+        .authenticate_git(
+            credential.as_deref(),
+            RequestId::new(),
+            repository_id,
+            operation,
+        )
+        .await;
+    if let Some(credential) = &mut credential {
+        credential.zeroize();
+    }
+    let principal = match principal {
+        Ok(principal) => principal,
+        Err(error) => return authentication_error_response(&error.to_string()),
     };
     match service
         .authorizer
         .authorize(&AuthorizationRequest {
             repository_id,
             operation,
-            identity: principal.identity.clone(),
+            principal: principal.clone(),
         })
         .await
     {
         Ok(()) => {}
         Err(error) => return error_response(StatusCode::FORBIDDEN, &error.to_string()),
     }
-    let repository = match service
-        .repository
-        .get_repository_as(repository_id, &principal.identity)
-        .await
-    {
+    let principal_identity = principal.human_identity().cloned();
+    let runtime_receive_context = if receive {
+        match &principal {
+            Principal::Human(_) => None,
+            Principal::Runtime(runtime) => {
+                let context = runtime.git_authority().map_or_else(
+                    || runtime.receive_context().cloned(),
+                    |authority| {
+                        receive_policy::ResolvedRuntimeReceiveContext::new_with_expected_parent(
+                            Arc::clone(&authority.scope),
+                            authority.runtime_session_id.to_string(),
+                            authority.authorization_snapshot_id.to_string(),
+                            authority.evaluated_at.unix_timestamp(),
+                            authority.expected_parent.clone(),
+                        )
+                        .ok()
+                    },
+                );
+                let Some(context) = context else {
+                    return error_response(
+                        StatusCode::FORBIDDEN,
+                        "runtime receive authority is unavailable",
+                    );
+                };
+                let now = match SystemTime::now().duration_since(UNIX_EPOCH) {
+                    Ok(duration) => i64::try_from(duration.as_secs()).unwrap_or(i64::MAX),
+                    Err(_) => {
+                        return error_response(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "host clock is unavailable",
+                        );
+                    }
+                };
+                if context.repository_id()
+                    != git_capability_domain::RepositoryId::new(repository_id.as_uuid())
+                    || !context.is_active_at(now)
+                {
+                    return error_response(
+                        StatusCode::FORBIDDEN,
+                        "runtime receive authority is invalid",
+                    );
+                }
+                if service.runtime_receive_hook.is_none() {
+                    return error_response(
+                        StatusCode::FORBIDDEN,
+                        "runtime receive policy guard is unavailable",
+                    );
+                }
+                Some(context)
+            }
+        }
+    } else {
+        None
+    };
+    let repository_result = match &principal_identity {
+        Some(identity) => {
+            service
+                .repository
+                .get_repository_as(repository_id, identity)
+                .await
+        }
+        None => service.repository.get_repository(repository_id).await,
+    };
+    let repository = match repository_result {
         Ok(repository) => repository,
         Err(ForgeRepositoryError::RepositoryNotFound(_)) => {
             return error_response(StatusCode::NOT_FOUND, "repository was not found");
         }
         Err(error) => return service_error(error),
     };
-    if let Some(content_length) = request
+    let runtime_scope = match &principal {
+        Principal::Human(_) => None,
+        Principal::Runtime(runtime) => runtime
+            .git_authority()
+            .map(|authority| Arc::clone(&authority.scope)),
+    };
+    // Runtime ref visibility is computed from canonical refs. Serialize it
+    // with receives so a concurrent human push cannot introduce an
+    // out-of-scope advertisement after filtering but before upload-pack.
+    let receive_guard = if receive || runtime_scope.is_some() {
+        Some(service.lock_receive(repository_id).await)
+    } else {
+        None
+    };
+    let hidden_refs = if let Some(scope) = runtime_scope.as_deref() {
+        match hidden_runtime_refs(
+            service.storage.repository_path(repository_id),
+            scope,
+            capability_operation(operation),
+        )
+        .await
+        {
+            Ok(refs) => refs,
+            Err(error) => return service_error(error),
+        }
+    } else {
+        Vec::new()
+    };
+    let declared_content_length = request
         .headers()
         .get(http::header::CONTENT_LENGTH)
         .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse::<u64>().ok())
-    {
-        if content_length > service.limits.max_request_bytes {
+        .and_then(|value| value.parse::<u64>().ok());
+    let max_request_bytes =
+        runtime_receive_context
+            .as_ref()
+            .map_or(service.limits.max_request_bytes, |context| {
+                service
+                    .limits
+                    .max_request_bytes
+                    .min(context.transfer_limits().request_bytes())
+            });
+    if let Some(content_length) = declared_content_length {
+        if content_length > max_request_bytes {
             return error_response(StatusCode::PAYLOAD_TOO_LARGE, "Git request exceeds limit");
         }
     }
 
     let receive_id = receive.then(ReceiveId::new);
-    let receive_guard = if receive {
-        Some(service.lock_receive(repository_id).await)
-    } else {
-        None
-    };
     let before = if receive {
         match snapshot_refs(service.storage.repository_path(repository_id)).await {
             Ok(refs) => Some(refs),
@@ -446,16 +939,43 @@ async fn execute(
     } else {
         None
     };
+    let hook_context = match runtime_receive_context
+        .as_ref()
+        .map(materialize_receive_context)
+        .transpose()
+    {
+        Ok(context) => context,
+        Err(error) => return service_error(error),
+    };
+    let runtime_hook_directory = runtime_receive_context.as_ref().and_then(|_| {
+        service
+            .runtime_receive_hook
+            .as_deref()
+            .and_then(Path::parent)
+    });
+    let request_bytes_bound = runtime_receive_context.as_ref().map(|_| {
+        declared_content_length
+            .unwrap_or(max_request_bytes)
+            .to_string()
+    });
+    let repository_id_text = repository_id.to_string();
     let environment = BackendEnvironment {
         project_root: service.storage.root(),
         repository_id,
         endpoint,
         method: request.method().as_str(),
         query: query.as_deref().unwrap_or(""),
-        remote_user: &principal.name,
+        remote_user: principal.name(),
         content_type: header_value(&request, http::header::CONTENT_TYPE),
         content_length: header_value(&request, http::header::CONTENT_LENGTH),
         git_protocol: header_value_name(&request, "git-protocol"),
+        runtime_receive_hook_directory: runtime_hook_directory,
+        runtime_receive_context_file: hook_context.as_ref().map(tempfile::NamedTempFile::path),
+        runtime_receive_repository: runtime_receive_context
+            .as_ref()
+            .map(|_| repository_id_text.as_str()),
+        runtime_receive_request_bytes: request_bytes_bound.as_deref(),
+        hidden_refs: &hidden_refs,
     };
     let mut command = backend_command(&service.backend, &environment);
 
@@ -482,7 +1002,6 @@ async fn execute(
         );
     };
 
-    let max_request_bytes = service.limits.max_request_bytes;
     let mut body_stream = request.into_body().into_data_stream();
     let request_writer = tokio::spawn(async move {
         let mut written = 0_u64;
@@ -523,10 +1042,12 @@ async fn execute(
     let repository_service = Arc::clone(&service.repository);
     let repository_for_receive = repository.clone();
     let repository_path = service.storage.repository_path(repository_id);
-    let principal_name = principal.name.clone();
-    let principal_identity = principal.identity.clone();
+    let principal_name = principal.name().to_owned();
     let timeout = service.limits.transaction_timeout;
     tokio::spawn(async move {
+        // Keep the owner-only authority file alive only while this exact
+        // backend transaction and its hook descendants can use the handle.
+        let runtime_receive_context_file = hook_context;
         let receive_guard = receive_guard;
         let completion = tokio::time::timeout(timeout, child.wait()).await;
         let status = match completion {
@@ -579,7 +1100,7 @@ async fn execute(
                             &repository_for_receive,
                             receive_id,
                             &principal_name,
-                            Some(&principal_identity),
+                            principal_identity.as_ref(),
                             &updates,
                         )
                         .await
@@ -620,6 +1141,7 @@ async fn execute(
             }
         }
         drop(receive_guard);
+        drop(runtime_receive_context_file);
     });
 
     let mut builder = Response::builder().status(status);
@@ -665,6 +1187,11 @@ struct BackendEnvironment<'a> {
     content_type: Option<&'a str>,
     content_length: Option<&'a str>,
     git_protocol: Option<&'a str>,
+    runtime_receive_hook_directory: Option<&'a Path>,
+    runtime_receive_context_file: Option<&'a Path>,
+    runtime_receive_repository: Option<&'a str>,
+    runtime_receive_request_bytes: Option<&'a str>,
+    hidden_refs: &'a [String],
 }
 
 fn backend_command(backend: &Path, environment: &BackendEnvironment<'_>) -> Command {
@@ -698,7 +1225,74 @@ fn backend_command(backend: &Path, environment: &BackendEnvironment<'_>) -> Comm
             command.env(name, value);
         }
     }
+    let mut configuration = Vec::<(&str, String)>::new();
+    if let Some(hook_directory) = environment.runtime_receive_hook_directory {
+        configuration.push((
+            "core.hooksPath",
+            hook_directory.to_string_lossy().into_owned(),
+        ));
+    }
+    for reference in environment.hidden_refs {
+        configuration.push(("uploadpack.hideRefs", reference.clone()));
+        configuration.push(("receive.hideRefs", reference.clone()));
+    }
+    if !configuration.is_empty() {
+        command.env("GIT_CONFIG_COUNT", configuration.len().to_string());
+        for (index, (key, value)) in configuration.iter().enumerate() {
+            command
+                .env(format!("GIT_CONFIG_KEY_{index}"), key)
+                .env(format!("GIT_CONFIG_VALUE_{index}"), value);
+        }
+    }
+    for (name, value) in [
+        (
+            "HEPH_RUNTIME_RECEIVE_CONTEXT_FILE",
+            environment
+                .runtime_receive_context_file
+                .map(Path::as_os_str)
+                .and_then(std::ffi::OsStr::to_str),
+        ),
+        (
+            "HEPH_RUNTIME_RECEIVE_REPOSITORY",
+            environment.runtime_receive_repository,
+        ),
+        (
+            "HEPH_RUNTIME_RECEIVE_REQUEST_BYTES",
+            environment.runtime_receive_request_bytes,
+        ),
+    ] {
+        if let Some(value) = value {
+            command.env(name, value);
+        }
+    }
     command
+}
+
+fn materialize_receive_context(
+    context: &receive_policy::ResolvedRuntimeReceiveContext,
+) -> Result<tempfile::NamedTempFile, GitHttpError> {
+    let bytes = context.to_hook_json().map_err(domain)?;
+    let mut file = tempfile::Builder::new()
+        .prefix("hephaestus-runtime-git-")
+        .suffix(".context")
+        .tempfile()
+        .map_err(GitHttpError::Io)?;
+    std::io::Write::write_all(file.as_file_mut(), &bytes).map_err(GitHttpError::Io)?;
+    file.as_file().sync_all().map_err(GitHttpError::Io)?;
+    Ok(file)
+}
+
+async fn hidden_runtime_refs(
+    repository: PathBuf,
+    scope: &git_capability_domain::GitCapabilityScope,
+    operation: git_capability_domain::GitOperation,
+) -> Result<Vec<String>, GitHttpError> {
+    Ok(snapshot_refs(repository)
+        .await?
+        .into_keys()
+        .filter(|reference| !scope.allows(operation, reference.as_str()))
+        .map(|reference| reference.as_str().to_owned())
+        .collect())
 }
 
 async fn read_cgi_headers(
@@ -884,6 +1478,15 @@ fn error_response(status: StatusCode, message: &str) -> Response<Body> {
         .into_response()
 }
 
+fn authentication_error_response(message: &str) -> Response<Body> {
+    let mut response = error_response(StatusCode::UNAUTHORIZED, message);
+    response.headers_mut().insert(
+        http::header::WWW_AUTHENTICATE,
+        HeaderValue::from_static(r#"Basic realm="hephaestus-git""#),
+    );
+    response
+}
+
 fn service_error(error: impl std::fmt::Display) -> Response<Body> {
     tracing::warn!(%error, "Git HTTP request failed");
     error_response(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string())
@@ -896,6 +1499,9 @@ pub enum GitHttpError {
     /// Configured backend executable is not an absolute path.
     #[error("git-http-backend path must be absolute: {0}")]
     InvalidBackendPath(PathBuf),
+    /// Configured runtime pre-receive hook path is not absolute or canonical.
+    #[error("runtime pre-receive hook must be an absolute path named pre-receive: {0}")]
+    InvalidReceiveHookPath(PathBuf),
     /// Process I/O failed.
     #[error("Git backend I/O failed: {0}")]
     Io(#[source] io::Error),
@@ -910,13 +1516,114 @@ pub enum GitHttpError {
 #[cfg(test)]
 mod tests {
     use super::{
-        BackendEnvironment, backend_command, diff_refs, parse_cgi_headers, validate_backend_path,
+        AuthorizationRequest, BackendEnvironment, GitAuthorizer, GitOperation,
+        PostgresGitAuthorizer, Principal, authentication_error_response, backend_command,
+        diff_refs, parse_basic_pat, parse_cgi_headers, pat_operation, validate_backend_path,
     };
+    use async_trait::async_trait;
+    use authz_domain::{
+        AuthorizationDecision, AuthzError, GitRepositoryAuthorizer, GitRepositoryOperation,
+    };
+    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
     use forge_domain::{CommitSha, GitRef, RepositoryId};
+    use identity_domain::AuthenticatedIdentity;
+    use pat_domain::{PersonalAccessToken, PersonalAccessTokenId};
     use std::{
         collections::{BTreeMap, BTreeSet},
         path::Path,
+        sync::Arc,
     };
+    use uuid::Uuid;
+
+    struct UnexpectedRuntimeDelegate;
+
+    #[async_trait]
+    impl GitRepositoryAuthorizer for UnexpectedRuntimeDelegate {
+        async fn authorize_git(
+            &self,
+            _repository_id: Uuid,
+            _operation: GitRepositoryOperation,
+            _identity: &AuthenticatedIdentity,
+        ) -> Result<AuthorizationDecision, AuthzError> {
+            panic!("a runtime principal must not reach the human authorizer delegate")
+        }
+    }
+
+    #[test]
+    fn runtime_principal_preserves_opaque_runtime_identity() {
+        let principal = Principal::runtime("runtime-42", "session-opaque", "snapshot-opaque");
+
+        assert_eq!(principal.name(), "runtime-42");
+        assert!(principal.human_identity().is_none());
+        let Principal::Runtime(runtime) = principal else {
+            panic!("expected runtime principal");
+        };
+        assert_eq!(runtime.runtime_session_id(), "session-opaque");
+        assert_eq!(runtime.authorization_snapshot_id(), "snapshot-opaque");
+    }
+
+    #[test]
+    fn parses_canonical_git_basic_pat_without_exposing_it() {
+        let token = PersonalAccessToken::from_secret(PersonalAccessTokenId::new(), [0x5a; 32]);
+        let plaintext = token.expose();
+        let credential = format!(
+            "Basic {}",
+            BASE64_STANDARD.encode(format!("heph-pat:{plaintext}"))
+        );
+
+        let parsed = parse_basic_pat(&credential).expect("canonical Basic PAT");
+        assert_eq!(parsed.id(), token.id());
+
+        let malformed = format!("Basic {}", BASE64_STANDARD.encode("heph-pat:not-a-pat"));
+        let error = parse_basic_pat(&malformed).expect_err("malformed PAT must fail closed");
+        assert!(!error.to_string().contains("not-a-pat"));
+        assert!(!format!("{error:?}").contains("not-a-pat"));
+    }
+
+    #[test]
+    fn maps_transport_operations_to_exact_pat_scope_operations() {
+        assert_eq!(
+            pat_operation(GitOperation::Clone),
+            git_capability_domain::GitOperation::Discover
+        );
+        assert_eq!(
+            pat_operation(GitOperation::Fetch),
+            git_capability_domain::GitOperation::Fetch
+        );
+        assert_eq!(
+            pat_operation(GitOperation::Push),
+            git_capability_domain::GitOperation::Receive
+        );
+    }
+
+    #[test]
+    fn authentication_denial_challenges_git_without_echoing_credentials() {
+        let response = authentication_error_response("the Git credential is invalid");
+        assert_eq!(response.status(), http::StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            response.headers()[http::header::WWW_AUTHENTICATE],
+            r#"Basic realm="hephaestus-git""#
+        );
+    }
+
+    #[tokio::test]
+    async fn postgres_authorizer_rejects_unresolved_runtime_principal_before_human_delegate() {
+        let authorizer = PostgresGitAuthorizer::new(Arc::new(UnexpectedRuntimeDelegate));
+        let request = AuthorizationRequest {
+            repository_id: RepositoryId::new(),
+            operation: GitOperation::Fetch,
+            principal: Principal::runtime("runtime-42", "session-opaque", "snapshot-opaque"),
+        };
+
+        let error = authorizer
+            .authorize(&request)
+            .await
+            .expect_err("unresolved runtime principal must fail closed");
+        assert_eq!(
+            error.to_string(),
+            "Git operation is not authorized: runtime Git authority is unavailable"
+        );
+    }
 
     #[test]
     fn parses_native_backend_headers() {
@@ -960,6 +1667,11 @@ mod tests {
             content_type: Some("application/x-git-receive-pack-request"),
             content_length: Some("42"),
             git_protocol: Some("version=2"),
+            runtime_receive_hook_directory: None,
+            runtime_receive_context_file: None,
+            runtime_receive_repository: None,
+            runtime_receive_request_bytes: None,
+            hidden_refs: &[],
         };
         let output = backend_command(Path::new("/usr/bin/env"), &environment)
             .output()

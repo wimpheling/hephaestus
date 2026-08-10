@@ -37,7 +37,9 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.AgentInstancePageTest do
     for id <- ~w(
       instance-breadcrumbs project-tabs instance-overview revise-instance-panel
       secret-binding-panel instance-revisions create-attachment-panel instance-attachments
-      create-update-panel instance-updates instance-recent-runs
+      capability-permission-panel capability-metrics capability-binding-history
+      runtime-authority-sessions capability-audit-evidence create-update-panel instance-updates
+      mailbox-delivery-evidence instance-recent-runs
     ) do
       assert html =~ ~s(id="#{id}")
     end
@@ -56,6 +58,9 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.AgentInstancePageTest do
     assert html =~ ~s(id="bind-secret-api-token")
     assert html =~ ~s(name="binding[slot]")
     assert html =~ ~s(phx-submit="bind-secret")
+    assert html =~ ~s(id="revise-capabilities")
+    assert html =~ ~s(phx-submit="revise-capabilities")
+    assert html =~ ~s(id="capability-resource-source-repository")
     assert html =~ ~s(phx-click="set-attachment")
     assert html =~ ~s(phx-value-attachment_id="attachment-1")
     assert html =~ ~s(phx-click="remove-attachment")
@@ -76,6 +81,36 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.AgentInstancePageTest do
     assert html =~ ~s(phx-value-action="retry")
   end
 
+  test "renders mailbox scheduling evidence without application payload data" do
+    instance =
+      instance()
+      |> Map.put("mailbox_deliveries", [
+        %{
+          "event_id" => "event-1",
+          "disposition" => "retryable",
+          "logical_attempt_count" => 2,
+          "instance_revision_id" => "revision-1",
+          "dispatch_sequence" => 4,
+          "next_recovery_action" => "wait_for_retry",
+          "next_eligible_at" => "2026-08-08T12:00:00Z",
+          "denial_code" => "",
+          "state_access_outcome" => "completed_access",
+          "payload" => "must-not-render",
+          "selected_headers" => %{"authorization" => "must-not-render"}
+        }
+      ])
+
+    html =
+      render_component(&AgentInstancePage.agent_instance/1, %{assigns() | instance: instance})
+
+    assert html =~ ~s(id="mailbox-delivery-evidence")
+    assert html =~ ~s(id="mailbox-delivery-event-1")
+    assert html =~ "attempt 2"
+    assert html =~ "wait_for_retry"
+    refute html =~ "must-not-render"
+    refute html =~ "authorization"
+  end
+
   defp assigns do
     %{
       state: :ready,
@@ -87,6 +122,7 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.AgentInstancePageTest do
       revision_form: Phoenix.Component.to_form(%{}, as: :revision),
       update_form: Phoenix.Component.to_form(%{}, as: :update),
       binding_form: Phoenix.Component.to_form(%{}, as: :binding),
+      capability_form: Phoenix.Component.to_form(%{}, as: :capabilities),
       organization_index_destination: "/organizations",
       organization_destination: "/organizations/org-1",
       project_agents_destination: "/projects/project-1/agents",
@@ -99,9 +135,11 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.AgentInstancePageTest do
       set_attachment_event: "set-attachment",
       remove_attachment_event: "remove-attachment",
       revise_instance_event: "revise-instance",
+      revise_capabilities_event: "revise-capabilities",
       create_update_event: "create-update",
       recover_update_event: "recover-update",
-      bind_secret_event: "bind-secret"
+      bind_secret_event: "bind-secret",
+      control_mailbox_event: "control-mailbox"
     }
   end
 
@@ -133,6 +171,20 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.AgentInstancePageTest do
         }
       ],
       "update_candidates" => [candidate()],
+      "capability_requirements" => [capability_requirement()],
+      "capability_resource_options" => [
+        %{
+          "id" => "repository-1",
+          "slot_key" => "source-repository",
+          "resource_kind" => "repository",
+          "display_name" => "Source",
+          "grantable_operations" => ["git_read", "update_ref"]
+        }
+      ],
+      "capability_bindings" => [],
+      "runtime_sessions" => [],
+      "capability_audit" => [],
+      "capability_metrics" => %{},
       "recent_runs" => [
         %{
           "id" => "run-1",
@@ -148,6 +200,7 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.AgentInstancePageTest do
   defp revision do
     %{
       "id" => "revision-1",
+      "release_agent_id" => "release-agent-1",
       "release_agent_name" => "Cook agent",
       "release_state" => "published",
       "release_version" => "1.0.0",
@@ -160,6 +213,19 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.AgentInstancePageTest do
       "runtime_contract" => %{
         "policy_ceiling" => %{"vcpus" => 2, "memory_mib" => 1024, "network" => "disabled"}
       }
+    }
+  end
+
+  defp capability_requirement do
+    %{
+      "id" => "requirement-1",
+      "release_agent_id" => "release-agent-1",
+      "slot_key" => "source-repository",
+      "purpose" => "Read and publish source",
+      "resource_kind" => "repository",
+      "required_operations" => ["git_read"],
+      "optional_operations" => ["update_ref"],
+      "slot_required" => true
     }
   end
 

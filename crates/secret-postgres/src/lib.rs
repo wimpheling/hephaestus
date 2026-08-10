@@ -14,7 +14,7 @@
 
 mod service;
 
-pub use service::{SecretRuntimeService, SecretService};
+pub use service::{GatewayIngressSecretResolver, SecretRuntimeService, SecretService};
 
 use authz_postgres::begin_actor_transaction;
 use identity_domain::AuthenticatedIdentity;

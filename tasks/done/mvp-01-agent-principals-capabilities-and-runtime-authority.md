@@ -1,0 +1,341 @@
+# MVP 01: Agent capability requirements and instance permissions
+
+Owner: unassigned
+
+## Outcome
+
+Let a released agent describe the Hephaestus resources and operations it needs,
+and let an authorized user satisfy those requirements while creating or
+reconfiguring an agent instance.
+
+Instance setup presents the release requirements, lets the user select exact
+resources, and requires an explicit permission grant for each selection. The
+result is an immutable instance revision containing exact capability bindings.
+Required bindings must be valid before the revision can run.
+
+At dispatch, Hephaestus creates an immutable authorization snapshot and one
+short-lived runtime session for the exact run. The runtime may perform only the
+operations present in both its snapshot ceiling and live authorization. Every
+privileged operation is RLS-constrained and auditable.
+
+```text
+release capability requirements
+→ selected resources and explicit permissions
+→ immutable instance revision bindings
+→ dispatch-time authorization snapshot
+→ short-lived runtime session
+→ ceiling check + live permission check + RLS + audit
+```
+
+## Locked decisions
+
+| Area | Decision |
+| --- | --- |
+| Release contract | A release declares stable symbolic capability slots, compatible resource kinds, required operations, optional operations, and whether the entire slot is required. |
+| Grant ceiling | An instance may receive only operations declared by its release. A user may omit optional operations but cannot add undeclared ones. |
+| Exact binding | Each configured slot resolves to an exact Hephaestus resource and an explicit operation set. Names, paths, or project membership do not imply a binding. |
+| User authority | Creating an instance does not itself authorize the creator to grant resources. Every binding requires permission to grant the selected operations on the exact resource. |
+| Revision history | Capability bindings belong to an immutable instance revision. Any binding or permission change creates a new revision. |
+| Live revocation | A binding records the run's maximum authority. Current OpenFGA/Mélange authorization may deny an operation at any time. |
+| Runtime principal | An agent instance or gateway is a durable workload principal. A runtime session authenticates one exact run or HTTP invocation of one immutable workload revision. |
+| Runtime credential | Each runtime session has one opaque, random, short-lived bearer credential. PostgreSQL stores only its hash, and queued work never contains it. |
+| Credential recovery | Credential issuance has a stable issuance generation and a temporary host-only encrypted handoff envelope. The guest acknowledges that exact generation before the envelope is destroyed; retry re-delivers the same credential, never a replacement for an active session. |
+| Effective permission | Every privileged call must match the runtime session, snapshot ceiling, exact resource and operation, live authorization, and RLS policy. |
+| Resource semantics | Permissions describe controlled Hephaestus operations rather than filesystem-style read/write access. |
+| Git resources | A repository binding is a named, exact resource capability. It may grant only declared Git operations, ref globs, and write-path globs; a repository name, project membership, or attachment never grants ambient Git authority. |
+| Git read boundary | Raw Git reads may be restricted by repository and ref, but not by path. Path-restricted reads require a distinct filtered content API or virtual repository and are not implied by sparse checkout. |
+| State | Private persistent state is allocated from the release's state requirement and is not a user-selected external capability binding. |
+| Secrets | Secret slots, imports, bindings, exact-version resolution, and delivery policy remain typed secret contracts. Their leases attach to the runtime session. Brokered slots may bind destination-bound HTTPS placeholder substitution rules so provider and webhook credentials never enter the VM. |
+| Setup experience | Parameters, state, secret slots, and capability slots appear in one instance requirements review while retaining their distinct storage and enforcement models. |
+
+## Initial permission vocabulary
+
+The first implementation must define a closed compatibility matrix between
+resource kinds and semantic operations. It must cover the existing
+repository, project, agent-instance, gateway, run, and state-volume operations
+required by installed workloads.
+
+Initial repository operations should distinguish metadata/tree inspection,
+Git read, ref creation, fast-forward ref update, force update, ref deletion,
+tag creation/deletion, run triggering, and attachment management. A Git write
+binding must carry independent ref glob and changed-path glob constraints;
+delete authority is never inferred from write authority. The initial Git
+capability may constrain writes by path at receive time, but must not claim to
+hide paths from a raw Git clone or fetch.
+
+Initial project, agent-instance, and gateway operations should distinguish
+inspection from configuration, execution, update, pause, and recovery.
+Permission to manage a workload must not imply permission to grant it more
+authority, manage secrets, delete its project, or bypass approval for
+controlled publication. Gateway HTTP invocation has a short-lived session and
+no implicit mailbox, repository, state-volume, Caddy, or agent authority.
+
+Mailbox, gateway, and generic egress/secret bindings will use this same
+capability contract in their respective MVP tasks.
+
+The concrete gateway-principal and invocation-session evidence is implemented
+by [MVP 03.1](../todo/mvp-03.1-gateway-principals-and-authority.md), before MVP 03
+adds public HTTP routing.
+
+## Dependencies
+
+- [`reusable-agent-releases-and-instances.md`](../done/reusable-agent-releases-and-instances.md)
+- [`manage-delegate-and-deliver-secrets.md`](../done/manage-delegate-and-deliver-secrets.md)
+- [`define-own-the-loop-agent-platform.md`](../todo/define-own-the-loop-agent-platform.md)
+- [`mvp-03.1-gateway-principals-and-authority.md`](../todo/mvp-03.1-gateway-principals-and-authority.md)
+
+## Non-goals
+
+This task does not implement mailboxes, public ingress, model providers,
+outbound adapters, an Operator Agent, a Project Agent, human-to-agent
+delegation, one-shot approvals, schedules, or long-lived service sessions.
+
+It does not expose arbitrary database operations, host paths, a generic “full
+project access” bit, or broad reusable Git credentials. Plaintext secret
+      delivery is limited to an exact typed binding and bootstrap channel; provider
+      and webhook credentials use brokered placeholder substitution and are never
+      ambient or present in queues, logs, release source, or the VM. Git-specific runtime credential
+transport and Git HTTP enforcement are implemented by MVP 01.1.
+
+## Implementation checklist
+
+- [x] **1. Define capability requirements**
+  - [x] **Add provider-neutral domain types**
+    - [x] Add validated capability slot keys, resource kinds, semantic
+      operations, requirement IDs, binding IDs, authorization-snapshot IDs,
+      runtime-session IDs, including gateway invocation sessions.
+    - [x] Represent required and optional operations separately and validate
+      that each operation is legal for its resource kind.
+    - [x] Define deterministic normalized forms, hashes, and idempotency keys
+      for requirements, bindings, snapshots, sessions, and revocations.
+    - [x] Add tests for parsing, bounds, normalization, serialization,
+      duplicate rejection, illegal resource-operation pairs, and deterministic
+      identity.
+  - [x] **Extend release configuration**
+    - [x] Add capability declarations with a stable slot key, human-readable
+      purpose, compatible resource kind, required operations, optional
+      operations, and required/optional slot state.
+    - [x] Reject tenant resource IDs, resource names, permission grants, and
+      bearer material in release source configuration.
+    - [x] Bind normalized declarations and their hash into the immutable
+      release agent and release provenance.
+    - [x] Preserve valid releases that declare no capability slots.
+    - [x] Add parser and release-domain tests for valid declarations,
+      unsupported versions, malformed operations, duplicate slots, normalized
+      hashes, and immutable publication.
+  - [x] **Define repository capability requirements**
+    - [x] Define repository operations and normalized ref/path glob grammar,
+      including explicit create, update, force-update, delete, and tag rules.
+    - [x] Require a release to declare each named repository slot and its
+      maximum operation/ref/path ceiling; reject resource names, remote URLs,
+      token values, and tenant identifiers in release source.
+    - [x] Specify receive-time changed-path semantics for additions, deletions,
+      renames, merges, and new refs, including byte/object limits and
+      deny-by-default behavior for ambiguous history.
+    - [x] State and test that raw Git read policy is repository/ref scoped;
+      path-restricted reads are a later filtered-content capability.
+
+- [x] **2. Bind instance permissions**
+  - [x] **Persist immutable revision bindings**
+    - [x] Add capability requirement and immutable instance-revision binding
+      records with exact resource type, resource ID, granted operation set,
+      creator, authorization-model version, and creation time.
+    - [x] Enforce complete foreign keys or equivalent typed integrity for every
+      supported resource kind.
+    - [x] Prevent cross-project bindings unless the resource kind has an
+      explicit authorized sharing contract.
+    - [x] Reject undeclared slots, incompatible resources, missing required
+      operations, undeclared optional operations, duplicates, and stale
+      revision updates.
+    - [x] Mark a candidate revision visibly unrunnable when a required binding
+      is missing, revoked, unavailable, or invalid under current platform
+      policy.
+    - [x] Make every binding or permission change create a new immutable
+      revision and preserve all historical bindings referenced by runs.
+  - [x] **Authorize grants**
+    - [x] Define the exact user permission required to grant each semantic
+      operation on each supported resource kind.
+    - [x] Check resource selection, grant authority, tenant scope, release
+      requirement, operation ceiling, and platform policy in one transaction.
+    - [x] Require independent authorization for every resource in a
+      multi-binding instance revision.
+    - [x] Ensure permission to create, configure, or execute an instance does
+      not implicitly authorize resource grants.
+    - [x] Add real-PostgreSQL tests for valid grants, partial authority,
+      cross-project denial, operation broadening, concurrent revisions,
+      revocation, and historical retention.
+
+- [x] **3. Make agent instances authorization subjects**
+  - [x] **Extend the canonical authorization model**
+    - [x] Add explicit agent-instance and gateway relations for every supported resource
+      and semantic operation.
+    - [x] Define separate user permissions for inspecting a resource, using
+      it, and granting an agent access to it.
+    - [x] Ensure organization or project membership grants no ambient
+      agent-instance authority.
+    - [x] Define authoritative domain records that produce every new
+      `melange_tuple`.
+    - [x] Regenerate and commit specialized Mélange SQL with the
+      repository-pinned CLI.
+    - [x] Extend OpenFGA/Mélange compatibility fixtures and unknown-object
+      deny-by-default tests.
+  - [x] **Apply PostgreSQL RLS**
+    - [x] Add forced RLS policies for capability requirements, bindings,
+      snapshots, runtime sessions, and capability audit records.
+    - [x] Generalize transaction-local context to carry the effective agent
+      instance or gateway, exact run or HTTP invocation, runtime session, and
+      request ID.
+    - [x] Keep agent-facing transactions on a non-`BYPASSRLS` role and prevent
+      callers from selecting a trusted worker identity.
+    - [x] Add real-PostgreSQL tests for user, agent-instance, exact-run, and
+      trusted-worker flows, including forged and incomplete context.
+
+- [x] **4. Snapshot authority and issue runtime sessions**
+  - [x] **Resolve authority at dispatch**
+    - [x] Reauthorize the exact instance, active revision, run, attachment,
+      release use, capability bindings, secret bindings, selected resources,
+      and lifecycle state immediately before dispatch.
+    - [x] Persist one immutable authorization snapshot containing the exact
+      revision binding IDs, granted operations, resource IDs, secret lease
+      identities, authorization-model version, and deterministic snapshot
+      hash.
+    - [x] Create one runtime session bound to the exact workload, revision,
+      run or HTTP invocation, optional attachment, snapshot, issue time,
+      expiry, and lifecycle state.
+    - [x] Mint one fresh opaque credential, store only its hash, and deliver
+      bearer material only through the runtime bootstrap channel.
+    - [x] Create a stable issuance generation and a temporary encrypted,
+      host-only handoff envelope before bootstrap delivery. PostgreSQL retains
+      only the credential hash; the envelope is readable only by trusted host
+      bootstrap code and expires with the session.
+    - [x] Require the guest to acknowledge the exact issuance generation before
+      deleting the envelope. On dispatch retry or redelivery, re-deliver the
+      same credential and make duplicate guest acknowledgement idempotent.
+    - [x] On acknowledgement timeout or unrecoverable bootstrap failure, revoke
+      the session, terminate the guest, and delete the envelope. Minting a new
+      credential requires a new session after the old session is revoked.
+    - [x] Add failure-injection tests before and after credential generation,
+      hash/session commit, envelope persistence, bootstrap delivery, guest
+      acknowledgement, envelope deletion, and guest start. Prove retry neither
+      loses the credential nor creates conflicting active credentials.
+    - [x] Deny dispatch with stable diagnostics when any required binding is
+      missing, revoked, unauthorized, or incompatible.
+  - [x] **Attach runtime leases**
+    - [x] Associate exact secret leases and future capability-specific leases
+      with the same runtime session and authorization snapshot.
+    - [x] Preserve the distinct raw-secret and brokered-secret permissions and
+      delivery behavior.
+    - [x] Bind brokered HTTPS slots to exact placeholder, destination, injection,
+      and optional gateway-route rules. Record their versions, leases, runtime
+      revisions, rotation, and revocation without placing their values in
+      durable records, queues, logs, or guest bootstrap material.
+    - [x] Define session expiry, revocation, cancellation, terminal cleanup,
+      and crash reconciliation.
+    - [x] Add dispatch tests for mixed ordinary and secret capabilities,
+      rotation, revocation, concurrent dispatch, retries, and stale revisions.
+
+- [x] **5. Authorize privileged runtime calls**
+  - [x] **Authenticate and attenuate each request**
+    - [x] Authenticate the opaque credential and match its exact runtime
+      session, run, instance, revision, expiry, and active lifecycle.
+    - [x] Resolve the requested semantic operation and exact resource to one
+      binding in the immutable snapshot.
+    - [x] Reject any request outside the snapshot ceiling before invoking
+      application or database services.
+    - [x] Check current OpenFGA/Mélange permission for the agent instance and
+      resource inside the RLS-constrained transaction.
+    - [x] Recheck capability-specific live state such as binding revocation,
+      attachment status, release use, secret lease, or resource lifecycle.
+    - [x] Add tests for credential theft across runs, instances, revisions,
+      resources, operations, attachments, expiry, and revoked bindings.
+  - [x] **Handle revocation honestly**
+    - [x] Deny new API and broker calls immediately after live authorization
+      or a bound resource is revoked.
+    - [x] Request cancellation when revoked authority has already materialized
+      a sensitive guest resource that cannot be withdrawn through an API
+      check.
+    - [x] Record when a read-only mount or raw secret may already have been
+      observed and cannot be retroactively revoked.
+    - [x] Prevent session renewal, retry, or worker recovery from broadening
+      the immutable snapshot.
+    - [x] Add race tests before dispatch, after session creation, during guest
+      provisioning, during a privileged call, and after revocation.
+  - [x] **Specialize runtime authority for Git**
+    - [x] Define the authenticated runtime-Git principal as the exact runtime
+      session, never as a human user or a reusable agent-wide identity.
+    - [x] Require every Git request to recheck credential validity, exact run,
+      binding, operation, repository, ref/path constraints, expiry, current
+      authorization, and resource lifecycle.
+    - [x] Delegate Git credential format, Git HTTP authentication, ref
+      advertisement, receive enforcement, and runtime worktree delivery to
+      MVP 01.1 without weakening this task's immutable binding ceiling.
+
+- [x] **6. Add the instance permission UI**
+  - [x] **Review requirements during instance creation**
+    - [x] Present ordinary parameters, private state, secret slots, and
+      capability slots in one release requirements flow.
+    - [x] For each capability slot, show its purpose, resource kind, required
+      operations, optional operations, and whether the slot is required.
+    - [x] List only exact resources the current user may both select and grant
+      with the requested operation set.
+    - [x] Require explicit resource selection and permission confirmation for
+      every required capability.
+    - [x] Show why the instance is unrunnable when a required resource or
+      permission is unavailable.
+  - [x] **Manage revisions and permission changes**
+    - [x] Show active revision bindings as resource, operation set, grantor,
+      live status, and last-use metadata without exposing secrets.
+    - [x] Create a new revision for resource replacement, optional-operation
+      changes, or binding removal.
+    - [x] Show a permission diff for release updates and require explicit
+      approval for every newly required resource or operation.
+    - [x] Distinguish release-required operations, optional grantable
+      operations, current grants, and live revocations.
+    - [x] Add LiveView and browser tests for complete configuration, partial
+      grant authority, denied resources, optional permissions, invalid
+      revisions, update diffs, revocation, and authorization-safe live refresh.
+
+- [x] **7. Audit, inspect, and observe**
+  - [x] **Record complete authority provenance**
+    - [x] Record requester, grantor, agent instance, revision, run, runtime
+      session, authorization snapshot, binding, permission, resource,
+      authorization-model version, request ID, decision, and outcome.
+    - [x] Keep bearer credentials, secret values, sensitive parameters, request
+      bodies, and provider authorization material out of audit and telemetry.
+    - [x] Add read-only inspection for an instance's declared requirements,
+      bound resources, granted operations, live status, snapshot ceiling,
+      runtime sessions, denials, and revocation effects.
+    - [x] Reauthorize live subscriptions before publishing permission,
+      session, audit, or denial updates.
+    - [x] Measure session issuance, expiry, revocation latency, capability
+      calls, ceiling denials, live-authorization denials, and invalid revisions
+      using bounded opaque labels.
+
+- [x] **8. Verify and document**
+  - [x] Document the release declaration, instance binding, user grant,
+    revision, snapshot, runtime session, live check, revocation, and audit
+    lifecycle.
+  - [x] Document the supported resource-operation matrix and the exact user
+    authority required to grant each operation.
+  - [x] Document the instance creation and permission-update UI.
+  - [x] Run `cargo fmt --all -- --check`.
+  - [x] Run `cargo clippy --workspace --all-targets --all-features`.
+  - [x] Run `cargo test --workspace --all-features`.
+  - [x] Run `cargo doc --workspace --all-features --no-deps`.
+  - [x] Run the real-PostgreSQL authorization, capability, revision,
+    dispatch, runtime-session, revocation, and RLS suites.
+  - [x] Run Mélange generated-migration drift detection, `melange doctor`, and
+    OpenFGA compatibility fixtures.
+  - [x] Run `mix precommit` in `web/`.
+  - [x] Run the capability configuration and permission-diff Playwright
+    scenarios.
+  - [x] Run secret and runtime-credential sentinel scans.
+  - [x] Run `git diff --check`.
+
+## Completion evidence
+
+Record the configuration and schema versions, supported resource-operation
+matrix, migration IDs, authorization-model and generated-SQL hashes, golden
+release requirement and instance-binding IDs, authorization snapshots,
+runtime sessions, UI screenshots, grant and denial fixtures, revocation-race
+results, test counts, sentinel-scan results, and deliberate follow-up tasks.

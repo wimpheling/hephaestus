@@ -104,7 +104,7 @@ values and reusable credentials are never placed in a transport payload.
 
 Raw authority is explicit and more sensitive. After VM resources are ready,
 the host creates one memory-backed per-run secret tree and stable slot-derived
-files, then mounts it read-only at `/run/hephaestus/secrets`. Values never
+files, then mounts it read-only at `/run/hephaestus-secrets`. Values never
 enter environment variables, arguments, ordinary configuration, source,
 release, result, state, logs, metrics, NATS, or PostgreSQL metadata.
 
@@ -135,6 +135,62 @@ The initial completion adapter is deliberately narrow:
   status handling, and a `deny_unknown_fields` `{result}` response;
 - rejection of credential echoes, control characters, malformed responses,
   and provider debug bodies.
+
+## Brokered HTTPS placeholder delivery
+
+Brokered HTTPS is the general-purpose, provider-neutral form of brokered
+delivery. It is intended for an agent which needs to call an ordinary HTTPS
+API while the API credential must remain outside the VM. It is not a generic
+proxy, credential-read API, or provider adapter.
+
+At release binding time, one immutable rule names exactly one secret version,
+one declared slot, and either:
+
+- one normalized `https://host[:port]` origin and one outbound header value or
+  fixed header prefix; or
+- one exact gateway route and one inbound request header.
+
+Wildcards, URL paths, query/body substitutions, raw IP destinations, duplicate
+target headers, arbitrary proxy headers, and ambiguous route/destination
+combinations are rejected. The released VM receives the stable non-secret
+identifier `heph-placeholder:v1:<rule-id>`. It is useful only when presented
+in the exact declared header position through a live runtime credential; it is
+not a bearer credential and cannot be exchanged for plaintext.
+
+For outbound use, a `BrokerOnly` VM has no general IP network. It sends a
+bounded HTTPS request to the private broker channel. The host validates the
+runtime session, lease, slot, selected rule, exact destination, request bounds,
+and placeholder before decrypting the selected version. The host then makes
+the HTTPS request itself with DNS addresses pinned by the control plane, TLS
+certificate and SNI validation enabled, redirects disabled, and proxy
+environment variables ignored. Raw IPv4/IPv6, loopback, private, link-local,
+metadata, multicast, and unpinned DNS destinations are rejected. This is a
+cooperating transport, not transparent TLS interception: the guest never sees
+the real credential or an interception CA.
+
+The broker repeats live authorization after upstream use. Rotation creates a
+new immutable binding/rule for future sessions; an issued lease remains pinned
+to its selected version until normal expiry unless it is revoked. Revocation
+denies new substitution immediately and prevents a response from being
+delivered if it wins the post-upstream authorization race. The generic adapter
+also rejects a response that contains the substituted secret value, so an
+allowed upstream cannot reflect it back into the VM. This does not eliminate
+the residual risk inherent in every allowed destination: the remote service
+can act on the credential while the request is authorized.
+
+For inbound gateway use, the gateway edge resolves only an exact active route
+lease. It compares the received header with the host-resolved secret in
+constant time and rewrites a match to the stable placeholder before the request
+enters the handler VM. A non-match is rejected without disclosing which part
+was wrong. The VM therefore owns webhook protocol logic and response status,
+but never receives the webhook secret.
+
+Brokered HTTPS is distinct from raw delivery. Raw delivery deliberately gives
+plaintext to a guest file and cannot promise non-disclosure after that point;
+brokered HTTPS never mounts, logs, queues, returns, or otherwise exposes the
+resolved value to the guest. Sentinel tests cover the broker wire response,
+upstream echo rejection, gateway-header rewrite, and rotation/revocation
+authorization boundaries.
 
 ## Audit and UI safety
 
@@ -186,10 +242,30 @@ destruction. On restart, normal reconcilers resume unpublished outbox records,
 revoked-session cancellation, runtime cleanup, and safe orphan removal without
 minting replacement versions or credentials.
 
-The current composition root deliberately installs `DenyingBrokerAdapter`.
-Production KMS/vault providers and additional semantic upstream adapters are
-separate follow-up work; operators must not treat the local key provider or
-fake loopback adapter as a production credential boundary.
+The daemon defaults to `DenyingBrokerAdapter`. To enable generic brokered
+HTTPS, an operator must set `HEPHAESTUS_BROKERED_HTTPS_UPSTREAMS_JSON` to a
+non-empty JSON array of `{ "rule": <immutable brokered rule>, "addresses":
+[<control-plane-pinned public IPs>] }`. The registry rejects duplicate rule
+IDs, private/unpinned addresses, non-outbound rules, and non-default-port
+origins. It selects only the requested rule ID after the runtime service has
+verified that exact ID against the issued lease; it uses a certificate-verifying
+native trust store, exact SNI/hostname, redirects disabled, and no proxy
+environment. The declaration remains operational control-plane configuration:
+it must exactly mirror a durable immutable rule and its DNS pins. A supported
+`AgentInstanceService.DeclareBrokeredHttpsRule` creates that durable rule from
+an active brokered binding: it requires instance-management and brokered-bind
+authority, fixes the currently active secret version, and accepts only the
+binding's exact declared DNS destination plus one outbound header location.
+The caller receives the non-secret rule ID, whose stable placeholder is
+`heph-placeholder:v1:<rule-id>`.
+
+Released BrokerOnly workloads use the `brokered-egress-client` ABI over the
+dedicated private broker stream. They read the one-run opaque credential from
+the authenticated `heph-init` runtime-authority file, submit a bounded
+`WireBrokerRequest`, and receive only a sanitized `WireBrokerResponse`; the
+client has no HTTP, DNS, or secret-value API. The hardware libkrun fixture
+exercises this exact path with a provisioned runtime credential and the real
+host `BrokerServer`.
 
 Migration `0009_operational_observability.sql` adds metadata-only secret
 version and aggregate operational views. The application role still has no

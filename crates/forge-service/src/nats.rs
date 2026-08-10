@@ -4,6 +4,10 @@ use crate::{ForgeOutboxStore, ForgeRepositoryError};
 
 /// Durable isolated-build requests for reusable releases.
 pub const BUILD_REQUESTED_SUBJECT: &str = "hephaestus.build.requested.v1";
+/// Durable retry commands for an existing isolated build.
+pub const BUILD_RETRY_REQUESTED_SUBJECT: &str = "hephaestus.build.retry.requested.v1";
+/// Durable verification rebuild commands for immutable build inputs.
+pub const BUILD_VERIFY_REQUESTED_SUBJECT: &str = "hephaestus.build.verify.requested.v1";
 /// Exact reusable-instance run requests awaiting dispatch.
 pub const INSTANCE_RUN_REQUESTED_SUBJECT: &str = "hephaestus.instance.run.requested.v1";
 /// Durable commands consumed by the run orchestrator.
@@ -30,6 +34,8 @@ pub async fn ensure_forge_jetstream_topology(
             name: GIT_EVENT_STREAM.to_owned(),
             subjects: vec![
                 BUILD_REQUESTED_SUBJECT.to_owned(),
+                BUILD_RETRY_REQUESTED_SUBJECT.to_owned(),
+                BUILD_VERIFY_REQUESTED_SUBJECT.to_owned(),
                 INSTANCE_RUN_REQUESTED_SUBJECT.to_owned(),
             ],
             retention: RetentionPolicy::Limits,
@@ -58,7 +64,7 @@ pub async fn ensure_build_consumer(
             BUILD_CONSUMER,
             jetstream::consumer::pull::Config {
                 durable_name: Some(BUILD_CONSUMER.to_owned()),
-                filter_subject: BUILD_REQUESTED_SUBJECT.to_owned(),
+                filter_subject: "hephaestus.build.>".to_owned(),
                 ack_wait: std::time::Duration::from_secs(30),
                 ..Default::default()
             },

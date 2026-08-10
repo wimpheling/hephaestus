@@ -19,6 +19,16 @@ pub mod __buffa {
         #[allow(unused_imports)]
         use super::*;
         include!("hephaestus.release.v1.release.__view.rs");
+        pub mod oneof {
+            #[allow(unused_imports)]
+            use super::*;
+            include!("hephaestus.release.v1.release.__view_oneof.rs");
+        }
+    }
+    pub mod oneof {
+        #[allow(unused_imports)]
+        use super::*;
+        include!("hephaestus.release.v1.release.__oneof.rs");
     }
     /// Register this package's `Any` type entries and extension entries.
     pub fn register_types(reg: &mut ::buffa::type_registry::TypeRegistry) {
@@ -29,6 +39,13 @@ pub mod __buffa {
         reg.register_json_any(super::__LIST_REPOSITORY_RELEASES_RESPONSE_JSON_ANY);
         reg.register_json_any(super::__GET_RELEASE_REQUEST_JSON_ANY);
         reg.register_json_any(super::__GET_RELEASE_RESPONSE_JSON_ANY);
+        reg.register_json_any(super::__SET_DRAFT_VERSION_REQUEST_JSON_ANY);
+        reg.register_json_any(super::__SET_DRAFT_VERSION_RESPONSE_JSON_ANY);
+        reg.register_json_any(super::__PUBLISH_RELEASE_REQUEST_JSON_ANY);
+        reg.register_json_any(super::__PUBLISH_RELEASE_RESPONSE_JSON_ANY);
+        reg.register_json_any(super::__WATCH_RELEASE_REQUEST_JSON_ANY);
+        reg.register_json_any(super::__RELEASE_CHANGE_JSON_ANY);
+        reg.register_json_any(super::__WATCH_RELEASE_RESPONSE_JSON_ANY);
     }
 }
 #[doc(inline)]
@@ -59,5 +76,33 @@ pub use self::__buffa::view::GetReleaseRequestOwnedView;
 pub use self::__buffa::view::GetReleaseResponseView;
 #[doc(inline)]
 pub use self::__buffa::view::GetReleaseResponseOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::SetDraftVersionRequestView;
+#[doc(inline)]
+pub use self::__buffa::view::SetDraftVersionRequestOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::SetDraftVersionResponseView;
+#[doc(inline)]
+pub use self::__buffa::view::SetDraftVersionResponseOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::PublishReleaseRequestView;
+#[doc(inline)]
+pub use self::__buffa::view::PublishReleaseRequestOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::PublishReleaseResponseView;
+#[doc(inline)]
+pub use self::__buffa::view::PublishReleaseResponseOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::WatchReleaseRequestView;
+#[doc(inline)]
+pub use self::__buffa::view::WatchReleaseRequestOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::ReleaseChangeView;
+#[doc(inline)]
+pub use self::__buffa::view::ReleaseChangeOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::WatchReleaseResponseView;
+#[doc(inline)]
+pub use self::__buffa::view::WatchReleaseResponseOwnedView;
 #[doc(inline)]
 pub use self::__buffa::register_types;

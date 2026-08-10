@@ -30,10 +30,9 @@ defmodule HephaestusWebWeb.PageStream do
     identity = socket.assigns.current_identity
     generation = state.stream_generation
 
-    task =
-      Task.Supervisor.async_nolink(HephaestusWeb.PageTaskSupervisor, fn ->
-        state_module.execute(state, {:load, identity, generation})
-      end)
+    # Snapshot RPCs are finite page work. Do not queue them behind the
+    # supervisor's long-lived product-event watch tasks.
+    task = Task.async(fn -> state_module.execute(state, {:load, identity, generation}) end)
 
     assign(socket, :snapshot_task, task)
   end

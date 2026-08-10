@@ -4,7 +4,7 @@ defmodule HephaestusWebWeb.RepositoryFilesLive do
   alias HephaestusWebWeb.DesignSystem.Pages.RepositoryFilesPage
   alias HephaestusWebWeb.{RepositoryFilesState, RepositoryLiveSupport}
 
-  @stream_mode :page_scoped
+  @stream_mode :none
 
   @impl true
   def mount(%{"repository_id" => repository_id}, _session, socket) do

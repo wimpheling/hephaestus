@@ -30,6 +30,7 @@ pub(super) async fn handle(
             name: row.name,
             organization_id: opaque(row.organization_id).into(),
             organization_name: row.organization_name,
+            description: row.description,
             ..Default::default()
         }
         .into(),

@@ -16,6 +16,9 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.ReleasePage do
   attr :project_destination, :string, default: nil
   attr :repository_releases_destination, :string, default: nil
   attr :source_destination, :string, default: nil
+  attr :draft_version_form, :any, default: nil
+  attr :set_draft_version_event, :string, default: nil, values: [nil, "set-draft-version"]
+  attr :publish_event, :string, default: nil, values: [nil, "publish-release"]
 
   @doc "Renders release provenance and immutable contents."
   def release(assigns) do
@@ -45,6 +48,43 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.ReleasePage do
           <.tag tone={state_tone(@release["state"])}>{@release["state"]}</.tag>
         </:actions>
       </.page_heading>
+
+      <.frame
+        :if={@release["state"] == "draft"}
+        as="section"
+        id="release-draft-review"
+        variant={:panel}
+      >
+        <.page_heading
+          eyebrow="Review draft"
+          title="Choose the release version"
+          description="Publication freezes the source, build identity, configuration, artifact manifest, and exported agent contract."
+          level="h2"
+        />
+        <.form_container
+          :if={@draft_version_form && @set_draft_version_event}
+          for={@draft_version_form}
+          id="draft-version-form"
+          submit={@set_draft_version_event}
+        >
+          <.input
+            name="release[version]"
+            value={@draft_version_form[:version].value}
+            label="Release version"
+            required
+          />
+          <.action interaction={:submit} variant={:secondary}>Save draft version</.action>
+        </.form_container>
+        <.action
+          :if={@publish_event}
+          interaction={:event}
+          event={@publish_event}
+          variant={:primary}
+          confirm="Publish this immutable release?"
+        >
+          Publish release
+        </.action>
+      </.frame>
 
       <.frame as="section" id="release-provenance" variant={:table}>
         <.frame as="article" variant={:table_row}>

@@ -75,7 +75,7 @@ async fn exact_commit_becomes_one_controlled_result_with_durable_artifacts() {
         &["config", "user.email", "workspace@example.invalid"],
     )
     .await;
-    tokio::fs::write(work.join("agent.toml"), agent_config())
+    tokio::fs::write(work.join("agent.toml"), agent_config(repository.id))
         .await
         .expect("agent config");
     tokio::fs::write(work.join("input.txt"), "accepted\n")
@@ -377,9 +377,12 @@ async fn seed_attached_instance(
     repository_id: forge_domain::RepositoryId,
     commit: &str,
 ) {
-    let release_configuration = agent_config::parse(agent_config().as_bytes())
+    let configuration = agent_config(repository_id);
+    let release_configuration = agent_config::parse(configuration.as_bytes())
         .config
         .expect("fixture release configuration should parse");
+    let build_image_key = image_key(repository_id, "build");
+    let runtime_image_key = image_key(repository_id, "runtime");
     let build_id = Uuid::new_v4();
     let family_id = Uuid::new_v4();
     let release_id = Uuid::new_v4();
@@ -387,6 +390,23 @@ async fn seed_attached_instance(
     let instance_id = Uuid::new_v4();
     let revision_id = Uuid::new_v4();
     let mut tx = pool.begin().await.expect("begin exact instance fixture");
+    for key in [&build_image_key, &runtime_image_key] {
+        sqlx::query(
+            "INSERT INTO oci_images
+             (id, key, display_name, image_reference, toolchains, architectures,
+              availability_state, provenance, platform_policy_version)
+             VALUES ($1, $2, $2, $3, '[]'::jsonb, ARRAY['x86_64'],
+                     'available', '{}'::jsonb, 'workspace-test/v1')",
+        )
+        .bind(Uuid::new_v4())
+        .bind(key)
+        .bind(format!(
+            "{key}@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        ))
+        .execute(&mut *tx)
+        .await
+        .expect("seed fixture OCI image");
+    }
     sqlx::query(
         "INSERT INTO build_requests
          (id, repository_id, source_commit, source_ref,
@@ -505,16 +525,20 @@ async fn seed_attached_instance(
     tx.commit().await.expect("commit exact instance fixture");
 }
 
-const fn agent_config() -> &'static str {
+fn image_key(repository_id: forge_domain::RepositoryId, context: &str) -> String {
+    format!("workspace-{context}-{repository_id}")
+}
+
+fn agent_config(repository_id: forge_domain::RepositoryId) -> String {
     r#"
 version = 2
 [agent]
 name = "workspace-agent"
 key = "workspace-agent"
 [build]
+image = { key = "__BUILD_IMAGE_KEY__" }
 command = "/usr/bin/build"
 working_directory = "/workspace/source"
-root_image = "build@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 triggers = ["refs/heads/main"]
 [build.resources]
 vcpus = 1
@@ -525,14 +549,13 @@ profile = "disabled"
 path = "bin/agent"
 kind = "executable"
 [guest]
+image = { key = "__RUNTIME_IMAGE_KEY__" }
 command = "bin/agent"
 arguments = []
 working_directory = "bin"
 [resources]
 vcpus = 1
 memory_mib = 128
-[root_image]
-reference = "image@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 [workspace]
 mount = true
 path = "/workspace/repo"
@@ -547,6 +570,11 @@ profile = "disabled"
 push = true
 refs = ["refs/heads/main"]
 "#
+    .replace("__BUILD_IMAGE_KEY__", &image_key(repository_id, "build"))
+    .replace(
+        "__RUNTIME_IMAGE_KEY__",
+        &image_key(repository_id, "runtime"),
+    )
 }
 
 async fn git_binary() -> PathBuf {

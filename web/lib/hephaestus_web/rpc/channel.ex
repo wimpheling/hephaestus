@@ -2,8 +2,9 @@ defmodule HephaestusWeb.RPC.Channel do
   @moduledoc """
   Supervised, lazily connected native gRPC channel.
 
-  Keeping connection ownership here gives page effects one stable channel while
-  allowing the transport adapter to reconnect after a Rust service restart.
+  Keeping connection ownership here gives concurrent page effects one reusable
+  channel while allowing the transport adapter to reconnect after a Rust
+  service restart.
   """
 
   use GenServer
@@ -104,7 +105,7 @@ defmodule HephaestusWeb.RPC.Channel do
 
   @impl true
   def handle_cast(:reset, state) do
-    disconnect(state)
+    disconnect_async(state)
     {:noreply, %{state | channel: nil}}
   end
 
@@ -128,4 +129,14 @@ defmodule HephaestusWeb.RPC.Channel do
   end
 
   defp disconnect(_state), do: :ok
+
+  # Graceful Mint shutdown may wait for a failed peer. Channel invalidation is
+  # on the page retry path, so publish the empty slot before closing the stale
+  # connection and let the next caller connect immediately.
+  defp disconnect_async(%{channel: %GRPC.Channel{} = channel, connector: connector}) do
+    Task.start(fn -> connector.disconnect(channel) end)
+    :ok
+  end
+
+  defp disconnect_async(_state), do: :ok
 end

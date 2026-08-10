@@ -6,6 +6,7 @@ import "google/protobuf/timestamp.proto";
 import "hephaestus/artifact/v1/artifact.proto";
 import "hephaestus/build/v1/build.proto";
 import "hephaestus/common/v1/common.proto";
+import "hephaestus/event/v1/event.proto";
 import "hephaestus/options/v1/options.proto";
 
 service ReleaseService {
@@ -30,6 +31,36 @@ service ReleaseService {
     option (hephaestus.options.v1.operation_kind) = OPERATION_KIND_QUERY;
     option (hephaestus.options.v1.max_request_bytes) = 4096;
     option (hephaestus.options.v1.max_response_bytes) = 8388608;
+  }
+  rpc SetDraftVersion(SetDraftVersionRequest) returns (SetDraftVersionResponse) {
+    option (hephaestus.options.v1.authorization) = {
+      permission: "release.publish"
+      audience: "/hephaestus.release.v1.ReleaseService/SetDraftVersion"
+      actor_source: ACTOR_SOURCE_MEDIATOR_JWT_METADATA
+    };
+    option (hephaestus.options.v1.operation_kind) = OPERATION_KIND_MUTATION;
+    option (hephaestus.options.v1.max_request_bytes) = 65536;
+    option (hephaestus.options.v1.max_response_bytes) = 8388608;
+  }
+  rpc PublishRelease(PublishReleaseRequest) returns (PublishReleaseResponse) {
+    option (hephaestus.options.v1.authorization) = {
+      permission: "release.publish"
+      audience: "/hephaestus.release.v1.ReleaseService/PublishRelease"
+      actor_source: ACTOR_SOURCE_MEDIATOR_JWT_METADATA
+    };
+    option (hephaestus.options.v1.operation_kind) = OPERATION_KIND_MUTATION;
+    option (hephaestus.options.v1.max_request_bytes) = 65536;
+    option (hephaestus.options.v1.max_response_bytes) = 8388608;
+  }
+  rpc WatchRelease(WatchReleaseRequest) returns (stream WatchReleaseResponse) {
+    option (hephaestus.options.v1.authorization) = {
+      permission: "release.watch"
+      audience: "/hephaestus.release.v1.ReleaseService/WatchRelease"
+      actor_source: ACTOR_SOURCE_MEDIATOR_JWT_METADATA
+    };
+    option (hephaestus.options.v1.operation_kind) = OPERATION_KIND_SERVER_STREAM;
+    option (hephaestus.options.v1.max_request_bytes) = 8192;
+    option (hephaestus.options.v1.max_response_bytes) = 4194304;
   }
 }
 
@@ -100,4 +131,47 @@ message GetReleaseRequest {
 }
 message GetReleaseResponse {
   Release release = 1;
+}
+message SetDraftVersionRequest {
+  hephaestus.common.v1.RequestContext context = 1;
+  hephaestus.common.v1.OpaqueId release_id = 2;
+  string version = 3;
+}
+message SetDraftVersionResponse {
+  Release release = 1;
+  hephaestus.common.v1.MutationReceipt receipt = 2;
+}
+message PublishReleaseRequest {
+  hephaestus.common.v1.RequestContext context = 1;
+  hephaestus.common.v1.OpaqueId release_id = 2;
+}
+message PublishReleaseResponse {
+  Release release = 1;
+  hephaestus.common.v1.MutationReceipt receipt = 2;
+}
+message WatchReleaseRequest {
+  hephaestus.common.v1.OpaqueId release_id = 1;
+  hephaestus.common.v1.Cursor resume_cursor = 2;
+  uint32 max_events = 3;
+  uint64 max_total_bytes = 4;
+}
+message ReleaseChange {
+  hephaestus.common.v1.OpaqueId event_id = 1;
+  hephaestus.common.v1.Cursor cursor = 2;
+  hephaestus.common.v1.OpaqueId release_id = 3;
+  hephaestus.common.v1.OpaqueId repository_id = 4;
+  uint64 aggregate_version = 5;
+  hephaestus.event.v1.ChangeKind change = 6;
+  hephaestus.event.v1.LifecycleState state = 7;
+  google.protobuf.Timestamp occurred_at = 8;
+}
+message WatchReleaseResponse {
+  uint64 sequence = 1;
+  hephaestus.common.v1.Cursor committed_cursor = 2;
+  oneof item {
+    hephaestus.event.v1.ScopeSnapshotBarrier snapshot_barrier = 10;
+    ReleaseChange event = 11;
+    hephaestus.event.v1.RetentionGap retention_gap = 12;
+    hephaestus.event.v1.AccessRevoked access_revoked = 13;
+  }
 }

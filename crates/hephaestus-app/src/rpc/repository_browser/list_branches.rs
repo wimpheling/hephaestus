@@ -34,7 +34,10 @@ pub(super) async fn handle(
     if size > MAX_SIZE {
         return Err(into_connect_error(RpcError::InvalidArgument));
     }
+    // An explicitly present first page has an empty token. It is equivalent
+    // to omitting pagination and must not be rejected as a malformed cursor.
     let after = page
+        .filter(|page| !page.page_token.is_empty())
         .map(|page| {
             page.page_token
                 .strip_prefix("v1:")

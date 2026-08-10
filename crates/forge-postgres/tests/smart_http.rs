@@ -2,14 +2,18 @@
 
 use async_trait::async_trait;
 use authz_postgres::PostgresMelangeAuthorizer;
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use forge_domain::{GitRef, OrganizationId};
 use forge_postgres::PgForgeRepository;
 use forge_service::{CreateRepository, GitStorage, RUN_START_SUBJECT};
 use git_http::{
-    AuthenticationError, AuthorizationError, AuthorizationRequest, GitAuthenticator, GitAuthorizer,
-    GitHttpLimits, GitHttpService, GitOperation, PostgresGitAuthorizer, Principal,
+    AuthenticationError, AuthorizationError, AuthorizationRequest, CompositeGitAuthenticator,
+    GitAuthenticator, GitAuthorizer, GitHttpLimits, GitHttpService, GitOperation,
+    PostgresGitAuthorizer, Principal,
 };
 use identity_domain::{AuthenticatedIdentity, RequestId, UserId};
+use pat_domain::{PersonalAccessTokenLabel, PersonalAccessTokenScope};
+use pat_postgres::{CreatePersonalAccessToken, PostgresPersonalAccessTokenService};
 use serde_json::json;
 use serial_test::serial;
 use sqlx::{PgPool, postgres::PgPoolOptions};
@@ -35,10 +39,7 @@ impl GitAuthenticator for TestIdentityProvider {
     ) -> Result<Principal, AuthenticationError> {
         let mut identity = self.identity.clone();
         identity.request_id = request_id;
-        Ok(Principal {
-            name: identity.subject.clone(),
-            identity,
-        })
+        Ok(Principal::human(identity))
     }
 }
 
@@ -121,7 +122,7 @@ async fn postgres_authorizer_allows_reads_and_rejects_push_without_write() {
             .authorize(&AuthorizationRequest {
                 repository_id: repository,
                 operation,
-                identity: member_identity.clone(),
+                principal: Principal::human(member_identity.clone()),
             })
             .await
             .expect("organization member may read Git");
@@ -131,7 +132,7 @@ async fn postgres_authorizer_allows_reads_and_rejects_push_without_write() {
             .authorize(&AuthorizationRequest {
                 repository_id: repository,
                 operation: GitOperation::Push,
-                identity: member_identity,
+                principal: Principal::human(member_identity),
             })
             .await
             .is_err()
@@ -239,7 +240,35 @@ async fn clone_fetch_push_audit_and_run_request() {
         calls: Mutex::new(Vec::new()),
         identity: identity.clone(),
     });
-    let authenticator = Arc::new(TestIdentityProvider { identity });
+    let issued_pat = PostgresPersonalAccessTokenService::new(pool.clone())
+        .create(
+            &identity,
+            CreatePersonalAccessToken {
+                label: PersonalAccessTokenLabel::parse("smart HTTP integration")
+                    .expect("valid PAT label"),
+                scope: PersonalAccessTokenScope::new(
+                    [
+                        git_capability_domain::GitOperation::Discover,
+                        git_capability_domain::GitOperation::Fetch,
+                        git_capability_domain::GitOperation::Receive,
+                    ],
+                    Some([repository.id]),
+                )
+                .expect("exact PAT scope"),
+                expires_at: time::OffsetDateTime::now_utc() + time::Duration::hours(1),
+            },
+        )
+        .await
+        .expect("issue smart HTTP PAT");
+    let basic_credential = format!(
+        "Basic {}",
+        BASE64_STANDARD.encode(format!("heph-pat:{}", issued_pat.token.expose()))
+    );
+    let oidc_authenticator: Arc<dyn GitAuthenticator> = Arc::new(TestIdentityProvider { identity });
+    let authenticator = Arc::new(CompositeGitAuthenticator::new(
+        oidc_authenticator,
+        Arc::new(PostgresPersonalAccessTokenService::new(pool.clone())),
+    ));
     let backend = git_exec_path().await.join("git-http-backend");
     let router = GitHttpService::new(
         Arc::clone(&repository_service),
@@ -284,15 +313,21 @@ async fn clone_fetch_push_audit_and_run_request() {
     let commit = git_output(&source, &["rev-parse", "HEAD"]).await;
     seed_attached_instance(&pool, user_id, project.id, repository.id, &commit).await;
     git(&source, &["remote", "add", "origin", &remote]).await;
-    git(&source, &["push", "origin", "HEAD:refs/heads/main"]).await;
-
-    let clone = temporary.path().join("clone");
-    git(
-        temporary.path(),
-        &["clone", &remote, clone.to_str().expect("UTF-8 clone path")],
+    git_authenticated(
+        &source,
+        &["push", "origin", "HEAD:refs/heads/main"],
+        &basic_credential,
     )
     .await;
-    git(&clone, &["fetch", "origin"]).await;
+
+    let clone = temporary.path().join("clone");
+    git_authenticated(
+        temporary.path(),
+        &["clone", &remote, clone.to_str().expect("UTF-8 clone path")],
+        &basic_credential,
+    )
+    .await;
+    git_authenticated(&clone, &["fetch", "origin"], &basic_credential).await;
 
     let receive_count: i64 =
         sqlx::query_scalar("SELECT count(*) FROM git_receives WHERE repository_id = $1")
@@ -540,6 +575,26 @@ async fn git(directory: &Path, arguments: &[&str]) {
     assert!(
         output.status.success(),
         "git {arguments:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+async fn git_authenticated(directory: &Path, arguments: &[&str], authorization: &str) {
+    let output = Command::new("git")
+        .args(arguments)
+        .current_dir(directory)
+        .env("GIT_CONFIG_COUNT", "1")
+        .env("GIT_CONFIG_KEY_0", "http.extraHeader")
+        .env(
+            "GIT_CONFIG_VALUE_0",
+            format!("Authorization: {authorization}"),
+        )
+        .output()
+        .await
+        .expect("run authenticated Git");
+    assert!(
+        output.status.success(),
+        "authenticated git {arguments:?} failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 }

@@ -1,0 +1,27 @@
+[package]
+name = "runtime-handoff-local"
+description = "Encrypted host-local runtime credential handoff envelopes"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[package.metadata.hephaestus]
+layer = "adapter"
+context = "authorization"
+
+[dependencies]
+aes-gcm.workspace = true
+capability-domain = { path = "../capability-domain" }
+runtime-authority = { path = "../runtime-authority" }
+runtime-git-authority = { path = "../runtime-git-authority" }
+serde.workspace = true
+serde_json.workspace = true
+time.workspace = true
+uuid.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

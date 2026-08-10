@@ -10,7 +10,8 @@ defmodule HephaestusWebWeb.ProductRouteWiringTest do
     "project_live.ex",
     "project_agents_live.ex",
     "project_runs_live.ex",
-    "project_settings_live.ex"
+    "project_settings_live.ex",
+    "personal_access_tokens_live.ex"
   ]
 
   test "product LiveViews are callback adapters without backend clients" do
@@ -49,5 +50,6 @@ defmodule HephaestusWebWeb.ProductRouteWiringTest do
     assert router =~ ~s(live "/projects/:project_id/agents", ProjectAgentsLive)
     assert router =~ ~s(live "/projects/:project_id/runs", ProjectRunsLive)
     assert router =~ ~s(live "/projects/:project_id/settings", ProjectSettingsLive)
+    assert router =~ ~s(live "/settings/git-credentials", PersonalAccessTokensLive)
   end
 end

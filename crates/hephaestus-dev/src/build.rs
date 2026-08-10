@@ -78,8 +78,8 @@ fn build_web(context: &DevContext) -> Result<()> {
 }
 
 pub fn install_guest_bootstrap(context: &DevContext) -> Result<()> {
-    let root_image = context.root_image();
-    if !root_image.join(".hephaestus-image").is_file() {
+    let cache = context.image_cache();
+    if !cache.is_dir() {
         return Ok(());
     }
     let source = context
@@ -87,11 +87,24 @@ pub fn install_guest_bootstrap(context: &DevContext) -> Result<()> {
         .join("target")
         .join(GUEST_TARGET)
         .join("release/heph-init");
-    let destination = root_image.join("usr/libexec/hephaestus/heph-init");
-    if let Some(parent) = destination.parent() {
-        fs::create_dir_all(parent)?;
+    for entry in fs::read_dir(cache)? {
+        let entry = entry?;
+        let image = entry.path();
+        let metadata = fs::symlink_metadata(&image)?;
+        let marker = image.join(".hephaestus-image");
+        if metadata.file_type().is_symlink()
+            || !metadata.is_dir()
+            || fs::symlink_metadata(&marker).is_ok_and(|metadata| metadata.file_type().is_symlink())
+            || !marker.is_file()
+        {
+            continue;
+        }
+        let destination = image.join("usr/libexec/hephaestus/heph-init");
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::copy(&source, &destination)?;
+        fs::set_permissions(destination, fs::Permissions::from_mode(0o755))?;
     }
-    fs::copy(source, &destination)?;
-    fs::set_permissions(destination, fs::Permissions::from_mode(0o755))?;
     Ok(())
 }

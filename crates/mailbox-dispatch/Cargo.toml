@@ -1,0 +1,28 @@
+[package]
+name = "mailbox-dispatch"
+description = "Durable mailbox dispatch commands and run completion integration"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[package.metadata.hephaestus]
+layer = "worker"
+context = "mailbox"
+
+[lib]
+path = "src/nats.rs"
+
+[dependencies]
+async-nats.workspace = true
+async-trait.workspace = true
+mailbox-domain = { path = "../mailbox-domain" }
+run-domain = { path = "../run-domain" }
+run-orchestrator = { path = "../run-orchestrator" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+
+[lints]
+workspace = true

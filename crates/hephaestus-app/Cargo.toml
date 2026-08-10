@@ -14,6 +14,10 @@ sqlx_test_dependency = true
 
 [dependencies]
 agent-config = { path = "../agent-config" }
+builder-catalog-application = { path = "../builder-catalog-application" }
+builder-catalog-domain = { path = "../builder-catalog-domain" }
+builder-catalog-postgres = { path = "../builder-catalog-postgres" }
+capability-domain = { path = "../capability-domain" }
 async-nats.workspace = true
 async-trait.workspace = true
 authz-domain = { path = "../authz-domain" }
@@ -26,24 +30,45 @@ build-orchestrator = { path = "../build-orchestrator" }
 build-postgres = { path = "../build-postgres" }
 buffa.workspace = true
 buffa-types.workspace = true
+bytes.workspace = true
 event-application = { path = "../event-application" }
 event-postgres = { path = "../event-postgres" }
 forge-service = { path = "../forge-service" }
 forge-postgres = { path = "../forge-postgres" }
 forge-domain = { path = "../forge-domain" }
+gateway-edge = { path = "../gateway-edge" }
+gateway-postgres = { path = "../gateway-postgres" }
 futures-util.workspace = true
 git-http = { path = "../git-http" }
+git-capability-domain = { path = "../git-capability-domain" }
 identity-oidc = { path = "../identity-oidc" }
 identity-domain = { path = "../identity-domain" }
 identity-application = { path = "../identity-application" }
 identity-postgres = { path = "../identity-postgres" }
+mailbox-dispatch = { path = "../mailbox-dispatch" }
+mailbox-domain = { path = "../mailbox-domain" }
+mailbox-postgres = { path = "../mailbox-postgres" }
 http.workspace = true
 hmac.workspace = true
 jsonwebtoken.workspace = true
+oci-builder-postgres = { path = "../oci-builder-postgres" }
+oci-builder-runtime-local = { path = "../oci-builder-runtime-local" }
+oci-builder-worker = { path = "../oci-builder-worker" }
+pat-postgres = { path = "../pat-postgres" }
+pat-domain = { path = "../pat-domain" }
 release-service = { path = "../release-service" }
 release-artifact-store = { path = "../release-artifact-store" }
 release-domain = { path = "../release-domain" }
 release-postgres = { path = "../release-postgres" }
+registry-http = { path = "../registry-http" }
+registry-domain = { path = "../registry-domain" }
+registry-notification = { path = "../registry-notification" }
+registry-notification-http = { path = "../registry-notification-http" }
+registry-postgres = { path = "../registry-postgres" }
+registry-publisher = { path = "../registry-publisher" }
+registry-reconciler = { path = "../registry-reconciler" }
+registry-token = { path = "../registry-token" }
+registry-zot = { path = "../registry-zot" }
 rpc-proto = { path = "../rpc-proto", default-features = false }
 review-domain = { path = "../review-domain" }
 review-postgres = { path = "../review-postgres" }
@@ -53,6 +78,11 @@ run-orchestrator = { path = "../run-orchestrator" }
 run-postgres = { path = "../run-postgres" }
 run-runtime-local = { path = "../run-runtime-local" }
 runtime-types = { path = "../runtime-types" }
+runtime-authority = { path = "../runtime-authority" }
+runtime-authority-postgres = { path = "../runtime-authority-postgres" }
+runtime-handoff-local = { path = "../runtime-handoff-local" }
+runtime-git-authority = { path = "../runtime-git-authority" }
+runtime-git-authority-postgres = { path = "../runtime-git-authority-postgres" }
 secret-broker = { path = "../secret-broker" }
 secret-domain = { path = "../secret-domain" }
 secret-runtime = { path = "../secret-runtime" }
@@ -81,10 +111,17 @@ workspace-postgres = { path = "../workspace-postgres" }
 workspace-domain = { path = "../workspace-domain" }
 
 [dev-dependencies]
+registry-token = { path = "../registry-token" }
 rpc-proto = { path = "../rpc-proto", features = ["client"] }
+brokered-egress-domain = { path = "../brokered-egress-domain" }
+secret-broker = { path = "../secret-broker", features = ["test-fixtures"] }
 sqlx.workspace = true
 serial_test = "3"
 tempfile = "3"
+rcgen = "0.13.2"
+rustls = "0.23"
+tokio-rustls = "0.26"
+reqwest.workspace = true
 
 [[bin]]
 name = "hephaestusd"

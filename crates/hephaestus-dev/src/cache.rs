@@ -1,6 +1,6 @@
 use crate::{
     cli::CacheSelection,
-    context::{DevContext, ELIXIR_IMAGE, FEDORA_IMAGE, NATS_IMAGE, POSTGRES_IMAGE},
+    context::{DEFAULT_LOCAL_OCI_IMAGE, DevContext, ELIXIR_IMAGE, NATS_IMAGE, POSTGRES_IMAGE},
     process::{Result, directory_size, remove_path, run},
 };
 use std::{path::Path, process::Command};
@@ -33,7 +33,12 @@ pub fn clean(context: &DevContext, selection: &CacheSelection) -> Result<()> {
         remove_path(&context.repository_root.join("web/assets/node_modules"))?;
     }
     if selection.containers() {
-        for image in [POSTGRES_IMAGE, NATS_IMAGE, ELIXIR_IMAGE, FEDORA_IMAGE] {
+        for image in [
+            POSTGRES_IMAGE,
+            NATS_IMAGE,
+            ELIXIR_IMAGE,
+            DEFAULT_LOCAL_OCI_IMAGE,
+        ] {
             let _ignored = run(Command::new("podman").args(["image", "rm", "--force", image]));
         }
     }

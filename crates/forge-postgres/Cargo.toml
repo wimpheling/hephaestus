@@ -27,7 +27,11 @@ uuid.workspace = true
 
 [dev-dependencies]
 axum.workspace = true
+base64.workspace = true
 git-http = { path = "../git-http" }
+git-capability-domain = { path = "../git-capability-domain" }
+pat-domain = { path = "../pat-domain" }
+pat-postgres = { path = "../pat-postgres" }
 async-nats.workspace = true
 futures-util.workspace = true
 run-orchestrator = { path = "../run-orchestrator" }

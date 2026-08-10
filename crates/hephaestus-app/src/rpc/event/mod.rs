@@ -3,7 +3,7 @@
 // Product-event projection is also used by the outbound event adapter.
 #[allow(clippy::redundant_pub_crate)]
 pub(crate) mod model;
-mod watch;
+pub(crate) mod watch;
 mod watch_agent_instance;
 mod watch_identity;
 mod watch_organization;

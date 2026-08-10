@@ -38,6 +38,13 @@ const liveSocket = new LiveSocket("/live", Socket, {
 // Show bounded design-system progress on live navigation and form submits.
 installNavigationProgress()
 
+// One-time PAT values stay out of LiveView assigns and the document. The
+// blocking browser prompt holds the value only until the developer copies or
+// dismisses it; there is deliberately no console or local-storage fallback.
+window.addEventListener("phx:personal-access-token-issued", ({detail}) => {
+  window.prompt("Copy this Git credential now. It will not be shown again.", detail.value)
+})
+
 // connect if there are any LiveViews on the page
 liveSocket.connect()
 

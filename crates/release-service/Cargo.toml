@@ -9,7 +9,9 @@ layer = "application"
 context = "release"
 
 [dependencies]
+capability-domain = { path = "../capability-domain" }
 forge-domain = { path = "../forge-domain" }
+git-capability-domain = { path = "../git-capability-domain" }
 release-domain = { path = "../release-domain" }
 runtime-types = { path = "../runtime-types" }
 uuid.workspace = true

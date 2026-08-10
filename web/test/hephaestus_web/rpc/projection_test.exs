@@ -13,6 +13,21 @@ defmodule HephaestusWeb.RPC.ProjectionTest do
 
   alias Hephaestus.Secret.V1.SecretSummary
   alias Hephaestus.Run.V1.{ResultProposal, Run, RunMetrics, RunResult}
+  alias Hephaestus.Gateway.V1.{GatewayIngressOutcome, GatewayLifecycle, GatewaySummary}
+
+  alias Hephaestus.Pat.V1.{
+    CreatePersonalAccessTokenResponse,
+    PersonalAccessTokenValue
+  }
+
+  alias Hephaestus.Image.V1.{
+    RegistryAvailabilityState,
+    RegistryEvidence,
+    RegistryEvidenceState,
+    RegistryPublication,
+    RegistryPublicationState
+  }
+
   alias HephaestusWeb.RPC.Projection
 
   test "projects parameter schema constraints, defaults, and sensitivity" do
@@ -51,6 +66,18 @@ defmodule HephaestusWeb.RPC.ProjectionTest do
            } = Projection.to_value(secret)
   end
 
+  test "projects gateway lifecycle and ingress enums into management values" do
+    gateway = %GatewaySummary{
+      id: %OpaqueId{value: "gateway-id"},
+      lifecycle: GatewayLifecycle.GATEWAY_LIFECYCLE_ENABLED
+    }
+
+    assert %{"id" => "gateway-id", "lifecycle" => "enabled"} = Projection.to_value(gateway)
+
+    assert "timed_out" =
+             Projection.to_value(GatewayIngressOutcome.GATEWAY_INGRESS_OUTCOME_TIMED_OUT)
+  end
+
   test "projects runtime metric labels as a bounded string map" do
     metric = %RuntimeMetric{
       name: "duration",
@@ -60,6 +87,15 @@ defmodule HephaestusWeb.RPC.ProjectionTest do
     }
 
     assert %{"labels" => %{"phase" => "update"}} = Projection.to_value(metric)
+  end
+
+  test "preserves the reviewed one-time PAT value for the transient UI effect" do
+    response = %CreatePersonalAccessTokenResponse{
+      value: %PersonalAccessTokenValue{value: "one-time-sentinel"}
+    }
+
+    assert %{"value" => %{"value" => "one-time-sentinel"}} =
+             Projection.to_value(response)
   end
 
   test "projects a run result proposal after nested messages are normalized" do
@@ -83,5 +119,30 @@ defmodule HephaestusWeb.RPC.ProjectionTest do
              "target_ref" => "refs/heads/main",
              "proposal_version" => 2
            } = Projection.to_value(run)
+  end
+
+  test "projects safe registry publication metadata without transport secrets" do
+    publication = %RegistryPublication{
+      state: RegistryPublicationState.REGISTRY_PUBLICATION_STATE_APPROVED,
+      availability: RegistryAvailabilityState.REGISTRY_AVAILABILITY_STATE_AVAILABLE,
+      immutable_reference:
+        "registry.forge.example/projects/project/repository-images/image@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      architectures: ["amd64"],
+      sbom: %RegistryEvidence{
+        state: RegistryEvidenceState.REGISTRY_EVIDENCE_STATE_VERIFIED,
+        immutable_reference:
+          "registry.forge.example/projects/project/repository-images/image@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      }
+    }
+
+    assert %{
+             "state" => "approved",
+             "availability" => "available",
+             "architectures" => ["amd64"],
+             "sbom" => %{
+               "state" => "verified",
+               "immutable_reference" => "registry.forge.example/" <> _
+             }
+           } = Projection.to_value(publication)
   end
 end

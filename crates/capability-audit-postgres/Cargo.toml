@@ -1,0 +1,31 @@
+[package]
+name = "capability-audit-postgres"
+description = "PostgreSQL adapter for redacted capability audit evidence"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[package.metadata.hephaestus]
+layer = "adapter"
+context = "authorization"
+postgres_adapter = true
+database_context = "authorization"
+
+[dependencies]
+async-trait.workspace = true
+authz-postgres = { path = "../authz-postgres" }
+capability-audit = { path = "../capability-audit" }
+capability-domain = { path = "../capability-domain" }
+identity-domain = { path = "../identity-domain" }
+runtime-types = { path = "../runtime-types" }
+sqlx.workspace = true
+time.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+serial_test = "3"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

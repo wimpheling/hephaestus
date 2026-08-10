@@ -4,12 +4,27 @@ use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, path::PathBuf};
 
 /// Current host-to-guest protocol version.
-pub const PROTOCOL_VERSION: u16 = 3;
+pub const PROTOCOL_VERSION: u16 = 6;
+/// Maximum private HTTP body carried by the authenticated control protocol.
+pub const MAX_PRIVATE_HTTP_BODY_BYTES: usize = 1_048_576;
+/// Maximum private HTTP headers carried by one request or response.
+pub const MAX_PRIVATE_HTTP_HEADERS: usize = 64;
+/// VM label which opts a released command into the one-request gateway ABI.
+///
+/// This is deliberately an exact contract value rather than a generic
+/// networking switch: ordinary VM commands must never receive control-plane
+/// HTTP frames on their standard input.
+pub const GATEWAY_HANDLER_CONTRACT_LABEL: &str = "hephaestus.gateway.handler-contract";
+/// The only gateway handler contract understood by this protocol version.
+pub const GATEWAY_HANDLER_CONTRACT_V1: &str = "http.v1";
 
 /// `AF_VSOCK` port used by `heph-init` to connect to the host worker.
 pub const GUEST_VSOCK_PORT: u32 = 19_000;
 /// Dedicated guest-to-host secret broker port.
 pub const SECRET_BROKER_VSOCK_PORT: u32 = 19_001;
+/// Guest-private file populated from the authenticated runtime-authority
+/// bootstrap payload before the workload starts.
+pub const GUEST_RUNTIME_AUTHORITY_PATH: &str = "/run/hephaestus-authority/session.json";
 
 /// Maximum encoded protocol frame size.
 pub const MAX_FRAME_SIZE: usize = 16 * 1024 * 1024;
@@ -40,6 +55,11 @@ pub enum HostMessage {
         mounts: Vec<GuestMount>,
         /// Persistent agent-state volume to locate by filesystem UUID.
         state_volume: Option<GuestStateVolume>,
+        /// Sensitive one-run authority delivered only on this authenticated
+        /// host-to-guest bootstrap stream.
+        runtime_authority: Option<Box<RuntimeAuthorityMessage>>,
+        /// Whether `command` is a one-request private HTTP gateway handler.
+        gateway_handler: bool,
     },
     /// Requests graceful cancellation.
     Cancel {
@@ -50,6 +70,13 @@ pub enum HostMessage {
     HealthPing {
         /// Opaque value echoed by the guest.
         nonce: u64,
+    },
+    /// Invokes one gateway handler request over the authenticated control channel.
+    PrivateHttpRequest {
+        /// Correlates the exact guest response.
+        request_id: u64,
+        /// Complete bounded request.
+        request: PrivateHttpRequestMessage,
     },
 }
 
@@ -64,6 +91,13 @@ pub enum GuestMessage {
     },
     /// Reports that the command and mounts were accepted.
     Ready,
+    /// Confirms that guest bootstrap persisted the exact authority payload.
+    RuntimeAuthorityAcknowledged {
+        /// Exact runtime session identifier.
+        session_id: uuid::Uuid,
+        /// Exact issuance generation received by the guest.
+        generation: u64,
+    },
     /// Carries an uninterpreted command output chunk.
     Log {
         /// Output stream that produced the chunk.
@@ -104,6 +138,77 @@ pub enum GuestMessage {
         /// Human-readable diagnostic.
         message: String,
     },
+    /// Returns exactly one bounded gateway handler response.
+    PrivateHttpResponse {
+        /// Correlates the exact host request.
+        request_id: u64,
+        /// Complete bounded response.
+        response: PrivateHttpResponseMessage,
+    },
+}
+
+/// Wire representation of a complete canonical private HTTP request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrivateHttpRequestMessage {
+    /// Uppercase canonical HTTP method.
+    pub method: String,
+    /// Normalized absolute path and optional query.
+    pub path_and_query: String,
+    /// Bounded canonical header name/value pairs.
+    pub headers: Vec<(String, String)>,
+    /// Complete bounded body.
+    pub body: Vec<u8>,
+}
+/// Wire representation of a complete canonical private HTTP response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrivateHttpResponseMessage {
+    /// Three-digit HTTP status.
+    pub status: u16,
+    /// Bounded canonical header name/value pairs.
+    pub headers: Vec<(String, String)>,
+    /// Complete bounded body.
+    pub body: Vec<u8>,
+}
+
+/// Sensitive runtime authority carried only by the bootstrap stream.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct RuntimeAuthorityMessage {
+    /// Exact runtime session identifier.
+    pub session_id: uuid::Uuid,
+    /// Exact positive issuance generation.
+    pub generation: u64,
+    /// Opaque bearer bytes.
+    pub credential: [u8; vm_trait::RUNTIME_AUTHORITY_CREDENTIAL_BYTES],
+    /// Separate exact-run Git bearer, when runtime Git is bound.
+    pub runtime_git_credential: Option<[u8; vm_trait::RUNTIME_GIT_CREDENTIAL_BYTES]>,
+}
+
+impl std::fmt::Debug for RuntimeAuthorityMessage {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RuntimeAuthorityMessage")
+            .field("session_id", &self.session_id)
+            .field("generation", &self.generation)
+            .field("credential", &"[REDACTED]")
+            .field(
+                "runtime_git_credential",
+                &self.runtime_git_credential.as_ref().map(|_| "[REDACTED]"),
+            )
+            .finish()
+    }
+}
+
+impl Drop for RuntimeAuthorityMessage {
+    fn drop(&mut self) {
+        for byte in &mut self.credential {
+            *std::hint::black_box(byte) = 0;
+        }
+        if let Some(credential) = &mut self.runtime_git_credential {
+            for byte in credential {
+                *std::hint::black_box(byte) = 0;
+            }
+        }
+    }
 }
 
 /// Command representation transmitted to `heph-init`.

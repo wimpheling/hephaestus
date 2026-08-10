@@ -191,15 +191,19 @@ impl RunRepository for PgRunRepository {
         run_id: RunId,
         volume_id: Option<VolumeId>,
         lease_id: Option<LeaseId>,
+        lease_fencing_token: Option<i64>,
         vm_id: &str,
     ) -> Result<Run, RepositoryError> {
         sqlx::query(
-            "UPDATE runs SET volume_id = $2, lease_id = $3, vm_id = $4, updated_at = now()
+            "UPDATE runs
+             SET volume_id = $2, lease_id = $3, lease_fencing_token = $4,
+                 vm_id = $5, updated_at = now()
              WHERE id = $1",
         )
         .bind(run_id.as_uuid())
         .bind(volume_id.map(VolumeId::as_uuid))
         .bind(lease_id.map(LeaseId::as_uuid))
+        .bind(lease_fencing_token)
         .bind(vm_id)
         .execute(&self.pool)
         .await
@@ -370,6 +374,7 @@ struct RunRow {
     command_id: Uuid,
     volume_id: Option<Uuid>,
     lease_id: Option<Uuid>,
+    lease_fencing_token: Option<i64>,
     vm_id: Option<String>,
     state: String,
     outcome: Option<String>,
@@ -396,6 +401,7 @@ impl<'row> FromRow<'row, PgRow> for RunRow {
             command_id: row.try_get("command_id")?,
             volume_id: row.try_get("volume_id")?,
             lease_id: row.try_get("lease_id")?,
+            lease_fencing_token: row.try_get("lease_fencing_token")?,
             vm_id: row.try_get("vm_id")?,
             state: row.try_get("state")?,
             outcome: row.try_get("outcome")?,
@@ -434,6 +440,7 @@ impl TryFrom<RunRow> for Run {
             command_id: row.command_id.into(),
             volume_id: row.volume_id.map(Into::into),
             lease_id: row.lease_id.map(Into::into),
+            lease_fencing_token: row.lease_fencing_token,
             vm_id: row.vm_id,
             state: parse_state(&row.state)?,
             outcome: row.outcome.as_deref().map(parse_outcome).transpose()?,
