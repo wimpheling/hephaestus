@@ -223,6 +223,7 @@ pub async fn recoverable_update_hook_run_ids(pool: &PgPool) -> Result<Vec<Uuid>,
          JOIN runs AS run ON run.id = update.hook_run_id
          WHERE update.state IN ('hook_running', 'hook_committed')
            AND run.state = 'cleaned_up'
+           AND run.run_kind = 'update'
          ORDER BY update.created_at, update.id",
     )
     .fetch_all(pool)

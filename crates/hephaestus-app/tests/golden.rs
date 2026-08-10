@@ -437,17 +437,13 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
     let input_commit = git_output(&source, &["rev-parse", "HEAD"]).await;
     let remote = format!("http://{}/{}", running.http_addr(), repository.id);
     git(&source, &["remote", "add", "origin", &remote]).await;
-    if libkrun_e2e {
-        // Brokered secret dispatch requires the authenticated Git-receive
-        // principal, target ref, and target commit. Mailbox events deliberately
-        // carry no end-user principal, so use this ordinary daemon run for the
-        // live secret-resolver composition.
-        sqlx::query("UPDATE agent_instances SET run_gate_open = true WHERE id = $1")
-            .bind(seeded_instance.instance)
-            .execute(&pool)
-            .await
-            .expect("open brokered golden run gate");
-    }
+    // Keep the fixture closed through startup recovery, then admit the exact
+    // authenticated push that this golden proof is about.
+    sqlx::query("UPDATE agent_instances SET run_gate_open = true WHERE id = $1")
+        .bind(seeded_instance.instance)
+        .execute(&pool)
+        .await
+        .expect("open golden push run gate");
     authenticated_git(&source, &token, &["push", "origin", "HEAD:refs/heads/main"]).await;
 
     let run_id: uuid::Uuid =

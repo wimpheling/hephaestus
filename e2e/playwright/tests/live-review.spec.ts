@@ -20,6 +20,9 @@ const repositoryRoot = process.env.HEPHAESTUS_REPOSITORY_ROOT;
 const gitUrl = process.env.HEPHAESTUS_GIT_URL ?? "http://127.0.0.1:8080";
 const oidcUrl = process.env.HEPHAESTUS_OIDC_URL ?? "http://127.0.0.1:5556";
 const secretSentinel = "HEPHAESTUS_BROWSER_SECRET_4d7ccf";
+// `hephaestus-e2e-seed` provisions this available catalog key and the UI E2E
+// root-image manifest materializes its digest-pinned reference.
+const fixtureImageKey = "fixture-root";
 let browserJourneyBuild: {repositoryId: string; id: string} | undefined;
 
 test.describe.serial("release, instance, secret, and live-review product journey", () => {
@@ -990,18 +993,33 @@ function agentConfig(includeBuild = false) {
   if (includeBuild) return buildAgentConfig();
 
   return `
-version = 1
+version = 2
 [agent]
 name = "browser-agent"
-[guest]
+key = "browser-agent"
+[build]
+image = { key = "${fixtureImageKey}" }
 command = "/bin/sh"
 arguments = ["-c", "true"]
-working_directory = "/workspace/work"
+working_directory = "/workspace/source"
+triggers = []
+[build.resources]
+vcpus = 1
+memory_mib = 128
+[build.network]
+profile = "disabled"
+[[build.artifacts]]
+path = "reports/result.txt"
+kind = "file"
+media_type = "text/plain"
+[guest]
+image = { key = "${fixtureImageKey}" }
+command = "bin/browser-agent"
+arguments = []
+working_directory = "bin"
 [resources]
 vcpus = 1
 memory_mib = 128
-[root_image]
-reference = "fixture-root@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 [workspace]
 mount = true
 path = "/workspace/repo"
@@ -1025,10 +1043,10 @@ version = 2
 name = "browser-built-agent"
 key = "browser-built-agent"
 [build]
+image = { key = "${fixtureImageKey}" }
 command = "/bin/sh"
 arguments = ["-c", "mkdir -p /workspace/output/reports && printf 'built browser artifact\\n' > /workspace/output/reports/result.txt"]
 working_directory = "/workspace/source"
-root_image = "fixture-root@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 triggers = ["refs/heads/main"]
 [build.resources]
 vcpus = 1
@@ -1040,14 +1058,13 @@ path = "reports/result.txt"
 kind = "file"
 media_type = "text/plain"
 [guest]
+image = { key = "${fixtureImageKey}" }
 command = "bin/browser-built-agent"
 arguments = []
 working_directory = "bin"
 [resources]
 vcpus = 1
 memory_mib = 128
-[root_image]
-reference = "fixture-root@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 [workspace]
 mount = true
 path = "/workspace/repo"

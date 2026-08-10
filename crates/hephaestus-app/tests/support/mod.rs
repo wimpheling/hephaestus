@@ -82,6 +82,7 @@ impl VmProvider for ResultGuestProvider {
 struct ResultGuestInstance {
     id: VmId,
     work: PathBuf,
+    runtime_authority: Option<(uuid::Uuid, u64)>,
     events: broadcast::Sender<VmEvent>,
     exit: watch::Sender<Option<VmExit>>,
 }
@@ -116,11 +117,16 @@ impl ResultGuestInstance {
                 reason: String::from("repository work mount is read-only"),
             });
         }
+        let runtime_authority = spec
+            .runtime_authority
+            .as_ref()
+            .map(|authority| (authority.session_id(), authority.generation()));
         let (events, _) = broadcast::channel(16);
         let (exit, _) = watch::channel(None);
         Ok(Self {
             id: spec.id,
             work: work.host_path.clone(),
+            runtime_authority,
             events,
             exit,
         })
@@ -137,6 +143,12 @@ impl VmInstance for ResultGuestInstance {
         let _started = self.events.send(VmEvent::Started {
             ingress: Vec::new(),
         });
+        if let Some((session_id, generation)) = self.runtime_authority {
+            let _acknowledged = self.events.send(VmEvent::RuntimeAuthorityAcknowledged {
+                session_id,
+                generation,
+            });
+        }
         let _ready = self.events.send(VmEvent::Ready);
         tokio::fs::write(self.work.join("input.txt"), "agent edit\n")
             .await
