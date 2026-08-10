@@ -707,11 +707,24 @@ mod tests {
             .publish_pending(100)
             .await
             .expect("publish revocation");
-        let terminal = revoked
-            .recv()
-            .await
-            .expect("revocation terminal")
-            .expect("valid revocation terminal");
+        // The membership deletion races a read that began while the watch was
+        // still authorized. That read may deliver its already-committed event;
+        // the next authorization check must then terminate with revocation.
+        let terminal = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let frame = revoked
+                    .recv()
+                    .await
+                    .expect("revocation terminal")
+                    .expect("valid revocation terminal");
+                if matches!(frame.delivery, Delivery::Revoked(_)) {
+                    break frame;
+                }
+                assert!(matches!(frame.delivery, Delivery::Event(_)));
+            }
+        })
+        .await
+        .expect("event watch must observe revocation");
         assert!(matches!(terminal.delivery, Delivery::Revoked(_)));
     }
 
