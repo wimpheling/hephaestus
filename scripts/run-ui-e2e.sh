@@ -335,7 +335,7 @@ podman run --detach \
     --env HEPHAESTUS_BROWSER_OIDC_CLIENT_SECRET="development-secret" \
     --env HEPHAESTUS_BROWSER_OIDC_REDIRECT_URI="${web_url}/auth/oidc/callback" \
     docker.io/hexpm/elixir:1.18.4-erlang-27.3.4-debian-bookworm-20250428-slim \
-    sh -lc 'mix phx.server' \
+    sh -lc 'mix local.hex --force >/dev/null && mix phx.server' \
     >"${fixture_root}/web-container-id"
 wait_for_url "${web_url}/" "${fixture_root}/web.log"
 assert_web_isolation

@@ -228,6 +228,7 @@ async fn seed(pool: &PgPool) -> Fixture {
     let binding_id = Uuid::new_v4();
     let snapshot_id = Uuid::new_v4();
     let session_id = Uuid::new_v4();
+    let credential_hash = fixture_hash(session_id);
 
     sqlx::query("INSERT INTO organizations (id, name) VALUES ($1, $2)")
         .bind(organization_id)
@@ -462,7 +463,7 @@ async fn seed(pool: &PgPool) -> Fixture {
     .bind(revision_id)
     .bind([10_u8; 32].as_slice())
     .bind([9_u8; 32].as_slice())
-    .bind([11_u8; 32].as_slice())
+    .bind(credential_hash.as_slice())
     .execute(pool)
     .await
     .expect("audit runtime session");
@@ -477,6 +478,13 @@ async fn seed(pool: &PgPool) -> Fixture {
         binding_id,
         session_id,
     }
+}
+
+fn fixture_hash(session_id: Uuid) -> [u8; 32] {
+    let mut hash = [0_u8; 32];
+    hash[..16].copy_from_slice(session_id.as_bytes());
+    hash[16..].copy_from_slice(Uuid::new_v4().as_bytes());
+    hash
 }
 
 async fn test_pool() -> Option<PgPool> {
