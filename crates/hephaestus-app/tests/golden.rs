@@ -354,7 +354,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             transient_runtime_roots,
             host_id: String::from("golden-host"),
             lease_duration: Duration::from_secs(30),
-            mkfs_ext4: PathBuf::from("/usr/bin/mkfs.ext4"),
+            mkfs_ext4: mkfs_ext4(),
         },
         workspaces: LocalWorkspaceConfig {
             workspace_root: root.join("workspaces"),
@@ -1691,6 +1691,17 @@ async fn git_output_bare(repository: &Path, arguments: &[&str]) -> String {
         .expect("UTF-8 bare Git output")
         .trim()
         .to_owned()
+}
+
+fn mkfs_ext4() -> PathBuf {
+    if let Some(path) = env::var_os("HEPHAESTUS_MKFS_EXT4") {
+        return PathBuf::from(path);
+    }
+    ["/usr/sbin/mkfs.ext4", "/usr/bin/mkfs.ext4"]
+        .into_iter()
+        .map(PathBuf::from)
+        .find(|path| path.is_file())
+        .expect("mkfs.ext4 must be installed for the golden volume fixture")
 }
 
 async fn cleanup_streams(nats_url: &str) {

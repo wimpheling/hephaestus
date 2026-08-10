@@ -186,18 +186,24 @@ test.describe.serial("release, instance, secret, and live-review product journey
     for (const releaseId of fixture.releaseIds) {
       await page.goto(`/repositories/${fixture.repositoryId}/releases/${releaseId}`);
       await waitForLiveView(page);
+      await expect(page.locator("#release-page-state")).toHaveCount(0);
 
       const review = page.locator("#release-draft-review");
-      await expect(review).toBeVisible();
-      const version = review.locator('input[name="release[version]"]');
-      const currentVersion = await version.inputValue();
-      const chosenVersion = currentVersion || "v1.0.0";
-      await version.fill(chosenVersion);
-      await review.getByRole("button", {name: "Save draft version"}).click();
-      await expect(review).toBeVisible();
+      if (await review.count()) {
+        const version = review.locator('input[name="release[version]"]');
+        const currentVersion = await version.inputValue();
+        const chosenVersion = currentVersion || "v1.0.0";
+        await version.fill(chosenVersion);
+        await review.getByRole("button", {name: "Save draft version"}).click();
+        await expect(review).toBeVisible();
 
-      page.once("dialog", dialog => dialog.accept());
-      await review.getByRole("button", {name: "Publish release"}).click();
+        page.once("dialog", dialog => dialog.accept());
+        await review.getByRole("button", {name: "Publish release"}).click();
+      }
+
+      // CI retries intentionally retain the E2E database. A previous attempt
+      // may have completed this irreversible publication, which is the same
+      // durable end state this test requires rather than a reason to replay it.
       await expect(page.locator("#release-draft-review")).toHaveCount(0);
       await expect(page.locator("#release-page-state")).toHaveCount(0);
       await expect(page.getByRole("main").getByText("published", {exact: true})).toBeVisible();
@@ -334,6 +340,7 @@ test.describe.serial("release, instance, secret, and live-review product journey
 
     await page.goto(`/organizations/${fixture.organizationId}/secrets/new`);
     await waitForLiveView(page);
+    await expect(page.locator("#organization-new-secret-page-state")).toHaveCount(0);
     const secretForm = page.locator("#create-organization-secret");
     await expect(secretForm.getByLabel("Secret name")).toBeVisible();
     await expect(secretForm.getByLabel("New value")).toHaveAttribute("type", "password");
@@ -587,7 +594,8 @@ async function loadFixture() {
      FROM release_agents release_agent
      JOIN releases release ON release.id = release_agent.release_id
      WHERE release.repository_id = $1
-     ORDER BY release.version`,
+       AND release.version = ANY(ARRAY['v1', 'v2', 'v3-failing'])
+     ORDER BY array_position(ARRAY['v1', 'v2', 'v3-failing'], release.version)`,
     [result.rows[0].repository_id]
   );
   await releaseClient.end();
