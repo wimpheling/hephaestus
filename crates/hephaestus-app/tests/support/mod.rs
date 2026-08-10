@@ -81,7 +81,8 @@ impl VmProvider for ResultGuestProvider {
 
 struct ResultGuestInstance {
     id: VmId,
-    work: Option<PathBuf>,
+    run_work: Option<PathBuf>,
+    build_output: Option<PathBuf>,
     runtime_authority: Option<(uuid::Uuid, u64)>,
     events: broadcast::Sender<VmEvent>,
     exit: watch::Sender<Option<VmExit>>,
@@ -89,15 +90,15 @@ struct ResultGuestInstance {
 
 impl ResultGuestInstance {
     fn new(spec: VmSpec) -> Result<Self, VmError> {
-        let source = spec
+        let run_source = spec
             .mounts
             .iter()
             .find(|mount| mount.tag == "repository-source");
-        let work = spec
+        let run_work = spec
             .mounts
             .iter()
             .find(|mount| mount.tag == "repository-work");
-        let work = match (source, work) {
+        let run_work = match (run_source, run_work) {
             (Some(source), Some(work)) => {
                 if !source.read_only {
                     return Err(VmError::InvalidSpec {
@@ -121,6 +122,38 @@ impl ResultGuestInstance {
                 });
             }
         };
+        let build_source = spec.mounts.iter().find(|mount| mount.tag == "build-source");
+        let build_output = spec.mounts.iter().find(|mount| mount.tag == "build-output");
+        let build_output = match (build_source, build_output) {
+            (Some(source), Some(output)) => {
+                if !source.read_only {
+                    return Err(VmError::InvalidSpec {
+                        field: String::from("mounts"),
+                        reason: String::from("build source mount is writable"),
+                    });
+                }
+                if output.read_only {
+                    return Err(VmError::InvalidSpec {
+                        field: String::from("mounts"),
+                        reason: String::from("build output mount is read-only"),
+                    });
+                }
+                Some(output.host_path.clone())
+            }
+            (None, None) => None,
+            _ => {
+                return Err(VmError::InvalidSpec {
+                    field: String::from("mounts"),
+                    reason: String::from("build source and output mounts must be paired"),
+                });
+            }
+        };
+        if run_work.is_some() && build_output.is_some() {
+            return Err(VmError::InvalidSpec {
+                field: String::from("mounts"),
+                reason: String::from("run and build mounts cannot be combined"),
+            });
+        }
         let runtime_authority = spec
             .runtime_authority
             .as_ref()
@@ -129,7 +162,8 @@ impl ResultGuestInstance {
         let (exit, _) = watch::channel(None);
         Ok(Self {
             id: spec.id,
-            work,
+            run_work,
+            build_output,
             runtime_authority,
             events,
             exit,
@@ -154,11 +188,29 @@ impl VmInstance for ResultGuestInstance {
             });
         }
         let _ready = self.events.send(VmEvent::Ready);
-        if let Some(work) = &self.work {
+        if let Some(work) = &self.run_work {
             tokio::fs::write(work.join("input.txt"), "agent edit\n")
                 .await
                 .map_err(test_vm_error)?;
             tokio::fs::write(work.join("reports/result.txt"), "durable report\n")
+                .await
+                .map_err(test_vm_error)?;
+        }
+        if let Some(output) = &self.build_output {
+            let binary = output.join("bin");
+            tokio::fs::create_dir_all(&binary)
+                .await
+                .map_err(test_vm_error)?;
+            let artifact = binary.join("golden");
+            tokio::fs::write(&artifact, "#!/bin/sh\nexit 0\n")
+                .await
+                .map_err(test_vm_error)?;
+            let mut permissions = tokio::fs::metadata(&artifact)
+                .await
+                .map_err(test_vm_error)?
+                .permissions();
+            std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o555);
+            tokio::fs::set_permissions(artifact, permissions)
                 .await
                 .map_err(test_vm_error)?;
         }
