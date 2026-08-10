@@ -4,8 +4,11 @@ defmodule HephaestusWebWeb.ReleaseLive do
   alias HephaestusWebWeb.DesignSystem.Pages.ReleasePage
   alias HephaestusWebWeb.{PageStream, ReleaseState}
 
+  @stream_mode :none
+
   @impl true
   def mount(%{"release_id" => release_id}, _session, socket) do
+    _stream_mode = @stream_mode
     state = ReleaseState.new(release_id)
 
     socket =

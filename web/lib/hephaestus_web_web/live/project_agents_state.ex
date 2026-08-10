@@ -50,6 +50,8 @@ defmodule HephaestusWebWeb.ProjectAgentsState do
 
   def reduce(state, {:loaded, _generation, _project, _instances, _catalog}), do: {state, []}
   def reduce(state, :submitting), do: {%{state | status: :submitting, error: nil}, []}
+  def reduce(state, :reconnecting), do: {%{state | status: :reconnecting}, []}
+  def reduce(state, :stale), do: {%{state | status: :stale}, [:load]}
 
   def reduce(state, {:failed, reason}) do
     message = command_error("Import", reason)

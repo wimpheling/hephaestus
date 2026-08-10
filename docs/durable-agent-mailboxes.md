@@ -30,6 +30,13 @@ The control plane does not parse application payload schemas. Compression is
 currently rejected at the acceptance boundary; a bounded, audited decompressor
 policy is required before accepting compressed bodies.
 
+Opaque body bytes are retained for 30 days. A worker-only retention pass may
+then remove the bytes only after the delivery is terminal (`delivered`,
+`dead_lettered`, or `cancelled`). The body ID, exact lengths, integrity hash,
+accepted event, delivery history, and audit evidence remain immutable, so
+deduplication and operator inspection never depend on retaining application
+content indefinitely.
+
 ## Authority and lifecycle
 
 The mailbox belongs to exactly one project-owned agent instance. It has no
@@ -96,6 +103,12 @@ required, the state-volume ID, lease ID, and lease fencing token. A monotonic
 dispatch sequence per instance preserves the ordering evidence for stateful
 work.
 
+For a mailbox-dispatched run, the existing read-only guest control mount also
+contains `mailbox-event.json` and `mailbox-body`. The JSON is the bounded,
+generic envelope and opaque IDs; the body is a separate exact byte file. They
+are materialized from PostgreSQL after durable claim, never placed in NATS,
+logs, metrics, or runtime-authority handoffs.
+
 An attempt is settled only after the run reaches durable `CleanedUp`, meaning
 guest destruction and required lease cleanup are complete. A successful run is
 `delivered`; a failed run schedules exponential backoff capped at one hour and
@@ -123,12 +136,14 @@ volume, lease, outbox command, and operation. Trace fields must use those
 opaque IDs only; routes, selected headers, trace context, payload metadata, and
 broker error text should not become unbounded labels or sensitive log fields.
 
-No mailbox metrics exporter exists yet. When one is added, it should derive
-aggregates from PostgreSQL rather than broker counters: acceptance-to-dispatch
-latency, pending/eligible depth, active stateful runs, retry and dead-letter
-counts, denial counts, unpublished-outbox lag, and reconciliation outcomes.
-It must use bounded outcome/subject labels and never use event, instance,
-producer, route, header, or payload identifiers as metric labels.
+The operator metrics projection derives mailbox aggregates from PostgreSQL,
+never broker delivery counters: acceptance-to-dispatch latency, queue depth,
+active runs, retries, dead letters, denials, unpublished commands, and purged
+payload counts. It contains no event, instance, producer, route, header, trace,
+or payload identifiers. Delivery changes emit a redacted `AgentInstanceChanged`
+product event; the existing instance watch reauthorizes every event before
+delivery, and clients refresh the separately authorized mailbox inspection
+projection after that wake.
 
 ## Operational verification
 

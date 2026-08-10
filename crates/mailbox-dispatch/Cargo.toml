@@ -9,6 +9,9 @@ rust-version.workspace = true
 layer = "worker"
 context = "mailbox"
 
+[lib]
+path = "src/nats.rs"
+
 [dependencies]
 async-nats.workspace = true
 async-trait.workspace = true

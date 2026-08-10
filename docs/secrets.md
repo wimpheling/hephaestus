@@ -104,7 +104,7 @@ values and reusable credentials are never placed in a transport payload.
 
 Raw authority is explicit and more sensitive. After VM resources are ready,
 the host creates one memory-backed per-run secret tree and stable slot-derived
-files, then mounts it read-only at `/run/hephaestus/secrets`. Values never
+files, then mounts it read-only at `/run/hephaestus-secrets`. Values never
 enter environment variables, arguments, ordinary configuration, source,
 release, result, state, logs, metrics, NATS, or PostgreSQL metadata.
 
@@ -242,10 +242,30 @@ destruction. On restart, normal reconcilers resume unpublished outbox records,
 revoked-session cancellation, runtime cleanup, and safe orphan removal without
 minting replacement versions or credentials.
 
-The current composition root deliberately installs `DenyingBrokerAdapter`.
-Production KMS/vault providers and additional semantic upstream adapters are
-separate follow-up work; operators must not treat the local key provider or
-fake loopback adapter as a production credential boundary.
+The daemon defaults to `DenyingBrokerAdapter`. To enable generic brokered
+HTTPS, an operator must set `HEPHAESTUS_BROKERED_HTTPS_UPSTREAMS_JSON` to a
+non-empty JSON array of `{ "rule": <immutable brokered rule>, "addresses":
+[<control-plane-pinned public IPs>] }`. The registry rejects duplicate rule
+IDs, private/unpinned addresses, non-outbound rules, and non-default-port
+origins. It selects only the requested rule ID after the runtime service has
+verified that exact ID against the issued lease; it uses a certificate-verifying
+native trust store, exact SNI/hostname, redirects disabled, and no proxy
+environment. The declaration remains operational control-plane configuration:
+it must exactly mirror a durable immutable rule and its DNS pins. A supported
+`AgentInstanceService.DeclareBrokeredHttpsRule` creates that durable rule from
+an active brokered binding: it requires instance-management and brokered-bind
+authority, fixes the currently active secret version, and accepts only the
+binding's exact declared DNS destination plus one outbound header location.
+The caller receives the non-secret rule ID, whose stable placeholder is
+`heph-placeholder:v1:<rule-id>`.
+
+Released BrokerOnly workloads use the `brokered-egress-client` ABI over the
+dedicated private broker stream. They read the one-run opaque credential from
+the authenticated `heph-init` runtime-authority file, submit a bounded
+`WireBrokerRequest`, and receive only a sanitized `WireBrokerResponse`; the
+client has no HTTP, DNS, or secret-value API. The hardware libkrun fixture
+exercises this exact path with a provisioned runtime credential and the real
+host `BrokerServer`.
 
 Migration `0009_operational_observability.sql` adds metadata-only secret
 version and aggregate operational views. The application role still has no

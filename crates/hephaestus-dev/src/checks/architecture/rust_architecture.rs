@@ -371,6 +371,11 @@ fn is_storage_path(path: &Path) -> bool {
                         | "vm-conformance"
                         | "volume-local"
                         | "build-orchestrator"
+                        // Both are intentionally narrow local credential
+                        // adapters: one owns the Git helper file protocol and
+                        // the other owns encrypted runtime handoff envelopes.
+                        | "git-credential-hephaestus"
+                        | "runtime-handoff-local"
                 )
             )
         })

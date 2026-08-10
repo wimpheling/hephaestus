@@ -5,6 +5,8 @@ defmodule HephaestusWebWeb.AgentInstanceLive do
   alias HephaestusWebWeb.DesignSystem.Pages.AgentInstancePage
   alias HephaestusWebWeb.PageStream
 
+  @stream_mode :page_scoped
+
   @events [
     "create-attachment",
     "set-attachment",
@@ -13,11 +15,13 @@ defmodule HephaestusWebWeb.AgentInstanceLive do
     "revise-capabilities",
     "create-update",
     "recover-update",
-    "bind-secret"
+    "bind-secret",
+    "control-mailbox"
   ]
 
   @impl true
   def mount(%{"instance_id" => instance_id}, _session, socket) do
+    _stream_mode = @stream_mode
     state = AgentInstanceState.new(instance_id)
 
     socket =

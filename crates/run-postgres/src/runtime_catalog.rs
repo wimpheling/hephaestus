@@ -1,11 +1,12 @@
 use async_trait::async_trait;
 use run_domain::{Run, RunKind};
 use run_orchestrator::{
-    RunRuntimeArtifact, RunRuntimeArtifactKind, RunRuntimeCatalog, RunRuntimeCatalogError,
-    RunRuntimeInput,
+    MailboxRuntimeEvent, RunRuntimeArtifact, RunRuntimeArtifactKind, RunRuntimeCatalog,
+    RunRuntimeCatalogError, RunRuntimeInput,
 };
 use runtime_types::RunId;
 use serde_json::Value;
+use sha2::Digest;
 use sqlx::FromRow;
 use uuid::Uuid;
 
@@ -21,7 +22,11 @@ impl RunRuntimeCatalog for PgRunRepository {
                     update.id AS update_id,
                     update.expected_current_revision_id AS previous_revision_id,
                     previous_agent.release_id AS previous_release_id,
-                    previous.parameters AS previous_parameters
+                    previous.parameters AS previous_parameters,
+                    EXISTS (
+                        SELECT 1 FROM mailbox_delivery_attempts AS mailbox_attempt
+                        WHERE mailbox_attempt.run_id = stored_run.id
+                    ) AS mailbox_run
              FROM runs AS stored_run
              JOIN agent_instance_revisions AS revision
                ON revision.id = stored_run.instance_revision_id
@@ -63,6 +68,7 @@ impl RunRuntimeCatalog for PgRunRepository {
             ));
         }
         if run.kind == RunKind::Normal
+            && !context.mailbox_run
             && (context.repository_id.is_none()
                 || context.git_ref.is_none()
                 || context.commit_sha.is_none())
@@ -79,6 +85,7 @@ impl RunRuntimeCatalog for PgRunRepository {
             Some(release_id) => self.load_runtime_artifacts(release_id).await?,
             None => Vec::new(),
         };
+        let mailbox_event = self.load_mailbox_event(run.id).await?;
 
         Ok(RunRuntimeInput {
             parameters: context.parameters,
@@ -91,6 +98,7 @@ impl RunRuntimeCatalog for PgRunRepository {
             previous_parameters: context.previous_parameters,
             artifacts,
             previous_artifacts,
+            mailbox_event,
         })
     }
 
@@ -109,6 +117,27 @@ impl RunRuntimeCatalog for PgRunRepository {
 }
 
 impl PgRunRepository {
+    async fn load_mailbox_event(
+        &self,
+        run_id: RunId,
+    ) -> Result<Option<MailboxRuntimeEvent>, RunRuntimeCatalogError> {
+        let row = sqlx::query_as::<_, MailboxRuntimeRow>(
+            "SELECT event.mailbox_id, event.id AS event_id, event.body_id,
+                    event.method, event.route, event.selected_headers,
+                    event.content_type, event.trace_context, event.received_at,
+                    payload.encoded_body, payload.integrity_hash
+             FROM mailbox_delivery_attempts AS attempt
+             JOIN mailbox_events AS event ON event.id = attempt.event_id
+             JOIN mailbox_payloads AS payload ON payload.id = event.body_id
+             WHERE attempt.run_id = $1",
+        )
+        .bind(run_id.as_uuid())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(storage)?;
+        row.map(TryInto::try_into).transpose()
+    }
+
     async fn load_runtime_artifacts(
         &self,
         release_id: Uuid,
@@ -141,6 +170,7 @@ struct RuntimeContextRow {
     previous_revision_id: Option<Uuid>,
     previous_release_id: Option<Uuid>,
     previous_parameters: Option<Value>,
+    mailbox_run: bool,
 }
 
 #[derive(Debug, FromRow)]
@@ -151,6 +181,56 @@ struct RuntimeArtifactRow {
     content_hash: Vec<u8>,
     size_bytes: i64,
     storage_key: Uuid,
+}
+
+#[derive(Debug, FromRow)]
+struct MailboxRuntimeRow {
+    mailbox_id: Uuid,
+    event_id: Uuid,
+    body_id: Uuid,
+    method: String,
+    route: String,
+    selected_headers: Value,
+    content_type: Option<String>,
+    trace_context: Option<String>,
+    received_at: time::OffsetDateTime,
+    encoded_body: Option<Vec<u8>>,
+    integrity_hash: Vec<u8>,
+}
+
+impl TryFrom<MailboxRuntimeRow> for MailboxRuntimeEvent {
+    type Error = RunRuntimeCatalogError;
+
+    fn try_from(row: MailboxRuntimeRow) -> Result<Self, Self::Error> {
+        let body = row.encoded_body.ok_or(RunRuntimeCatalogError::InvalidData(
+            "mailbox body was purged",
+        ))?;
+        if body.len() > 1_048_576 {
+            return Err(RunRuntimeCatalogError::InvalidData("mailbox body size"));
+        }
+        let integrity_hash = row
+            .integrity_hash
+            .try_into()
+            .map_err(|_| RunRuntimeCatalogError::InvalidData("mailbox body hash"))?;
+        if sha2::Sha256::digest(&body).as_slice() != integrity_hash {
+            return Err(RunRuntimeCatalogError::InvalidData(
+                "mailbox body integrity",
+            ));
+        }
+        Ok(Self {
+            mailbox_id: row.mailbox_id,
+            event_id: row.event_id,
+            body_id: row.body_id,
+            method: row.method,
+            route: row.route,
+            selected_headers: row.selected_headers,
+            content_type: row.content_type,
+            trace_context: row.trace_context,
+            received_at: row.received_at,
+            body,
+            integrity_hash,
+        })
+    }
 }
 
 impl TryFrom<RuntimeArtifactRow> for RunRuntimeArtifact {

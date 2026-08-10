@@ -7,14 +7,16 @@ use authz_postgres::{
     AUTHORIZATION_MODEL_VERSION, PostgresMelangeAuthorizer, audit_decision,
     begin_actor_transaction, begin_runtime_transaction,
 };
+use brokered_egress_domain::{
+    BrokeredSecretRule, BrokeredSecretRuleId, ExactHttpsOrigin, HeaderName as BrokeredHeaderName,
+    HttpInjectionLocation,
+};
 use capability_domain::{
     CapabilityBinding, CapabilityBindingId, CapabilityOperation, CapabilityRequirement,
     CapabilityRequirementId, CapabilityResource, CapabilityResourceKind, CapabilitySlotKey,
 };
 use forge_domain::{CommitSha, GitRef, ProjectId};
-use gateway_edge::{
-    GatewayEdgeError, GatewayInboundSecretResolver, GatewayRouteBinding, InboundGatewaySecretRule,
-};
+use gateway_domain::{GatewayError, GatewayInboundSecretResolver, InboundGatewaySecretRule};
 use http::{HeaderName, HeaderValue};
 use identity_domain::{AuthenticatedIdentity, OrganizationId};
 use release_domain::{AgentAttachmentId, AgentInstanceId, AgentInstanceRevisionId};
@@ -74,17 +76,18 @@ impl<K: KeyProvider + Send + Sync> GatewayInboundSecretResolver
     async fn rules_for_invocation(
         &self,
         invocation_id: Uuid,
-        route: &GatewayRouteBinding,
-    ) -> Result<Vec<InboundGatewaySecretRule>, GatewayEdgeError> {
+        route_id: Uuid,
+        gateway_revision_id: Uuid,
+    ) -> Result<Vec<InboundGatewaySecretRule>, GatewayError> {
         let mut transaction = self
             .resolver_pool
             .begin()
             .await
-            .map_err(|_| GatewayEdgeError::Unavailable)?;
+            .map_err(|_| GatewayError::InvalidInboundSecretRule)?;
         sqlx::query("SET LOCAL ROLE hephaestus_worker")
             .execute(&mut *transaction)
             .await
-            .map_err(|_| GatewayEdgeError::Unavailable)?;
+            .map_err(|_| GatewayError::InvalidInboundSecretRule)?;
         let rows = sqlx::query_as::<_, GatewayEncryptedVersionRow>(
             "SELECT rule.header_name,
                     secret.id AS secret_id, version.id AS version_id, version.sequence,
@@ -117,27 +120,27 @@ impl<K: KeyProvider + Send + Sync> GatewayInboundSecretResolver
                AND version.purged_at IS NULL",
         )
         .bind(invocation_id)
-        .bind(route.route_id)
-        .bind(route.gateway_revision_id)
+        .bind(route_id)
+        .bind(gateway_revision_id)
         .fetch_all(&mut *transaction)
         .await
-        .map_err(|_| GatewayEdgeError::Unavailable)?;
+        .map_err(|_| GatewayError::InvalidInboundSecretRule)?;
         transaction
             .commit()
             .await
-            .map_err(|_| GatewayEdgeError::Unavailable)?;
+            .map_err(|_| GatewayError::InvalidInboundSecretRule)?;
         rows.into_iter()
             .map(|row| {
                 let header = HeaderName::from_bytes(row.header_name.as_bytes())
-                    .map_err(|_| GatewayEdgeError::Unavailable)?;
+                    .map_err(|_| GatewayError::InvalidInboundSecretRule)?;
                 let (context, encrypted) = gateway_encrypted_version(row)?;
                 let value = self
                     .encrypted_store
                     .resolve(&context, &encrypted)
-                    .map_err(|_| GatewayEdgeError::Unavailable)?;
+                    .map_err(|_| GatewayError::InvalidInboundSecretRule)?;
                 let placeholder =
                     HeaderValue::from_str(&format!("heph-placeholder:v1:{}", context.version_id))
-                        .map_err(|_| GatewayEdgeError::Unavailable)?;
+                        .map_err(|_| GatewayError::InvalidInboundSecretRule)?;
                 InboundGatewaySecretRule::new(header, value.expose().to_vec(), placeholder)
             })
             .collect()
@@ -1121,6 +1124,152 @@ impl<K: KeyProvider + Send + Sync> SecretService<K> {
             .await
             .map_err(|_| SecretServiceError::Persistence)?;
         Ok(command.new_revision_id)
+    }
+
+    /// Declares one exact immutable outbound HTTPS placeholder rule for an
+    /// existing brokered binding.
+    #[allow(clippy::too_many_lines)] // The single transaction deliberately keeps authority and rule creation atomic.
+    pub async fn declare_brokered_https_rule(
+        &self,
+        identity: &AuthenticatedIdentity,
+        command: DeclareBrokeredHttpsRule,
+    ) -> Result<uuid::Uuid, SecretServiceError> {
+        let mut tx = begin_actor_transaction(&self.pool, identity)
+            .await
+            .map_err(|_| SecretServiceError::Persistence)?;
+        let binding: BrokeredRuleBindingRow = sqlx::query_as(
+            "SELECT revision.instance_id, binding.instance_revision_id, binding.import_id,
+                    binding.delivery_mode, binding.destinations, imported.secret_id
+               FROM agent_secret_bindings AS binding
+               JOIN agent_instance_revisions AS revision
+                 ON revision.id = binding.instance_revision_id
+               JOIN secret_imports AS imported ON imported.id = binding.import_id
+              WHERE binding.id = $1 AND binding.status = 'active'",
+        )
+        .bind(command.binding_id.as_uuid())
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|_| SecretServiceError::Persistence)?
+        .ok_or(SecretServiceError::Unavailable)?;
+        self.require(
+            &mut tx,
+            identity,
+            Permission::CanManage,
+            ObjectRef::new(ObjectType::AgentInstance, binding.instance_id),
+        )
+        .await?;
+        self.require_binding_mode(
+            &mut tx,
+            identity,
+            SecretImportId::from_uuid(binding.import_id),
+            DeliveryMode::Brokered,
+        )
+        .await?;
+        if binding.delivery_mode != "brokered" {
+            return Err(SecretServiceError::BindingPolicyMismatch);
+        }
+        if existing_command(&mut tx, command.command_key, "declare_brokered_https_rule")
+            .await
+            .map_err(|_| SecretServiceError::Persistence)?
+            .is_some()
+        {
+            tx.commit()
+                .await
+                .map_err(|_| SecretServiceError::Persistence)?;
+            return Ok(command.rule_id);
+        }
+        let destination = ExactHttpsOrigin::parse(command.destination)
+            .map_err(|_| SecretServiceError::BindingPolicyMismatch)?;
+        let host = destination
+            .as_str()
+            .strip_prefix("https://")
+            .filter(|value| !value.contains(':'))
+            .ok_or(SecretServiceError::BindingPolicyMismatch)?;
+        if !binding.destinations.iter().any(|value| value == host) {
+            return Err(SecretServiceError::BindingPolicyMismatch);
+        }
+        let location = match command.header_prefix {
+            Some(prefix) => HttpInjectionLocation::OutboundHeaderPrefix {
+                header: BrokeredHeaderName::parse(command.header)
+                    .map_err(|_| SecretServiceError::BindingPolicyMismatch)?,
+                prefix,
+            },
+            None => HttpInjectionLocation::OutboundHeaderValue {
+                header: BrokeredHeaderName::parse(command.header)
+                    .map_err(|_| SecretServiceError::BindingPolicyMismatch)?,
+            },
+        };
+        let secret_version_id: uuid::Uuid = sqlx::query_scalar(
+            "SELECT active_version_id FROM secrets WHERE id = $1 AND status = 'active'",
+        )
+        .bind(binding.secret_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|_| SecretServiceError::Persistence)?
+        .ok_or(SecretServiceError::Unavailable)?;
+        let rule = BrokeredSecretRule {
+            id: BrokeredSecretRuleId::from_uuid(command.rule_id),
+            binding_id: command.binding_id.as_uuid(),
+            instance_revision_id: binding.instance_revision_id,
+            secret_version_id,
+            destination: Some(destination),
+            location,
+            gateway_route_id: None,
+        }
+        .normalized()
+        .map_err(|_| SecretServiceError::BindingPolicyMismatch)?;
+        let origin = rule
+            .destination
+            .as_ref()
+            .ok_or(SecretServiceError::BindingPolicyMismatch)?
+            .as_str()
+            .to_owned();
+        let (location_kind, header_name, header_prefix) = match &rule.location {
+            HttpInjectionLocation::OutboundHeaderValue { header } => {
+                ("outbound_header_value", header.as_str(), None)
+            }
+            HttpInjectionLocation::OutboundHeaderPrefix { header, prefix } => (
+                "outbound_header_prefix",
+                header.as_str(),
+                Some(prefix.as_str()),
+            ),
+            HttpInjectionLocation::InboundGatewayHeader { .. } => {
+                return Err(SecretServiceError::BindingPolicyMismatch);
+            }
+        };
+        sqlx::query(
+            "INSERT INTO brokered_secret_rules
+               (id, binding_id, instance_revision_id, secret_version_id, direction,
+                destination_origin, location_kind, header_name, header_prefix,
+                normalized_hash)
+             VALUES ($1, $2, $3, $4, 'outbound', $5, $6, $7, $8, $9)",
+        )
+        .bind(rule.id.as_uuid())
+        .bind(rule.binding_id)
+        .bind(rule.instance_revision_id)
+        .bind(rule.secret_version_id)
+        .bind(origin)
+        .bind(location_kind)
+        .bind(header_name)
+        .bind(header_prefix)
+        .bind(rule.normalized_hash().as_slice())
+        .execute(&mut *tx)
+        .await
+        .map_err(|_| SecretServiceError::Persistence)?;
+        record_command(
+            &mut tx,
+            command.command_key,
+            "declare_brokered_https_rule",
+            command.rule_id,
+            Some(command.binding_id.as_uuid()),
+            identity,
+        )
+        .await
+        .map_err(|_| SecretServiceError::Persistence)?;
+        tx.commit()
+            .await
+            .map_err(|_| SecretServiceError::Persistence)?;
+        Ok(command.rule_id)
     }
 
     /// Pins every live binding to an exact immutable version and issues one
@@ -2122,7 +2271,10 @@ impl<K: KeyProvider + Send + Sync> SecretRuntimeService<K> {
             Permission::UseBrokered,
         )
         .await
-        .map_err(|_| SecretServiceError::Persistence)?;
+        // Preserve a live revocation or authorization decision.  Collapsing
+        // it to Persistence would obscure the post-upstream fail-closed
+        // result and make callers retry a request whose authority was gone.
+        ?;
         self.authorize_brokered_https_snapshot(&session, &lease, request)
             .await?;
         record_runtime_use(
@@ -2376,6 +2528,16 @@ struct EligibleImportRow {
     delivery_modes: Vec<String>,
     phases: Vec<String>,
     destinations: Vec<String>,
+}
+
+#[derive(sqlx::FromRow)]
+struct BrokeredRuleBindingRow {
+    instance_id: Uuid,
+    instance_revision_id: Uuid,
+    import_id: Uuid,
+    delivery_mode: String,
+    destinations: Vec<String>,
+    secret_id: Uuid,
 }
 
 #[derive(sqlx::FromRow)]
@@ -2839,18 +3001,19 @@ fn encrypted_version(
 
 fn gateway_encrypted_version(
     row: GatewayEncryptedVersionRow,
-) -> Result<(VersionContext, EncryptedSecretVersion), GatewayEdgeError> {
+) -> Result<(VersionContext, EncryptedSecretVersion), GatewayError> {
     let owner = match (row.organization_id, row.project_id) {
         (Some(id), None) => SecretOwner::Organization(OrganizationId::from_uuid(id)),
         (None, Some(id)) => SecretOwner::Project(ProjectId::from_uuid(id)),
-        _ => return Err(GatewayEdgeError::Unavailable),
+        _ => return Err(GatewayError::InvalidInboundSecretRule),
     };
     let version_id = SecretVersionId::from_uuid(row.version_id);
     let context = VersionContext {
         owner,
         secret_id: SecretId::from_uuid(row.secret_id),
         version_id,
-        sequence: u64::try_from(row.sequence).map_err(|_| GatewayEdgeError::Unavailable)?,
+        sequence: u64::try_from(row.sequence)
+            .map_err(|_| GatewayError::InvalidInboundSecretRule)?,
         media_type: String::from("application/octet-stream"),
     };
     let encrypted = EncryptedSecretVersion {
@@ -2860,19 +3023,19 @@ fn gateway_encrypted_version(
         data_nonce: row
             .data_nonce
             .try_into()
-            .map_err(|_| GatewayEdgeError::Unavailable)?,
+            .map_err(|_| GatewayError::InvalidInboundSecretRule)?,
         ciphertext: row.ciphertext,
         wrap_nonce: row
             .wrap_nonce
             .try_into()
-            .map_err(|_| GatewayEdgeError::Unavailable)?,
+            .map_err(|_| GatewayError::InvalidInboundSecretRule)?,
         wrapped_data_key: row.wrapped_data_key,
         associated_data_hash: row
             .associated_data_hash
             .try_into()
-            .map_err(|_| GatewayEdgeError::Unavailable)?,
+            .map_err(|_| GatewayError::InvalidInboundSecretRule)?,
         content_length: u32::try_from(row.content_length)
-            .map_err(|_| GatewayEdgeError::Unavailable)?,
+            .map_err(|_| GatewayError::InvalidInboundSecretRule)?,
     };
     Ok((context, encrypted))
 }

@@ -62,82 +62,81 @@ gateway authorization relations, exact release-agent resolution, invocation
 sessions, host-only inbound secret leases, the bounded dispatcher, private
 HTTP VM ABI, daemon composition, and Caddy reconciliation.
 
-Real proof currently covers a rootless libkrun private-HTTP exchange with the
-guest network disabled, plus a disposable shared-Caddy smoke test covering
-forwarding, route update, tombstone removal, and platform-route preservation.
-The Caddy provider now owns one explicitly marked gateway subroute in an
+Real proof covers a rootless libkrun private-HTTP exchange with the guest
+network disabled; PostgreSQL RLS/lifecycle-CAS/outbox races; Caddy forwarding,
+route updates, tombstone removal, and platform-route preservation; and the
+authorized project management UI with reauthorizing product-event watches.
+The joined `scripts/run-gateway-libkrun-e2e.sh` scenario proves Caddy through
+the daemon dispatcher, persisted gateway authority, exact released artifact,
+and real libkrun VM with host-only inbound brokered-header substitution. The
+Caddy provider owns one explicitly marked gateway subroute in an
 operator-supplied complete baseline rather than replacing platform routes.
-
-The remaining unchecked work is lifecycle/management completion evidence:
-broader PostgreSQL route/RLS races, adversarial Caddy-to-real-dispatch tests,
-cutover/draining and crash recovery, gateway UI/metrics/live subscription
-authorization, brokered-secret end-to-end proof with MVP 04, and the full
-repository-quality gate. Persistent guest web servers remain deliberately out
-of scope in the linked follow-up.
+Persistent guest web servers remain deliberately out of scope in the linked
+follow-up.
 
 ## Implementation checklist
 
-- [ ] **1. Specify gateway declarations and the HTTP contract**
-  - [ ] **Define the public edge contract**
-    - [ ] Define the canonical HTTP method, path/query, header, body,
+- [x] **1. Specify gateway declarations and the HTTP contract**
+  - [x] **Define the public edge contract**
+    - [x] Define the canonical HTTP method, path/query, header, body,
       trusted-metadata, and response representations; reject ambiguous path
       normalization and duplicate or forbidden headers.
-    - [ ] Define request/response size limits, startup and execution deadlines,
+    - [x] Define request/response size limits, startup and execution deadlines,
       rate limits, client-disconnect cancellation, safe timeout/failure
       responses, and response-header allowlists.
-    - [ ] Discard producer-controlled forwarding headers and supply trusted
+    - [x] Discard producer-controlled forwarding headers and supply trusted
       scheme, authority, client address, and request ID metadata.
-    - [ ] Document that streaming, trailers, upgrades, WebSockets, and
+    - [x] Document that streaming, trailers, upgrades, WebSockets, and
       long-lived connections are unsupported.
-  - [ ] **Define gateway identity and lifecycle**
-    - [ ] Extend repository configuration so gateway declarations are siblings
+  - [x] **Define gateway identity and lifecycle**
+    - [x] Extend repository configuration so gateway declarations are siblings
       of agent declarations. Define stable gateway names, one or more bounded
       listener/route requests, handler-contract versions, typed parameters,
       exact secret slots, exposure mode, limits, and normalized configuration
       identity. Return the resolved URL as provisioning output.
-    - [ ] Define released gateway installation, immutable revision,
+    - [x] Define released gateway installation, immutable revision,
       capability binding, update, pause, failure, recovery, and removal
       semantics using existing release primitives where possible.
     - [x] Define the host-side `GatewayProvider` contract for route
       reconciliation and provider request/response translation. Make
       `LocalCaddyGatewayProvider` the only MVP implementation.
-    - [ ] Ensure gateway runtime policy cannot include repository mounts,
+    - [x] Ensure gateway runtime policy cannot include repository mounts,
       project agent state, canonical credentials, or unrestricted mailbox
       publication. Route provider/webhook credentials only through MVP 04
       brokered placeholder substitution; never bootstrap them into the VM.
-    - [ ] Add stable diagnostics for unsupported gateway runtime contracts.
+    - [x] Add stable diagnostics for unsupported gateway runtime contracts.
 
-- [ ] **2. Persist authoritative gateway routes**
-  - [ ] **Add PostgreSQL models**
-    - [ ] Add stable gateway, gateway-revision, route, gateway target,
+- [x] **2. Persist authoritative gateway routes**
+  - [x] **Add PostgreSQL models**
+    - [x] Add stable gateway, gateway-revision, route, gateway target,
       derived-configuration revision, and reconciliation identifiers.
-    - [ ] Persist bounded route and methods, HTTP contract, gateway
+    - [x] Persist bounded route and methods, HTTP contract, gateway
       revision, enabled state, creator, lifecycle, and tombstone history.
-    - [ ] Reject overlapping active routes, invalid wildcard use,
+    - [x] Reject overlapping active routes, invalid wildcard use,
       cross-project targets, stale revisions, and
       unauthorized binding changes.
-    - [ ] Apply forced RLS and capability-checked inspect, create, update,
+    - [x] Apply forced RLS and capability-checked inspect, create, update,
       enable, disable, and remove operations.
-    - [ ] Add real-PostgreSQL tests for route conflict races, tenant
+    - [x] Add real-PostgreSQL tests for route conflict races, tenant
       boundaries, lifecycle CAS, RLS, and tombstone provenance.
 
-- [ ] **3. Reconcile Caddy configuration**
-  - [ ] **Keep the administration boundary private**
-    - [ ] Add `LocalCaddyGatewayProvider`, a trusted reconciler that converts authoritative active bindings
+- [x] **3. Reconcile Caddy configuration**
+  - [x] **Keep the administration boundary private**
+    - [x] Add `LocalCaddyGatewayProvider`, a trusted reconciler that converts authoritative active bindings
       into deterministic `/gateway/` routes in the existing shared Caddy
       configuration without exposing the Caddy admin API to released code or
       creating a separate Caddy deployment.
-    - [ ] Apply derived configuration atomically and record the exact desired
+    - [x] Apply derived configuration atomically and record the exact desired
       and observed configuration revisions.
-    - [ ] Recover deterministically after Caddy, reconciler, or database
+    - [x] Recover deterministically after Caddy, reconciler, or database
       restart and remove disabled or tombstoned routes safely.
-    - [ ] Terminate HTTPS in Caddy and forward only normalized private HTTP to
+    - [x] Terminate HTTPS in Caddy and forward only normalized private HTTP to
       the dispatcher. Do not add certificate or domain lifecycle APIs.
-    - [ ] Add reconciliation tests for duplicate commands, partial failure,
+    - [x] Add reconciliation tests for duplicate commands, partial failure,
       stale observations, restart, and conflicting desired revisions.
 
-- [ ] **4. Implement the GatewayDispatcher and synchronous invocation**
-  - [ ] **Invoke bounded HTTP handlers**
+- [x] **4. Implement the GatewayDispatcher and synchronous invocation**
+  - [x] **Invoke bounded HTTP handlers**
     - [x] Bind the dispatcher route resolver and invocation recorder to the
       persisted enabled gateway revision, authorization snapshot, and runtime
       session; a provider trait or unit-only recorder alone is insufficient.
@@ -153,80 +152,80 @@ of scope in the linked follow-up.
       rechecks the active revision/lifecycle while atomically accepting the
       invocation; persisted evidence contains only IDs, correlation, and
       terminal outcome.
-    - [ ] Extend that persisted bridge with the M03.1 gateway authorization
+    - [x] Extend that persisted bridge with the M03.1 gateway authorization
       snapshot and generic runtime-session issuance/acknowledgement handoff.
       The existing generic session tables are run-shaped, so this requires the
       deliberate gateway-session persistence extension rather than fabricating
       a run or weakening the session ceiling.
-    - [ ] Resolve the exact enabled gateway route without trusting
+    - [x] Resolve the exact enabled gateway route without trusting
       producer-controlled forwarding headers or route metadata.
-    - [ ] Enforce method, route, body, header, timeout, and rate limits before
+    - [x] Enforce method, route, body, header, timeout, and rate limits before
       VM launch and create an auditable per-invocation runtime session.
-    - [ ] Start the exact released gateway revision with its immutable release
+    - [x] Start the exact released gateway revision with its immutable release
       mount, invoke its HTTP handler over private HTTP, and relay only its
       bounded canonical response through the provider adapter.
-    - [ ] Define deterministic behavior for startup failure, guest failure,
+    - [x] Define deterministic behavior for startup failure, guest failure,
       timeout, cancellation, paused gateways, revoked bindings, and retries.
-    - [ ] Prevent request smuggling, decompression bombs, path normalization
+    - [x] Prevent request smuggling, decompression bombs, path normalization
       mismatches, host confusion, and internal or metadata endpoint routing.
-    - [ ] Add protocol-level and adversarial tests through Caddy into the
+    - [x] Add protocol-level and adversarial tests through Caddy into the
       GatewayDispatcher.
 
-- [ ] **5. Run gateway releases with narrow authority**
-  - [ ] **Restrict gateway authority**
-    - [ ] Provide the normalized HTTP request and no project repository or
+- [x] **5. Run gateway releases with narrow authority**
+  - [x] **Restrict gateway authority**
+    - [x] Provide the normalized HTTP request and no project repository or
       agent state mounts.
-    - [ ] Mint a gateway-scoped runtime credential permitting only exact bound
+    - [x] Mint a gateway-scoped runtime credential permitting only exact bound
       operations and publication to explicitly selected agent mailboxes. Permit
       brokered inbound-header and outbound HTTPS placeholder substitution only
       under its exact secret, route, and destination bindings.
-    - [ ] Compare an inbound secret header in constant time and rewrite only a
+    - [x] Compare an inbound secret header in constant time and rewrite only a
       valid value to its brokered placeholder before VM delivery. Leave an
       invalid value non-matching or reject it without revealing secret-match
       details.
-    - [ ] Keep application protocol semantics, placeholder-based protocol-secret
+    - [x] Keep application protocol semantics, placeholder-based protocol-secret
       validation, and response codes in gateway code without placing them in
       platform core.
-    - [ ] Add tests proving a malicious gateway cannot inspect another
+    - [x] Add tests proving a malicious gateway cannot inspect another
       project, acquire repository capability, target an unbound mailbox,
       change its route, call Caddy administration, or obtain a real inbound
       secret while it can validate the authorized placeholder.
 
-- [ ] **6. Handle cutover, failure, and recovery**
-  - [ ] Define route and gateway revision cutover, in-flight request draining,
+- [x] **6. Handle cutover, failure, and recovery**
+  - [x] Define route and gateway revision cutover, in-flight request draining,
     cancellation, and exact provenance across retries and failures.
-  - [ ] Define behavior for paused gateways, revoked capability bindings,
+  - [x] Define behavior for paused gateways, revoked capability bindings,
     unavailable guests, timeout/retry exhaustion, and disabled routes.
-  - [ ] Reconcile orphaned derived routes, stale gateway leases, and incomplete
+  - [x] Reconcile orphaned derived routes, stale gateway leases, and incomplete
     revision activation.
-  - [ ] Add failure-injection tests around Caddy reconfiguration, gateway
+  - [x] Add failure-injection tests around Caddy reconfiguration, gateway
     startup, request forwarding, response forwarding, timeout, and cleanup.
 
-- [ ] **7. Add observability and management UI**
-  - [ ] Trace route, binding, Caddy revision, gateway
+- [x] **7. Add observability and management UI**
+  - [x] Trace route, binding, Caddy revision, gateway
     instance/revision, runtime session, provider translation, and request IDs.
-  - [ ] Measure accepted, rejected, limited, cancelled, timed out, failed, and
+  - [x] Measure accepted, rejected, limited, cancelled, timed out, failed, and
     completed requests without high-cardinality public data.
-  - [ ] Add authorized project UI and supported RPC controls for gateway
+  - [x] Add authorized project UI and supported RPC controls for gateway
     installation, route binding, gateway revision, lifecycle, recent ingress,
     denials, and recovery.
-  - [ ] Reauthorize live route and ingress subscriptions and never expose
+  - [x] Reauthorize live route and ingress subscriptions and never expose
     request bodies to unauthorized viewers.
 
-- [ ] **8. Verify and document**
-  - [ ] Document the shared-Caddy boundary, canonical HTTP contract, provider
+- [x] **8. Verify and document**
+  - [x] Document the shared-Caddy boundary, canonical HTTP contract, provider
     adapter, typed parameters/brokered placeholders, URL output, TLS non-goal, gateway
     restrictions, limits, cutover, and recovery.
-  - [ ] Run `cargo fmt --all -- --check`.
-  - [ ] Run `cargo clippy --workspace --all-targets --all-features`.
-  - [ ] Run `cargo test --workspace --all-features`.
-  - [ ] Run `cargo doc --workspace --all-features --no-deps`.
-  - [ ] Run real-PostgreSQL, Caddy, and real-libkrun scenarios covering HTTP
+  - [x] Run `cargo fmt --all -- --check`.
+  - [x] Run `cargo clippy --workspace --all-targets --all-features`.
+  - [x] Run `cargo test --workspace --all-features`.
+  - [x] Run `cargo doc --workspace --all-features --no-deps`.
+  - [x] Run real-PostgreSQL, Caddy, and real-libkrun scenarios covering HTTP
     forwarding, status/header/body propagation, timeout, cancellation, route
     isolation, restart, and authorization denial.
-  - [ ] Run `mix precommit` in `web/`.
-  - [ ] Run the relevant Playwright browser scenario.
-  - [ ] Run `git diff --check`.
+  - [x] Run `mix precommit` in `web/`.
+  - [x] Run the relevant Playwright browser scenario.
+  - [x] Run `git diff --check`.
 
 ## Completion evidence
 

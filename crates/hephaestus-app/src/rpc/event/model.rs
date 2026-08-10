@@ -10,8 +10,8 @@ use rpc_proto::messages::hephaestus::{
     event::v1::{
         AccessRevoked, AgentInstanceChanged, AgentSecretBindingChanged, AggregateType,
         AggregateVersionReference, ArtifactChanged, BuildChanged, ChangeKind, EventProvenance,
-        EventScope, EventScopeKind, IdentityOrganizationsChanged, IdentityProfileChanged,
-        LifecycleState, OrganizationChanged, ProductEvent, ProjectChanged,
+        EventScope, EventScopeKind, GatewayChanged, IdentityOrganizationsChanged,
+        IdentityProfileChanged, LifecycleState, OrganizationChanged, ProductEvent, ProjectChanged,
         RegistryPublicationChanged, ReleaseChanged, RepositoryChanged, RepositoryRefChanged,
         RetentionGap, ReviewChanged, RunChanged, ScopeSnapshotBarrier, SecretGrantChanged,
         SecretImportChanged, SecretMetadataChanged, product_event,
@@ -223,6 +223,13 @@ pub(crate) fn event(
                 },
             ))
         }
+        (AggregateType::Gateway, "gateway.changed") => {
+            product_event::Payload::GatewayChanged(Box::new(GatewayChanged {
+                change: change.into(),
+                state: state.into(),
+                ..Default::default()
+            }))
+        }
         _ => return Err(RpcError::Internal),
     };
     Ok(ProductEvent {
@@ -274,6 +281,7 @@ fn aggregate_type(value: &str) -> Result<AggregateType, RpcError> {
         "agent_secret_binding" => Ok(AggregateType::AgentSecretBinding),
         "artifact" => Ok(AggregateType::Artifact),
         "registry_publication" => Ok(AggregateType::RegistryPublication),
+        "gateway" => Ok(AggregateType::Gateway),
         _ => Err(RpcError::Internal),
     }
 }
@@ -447,6 +455,46 @@ mod tests {
             Some(product_event::Payload::RegistryPublicationChanged(payload))
                 if payload.change.as_known() == Some(ChangeKind::StateChanged)
                     && payload.state.as_known() == Some(LifecycleState::Published)
+        ));
+    }
+
+    #[test]
+    fn project_scoped_gateway_event_projects_only_the_safe_invalidation() {
+        let project_id = Uuid::new_v4();
+        let projected = event(
+            &EventCursorCodec::new([7; 32]),
+            EventScope {
+                kind: ScopeKind::Project,
+                id: project_id,
+            },
+            &ApplicationEvent {
+                id: Uuid::new_v4(),
+                cursor: 1,
+                aggregate_type: String::from("gateway"),
+                aggregate_id: Uuid::new_v4(),
+                aggregate_version: 1,
+                event_type: String::from("gateway.changed"),
+                schema_version: 1,
+                change_kind: String::from("state_changed"),
+                safe_state: Some(String::from("paused")),
+                related_id_one: None,
+                related_id_two: None,
+                actor_id: None,
+                request_id: None,
+                occurred_at: OffsetDateTime::now_utc(),
+            },
+        )
+        .expect("gateway event should project");
+
+        assert_eq!(
+            projected.aggregate_type.as_known(),
+            Some(AggregateType::Gateway)
+        );
+        assert!(matches!(
+            projected.payload,
+            Some(product_event::Payload::GatewayChanged(payload))
+                if payload.change.as_known() == Some(ChangeKind::StateChanged)
+                    && payload.state.as_known() == Some(LifecycleState::Paused)
         ));
     }
 }

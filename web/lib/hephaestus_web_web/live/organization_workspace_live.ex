@@ -5,8 +5,11 @@ defmodule HephaestusWebWeb.OrganizationWorkspaceLive do
   alias HephaestusWebWeb.OrganizationWorkspaceState
   alias HephaestusWebWeb.PageStream
 
+  @stream_mode :none
+
   @impl true
   def mount(%{"organization_id" => organization_id}, _session, socket) do
+    _stream_mode = @stream_mode
     state = OrganizationWorkspaceState.new(%{organization_id: organization_id})
 
     socket =

@@ -57,62 +57,62 @@ delivery entirely to MVP 03.
 
 ## Implementation checklist
 
-- [ ] **1. Define gateway declarations, identity, and lifecycle**
-  - [ ] Extend repository configuration with gateway declarations beside agent
+- [x] **1. Define gateway declarations, identity, and lifecycle**
+  - [x] Extend repository configuration with gateway declarations beside agent
     declarations, stable names, normalized configuration identity, supported
     handler-contract version, typed parameters, exposure mode, secret slots,
     and bounded route intent.
-  - [ ] Define gateway installation, immutable revision, update, pause,
+  - [x] Define gateway installation, immutable revision, update, pause,
     enable/disable, failure, recovery, removal, and tombstone semantics.
-  - [ ] Reject unsupported handler contracts, ambiguous route intent, duplicate
+  - [x] Reject unsupported handler contracts, ambiguous route intent, duplicate
     gateway names, cross-project references, and configuration that requests
     runtime mounts or authority outside exact capability bindings.
 
-- [ ] **2. Persist the authoritative gateway model**
-  - [ ] Add PostgreSQL records for gateway, immutable gateway revision,
+- [x] **2. Persist the authoritative gateway model**
+  - [x] Add PostgreSQL records for gateway, immutable gateway revision,
     declared route intent, lifecycle transitions, and tombstone provenance.
-  - [ ] Make PostgreSQL the sole authority; any future Caddy configuration is
+  - [x] Make PostgreSQL the sole authority; any future Caddy configuration is
     derived, reconstructible state.
-  - [ ] Add forced RLS and compare-and-swap lifecycle transitions with real
+  - [x] Add forced RLS and compare-and-swap lifecycle transitions with real
     PostgreSQL tests for tenant isolation, conflicts, stale revisions, and
     historical retention.
 
-- [ ] **3. Add gateway authorization relations and bindings**
-  - [ ] Extend the canonical OpenFGA/Mélange model with gateway and gateway
+- [x] **3. Add gateway authorization relations and bindings**
+  - [x] Extend the canonical OpenFGA/Mélange model with gateway and gateway
     revision relations for inspect, configure, execute/invoke, update, pause,
     recovery, and removal.
-  - [ ] Bind gateway capability slots through the existing immutable revision
+  - [x] Bind gateway capability slots through the existing immutable revision
     binding model; require explicit grant authority for every selected resource.
-  - [ ] Prove that gateway management grants no ambient Caddy, repository,
+  - [x] Prove that gateway management grants no ambient Caddy, repository,
     state-volume, mailbox, secret, or cross-project authority.
 
-- [ ] **4. Snapshot and audit gateway invocation authority**
-  - [ ] Add an invocation command that resolves one exact enabled gateway
+- [x] **4. Snapshot and audit gateway invocation authority**
+  - [x] Add an invocation command that resolves one exact enabled gateway
     revision, reauthorizes it, creates the immutable authorization snapshot,
     and issues a short-lived generic runtime session.
-  - [ ] Persist requestor, gateway, revision, invocation, session, snapshot,
+  - [x] Persist requestor, gateway, revision, invocation, session, snapshot,
     binding IDs, authorization-model version, decision, outcome, and request
     correlation IDs without recording HTTP payloads or secret values.
-  - [ ] Enforce the same credential lifecycle, live revocation, RLS, session
+  - [x] Enforce the same credential lifecycle, live revocation, RLS, session
     expiry, cancellation, and recovery rules as agent-run sessions.
-  - [ ] Add tests for denied invocation, revision replacement, disabled and
+  - [x] Add tests for denied invocation, revision replacement, disabled and
     removed gateways, cross-project access, stale/revoked authority, credential
     replay, and audit redaction.
 
-- [ ] **5. Expose minimal safe management and inspection**
-  - [ ] Add typed RPC and UI projections for gateway declarations, revisions,
+- [x] **5. Expose minimal safe management and inspection**
+  - [x] Add typed RPC and UI projections for gateway declarations, revisions,
     lifecycle, capability requirements/bindings, and redacted invocation
     history.
-  - [ ] Reauthorize every read and live update; never expose bearer material,
+  - [x] Reauthorize every read and live update; never expose bearer material,
     secret values, provider credentials, HTTP bodies, or future Caddy details.
 
-- [ ] **6. Verify and hand off to MVP 03**
-  - [ ] Document the division: MVP 03.1 owns gateway identity and authority;
+- [x] **6. Verify and hand off to MVP 03**
+  - [x] Document the division: MVP 03.1 owns gateway identity and authority;
     MVP 03 owns Caddy reconciliation, public URL output, HTTPS termination,
     request translation, VM invocation, and HTTP response relay.
-  - [ ] Run formatting, Clippy, tests, rustdoc, real-PostgreSQL authorization
+  - [x] Run formatting, Clippy, tests, rustdoc, real-PostgreSQL authorization
     and lifecycle tests, `git diff --check`, and `cargo dev quality`.
-  - [ ] Update MVP 01 completion evidence with concrete gateway-principal and
+  - [x] Update MVP 01 completion evidence with concrete gateway-principal and
     invocation-session fixtures.
 
 ## Non-goals

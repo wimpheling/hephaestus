@@ -197,6 +197,12 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.ProjectAgentsPage do
       },
       %{key: :runs, label: "Runs", icon: "hero-play-circle", destination: "/projects/#{id}/runs"},
       %{
+        key: :gateways,
+        label: "Gateways",
+        icon: "hero-globe-alt",
+        destination: "/projects/#{id}/gateways"
+      },
+      %{
         key: :settings,
         label: "Settings",
         icon: "hero-cog-6-tooth",

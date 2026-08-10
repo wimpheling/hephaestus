@@ -27,6 +27,37 @@ pub struct RunRuntimeInput {
     pub artifacts: Vec<RunRuntimeArtifact>,
     /// Verified metadata for the previous release during an update.
     pub previous_artifacts: Vec<RunRuntimeArtifact>,
+    /// One accepted opaque mailbox event, when this run was claimed by the
+    /// mailbox dispatcher. Its bytes are written only to the sealed guest
+    /// control mount and never to a broker command or runtime log.
+    pub mailbox_event: Option<MailboxRuntimeEvent>,
+}
+
+/// Exact generic mailbox input bound to one already-authorized run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MailboxRuntimeEvent {
+    /// Durable mailbox identity.
+    pub mailbox_id: Uuid,
+    /// Accepted event identity.
+    pub event_id: Uuid,
+    /// Opaque immutable body identity.
+    pub body_id: Uuid,
+    /// Provider-neutral request method.
+    pub method: String,
+    /// Provider-neutral route.
+    pub route: String,
+    /// Bounded selected headers.
+    pub selected_headers: Value,
+    /// Optional content type.
+    pub content_type: Option<String>,
+    /// Optional bounded trace context.
+    pub trace_context: Option<String>,
+    /// Upstream receipt time.
+    pub received_at: time::OffsetDateTime,
+    /// Exact opaque bytes for the read-only guest control file.
+    pub body: Vec<u8>,
+    /// Exact SHA-256 evidence for the body bytes.
+    pub integrity_hash: [u8; 32],
 }
 
 /// Bounded release artifact metadata used by local materialization.

@@ -8,6 +8,7 @@ mod image_catalog;
 // The event adapter is shared with the single outbound product-event adapter.
 #[allow(clippy::redundant_pub_crate)]
 pub(crate) mod event;
+mod gateway;
 mod identity;
 mod instance;
 mod organization;
@@ -197,6 +198,12 @@ pub(crate) fn service(
         mutation_receipts.clone(),
     ));
     let router = IdentityServiceExt::register(identity, Router::new());
+    let router = gateway::register(
+        router,
+        pool.clone(),
+        MediatorAuthenticator::new(mediator_signing_key),
+        mutation_receipts.clone(),
+    );
     let router = rpc_proto::connect::hephaestus::instance::v1::AgentInstanceServiceExt::register(
         instance, router,
     );

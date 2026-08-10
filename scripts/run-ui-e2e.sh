@@ -179,6 +179,8 @@ chmod 0700 \
 umask 077
 head -c 32 /dev/zero | tr '\0' '\127' >"${fixture_root}/secret-keys/e2e-v1"
 chmod 0400 "${fixture_root}/secret-keys/e2e-v1"
+head -c 32 /dev/zero | tr '\0' '\126' >"${fixture_root}/runtime-authority-handoff.key"
+chmod 0400 "${fixture_root}/runtime-authority-handoff.key"
 openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 \
     -out "${fixture_root}/registry-token-private.pem" >/dev/null 2>&1
 printf '%s\n' 'browser-e2e-notification-callback-token-0123456789abcdef' \
@@ -252,6 +254,7 @@ export HEPHAESTUS_RUNTIME_ROOT="${fixture_root}/runtime"
 export HEPHAESTUS_SECRET_RUNTIME_ROOT="${secret_runtime_root}"
 export HEPHAESTUS_SECRET_KEY_DIRECTORY="${fixture_root}/secret-keys"
 export HEPHAESTUS_SECRET_KEY_REFERENCE="e2e-v1"
+export HEPHAESTUS_RUNTIME_AUTHORITY_HANDOFF_KEY_FILE="${fixture_root}/runtime-authority-handoff.key"
 export HEPHAESTUS_RPC_MEDIATOR_SECRET="e2e-rpc-mediator-secret-with-sufficient-entropy"
 export HEPHAESTUS_REGISTRY_TOKEN_PRIVATE_KEY="${fixture_root}/registry-token-private.pem"
 export HEPHAESTUS_REGISTRY_TOKEN_ISSUER="${daemon_url}/v1/registry/token"
@@ -310,7 +313,12 @@ HEPHAESTUS_GIT_URL="${daemon_url}" \
 HEPHAESTUS_WEB_URL="${web_url}" \
 HEPHAESTUS_OIDC_URL="${oidc_url}" \
 HEPHAESTUS_E2E_EVIDENCE_DIR="${fixture_root}/screenshots" \
-    npm test
+    bash -c '
+        if [[ -n "${HEPHAESTUS_PLAYWRIGHT_GREP:-}" ]]; then
+            exec npx playwright test --grep "${HEPHAESTUS_PLAYWRIGHT_GREP}"
+        fi
+        exec npm test
+    '
 
 podman logs "${web_container}" >"${fixture_root}/web.log" 2>&1
 podman exec "${postgres_container}" pg_dump --username postgres --dbname hephaestus \

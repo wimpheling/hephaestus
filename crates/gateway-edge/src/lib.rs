@@ -6,7 +6,8 @@
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
+pub use gateway_domain::{GatewayInboundSecretResolver, InboundGatewaySecretRule};
+use http::{HeaderMap, HeaderName, Method, StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{collections::BTreeSet, net::IpAddr, sync::Arc, time::Duration};
@@ -14,6 +15,10 @@ use subtle::ConstantTimeEq;
 use tokio::time::timeout;
 use uuid::Uuid;
 use vm_trait::{PrivateHttpRequest, PrivateHttpResponse, VmInstance};
+
+mod integration;
+
+pub use integration::caddy::LocalCaddyAdministration;
 
 /// Reserved public path prefix owned by gateway routing.
 pub const GATEWAY_NAMESPACE: &str = "/gateway/";
@@ -201,6 +206,15 @@ pub trait GatewayProvider: Send + Sync {
         &self,
         desired: &GatewayDesiredConfiguration,
     ) -> Result<GatewayConfigRevision, GatewayEdgeError>;
+    /// Reapplies the complete authoritative configuration after an edge
+    /// restart. Implementations that can prove their observation is still
+    /// present may use the ordinary idempotent reconciliation path.
+    async fn recover(
+        &self,
+        desired: &GatewayDesiredConfiguration,
+    ) -> Result<GatewayConfigRevision, GatewayEdgeError> {
+        self.reconcile(desired).await
+    }
     /// Translates one provider request into canonical HTTP and dispatches it.
     /// Only the adapter may populate trusted metadata.
     async fn forward(&self, request: GatewayRequest) -> GatewayProviderResponse;
@@ -212,64 +226,6 @@ pub trait GatewayProvider: Send + Sync {
 pub trait CaddyAdministration: Send + Sync {
     /// Atomically loads a complete derived Caddy configuration.
     async fn load(&self, configuration: Vec<u8>) -> Result<(), GatewayEdgeError>;
-}
-
-/// Loopback-only HTTP client for Caddy's private administration API.
-///
-/// This adapter deliberately exposes only whole-config `POST /load`. Gateway
-/// VMs never receive its endpoint or client, and no caller can use it to issue
-/// arbitrary Caddy administration requests.
-#[derive(Clone)]
-pub struct LocalCaddyAdministration {
-    client: reqwest::Client,
-    load_endpoint: reqwest::Url,
-}
-
-impl LocalCaddyAdministration {
-    /// Creates an administration client for a loopback Caddy admin endpoint.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error unless `endpoint` is an HTTP URL addressed exactly to
-    /// an IP loopback host. A public or DNS administration endpoint would make
-    /// the shared edge control plane remotely mutable.
-    pub fn new(endpoint: &str) -> Result<Self, GatewayEdgeError> {
-        let mut endpoint = reqwest::Url::parse(endpoint)
-            .map_err(|_| GatewayEdgeError::InvalidAdministrationEndpoint)?;
-        let loopback = endpoint
-            .host_str()
-            .and_then(|host| host.parse::<IpAddr>().ok())
-            .is_some_and(|address| address.is_loopback());
-        if endpoint.scheme() != "http" || !loopback {
-            return Err(GatewayEdgeError::InvalidAdministrationEndpoint);
-        }
-        endpoint.set_path("/load");
-        endpoint.set_query(None);
-        endpoint.set_fragment(None);
-        Ok(Self {
-            client: reqwest::Client::new(),
-            load_endpoint: endpoint,
-        })
-    }
-}
-
-#[async_trait]
-impl CaddyAdministration for LocalCaddyAdministration {
-    async fn load(&self, configuration: Vec<u8>) -> Result<(), GatewayEdgeError> {
-        let response = self
-            .client
-            .post(self.load_endpoint.clone())
-            .header(reqwest::header::CONTENT_TYPE, "application/json")
-            .body(configuration)
-            .send()
-            .await
-            .map_err(|_| GatewayEdgeError::Unavailable)?;
-        if response.status().is_success() {
-            Ok(())
-        } else {
-            Err(GatewayEdgeError::Unavailable)
-        }
-    }
 }
 
 #[async_trait]
@@ -365,6 +321,27 @@ where
         Ok(desired.revision)
     }
 
+    async fn recover(
+        &self,
+        desired: &GatewayDesiredConfiguration,
+    ) -> Result<GatewayConfigRevision, GatewayEdgeError> {
+        // Caddy does not retain an observation token across a process restart.
+        // Always reload the complete authoritative template here, even when
+        // this daemon still remembers the same desired revision.
+        for route in &desired.routes {
+            route.validate()?;
+        }
+        ensure_unique_routes(&desired.routes)?;
+        let template = self
+            .template
+            .as_ref()
+            .ok_or(GatewayEdgeError::Unavailable)?;
+        let config = template.render(desired, &self.dispatcher_upstream)?;
+        self.administration.load(config).await?;
+        *self.observed.write().await = Some(desired.revision);
+        Ok(desired.revision)
+    }
+
     async fn forward(&self, request: GatewayRequest) -> GatewayProviderResponse {
         self.dispatcher.dispatch(request).await
     }
@@ -436,6 +413,29 @@ pub trait GatewayVmLauncher: Send + Sync {
         route: &GatewayRouteBinding,
         invocation_id: Uuid,
     ) -> Result<Arc<dyn VmInstance>, GatewayEdgeError>;
+
+    /// Releases host-owned launch resources after the VM is destroyed.
+    async fn cleanup(&self, _: Uuid) -> Result<(), GatewayEdgeError> {
+        Ok(())
+    }
+
+    /// Confirms the exact runtime-authority bootstrap observed by the guest.
+    ///
+    /// Test-only launchers without runtime authority can retain the default.
+    async fn acknowledge_runtime_authority(
+        &self,
+        _: Uuid,
+        _: Uuid,
+        _: u64,
+    ) -> Result<(), GatewayEdgeError> {
+        Ok(())
+    }
+
+    /// Whether a launched VM must acknowledge its runtime authority before it
+    /// can handle the request.
+    async fn requires_runtime_authority_ack(&self, _: Uuid) -> Result<bool, GatewayEdgeError> {
+        Ok(false)
+    }
 }
 
 /// Resolves one authoritative route to its exact immutable release launch
@@ -449,6 +449,19 @@ pub trait GatewayReleaseResolver: Send + Sync {
         route: &GatewayRouteBinding,
         invocation_id: Uuid,
     ) -> Result<vm_trait::VmSpec, GatewayEdgeError>;
+
+    /// Persists the exact guest acknowledgement for a launched invocation.
+    async fn acknowledge_runtime_authority(
+        &self,
+        invocation_id: Uuid,
+        session_id: Uuid,
+        generation: u64,
+    ) -> Result<(), GatewayEdgeError>;
+
+    /// Releases any host-owned release tree prepared for this invocation.
+    async fn cleanup_launch(&self, _: Uuid) -> Result<(), GatewayEdgeError> {
+        Ok(())
+    }
 }
 
 /// Provisions the already-resolved private VM launch specification.
@@ -490,28 +503,55 @@ where
         invocation_id: Uuid,
     ) -> Result<Arc<dyn VmInstance>, GatewayEdgeError> {
         let spec = self.releases.resolve_launch(route, invocation_id).await?;
-        self.launcher.provision_gateway(spec).await
+        match self.launcher.provision_gateway(spec).await {
+            Ok(instance) => Ok(instance),
+            Err(error) => {
+                let _cleanup = self.releases.cleanup_launch(invocation_id).await;
+                Err(error)
+            }
+        }
+    }
+
+    async fn cleanup(&self, invocation_id: Uuid) -> Result<(), GatewayEdgeError> {
+        self.releases.cleanup_launch(invocation_id).await
+    }
+
+    async fn acknowledge_runtime_authority(
+        &self,
+        invocation_id: Uuid,
+        session_id: Uuid,
+        generation: u64,
+    ) -> Result<(), GatewayEdgeError> {
+        self.releases
+            .acknowledge_runtime_authority(invocation_id, session_id, generation)
+            .await
+    }
+
+    async fn requires_runtime_authority_ack(&self, _: Uuid) -> Result<bool, GatewayEdgeError> {
+        Ok(true)
     }
 }
 
 /// Bridges canonical gateway HTTP to a VM provider's private host-to-guest
 /// handler transport.  It does not create a guest listener or port forward.
 pub struct PrivateHttpVmGatewayHandler<L> {
-    launcher: L,
+    launcher: Arc<L>,
 }
 
 impl<L> PrivateHttpVmGatewayHandler<L> {
     /// Creates an adapter from the release-aware VM launcher.
     #[must_use]
-    pub const fn new(launcher: L) -> Self {
-        Self { launcher }
+    pub fn new(launcher: L) -> Self {
+        Self {
+            launcher: Arc::new(launcher),
+        }
     }
 }
 
 #[async_trait]
 impl<L> GatewayVmHandler for PrivateHttpVmGatewayHandler<L>
 where
-    L: GatewayVmLauncher,
+    L: GatewayVmLauncher + 'static,
 {
     async fn invoke(
         &self,
@@ -525,12 +565,33 @@ where
         // that outer future cannot leak a running microVM or its provider
         // resources.  The task always destroys the one-shot instance before
         // resolving its result.
+        let launcher = Arc::clone(&self.launcher);
         let task = tokio::spawn(async move {
             let invocation = async {
+                let mut events = instance.subscribe_events();
                 instance
                     .start()
                     .await
                     .map_err(|_| GatewayEdgeError::HandlerUnavailable)?;
+                let requires_authority_ack = launcher
+                    .requires_runtime_authority_ack(invocation_id)
+                    .await?;
+                let mut acknowledged = false;
+                while let Ok(event) = events.try_recv() {
+                    if let vm_trait::VmEvent::RuntimeAuthorityAcknowledged {
+                        session_id,
+                        generation,
+                    } = event
+                    {
+                        launcher
+                            .acknowledge_runtime_authority(invocation_id, session_id, generation)
+                            .await?;
+                        acknowledged = true;
+                    }
+                }
+                if requires_authority_ack && !acknowledged {
+                    return Err(GatewayEdgeError::HandlerUnavailable);
+                }
                 let response = instance
                     .invoke_private_http(PrivateHttpRequest {
                         method: request.method,
@@ -544,7 +605,8 @@ where
             }
             .await;
             let cleanup = instance.destroy().await;
-            if cleanup.is_err() && invocation.is_ok() {
+            let release_cleanup = launcher.cleanup(invocation_id).await;
+            if (cleanup.is_err() || release_cleanup.is_err()) && invocation.is_ok() {
                 return Err(GatewayEdgeError::HandlerUnavailable);
             }
             invocation
@@ -570,57 +632,6 @@ pub trait GatewayInvocationRecorder: Send + Sync {
         invocation_id: Uuid,
         outcome: GatewayInvocationOutcome,
     ) -> Result<(), GatewayEdgeError>;
-}
-
-/// One host-only inbound header substitution ceiling for an accepted invocation.
-///
-/// The real value stays inside this object and is never copied into a VM request,
-/// durable record, trace, diagnostic, or response.
-pub struct InboundGatewaySecretRule {
-    header: HeaderName,
-    expected: Vec<u8>,
-    placeholder: HeaderValue,
-}
-
-impl InboundGatewaySecretRule {
-    /// Creates one exact header-value matcher and VM-visible placeholder.
-    ///
-    /// # Errors
-    ///
-    /// Returns a contract error for an empty secret or invalid placeholder.
-    pub fn new(
-        header: HeaderName,
-        expected: Vec<u8>,
-        placeholder: HeaderValue,
-    ) -> Result<Self, GatewayEdgeError> {
-        if expected.is_empty() || placeholder.as_bytes().is_empty() {
-            return Err(GatewayEdgeError::Contract("invalid inbound secret rule"));
-        }
-        Ok(Self {
-            header,
-            expected,
-            placeholder,
-        })
-    }
-}
-
-impl Drop for InboundGatewaySecretRule {
-    fn drop(&mut self) {
-        self.expected.fill(0);
-    }
-}
-
-/// Resolves exact active inbound secret leases after an invocation has been
-/// accepted. Implementations must verify route, revision, runtime session,
-/// lease status, expiry, and selected secret version before returning a rule.
-#[async_trait]
-pub trait GatewayInboundSecretResolver: Send + Sync {
-    /// Returns every active exact substitution rule for this accepted invocation.
-    async fn rules_for_invocation(
-        &self,
-        invocation_id: Uuid,
-        route: &GatewayRouteBinding,
-    ) -> Result<Vec<InboundGatewaySecretRule>, GatewayEdgeError>;
 }
 
 /// Persistable terminal outcome with no request/response payload.
@@ -744,7 +755,11 @@ impl<R: Sync, H: Sync, I: Sync> GatewayDispatcher<R, H, I> {
         let Some(resolver) = &self.inbound_secrets else {
             return Ok(request);
         };
-        for rule in resolver.rules_for_invocation(invocation_id, route).await? {
+        let rules = resolver
+            .rules_for_invocation(invocation_id, route.route_id, route.gateway_revision_id)
+            .await
+            .map_err(|_| GatewayEdgeError::Unavailable)?;
+        for rule in rules {
             let values = request.headers.get_all(&rule.header);
             let mut values = values.iter();
             let Some(value) = values.next() else {
@@ -1187,17 +1202,18 @@ mod tests {
         async fn rules_for_invocation(
             &self,
             _: Uuid,
-            _: &GatewayRouteBinding,
-        ) -> Result<Vec<InboundGatewaySecretRule>, GatewayEdgeError> {
+            _: Uuid,
+            _: Uuid,
+        ) -> Result<Vec<InboundGatewaySecretRule>, gateway_domain::GatewayError> {
             Ok(vec![InboundGatewaySecretRule::new(
                 HeaderName::from_static("x-hook-secret"),
                 b"gateway-secret-sentinel".to_vec(),
-                HeaderValue::from_static("heph-placeholder:v1:gateway-proof"),
+                http::HeaderValue::from_static("heph-placeholder:v1:gateway-proof"),
             )?])
         }
     }
 
-    struct HeaderCapture(Mutex<Option<HeaderValue>>);
+    struct HeaderCapture(Mutex<Option<http::HeaderValue>>);
     #[async_trait]
     impl GatewayVmHandler for HeaderCapture {
         async fn invoke(
@@ -1336,6 +1352,36 @@ mod tests {
         };
         assert!(provider.reconcile(&desired).await.is_err());
         assert_eq!(provider.observed_revision().await, None);
+    }
+
+    #[tokio::test]
+    async fn recovery_reapplies_an_unchanged_authoritative_revision() {
+        let admin = Arc::new(Admin(Mutex::new(Vec::new())));
+        let provider = LocalCaddyGatewayProvider::new(
+            Arc::clone(&admin),
+            GatewayDispatcher::new(
+                Resolver(route()),
+                Handler {
+                    calls: AtomicUsize::new(0),
+                    delay: Duration::ZERO,
+                },
+                Recorder,
+            ),
+        )
+        .with_configuration_template(caddy_template());
+        let desired = GatewayDesiredConfiguration {
+            revision: GatewayConfigRevision::new(),
+            routes: vec![route()],
+        };
+        provider
+            .reconcile(&desired)
+            .await
+            .expect("initial Caddy configuration");
+        provider
+            .recover(&desired)
+            .await
+            .expect("Caddy restart recovery");
+        assert_eq!(admin.0.lock().expect("lock").len(), 2);
     }
     #[tokio::test]
     async fn dispatcher_times_out_and_never_relays_unbounded_handler() {

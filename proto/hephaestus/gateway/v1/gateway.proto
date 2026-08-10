@@ -1,0 +1,144 @@
+syntax = "proto3";
+
+package hephaestus.gateway.v1;
+
+import "google/protobuf/timestamp.proto";
+import "hephaestus/common/v1/common.proto";
+import "hephaestus/options/v1/options.proto";
+
+// Project-scoped management and redacted ingress inspection for repository
+// gateways. Public request payloads and provider credentials are never part of
+// this API.
+service GatewayService {
+  rpc ListProjectGateways(ListProjectGatewaysRequest) returns (ListProjectGatewaysResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (hephaestus.options.v1.authorization) = {
+      permission: "gateway.list"
+      audience: "/hephaestus.gateway.v1.GatewayService/ListProjectGateways"
+      actor_source: ACTOR_SOURCE_MEDIATOR_JWT_METADATA
+    };
+    option (hephaestus.options.v1.operation_kind) = OPERATION_KIND_QUERY;
+    option (hephaestus.options.v1.max_request_bytes) = 8192;
+    option (hephaestus.options.v1.max_response_bytes) = 1048576;
+  }
+  rpc GetGateway(GetGatewayRequest) returns (GetGatewayResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (hephaestus.options.v1.authorization) = {
+      permission: "gateway.read"
+      audience: "/hephaestus.gateway.v1.GatewayService/GetGateway"
+      actor_source: ACTOR_SOURCE_MEDIATOR_JWT_METADATA
+    };
+    option (hephaestus.options.v1.operation_kind) = OPERATION_KIND_QUERY;
+    option (hephaestus.options.v1.max_request_bytes) = 4096;
+    option (hephaestus.options.v1.max_response_bytes) = 1048576;
+  }
+  rpc ListGatewayIngress(ListGatewayIngressRequest) returns (ListGatewayIngressResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (hephaestus.options.v1.authorization) = {
+      permission: "gateway.ingress.list"
+      audience: "/hephaestus.gateway.v1.GatewayService/ListGatewayIngress"
+      actor_source: ACTOR_SOURCE_MEDIATOR_JWT_METADATA
+    };
+    option (hephaestus.options.v1.operation_kind) = OPERATION_KIND_QUERY;
+    option (hephaestus.options.v1.max_request_bytes) = 8192;
+    option (hephaestus.options.v1.max_response_bytes) = 1048576;
+  }
+  rpc SetGatewayLifecycle(SetGatewayLifecycleRequest) returns (SetGatewayLifecycleResponse) {
+    option (hephaestus.options.v1.authorization) = {
+      permission: "gateway.lifecycle.set"
+      audience: "/hephaestus.gateway.v1.GatewayService/SetGatewayLifecycle"
+      actor_source: ACTOR_SOURCE_MEDIATOR_JWT_METADATA
+    };
+    option (hephaestus.options.v1.operation_kind) = OPERATION_KIND_MUTATION;
+    option (hephaestus.options.v1.max_request_bytes) = 8192;
+    option (hephaestus.options.v1.max_response_bytes) = 4096;
+  }
+}
+
+enum GatewayLifecycle {
+  GATEWAY_LIFECYCLE_UNSPECIFIED = 0;
+  GATEWAY_LIFECYCLE_ENABLED = 1;
+  GATEWAY_LIFECYCLE_PAUSED = 2;
+  GATEWAY_LIFECYCLE_REMOVED = 3;
+}
+
+enum GatewayIngressOutcome {
+  GATEWAY_INGRESS_OUTCOME_UNSPECIFIED = 0;
+  GATEWAY_INGRESS_OUTCOME_ACCEPTED = 1;
+  GATEWAY_INGRESS_OUTCOME_COMPLETED = 2;
+  GATEWAY_INGRESS_OUTCOME_FAILED = 3;
+  GATEWAY_INGRESS_OUTCOME_TIMED_OUT = 4;
+  GATEWAY_INGRESS_OUTCOME_REJECTED = 5;
+}
+
+message GatewayRoute {
+  hephaestus.common.v1.OpaqueId id = 1;
+  string path = 2;
+  repeated string methods = 3;
+  bool enabled = 4;
+}
+
+message GatewayRevision {
+  hephaestus.common.v1.OpaqueId id = 1;
+  hephaestus.common.v1.OpaqueId release_id = 2;
+  string handler_contract = 3;
+  string exposure = 4;
+  repeated string secret_slots = 5;
+  google.protobuf.Timestamp created_at = 6;
+  repeated GatewayRoute routes = 7;
+}
+
+message GatewaySummary {
+  hephaestus.common.v1.OpaqueId id = 1;
+  hephaestus.common.v1.OpaqueId project_id = 2;
+  hephaestus.common.v1.OpaqueId repository_id = 3;
+  string name = 4;
+  GatewayLifecycle lifecycle = 5;
+  hephaestus.common.v1.OpaqueId active_revision_id = 6;
+  google.protobuf.Timestamp updated_at = 7;
+}
+
+message GatewayIngress {
+  hephaestus.common.v1.OpaqueId id = 1;
+  hephaestus.common.v1.OpaqueId gateway_revision_id = 2;
+  hephaestus.common.v1.OpaqueId gateway_route_id = 3;
+  GatewayIngressOutcome outcome = 4;
+  google.protobuf.Timestamp accepted_at = 5;
+  optional google.protobuf.Timestamp completed_at = 6;
+}
+
+message ListProjectGatewaysRequest {
+  hephaestus.common.v1.OpaqueId project_id = 1;
+  hephaestus.common.v1.PageRequest page = 2;
+}
+message ListProjectGatewaysResponse {
+  repeated GatewaySummary gateways = 1;
+  hephaestus.common.v1.PageResponse page = 2;
+}
+message GetGatewayRequest {
+  hephaestus.common.v1.OpaqueId gateway_id = 1;
+  hephaestus.common.v1.PageRequest page = 2;
+}
+message GetGatewayResponse {
+  GatewaySummary gateway = 1;
+  repeated GatewayRevision revisions = 2;
+  hephaestus.common.v1.PageResponse page = 3;
+}
+message ListGatewayIngressRequest {
+  hephaestus.common.v1.OpaqueId gateway_id = 1;
+  hephaestus.common.v1.PageRequest page = 2;
+}
+message ListGatewayIngressResponse {
+  repeated GatewayIngress ingress = 1;
+  hephaestus.common.v1.PageResponse page = 2;
+}
+message SetGatewayLifecycleRequest {
+  hephaestus.common.v1.RequestContext context = 1;
+  hephaestus.common.v1.OpaqueId gateway_id = 2;
+  GatewayLifecycle expected = 3;
+  GatewayLifecycle next = 4;
+}
+message SetGatewayLifecycleResponse {
+  GatewaySummary gateway = 1;
+  hephaestus.common.v1.MutationReceipt receipt = 2;
+}

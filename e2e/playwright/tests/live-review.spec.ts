@@ -47,6 +47,29 @@ test.describe.serial("release, instance, secret, and live-review product journey
     expect(Date.now() - repositoryStartedAt).toBeLessThan(3_000);
   });
 
+  test("manages redacted gateway lifecycle through the reauthorized project watch", async ({
+    page
+  }) => {
+    const fixture = await loadFixture();
+    const gateway = await seedGateway(fixture);
+    await signIn(page);
+
+    await page.goto(`/projects/${fixture.projectId}/gateways`);
+    await waitForLiveView(page);
+    await expect(page.locator(`#gateway-${gateway.id}`)).toContainText("browser-gateway");
+
+    await page.getByRole("link", {name: "Inspect"}).click();
+    await expect(page).toHaveURL(
+      `/projects/${fixture.projectId}/gateways/${gateway.id}`
+    );
+    await waitForLiveView(page);
+    await expect(page.locator("#project-gateway")).toContainText("/browser-hook");
+    await page.getByRole("button", {name: "Pause"}).click();
+    await expect(page.locator("#project-gateway")).toContainText("Lifecycle: paused");
+    await expect(page.getByRole("button", {name: "Recover"})).toBeVisible();
+    await assertAccessible(page, "#project-gateway");
+  });
+
   test("creates a repository, pushes agent.toml, and publishes its built release", async ({
     page
   }) => {
@@ -571,6 +594,56 @@ async function queryBuilds(repositoryId: string) {
   );
   await client.end();
   return result.rows as Array<{id: string; source_commit: string}>;
+}
+
+async function seedGateway(
+  fixture: Awaited<ReturnType<typeof loadFixture>>
+): Promise<{id: string}> {
+  const gatewayId = randomUUID();
+  const revisionId = randomUUID();
+  const routeId = randomUUID();
+  const client = new pg.Client({connectionString: databaseUrl});
+  await client.connect();
+  const owner = await client.query(
+    `SELECT member.user_id
+       FROM organization_members member
+      WHERE member.organization_id = $1 AND member.role = 'owner'
+      ORDER BY member.user_id LIMIT 1`,
+    [fixture.organizationId]
+  );
+  const ownerId = owner.rows[0].user_id as string;
+  await client.query("BEGIN");
+  try {
+    await client.query(
+      `INSERT INTO gateways (id, project_id, repository_id, name, lifecycle, created_by)
+       VALUES ($1, $2, $3, 'browser-gateway', 'enabled', $4)`,
+      [gatewayId, fixture.projectId, fixture.repositoryId, ownerId]
+    );
+    await client.query(
+      `INSERT INTO gateway_revisions
+         (id, gateway_id, project_id, repository_id, handler_contract, exposure,
+          parameters, secret_slots, normalized_hash, created_by)
+       VALUES ($1, $2, $3, $4, 'http.v1', 'public', '{}'::jsonb, ARRAY[]::text[], $5, $6)`,
+      [revisionId, gatewayId, fixture.projectId, fixture.repositoryId, Buffer.alloc(32), ownerId]
+    );
+    await client.query(
+      `INSERT INTO gateway_routes
+         (id, gateway_revision_id, gateway_id, project_id, path, methods)
+       VALUES ($1, $2, $3, $4, '/browser-hook', ARRAY['POST'])`,
+      [routeId, revisionId, gatewayId, fixture.projectId]
+    );
+    await client.query("UPDATE gateways SET active_revision_id = $2 WHERE id = $1", [
+      gatewayId,
+      revisionId
+    ]);
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    await client.end();
+  }
+  return {id: gatewayId};
 }
 
 async function verifiableBuildId() {

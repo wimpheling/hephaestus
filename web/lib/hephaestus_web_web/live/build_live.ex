@@ -4,8 +4,11 @@ defmodule HephaestusWebWeb.BuildLive do
   alias HephaestusWebWeb.DesignSystem.Pages.BuildPage
   alias HephaestusWebWeb.{BuildState, PageStream}
 
+  @stream_mode :none
+
   @impl true
   def mount(%{"repository_id" => repository_id, "build_id" => build_id}, _session, socket) do
+    _stream_mode = @stream_mode
     state = BuildState.new(repository_id, build_id)
 
     socket =

@@ -100,7 +100,8 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.AgentInstancePageTest do
         }
       ])
 
-    html = render_component(&AgentInstancePage.agent_instance/1, %{assigns() | instance: instance})
+    html =
+      render_component(&AgentInstancePage.agent_instance/1, %{assigns() | instance: instance})
 
     assert html =~ ~s(id="mailbox-delivery-evidence")
     assert html =~ ~s(id="mailbox-delivery-event-1")
@@ -137,7 +138,8 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.AgentInstancePageTest do
       revise_capabilities_event: "revise-capabilities",
       create_update_event: "create-update",
       recover_update_event: "recover-update",
-      bind_secret_event: "bind-secret"
+      bind_secret_event: "bind-secret",
+      control_mailbox_event: "control-mailbox"
     }
   end
 

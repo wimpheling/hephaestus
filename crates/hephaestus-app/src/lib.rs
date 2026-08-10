@@ -34,13 +34,16 @@ use forge_service::{
 };
 use futures_util::StreamExt;
 use gateway_edge::{
-    GatewayConfigRevision, GatewayDispatcher, GatewayInboundSecretResolver, GatewayLimits,
+    GatewayDispatcher, GatewayInboundSecretResolver, GatewayLimits, GatewayProvider,
     GatewayRequest, GatewayRequestDispatcher, GatewayRuntimeLauncher, GatewayRuntimeService,
     GatewayScheme, LocalCaddyAdministration, LocalCaddyConfigurationTemplate,
     LocalCaddyGatewayProvider, PrivateHttpVmGatewayHandler, TrustedRequestMetadata,
     UNTRUSTED_FORWARDING_HEADERS,
 };
-use gateway_postgres::{PostgresGatewayEdgeAuthority, PostgresGatewayReleaseResolver};
+use gateway_postgres::{
+    GatewayReleaseArtifact, GatewayReleaseArtifactKind, GatewayReleaseMaterializer,
+    PostgresGatewayEdgeAuthority, PostgresGatewayReleaseResolver,
+};
 use git_http::{
     CompositeGitAuthenticator, GitAuthenticator, GitHttpLimits, GitHttpService,
     OidcGitAuthenticator, PostgresGitAuthorizer, RuntimeGitHttpAuthenticator,
@@ -96,10 +99,13 @@ use run_domain::{CancelRun, Run, RunKind};
 use run_orchestrator::{
     CompositeRunCompletionObserver, NatsCommandHandler, PreparedRunAuthority, RunAuthorityError,
     RunAuthorityManager, RunCompletionError, RunCompletionObserver, RunOrchestrator, RunRepository,
-    RunSecretManager, VmSpecFactory, ensure_jetstream_topology,
+    RunRuntimeArtifact, RunRuntimeArtifactKind, RunSecretManager, VmSpecFactory,
+    ensure_jetstream_topology,
 };
 use run_postgres::PgRunRepository;
-use run_runtime_local::{LocalRunRuntimeConfig, LocalRunRuntimeManager};
+use run_runtime_local::{
+    LocalGatewayReleaseRuntime, LocalRunRuntimeConfig, LocalRunRuntimeManager,
+};
 use runtime_authority::{
     GatewayRuntimeAuthorityIssuer, RuntimeHandoffStore, RuntimeSessionIssuer,
     RuntimeSessionRepository,
@@ -144,7 +150,7 @@ use workspace_local::{LocalWorkspaceConfig, LocalWorkspaceManager};
 use workspace_postgres::PgWorkspaceMetadataRepository;
 
 /// Ordered database migration expected by this application version.
-pub const EXPECTED_DATABASE_MIGRATION: i64 = 40;
+pub const EXPECTED_DATABASE_MIGRATION: i64 = 46;
 
 /// OIDC issuer configuration used for bearer-token authentication.
 pub struct OidcConfig {
@@ -573,6 +579,46 @@ impl GatewayRuntimeLauncher for ProviderGatewayRuntimeLauncher {
         self.provider
             .provision(spec)
             .await
+            .map_err(|_| gateway_edge::GatewayEdgeError::HandlerUnavailable)
+    }
+}
+
+/// Composition adapter that gives gateway `PostgreSQL` authority the same
+/// verified local release-artifact lifecycle used by ordinary runs.
+#[derive(Clone)]
+struct LocalGatewayReleaseMaterializer {
+    runtime: LocalGatewayReleaseRuntime,
+}
+
+impl GatewayReleaseMaterializer for LocalGatewayReleaseMaterializer {
+    fn prepare(
+        &self,
+        invocation_id: Uuid,
+        artifacts: &[GatewayReleaseArtifact],
+    ) -> Result<VmMount, gateway_edge::GatewayEdgeError> {
+        let artifacts = artifacts
+            .iter()
+            .map(|artifact| RunRuntimeArtifact {
+                path: artifact.path.clone(),
+                kind: match artifact.kind {
+                    GatewayReleaseArtifactKind::Executable => RunRuntimeArtifactKind::Executable,
+                    GatewayReleaseArtifactKind::File => RunRuntimeArtifactKind::File,
+                    GatewayReleaseArtifactKind::Manifest => RunRuntimeArtifactKind::Manifest,
+                },
+                mode: artifact.mode,
+                content_hash: artifact.content_hash,
+                size_bytes: artifact.size_bytes,
+                storage_key: artifact.storage_key,
+            })
+            .collect::<Vec<_>>();
+        self.runtime
+            .prepare(invocation_id, &artifacts)
+            .map_err(|_| gateway_edge::GatewayEdgeError::HandlerUnavailable)
+    }
+
+    fn destroy(&self, invocation_id: Uuid) -> Result<(), gateway_edge::GatewayEdgeError> {
+        self.runtime
+            .destroy(invocation_id)
             .map_err(|_| gateway_edge::GatewayEdgeError::HandlerUnavailable)
     }
 }
@@ -1027,6 +1073,9 @@ impl HephaestusApp {
             LocalRunRuntimeManager::initialize(run_repository.clone(), config.run_runtime)
                 .map_err(component("run runtime initialization"))?,
         );
+        let gateway_release_runtime = LocalGatewayReleaseMaterializer {
+            runtime: run_runtime.gateway_release_runtime(),
+        };
         let gateway_edge_config = config.gateway_edge.take();
         let gateway_secret_keys = config.secret_keys.clone();
         let gateway_handoff_root = config.runtime_authority_handoff_root.clone();
@@ -1093,7 +1142,8 @@ impl HephaestusApp {
                 pool.clone(),
                 gateway_root_images,
                 resolver_handoff,
-            );
+            )
+            .with_release_materializer(Arc::new(gateway_release_runtime));
             let runtime = GatewayRuntimeService::new(
                 releases,
                 ProviderGatewayRuntimeLauncher {
@@ -1398,7 +1448,7 @@ impl HephaestusApp {
                 .map_err(component("gateway private dispatcher listener"))?;
             let desired = gateway
                 .authority
-                .desired_configuration(GatewayConfigRevision::new())
+                .desired_configuration()
                 .await
                 .map_err(component("gateway desired configuration"))?;
             gateway
@@ -1443,6 +1493,20 @@ impl HephaestusApp {
 
         let cancellation = CancellationToken::new();
         let mut tasks = Vec::with_capacity(8);
+        if let Some(gateway) = &self.gateway_edge {
+            let gateway_reconcile_cancel = cancellation.clone();
+            let gateway_authority = gateway.authority.clone();
+            let gateway_provider = Arc::clone(&gateway.provider);
+            tasks.push(tokio::spawn(async move {
+                gateway_reconciliation_loop(
+                    gateway_authority,
+                    gateway_provider,
+                    gateway_reconcile_cancel,
+                )
+                .await;
+                Ok(())
+            }));
+        }
         let (broker_ready_tx, broker_ready_rx) = oneshot::channel();
         let broker_cancel = cancellation.clone();
         tasks.push(tokio::spawn(async move {
@@ -1819,6 +1883,61 @@ fn gateway_http_response(
     response
 }
 
+const GATEWAY_RECONCILIATION_INTERVAL: Duration = Duration::from_secs(1);
+const GATEWAY_CADDY_RECOVERY_INTERVAL: Duration = Duration::from_secs(30);
+
+/// Reconstructs Caddy exclusively from authoritative route records. Ordinary
+/// passes apply revision cutovers promptly; a bounded forced pass repairs a
+/// Caddy process which restarted after this daemon observed the same revision.
+async fn gateway_reconciliation_loop(
+    authority: PostgresGatewayEdgeAuthority,
+    provider: Arc<dyn GatewayProvider>,
+    cancellation: CancellationToken,
+) {
+    let mut reconcile = tokio::time::interval(GATEWAY_RECONCILIATION_INTERVAL);
+    reconcile.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // Avoid an immediate duplicate of the startup reconciliation while still
+    // making a daemon-owned Caddy restart recover without operator action.
+    let mut recovery = tokio::time::interval_at(
+        tokio::time::Instant::now() + GATEWAY_CADDY_RECOVERY_INTERVAL,
+        GATEWAY_CADDY_RECOVERY_INTERVAL,
+    );
+    recovery.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tokio::select! {
+            () = cancellation.cancelled() => return,
+            _ = reconcile.tick() => {
+                reconcile_gateway_once(&authority, provider.as_ref(), false).await;
+            }
+            _ = recovery.tick() => {
+                reconcile_gateway_once(&authority, provider.as_ref(), true).await;
+            }
+        }
+    }
+}
+
+async fn reconcile_gateway_once(
+    authority: &PostgresGatewayEdgeAuthority,
+    provider: &dyn GatewayProvider,
+    recover: bool,
+) {
+    let desired = match authority.desired_configuration().await {
+        Ok(desired) => desired,
+        Err(error) => {
+            tracing::warn!(%error, "gateway desired-route reconstruction failed");
+            return;
+        }
+    };
+    let result = if recover {
+        provider.recover(&desired).await
+    } else {
+        provider.reconcile(&desired).await
+    };
+    if let Err(error) = result {
+        tracing::warn!(%error, recovery = recover, "gateway Caddy reconciliation failed");
+    }
+}
+
 async fn reap_failed_start(tasks: Vec<JoinHandle<Result<(), String>>>) {
     for task in tasks {
         task.abort();
@@ -1980,6 +2099,10 @@ async fn mailbox_recovery_loop(
     ready: oneshot::Sender<()>,
 ) -> Result<(), String> {
     store.recover().await.map_err(|error| error.to_string())?;
+    store
+        .cleanup_expired_payloads(100)
+        .await
+        .map_err(|error| error.to_string())?;
     if ready.send(()).is_err() {
         return Ok(());
     }
@@ -1989,6 +2112,9 @@ async fn mailbox_recovery_loop(
             () = tokio::time::sleep(poll_interval) => {
                 if let Err(error) = store.recover().await {
                     tracing::warn!(%error, "mailbox recovery pass failed");
+                }
+                if let Err(error) = store.cleanup_expired_payloads(100).await {
+                    tracing::warn!(%error, "mailbox payload retention pass failed");
                 }
             }
         }

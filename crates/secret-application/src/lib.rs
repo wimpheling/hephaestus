@@ -133,6 +133,25 @@ pub struct BindSecret {
     pub destinations: Vec<String>,
 }
 
+/// Declares the immutable outbound HTTPS substitution rule for one already
+/// bound brokered slot. This contains authority metadata only, never a secret
+/// value or guest credential.
+#[derive(Debug, Clone)]
+pub struct DeclareBrokeredHttpsRule {
+    /// Deterministic idempotency identity.
+    pub command_key: SecretCommandKey,
+    /// Stable immutable rule identity.
+    pub rule_id: uuid::Uuid,
+    /// Existing active brokered binding.
+    pub binding_id: AgentSecretBindingId,
+    /// Exact HTTPS origin.
+    pub destination: String,
+    /// Exact outbound header name.
+    pub header: String,
+    /// Optional fixed prefix; absent means complete-value substitution.
+    pub header_prefix: Option<String>,
+}
+
 /// Resolves one exact runnable instance revision immediately before dispatch.
 #[derive(Debug, Clone)]
 pub struct ResolveRunSecrets {

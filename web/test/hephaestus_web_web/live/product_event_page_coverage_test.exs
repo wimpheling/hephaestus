@@ -8,6 +8,8 @@ defmodule HephaestusWebWeb.ProductEventPageCoverageTest do
     AgentInstanceState,
     OrganizationState,
     OrganizationWorkspaceState,
+    ProjectGatewayState,
+    ProjectGatewaysState,
     ProjectRunsState,
     ProjectState,
     ReleaseState,
@@ -19,6 +21,8 @@ defmodule HephaestusWebWeb.ProductEventPageCoverageTest do
     {OrganizationWorkspaceState, [:organization_changed, :project_changed, :repository_changed]},
     {ProjectState, [:project_changed, :repository_changed]},
     {ProjectRunsState, [:project_changed, :run_changed]},
+    {ProjectGatewaysState, [:gateway_changed]},
+    {ProjectGatewayState, [:gateway_changed]},
     {ReleaseState, [:repository_changed, :build_changed, :release_changed, :artifact_changed]},
     {AgentInstanceState,
      [
@@ -98,6 +102,10 @@ defmodule HephaestusWebWeb.ProductEventPageCoverageTest do
 
   defp new_state(ProjectState), do: ProjectState.new(%{project_id: "project-1"})
   defp new_state(ProjectRunsState), do: ProjectRunsState.new(%{project_id: "project-1"})
+  defp new_state(ProjectGatewaysState), do: ProjectGatewaysState.new(%{project_id: "project-1"})
+
+  defp new_state(ProjectGatewayState),
+    do: ProjectGatewayState.new(%{project_id: "project-1", gateway_id: "gateway-1"})
 
   defp new_state(ReleaseState), do: ReleaseState.new("release-1")
   defp new_state(AgentInstanceState), do: AgentInstanceState.new("instance-1")

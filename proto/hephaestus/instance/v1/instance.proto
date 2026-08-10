@@ -99,6 +99,16 @@ service AgentInstanceService {
     option (hephaestus.options.v1.max_request_bytes) = 65536;
     option (hephaestus.options.v1.max_response_bytes) = 8192;
   }
+  rpc DeclareBrokeredHttpsRule(DeclareBrokeredHttpsRuleRequest) returns (DeclareBrokeredHttpsRuleResponse) {
+    option (hephaestus.options.v1.authorization) = {
+      permission: "instance_secret.bind"
+      audience: "/hephaestus.instance.v1.AgentInstanceService/DeclareBrokeredHttpsRule"
+      actor_source: ACTOR_SOURCE_MEDIATOR_JWT_METADATA
+    };
+    option (hephaestus.options.v1.operation_kind) = OPERATION_KIND_MUTATION;
+    option (hephaestus.options.v1.max_request_bytes) = 8192;
+    option (hephaestus.options.v1.max_response_bytes) = 4096;
+  }
   rpc ReviseCapabilities(ReviseCapabilitiesRequest) returns (ReviseCapabilitiesResponse) {
     option (hephaestus.options.v1.authorization) = {
       permission: "instance.revise_capabilities"
@@ -479,6 +489,19 @@ message BindSecretResponse {
   hephaestus.common.v1.OpaqueId instance_revision_id = 2;
   hephaestus.common.v1.MutationReceipt receipt = 3;
 }
+// Declares one exact outbound placeholder substitution rule after the opaque
+// import has been bound to an instance slot. It contains no secret material.
+message DeclareBrokeredHttpsRuleRequest {
+  hephaestus.common.v1.RequestContext context = 1;
+  hephaestus.common.v1.OpaqueId binding_id = 2;
+  string destination = 3;
+  string header = 4;
+  optional string header_prefix = 5;
+}
+message DeclareBrokeredHttpsRuleResponse {
+  hephaestus.common.v1.OpaqueId rule_id = 1;
+  hephaestus.common.v1.MutationReceipt receipt = 2;
+}
 message CapabilityBindingSelection {
   string slot_key = 1;
   string resource_kind = 2;
@@ -490,12 +513,14 @@ message ReviseCapabilitiesRequest {
   hephaestus.common.v1.OpaqueId instance_id = 2;
   hephaestus.common.v1.OpaqueId expected_revision_id = 3;
   repeated CapabilityBindingSelection bindings = 4;
+  hephaestus.common.v1.PageRequest page = 5;
 }
 message ReviseCapabilitiesResponse {
   hephaestus.common.v1.OpaqueId instance_revision_id = 1;
   bool runnable = 2;
   repeated hephaestus.common.v1.Diagnostic diagnostics = 3;
   hephaestus.common.v1.MutationReceipt receipt = 4;
+  hephaestus.common.v1.PageResponse page = 5;
 }
 message ControlMailboxRequest {
   hephaestus.common.v1.RequestContext context = 1;
@@ -508,4 +533,5 @@ message ControlMailboxResponse {
   // Whether this request changed the durable state. A false value is a safe,
   // non-disclosing no-op, not evidence that a particular event exists.
   bool changed = 1;
+  hephaestus.common.v1.MutationReceipt receipt = 2;
 }

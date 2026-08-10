@@ -27,6 +27,7 @@ release-domain = { path = "../release-domain" }
 runtime-authority = { path = "../runtime-authority" }
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 sqlx.workspace = true
 time.workspace = true
 tokio = { workspace = true, features = ["sync"] }

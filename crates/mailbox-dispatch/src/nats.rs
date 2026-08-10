@@ -157,6 +157,12 @@ pub trait MailboxDispatchStore: Send + Sync + 'static {
     async fn settle_run(&self, run: &Run) -> Result<(), MailboxDispatchStoreError>;
     /// Reconciles interrupted mailbox claims and outcome settlements.
     async fn recover(&self) -> Result<usize, MailboxDispatchStoreError>;
+    /// Purges expired opaque body bytes only after durable terminal delivery.
+    /// Immutable event and integrity provenance remain available afterwards.
+    async fn cleanup_expired_payloads(
+        &self,
+        limit: i64,
+    ) -> Result<usize, MailboxDispatchStoreError>;
 }
 
 /// Non-disclosing failure returned by the mailbox authoritative store.

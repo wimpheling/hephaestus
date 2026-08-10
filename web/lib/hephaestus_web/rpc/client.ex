@@ -21,6 +21,15 @@ defmodule HephaestusWeb.RPC.Client do
     ListImagesRequest
   }
 
+  alias Hephaestus.Gateway.V1.{
+    GatewayLifecycle,
+    GatewayService,
+    GetGatewayRequest,
+    ListGatewayIngressRequest,
+    ListProjectGatewaysRequest,
+    SetGatewayLifecycleRequest
+  }
+
   alias Hephaestus.Build.V1.{
     BuildService,
     GetBuildRequest,
@@ -346,6 +355,61 @@ defmodule HephaestusWeb.RPC.Client do
         project_id,
         &ProjectService.Stub.list_project_instances/3,
         :instances
+      )
+
+  @doc "Lists redacted gateway management metadata for one authorized project."
+  def list_project_gateways(identity, project_id),
+    do:
+      paged_by_id(
+        identity,
+        "/hephaestus.gateway.v1.GatewayService/ListProjectGateways",
+        ListProjectGatewaysRequest,
+        :project_id,
+        project_id,
+        &GatewayService.Stub.list_project_gateways/3,
+        :gateways
+      )
+
+  @doc "Loads one gateway with immutable revisions and declared route intents."
+  def get_gateway(identity, gateway_id) do
+    with {:ok, %{"gateway" => gateway, "revisions" => revisions}} <-
+           unary_projected(
+             identity,
+             "/hephaestus.gateway.v1.GatewayService/GetGateway",
+             %GetGatewayRequest{gateway_id: id(gateway_id)},
+             &GatewayService.Stub.get_gateway/3,
+             nil
+           ) do
+      {:ok, Map.put(gateway, "revisions", revisions)}
+    end
+  end
+
+  @doc "Lists value-free recent ingress outcomes for one authorized gateway."
+  def list_gateway_ingress(identity, gateway_id),
+    do:
+      paged_by_id(
+        identity,
+        "/hephaestus.gateway.v1.GatewayService/ListGatewayIngress",
+        ListGatewayIngressRequest,
+        :gateway_id,
+        gateway_id,
+        &GatewayService.Stub.list_gateway_ingress/3,
+        :ingress
+      )
+
+  @doc "Applies an authorized compare-and-swap gateway lifecycle transition."
+  def set_gateway_lifecycle(identity, gateway_id, expected, next),
+    do:
+      mutation(
+        identity,
+        "/hephaestus.gateway.v1.GatewayService/SetGatewayLifecycle",
+        SetGatewayLifecycleRequest,
+        [
+          gateway_id: id(gateway_id),
+          expected: gateway_lifecycle(expected),
+          next: gateway_lifecycle(next)
+        ],
+        &GatewayService.Stub.set_gateway_lifecycle/3
       )
 
   def list_importable_release_agents(identity, project_id),
@@ -887,7 +951,7 @@ defmodule HephaestusWeb.RPC.Client do
       identity,
       "/hephaestus.instance.v1.AgentInstanceService/ControlMailbox",
       ControlMailboxRequest,
-      if(event_id, do: [event_id: id(event_id) | attributes], else: attributes),
+      if(event_id, do: [{:event_id, id(event_id)} | attributes], else: attributes),
       &AgentInstanceService.Stub.control_mailbox/3
     )
   end
@@ -999,6 +1063,18 @@ defmodule HephaestusWeb.RPC.Client do
   defp git_operation("fetch"), do: GitOperation.value(:GIT_OPERATION_FETCH)
   defp git_operation("receive"), do: GitOperation.value(:GIT_OPERATION_RECEIVE)
   defp git_operation(_operation), do: nil
+
+  defp gateway_lifecycle("enabled"),
+    do: GatewayLifecycle.value(:GATEWAY_LIFECYCLE_ENABLED)
+
+  defp gateway_lifecycle("paused"),
+    do: GatewayLifecycle.value(:GATEWAY_LIFECYCLE_PAUSED)
+
+  defp gateway_lifecycle("removed"),
+    do: GatewayLifecycle.value(:GATEWAY_LIFECYCLE_REMOVED)
+
+  defp gateway_lifecycle(_value),
+    do: GatewayLifecycle.value(:GATEWAY_LIFECYCLE_UNSPECIFIED)
 
   defp paged_by_id(identity, audience, request_module, id_field, value, stub_call, field) do
     paginate(

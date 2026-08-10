@@ -43,6 +43,7 @@ defmodule Hephaestus.Event.V1.AggregateType do
   field(:AGGREGATE_TYPE_ARTIFACT, 15)
   field(:AGGREGATE_TYPE_IDENTITY_PROFILE, 16)
   field(:AGGREGATE_TYPE_REGISTRY_PUBLICATION, 17)
+  field(:AGGREGATE_TYPE_GATEWAY, 18)
 end
 
 defmodule Hephaestus.Event.V1.ChangeKind do
@@ -332,6 +333,18 @@ defmodule Hephaestus.Event.V1.RegistryPublicationChanged do
   field(:state, 2, type: Hephaestus.Event.V1.LifecycleState, enum: true)
 end
 
+defmodule Hephaestus.Event.V1.GatewayChanged do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.event.v1.GatewayChanged",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:change, 1, type: Hephaestus.Event.V1.ChangeKind, enum: true)
+  field(:state, 2, type: Hephaestus.Event.V1.LifecycleState, enum: true)
+end
+
 defmodule Hephaestus.Event.V1.ProductEvent do
   @moduledoc false
 
@@ -453,6 +466,12 @@ defmodule Hephaestus.Event.V1.ProductEvent do
   field(:registry_publication_changed, 36,
     type: Hephaestus.Event.V1.RegistryPublicationChanged,
     json_name: "registryPublicationChanged",
+    oneof: 0
+  )
+
+  field(:gateway_changed, 37,
+    type: Hephaestus.Event.V1.GatewayChanged,
+    json_name: "gatewayChanged",
     oneof: 0
   )
 end

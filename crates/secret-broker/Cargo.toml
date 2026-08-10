@@ -9,8 +9,14 @@ rust-version.workspace = true
 layer = "adapter"
 context = "secret"
 
+[features]
+# Enables narrowly-scoped loopback TLS wiring for downstream integration
+# tests. Production callers cannot opt into private-address pins.
+test-fixtures = []
+
 [dependencies]
 async-trait.workspace = true
+brokered-egress-client = { path = "../brokered-egress-client" }
 brokered-egress-domain = { path = "../brokered-egress-domain" }
 runtime-types = { path = "../runtime-types" }
 secret-domain = { path = "../secret-domain" }
@@ -26,8 +32,12 @@ tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+rcgen = "0.13.2"
+rustls = "0.23"
+rustls-pemfile = "2"
 tempfile = "3"
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tokio-rustls = "0.26"
 
 [lints]
 workspace = true

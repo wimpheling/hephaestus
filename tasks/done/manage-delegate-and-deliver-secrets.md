@@ -312,7 +312,7 @@ audit, retention, and organization/project/repository settings.
   - [x] **Construct the mount**
     - [x] Materialize raw values only after VM resources are ready into a
       per-run host-controlled ephemeral secret filesystem.
-    - [x] Mount it read-only at `/run/hephaestus/secrets` with one stable
+    - [x] Mount it read-only at `/run/hephaestus-secrets` with one stable
       slot-derived filename, restrictive mode and ownership, and no
       user-controlled host paths.
     - [x] Exclude the mount from source, release, work, result, state, snapshot,

@@ -5,8 +5,11 @@ defmodule HephaestusWebWeb.ProjectRunsLive do
   alias HephaestusWebWeb.PageStream
   alias HephaestusWebWeb.ProjectRunsState
 
+  @stream_mode :none
+
   @impl true
   def mount(%{"project_id" => project_id}, _session, socket) do
+    _stream_mode = @stream_mode
     state = ProjectRunsState.new(%{project_id: project_id})
 
     socket =

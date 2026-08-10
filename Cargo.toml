@@ -28,7 +28,10 @@ http = "1"
 hmac = "0.12"
 jsonwebtoken = "9"
 proptest = "1"
-reqwest = { version = "0.12", default-features = false, features = ["json"] }
+# HTTPS broker transports must have a certificate-verifying TLS backend.  Keep
+# the platform's native trust-store integration explicit instead of relying on
+# reqwest defaults.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots"] }
 libloading = "0.8"
 libc = "0.2"
 rustix = { version = "1", features = ["fs", "process"] }

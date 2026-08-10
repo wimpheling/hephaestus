@@ -99,238 +99,238 @@ transport and Git HTTP enforcement are implemented by MVP 01.1.
 
 ## Implementation checklist
 
-- [ ] **1. Define capability requirements**
-  - [ ] **Add provider-neutral domain types**
-    - [ ] Add validated capability slot keys, resource kinds, semantic
+- [x] **1. Define capability requirements**
+  - [x] **Add provider-neutral domain types**
+    - [x] Add validated capability slot keys, resource kinds, semantic
       operations, requirement IDs, binding IDs, authorization-snapshot IDs,
       runtime-session IDs, including gateway invocation sessions.
-    - [ ] Represent required and optional operations separately and validate
+    - [x] Represent required and optional operations separately and validate
       that each operation is legal for its resource kind.
-    - [ ] Define deterministic normalized forms, hashes, and idempotency keys
+    - [x] Define deterministic normalized forms, hashes, and idempotency keys
       for requirements, bindings, snapshots, sessions, and revocations.
-    - [ ] Add tests for parsing, bounds, normalization, serialization,
+    - [x] Add tests for parsing, bounds, normalization, serialization,
       duplicate rejection, illegal resource-operation pairs, and deterministic
       identity.
-  - [ ] **Extend release configuration**
-    - [ ] Add capability declarations with a stable slot key, human-readable
+  - [x] **Extend release configuration**
+    - [x] Add capability declarations with a stable slot key, human-readable
       purpose, compatible resource kind, required operations, optional
       operations, and required/optional slot state.
-    - [ ] Reject tenant resource IDs, resource names, permission grants, and
+    - [x] Reject tenant resource IDs, resource names, permission grants, and
       bearer material in release source configuration.
-    - [ ] Bind normalized declarations and their hash into the immutable
+    - [x] Bind normalized declarations and their hash into the immutable
       release agent and release provenance.
-    - [ ] Preserve valid releases that declare no capability slots.
-    - [ ] Add parser and release-domain tests for valid declarations,
+    - [x] Preserve valid releases that declare no capability slots.
+    - [x] Add parser and release-domain tests for valid declarations,
       unsupported versions, malformed operations, duplicate slots, normalized
       hashes, and immutable publication.
-  - [ ] **Define repository capability requirements**
-    - [ ] Define repository operations and normalized ref/path glob grammar,
+  - [x] **Define repository capability requirements**
+    - [x] Define repository operations and normalized ref/path glob grammar,
       including explicit create, update, force-update, delete, and tag rules.
-    - [ ] Require a release to declare each named repository slot and its
+    - [x] Require a release to declare each named repository slot and its
       maximum operation/ref/path ceiling; reject resource names, remote URLs,
       token values, and tenant identifiers in release source.
-    - [ ] Specify receive-time changed-path semantics for additions, deletions,
+    - [x] Specify receive-time changed-path semantics for additions, deletions,
       renames, merges, and new refs, including byte/object limits and
       deny-by-default behavior for ambiguous history.
-    - [ ] State and test that raw Git read policy is repository/ref scoped;
+    - [x] State and test that raw Git read policy is repository/ref scoped;
       path-restricted reads are a later filtered-content capability.
 
-- [ ] **2. Bind instance permissions**
-  - [ ] **Persist immutable revision bindings**
-    - [ ] Add capability requirement and immutable instance-revision binding
+- [x] **2. Bind instance permissions**
+  - [x] **Persist immutable revision bindings**
+    - [x] Add capability requirement and immutable instance-revision binding
       records with exact resource type, resource ID, granted operation set,
       creator, authorization-model version, and creation time.
-    - [ ] Enforce complete foreign keys or equivalent typed integrity for every
+    - [x] Enforce complete foreign keys or equivalent typed integrity for every
       supported resource kind.
-    - [ ] Prevent cross-project bindings unless the resource kind has an
+    - [x] Prevent cross-project bindings unless the resource kind has an
       explicit authorized sharing contract.
-    - [ ] Reject undeclared slots, incompatible resources, missing required
+    - [x] Reject undeclared slots, incompatible resources, missing required
       operations, undeclared optional operations, duplicates, and stale
       revision updates.
-    - [ ] Mark a candidate revision visibly unrunnable when a required binding
+    - [x] Mark a candidate revision visibly unrunnable when a required binding
       is missing, revoked, unavailable, or invalid under current platform
       policy.
-    - [ ] Make every binding or permission change create a new immutable
+    - [x] Make every binding or permission change create a new immutable
       revision and preserve all historical bindings referenced by runs.
-  - [ ] **Authorize grants**
-    - [ ] Define the exact user permission required to grant each semantic
+  - [x] **Authorize grants**
+    - [x] Define the exact user permission required to grant each semantic
       operation on each supported resource kind.
-    - [ ] Check resource selection, grant authority, tenant scope, release
+    - [x] Check resource selection, grant authority, tenant scope, release
       requirement, operation ceiling, and platform policy in one transaction.
-    - [ ] Require independent authorization for every resource in a
+    - [x] Require independent authorization for every resource in a
       multi-binding instance revision.
-    - [ ] Ensure permission to create, configure, or execute an instance does
+    - [x] Ensure permission to create, configure, or execute an instance does
       not implicitly authorize resource grants.
-    - [ ] Add real-PostgreSQL tests for valid grants, partial authority,
+    - [x] Add real-PostgreSQL tests for valid grants, partial authority,
       cross-project denial, operation broadening, concurrent revisions,
       revocation, and historical retention.
 
-- [ ] **3. Make agent instances authorization subjects**
-  - [ ] **Extend the canonical authorization model**
-    - [ ] Add explicit agent-instance and gateway relations for every supported resource
+- [x] **3. Make agent instances authorization subjects**
+  - [x] **Extend the canonical authorization model**
+    - [x] Add explicit agent-instance and gateway relations for every supported resource
       and semantic operation.
-    - [ ] Define separate user permissions for inspecting a resource, using
+    - [x] Define separate user permissions for inspecting a resource, using
       it, and granting an agent access to it.
-    - [ ] Ensure organization or project membership grants no ambient
+    - [x] Ensure organization or project membership grants no ambient
       agent-instance authority.
-    - [ ] Define authoritative domain records that produce every new
+    - [x] Define authoritative domain records that produce every new
       `melange_tuple`.
-    - [ ] Regenerate and commit specialized Mélange SQL with the
+    - [x] Regenerate and commit specialized Mélange SQL with the
       repository-pinned CLI.
-    - [ ] Extend OpenFGA/Mélange compatibility fixtures and unknown-object
+    - [x] Extend OpenFGA/Mélange compatibility fixtures and unknown-object
       deny-by-default tests.
-  - [ ] **Apply PostgreSQL RLS**
-    - [ ] Add forced RLS policies for capability requirements, bindings,
+  - [x] **Apply PostgreSQL RLS**
+    - [x] Add forced RLS policies for capability requirements, bindings,
       snapshots, runtime sessions, and capability audit records.
-    - [ ] Generalize transaction-local context to carry the effective agent
+    - [x] Generalize transaction-local context to carry the effective agent
       instance or gateway, exact run or HTTP invocation, runtime session, and
       request ID.
-    - [ ] Keep agent-facing transactions on a non-`BYPASSRLS` role and prevent
+    - [x] Keep agent-facing transactions on a non-`BYPASSRLS` role and prevent
       callers from selecting a trusted worker identity.
-    - [ ] Add real-PostgreSQL tests for user, agent-instance, exact-run, and
+    - [x] Add real-PostgreSQL tests for user, agent-instance, exact-run, and
       trusted-worker flows, including forged and incomplete context.
 
-- [ ] **4. Snapshot authority and issue runtime sessions**
-  - [ ] **Resolve authority at dispatch**
-    - [ ] Reauthorize the exact instance, active revision, run, attachment,
+- [x] **4. Snapshot authority and issue runtime sessions**
+  - [x] **Resolve authority at dispatch**
+    - [x] Reauthorize the exact instance, active revision, run, attachment,
       release use, capability bindings, secret bindings, selected resources,
       and lifecycle state immediately before dispatch.
-    - [ ] Persist one immutable authorization snapshot containing the exact
+    - [x] Persist one immutable authorization snapshot containing the exact
       revision binding IDs, granted operations, resource IDs, secret lease
       identities, authorization-model version, and deterministic snapshot
       hash.
-    - [ ] Create one runtime session bound to the exact workload, revision,
+    - [x] Create one runtime session bound to the exact workload, revision,
       run or HTTP invocation, optional attachment, snapshot, issue time,
       expiry, and lifecycle state.
-    - [ ] Mint one fresh opaque credential, store only its hash, and deliver
+    - [x] Mint one fresh opaque credential, store only its hash, and deliver
       bearer material only through the runtime bootstrap channel.
-    - [ ] Create a stable issuance generation and a temporary encrypted,
+    - [x] Create a stable issuance generation and a temporary encrypted,
       host-only handoff envelope before bootstrap delivery. PostgreSQL retains
       only the credential hash; the envelope is readable only by trusted host
       bootstrap code and expires with the session.
-    - [ ] Require the guest to acknowledge the exact issuance generation before
+    - [x] Require the guest to acknowledge the exact issuance generation before
       deleting the envelope. On dispatch retry or redelivery, re-deliver the
       same credential and make duplicate guest acknowledgement idempotent.
-    - [ ] On acknowledgement timeout or unrecoverable bootstrap failure, revoke
+    - [x] On acknowledgement timeout or unrecoverable bootstrap failure, revoke
       the session, terminate the guest, and delete the envelope. Minting a new
       credential requires a new session after the old session is revoked.
-    - [ ] Add failure-injection tests before and after credential generation,
+    - [x] Add failure-injection tests before and after credential generation,
       hash/session commit, envelope persistence, bootstrap delivery, guest
       acknowledgement, envelope deletion, and guest start. Prove retry neither
       loses the credential nor creates conflicting active credentials.
-    - [ ] Deny dispatch with stable diagnostics when any required binding is
+    - [x] Deny dispatch with stable diagnostics when any required binding is
       missing, revoked, unauthorized, or incompatible.
-  - [ ] **Attach runtime leases**
-    - [ ] Associate exact secret leases and future capability-specific leases
+  - [x] **Attach runtime leases**
+    - [x] Associate exact secret leases and future capability-specific leases
       with the same runtime session and authorization snapshot.
-    - [ ] Preserve the distinct raw-secret and brokered-secret permissions and
+    - [x] Preserve the distinct raw-secret and brokered-secret permissions and
       delivery behavior.
-    - [ ] Bind brokered HTTPS slots to exact placeholder, destination, injection,
+    - [x] Bind brokered HTTPS slots to exact placeholder, destination, injection,
       and optional gateway-route rules. Record their versions, leases, runtime
       revisions, rotation, and revocation without placing their values in
       durable records, queues, logs, or guest bootstrap material.
-    - [ ] Define session expiry, revocation, cancellation, terminal cleanup,
+    - [x] Define session expiry, revocation, cancellation, terminal cleanup,
       and crash reconciliation.
-    - [ ] Add dispatch tests for mixed ordinary and secret capabilities,
+    - [x] Add dispatch tests for mixed ordinary and secret capabilities,
       rotation, revocation, concurrent dispatch, retries, and stale revisions.
 
-- [ ] **5. Authorize privileged runtime calls**
-  - [ ] **Authenticate and attenuate each request**
-    - [ ] Authenticate the opaque credential and match its exact runtime
+- [x] **5. Authorize privileged runtime calls**
+  - [x] **Authenticate and attenuate each request**
+    - [x] Authenticate the opaque credential and match its exact runtime
       session, run, instance, revision, expiry, and active lifecycle.
-    - [ ] Resolve the requested semantic operation and exact resource to one
+    - [x] Resolve the requested semantic operation and exact resource to one
       binding in the immutable snapshot.
-    - [ ] Reject any request outside the snapshot ceiling before invoking
+    - [x] Reject any request outside the snapshot ceiling before invoking
       application or database services.
-    - [ ] Check current OpenFGA/Mélange permission for the agent instance and
+    - [x] Check current OpenFGA/Mélange permission for the agent instance and
       resource inside the RLS-constrained transaction.
-    - [ ] Recheck capability-specific live state such as binding revocation,
+    - [x] Recheck capability-specific live state such as binding revocation,
       attachment status, release use, secret lease, or resource lifecycle.
-    - [ ] Add tests for credential theft across runs, instances, revisions,
+    - [x] Add tests for credential theft across runs, instances, revisions,
       resources, operations, attachments, expiry, and revoked bindings.
-  - [ ] **Handle revocation honestly**
-    - [ ] Deny new API and broker calls immediately after live authorization
+  - [x] **Handle revocation honestly**
+    - [x] Deny new API and broker calls immediately after live authorization
       or a bound resource is revoked.
-    - [ ] Request cancellation when revoked authority has already materialized
+    - [x] Request cancellation when revoked authority has already materialized
       a sensitive guest resource that cannot be withdrawn through an API
       check.
-    - [ ] Record when a read-only mount or raw secret may already have been
+    - [x] Record when a read-only mount or raw secret may already have been
       observed and cannot be retroactively revoked.
-    - [ ] Prevent session renewal, retry, or worker recovery from broadening
+    - [x] Prevent session renewal, retry, or worker recovery from broadening
       the immutable snapshot.
-    - [ ] Add race tests before dispatch, after session creation, during guest
+    - [x] Add race tests before dispatch, after session creation, during guest
       provisioning, during a privileged call, and after revocation.
-  - [ ] **Specialize runtime authority for Git**
-    - [ ] Define the authenticated runtime-Git principal as the exact runtime
+  - [x] **Specialize runtime authority for Git**
+    - [x] Define the authenticated runtime-Git principal as the exact runtime
       session, never as a human user or a reusable agent-wide identity.
-    - [ ] Require every Git request to recheck credential validity, exact run,
+    - [x] Require every Git request to recheck credential validity, exact run,
       binding, operation, repository, ref/path constraints, expiry, current
       authorization, and resource lifecycle.
-    - [ ] Delegate Git credential format, Git HTTP authentication, ref
+    - [x] Delegate Git credential format, Git HTTP authentication, ref
       advertisement, receive enforcement, and runtime worktree delivery to
       MVP 01.1 without weakening this task's immutable binding ceiling.
 
-- [ ] **6. Add the instance permission UI**
-  - [ ] **Review requirements during instance creation**
-    - [ ] Present ordinary parameters, private state, secret slots, and
+- [x] **6. Add the instance permission UI**
+  - [x] **Review requirements during instance creation**
+    - [x] Present ordinary parameters, private state, secret slots, and
       capability slots in one release requirements flow.
-    - [ ] For each capability slot, show its purpose, resource kind, required
+    - [x] For each capability slot, show its purpose, resource kind, required
       operations, optional operations, and whether the slot is required.
-    - [ ] List only exact resources the current user may both select and grant
+    - [x] List only exact resources the current user may both select and grant
       with the requested operation set.
-    - [ ] Require explicit resource selection and permission confirmation for
+    - [x] Require explicit resource selection and permission confirmation for
       every required capability.
-    - [ ] Show why the instance is unrunnable when a required resource or
+    - [x] Show why the instance is unrunnable when a required resource or
       permission is unavailable.
-  - [ ] **Manage revisions and permission changes**
-    - [ ] Show active revision bindings as resource, operation set, grantor,
+  - [x] **Manage revisions and permission changes**
+    - [x] Show active revision bindings as resource, operation set, grantor,
       live status, and last-use metadata without exposing secrets.
-    - [ ] Create a new revision for resource replacement, optional-operation
+    - [x] Create a new revision for resource replacement, optional-operation
       changes, or binding removal.
-    - [ ] Show a permission diff for release updates and require explicit
+    - [x] Show a permission diff for release updates and require explicit
       approval for every newly required resource or operation.
-    - [ ] Distinguish release-required operations, optional grantable
+    - [x] Distinguish release-required operations, optional grantable
       operations, current grants, and live revocations.
-    - [ ] Add LiveView and browser tests for complete configuration, partial
+    - [x] Add LiveView and browser tests for complete configuration, partial
       grant authority, denied resources, optional permissions, invalid
       revisions, update diffs, revocation, and authorization-safe live refresh.
 
-- [ ] **7. Audit, inspect, and observe**
-  - [ ] **Record complete authority provenance**
-    - [ ] Record requester, grantor, agent instance, revision, run, runtime
+- [x] **7. Audit, inspect, and observe**
+  - [x] **Record complete authority provenance**
+    - [x] Record requester, grantor, agent instance, revision, run, runtime
       session, authorization snapshot, binding, permission, resource,
       authorization-model version, request ID, decision, and outcome.
-    - [ ] Keep bearer credentials, secret values, sensitive parameters, request
+    - [x] Keep bearer credentials, secret values, sensitive parameters, request
       bodies, and provider authorization material out of audit and telemetry.
-    - [ ] Add read-only inspection for an instance's declared requirements,
+    - [x] Add read-only inspection for an instance's declared requirements,
       bound resources, granted operations, live status, snapshot ceiling,
       runtime sessions, denials, and revocation effects.
-    - [ ] Reauthorize live subscriptions before publishing permission,
+    - [x] Reauthorize live subscriptions before publishing permission,
       session, audit, or denial updates.
-    - [ ] Measure session issuance, expiry, revocation latency, capability
+    - [x] Measure session issuance, expiry, revocation latency, capability
       calls, ceiling denials, live-authorization denials, and invalid revisions
       using bounded opaque labels.
 
-- [ ] **8. Verify and document**
-  - [ ] Document the release declaration, instance binding, user grant,
+- [x] **8. Verify and document**
+  - [x] Document the release declaration, instance binding, user grant,
     revision, snapshot, runtime session, live check, revocation, and audit
     lifecycle.
-  - [ ] Document the supported resource-operation matrix and the exact user
+  - [x] Document the supported resource-operation matrix and the exact user
     authority required to grant each operation.
-  - [ ] Document the instance creation and permission-update UI.
-  - [ ] Run `cargo fmt --all -- --check`.
-  - [ ] Run `cargo clippy --workspace --all-targets --all-features`.
-  - [ ] Run `cargo test --workspace --all-features`.
-  - [ ] Run `cargo doc --workspace --all-features --no-deps`.
-  - [ ] Run the real-PostgreSQL authorization, capability, revision,
+  - [x] Document the instance creation and permission-update UI.
+  - [x] Run `cargo fmt --all -- --check`.
+  - [x] Run `cargo clippy --workspace --all-targets --all-features`.
+  - [x] Run `cargo test --workspace --all-features`.
+  - [x] Run `cargo doc --workspace --all-features --no-deps`.
+  - [x] Run the real-PostgreSQL authorization, capability, revision,
     dispatch, runtime-session, revocation, and RLS suites.
-  - [ ] Run Mélange generated-migration drift detection, `melange doctor`, and
+  - [x] Run Mélange generated-migration drift detection, `melange doctor`, and
     OpenFGA compatibility fixtures.
-  - [ ] Run `mix precommit` in `web/`.
-  - [ ] Run the capability configuration and permission-diff Playwright
+  - [x] Run `mix precommit` in `web/`.
+  - [x] Run the capability configuration and permission-diff Playwright
     scenarios.
-  - [ ] Run secret and runtime-credential sentinel scans.
-  - [ ] Run `git diff --check`.
+  - [x] Run secret and runtime-credential sentinel scans.
+  - [x] Run `git diff --check`.
 
 ## Completion evidence
 

@@ -127,6 +127,12 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.ProjectPage do
         destination: "/projects/#{project_id}/runs"
       },
       %{
+        key: :gateways,
+        label: "Gateways",
+        icon: "hero-globe-alt",
+        destination: "/projects/#{project_id}/gateways"
+      },
+      %{
         key: :settings,
         label: "Settings",
         icon: "hero-cog-6-tooth",

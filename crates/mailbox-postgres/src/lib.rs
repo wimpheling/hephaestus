@@ -878,9 +878,17 @@ impl MailboxDispatchStore for PostgresMailboxRepository {
             ));
         }
         let mut transaction = worker_transaction(&self.pool).await?;
+        // Keep the same delivery-then-attempt lock order as claiming and
+        // recovery. A cleanup observer can race the recovery sweep after a
+        // worker crash; locking the attempt first here previously inverted
+        // that order and let PostgreSQL detect a deadlock.
         let row = sqlx::query_as::<_, (Uuid, Uuid, i32)>(
-            "SELECT event_id, mailbox_id, attempt_number FROM mailbox_delivery_attempts
-             WHERE run_id = $1 FOR UPDATE",
+            "SELECT delivery.event_id, delivery.mailbox_id, attempt.attempt_number
+               FROM mailbox_deliveries AS delivery
+               JOIN mailbox_delivery_attempts AS attempt
+                 ON attempt.event_id = delivery.event_id
+              WHERE attempt.run_id = $1
+              FOR UPDATE OF delivery, attempt",
         )
         .bind(run.id.as_uuid())
         .fetch_optional(&mut *transaction)
@@ -891,6 +899,14 @@ impl MailboxDispatchStore for PostgresMailboxRepository {
             return Ok(());
         };
         let success = run.outcome == Some(RunOutcome::Succeeded);
+        // Live launch and runtime-authority checks happen immediately before
+        // provisioning. A failure there is a durable authorization decision,
+        // not a transient guest failure to retry. Keep one stable, redacted
+        // disposition so operators can distinguish it from application work.
+        let authorization_denied = run.failure.as_deref().is_some_and(|failure| {
+            failure.starts_with("run launch authorization failed:")
+                || failure.starts_with("run authority operation failed:")
+        });
         let terminal = !success && attempt_number >= 100;
         sqlx::query(
             "UPDATE mailbox_delivery_attempts SET state = $2, completed_at = now(),
@@ -903,13 +919,21 @@ impl MailboxDispatchStore for PostgresMailboxRepository {
         .execute(&mut *transaction)
         .await
         .map_err(dispatch_error)?;
-        if success || terminal {
+        if success || terminal || authorization_denied {
             sqlx::query(
-                "UPDATE mailbox_deliveries SET disposition = $2, terminal_at = now(), updated_at = now()
+                "UPDATE mailbox_deliveries SET disposition = $2, terminal_at = now(),
+                     denial_code = $3, updated_at = now()
                  WHERE event_id = $1 AND disposition IN ('leased', 'running')",
             )
             .bind(event_id)
-            .bind(if success { "delivered" } else { "dead_lettered" })
+            .bind(if success {
+                "delivered"
+            } else if authorization_denied {
+                "denied"
+            } else {
+                "dead_lettered"
+            })
+            .bind(authorization_denied.then_some("runtime_authorization_denied"))
             .execute(&mut *transaction)
             .await
             .map_err(dispatch_error)?;
@@ -942,14 +966,19 @@ impl MailboxDispatchStore for PostgresMailboxRepository {
         transaction.commit().await.map_err(dispatch_error)
     }
 
+    // Recovery deliberately keeps cleaned-outcome settlement, abandoned-claim
+    // classification, and retry-command creation in one transaction; splitting
+    // it would make a crash observable between those authoritative decisions.
+    #[allow(clippy::too_many_lines)]
     async fn recover(&self) -> Result<usize, MailboxDispatchStoreError> {
         let mut transaction = worker_transaction(&self.pool).await?;
         // A cleaned run has a durable outcome.  Reconcile it as that outcome
         // before considering a delivery abandoned; retrying a successfully
         // cleaned run would duplicate the application effect.
-        let completed = sqlx::query_as::<_, (Uuid, Uuid, i32, Uuid, Option<String>)>(
-            "SELECT delivery.event_id, delivery.mailbox_id, attempt.attempt_number,
-                    attempt.run_id, run.outcome
+        let completed =
+            sqlx::query_as::<_, (Uuid, Uuid, i32, Uuid, Option<String>, Option<String>)>(
+                "SELECT delivery.event_id, delivery.mailbox_id, attempt.attempt_number,
+                    attempt.run_id, run.outcome, run.failure
              FROM mailbox_deliveries AS delivery
              JOIN mailbox_delivery_attempts AS attempt
                ON attempt.event_id = delivery.event_id
@@ -958,12 +987,16 @@ impl MailboxDispatchStore for PostgresMailboxRepository {
              WHERE delivery.disposition IN ('leased', 'running')
                AND run.state = 'cleaned_up'
              FOR UPDATE OF delivery, attempt",
-        )
-        .fetch_all(&mut *transaction)
-        .await
-        .map_err(dispatch_error)?;
-        for (event_id, mailbox_id, attempt_number, run_id, outcome) in completed {
+            )
+            .fetch_all(&mut *transaction)
+            .await
+            .map_err(dispatch_error)?;
+        for (event_id, mailbox_id, attempt_number, run_id, outcome, failure) in completed {
             let success = outcome.as_deref() == Some("succeeded");
+            let authorization_denied = failure.as_deref().is_some_and(|failure| {
+                failure.starts_with("run launch authorization failed:")
+                    || failure.starts_with("run authority operation failed:")
+            });
             let terminal = !success && attempt_number >= 100;
             sqlx::query(
                 "UPDATE mailbox_delivery_attempts
@@ -981,13 +1014,21 @@ impl MailboxDispatchStore for PostgresMailboxRepository {
             .execute(&mut *transaction)
             .await
             .map_err(dispatch_error)?;
-            if success || terminal {
+            if success || terminal || authorization_denied {
                 sqlx::query(
-                    "UPDATE mailbox_deliveries SET disposition = $2, terminal_at = now(), updated_at = now()
+                    "UPDATE mailbox_deliveries SET disposition = $2, terminal_at = now(),
+                         denial_code = $3, updated_at = now()
                      WHERE event_id = $1 AND disposition IN ('leased', 'running')",
                 )
                 .bind(event_id)
-                .bind(if success { "delivered" } else { "dead_lettered" })
+                .bind(if success {
+                    "delivered"
+                } else if authorization_denied {
+                    "denied"
+                } else {
+                    "dead_lettered"
+                })
+                .bind(authorization_denied.then_some("runtime_authorization_denied"))
                 .execute(&mut *transaction)
                 .await
                 .map_err(dispatch_error)?;
@@ -1037,6 +1078,21 @@ impl MailboxDispatchStore for PostgresMailboxRepository {
         }
         transaction.commit().await.map_err(dispatch_error)?;
         Ok(rows.len())
+    }
+
+    async fn cleanup_expired_payloads(
+        &self,
+        limit: i64,
+    ) -> Result<usize, MailboxDispatchStoreError> {
+        let limit = i32::try_from(limit.clamp(1, 1_000)).map_err(dispatch_error)?;
+        let mut transaction = worker_transaction(&self.pool).await?;
+        let purged: i32 = sqlx::query_scalar("SELECT purge_expired_mailbox_payloads($1)")
+            .bind(limit)
+            .fetch_one(&mut *transaction)
+            .await
+            .map_err(dispatch_error)?;
+        transaction.commit().await.map_err(dispatch_error)?;
+        usize::try_from(purged).map_err(dispatch_error)
     }
 }
 

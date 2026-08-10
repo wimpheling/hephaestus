@@ -97,6 +97,11 @@ pub mod product_event {
                 >,
             >,
         ),
+        GatewayChanged(
+            ::buffa::alloc::boxed::Box<
+                super::super::super::super::__buffa::view::GatewayChangedView<'a>,
+            >,
+        ),
     }
 }
 pub mod watch_identity_response {

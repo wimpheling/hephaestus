@@ -156,32 +156,38 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.AgentInstancePage do
           event {short_id(delivery["event_id"])} · {delivery["disposition"]}
         </.text>
         <.frame :if={@instance["can_recover"]} variant={:resource_detail}>
-          <button
-            type="button"
-            phx-click={@control_event}
-            phx-value-mailbox_id={delivery["mailbox_id"]}
-            phx-value-event_id={delivery["event_id"]}
-            phx-value-action="retry"
-          >Retry</button>
-          <button
-            type="button"
-            phx-click={@control_event}
-            phx-value-mailbox_id={delivery["mailbox_id"]}
-            phx-value-event_id={delivery["event_id"]}
-            phx-value-action="cancel"
-          >Cancel</button>
-          <button
-            type="button"
-            phx-click={@control_event}
-            phx-value-mailbox_id={delivery["mailbox_id"]}
-            phx-value-event_id={delivery["event_id"]}
-            phx-value-action="dead_letter"
-          >Dead-letter</button>
+          <.action
+            interaction={:event}
+            event={@control_event}
+            event_payload={mailbox_payload(delivery, "retry")}
+            variant={:compact}
+          >
+            Retry
+          </.action>
+          <.action
+            interaction={:event}
+            event={@control_event}
+            event_payload={mailbox_payload(delivery, "cancel")}
+            variant={:compact}
+          >
+            Cancel
+          </.action>
+          <.action
+            interaction={:event}
+            event={@control_event}
+            event_payload={mailbox_payload(delivery, "dead_letter")}
+            variant={:danger_compact}
+          >
+            Dead-letter
+          </.action>
         </.frame>
       </.frame>
     </.resource_list>
     """
   end
+
+  defp mailbox_payload(delivery, action),
+    do: %{mailbox_id: delivery["mailbox_id"], event_id: delivery["event_id"], action: action}
 
   attr :instance, :map, required: true
 

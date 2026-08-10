@@ -27,7 +27,10 @@ use uuid::Uuid;
 use vm_trait::VmMount;
 
 /// Fixed guest path for raw secret files.
-pub const GUEST_SECRET_PATH: &str = "/run/hephaestus/secrets";
+// Runtime control data occupies the read-only `/run/hephaestus` mount. Keep
+// secrets as a sibling mount: libkrun cannot create a nested virtiofs target
+// beneath that sealed control filesystem.
+pub const GUEST_SECRET_PATH: &str = "/run/hephaestus-secrets";
 /// Guest-visible file containing only the short-lived opaque broker/runtime
 /// credential, never a secret value.
 pub const RUNTIME_CREDENTIAL_FILE: &str = ".runtime-credential";

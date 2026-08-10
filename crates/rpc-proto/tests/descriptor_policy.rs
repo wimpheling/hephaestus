@@ -26,6 +26,7 @@ fn reflection_inventory_contains_every_application_service_and_method() {
         "hephaestus.build.v1.BuildService",
         "hephaestus.image.v1.ImageCatalogService",
         "hephaestus.event.v1.ProductEventService",
+        "hephaestus.gateway.v1.GatewayService",
         "hephaestus.identity.v1.IdentityService",
         "hephaestus.instance.v1.AgentInstanceService",
         "hephaestus.organization.v1.OrganizationService",
@@ -52,7 +53,7 @@ fn reflection_inventory_contains_every_application_service_and_method() {
             .iter()
             .map(|service| service.methods().len())
             .sum::<usize>(),
-        68
+        75
     );
 
     let reflector = connectrpc_reflection::Reflector::from_descriptor_pool(pool)
@@ -348,7 +349,7 @@ fn every_method_declares_auth_kind_limits_and_retry_policy() {
         }
     }
 
-    assert_eq!(methods, 68, "review the policy when adding an RPC method");
+    assert_eq!(methods, 75, "review the policy when adding an RPC method");
 }
 
 #[test]
@@ -424,6 +425,7 @@ fn product_event_scope_aggregate_and_change_enums_are_frozen() {
                 "AGGREGATE_TYPE_ARTIFACT",
                 "AGGREGATE_TYPE_IDENTITY_PROFILE",
                 "AGGREGATE_TYPE_REGISTRY_PUBLICATION",
+                "AGGREGATE_TYPE_GATEWAY",
             ][..],
         ),
         (
@@ -528,6 +530,7 @@ fn expected_payload_fields() -> BTreeMap<&'static str, BTreeSet<&'static str>> {
             "registry_publication_changed",
             BTreeSet::from(["change", "state"]),
         ),
+        ("gateway_changed", BTreeSet::from(["change", "state"])),
     ])
 }
 
@@ -663,7 +666,7 @@ fn product_events_have_one_canonical_envelope_and_complete_reducer_manifest() {
         })
         .collect::<BTreeSet<_>>();
     assert_eq!(actual_variants, manifested);
-    assert_eq!(coverage.variants.len(), 17);
+    assert_eq!(coverage.variants.len(), 18);
 }
 
 #[test]

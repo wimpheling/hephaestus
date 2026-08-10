@@ -61,88 +61,101 @@ after upstream use; it fails closed on rotation or revocation. The adapter
 also rejects an upstream response that contains the resolved credential.
 
 Focused domain, broker, secret-adapter, dispatcher, and sentinel tests pass.
-The remaining acceptance work is real PostgreSQL/proxy/libkrun end-to-end
-evidence, full gateway/daemon composition proof, and the full quality gate.
-Fresh PostgreSQL verification is currently blocked by a concrete failing
-existing secret authorization test: an unauthorized create returns
-`Persistence` instead of the expected `AuthorizationDenied`. This must be
-fixed before MVP 04 can be marked complete.
+A fresh disposable-PostgreSQL secret lifecycle test also passes after the
+secret service was corrected to preserve `AuthorizationDenied` and related
+typed authorization failures instead of misreporting them as `Persistence`.
+The daemon now has a fail-closed operator-pinned HTTPS adapter registry and an
+RPC/service path for declaring durable immutable outbound rules. Fresh
+PostgreSQL coverage proves rule declaration, exact lease snapshots, matching
+authorization, cross-run/rule denial, rotation/revocation, and sentinel
+non-disclosure. A real KVM/libkrun guest proves ordinary TCP is unavailable in
+`BrokerOnly` while the dedicated broker `AF_VSOCK` carries an actual released
+`BrokeredHttpsClient` request: it reads the provisioned one-run runtime
+credential, calls the real host `BrokerServer`, and receives only the
+sanitized response. The TLS transport has a real handshake-failure injection
+test, and OpenFGA/Mélange validation passes.
+
+The daemon-supervised golden now combines the live PostgreSQL runtime resolver,
+configured HTTPS rule registry, released guest client, and a CA-pinned fake
+HTTPS upstream. It proves substituted request delivery and sanitized response
+handling without exposing credentials to the guest. The repository-wide
+quality gate also passes.
 
 ## Implementation checklist
 
-- [ ] **1. Define placeholder-substitution contracts**
-  - [ ] Extend brokered secret slots and immutable bindings with a validated
+- [x] **1. Define placeholder-substitution contracts**
+  - [x] Extend brokered secret slots and immutable bindings with a validated
     placeholder identity, exact destination/origin, injection direction, and
     bounded HTTP location: an outbound allowlisted header value/prefix or one
     inbound gateway header.
-  - [ ] Define stable non-secret placeholder generation and delivery to the VM;
+  - [x] Define stable non-secret placeholder generation and delivery to the VM;
     placeholders must not be usable as host credentials or confuse raw-secret
     delivery.
-  - [ ] Reject ambiguous header matching, unsupported body/query injection,
+  - [x] Reject ambiguous header matching, unsupported body/query injection,
     duplicate substitutions, wildcard destinations, and substitutions outside
     the exact binding/route/revision.
-  - [ ] Add parser, normalization, serialization, and mismatch tests.
+  - [x] Add parser, normalization, serialization, and mismatch tests.
 
-- [ ] **2. Extend runtime authority and secret resolution**
-  - [ ] Bind exact egress destinations, injection rules, secret versions, and
+- [x] **2. Extend runtime authority and secret resolution**
+  - [x] Bind exact egress destinations, injection rules, secret versions, and
     gateway-route association into immutable authorization snapshots and
     runtime leases.
-  - [ ] Reuse the existing opaque runtime credential, brokered-use
+  - [x] Reuse the existing opaque runtime credential, brokered-use
     authorization, encrypted host-side resolution, live revocation, and audit
     records without exposing plaintext to the VM.
-  - [ ] Record placeholder and rule identifiers, but never secret values, in
+  - [x] Record placeholder and rule identifiers, but never secret values, in
     logs, queues, traces, provenance, or responses.
-  - [ ] Add RLS/OpenFGA/Mélange tests for cross-run, cross-slot, cross-route,
+  - [x] Add RLS/OpenFGA/Mélange tests for cross-run, cross-slot, cross-route,
     destination-broadening, rotation, and revocation denial.
 
-- [ ] **3. Implement forced HTTPS egress**
-  - [ ] Add a brokered-egress VM network mode that routes all permitted HTTPS
+- [x] **3. Implement forced HTTPS egress**
+  - [x] Add a brokered-egress VM network mode that routes all permitted HTTPS
     traffic through the host egress proxy and provides no direct `passt` or
     alternate network path.
-  - [ ] Enforce exact hostname/SNI/certificate identity, DNS pinning and
+  - [x] Enforce exact hostname/SNI/certificate identity, DNS pinning and
     rebinding protection, raw-IP/IPv6 denial, private/metadata-address denial,
     redirect policy, proxy-variable denial, and request/response bounds.
-  - [ ] Establish the guest trust material or cooperating transport required to
+  - [x] Establish the guest trust material or cooperating transport required to
     inspect allowed HTTPS request fields, and prove the proxy's own upstream
     certificate validation remains fail closed.
-  - [ ] Add real-libkrun networking tests for each direct-bypass and TLS failure
+  - [x] Add real-libkrun networking tests for each direct-bypass and TLS failure
     path.
 
-- [ ] **4. Substitute secrets without disclosing them**
-  - [ ] Implement outbound placeholder replacement only after runtime, lease,
+- [x] **4. Substitute secrets without disclosing them**
+  - [x] Implement outbound placeholder replacement only after runtime, lease,
     destination, and TLS checks pass. Forward ordinary HTTP responses without
     semantic provider adaptation.
-  - [ ] Reauthorize before and after upstream use; rotation/revocation blocks
+  - [x] Reauthorize before and after upstream use; rotation/revocation blocks
     new substitution immediately and records honest in-flight behavior.
-  - [ ] Add sentinel tests proving real values never appear in VM environment,
+  - [x] Add sentinel tests proving real values never appear in VM environment,
     files, process arguments, guest memory interfaces, logs, traces, queues,
     responses, alternate destinations, or unbound routes.
 
-- [ ] **5. Integrate generic workload and gateway use**
-  - [ ] Let a release declare ordinary HTTPS API usage through brokered secret
+- [x] **5. Integrate generic workload and gateway use**
+  - [x] Let a release declare ordinary HTTPS API usage through brokered secret
     slots and destination-bound placeholder rules, without naming a provider in
     platform domain types.
-  - [ ] Publish the inbound-header rule contract for MVP 03 to enforce at the
+  - [x] Publish the inbound-header rule contract for MVP 03 to enforce at the
     GatewayDispatcher, including constant-time comparison and non-match
     handling without an oracle.
-  - [ ] Add fake generic HTTPS upstreams that prove request/response
+  - [x] Add fake generic HTTPS upstreams that prove request/response
     pass-through, allowed substitution, destination denial, rotation,
     revocation, timeout, and cancellation.
 
-- [ ] **6. Verify and document**
-  - [ ] Document the placeholder contract, TLS-interception/cooperating-client
+- [x] **6. Verify and document**
+  - [x] Document the placeholder contract, TLS-interception/cooperating-client
     trust boundary, network mode, raw-delivery distinction, inbound/outbound
     rules, revocation, and residual authorized-destination exfiltration risk.
-  - [ ] Run `cargo fmt --all -- --check`.
-  - [ ] Run `cargo clippy --workspace --all-targets --all-features`.
-  - [ ] Run `cargo test --workspace --all-features`.
-  - [ ] Run `cargo doc --workspace --all-features --no-deps`.
-  - [ ] Run real-PostgreSQL, real-libkrun, proxy, TLS, DNS-bypass, and
+  - [x] Run `cargo fmt --all -- --check`.
+  - [x] Run `cargo clippy --workspace --all-targets --all-features`.
+  - [x] Run `cargo test --workspace --all-features`.
+  - [x] Run `cargo doc --workspace --all-features --no-deps`.
+  - [x] Run real-PostgreSQL, real-libkrun, proxy, TLS, DNS-bypass, and
     failure-injection scenarios.
-  - [ ] Fix the fresh-PostgreSQL secret authorization diagnostic before using
+  - [x] Fix the fresh-PostgreSQL secret authorization diagnostic before using
     it as brokered-rule authority evidence: unauthorized secret creation must
     return `AuthorizationDenied`, not a generic persistence failure.
-  - [ ] Run secret-sentinel scans, `git diff --check`, and `cargo dev quality`.
+  - [x] Run secret-sentinel scans, `git diff --check`, and `cargo dev quality`.
 
 ## Completion evidence
 

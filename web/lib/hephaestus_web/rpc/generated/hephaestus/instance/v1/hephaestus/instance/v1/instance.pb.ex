@@ -911,6 +911,33 @@ defmodule Hephaestus.Instance.V1.BindSecretResponse do
   field(:receipt, 3, type: Hephaestus.Common.V1.MutationReceipt)
 end
 
+defmodule Hephaestus.Instance.V1.DeclareBrokeredHttpsRuleRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.instance.v1.DeclareBrokeredHttpsRuleRequest",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:context, 1, type: Hephaestus.Common.V1.RequestContext)
+  field(:binding_id, 2, type: Hephaestus.Common.V1.OpaqueId, json_name: "bindingId")
+  field(:destination, 3, type: :string)
+  field(:header, 4, type: :string)
+  field(:header_prefix, 5, proto3_optional: true, type: :string, json_name: "headerPrefix")
+end
+
+defmodule Hephaestus.Instance.V1.DeclareBrokeredHttpsRuleResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.instance.v1.DeclareBrokeredHttpsRuleResponse",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:rule_id, 1, type: Hephaestus.Common.V1.OpaqueId, json_name: "ruleId")
+  field(:receipt, 2, type: Hephaestus.Common.V1.MutationReceipt)
+end
+
 defmodule Hephaestus.Instance.V1.CapabilityBindingSelection do
   @moduledoc false
 
@@ -942,6 +969,7 @@ defmodule Hephaestus.Instance.V1.ReviseCapabilitiesRequest do
   )
 
   field(:bindings, 4, repeated: true, type: Hephaestus.Instance.V1.CapabilityBindingSelection)
+  field(:page, 5, type: Hephaestus.Common.V1.PageRequest)
 end
 
 defmodule Hephaestus.Instance.V1.ReviseCapabilitiesResponse do
@@ -960,6 +988,7 @@ defmodule Hephaestus.Instance.V1.ReviseCapabilitiesResponse do
   field(:runnable, 2, type: :bool)
   field(:diagnostics, 3, repeated: true, type: Hephaestus.Common.V1.Diagnostic)
   field(:receipt, 4, type: Hephaestus.Common.V1.MutationReceipt)
+  field(:page, 5, type: Hephaestus.Common.V1.PageResponse)
 end
 
 defmodule Hephaestus.Instance.V1.ControlMailboxRequest do
@@ -991,6 +1020,7 @@ defmodule Hephaestus.Instance.V1.ControlMailboxResponse do
     syntax: :proto3
 
   field(:changed, 1, type: :bool)
+  field(:receipt, 2, type: Hephaestus.Common.V1.MutationReceipt)
 end
 
 defmodule Hephaestus.Instance.V1.AgentInstanceService.Service do
@@ -1052,6 +1082,12 @@ defmodule Hephaestus.Instance.V1.AgentInstanceService.Service do
     :BindSecret,
     Hephaestus.Instance.V1.BindSecretRequest,
     Hephaestus.Instance.V1.BindSecretResponse
+  )
+
+  rpc(
+    :DeclareBrokeredHttpsRule,
+    Hephaestus.Instance.V1.DeclareBrokeredHttpsRuleRequest,
+    Hephaestus.Instance.V1.DeclareBrokeredHttpsRuleResponse
   )
 
   rpc(

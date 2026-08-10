@@ -176,6 +176,7 @@ defmodule HephaestusWebWeb.DesignSystem.Components.Structure do
       nil,
       "accept-secret-import",
       "bind-secret",
+      "control-mailbox",
       "create-attachment",
       "create-secret",
       "create-personal-access-token",
@@ -269,6 +270,9 @@ defmodule HephaestusWebWeb.DesignSystem.Components.Structure do
       phx-value-attachment_id={@event_payload[:attachment_id]}
       phx-value-enabled={@event_payload[:enabled]}
       phx-value-kind={@event_payload[:kind]}
+      phx-value-mailbox_id={@event_payload[:mailbox_id]}
+      phx-value-event_id={@event_payload[:event_id]}
+      phx-value-next={@event_payload[:next]}
       phx-value-secret_id={@event_payload[:secret_id]}
       phx-value-token_id={@event_payload[:token_id]}
       phx-value-update_id={@event_payload[:update_id]}
@@ -512,6 +516,9 @@ defmodule HephaestusWebWeb.DesignSystem.Components.Structure do
     :attachment_id,
     :enabled,
     :kind,
+    :mailbox_id,
+    :event_id,
+    :next,
     :secret_id,
     :token_id,
     :update_id

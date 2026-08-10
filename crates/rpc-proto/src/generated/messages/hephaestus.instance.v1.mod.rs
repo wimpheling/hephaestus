@@ -67,6 +67,8 @@ pub mod __buffa {
         reg.register_json_any(super::__RECOVER_UPDATE_RESPONSE_JSON_ANY);
         reg.register_json_any(super::__BIND_SECRET_REQUEST_JSON_ANY);
         reg.register_json_any(super::__BIND_SECRET_RESPONSE_JSON_ANY);
+        reg.register_json_any(super::__DECLARE_BROKERED_HTTPS_RULE_REQUEST_JSON_ANY);
+        reg.register_json_any(super::__DECLARE_BROKERED_HTTPS_RULE_RESPONSE_JSON_ANY);
         reg.register_json_any(super::__CAPABILITY_BINDING_SELECTION_JSON_ANY);
         reg.register_json_any(super::__REVISE_CAPABILITIES_REQUEST_JSON_ANY);
         reg.register_json_any(super::__REVISE_CAPABILITIES_RESPONSE_JSON_ANY);
@@ -214,6 +216,14 @@ pub use self::__buffa::view::BindSecretRequestOwnedView;
 pub use self::__buffa::view::BindSecretResponseView;
 #[doc(inline)]
 pub use self::__buffa::view::BindSecretResponseOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::DeclareBrokeredHttpsRuleRequestView;
+#[doc(inline)]
+pub use self::__buffa::view::DeclareBrokeredHttpsRuleRequestOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::DeclareBrokeredHttpsRuleResponseView;
+#[doc(inline)]
+pub use self::__buffa::view::DeclareBrokeredHttpsRuleResponseOwnedView;
 #[doc(inline)]
 pub use self::__buffa::view::CapabilityBindingSelectionView;
 #[doc(inline)]

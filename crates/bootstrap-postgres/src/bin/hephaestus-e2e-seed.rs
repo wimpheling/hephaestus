@@ -356,22 +356,21 @@ async fn seed_release_catalog(
 
 async fn seed_builder_catalog(pool: &sqlx::PgPool) -> Result<(), Box<dyn Error>> {
     sqlx::query(
-        "INSERT INTO builder_images
+        "INSERT INTO oci_images
            (id, key, display_name, image_reference, toolchains, architectures,
-            preparation_state, availability_state, network_ceiling,
-            max_vcpus, max_memory_mib, dependency_policy, provenance,
-            platform_policy_version)
+            availability_state, provenance, platform_policy_version)
          VALUES
            ('20000000-0000-4000-8000-000000000001', 'fixture-root',
             'Browser fixture build root',
             'fixture-root@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
             '[{\"name\":\"shell\",\"version\":\"fixture\"}]'::jsonb,
-            ARRAY['x86_64'], 'ready', 'available', 'disabled',
-            4, 1024, 'vendored_offline',
+            ARRAY['x86_64'], 'available',
             '{\"source\":\"e2e-fixture\"}'::jsonb, 'e2e-fixture-v1')
-         ON CONFLICT (image_reference) DO UPDATE SET
+         ON CONFLICT (key) DO UPDATE SET
+           image_reference = EXCLUDED.image_reference,
            availability_state = EXCLUDED.availability_state,
-           preparation_state = EXCLUDED.preparation_state",
+           provenance = EXCLUDED.provenance,
+           platform_policy_version = EXCLUDED.platform_policy_version",
     )
     .execute(pool)
     .await?;

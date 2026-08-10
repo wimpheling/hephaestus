@@ -33,18 +33,20 @@ use rpc_proto::{
         instance::v1::{
             BindSecretRequest, BindSecretResponse, ControlMailboxRequest, ControlMailboxResponse,
             CreateAttachmentRequest, CreateAttachmentResponse, CreateUpdateRequest,
-            CreateUpdateResponse, GetInstanceRequest, GetInstanceResponse, ImportAgentRequest,
-            ImportAgentResponse, MailboxControlAction as ProtoMailboxControlAction,
-            RecoverUpdateRequest, RecoverUpdateResponse, RecoveryAction, RecoveryDecision,
-            RemovalState, RemoveAttachmentRequest, RemoveAttachmentResponse,
-            ReviseCapabilitiesRequest, ReviseCapabilitiesResponse, ReviseInstanceRequest,
-            ReviseInstanceResponse, SetAttachmentEnabledRequest, SetAttachmentEnabledResponse,
+            CreateUpdateResponse, DeclareBrokeredHttpsRuleRequest,
+            DeclareBrokeredHttpsRuleResponse, GetInstanceRequest, GetInstanceResponse,
+            ImportAgentRequest, ImportAgentResponse,
+            MailboxControlAction as ProtoMailboxControlAction, RecoverUpdateRequest,
+            RecoverUpdateResponse, RecoveryAction, RecoveryDecision, RemovalState,
+            RemoveAttachmentRequest, RemoveAttachmentResponse, ReviseCapabilitiesRequest,
+            ReviseCapabilitiesResponse, ReviseInstanceRequest, ReviseInstanceResponse,
+            SetAttachmentEnabledRequest, SetAttachmentEnabledResponse,
             TriggerPolicy as ProtoTriggerPolicy, ref_selector,
         },
         secret::v1::{DeliveryMode as ProtoDeliveryMode, DeliveryPhase},
     },
 };
-use secret_domain::{DeliveryMode, ExecutionPhase, SecretSlotKey};
+use secret_domain::{AgentSecretBindingId, DeliveryMode, ExecutionPhase, SecretSlotKey};
 use serde_json::Value;
 use std::{collections::BTreeMap, str::FromStr};
 use uuid::Uuid;
@@ -143,8 +145,17 @@ impl AgentInstanceService for InstanceRpc {
             // The repository deliberately does not disclose whether an
             // inaccessible mailbox or event exists.
             .map_err(|_| into_connect_error(RpcError::NotFound))?;
+        let receipt = mutation_receipt(
+            &self.receipts,
+            identity.idempotency_id,
+            identity.user_id,
+            "agent_instance",
+            "agent_instance",
+        )
+        .await?;
         Response::ok(ControlMailboxResponse {
             changed: result.changed,
+            receipt: receipt.into(),
             ..Default::default()
         })
     }
@@ -500,6 +511,47 @@ impl AgentInstanceService for InstanceRpc {
         Response::ok(BindSecretResponse {
             binding_id: opaque(json_id(&value, "binding_id")?).into(),
             instance_revision_id: opaque(json_id(&value, "instance_revision_id")?).into(),
+            receipt: receipt.into(),
+            ..Default::default()
+        })
+    }
+
+    async fn declare_brokered_https_rule(
+        &self,
+        ctx: RequestContext,
+        request: ServiceRequest<'_, DeclareBrokeredHttpsRuleRequest>,
+    ) -> ServiceResult<DeclareBrokeredHttpsRuleResponse> {
+        let request = request.to_owned_message();
+        let identity = mutation(
+            &ctx,
+            &self.authenticator,
+            "DeclareBrokeredHttpsRule",
+            &request.context,
+        )?;
+        let value = self
+            .execute(
+                &identity,
+                InternalCommand::DeclareBrokeredHttpsRule {
+                    binding_id: AgentSecretBindingId::from_uuid(parse_id(
+                        request.binding_id.as_option(),
+                    )?),
+                    destination: request.destination,
+                    header: request.header,
+                    header_prefix: request.header_prefix,
+                },
+            )
+            .await
+            .map_err(into_connect_error)?;
+        let receipt = mutation_receipt(
+            &self.receipts,
+            identity.idempotency_id,
+            identity.user_id,
+            "brokered_secret_rule",
+            "agent_secret_binding",
+        )
+        .await?;
+        Response::ok(DeclareBrokeredHttpsRuleResponse {
+            rule_id: opaque(json_id(&value, "rule_id")?).into(),
             receipt: receipt.into(),
             ..Default::default()
         })

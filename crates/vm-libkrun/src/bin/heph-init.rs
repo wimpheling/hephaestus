@@ -62,8 +62,25 @@ fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         return Err(format!("unsupported host protocol version {version}").into());
     }
 
+    // Persist the authority before mounting the immutable runtime control tree
+    // at `/run/hephaestus`. A read-only nested virtiofs mount can otherwise
+    // make its parent unsuitable for creating the sibling authority directory
+    // on some libkrun/FUSE combinations.
+    let runtime_authority_ack = runtime_authority
+        .as_deref()
+        .map(persist_runtime_authority)
+        .transpose()?;
+
     for mount in mounts {
         if let Err(error) = mount_virtiofs(&mount.tag, &mount.guest_path, mount.read_only) {
+            let error = io::Error::new(
+                error.kind(),
+                format!(
+                    "mount {} at {}: {error}",
+                    mount.tag,
+                    mount.guest_path.display()
+                ),
+            );
             send_guest_error(&mut control, "mount", &error);
             return Err(error.into());
         }
@@ -84,8 +101,7 @@ fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         })?;
         thread::sleep(Duration::from_millis(milliseconds));
     }
-    if let Some(authority) = runtime_authority {
-        let (session_id, generation) = persist_runtime_authority(&authority)?;
+    if let Some((session_id, generation)) = runtime_authority_ack {
         write_frame(
             &mut control,
             &GuestMessage::RuntimeAuthorityAcknowledged {
@@ -198,9 +214,12 @@ fn persist_runtime_authority(
         return Err("runtime authority generation must be positive".into());
     }
     let directory = Path::new(RUNTIME_AUTHORITY_DIRECTORY);
-    fs::create_dir_all(directory)?;
-    fs::set_permissions(directory, fs::Permissions::from_mode(0o700))?;
-    chown(directory, Some(AGENT_UID), Some(AGENT_GID))?;
+    fs::create_dir_all(directory)
+        .map_err(|error| format!("create authority directory: {error}"))?;
+    fs::set_permissions(directory, fs::Permissions::from_mode(0o700))
+        .map_err(|error| format!("seal authority directory: {error}"))?;
+    chown(directory, Some(AGENT_UID), Some(AGENT_GID))
+        .map_err(|error| format!("own authority directory: {error}"))?;
 
     let mut credential_hex = Zeroizing::new(String::with_capacity(authority.credential.len() * 2));
     for byte in &authority.credential {
@@ -225,13 +244,25 @@ fn persist_runtime_authority(
             .map(std::string::String::as_str),
     };
     let bytes = Zeroizing::new(serde_json::to_vec(&document)?);
+    match fs::symlink_metadata(GUEST_RUNTIME_AUTHORITY_PATH) {
+        Ok(metadata) if metadata.file_type().is_file() && !metadata.file_type().is_symlink() => {
+            fs::remove_file(GUEST_RUNTIME_AUTHORITY_PATH)
+                .map_err(|error| format!("remove stale authority credential: {error}"))?;
+        }
+        Ok(_) => return Err("stale authority credential is not a regular file".into()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(format!("inspect authority credential: {error}").into()),
+    }
     let mut file = fs::OpenOptions::new()
         .create_new(true)
         .write(true)
         .mode(0o400)
-        .open(GUEST_RUNTIME_AUTHORITY_PATH)?;
-    file.write_all(&bytes)?;
-    file.sync_all()?;
+        .open(GUEST_RUNTIME_AUTHORITY_PATH)
+        .map_err(|error| format!("create authority credential: {error}"))?;
+    file.write_all(&bytes)
+        .map_err(|error| format!("write authority credential: {error}"))?;
+    file.sync_all()
+        .map_err(|error| format!("sync authority credential: {error}"))?;
     chown(
         Path::new(GUEST_RUNTIME_AUTHORITY_PATH),
         Some(AGENT_UID),

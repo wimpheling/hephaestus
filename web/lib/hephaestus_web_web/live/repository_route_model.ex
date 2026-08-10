@@ -120,6 +120,17 @@ defmodule HephaestusWebWeb.RepositoryRouteModel do
 
   def reduce(
         %{stream_generation: generation} = state,
+        {:loaded, generation, {:error, :forbidden}},
+        _action
+      ) do
+    message = "Repository not found or access was revoked."
+
+    {%{state | status: :access_revoked, error: message},
+     [{:flash, :error, message}, {:navigate, "/organizations"}]}
+  end
+
+  def reduce(
+        %{stream_generation: generation} = state,
         {
           :loaded,
           generation,

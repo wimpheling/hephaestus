@@ -18,6 +18,6 @@ pub use orchestrator::{
 };
 pub use repository::{CreateRunResult, RepositoryError, RunRepository, StoredVmEvent};
 pub use runtime_catalog::{
-    RunRuntimeArtifact, RunRuntimeArtifactKind, RunRuntimeCatalog, RunRuntimeCatalogError,
-    RunRuntimeInput,
+    MailboxRuntimeEvent, RunRuntimeArtifact, RunRuntimeArtifactKind, RunRuntimeCatalog,
+    RunRuntimeCatalogError, RunRuntimeInput,
 };

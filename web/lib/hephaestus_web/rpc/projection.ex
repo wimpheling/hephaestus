@@ -57,6 +57,8 @@ defmodule HephaestusWeb.RPC.Projection do
     DEPENDENCY_POLICY_
     PROJECT_BUILDER_STATUS_
     GIT_OPERATION_
+    GATEWAY_LIFECYCLE_
+    GATEWAY_INGRESS_OUTCOME_
   )
 
   @spec to_value(term()) :: term()

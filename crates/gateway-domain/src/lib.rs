@@ -3,11 +3,64 @@
 //! This crate deliberately contains no listener, provider, database, or VM
 //! code. It is the exact shared vocabulary for the control plane and edge.
 
+use async_trait::async_trait;
+use http::{HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeSet, fmt, str::FromStr};
 use thiserror::Error;
 use uuid::Uuid;
+
+/// One host-only exact inbound secret substitution rule.
+pub struct InboundGatewaySecretRule {
+    /// Header whose exact inbound value is matched.
+    pub header: HeaderName,
+    /// Decrypted value held only until dispatch completes.
+    pub expected: Vec<u8>,
+    /// Non-secret value delivered to the guest.
+    pub placeholder: HeaderValue,
+}
+
+impl InboundGatewaySecretRule {
+    /// Creates a non-empty exact substitution rule.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GatewayError::InvalidInboundSecretRule`] when either the
+    /// expected value or safe replacement is empty.
+    pub fn new(
+        header: HeaderName,
+        expected: Vec<u8>,
+        placeholder: HeaderValue,
+    ) -> Result<Self, GatewayError> {
+        if expected.is_empty() || placeholder.as_bytes().is_empty() {
+            return Err(GatewayError::InvalidInboundSecretRule);
+        }
+        Ok(Self {
+            header,
+            expected,
+            placeholder,
+        })
+    }
+}
+
+impl Drop for InboundGatewaySecretRule {
+    fn drop(&mut self) {
+        self.expected.fill(0);
+    }
+}
+
+/// Gateway-owned port for resolving already-authorized inbound secret rules.
+#[async_trait]
+pub trait GatewayInboundSecretResolver: Send + Sync {
+    /// Returns rules for one accepted invocation and exact immutable route.
+    async fn rules_for_invocation(
+        &self,
+        invocation_id: Uuid,
+        route_id: Uuid,
+        gateway_revision_id: Uuid,
+    ) -> Result<Vec<InboundGatewaySecretRule>, GatewayError>;
+}
 
 /// Maximum bytes accepted in one canonical request or response body.
 pub const MAX_BODY_BYTES: u32 = 1_048_576;
@@ -307,6 +360,9 @@ pub enum GatewayError {
     /// A secret-slot name is malformed.
     #[error("invalid gateway secret slot")]
     InvalidSecretSlot,
+    /// An inbound secret matcher is malformed.
+    #[error("invalid inbound gateway secret rule")]
+    InvalidInboundSecretRule,
 }
 
 #[cfg(test)]

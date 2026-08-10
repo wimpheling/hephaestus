@@ -4,8 +4,11 @@ defmodule HephaestusWebWeb.ProjectLive do
   alias HephaestusWebWeb.DesignSystem.Pages.ProjectPage
   alias HephaestusWebWeb.ProjectState
 
+  @stream_mode :none
+
   @impl true
   def mount(%{"project_id" => project_id}, _session, socket) do
+    _stream_mode = @stream_mode
     state = ProjectState.new(%{project_id: project_id})
 
     socket =
@@ -70,18 +73,16 @@ defmodule HephaestusWebWeb.ProjectLive do
       organizations_destination={~p"/organizations"}
       logout_destination={~p"/logout"}
     >
-      <div id="project-live-root">
-        <ProjectPage.project_page
-          state={@presentation.status}
-          project={@presentation.project}
-          project_id={@presentation.project_id}
-          item_count={@presentation.item_count}
-          repositories={@streams.repositories}
-          organization_index_destination={~p"/organizations"}
-          organization_destination={organization_destination(@presentation.project)}
-          repository_destination={fn id -> ~p"/repositories/#{id}" end}
-        />
-      </div>
+      <ProjectPage.project_page
+        state={@presentation.status}
+        project={@presentation.project}
+        project_id={@presentation.project_id}
+        item_count={@presentation.item_count}
+        repositories={@streams.repositories}
+        organization_index_destination={~p"/organizations"}
+        organization_destination={organization_destination(@presentation.project)}
+        repository_destination={fn id -> ~p"/repositories/#{id}" end}
+      />
     </Layouts.app>
     """
   end

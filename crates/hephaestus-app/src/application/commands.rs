@@ -15,7 +15,10 @@ use release_postgres::{
     ReviseInstanceCapabilities, SetAttachmentEnabled, UpdateRecoveryAction,
 };
 use runtime_types::RunId;
-use secret_application::{AcceptSecretImport, BindSecret, CreateSecret, GrantSecret, RotateSecret};
+use secret_application::{
+    AcceptSecretImport, BindSecret, CreateSecret, DeclareBrokeredHttpsRule, GrantSecret,
+    RotateSecret,
+};
 use secret_domain::{
     AgentSecretBindingId, DeliveryMode, ExecutionPhase, SecretAlias, SecretCommandKey,
     SecretGrantId, SecretId, SecretImportId, SecretName, SecretOwner, SecretSlotKey, SecretTarget,
@@ -127,6 +130,12 @@ pub enum InternalCommand {
         phases: Vec<ExecutionPhase>,
         attachment_ids: Vec<Uuid>,
         destinations: Vec<String>,
+    },
+    DeclareBrokeredHttpsRule {
+        binding_id: AgentSecretBindingId,
+        destination: String,
+        header: String,
+        header_prefix: Option<String>,
     },
     SetSecretEnabled {
         secret_id: SecretId,
@@ -547,6 +556,29 @@ pub async fn dispatch(
                 "binding_id": binding_id,
                 "instance_revision_id": revision_id,
             }))
+        }
+        InternalCommand::DeclareBrokeredHttpsRule {
+            binding_id,
+            destination,
+            header,
+            header_prefix,
+        } => {
+            let rule_id = stable_id(identity, "declare_brokered_https_rule.rule");
+            state
+                .secrets
+                .declare_brokered_https_rule(
+                    identity,
+                    DeclareBrokeredHttpsRule {
+                        command_key: secret_key(identity, "declare_brokered_https_rule", rule_id),
+                        rule_id,
+                        binding_id,
+                        destination,
+                        header,
+                        header_prefix,
+                    },
+                )
+                .await?;
+            Ok(json!({ "rule_id": rule_id }))
         }
         InternalCommand::SetSecretEnabled { secret_id, enabled } => {
             state

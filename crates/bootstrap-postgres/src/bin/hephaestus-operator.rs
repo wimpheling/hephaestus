@@ -639,6 +639,14 @@ async fn inspect_metrics(
                'secret', COALESCE(
                    (SELECT to_jsonb(metric) FROM secret_operation_metrics metric),
                    '{}'::jsonb
+               ),
+               'mailbox', COALESCE(
+                   (SELECT to_jsonb(metric) FROM mailbox_operation_metrics metric),
+                   '{}'::jsonb
+               ),
+               'gateway', COALESCE(
+                   (SELECT to_jsonb(metric) FROM gateway_operation_metrics metric),
+                   '{}'::jsonb
                )
            )",
     )

@@ -61,13 +61,18 @@ PostgreSQL 17 and NATS JetStream, covering concurrent deduplication, outbox
 publication, NAK redelivery, durable-consumer recreation, one-run claiming,
 recovery to retryable, RLS tenant isolation, and tombstone retention.
 
-The remaining unchecked acceptance work is deliberate: full dispatch-time
-reauthorization/runtime-authority issuance, all stateful run-gate and fenced
-lease races through mailbox dispatch, payload-retention cleanup policy,
-failure injection around real VM/provider boundaries, metrics/live
-subscriptions, and the full repository-quality gate. A real libkrun mailbox
-journey has not yet been added; existing libkrun tests prove the underlying run
-and lease lifecycle, not mailbox-to-VM delivery.
+Dispatch-time authorization is rechecked before provisioning, runtime
+authority is minted only for the claimed run, and denied claims retain a
+stable redacted disposition. The real suite covers a reopened run gate with
+concurrent claims, stale fenced-lease cleanup, duplicate in-flight starts,
+pre-provision denials, guest acknowledgement failure, timeout, and restart
+after lease release. Payload retention keeps opaque bytes for 30 days, then a
+worker-only terminal-delivery cleanup purges bytes while retaining event/body
+identity and integrity evidence. The opt-in
+`HEPHAESTUS_APP_LIBKRUN_E2E=1 scripts/run-libkrun-integration.sh` journey now
+starts the production daemon with PostgreSQL and JetStream, accepts a real
+mailbox event, and verifies that a real libkrun guest consumes the sealed
+control files before the fenced state lease and VM are cleaned up.
 
 ## Implementation checklist
 
@@ -87,8 +92,8 @@ and lease lifecycle, not mailbox-to-VM delivery.
     - [x] Add domain tests for validation, bounds, serialization, transitions,
       deterministic identities, and malformed envelopes.
 
-- [ ] **2. Persist mailboxes and events transactionally**
-  - [ ] **Add authoritative PostgreSQL records**
+- [x] **2. Persist mailboxes and events transactionally**
+  - [x] **Add authoritative PostgreSQL records**
     - [x] Add agent-instance-owned mailboxes, immutable accepted events, delivery
       state, attempts, dispositions, payload references, and tombstone-safe
       provenance.
@@ -99,97 +104,97 @@ and lease lifecycle, not mailbox-to-VM delivery.
       transaction as acceptance or eligibility transitions.
     - [x] Apply forced RLS and exact mailbox publish, consume, inspect, retry,
       and recover permissions.
-    - [ ] Add real-PostgreSQL tests for concurrent duplicate publication,
+    - [x] Add real-PostgreSQL tests for concurrent duplicate publication,
       rollback, RLS, tenant isolation, visibility, and tombstone retention.
-  - [ ] **Store bounded payloads safely**
+  - [x] **Store bounded payloads safely**
     - [x] Store each accepted body in PostgreSQL under an opaque body ID with
       its exact byte length and integrity hash in the acceptance transaction.
     - [x] Enforce encoded and decoded size limits before commit and reject
       content-type confusion, malformed compression, and decompression bombs.
     - [x] Put only the opaque mailbox-event and body IDs in commands, logs,
       traces, and NATS payloads.
-    - [ ] Preserve payload bytes until every live delivery or audit retention
+    - [x] Preserve payload bytes until every live delivery or audit retention
       requirement permits cleanup.
 
-- [ ] **3. Dispatch eligible events**
-  - [ ] **Integrate lifecycle and authorization**
-    - [ ] At dispatch, recheck the mailbox, event, instance lifecycle, run
+- [x] **3. Dispatch eligible events**
+  - [x] **Integrate lifecycle and authorization**
+    - [x] At dispatch, recheck the mailbox, event, instance lifecycle, run
       gate, active revision, release access, capability binding, and target
       authorization in one durable transition.
-    - [ ] Bind the event to the then-active immutable instance revision and
+    - [x] Bind the event to the then-active immutable instance revision and
       authorization snapshot only when dispatch becomes eligible.
-    - [ ] Mint runtime authority at dispatch and keep bearer material out of
+    - [x] Mint runtime authority at dispatch and keep bearer material out of
       the durable event and command payload.
-    - [ ] Persist a stable denial diagnostic when reauthorization fails rather
+    - [x] Persist a stable denial diagnostic when reauthorization fails rather
       than silently dropping accepted work.
-    - [ ] Re-evaluate deferred events idempotently when the run gate reopens.
-  - [ ] **Use JetStream as the command transport**
-    - [ ] Publish versioned start, retry, cancel, and recovery commands with
+    - [x] Re-evaluate deferred events idempotently when the run gate reopens.
+  - [x] **Use JetStream as the command transport**
+    - [x] Publish versioned start, retry, cancel, and recovery commands with
       stable IDs and bounded exact provenance.
-    - [ ] Write every command to the transactional outbox with the PostgreSQL
+    - [x] Write every command to the transactional outbox with the PostgreSQL
       state transition that makes it necessary.
-    - [ ] Publish the outbox ID as `Nats-Msg-Id` and keep event bodies, bearer
+    - [x] Publish the outbox ID as `Nats-Msg-Id` and keep event bodies, bearer
       credentials, and mutable attempt state out of NATS.
-    - [ ] Use durable consumers and acknowledge a command only after its
+    - [x] Use durable consumers and acknowledge a command only after its
       corresponding PostgreSQL transition commits or is proven idempotently
       complete.
-    - [ ] Make each consumer compare-and-swap authoritative PostgreSQL state so
+    - [x] Make each consumer compare-and-swap authoritative PostgreSQL state so
       publisher retry and JetStream redelivery cannot create a second logical
       attempt or run.
-    - [ ] Treat JetStream delivery counts as transport diagnostics only; never
+    - [x] Treat JetStream delivery counts as transport diagnostics only; never
       use them as mailbox attempt counts or dead-letter policy.
-    - [ ] Add tests for database rollback, acknowledgement loss, publisher
+    - [x] Add tests for database rollback, acknowledgement loss, publisher
       retry, duplicate delivery, consumer restart, stream replay, worker crash,
       and recovery at every authoritative transition.
 
-- [ ] **4. Serialize stateful execution**
-  - [ ] **Coordinate the instance run gate and volume lease**
-    - [ ] Atomically prevent a second stateful normal run, update hook, or
+- [x] **4. Serialize stateful execution**
+  - [x] **Coordinate the instance run gate and volume lease**
+    - [x] Atomically prevent a second stateful normal run, update hook, or
       recovery action from becoming active for the same instance.
-    - [ ] Use PostgreSQL lifecycle compare-and-swap, the existing run gate, and
+    - [x] Use PostgreSQL lifecycle compare-and-swap, the existing run gate, and
       the existing fenced volume lease as the complete dispatch coordination
       mechanism.
-    - [ ] Acquire and validate the instance volume's exclusive fenced lease
+    - [x] Acquire and validate the instance volume's exclusive fenced lease
       before guest launch and release it only after guest destruction and
       provider cleanup.
-    - [ ] Persist the exact state-volume ID, fenced lease ID and token, and
+    - [x] Persist the exact state-volume ID, fenced lease ID and token, and
       per-instance dispatch sequence on the attempt before guest launch.
-    - [ ] Prevent an old worker, expired lease holder, or duplicate command
+    - [x] Prevent an old worker, expired lease holder, or duplicate command
       from completing or mutating the state of a newer attempt.
-    - [ ] Integrate update draining so events accepted behind a closed gate
+    - [x] Integrate update draining so events accepted behind a closed gate
       remain durable and bind only after safe reopening.
-    - [ ] Add concurrency tests for simultaneous ingress, repository triggers,
+    - [x] Add concurrency tests for simultaneous ingress, repository triggers,
       retries, updates, pauses, cancellations, and stale lease holders.
 
-- [ ] **5. Define retry, dead-letter, and recovery behavior**
-  - [ ] **Handle outcomes honestly**
-    - [ ] Define which provisioning, authorization, guest, protocol, timeout,
+- [x] **5. Define retry, dead-letter, and recovery behavior**
+  - [x] **Handle outcomes honestly**
+    - [x] Define which provisioning, authorization, guest, protocol, timeout,
       and application outcomes are retryable, terminal, uncertain, or require
       operator recovery.
-    - [ ] Persist the logical attempt count, next eligible time, bounded
+    - [x] Persist the logical attempt count, next eligible time, bounded
       exponential backoff, attempt limit, and explicit dead-letter disposition
       in PostgreSQL without losing the original event.
-    - [ ] Publish each newly eligible retry as a fresh stable outbox command
+    - [x] Publish each newly eligible retry as a fresh stable outbox command
       for that logical transition.
-    - [ ] Ensure application success is recorded only after the runtime result
+    - [x] Ensure application success is recorded only after the runtime result
       protocol and state cleanup reach their durable commit point.
-    - [ ] Persist the terminal state-access outcome without inferring whether
+    - [x] Persist the terminal state-access outcome without inferring whether
       application-owned files changed or whether a failed run rolled them
       back.
-    - [ ] Add authorized pause, resume, retry, cancel, and dead-letter
+    - [x] Add authorized pause, resume, retry, cancel, and dead-letter
       inspection commands with structured audit.
-  - [ ] **Reconcile crashes**
-    - [ ] Reconcile abandoned dispatch claims, orphaned guests, stale volume
+  - [x] **Reconcile crashes**
+    - [x] Reconcile abandoned dispatch claims, orphaned guests, stale volume
       leases, missing commands, and incomplete attempt transitions.
-    - [ ] Ensure restart never assumes preservation of process memory or an
+    - [x] Ensure restart never assumes preservation of process memory or an
       in-memory workflow stack.
-    - [ ] Add failure-injection tests before and after acceptance, dispatch
+    - [x] Add failure-injection tests before and after acceptance, dispatch
       commit, guest start, result commit, guest destruction, and lease release.
 
-- [ ] **6. Add observability and operator inspection**
-  - [ ] Trace mailbox, event, attempt, instance, revision, run, authorization
+- [x] **6. Add observability and operator inspection**
+  - [x] Trace mailbox, event, attempt, instance, revision, run, authorization
     snapshot, lease, and command identifiers.
-  - [ ] Measure acceptance-to-dispatch latency, queue depth, active stateful
+  - [x] Measure acceptance-to-dispatch latency, queue depth, active stateful
     runs, retries, dead letters, denials, and reconciliation outcomes.
   - [x] Add read-only inspection for an event's current disposition, attempts,
     denial reason, bound revision, state volume, fenced lease, dispatch order,
@@ -197,21 +202,21 @@ and lease lifecycle, not mailbox-to-VM delivery.
   - [x] Expose bounded, authorized operator controls for pause, resume, retry,
     cancel, and dead-letter through the supported application RPC/UI boundary;
     retain the PostgreSQL audit record as the authoritative control evidence.
-  - [ ] Reauthorize live subscriptions before publishing mailbox or delivery
+  - [x] Reauthorize live subscriptions before publishing mailbox or delivery
     updates.
 
-- [ ] **7. Verify and document**
+- [x] **7. Verify and document**
   - [x] Document envelope limits, delivery semantics, revision-binding time,
     stateful serialization, retry policy, sleep/wake behavior, and recovery.
   - [x] Document the PostgreSQL authority, transactional-outbox, JetStream
     transport, run-orchestrator, and fenced-volume-lease responsibility
     boundaries.
-  - [ ] Run `cargo fmt --all -- --check`.
-  - [ ] Run `cargo clippy --workspace --all-targets --all-features`.
-  - [ ] Run `cargo test --workspace --all-features`.
-  - [ ] Run `cargo doc --workspace --all-features --no-deps`.
-  - [ ] Run real-PostgreSQL, NATS, and real-libkrun mailbox scenarios.
-  - [ ] Run `git diff --check`.
+  - [x] Run `cargo fmt --all -- --check`.
+  - [x] Run `cargo clippy --workspace --all-targets --all-features`.
+  - [x] Run `cargo test --workspace --all-features`.
+  - [x] Run `cargo doc --workspace --all-features --no-deps`.
+  - [x] Run real-PostgreSQL, NATS, and real-libkrun mailbox scenarios.
+  - [x] Run `git diff --check`.
 
 ## Completion evidence
 

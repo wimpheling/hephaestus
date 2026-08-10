@@ -9,8 +9,8 @@ use async_trait::async_trait;
 use release_domain::ArtifactPath;
 use run_domain::{Run, RunKind};
 use run_orchestrator::{
-    PreparedRunRuntime, RunRuntimeArtifact, RunRuntimeArtifactKind, RunRuntimeCatalog,
-    RunRuntimeCatalogError, RunRuntimeError, RunRuntimeInput, RunRuntimeManager,
+    MailboxRuntimeEvent, PreparedRunRuntime, RunRuntimeArtifact, RunRuntimeArtifactKind,
+    RunRuntimeCatalog, RunRuntimeCatalogError, RunRuntimeError, RunRuntimeInput, RunRuntimeManager,
 };
 use runtime_types::RunId;
 use serde::Serialize;
@@ -30,6 +30,7 @@ const MAX_RUNTIME_BYTES: u64 = 512 * 1024 * 1024;
 const RELEASE_TAG_PREFIX: &str = "rel";
 const CONTEXT_TAG_PREFIX: &str = "ctx";
 const PREVIOUS_RELEASE_TAG_PREFIX: &str = "old";
+const GATEWAY_RELEASE_TAG_PREFIX: &str = "gwr";
 
 /// Filesystem roots used for per-run runtime materialization.
 #[derive(Debug, Clone)]
@@ -45,6 +46,18 @@ pub struct LocalRunRuntimeConfig {
 pub struct LocalRunRuntimeManager {
     catalog: Arc<dyn RunRuntimeCatalog>,
     config: LocalRunRuntimeConfig,
+}
+
+/// Local immutable release tree used by a one-shot gateway invocation.
+///
+/// Gateway invocations share the same verified object store and artifact
+/// materialization rules as runs, but have no run-shaped control context.
+/// Keeping this narrow adapter here prevents gateway dispatch from mounting
+/// opaque object-store files directly as a release filesystem.
+#[derive(Clone)]
+pub struct LocalGatewayReleaseRuntime {
+    runtime_root: PathBuf,
+    release_artifact_root: PathBuf,
 }
 
 impl LocalRunRuntimeManager {
@@ -85,6 +98,16 @@ impl LocalRunRuntimeManager {
             .runtime_root
             .join("active")
             .join(run_id.to_string())
+    }
+
+    /// Returns a gateway-specific release materializer over these validated
+    /// runtime roots.
+    #[must_use]
+    pub fn gateway_release_runtime(&self) -> LocalGatewayReleaseRuntime {
+        LocalGatewayReleaseRuntime {
+            runtime_root: self.config.runtime_root.clone(),
+            release_artifact_root: self.config.release_artifact_root.clone(),
+        }
     }
 
     async fn load(&self, run: &Run) -> Result<RunRuntimeInput, RunRuntimeError> {
@@ -162,6 +185,9 @@ impl LocalRunRuntimeManager {
         }
         write_json(&control.join("parameters.json"), &input.parameters)?;
         tracing::debug!(run_id = %run.id, "runtime parameters materialized");
+        if let Some(mailbox_event) = input.mailbox_event.as_ref() {
+            materialize_mailbox_event(&control, mailbox_event)?;
+        }
         let context = HostContext::new(run, input);
         write_json(&control.join("context.json"), &context)?;
         tracing::debug!(run_id = %run.id, "runtime context materialized");
@@ -199,6 +225,85 @@ impl LocalRunRuntimeManager {
             });
         }
         Ok(PreparedRunRuntime { mounts })
+    }
+}
+
+impl LocalGatewayReleaseRuntime {
+    fn active_path(&self, invocation_id: Uuid) -> PathBuf {
+        self.runtime_root
+            .join("gateways")
+            .join(invocation_id.to_string())
+    }
+
+    /// Materializes verified artifacts into a fresh read-only `/release` tree.
+    ///
+    /// # Errors
+    ///
+    /// Returns a redacted error when artifact metadata, the canonical store,
+    /// or the local runtime tree is invalid.
+    pub fn prepare(
+        &self,
+        invocation_id: Uuid,
+        artifacts: &[RunRuntimeArtifact],
+    ) -> Result<VmMount, RunRuntimeError> {
+        if artifacts.is_empty() || artifacts.len() > MAX_RUNTIME_ARTIFACTS {
+            return Err(runtime_error("release artifact count is invalid"));
+        }
+        let gateways = self.runtime_root.join("gateways");
+        fs::create_dir_all(&gateways).map_err(filesystem)?;
+        fs::set_permissions(&gateways, fs::Permissions::from_mode(0o700)).map_err(filesystem)?;
+        let active = self.active_path(invocation_id);
+        if active.exists() {
+            return Err(runtime_error("gateway runtime already exists"));
+        }
+        let staging = self
+            .runtime_root
+            .join(format!(".gateway-prepare-{invocation_id}"));
+        create_directory(&staging, 0o700)?;
+        let release = staging.join("release");
+        let result = (|| {
+            create_directory(&release, 0o700)?;
+            let mut total = 0_u64;
+            for artifact in artifacts {
+                total = total
+                    .checked_add(artifact.size_bytes)
+                    .ok_or_else(|| runtime_error("release artifact size is invalid"))?;
+                if total > MAX_RUNTIME_BYTES {
+                    return Err(runtime_error("release artifact size is invalid"));
+                }
+                materialize_artifact(&self.release_artifact_root, &release, artifact)?;
+            }
+            make_tree_read_only(&release)?;
+            fs::rename(&staging, &active).map_err(filesystem)?;
+            fs::set_permissions(&active, fs::Permissions::from_mode(0o500)).map_err(filesystem)?;
+            Ok::<_, RunRuntimeError>(VmMount {
+                tag: gateway_runtime_mount_tag(invocation_id),
+                host_path: active.join("release"),
+                guest_path: PathBuf::from("/release"),
+                read_only: true,
+            })
+        })();
+        if result.is_err() {
+            let _cleanup = fs::remove_dir_all(&staging);
+        }
+        result
+    }
+
+    /// Removes one gateway release tree after its VM has been destroyed.
+    ///
+    /// # Errors
+    ///
+    /// Returns a redacted error when the path is not a safe local runtime tree.
+    pub fn destroy(&self, invocation_id: Uuid) -> Result<(), RunRuntimeError> {
+        let active = self.active_path(invocation_id);
+        match fs::symlink_metadata(&active) {
+            Ok(_) => {
+                make_tree_removable(&active)?;
+                fs::remove_dir_all(active).map_err(filesystem)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(filesystem(error)),
+        }
     }
 }
 
@@ -273,6 +378,8 @@ struct HostContext<'a> {
     previous_release_id: Option<Uuid>,
     previous_release_mount: Option<&'static str>,
     previous_parameters_path: Option<&'static str>,
+    mailbox_event_path: Option<&'static str>,
+    mailbox_body_path: Option<&'static str>,
 }
 
 impl<'a> HostContext<'a> {
@@ -302,8 +409,58 @@ impl<'a> HostContext<'a> {
                 .previous_parameters
                 .as_ref()
                 .map(|_| "/run/hephaestus/parameters-previous.json"),
+            mailbox_event_path: input
+                .mailbox_event
+                .as_ref()
+                .map(|_| "/run/hephaestus/mailbox-event.json"),
+            mailbox_body_path: input
+                .mailbox_event
+                .as_ref()
+                .map(|_| "/run/hephaestus/mailbox-body"),
         }
     }
+}
+
+#[derive(Serialize)]
+struct MailboxControlEnvelope<'a> {
+    schema_version: u8,
+    mailbox_id: Uuid,
+    event_id: Uuid,
+    body_id: Uuid,
+    method: &'a str,
+    route: &'a str,
+    selected_headers: &'a serde_json::Value,
+    content_type: Option<&'a str>,
+    trace_context: Option<&'a str>,
+    received_at: time::OffsetDateTime,
+    body_path: &'static str,
+}
+
+fn materialize_mailbox_event(
+    control: &Path,
+    event: &MailboxRuntimeEvent,
+) -> Result<(), RunRuntimeError> {
+    if event.body.len() > 1_048_576 {
+        return Err(runtime_error("mailbox event body is invalid"));
+    }
+    if Sha256::digest(&event.body).as_slice() != event.integrity_hash {
+        return Err(runtime_error("mailbox event body integrity is invalid"));
+    }
+    let envelope = MailboxControlEnvelope {
+        schema_version: 1,
+        mailbox_id: event.mailbox_id,
+        event_id: event.event_id,
+        body_id: event.body_id,
+        method: &event.method,
+        route: &event.route,
+        selected_headers: &event.selected_headers,
+        content_type: event.content_type.as_deref(),
+        trace_context: event.trace_context.as_deref(),
+        received_at: event.received_at,
+        body_path: "/run/hephaestus/mailbox-body",
+    };
+    write_json(&control.join("mailbox-event.json"), &envelope)?;
+    write_bytes(&control.join("mailbox-body"), &event.body)
 }
 
 fn materialize_artifact(
@@ -386,6 +543,19 @@ fn write_json(path: &Path, value: &impl Serialize) -> Result<(), RunRuntimeError
     fs::set_permissions(path, fs::Permissions::from_mode(0o444)).map_err(filesystem)
 }
 
+fn write_bytes(path: &Path, bytes: &[u8]) -> Result<(), RunRuntimeError> {
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o400)
+        .custom_flags(o_nofollow())
+        .open(path)
+        .map_err(filesystem)?;
+    file.write_all(bytes).map_err(filesystem)?;
+    file.flush().map_err(filesystem)?;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o444)).map_err(filesystem)
+}
+
 fn make_tree_read_only(root: &Path) -> Result<(), RunRuntimeError> {
     for entry in fs::read_dir(root).map_err(filesystem)? {
         let entry = entry.map_err(filesystem)?;
@@ -437,6 +607,10 @@ fn runtime_mount_tag(prefix: &str, run_id: RunId) -> String {
     format!("{prefix}-{}", run_id.as_uuid().simple())
 }
 
+fn gateway_runtime_mount_tag(invocation_id: Uuid) -> String {
+    format!("{GATEWAY_RELEASE_TAG_PREFIX}-{}", invocation_id.simple())
+}
+
 #[cfg(target_os = "linux")]
 const fn o_nofollow() -> i32 {
     0o400_000 | 0o2_000_000
@@ -478,15 +652,54 @@ fn serialization(_error: serde_json::Error) -> RunRuntimeError {
 #[cfg(test)]
 mod tests {
     use super::{
-        CONTEXT_TAG_PREFIX, PREVIOUS_RELEASE_TAG_PREFIX, RELEASE_TAG_PREFIX, make_tree_read_only,
-        materialize_artifact, runtime_mount_tag,
+        CONTEXT_TAG_PREFIX, LocalGatewayReleaseRuntime, PREVIOUS_RELEASE_TAG_PREFIX,
+        RELEASE_TAG_PREFIX, make_tree_read_only, materialize_artifact, materialize_mailbox_event,
+        runtime_mount_tag,
     };
     use release_artifact_store::LocalArtifactStore;
-    use run_orchestrator::{RunRuntimeArtifact, RunRuntimeArtifactKind};
+    use run_orchestrator::{MailboxRuntimeEvent, RunRuntimeArtifact, RunRuntimeArtifactKind};
     use runtime_types::RunId;
     use sha2::{Digest, Sha256};
     use std::{fs, os::unix::fs::PermissionsExt, process::Command};
     use uuid::Uuid;
+
+    #[test]
+    fn mailbox_input_is_sealed_as_a_control_envelope_and_opaque_body() {
+        let fixture = tempfile::tempdir().expect("fixture");
+        let mailbox_id = Uuid::new_v4();
+        let event_id = Uuid::new_v4();
+        let body_id = Uuid::new_v4();
+        let body = b"guest-only-mailbox-body".to_vec();
+        materialize_mailbox_event(
+            fixture.path(),
+            &MailboxRuntimeEvent {
+                mailbox_id,
+                event_id,
+                body_id,
+                method: String::from("POST"),
+                route: String::from("/event"),
+                selected_headers: serde_json::json!({"x-kind": "proof"}),
+                content_type: Some(String::from("application/octet-stream")),
+                trace_context: None,
+                received_at: time::OffsetDateTime::now_utc(),
+                body: body.clone(),
+                integrity_hash: Sha256::digest(&body).into(),
+            },
+        )
+        .expect("materialize mailbox input");
+        assert_eq!(
+            fs::read(fixture.path().join("mailbox-body")).expect("read body"),
+            body
+        );
+        let envelope: serde_json::Value = serde_json::from_slice(
+            &fs::read(fixture.path().join("mailbox-event.json")).expect("read envelope"),
+        )
+        .expect("parse envelope");
+        assert_eq!(envelope["mailbox_id"], mailbox_id.to_string());
+        assert_eq!(envelope["event_id"], event_id.to_string());
+        assert_eq!(envelope["body_id"], body_id.to_string());
+        assert_eq!(envelope["body_path"], "/run/hephaestus/mailbox-body");
+    }
 
     #[test]
     fn runtime_mount_tags_fit_the_libkrun_limit() {
@@ -501,6 +714,53 @@ mod tests {
             assert_eq!(tag.len(), 36);
             assert_eq!(tag, runtime_mount_tag(prefix, run_id));
         }
+    }
+
+    #[test]
+    fn gateway_runtime_materializes_and_removes_the_exact_release_tree() {
+        let fixture = tempfile::tempdir().expect("fixture");
+        let runtime_root = fixture.path().join("runtime");
+        let store_root = fixture.path().join("store");
+        fs::create_dir(&runtime_root).expect("runtime root");
+        fs::create_dir(&store_root).expect("store root");
+        let key = Uuid::new_v4();
+        let bytes = b"gateway release executable";
+        fs::write(store_root.join(key.simple().to_string()), bytes).expect("object");
+        let invocation = Uuid::new_v4();
+        let runtime = LocalGatewayReleaseRuntime {
+            runtime_root: runtime_root.clone(),
+            release_artifact_root: store_root,
+        };
+
+        let mount = runtime
+            .prepare(
+                invocation,
+                &[RunRuntimeArtifact {
+                    path: String::from("bin/handler"),
+                    kind: RunRuntimeArtifactKind::Executable,
+                    mode: 0o555,
+                    content_hash: Sha256::digest(bytes).into(),
+                    size_bytes: u64::try_from(bytes.len()).expect("length"),
+                    storage_key: key,
+                }],
+            )
+            .expect("materialize gateway release");
+        assert_eq!(mount.guest_path, std::path::PathBuf::from("/release"));
+        assert!(mount.read_only);
+        assert_eq!(
+            fs::read(mount.host_path.join("bin/handler")).expect("materialized executable"),
+            bytes
+        );
+
+        runtime
+            .destroy(invocation)
+            .expect("destroy gateway release");
+        assert!(
+            !runtime_root
+                .join("gateways")
+                .join(invocation.to_string())
+                .exists()
+        );
     }
 
     #[test]

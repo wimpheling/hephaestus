@@ -49,6 +49,16 @@ async fn acceptance_deduplication_outbox_jetstream_redelivery_and_recovery_are_d
         .ensure_mailbox(fixture.project, mailbox_id, fixture.instance)
         .await
         .expect("create instance-owned mailbox");
+    let instance_watch_events_before: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM application_events
+         WHERE scope_kind = 'agent_instance' AND scope_id = $1
+           AND aggregate_type = 'agent_instance'
+           AND event_type = 'agent_instance.changed'",
+    )
+    .bind(fixture.instance.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("load initial instance watch cursor");
     let body = b"real-postgres-nats-mailbox";
     let first_event = event(mailbox_id, fixture.instance, body);
     let duplicate_event = MailboxEvent {
@@ -97,6 +107,28 @@ async fn acceptance_deduplication_outbox_jetstream_redelivery_and_recovery_are_d
     .await
     .expect("load atomic acceptance evidence");
     assert_eq!((payloads, events, deliveries, wake_outbox), (1, 1, 1, 1));
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM application_events
+             WHERE scope_kind = 'agent_instance' AND scope_id = $1
+               AND aggregate_type = 'agent_instance'
+               AND event_type = 'agent_instance.changed'",
+        )
+        .bind(fixture.instance.as_uuid())
+        .fetch_one(&pool)
+        .await
+        .expect("mailbox delivery emits a reauthorizable instance wake"),
+        instance_watch_events_before + 1
+    );
+    let (queue_depth, acceptance_to_dispatch_milliseconds): (i64, i64) = sqlx::query_as(
+        "SELECT queue_depth, acceptance_to_dispatch_milliseconds
+         FROM mailbox_operation_metrics",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("read aggregate-only mailbox operational metrics");
+    assert!(queue_depth >= 1);
+    assert_eq!(acceptance_to_dispatch_milliseconds, 0);
 
     let nats = async_nats::connect(nats_url)
         .await
@@ -248,6 +280,111 @@ async fn acceptance_deduplication_outbox_jetstream_redelivery_and_recovery_are_d
             .await
             .expect("load recovered disposition");
     assert_eq!(disposition, "retryable");
+
+    // A live capability revocation is terminal for this dispatch decision.
+    // Recovery must retain that stable denial rather than converting it into
+    // another application retry after a worker crash.
+    sqlx::query(
+        "UPDATE mailbox_deliveries SET disposition = 'leased', next_eligible_at = NULL
+         WHERE event_id = $1",
+    )
+    .bind(first.event_id.as_uuid())
+    .execute(&pool)
+    .await
+    .expect("reconstruct interrupted authorization settlement");
+    sqlx::query(
+        "UPDATE runs SET failure = 'run authority operation failed: live capability authority was revoked'
+         WHERE id = $1",
+    )
+    .bind(run.run_id.as_uuid())
+    .execute(&pool)
+    .await
+    .expect("persist redacted authorization denial");
+    assert_eq!(
+        store.recover().await.expect("recover authorization denial"),
+        0
+    );
+    let (disposition, denial_code): (String, Option<String>) = sqlx::query_as(
+        "SELECT disposition, denial_code FROM mailbox_deliveries WHERE event_id = $1",
+    )
+    .bind(first.event_id.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("load stable authorization denial");
+    assert_eq!(disposition, "denied");
+    assert_eq!(denial_code.as_deref(), Some("runtime_authorization_denied"));
+
+    // A closed instance run gate defers already-accepted work without binding
+    // it to a run. When reopened, concurrent consumers race the same stable
+    // dispatch command and PostgreSQL admits one stateful attempt only.
+    sqlx::query("UPDATE release_agents SET requires_state = true WHERE id = $1")
+        .bind(fixture.release_agent.as_uuid())
+        .execute(&pool)
+        .await
+        .expect("make gate proof stateful");
+    let mut gated_event = event(mailbox_id, fixture.instance, b"stateful-gate-proof");
+    gated_event.deduplication_key =
+        DeduplicationKey::parse("stateful-gate-proof").expect("distinct deduplication key");
+    let gated = store
+        .accept(
+            fixture.project,
+            &gated_event,
+            b"stateful-gate-proof",
+            u32::try_from(b"stateful-gate-proof".len()).expect("body length"),
+        )
+        .await
+        .expect("accept deferred stateful event");
+    let wake = mailbox_dispatch::MailboxDispatchCommand {
+        operation_id: mailbox_domain::MailboxOperationId::from_uuid(gated.event_id.as_uuid()),
+        event_id: gated.event_id,
+    };
+    store
+        .apply_command(MAILBOX_WAKE_SUBJECT, &wake)
+        .await
+        .expect("make gated event eligible");
+    let dispatch = mailbox_dispatch::MailboxDispatchCommand {
+        operation_id: mailbox_domain::MailboxOperationIdentity::dispatch(
+            mailbox_id,
+            gated.event_id,
+            1,
+        )
+        .id(),
+        event_id: gated.event_id,
+    };
+    store
+        .apply_command(MAILBOX_DISPATCH_SUBJECT, &dispatch)
+        .await
+        .expect("verify deferred dispatch command");
+    sqlx::query("UPDATE agent_instances SET run_gate_open = false WHERE id = $1")
+        .bind(fixture.instance.as_uuid())
+        .execute(&pool)
+        .await
+        .expect("close run gate");
+    assert!(
+        store
+            .claim_dispatch(&dispatch)
+            .await
+            .expect("closed-gate claim")
+            .is_none()
+    );
+    sqlx::query("UPDATE agent_instances SET run_gate_open = true WHERE id = $1")
+        .bind(fixture.instance.as_uuid())
+        .execute(&pool)
+        .await
+        .expect("reopen run gate");
+    let (left, right) = tokio::join!(
+        store.claim_dispatch(&dispatch),
+        store.claim_dispatch(&dispatch)
+    );
+    let runs = [
+        left.expect("first concurrent claim"),
+        right.expect("second concurrent claim"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
+    assert_eq!(runs.len(), 1, "one stateful run crosses the reopened gate");
+    assert!(runs[0].requires_state);
 }
 
 /// Proves the mailbox records remain inspectable after their owner is removed,
@@ -337,6 +474,111 @@ async fn mailbox_rls_isolates_tenants_and_preserves_removed_owner_history() {
     );
 }
 
+/// Proves expiry never removes bytes from an active delivery, and that the
+/// worker cleanup keeps immutable event/hash evidence after a terminal one.
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn mailbox_payload_retention_purges_only_expired_terminal_body_bytes() {
+    let Ok(database_url) = env::var("HEPHAESTUS_POSTGRES_TEST_URL") else {
+        return;
+    };
+    let pool = PgPoolOptions::new()
+        .max_connections(6)
+        .connect(&database_url)
+        .await
+        .expect("connect real PostgreSQL");
+    sqlx::migrate!("../../migrations")
+        .run(&pool)
+        .await
+        .expect("apply mailbox migrations");
+    let fixture = seed_instance(&pool).await;
+    let store = PostgresMailboxRepository::new(pool.clone());
+    let mailbox_id = MailboxId::new();
+    store
+        .ensure_mailbox(fixture.project, mailbox_id, fixture.instance)
+        .await
+        .expect("create instance-owned mailbox");
+    let body = b"retained-until-terminal";
+    let accepted = store
+        .accept(
+            fixture.project,
+            &event(mailbox_id, fixture.instance, body),
+            body,
+            u32::try_from(body.len()).expect("body length"),
+        )
+        .await
+        .expect("accept event");
+    // This proof owns retention rather than JetStream publication; settling
+    // the wake isolates the shared durable consumer for the transport test.
+    sqlx::query("UPDATE outbox SET published_at = now() WHERE id = $1")
+        .bind(accepted.event_id.as_uuid())
+        .execute(&pool)
+        .await
+        .expect("isolate retention fixture from transport proof");
+
+    let mut retention = pool.begin().await.expect("begin retention recalculation");
+    sqlx::query("SET LOCAL ROLE hephaestus_worker")
+        .execute(&mut *retention)
+        .await
+        .expect("use worker role for retention recalculation");
+    sqlx::query("SET LOCAL hephaestus.mailbox_payload_retention_recalculation = 'on'")
+        .execute(&mut *retention)
+        .await
+        .expect("enable narrow retention recalculation");
+    sqlx::query("UPDATE mailbox_payloads SET retained_until = now() - interval '1 second' WHERE id = (SELECT body_id FROM mailbox_events WHERE id = $1)")
+        .bind(accepted.event_id.as_uuid())
+        .execute(&mut *retention)
+        .await
+        .expect("expire body for proof");
+    retention
+        .commit()
+        .await
+        .expect("commit retention recalculation");
+    assert_eq!(
+        store
+            .cleanup_expired_payloads(10)
+            .await
+            .expect("cleanup pending payload"),
+        0
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, Vec<u8>>("SELECT encoded_body FROM mailbox_payloads WHERE id = (SELECT body_id FROM mailbox_events WHERE id = $1)")
+            .bind(accepted.event_id.as_uuid())
+            .fetch_one(&pool)
+            .await
+            .expect("pending body remains"),
+        body
+    );
+
+    sqlx::query("UPDATE mailbox_deliveries SET disposition = 'cancelled', terminal_at = now() WHERE event_id = $1")
+        .bind(accepted.event_id.as_uuid())
+        .execute(&pool)
+        .await
+        .expect("terminal delivery");
+    assert_eq!(
+        store
+            .cleanup_expired_payloads(10)
+            .await
+            .expect("cleanup terminal payload"),
+        1
+    );
+    let (body, purged_at, digest): (Option<Vec<u8>>, Option<OffsetDateTime>, Vec<u8>) =
+        sqlx::query_as(
+            "SELECT encoded_body, body_purged_at, integrity_hash
+             FROM mailbox_payloads WHERE id = (SELECT body_id FROM mailbox_events WHERE id = $1)",
+        )
+        .bind(accepted.event_id.as_uuid())
+        .fetch_one(&pool)
+        .await
+        .expect("load redacted payload provenance");
+    assert!(body.is_none());
+    assert!(purged_at.is_some());
+    assert_eq!(
+        digest,
+        Sha256::digest(b"retained-until-terminal").as_slice()
+    );
+}
+
 async fn visible_event_count(
     pool: &sqlx::PgPool,
     identity: &AuthenticatedIdentity,
@@ -391,6 +633,7 @@ struct Fixture {
     project: Uuid,
     instance: AgentInstanceId,
     revision: AgentInstanceRevisionId,
+    release_agent: ReleaseAgentId,
     owner: AuthenticatedIdentity,
     outsider: AuthenticatedIdentity,
 }
@@ -467,6 +710,7 @@ async fn seed_instance(pool: &sqlx::PgPool) -> Fixture {
         project: project_id,
         instance: instance_id,
         revision: revision_id,
+        release_agent: release_agent_id,
         owner,
         outsider,
     }

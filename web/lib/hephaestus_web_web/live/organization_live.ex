@@ -4,8 +4,11 @@ defmodule HephaestusWebWeb.OrganizationLive do
   alias HephaestusWebWeb.DesignSystem.Pages.OrganizationPage
   alias HephaestusWebWeb.{OrganizationState, PageStream}
 
+  @stream_mode :none
+
   @impl true
   def mount(_params, _session, socket) do
+    _stream_mode = @stream_mode
     state = OrganizationState.new(%{})
 
     socket =

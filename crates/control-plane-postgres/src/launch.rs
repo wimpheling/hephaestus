@@ -55,13 +55,23 @@ struct LaunchAuthorizationRow {
     instance_id: Uuid,
     release_agent_id: Uuid,
     attachment_id: Option<Uuid>,
+    mailbox_dispatch_authorized: bool,
 }
 #[async_trait]
 impl RunLaunchAuthorizer for PgRunLaunchAuthorizer {
     async fn authorize(&self, run: &Run) -> Result<(), run_orchestrator::RunAuthorizationError> {
         let mut tx = self.pool.begin().await.map_err(error)?;
-        let row = sqlx::query_as::<_, LaunchAuthorizationRow>("SELECT COALESCE(request.actor_id, update.actor_id) AS actor_id, COALESCE(request.request_id, update.id, run.command_id) AS request_id, run.run_kind, run.instance_id, run.release_agent_id, run.attachment_id FROM runs AS run LEFT JOIN run_requests AS request ON request.run_id = run.id LEFT JOIN agent_updates AS update ON update.hook_run_id = run.id WHERE run.id = $1")
+        let row = sqlx::query_as::<_, LaunchAuthorizationRow>("SELECT COALESCE(request.actor_id, update.actor_id) AS actor_id, COALESCE(request.request_id, update.id, run.command_id) AS request_id, run.run_kind, run.instance_id, run.release_agent_id, run.attachment_id, EXISTS(SELECT 1 FROM mailbox_delivery_attempts AS attempt JOIN mailbox_deliveries AS delivery ON delivery.event_id = attempt.event_id JOIN mailboxes AS mailbox ON mailbox.id = delivery.mailbox_id JOIN agent_instances AS mailbox_instance ON mailbox_instance.id = run.instance_id JOIN agent_instance_revisions AS mailbox_revision ON mailbox_revision.id = run.instance_revision_id AND mailbox_revision.instance_id = run.instance_id JOIN releases AS mailbox_release ON mailbox_release.id = run.release_id JOIN agent_attachments AS mailbox_attachment ON mailbox_attachment.id = run.attachment_id AND mailbox_attachment.instance_id = run.instance_id WHERE attempt.run_id = run.id AND attempt.instance_id = run.instance_id AND attempt.instance_revision_id = run.instance_revision_id AND delivery.disposition IN ('leased', 'running') AND mailbox.state = 'active' AND mailbox_instance.run_gate_open AND mailbox_instance.state IN ('active', 'update_rejected') AND mailbox_instance.active_revision_id = run.instance_revision_id AND mailbox_revision.runnable AND mailbox_release.state = 'published' AND mailbox_attachment.enabled AND mailbox_attachment.removed_at IS NULL) AS mailbox_dispatch_authorized FROM runs AS run LEFT JOIN run_requests AS request ON request.run_id = run.id LEFT JOIN agent_updates AS update ON update.hook_run_id = run.id WHERE run.id = $1")
             .bind(run.id.as_uuid()).fetch_optional(&mut *tx).await.map_err(error)?.ok_or_else(|| redacted("exact launch provenance is unavailable"))?;
+        // Mailbox dispatch has no end-user run request: it reauthorizes the
+        // exact accepted event, mailbox, run gate, selected immutable
+        // revision, release and target attachment above. The runtime-authority
+        // manager immediately follows with live capability reauthorization
+        // and bearer issuance for this exact run.
+        if row.mailbox_dispatch_authorized {
+            tx.commit().await.map_err(error)?;
+            return Ok(());
+        }
         let Some(actor_id) = row.actor_id else {
             return Err(redacted("launch requester is unavailable"));
         };

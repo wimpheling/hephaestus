@@ -13,6 +13,7 @@ defmodule HephaestusWeb.RPC.ProjectionTest do
 
   alias Hephaestus.Secret.V1.SecretSummary
   alias Hephaestus.Run.V1.{ResultProposal, Run, RunMetrics, RunResult}
+  alias Hephaestus.Gateway.V1.{GatewayIngressOutcome, GatewayLifecycle, GatewaySummary}
 
   alias Hephaestus.Pat.V1.{
     CreatePersonalAccessTokenResponse,
@@ -63,6 +64,18 @@ defmodule HephaestusWeb.RPC.ProjectionTest do
              "status" => "active",
              "allowed_delivery_modes" => ["brokered"]
            } = Projection.to_value(secret)
+  end
+
+  test "projects gateway lifecycle and ingress enums into management values" do
+    gateway = %GatewaySummary{
+      id: %OpaqueId{value: "gateway-id"},
+      lifecycle: GatewayLifecycle.GATEWAY_LIFECYCLE_ENABLED
+    }
+
+    assert %{"id" => "gateway-id", "lifecycle" => "enabled"} = Projection.to_value(gateway)
+
+    assert "timed_out" =
+             Projection.to_value(GatewayIngressOutcome.GATEWAY_INGRESS_OUTCOME_TIMED_OUT)
   end
 
   test "projects runtime metric labels as a bounded string map" do

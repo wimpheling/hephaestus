@@ -18,9 +18,10 @@ row_level_security = true
 async-trait.workspace = true
 authz-domain = { path = "../authz-domain" }
 authz-postgres = { path = "../authz-postgres" }
+brokered-egress-domain = { path = "../brokered-egress-domain" }
 capability-domain = { path = "../capability-domain" }
 forge-domain = { path = "../forge-domain" }
-gateway-edge = { path = "../gateway-edge" }
+gateway-domain = { path = "../gateway-domain" }
 http.workspace = true
 identity-domain = { path = "../identity-domain" }
 release-domain = { path = "../release-domain" }

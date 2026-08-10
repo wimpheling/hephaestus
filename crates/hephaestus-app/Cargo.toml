@@ -113,9 +113,15 @@ workspace-domain = { path = "../workspace-domain" }
 [dev-dependencies]
 registry-token = { path = "../registry-token" }
 rpc-proto = { path = "../rpc-proto", features = ["client"] }
+brokered-egress-domain = { path = "../brokered-egress-domain" }
+secret-broker = { path = "../secret-broker", features = ["test-fixtures"] }
 sqlx.workspace = true
 serial_test = "3"
 tempfile = "3"
+rcgen = "0.13.2"
+rustls = "0.23"
+tokio-rustls = "0.26"
+reqwest.workspace = true
 
 [[bin]]
 name = "hephaestusd"

@@ -8,7 +8,8 @@ use hephaestus_app::{
 use jsonwebtoken::{Algorithm, DecodingKey};
 use oci_builder_runtime_local::LocalOciRuntimeConfig;
 use run_runtime_local::LocalRunRuntimeConfig;
-use secret_broker::DenyingBrokerAdapter;
+use secret_application::BrokerAdapter;
+use secret_broker::{BrokeredHttpsAdapterRegistry, BrokeredHttpsUpstream, DenyingBrokerAdapter};
 use secret_runtime::EphemeralSecretConfig;
 use secret_store::LocalKeyProvider;
 use serde::Deserialize;
@@ -210,7 +211,7 @@ fn environment_config() -> Result<AppConfig, Box<dyn Error>> {
         },
         secret_keys,
         secret_broker_socket,
-        secret_broker_adapter: Arc::new(DenyingBrokerAdapter),
+        secret_broker_adapter: broker_adapter_from_environment()?,
         vm_backend,
         root_images,
         oci_builder,
@@ -228,6 +229,21 @@ fn environment_config() -> Result<AppConfig, Box<dyn Error>> {
         startup_timeout: Duration::from_secs(30),
         shutdown_timeout: Duration::from_secs(30),
     })
+}
+
+fn broker_adapter_from_environment() -> Result<Arc<dyn BrokerAdapter>, Box<dyn Error>> {
+    let Some(raw) = env::var_os("HEPHAESTUS_BROKERED_HTTPS_UPSTREAMS_JSON") else {
+        return Ok(Arc::new(DenyingBrokerAdapter));
+    };
+    let upstreams: Vec<BrokeredHttpsUpstream> = serde_json::from_slice(
+        raw.into_string()
+            .map_err(|_| "HEPHAESTUS_BROKERED_HTTPS_UPSTREAMS_JSON must be valid UTF-8")?
+            .as_bytes(),
+    )?;
+    if upstreams.is_empty() {
+        return Err("HEPHAESTUS_BROKERED_HTTPS_UPSTREAMS_JSON must not be empty".into());
+    }
+    Ok(Arc::new(BrokeredHttpsAdapterRegistry::new(upstreams)?))
 }
 
 fn gateway_edge_from_environment() -> Result<Option<GatewayEdgeConfig>, Box<dyn Error>> {

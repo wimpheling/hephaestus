@@ -3,6 +3,9 @@
 use bytes::Bytes;
 use http::{HeaderMap, HeaderValue, Method, StatusCode};
 use runtime_types::RunId;
+use secret_broker::{
+    BrokerExecutor, BrokerServer, WireBrokerRequest, WireBrokerResponse, WireBrokerStatus,
+};
 use secret_domain::{SecretSlotKey, SecretValue};
 use secret_runtime::{EphemeralSecretConfig, RawSecretFile, materialize};
 use std::{
@@ -19,11 +22,41 @@ use vm_conformance::ProviderHarness;
 use vm_libkrun::{LibkrunConfig, LibkrunProvider};
 use vm_trait::{
     DiskFormat, GuestCommand, LogStream, NetworkMode, PortForward, PortProtocol,
-    PrivateHttpRequest, RootFilesystem, StopMode, VmDisk, VmError, VmEvent, VmId, VmMount,
-    VmProvider, VmResources, VmSpec,
+    PrivateHttpRequest, RUNTIME_AUTHORITY_CREDENTIAL_BYTES, RootFilesystem,
+    RuntimeAuthorityBootstrap, StopMode, VmDisk, VmError, VmEvent, VmId, VmMount, VmProvider,
+    VmResources, VmSpec,
 };
 
 const ENABLE_FLAG: &str = "HEPHAESTUS_LIBKRUN_INTEGRATION";
+
+/// Host fixture that proves the released guest client forwarded only the exact
+/// runtime bearer and canonical broker request across the private vsock path.
+struct IntegrationBroker {
+    credential: [u8; RUNTIME_AUTHORITY_CREDENTIAL_BYTES],
+    session_id: uuid::Uuid,
+}
+
+#[async_trait::async_trait]
+impl BrokerExecutor for IntegrationBroker {
+    async fn execute(&self, request: WireBrokerRequest) -> WireBrokerResponse {
+        assert_eq!(request.credential, self.credential);
+        assert_eq!(request.run_id.as_uuid(), self.session_id);
+        assert_eq!(request.slot, "model");
+        assert_eq!(request.destination, "api.example.test");
+        assert_eq!(request.operation, "https_v1");
+        let body: serde_json::Value =
+            serde_json::from_slice(&request.body).expect("canonical brokered HTTPS body");
+        assert_eq!(body["rule_id"], "00000000-0000-0000-0000-000000000002");
+        assert_eq!(body["method"], "get");
+        assert_eq!(body["path_and_query"], "/v1/probe");
+        assert_eq!(body["headers"], serde_json::json!([]));
+        assert_eq!(body["body"], serde_json::json!([]));
+        WireBrokerResponse {
+            status: WireBrokerStatus::Succeeded,
+            body: b"ok".to_vec(),
+        }
+    }
+}
 
 #[tokio::test(flavor = "multi_thread")]
 // Keeping the hardware scenarios sequential guarantees that they share no
@@ -75,10 +108,24 @@ async fn boots_and_exercises_guest_runtime_without_privilege_escalation() {
         &runtime_root,
         vec![image_root],
         vec![disk_root],
-        vec![mount_root],
+        vec![mount_root.clone()],
         env!("CARGO_BIN_EXE_hephaestus-vm-libkrun-worker"),
         cgroup_root,
     );
+    let broker_socket = mount_root.join("brokered-egress.sock");
+    let broker_credential = [0xA5; RUNTIME_AUTHORITY_CREDENTIAL_BYTES];
+    let broker_session = uuid::Uuid::new_v4();
+    let broker_server = BrokerServer::bind(
+        &broker_socket,
+        Arc::new(IntegrationBroker {
+            credential: broker_credential,
+            session_id: broker_session,
+        }),
+    )
+    .expect("bind private broker socket");
+    let broker_shutdown = tokio_util::sync::CancellationToken::new();
+    let broker_task = tokio::spawn(broker_server.serve(broker_shutdown.clone()));
+    config.broker_socket_path = Some(broker_socket);
     config.startup_timeout = Duration::from_secs(15);
     config.readiness_timeout = Duration::from_secs(45);
     let expected_limits = config.limits.clone();
@@ -339,6 +386,81 @@ async fn boots_and_exercises_guest_runtime_without_privilege_escalation() {
         .expect("destroy disabled-network VM");
     assert!(!runtime_root.join(&disabled_id).exists());
     assert!(!cgroup_root_for_assertion.join(&disabled_id).exists());
+
+    // This is the VM half of the durable mailbox journey: the same sealed
+    // control mount produced by `run-runtime-local` reaches a real libkrun
+    // guest as a generic envelope plus exact opaque body, never via NATS.
+    let mailbox_root = mount_root.join("mailbox-control");
+    fs::create_dir(&mailbox_root).expect("create mailbox control root");
+    fs::write(
+        mailbox_root.join("mailbox-event.json"),
+        r#"{"schema_version":1,"method":"POST","route":"/mailbox/libkrun-proof","body_path":"/run/hephaestus/mailbox-body"}"#,
+    )
+    .expect("write mailbox envelope");
+    fs::write(
+        mailbox_root.join("mailbox-body"),
+        b"real-libkrun-mailbox-body",
+    )
+    .expect("write opaque mailbox body");
+    fs::set_permissions(&mailbox_root, fs::Permissions::from_mode(0o555))
+        .expect("seal mailbox control root");
+    let mut mailbox_spec = mode_spec(
+        rootfs.clone(),
+        "integration-mailbox-control",
+        "--expect-mailbox",
+        NetworkMode::Disabled,
+    );
+    mailbox_spec.mounts.push(VmMount {
+        tag: "mailbox-control".to_owned(),
+        host_path: mailbox_root,
+        guest_path: PathBuf::from("/run/hephaestus"),
+        read_only: true,
+    });
+    let mailbox = provider
+        .provision(mailbox_spec)
+        .await
+        .expect("provision mailbox control VM");
+    let mailbox_id = mailbox.id().0.clone();
+    let mut mailbox_events = mailbox.subscribe_events();
+    mailbox.start().await.expect("start mailbox control VM");
+    assert!(
+        collect_logs_until_exit(&mut mailbox_events)
+            .await
+            .contains("mailbox=ok")
+    );
+    mailbox.destroy().await.expect("destroy mailbox control VM");
+    assert!(!runtime_root.join(&mailbox_id).exists());
+    assert!(!cgroup_root_for_assertion.join(&mailbox_id).exists());
+
+    let mut broker_spec = mode_spec(
+        rootfs.clone(),
+        "integration-broker-only-no-ip-bypass",
+        "--expect-broker-only",
+        NetworkMode::BrokerOnly,
+    );
+    broker_spec.runtime_authority = Some(RuntimeAuthorityBootstrap::new(
+        broker_session,
+        1,
+        broker_credential,
+    ));
+    let broker_only = provider
+        .provision(broker_spec)
+        .await
+        .expect("provision broker-only VM");
+    let broker_only_id = broker_only.id().0.clone();
+    let mut broker_only_events = broker_only.subscribe_events();
+    broker_only.start().await.expect("start broker-only VM");
+    let broker_only_markers = collect_logs_until_exit(&mut broker_only_events).await;
+    assert!(broker_only_markers.contains("network-disabled=ok"));
+    assert!(broker_only_markers.contains("broker-vsock=ok"));
+    broker_shutdown.cancel();
+    broker_task
+        .await
+        .expect("broker server task")
+        .expect("broker server exit");
+    broker_only.destroy().await.expect("destroy broker-only VM");
+    assert!(!runtime_root.join(&broker_only_id).exists());
+    assert!(!cgroup_root_for_assertion.join(&broker_only_id).exists());
 
     let http = provider
         .provision(mode_spec(

@@ -84,3 +84,8 @@ phoenix_reducer = "identity_profile_changed"
 field = "registry_publication_changed"
 rust_projection = "RegistryPublicationChanged"
 phoenix_reducer = "registry_publication_changed"
+
+[[variants]]
+field = "gateway_changed"
+rust_projection = "GatewayChanged"
+phoenix_reducer = "gateway_changed"
