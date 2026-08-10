@@ -1609,6 +1609,14 @@ async fn seed_with_config(pool: &PgPool, source: &str) -> Fixture {
     let receive_id = Uuid::new_v4();
     let build = BuildRequestId::new();
     let commit = "a".repeat(40);
+    let build_image_key = format!("build-{source_repository}");
+    let runtime_image_key = format!("runtime-{source_repository}");
+    let source = source
+        .replace("key = \"build\"", &format!("key = \"{build_image_key}\""))
+        .replace(
+            "key = \"runtime\"",
+            &format!("key = \"{runtime_image_key}\""),
+        );
     sqlx::query("INSERT INTO users (id, display_name) VALUES ($1, $2)")
         .bind(actor.as_uuid())
         .bind(format!("release-actor-{actor}"))
@@ -1685,7 +1693,7 @@ async fn seed_with_config(pool: &PgPool, source: &str) -> Fixture {
     .await
     .expect("seed receive");
     let digest = "a".repeat(64);
-    for key in ["build", "runtime"] {
+    for key in [&build_image_key, &runtime_image_key] {
         sqlx::query(
             "INSERT INTO oci_images
              (id, key, display_name, image_reference, toolchains, architectures,
@@ -1747,11 +1755,13 @@ async fn seed_with_config(pool: &PgPool, source: &str) -> Fixture {
         "INSERT INTO build_request_images
          (build_request_id, execution_context, image_id, image_key, image_reference)
          SELECT $1, context.execution_context, image.id, image.key, image.image_reference
-           FROM (VALUES ('build'::text, 'build'::text), ('guest', 'runtime'))
+           FROM (VALUES ('build'::text, $2::text), ('guest', $3::text))
                     AS context(execution_context, image_key)
            JOIN oci_images AS image ON image.key = context.image_key",
     )
     .bind(build.as_uuid())
+    .bind(&build_image_key)
+    .bind(&runtime_image_key)
     .execute(pool)
     .await
     .expect("seed build image snapshots");
