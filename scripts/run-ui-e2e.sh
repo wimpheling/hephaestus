@@ -19,6 +19,7 @@ readonly secret_runtime_root
 postgres_container="hephaestus-ui-postgres-$$"
 nats_container="hephaestus-ui-nats-$$"
 web_container="hephaestus-ui-web-$$"
+web_setup_container="hephaestus-ui-web-setup-$$"
 oidc_pid=""
 daemon_pid=""
 base_port=$((20000 + ($$ % 10000) * 3))
@@ -30,12 +31,33 @@ readonly daemon_url="http://127.0.0.1:${daemon_port}"
 readonly web_url="http://127.0.0.1:${web_port}"
 readonly secret_sentinel="HEPHAESTUS_BROWSER_SECRET_4d7ccf"
 
+capture_web_logs() {
+    podman logs "${web_container}" >"${fixture_root}/web.log" 2>&1 || true
+}
+
+report_web_diagnostics() {
+    if podman container exists "${web_container}"; then
+        podman inspect --format \
+            'Phoenix container state: {{.State.Status}} (exit {{.State.ExitCode}})' \
+            "${web_container}" >&2 || true
+        capture_web_logs
+    fi
+    if [[ -f "${fixture_root}/web.log" ]]; then
+        tail -200 "${fixture_root}/web.log" >&2
+    fi
+}
+
 cleanup() {
     local status="$?"
     if [[ "${status}" -ne 0 ]]; then
         if [[ -f "${fixture_root}/daemon.log" ]]; then
             tail -200 "${fixture_root}/daemon.log" >&2
         fi
+        if [[ -f "${fixture_root}/web-setup.log" ]] &&
+            ! podman container exists "${web_container}"; then
+            tail -200 "${fixture_root}/web-setup.log" >&2
+        fi
+        report_web_diagnostics
         podman exec "${postgres_container}" psql --username postgres \
             --dbname hephaestus --tuples-only --command \
             "SELECT id, name, organization_id, project_id, status FROM secrets ORDER BY created_at" \
@@ -68,10 +90,9 @@ cleanup() {
             --dbname hephaestus --tuples-only --command \
             "SELECT event.scope_kind, event.scope_id, event.cursor, outbox.published_at IS NOT NULL AS published, outbox.dead_lettered_at IS NOT NULL AS dead_lettered, outbox.last_error FROM product_event_outbox outbox JOIN application_events event ON event.id = outbox.event_id ORDER BY event.occurred_at, event.cursor" \
             >&2 2>/dev/null || true
-        podman logs "${web_container}" >&2 2>/dev/null || true
     fi
     if [[ "${HEPHAESTUS_E2E_KEEP_FIXTURES:-0}" == "1" ]]; then
-        podman logs "${web_container}" >"${fixture_root}/web.log" 2>&1 || true
+        capture_web_logs
     fi
     if [[ -n "${daemon_pid}" ]]; then
         kill "${daemon_pid}" 2>/dev/null || true
@@ -81,7 +102,8 @@ cleanup() {
         kill "${oidc_pid}" 2>/dev/null || true
         wait "${oidc_pid}" 2>/dev/null || true
     fi
-    podman stop "${web_container}" >/dev/null 2>&1 || true
+    podman rm --force "${web_container}" >/dev/null 2>&1 || true
+    podman rm --force "${web_setup_container}" >/dev/null 2>&1 || true
     podman stop "${nats_container}" >/dev/null 2>&1 || true
     podman stop "${postgres_container}" >/dev/null 2>&1 || true
     if [[ "${HEPHAESTUS_E2E_KEEP_FIXTURES:-0}" == "1" ]]; then
@@ -286,7 +308,19 @@ wait_for_url "${daemon_url}/healthz" "${fixture_root}/daemon.log"
 
 # The repository may also be mounted by the persistent local server, so keep
 # one shared SELinux label across development containers.
-podman run --detach --rm \
+podman run --rm \
+    --name "${web_setup_container}" \
+    --network host \
+    --volume "${repo_root}:/workspace:z" \
+    --workdir /workspace/web \
+    --env MIX_ENV=dev \
+    docker.io/hexpm/elixir:1.18.4-erlang-27.3.4-debian-bookworm-20250428-slim \
+    sh -lc 'apt-get update -qq && apt-get install -y -qq --no-install-recommends ca-certificates >/dev/null && rm -rf /var/lib/apt/lists/* && mix local.hex --force >/dev/null && mix deps.get && mix assets.setup && mix assets.build' \
+    >"${fixture_root}/web-setup.log" 2>&1
+
+# Keep this container until cleanup. If Phoenix exits before readiness, its
+# logs and exit status remain available to the failure diagnostics.
+podman run --detach \
     --name "${web_container}" \
     --network host \
     --volume "${repo_root}:/workspace:z" \
@@ -301,7 +335,7 @@ podman run --detach --rm \
     --env HEPHAESTUS_BROWSER_OIDC_CLIENT_SECRET="development-secret" \
     --env HEPHAESTUS_BROWSER_OIDC_REDIRECT_URI="${web_url}/auth/oidc/callback" \
     docker.io/hexpm/elixir:1.18.4-erlang-27.3.4-debian-bookworm-20250428-slim \
-    sh -lc 'mix local.hex --force >/dev/null && mix clean && mix phx.server' \
+    sh -lc 'mix phx.server' \
     >"${fixture_root}/web-container-id"
 wait_for_url "${web_url}/" "${fixture_root}/web.log"
 assert_web_isolation
@@ -320,7 +354,7 @@ HEPHAESTUS_E2E_EVIDENCE_DIR="${fixture_root}/screenshots" \
         exec npm test
     '
 
-podman logs "${web_container}" >"${fixture_root}/web.log" 2>&1
+capture_web_logs
 podman exec "${postgres_container}" pg_dump --username postgres --dbname hephaestus \
     >"${fixture_root}/postgres.sql"
 

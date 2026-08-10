@@ -251,21 +251,53 @@ async fn exact_guest_output_becomes_one_immutable_draft() {
         executor.execute(failed_build).await,
         Err(BuildExecutionError::Vm)
     ));
-    let failed_event: serde_json::Value = sqlx::query_scalar(
-        "SELECT payload FROM outbox
-         WHERE aggregate_type = 'release' AND aggregate_id = $1
-           AND subject = 'hephaestus.build.failed.v1'",
+    let failed_state: (String, String, String, serde_json::Value) = sqlx::query_as(
+        "SELECT request.state, execution.state, execution.failure_code, request.diagnostics
+         FROM build_requests AS request
+         JOIN build_executions AS execution
+           ON execution.build_request_id = request.id
+         WHERE request.id = $1",
     )
     .bind(failed_build.as_uuid())
     .fetch_one(&pool)
     .await
-    .expect("transactional build failure event");
-    assert_eq!(failed_event["build_request_id"], failed_build.to_string());
-    assert_eq!(failed_event["failure_code"], "vm_provision");
-    assert_eq!(failed_event["schema_version"], 1);
-    assert_eq!(failed_event["message_id"], failed_event["idempotency_key"]);
-    assert!(failed_event["request_id"].is_null());
-    assert!(failed_event["trace_id"].is_null());
+    .expect("durable build failure");
+    assert_eq!(
+        failed_state,
+        (
+            String::from("failed"),
+            String::from("failed"),
+            String::from("vm_provision"),
+            serde_json::json!([{"code": "vm_provision"}]),
+        )
+    );
+
+    let failed_event: (String, String, String, Uuid, String) = sqlx::query_as(
+        "SELECT event.event_type, event.change_kind, event.safe_state,
+                event.related_id_one, outbox.subject
+         FROM application_events AS event
+         JOIN product_event_outbox AS outbox ON outbox.event_id = event.id
+         WHERE event.aggregate_type = 'build' AND event.aggregate_id = $1
+           AND event.event_type = 'build.changed'
+           AND event.change_kind = 'state_changed'
+           AND event.safe_state = 'failed'
+         ORDER BY event.cursor DESC
+         LIMIT 1",
+    )
+    .bind(failed_build.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("canonical transactional build failure event");
+    assert_eq!(
+        failed_event,
+        (
+            String::from("build.changed"),
+            String::from("state_changed"),
+            String::from("failed"),
+            repository_id,
+            String::from("hephaestus.product.event.v1"),
+        )
+    );
 
     let denied_build = BuildRequestId::new();
     copy_build_request(&pool, build_id, denied_build, [8_u8; 32]).await;

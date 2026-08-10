@@ -1098,7 +1098,7 @@ pub enum BuildExecutionError {
     Release,
     /// Durable persistence failed.
     #[error(transparent)]
-    Database(#[from] BuildRepositoryError),
+    Database(BuildRepositoryError),
     /// A validated release value could not be reconstructed.
     #[error(transparent)]
     ReleaseValue(#[from] release_domain::ReleaseValueError),
@@ -1108,6 +1108,19 @@ pub enum BuildExecutionError {
     /// Host filesystem operation failed.
     #[error("isolated build filesystem operation failed")]
     Filesystem,
+}
+
+impl From<BuildRepositoryError> for BuildExecutionError {
+    fn from(error: BuildRepositoryError) -> Self {
+        match error {
+            BuildRepositoryError::Unavailable => Self::Unavailable,
+            BuildRepositoryError::AlreadyClaimed => Self::AlreadyClaimed,
+            BuildRepositoryError::Unauthorized => Self::Unauthorized,
+            BuildRepositoryError::Authorization => Self::Authorization,
+            BuildRepositoryError::InvalidData => Self::StoredState,
+            other => Self::Database(other),
+        }
+    }
 }
 
 #[cfg(test)]
