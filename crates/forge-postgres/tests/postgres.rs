@@ -30,7 +30,8 @@ async fn persists_exact_config_and_deduplicates_receive() {
         return;
     };
     seed_reusable_attachment(&pool, &repository).await;
-    let (commit, update) = commit_and_update(&temporary, &repository, valid_config()).await;
+    let config = valid_config(repository.id.as_uuid());
+    let (commit, update) = commit_and_update(&temporary, &repository, &config).await;
     let receive_id = ReceiveId::new();
     let first = service
         .accept_receive(
@@ -88,7 +89,7 @@ async fn persists_exact_config_and_deduplicates_receive() {
     assert_eq!(reusable_events, 1);
 
     let work = temporary.path().join("work");
-    let invalid = valid_config().replace("version = 2", "version = 99");
+    let invalid = config.replace("version = 2", "version = 99");
     tokio::fs::write(work.join("agent.toml"), invalid)
         .await
         .expect("invalid agent configuration");
@@ -159,7 +160,8 @@ async fn forge_outbox_retry_is_deduplicated_by_jetstream() {
     .await
     .expect("isolate forge outbox fixture");
     seed_reusable_attachment(&pool, &repository).await;
-    let (_, update) = commit_and_update(&temporary, &repository, valid_config()).await;
+    let config = valid_config(repository.id.as_uuid());
+    let (_, update) = commit_and_update(&temporary, &repository, &config).await;
     service
         .accept_receive(&repository, ReceiveId::new(), "integration-user", &[update])
         .await
@@ -244,8 +246,18 @@ async fn pushed_config_publishes_command_and_starts_vm() {
     else {
         return;
     };
+    // The publisher scans the shared forge outbox, so pre-existing fixtures
+    // must not supply an older StartRun delivery to this scenario's consumer.
+    sqlx::query(
+        "UPDATE outbox SET published_at = now()
+         WHERE aggregate_type = 'forge' AND published_at IS NULL",
+    )
+    .execute(&pool)
+    .await
+    .expect("isolate forge start-run fixture");
     seed_reusable_attachment(&pool, &repository).await;
-    let (_, update) = commit_and_update(&temporary, &repository, valid_config()).await;
+    let config = valid_config(repository.id.as_uuid());
+    let (_, update) = commit_and_update(&temporary, &repository, &config).await;
     let receive = service
         .accept_receive(&repository, ReceiveId::new(), "integration-user", &[update])
         .await
@@ -346,10 +358,6 @@ async fn pushed_config_publishes_command_and_starts_vm() {
         .delete_stream("HEPH_RUN_COMMANDS")
         .await
         .expect("delete command stream");
-    context
-        .delete_stream("HEPH_RUN_EVENTS")
-        .await
-        .expect("delete run event stream");
     context
         .delete_stream("HEPHAESTUS_GIT_EVENTS")
         .await
@@ -474,7 +482,38 @@ async fn fixture() -> Option<(PgPool, PgForgeRepository, Repository, tempfile::T
         })
         .await
         .expect("repository");
+    seed_catalog_images(&pool, repository.id.as_uuid()).await;
     Some((pool, service, repository, temporary))
+}
+
+async fn seed_catalog_images(pool: &PgPool, repository_id: Uuid) {
+    for (key, display_name, image_reference) in [
+        (
+            fixture_image_key("build", repository_id),
+            String::from("Forge test build image"),
+            fixture_image_reference("forge-build"),
+        ),
+        (
+            fixture_image_key("runtime", repository_id),
+            String::from("Forge test runtime image"),
+            fixture_image_reference("forge-runtime"),
+        ),
+    ] {
+        sqlx::query(
+            "INSERT INTO oci_images
+             (id, key, display_name, image_reference, toolchains, architectures,
+              availability_state, provenance, platform_policy_version)
+             VALUES ($1, $2, $3, $4, '[]'::jsonb, ARRAY['x86_64'],
+                     'available', '{}'::jsonb, 'test/v1')",
+        )
+        .bind(Uuid::new_v4())
+        .bind(key)
+        .bind(display_name)
+        .bind(image_reference)
+        .execute(pool)
+        .await
+        .expect("seed fixture OCI image");
+    }
 }
 
 async fn seed_reusable_attachment(pool: &PgPool, repository: &Repository) {
@@ -775,16 +814,16 @@ async fn git_output(directory: &Path, arguments: &[&str]) -> String {
         .to_owned()
 }
 
-const fn valid_config() -> &'static str {
+fn valid_config(repository_id: Uuid) -> String {
     r#"
 version = 2
 [agent]
 name = "Reviewer"
 key = "reviewer"
 [build]
+image = { key = "__BUILD_IMAGE_KEY__" }
 command = "/bin/build"
 working_directory = "/source"
-root_image = "build@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 triggers = ["refs/heads/main"]
 [build.resources]
 vcpus = 1
@@ -795,14 +834,13 @@ profile = "disabled"
 path = "bin/reviewer"
 kind = "executable"
 [guest]
+image = { key = "__RUNTIME_IMAGE_KEY__" }
 command = "bin/reviewer"
 arguments = []
 working_directory = "bin"
 [resources]
 vcpus = 1
 memory_mib = 256
-[root_image]
-reference = "runtime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 [workspace]
 mount = true
 path = "/workspace/repo"
@@ -814,4 +852,22 @@ profile = "disabled"
 [triggers]
 push = false
 "#
+    .replace(
+        "__BUILD_IMAGE_KEY__",
+        &fixture_image_key("build", repository_id),
+    )
+    .replace(
+        "__RUNTIME_IMAGE_KEY__",
+        &fixture_image_key("runtime", repository_id),
+    )
+}
+
+fn fixture_image_key(kind: &str, repository_id: Uuid) -> String {
+    format!("forge-{kind}-{}", repository_id.simple())
+}
+
+fn fixture_image_reference(kind: &str) -> String {
+    let first = Uuid::new_v4().simple().to_string();
+    let second = Uuid::new_v4().simple().to_string();
+    format!("{kind}@sha256:{first}{second}")
 }

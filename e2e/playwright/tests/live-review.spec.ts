@@ -56,9 +56,10 @@ test.describe.serial("release, instance, secret, and live-review product journey
 
     await page.goto(`/projects/${fixture.projectId}/gateways`);
     await waitForLiveView(page);
-    await expect(page.locator(`#gateway-${gateway.id}`)).toContainText("browser-gateway");
+    const gatewayRow = page.locator(`#gateway-${gateway.id}`);
+    await expect(gatewayRow).toContainText(gateway.name);
 
-    await page.getByRole("link", {name: "Inspect"}).click();
+    await gatewayRow.click();
     await expect(page).toHaveURL(
       `/projects/${fixture.projectId}/gateways/${gateway.id}`
     );
@@ -598,8 +599,11 @@ async function queryBuilds(repositoryId: string) {
 
 async function seedGateway(
   fixture: Awaited<ReturnType<typeof loadFixture>>
-): Promise<{id: string}> {
+): Promise<{id: string; name: string}> {
   const gatewayId = randomUUID();
+  // Playwright retries reuse the persistent local database. A per-attempt
+  // name makes this fixture independent of a partially completed prior run.
+  const gatewayName = `browser-gateway-${gatewayId}`;
   const revisionId = randomUUID();
   const routeId = randomUUID();
   const client = new pg.Client({connectionString: databaseUrl});
@@ -616,8 +620,8 @@ async function seedGateway(
   try {
     await client.query(
       `INSERT INTO gateways (id, project_id, repository_id, name, lifecycle, created_by)
-       VALUES ($1, $2, $3, 'browser-gateway', 'enabled', $4)`,
-      [gatewayId, fixture.projectId, fixture.repositoryId, ownerId]
+       VALUES ($1, $2, $3, $4, 'enabled', $5)`,
+      [gatewayId, fixture.projectId, fixture.repositoryId, gatewayName, ownerId]
     );
     await client.query(
       `INSERT INTO gateway_revisions
@@ -643,7 +647,7 @@ async function seedGateway(
   } finally {
     await client.end();
   }
-  return {id: gatewayId};
+  return {id: gatewayId, name: gatewayName};
 }
 
 async function verifiableBuildId() {

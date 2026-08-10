@@ -23,7 +23,7 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.ProjectGatewayPage do
       title="Gateway unavailable"
       message="Gateway information is not ready."
     >
-      <.frame variant={:summary_body}>
+      <.frame id="project-gateway" variant={:summary_body}>
         <.breadcrumbs id="project-gateway-breadcrumbs">
           <:item navigate={@gateways_destination}>Gateways</:item>
           <:current>{@gateway["name"]}</:current>
@@ -34,7 +34,7 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.ProjectGatewayPage do
           description="Immutable gateway revisions and authorized ingress outcomes."
         >
           <:actions>
-            <.tag>{@gateway["lifecycle"]}</.tag>
+            <.tag>Lifecycle: {@gateway["lifecycle"]}</.tag>
             <.action
               :for={action <- @lifecycle_actions}
               interaction={:event}
