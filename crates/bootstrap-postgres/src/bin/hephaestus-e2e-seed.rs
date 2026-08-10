@@ -12,12 +12,17 @@ use sqlx::postgres::PgPoolOptions;
 use std::{env, error::Error, path::PathBuf, sync::Arc};
 use uuid::Uuid;
 
+// Kept in the binary's compilation environment by build.rs so a newly added
+// migration invalidates cached `sqlx::migrate!` output.
+const MIGRATION_FINGERPRINT: &str = env!("HEPHAESTUS_MIGRATION_FINGERPRINT");
+
 const USER_ID: &str = "10000000-0000-4000-8000-000000000001";
 const OUTSIDER_USER_ID: &str = "10000000-0000-4000-8000-000000000003";
 const ORGANIZATION_ID: &str = "10000000-0000-4000-8000-000000000002";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    std::hint::black_box(MIGRATION_FINGERPRINT);
     let schema_only = env::args_os()
         .nth(1)
         .is_some_and(|argument| argument == "--schema-only");
@@ -230,13 +235,27 @@ async fn seed_release_catalog(
                 "name": "Reusable reviewer",
                 "key": "browser-reviewer"
             },
+            "build": {
+                "image": {"key": "fixture-root"},
+                "command": "/bin/sh",
+                "arguments": ["-c", "true"],
+                "working_directory": "/workspace/source",
+                "resources": {"vcpus": 1, "memory_mib": 128},
+                "network": {"profile": "disabled"},
+                "artifacts": [{
+                    "path": "reports/result.txt",
+                    "kind": "file",
+                    "media_type": "text/plain"
+                }],
+                "triggers": []
+            },
             "guest": {
+                "image": {"key": "fixture-root"},
                 "command": "bin/browser-reviewer",
                 "arguments": [],
                 "working_directory": "bin"
             },
             "resources": {"vcpus": 1, "memory_mib": 128},
-            "root_image": {"reference": "fixture-root@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
             "workspace": {
                 "mount": true,
                 "path": "/workspace/repo",
@@ -299,7 +318,8 @@ async fn seed_release_catalog(
             "executable": "bin/browser-reviewer",
             "arguments": [],
             "working_directory": "bin",
-            "root_image_digest": "fixture-root@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "image_reference": "registry.browser.invalid/platform/images/fixture-root@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "root_image_digest": "registry.browser.invalid/platform/images/fixture-root@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "requires_state": true,
             "policy_ceiling": {
                 "vcpus": 1,
@@ -362,7 +382,7 @@ async fn seed_builder_catalog(pool: &sqlx::PgPool) -> Result<(), Box<dyn Error>>
          VALUES
            ('20000000-0000-4000-8000-000000000001', 'fixture-root',
             'Browser fixture build root',
-            'fixture-root@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            'registry.browser.invalid/platform/images/fixture-root@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
             '[{\"name\":\"shell\",\"version\":\"fixture\"}]'::jsonb,
             ARRAY['x86_64'], 'available',
             '{\"source\":\"e2e-fixture\"}'::jsonb, 'e2e-fixture-v1')
@@ -371,6 +391,83 @@ async fn seed_builder_catalog(pool: &sqlx::PgPool) -> Result<(), Box<dyn Error>>
            availability_state = EXCLUDED.availability_state,
            provenance = EXCLUDED.provenance,
            platform_policy_version = EXCLUDED.platform_policy_version",
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO registry_namespaces
+           (id, repository_path, owner_kind, platform_image_key)
+         VALUES
+           ('20000000-0000-4000-8000-000000000002',
+            'platform/images/fixture-root', 'platform_image', 'fixture-root')
+         ON CONFLICT (repository_path) DO NOTHING",
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO registry_publications
+           (id, namespace_id, owner_kind, platform_image_key, registry_authority,
+            expected_digest, expected_media_type, expected_size, policy_version,
+            state)
+         VALUES
+           ('20000000-0000-4000-8000-000000000003',
+            '20000000-0000-4000-8000-000000000002', 'platform_image',
+            'fixture-root', 'registry.browser.invalid',
+            'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            'application/vnd.oci.image.index.v1+json', 1, 'e2e-fixture-v1',
+            'pending')
+         ON CONFLICT (namespace_id, registry_authority, expected_digest, policy_version)
+         DO NOTHING",
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO registry_publication_platforms
+           (publication_id, digest, size, media_type, operating_system, architecture)
+         VALUES
+           ('20000000-0000-4000-8000-000000000003',
+            'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            1, 'application/vnd.oci.image.manifest.v1+json', 'linux', 'x86_64')
+         ON CONFLICT (publication_id, digest) DO NOTHING",
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO registry_publication_evidence
+           (publication_id, kind, subject_digest, digest, size, media_type, artifact_type)
+         VALUES
+           ('20000000-0000-4000-8000-000000000003', 'sbom',
+            'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+            1, 'application/vnd.oci.artifact.manifest.v1+json',
+            'application/vnd.cyclonedx+json'),
+           ('20000000-0000-4000-8000-000000000003', 'provenance',
+            'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            'sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+            1, 'application/vnd.oci.artifact.manifest.v1+json',
+            'application/vnd.in-toto+json'),
+           ('20000000-0000-4000-8000-000000000003', 'scan',
+            'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            'sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+            1, 'application/vnd.oci.artifact.manifest.v1+json',
+            'application/vnd.cyclonedx+json')
+         ON CONFLICT (publication_id, kind) DO NOTHING",
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "UPDATE registry_publications
+            SET state = 'verified', verified_at = now()
+          WHERE id = '20000000-0000-4000-8000-000000000003'
+            AND state IN ('pending', 'publishing')",
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "UPDATE registry_publications
+            SET state = 'approved', approved_at = now()
+          WHERE id = '20000000-0000-4000-8000-000000000003'
+            AND state = 'verified'",
     )
     .execute(pool)
     .await?;

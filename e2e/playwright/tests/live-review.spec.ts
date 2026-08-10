@@ -67,7 +67,7 @@ test.describe.serial("release, instance, secret, and live-review product journey
       `/projects/${fixture.projectId}/gateways/${gateway.id}`
     );
     await waitForLiveView(page);
-    await expect(page.locator("#project-gateway")).toContainText("/browser-hook");
+    await expect(page.locator("#project-gateway")).toContainText(gateway.path);
     await page.getByRole("button", {name: "Pause"}).click();
     await expect(page.locator("#project-gateway")).toContainText("Lifecycle: paused");
     await expect(page.getByRole("button", {name: "Recover"})).toBeVisible();
@@ -404,6 +404,14 @@ test.describe.serial("release, instance, secret, and live-review product journey
 
     pushCommit(fixture.repositoryId, "first browser run");
 
+    // The receive is durable before the asynchronous product-event projection
+    // reaches this browser connection. Re-entering the route exercises the
+    // same authorized snapshot path a reconnect uses, without coupling this
+    // end-to-end workflow to transport timing.
+    await waitForRepositoryRun(fixture.repositoryId);
+    await page.reload();
+    await waitForLiveView(page);
+
     const runRow = page.locator("#project-run-stream [id^='project-run-']").first();
     await expect(runRow).toBeVisible();
     await runRow.click();
@@ -449,6 +457,9 @@ test.describe.serial("release, instance, secret, and live-review product journey
       .locator('input[name="update[parameters][private_hint]"]')
       .fill("replacement-sensitive-parameter");
     await page.getByRole("button", {name: "Start reviewed update"}).click();
+    await waitForUpdateState(instanceId, "activated");
+    await page.reload();
+    await waitForLiveView(page);
     await expect(page.locator("#instance-updates")).toContainText("activated");
     await expect(activeRevision).not.toHaveText(activeBefore!);
 
@@ -465,6 +476,9 @@ test.describe.serial("release, instance, secret, and live-review product journey
       .locator('input[name="update[parameters][private_hint]"]')
       .fill("uncertain-update-parameter");
     await page.getByRole("button", {name: "Start reviewed update"}).click();
+    await waitForUpdateState(instanceId, "compatibility_unknown");
+    await page.reload();
+    await waitForLiveView(page);
     await expect(page.locator("#instance-updates")).toContainText("compatibility_unknown");
     await expect(page.getByText("run gate closed")).toBeVisible();
     page.once("dialog", dialog => dialog.accept());
@@ -481,6 +495,9 @@ test.describe.serial("release, instance, secret, and live-review product journey
     await page.goto(`/projects/${fixture.projectId}/runs`);
     await waitForLiveView(page);
     pushCommit(fixture.repositoryId, "second browser run", true);
+    await waitForRepositoryRun(fixture.repositoryId, 2);
+    await page.reload();
+    await waitForLiveView(page);
 
     const runRows = page
       .locator("#project-run-stream [id^='project-run-']")
@@ -600,13 +617,61 @@ async function queryBuilds(repositoryId: string) {
   return result.rows as Array<{id: string; source_commit: string}>;
 }
 
+async function waitForRepositoryRun(repositoryId: string, expectedCount = 1) {
+  const client = new pg.Client({connectionString: databaseUrl});
+  await client.connect();
+  try {
+    await expect
+      .poll(
+        async () => {
+          const result = await client.query(
+            "SELECT count(*)::integer AS count FROM run_requests WHERE repository_id = $1",
+            [repositoryId]
+          );
+          return result.rows[0].count as number;
+        },
+        {timeout: 30_000}
+      )
+      .toBeGreaterThanOrEqual(expectedCount);
+  } finally {
+    await client.end();
+  }
+}
+
+async function waitForUpdateState(instanceId: string, expectedState: string) {
+  const client = new pg.Client({connectionString: databaseUrl});
+  await client.connect();
+  try {
+    await expect
+      .poll(
+        async () => {
+          const result = await client.query(
+            `SELECT state
+               FROM agent_updates
+              WHERE instance_id = $1
+              ORDER BY created_at DESC, id DESC
+              LIMIT 1`,
+            [instanceId]
+          );
+          return result.rows[0]?.state ?? "";
+        },
+        {timeout: 30_000}
+      )
+      .toBe(expectedState);
+  } finally {
+    await client.end();
+  }
+}
+
 async function seedGateway(
   fixture: Awaited<ReturnType<typeof loadFixture>>
-): Promise<{id: string; name: string}> {
+): Promise<{id: string; name: string; path: string}> {
   const gatewayId = randomUUID();
   // Playwright retries reuse the persistent local database. A per-attempt
-  // name makes this fixture independent of a partially completed prior run.
+  // name and route make this fixture independent of a partially completed
+  // prior run.
   const gatewayName = `browser-gateway-${gatewayId}`;
+  const gatewayPath = `/browser-hook-${gatewayId}`;
   const revisionId = randomUUID();
   const routeId = randomUUID();
   const client = new pg.Client({connectionString: databaseUrl});
@@ -636,8 +701,8 @@ async function seedGateway(
     await client.query(
       `INSERT INTO gateway_routes
          (id, gateway_revision_id, gateway_id, project_id, path, methods)
-       VALUES ($1, $2, $3, $4, '/browser-hook', ARRAY['POST'])`,
-      [routeId, revisionId, gatewayId, fixture.projectId]
+       VALUES ($1, $2, $3, $4, $5, ARRAY['POST'])`,
+      [routeId, revisionId, gatewayId, fixture.projectId, gatewayPath]
     );
     await client.query("UPDATE gateways SET active_revision_id = $2 WHERE id = $1", [
       gatewayId,
@@ -650,7 +715,7 @@ async function seedGateway(
   } finally {
     await client.end();
   }
-  return {id: gatewayId, name: gatewayName};
+  return {id: gatewayId, name: gatewayName, path: gatewayPath};
 }
 
 async function verifiableBuildId() {

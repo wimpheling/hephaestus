@@ -58,11 +58,20 @@ impl PgRuntimeSessionRepository {
                   AND run.instance_id = $2
                   AND run.instance_revision_id = $3
                   AND run.state = 'provisioning'
-                  AND instance.active_revision_id = revision.id
                   AND (
-                      (run.run_kind = 'update' AND instance.state = 'updating')
+                      (run.run_kind = 'update'
+                          AND instance.state = 'updating'
+                          AND EXISTS (
+                              SELECT 1
+                              FROM agent_updates AS update
+                              WHERE update.hook_run_id = run.id
+                                AND update.instance_id = run.instance_id
+                                AND update.candidate_revision_id = revision.id
+                                AND update.state = 'hook_running'
+                          ))
                       OR (run.run_kind = 'normal'
-                          AND instance.state IN ('active', 'update_rejected'))
+                          AND instance.state IN ('active', 'update_rejected')
+                          AND instance.active_revision_id = revision.id)
                   )
                   AND revision.runnable
                   AND release.state = 'published'

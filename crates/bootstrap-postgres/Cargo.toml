@@ -4,6 +4,8 @@ description = "PostgreSQL bootstrap and operator utilities"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+build = "src/bin/e2e_seed_build.rs"
+autobins = false
 
 [dependencies]
 agent-config = { path = "../agent-config" }

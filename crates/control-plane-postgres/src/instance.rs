@@ -385,7 +385,7 @@ impl InstanceApplication {
                             requirement.optional_operations
                         ) AS operation
                         WHERE can_grant_agent_capability_operations(
-                            hephaestus_actor_id(), resource.resource_kind,
+                            hephaestus_actor_id()::uuid, resource.resource_kind,
                             resource.id, ARRAY[operation]
                         )
                         ORDER BY operation
@@ -393,7 +393,7 @@ impl InstanceApplication {
              FROM active_requirement AS requirement
              JOIN resource ON resource.resource_kind = requirement.resource_kind
              WHERE can_grant_agent_capability_operations(
-                 hephaestus_actor_id(), resource.resource_kind, resource.id,
+                 hephaestus_actor_id()::uuid, resource.resource_kind, resource.id,
                  requirement.required_operations
              )
              ORDER BY requirement.slot_key, resource.display_name, resource.id

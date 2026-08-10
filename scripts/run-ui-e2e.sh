@@ -102,14 +102,16 @@ cleanup() {
         kill "${oidc_pid}" 2>/dev/null || true
         wait "${oidc_pid}" 2>/dev/null || true
     fi
-    podman rm --force "${web_container}" >/dev/null 2>&1 || true
-    podman rm --force "${web_setup_container}" >/dev/null 2>&1 || true
-    podman stop "${nats_container}" >/dev/null 2>&1 || true
-    podman stop "${postgres_container}" >/dev/null 2>&1 || true
     if [[ "${HEPHAESTUS_E2E_KEEP_FIXTURES:-0}" == "1" ]]; then
+        printf 'retained browser E2E containers: %s %s %s\n' \
+            "${postgres_container}" "${nats_container}" "${web_container}" >&2
         printf 'retained browser E2E fixtures at %s\n' "${fixture_root}" >&2
         printf 'retained secret runtime at %s\n' "${secret_runtime_root}" >&2
     else
+        podman rm --force "${web_container}" >/dev/null 2>&1 || true
+        podman rm --force "${web_setup_container}" >/dev/null 2>&1 || true
+        podman stop "${nats_container}" >/dev/null 2>&1 || true
+        podman stop "${postgres_container}" >/dev/null 2>&1 || true
         rm -rf -- "${fixture_root}"
         rm -rf -- "${secret_runtime_root}"
     fi
@@ -288,8 +290,8 @@ export HEPHAESTUS_REGISTRY_NOTIFICATION_CALLBACK_TOKEN_FILE="${fixture_root}/reg
 export HEPHAESTUS_REGISTRY_RECONCILIATION_INTERVAL_MILLISECONDS="60000"
 export HEPHAESTUS_REGISTRY_CREDENTIAL_ROOT="${fixture_root}/registry-credentials"
 readonly root_image_manifest="${fixture_root}/root-image-manifest.json"
-printf '{"version":1,"roots":{"fixture-root@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa":{"kind":"directory","path":"%s"}}}\n' \
-    "${fixture_root}/root-image" >"${root_image_manifest}"
+printf '{"version":1,"roots":{"fixture-root@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa":{"kind":"directory","path":"%s"},"registry.browser.invalid/platform/images/fixture-root@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa":{"kind":"directory","path":"%s"}}}\n' \
+    "${fixture_root}/root-image" "${fixture_root}/root-image" >"${root_image_manifest}"
 unset HEPHAESTUS_ROOT_IMAGE_PATH HEPHAESTUS_ROOT_IMAGE_REFERENCE
 export HEPHAESTUS_ROOT_IMAGE_MANIFEST="${root_image_manifest}"
 export HEPHAESTUS_VM_BACKEND="fixture"
