@@ -30,7 +30,10 @@ trivy image --input "$candidate" --offline-scan --skip-db-update --skip-java-db-
     --format json --output "$output/evidence/vulnerability-scan.json"
 umoci unpack --rootless --image "$candidate:latest" "$output/bundle"
 mv "$output/bundle/rootfs" "$output/rootfs"
-rmdir "$output/bundle"
+# Umoci retains bundle metadata next to the exported rootfs. The bundle lives
+# under this fresh job-owned output root, so remove only that temporary
+# metadata after moving the verified rootfs into its durable handoff path.
+rm -rf -- "$output/bundle"
 
 manifest=$(jq -er '.manifests[0].digest' "$candidate/index.json")
 printf '%s\n' "$manifest" >"$output/manifest-digest"
