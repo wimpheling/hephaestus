@@ -114,8 +114,10 @@ only the remaining job-owned bundle metadata. Its one-shot guest process
 inherits the daemon's reviewed 8,192-descriptor capacity for the bounded
 Ubuntu-rootfs export. The trusted bootstrap applies that capacity only while
 launching the exact platform verifier command as guest root; it does not
-change host or tenant-agent limits. Only after that verifier succeeds may the
-host-controlled publisher receive its short-lived exact registry credential.
+change host or tenant-agent limits. That static verifier uses normal Umoci
+unpack only inside its dedicated microVM; repository code never receives that
+privilege. Only after the verifier succeeds may the host-controlled publisher
+receive its short-lived exact registry credential.
 
 The verifier rejects every HIGH or CRITICAL finding with an available upstream
 fix. Findings without a fix remain recorded in the scan evidence; the reviewed

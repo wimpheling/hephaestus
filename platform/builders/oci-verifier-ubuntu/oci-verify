@@ -28,7 +28,10 @@ syft "oci-dir:$candidate" --output "spdx-json=$output/evidence/sbom.spdx.json"
 trivy image --input "$candidate" --offline-scan --skip-db-update --skip-java-db-update \
     --scanners vuln --ignore-unfixed --exit-code 1 --severity HIGH,CRITICAL \
     --format json --output "$output/evidence/vulnerability-scan.json"
-umoci unpack --rootless --image "$candidate:latest" "$output/bundle"
+# This exact static verifier runs as guest root inside its dedicated,
+# networkless operation VM. Normal Umoci unpack is required for that trusted
+# bootstrap; repository code never executes with this privilege.
+umoci unpack --image "$candidate:latest" "$output/bundle"
 mv "$output/bundle/rootfs" "$output/rootfs"
 # Umoci retains bundle metadata next to the exported rootfs. The bundle lives
 # under this fresh job-owned output root, so remove only that temporary
