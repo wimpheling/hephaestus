@@ -1,0 +1,27 @@
+#!/bin/sh
+set -eu
+
+candidate=/workspace/candidate
+output=/workspace/verification
+
+rm -rf "$output"/*
+mkdir -p "$output/evidence" "$output/bundle"
+
+# Validate the canonical OCI index before treating its contents as an image.
+jq -e '
+  .schemaVersion == 2
+  and (.manifests | type) == "array"
+  and (.manifests | length) == 1
+  and (.manifests[0].digest | test("^sha256:[0-9a-f]{64}$"))
+' "$candidate/index.json" >/dev/null
+
+syft "oci-dir:$candidate" --output "spdx-json=$output/evidence/sbom.spdx.json"
+trivy image --input "$candidate" --offline-scan --skip-db-update --skip-java-db-update \
+    --scanners vuln --exit-code 1 --severity HIGH,CRITICAL \
+    --format json --output "$output/evidence/vulnerability-scan.json"
+umoci unpack --rootless --image "$candidate:latest" "$output/bundle"
+mv "$output/bundle/rootfs" "$output/rootfs"
+rmdir "$output/bundle"
+
+manifest=$(jq -er '.manifests[0].digest' "$candidate/index.json")
+printf '%s\n' "$manifest" >"$output/manifest-digest"

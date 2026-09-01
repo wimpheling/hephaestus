@@ -6,7 +6,10 @@
 # network policy.  Publishing is a separate trusted operation.
 set -euo pipefail
 
-readonly builders=(ubuntu-native rust-ubuntu typescript-node-ubuntu python-ubuntu)
+# Four tenant-selectable execution bases plus two platform-operation roots.
+# The latter are cataloged with a non-execution role and cannot be selected by
+# a repository Dockerfile or agent contract.
+readonly builders=(ubuntu-native rust-ubuntu typescript-node-ubuntu python-ubuntu oci-builder-ubuntu oci-verifier-ubuntu)
 readonly script_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
 readonly source_root="$script_root/platform/builders"
 
@@ -238,9 +241,14 @@ for key in "${builders[@]}"; do
     "$trivy" image --input "$destination/image" --offline-scan --skip-db-update --skip-java-db-update \
         --scanners vuln --exit-code 0 \
         --format json --output "$destination/evidence/vulnerability-scan.json"
-    "$trivy" image --input "$destination/image" --offline-scan --skip-db-update --skip-java-db-update \
+    if ! "$trivy" image --input "$destination/image" --offline-scan --skip-db-update --skip-java-db-update \
         --scanners vuln --ignore-unfixed --exit-code 1 --severity HIGH,CRITICAL \
-        --format json --output "$destination/evidence/vulnerability-policy.json"
+        --format json --output "$destination/evidence/vulnerability-policy.json"; then
+        printf '%s\n' \
+            "platform image $key has fixable high or critical findings; retained evidence: $destination/evidence/vulnerability-policy.json" \
+            >&2
+        exit 1
+    fi
     write_provenance "$destination/evidence/provenance.intoto.json" "$key" "$digest" "$source" "$revision" "$created" "$jq_binary"
 
     approval=''
@@ -280,6 +288,6 @@ done
     --arg skopeo "$($skopeo --version 2>&1 | head -n 1)" \
     --arg syft "$($syft --version 2>&1 | head -n 1)" \
     --arg trivy "$($trivy --version 2>&1 | head -n 1)" \
-    '{schema_version:1,kind:"hephaestus.platform-builder.release-input.v1",source:$source,revision:$revision,created:$created,architecture:"x86_64",toolchain:{buildah:$buildah,skopeo:$skopeo,syft:$syft,trivy:$trivy},builders:["ubuntu-native","rust-ubuntu","typescript-node-ubuntu","python-ubuntu"]}' \
+    '{schema_version:1,kind:"hephaestus.platform-builder.release-input.v1",source:$source,revision:$revision,created:$created,architecture:"x86_64",toolchain:{buildah:$buildah,skopeo:$skopeo,syft:$syft,trivy:$trivy},builders:["ubuntu-native","rust-ubuntu","typescript-node-ubuntu","python-ubuntu","oci-builder-ubuntu","oci-verifier-ubuntu"]}' \
     >"$root/.platform-builder-release.json"
 printf '%s\n' "built private OCI layouts under $root; pass this directory to publish-platform-builders.sh"

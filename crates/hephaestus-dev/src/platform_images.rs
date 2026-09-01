@@ -25,7 +25,7 @@ pub fn status(context: &DevContext) -> Result<()> {
     Ok(())
 }
 
-/// Runs the reviewed four-image construction script only after the caller has
+/// Runs the reviewed six-image construction script only after the caller has
 /// provided immutable release provenance. Publication remains a separate
 /// explicit operation.
 pub fn build(context: &DevContext, arguments: &PlatformImageBuildArgs) -> Result<()> {
@@ -53,7 +53,7 @@ pub fn build(context: &DevContext, arguments: &PlatformImageBuildArgs) -> Result
     create_volume(&context.platform_image_tool_storage_volume())?;
     create_volume(&context.platform_image_tool_cache_volume())?;
     println!(
-        "building four platform images into {}; this explicit operation may take several minutes",
+        "building six platform images into {}; this explicit operation may take several minutes",
         release_root.display()
     );
     let source_mount = format!("{}:/workspace:ro,Z", context.repository_root.display());
@@ -114,9 +114,12 @@ pub fn build(context: &DevContext, arguments: &PlatformImageBuildArgs) -> Result
         .args(["--env", "HEPHAESTUS_SKOPEO=/usr/bin/skopeo"])
         .args(["--env", "HEPHAESTUS_SKOPEO_VERSION=skopeo version 1.22.2"])
         .args(["--env", "HEPHAESTUS_SYFT=/usr/local/bin/syft"])
-        .args(["--env", "HEPHAESTUS_SYFT_VERSION=syft 1.50.0"])
+        .args(["--env", "HEPHAESTUS_SYFT_VERSION=syft 1.51.1-hephaestus.1"])
         .args(["--env", "HEPHAESTUS_TRIVY=/usr/local/bin/trivy"])
-        .args(["--env", "HEPHAESTUS_TRIVY_VERSION=Version: 0.73.0"])
+        .args([
+            "--env",
+            "HEPHAESTUS_TRIVY_VERSION=Version: 0.74.0-hephaestus.1",
+        ])
         .args(["--env", "HEPHAESTUS_JQ=/usr/bin/jq"])
         .args(["--env", "HEPHAESTUS_JQ_VERSION=jq-1.8.1"])
         .arg(TOOL_IMAGE)
@@ -197,7 +200,7 @@ pub fn publish(context: &DevContext, arguments: &PlatformImagePublishArgs) -> Re
         }
     }
     println!(
-        "publishing four reviewed platform images and applying their local catalog; this explicit operation may take several minutes"
+        "publishing six reviewed platform images and applying their local catalog; this explicit operation may take several minutes"
     );
     run(Command::new("podman")
         .args(["run", "--rm", "--network=host"])

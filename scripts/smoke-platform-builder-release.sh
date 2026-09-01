@@ -75,6 +75,14 @@ verify_pulled_builder() {
             "$container_engine" run --rm --network none "$image" /bin/sh -ec \
                 'test "$(. /etc/os-release; printf "%s" "$VERSION_ID")" = 24.04; test "$(python3 --version | awk "{print \$2}")" = 3.13.5; test "$(python3 -m pip --version | awk "{print \$2}")" = 25.1.1'
             ;;
+        oci-builder-ubuntu)
+            "$container_engine" run --rm --network none "$image" /bin/sh -ec \
+                'test "$(. /etc/os-release; printf "%s" "$VERSION_ID")" = 24.04; buildah --version >/dev/null; grep -Fxq "heph-agent:100000:65536" /etc/subuid; grep -Fxq "10001:100000:65536" /etc/subuid; grep -Fxq "heph-agent:100000:65536" /etc/subgid; grep -Fxq "10001:100000:65536" /etc/subgid'
+            ;;
+        oci-verifier-ubuntu)
+            "$container_engine" run --rm --network none "$image" /bin/sh -ec \
+                'test "$(. /etc/os-release; printf "%s" "$VERSION_ID")" = 24.04; umoci --version >/dev/null; syft --version >/dev/null; trivy --version >/dev/null'
+            ;;
         *) die "unknown platform builder: $key" ;;
     esac
 }
@@ -201,12 +209,12 @@ if ! publication_output=$("$repository_root/scripts/publish-platform-builders.sh
     die 'platform builder publication smoke failed'
 fi
 printf '%s\n' "$publication_output"
-"$repository_root/target/debug/hephaestus-operator" provision-builder-catalog "$catalog_output" \
+"$repository_root/target/debug/hephaestus-operator" provision-image-catalog "$catalog_output" \
     >"$fixture_root/catalog-apply.json"
 
-for key in ubuntu-native rust-ubuntu typescript-node-ubuntu python-ubuntu; do
+for key in ubuntu-native rust-ubuntu typescript-node-ubuntu python-ubuntu oci-builder-ubuntu oci-verifier-ubuntu; do
     reference=$("$jq_binary" -er --arg key "$key" '.images[] | select(.key == $key) | .image_reference' "$catalog_output")
-    token=$(issue_pull_token "platform/builders/$key")
+    token=$(issue_pull_token "platform/images/$key")
     "$skopeo_binary" inspect --registry-token "$token" --tls-verify=false "docker://$reference" >/dev/null
     pulled_layout="$fixture_root/pulled/$key"
     mkdir -p -- "$pulled_layout"
@@ -220,5 +228,5 @@ readonly retained_catalog="$(mktemp /tmp/hephaestus-platform-smoke-catalog.XXXXX
 chmod 0600 "$retained_review" "$retained_catalog"
 cp -- "$review_output" "$retained_review"
 cp -- "$catalog_output" "$retained_catalog"
-printf '%s\n' 'Platform builder release smoke passed: four images published, approved, cataloged, and pulled.' \
+printf '%s\n' 'Platform image release smoke passed: six images published, approved, cataloged, and pulled.' \
     "Review artifacts: $retained_review and $retained_catalog"

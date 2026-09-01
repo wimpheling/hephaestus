@@ -1,0 +1,51 @@
+#!/bin/sh
+set -eu
+
+# All paths are fixed by the VM adapter. The repository controls only the
+# read-only Dockerfile/context contents; no argument is evaluated as shell.
+readonly_source=/workspace/source
+readonly_base=/workspace/heph-base
+writable_output=/workspace/candidate
+
+export HOME=/tmp/heph-agent-home
+export XDG_RUNTIME_DIR=/tmp/heph-agent-runtime
+mkdir -p "$HOME" "$XDG_RUNTIME_DIR"
+chmod 0700 "$HOME" "$XDG_RUNTIME_DIR"
+
+rm -rf "$writable_output"/*
+# The approved base is an OCI layout with a generated immutable reference
+# name, not a mutable `latest` tag. Import that one descriptor into Buildah's
+# private VM-local store and assign the reserved Dockerfile name afterwards.
+base_tag=$(grep --only-matching --extended-regexp 'heph-sha256-[0-9a-f]{64}' \
+    "$readonly_base/index.json" | sort --unique)
+[ "$(printf '%s\n' "$base_tag" | wc --lines)" -eq 1 ]
+if ! base_image=$(buildah --storage-driver vfs pull --quiet "oci:${readonly_base}:${base_tag}"); then
+    # This fixed marker is safe operational telemetry. Buildah's raw output is
+    # deliberately never retained by the host.
+    printf '%s\n' 'HEPH_OCI_FAILURE=base-import' >&2
+    exit 125
+fi
+if ! buildah --storage-driver vfs tag "$base_image" heph-base; then
+    printf '%s\n' 'HEPH_OCI_FAILURE=base-alias' >&2
+    exit 125
+fi
+# Buildah 1.33 rejects `--network none` with `--isolation chroot`. The VM
+# specification is the authoritative boundary and has NetworkMode::Disabled,
+# so the guest cannot obtain a network interface regardless of Dockerfile
+# instructions; `--pull-never` separately rejects image acquisition.
+if ! buildah bud \
+    --storage-driver vfs \
+    --isolation chroot \
+    --pull-never \
+    --format oci \
+    --layers=false \
+    --file "$1" \
+    --tag hephaestus-repository-output \
+    "$2"; then
+    printf '%s\n' 'HEPH_OCI_FAILURE=dockerfile-build' >&2
+    exit 125
+fi
+if ! buildah --storage-driver vfs push --format oci hephaestus-repository-output "oci:${writable_output}:latest"; then
+    printf '%s\n' 'HEPH_OCI_FAILURE=layout-export' >&2
+    exit 125
+fi
