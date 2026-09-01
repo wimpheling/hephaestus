@@ -864,6 +864,40 @@ mod tests {
     }
 
     #[test]
+    fn oci_scratch_volume_is_an_isolated_writable_disk() {
+        let fixture = Fixture::new();
+        let scratch_path = fixture.disks.join("repository-oci-scratch.raw");
+        fs::write(&scratch_path, []).unwrap();
+
+        let mut valid = fixture.spec();
+        valid.disks.push(VmDisk {
+            id: String::from("repository-oci-scratch"),
+            host_path: scratch_path,
+            format: DiskFormat::Raw,
+            read_only: false,
+        });
+        valid.labels.insert(
+            String::from("hephaestus.oci-scratch.filesystem-uuid"),
+            uuid::Uuid::new_v4().to_string(),
+        );
+        valid.labels.insert(
+            String::from("hephaestus.oci-scratch.mount-path"),
+            String::from("/workspace/buildah"),
+        );
+        prepare_spec(&fixture.valid_config(), &valid).unwrap();
+
+        valid.labels.insert(
+            String::from("hephaestus.agent-state.filesystem-uuid"),
+            uuid::Uuid::new_v4().to_string(),
+        );
+        valid.labels.insert(
+            String::from("hephaestus.agent-state.mount-path"),
+            String::from("/var/lib/hephaestus"),
+        );
+        assert_invalid_field(prepare_spec(&fixture.valid_config(), &valid), "labels");
+    }
+
+    #[test]
     fn resource_and_writable_disk_limits_are_rejected() {
         let fixture = Fixture::new();
         let mut cpu = fixture.spec();

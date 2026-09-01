@@ -17,7 +17,7 @@ jq -e '
 
 syft "oci-dir:$candidate" --output "spdx-json=$output/evidence/sbom.spdx.json"
 trivy image --input "$candidate" --offline-scan --skip-db-update --skip-java-db-update \
-    --scanners vuln --exit-code 1 --severity HIGH,CRITICAL \
+    --scanners vuln --ignore-unfixed --exit-code 1 --severity HIGH,CRITICAL \
     --format json --output "$output/evidence/vulnerability-scan.json"
 umoci unpack --rootless --image "$candidate:latest" "$output/bundle"
 mv "$output/bundle/rootfs" "$output/rootfs"

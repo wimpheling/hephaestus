@@ -42,9 +42,15 @@ const BUILDER_BASE_GUEST_PATH: &str = "/workspace/heph-base";
 const BUILDER_OUTPUT_GUEST_PATH: &str = "/workspace/candidate";
 const BUILDER_SCRATCH_GUEST_PATH: &str = "/workspace/buildah";
 const BUILDER_SCRATCH_DISK_ID: &str = "repository-oci-scratch";
-const BUILDER_SCRATCH_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+// Buildah can hold the imported base, the working container, and the exported
+// layer at once. Keep the job-scoped ext4 disk sparse on the host, but give the
+// guest enough capacity for that bounded copy-on-write peak.
+const BUILDER_SCRATCH_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 const VERIFIER_OUTPUT_GUEST_PATH: &str = "/workspace/verification";
 const PLATFORM_OCI_BUILDER_ENV: &str = "HEPH_PLATFORM_OCI_BUILDER";
+const VERIFIER_TRIVY_CACHE_ENV: &str = "TRIVY_CACHE_DIR";
+const VERIFIER_TRIVY_CACHE_PATH: &str = "/var/lib/hephaestus-trivy";
+const VERIFIER_SYFT_UPDATE_ENV: &str = "SYFT_CHECK_FOR_APP_UPDATE";
 
 /// Fixed local roots and VM resources for repository OCI operations.
 ///
@@ -416,7 +422,20 @@ fn verifier_vm_spec(
         command: GuestCommand {
             program: String::from("/usr/libexec/hephaestus/oci-verify"),
             args: Vec::new(),
-            env: BTreeMap::new(),
+            // Guest startup deliberately constructs a minimal environment, so
+            // platform-operation settings cannot rely on image `ENV` values.
+            // The pinned Trivy database is read-only in the verifier root and
+            // Syft must not attempt an update from a networkless guest.
+            env: BTreeMap::from([
+                (
+                    String::from(VERIFIER_TRIVY_CACHE_ENV),
+                    String::from(VERIFIER_TRIVY_CACHE_PATH),
+                ),
+                (
+                    String::from(VERIFIER_SYFT_UPDATE_ENV),
+                    String::from("false"),
+                ),
+            ]),
             working_dir: None,
         },
         runtime_authority: None,
@@ -1561,7 +1580,8 @@ fn zot_confirmed_output(
 mod tests {
     use super::{
         BUILDER_SCRATCH_DISK_ID, BUILDER_SCRATCH_GUEST_PATH, LocalOciRuntime,
-        LocalOciRuntimeConfig, PLATFORM_OCI_BUILDER_ENV, ScratchDisk, builder_vm_spec,
+        LocalOciRuntimeConfig, PLATFORM_OCI_BUILDER_ENV, ScratchDisk, VERIFIER_SYFT_UPDATE_ENV,
+        VERIFIER_TRIVY_CACHE_ENV, VERIFIER_TRIVY_CACHE_PATH, builder_vm_spec,
         classify_guest_failure, copy_verified_rootfs, verifier_vm_spec, zot_confirmed_output,
     };
     use builder_catalog_domain::{OciImageId, OciImageReference};
@@ -1682,7 +1702,11 @@ mod tests {
     ) {
         assert!(matches!(verifier.network, NetworkMode::Disabled));
         assert!(verifier.runtime_authority.is_none());
-        assert!(verifier.command.env.is_empty());
+        assert_eq!(
+            verifier.command.env[VERIFIER_TRIVY_CACHE_ENV],
+            VERIFIER_TRIVY_CACHE_PATH
+        );
+        assert_eq!(verifier.command.env[VERIFIER_SYFT_UPDATE_ENV], "false");
         assert_eq!(
             verifier.command.program,
             "/usr/libexec/hephaestus/oci-verify"
