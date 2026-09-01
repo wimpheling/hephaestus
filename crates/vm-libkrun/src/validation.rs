@@ -391,9 +391,15 @@ pub fn prepare_spec(config: &LibkrunConfig, spec: &VmSpec) -> Result<PreparedSpe
 fn validate_state_volume_labels(spec: &VmSpec, disks: &[PreparedDisk]) -> Result<(), VmError> {
     let filesystem_uuid = spec.labels.get("hephaestus.agent-state.filesystem-uuid");
     let mount_path = spec.labels.get("hephaestus.agent-state.mount-path");
-    match (filesystem_uuid, mount_path) {
-        (None, None) => Ok(()),
-        (Some(filesystem_uuid), Some(mount_path)) => {
+    let scratch_uuid = spec.labels.get("hephaestus.oci-scratch.filesystem-uuid");
+    let scratch_path = spec.labels.get("hephaestus.oci-scratch.mount-path");
+    match (filesystem_uuid, mount_path, scratch_uuid, scratch_path) {
+        (Some(_), Some(_), Some(_), Some(_)) => invalid(
+            "labels",
+            "agent-state and OCI scratch volumes are mutually exclusive",
+        ),
+        (None, None, None, None) => Ok(()),
+        (Some(filesystem_uuid), Some(mount_path), None, None) => {
             if Uuid::parse_str(filesystem_uuid).is_err() {
                 return invalid(
                     "labels.hephaestus.agent-state.filesystem-uuid",
@@ -417,9 +423,33 @@ fn validate_state_volume_labels(spec: &VmSpec, disks: &[PreparedDisk]) -> Result
             }
             Ok(())
         }
+        (None, None, Some(filesystem_uuid), Some(mount_path)) => {
+            if Uuid::parse_str(filesystem_uuid).is_err() {
+                return invalid(
+                    "labels.hephaestus.oci-scratch.filesystem-uuid",
+                    "must be a valid UUID",
+                );
+            }
+            if mount_path != "/workspace/buildah" {
+                return invalid(
+                    "labels.hephaestus.oci-scratch.mount-path",
+                    "must be /workspace/buildah",
+                );
+            }
+            if !disks
+                .iter()
+                .any(|disk| disk.id == "repository-oci-scratch" && !disk.read_only)
+            {
+                return invalid(
+                    "disks",
+                    "OCI scratch labels require a writable repository-oci-scratch disk",
+                );
+            }
+            Ok(())
+        }
         _ => invalid(
             "labels",
-            "agent-state filesystem UUID and mount path must be supplied together",
+            "volume filesystem UUID and mount path must be supplied together",
         ),
     }
 }

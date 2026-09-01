@@ -17,13 +17,16 @@ use std::{
 };
 use uuid::Uuid;
 use vm_libkrun::protocol::{
-    GUEST_RUNTIME_AUTHORITY_PATH, GuestLogStream, GuestMessage, GuestStateVolume, HostMessage,
-    MAX_FRAME_SIZE, MAX_PRIVATE_HTTP_BODY_BYTES, MAX_PRIVATE_HTTP_HEADERS, PROTOCOL_VERSION,
-    PrivateHttpRequestMessage, PrivateHttpResponseMessage, RuntimeAuthorityMessage,
+    GUEST_RUNTIME_AUTHORITY_PATH, GuestCommandMessage, GuestLogStream, GuestMessage,
+    GuestStateVolume, HostMessage, MAX_FRAME_SIZE, MAX_PRIVATE_HTTP_BODY_BYTES,
+    MAX_PRIVATE_HTTP_HEADERS, PROTOCOL_VERSION, PrivateHttpRequestMessage,
+    PrivateHttpResponseMessage, RuntimeAuthorityMessage,
 };
 use zeroize::Zeroizing;
 
 const CONTROL_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+const PLATFORM_OCI_BUILDER_ENV: &str = "HEPH_PLATFORM_OCI_BUILDER";
+const PLATFORM_OCI_BUILDER_PROGRAM: &str = "/usr/libexec/hephaestus/oci-build";
 const AGENT_UID: u32 = 10_001;
 const AGENT_GID: u32 = 10_001;
 const RUNTIME_AUTHORITY_DIRECTORY: &str = "/run/hephaestus-authority";
@@ -132,16 +135,23 @@ fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         return Ok(());
     }
 
+    let platform_oci_builder = is_platform_oci_builder(&command);
     let mut child = Command::new(&command.program);
     child
         .args(&command.args)
         .env_clear()
-        .envs(&command.env)
+        .envs(
+            command
+                .env
+                .iter()
+                .filter(|(key, _)| key.as_str() != PLATFORM_OCI_BUILDER_ENV),
+        )
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .uid(AGENT_UID)
-        .gid(AGENT_GID);
+        .stderr(Stdio::piped());
+    if !platform_oci_builder {
+        child.uid(AGENT_UID).gid(AGENT_GID);
+    }
     if let Some(working_dir) = command.working_dir {
         child.current_dir(working_dir);
     }
@@ -196,6 +206,14 @@ fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     write_message(&writer, &GuestMessage::Exited { code, signal })?;
     drop(control_thread);
     Ok(())
+}
+
+fn is_platform_oci_builder(command: &GuestCommandMessage) -> bool {
+    command.program == PLATFORM_OCI_BUILDER_PROGRAM
+        && command
+            .env
+            .get(PLATFORM_OCI_BUILDER_ENV)
+            .is_some_and(|value| value == "1")
 }
 
 #[derive(Serialize)]
@@ -286,7 +304,9 @@ fn mount_state_volume(volume: &GuestStateVolume) -> io::Result<PathBuf> {
     let device = find_ext4_device(filesystem_uuid)?;
     fs::create_dir_all(&volume.guest_path)?;
     mount_ext4(&device, &volume.guest_path)?;
-    initialize_database(&volume.guest_path)?;
+    if volume.guest_path == Path::new("/var/lib/hephaestus") {
+        initialize_database(&volume.guest_path)?;
+    }
     Ok(volume.guest_path.clone())
 }
 
@@ -789,13 +809,15 @@ mod vsock {
 
 #[cfg(test)]
 mod tests {
-    use super::find_ext4_device_in;
+    use super::{find_ext4_device_in, is_platform_oci_builder};
     use std::{
+        collections::BTreeMap,
         fs::{self, File},
         io::{Seek, SeekFrom, Write},
     };
     use tempfile::TempDir;
     use uuid::Uuid;
+    use vm_libkrun::protocol::GuestCommandMessage;
 
     #[test]
     fn locates_ext4_device_by_filesystem_uuid() {
@@ -820,5 +842,22 @@ mod tests {
             find_ext4_device_in(expected, &blocks, &devices).unwrap(),
             devices.join("vdb")
         );
+    }
+
+    #[test]
+    fn only_the_internal_oci_builder_command_can_use_guest_root() {
+        let command = GuestCommandMessage {
+            program: String::from("/usr/libexec/hephaestus/oci-build"),
+            args: Vec::new(),
+            env: BTreeMap::from([(String::from("HEPH_PLATFORM_OCI_BUILDER"), String::from("1"))]),
+            working_dir: None,
+        };
+        assert!(is_platform_oci_builder(&command));
+
+        let different_command = GuestCommandMessage {
+            program: String::from("/bin/sh"),
+            ..command
+        };
+        assert!(!is_platform_oci_builder(&different_command));
     }
 }

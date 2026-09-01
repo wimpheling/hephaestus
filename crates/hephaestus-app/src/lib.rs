@@ -59,11 +59,12 @@ use mailbox_dispatch::{
 use mailbox_postgres::PostgresMailboxRepository;
 use oci_builder_postgres::{PgOciImageProductionJobStore, PgRepositoryOciImagePublicationStore};
 use oci_builder_runtime_local::{
-    ForgeZotOciPublisher, ForgeZotPublicationConfig, LocalOciRuntime, LocalOciRuntimeConfig,
+    ForgeZotOciPublisher, LocalOciRuntime, LocalOciRuntimeConfig, VmOciOperation,
+    VmOciOperationConfig, VmPublishedOciEngine,
 };
 use oci_builder_worker::{
-    BuildahEngine, OciImageProductionWorker, OciWorkerError, PublishedBuildahEngine,
-    RegistryPublisherTokenIssuer, RootfsMaterializationWorker,
+    OciImageProductionWorker, OciWorkerError, RegistryPublisherTokenIssuer,
+    RootfsMaterializationWorker,
 };
 use registry_domain::{PolicyVersion, RegistryNamespace, SupplyChainPolicy};
 use registry_http::{
@@ -150,7 +151,7 @@ use workspace_local::{LocalWorkspaceConfig, LocalWorkspaceManager};
 use workspace_postgres::PgWorkspaceMetadataRepository;
 
 /// Ordered database migration expected by this application version.
-pub const EXPECTED_DATABASE_MIGRATION: i64 = 47;
+pub const EXPECTED_DATABASE_MIGRATION: i64 = 52;
 
 /// OIDC issuer configuration used for bearer-token authentication.
 pub struct OidcConfig {
@@ -230,14 +231,24 @@ pub struct RuntimePolicy {
 pub struct OciBuilderWorkerConfig {
     /// Administrator-owned local Git/OCI/scanner runtime.
     pub runtime: LocalOciRuntimeConfig,
-    /// Trusted post-build SBOM tooling.
-    pub publication_tooling: ForgeZotPublicationConfig,
     /// Fixed Zot publication boundary and trusted OCI client binaries.
     pub publisher: PublisherConfiguration,
     /// Immutable policy revision recorded with every repository publication.
     pub publication_policy_version: PolicyVersion,
     /// Required evidence policy for repository builder images.
     pub publication_policy: SupplyChainPolicy,
+    /// Exact operational root reference for the isolated Buildah VM.
+    pub builder_vm_image: OciImageReference,
+    /// Exact operational root reference for the independent verifier VM.
+    pub verifier_vm_image: OciImageReference,
+    /// Private verifier evidence/export root.
+    pub verification_root: PathBuf,
+    /// Private, per-operation Buildah storage root mounted only into builders.
+    pub scratch_root: PathBuf,
+    /// Absolute trusted formatter for per-operation ext4 scratch disks.
+    pub mkfs_ext4: PathBuf,
+    /// Fixed resources for both one-shot operation VMs.
+    pub vm_resources: VmResources,
     /// Stable identity for durable OCI preparation claims.
     pub preparation_worker_name: String,
     /// Stable daemon-local identity for rootfs materialization claims.
@@ -497,6 +508,11 @@ impl AppConfig {
         if worker.runtime.repository_root != self.repository_root
             || !worker.rootfs_root.is_absolute()
             || !worker.root_manifest.is_absolute()
+            || !worker.verification_root.is_absolute()
+            || !worker.scratch_root.is_absolute()
+            || !worker.mkfs_ext4.is_absolute()
+            || worker.vm_resources.vcpus == 0
+            || worker.vm_resources.memory_mib == 0
             || worker.lease.is_zero()
             || worker.poll_interval.is_zero()
         {
@@ -510,6 +526,13 @@ impl AppConfig {
             return Err(AppError::Configuration(String::from(
                 "libkrun image roots must include the OCI builder rootfs root",
             )));
+        }
+        for reference in [&worker.builder_vm_image, &worker.verifier_vm_image] {
+            if !self.root_images.contains_key(reference.as_str()) {
+                return Err(AppError::Configuration(String::from(
+                    "OCI operational VM image is not present in the root image manifest",
+                )));
+            }
         }
         Ok(())
     }
@@ -627,12 +650,10 @@ struct OciBuilderWorkers {
     preparation: OciImageProductionWorker<
         PgOciImageProductionJobStore,
         LocalOciRuntime,
-        PublishedBuildahEngine<
-            ForgeZotOciPublisher<
-                PgRepositoryOciImagePublicationStore,
-                InternalRegistryTokens,
-                SystemCommandRunner,
-            >,
+        VmPublishedOciEngine<
+            PgRepositoryOciImagePublicationStore,
+            InternalRegistryTokens,
+            SystemCommandRunner,
         >,
     >,
     materialization: RootfsMaterializationWorker<PgOciImageProductionJobStore, LocalOciRuntime>,
@@ -936,19 +957,41 @@ impl OciBuilderWorkers {
         pool: PgPool,
         config: OciBuilderWorkerConfig,
         token_issuer: Arc<registry_token::RegistryTokenIssuer>,
+        provider: Arc<dyn VmProvider>,
+        root_images: &BTreeMap<String, RootFilesystem>,
     ) -> Result<Self, AppError> {
         if !config.root_manifest.is_absolute() || config.poll_interval.is_zero() {
             return Err(AppError::Configuration(String::from(
                 "OCI builder manifest path must be absolute and poll interval must be positive",
             )));
         }
-        let buildah = BuildahEngine::new(
-            config.runtime.buildah_binary.clone(),
-            config.runtime.buildah_output_prefix.clone(),
-        )
-        .map_err(component("OCI Buildah configuration"))?;
         let runtime = LocalOciRuntime::initialize(config.runtime)
             .map_err(component("OCI local runtime configuration"))?;
+        let builder_root = root_images
+            .get(config.builder_vm_image.as_str())
+            .cloned()
+            .ok_or_else(|| {
+                AppError::Configuration(String::from("OCI builder VM root is unavailable"))
+            })?;
+        let verifier_root = root_images
+            .get(config.verifier_vm_image.as_str())
+            .cloned()
+            .ok_or_else(|| {
+                AppError::Configuration(String::from("OCI verifier VM root is unavailable"))
+            })?;
+        let operation = VmOciOperation::initialize(
+            provider,
+            VmOciOperationConfig {
+                builder_root,
+                verifier_root,
+                candidate_root: runtime.output_root().to_path_buf(),
+                scratch_root: config.scratch_root,
+                mkfs_ext4: config.mkfs_ext4,
+                verification_root: config.verification_root,
+                resources: config.vm_resources,
+            },
+        )
+        .map_err(component("OCI VM operation configuration"))?;
         let publication_store = PgRepositoryOciImagePublicationStore::new(
             pool.clone(),
             PgRegistryStore::new(pool.clone()),
@@ -956,13 +999,9 @@ impl OciBuilderWorkers {
             config.publication_policy_version,
             config.publication_policy,
         );
-        let publication_tooling = config
-            .publication_tooling
-            .initialize()
-            .map_err(component("OCI publication tooling"))?;
         let publisher = ForgeZotOciPublisher::new(
             runtime.clone(),
-            publication_tooling,
+            None,
             publication_store,
             InternalRegistryTokens {
                 issuer: token_issuer,
@@ -972,7 +1011,7 @@ impl OciBuilderWorkers {
         let preparation = OciImageProductionWorker::new(
             PgOciImageProductionJobStore::new(pool.clone()),
             runtime.clone(),
-            PublishedBuildahEngine::new(buildah, publisher),
+            VmPublishedOciEngine::new(operation, publisher),
             config.preparation_worker_name,
             config.materialization_worker_name.clone(),
             config.lease,
@@ -1101,18 +1140,6 @@ impl HephaestusApp {
             config.secret_broker_adapter,
         ));
 
-        let oci_builder_workers = config
-            .oci_builder
-            .take()
-            .map(|worker| {
-                OciBuilderWorkers::initialize(
-                    pool.clone(),
-                    worker,
-                    Arc::clone(&config.registry.token_issuer),
-                )
-            })
-            .transpose()?
-            .map(Arc::new);
         let provider: Arc<dyn VmProvider> = match config.vm_backend {
             VmBackendConfig::Fake => Arc::new(FakeProvider::new()),
             VmBackendConfig::FixtureResult => Arc::new(ResultFixtureProvider),
@@ -1121,6 +1148,20 @@ impl HephaestusApp {
                 Arc::new(LibkrunProvider::new(*provider).map_err(component("libkrun provider"))?)
             }
         };
+        let oci_builder_workers = config
+            .oci_builder
+            .take()
+            .map(|worker| {
+                OciBuilderWorkers::initialize(
+                    pool.clone(),
+                    worker,
+                    Arc::clone(&config.registry.token_issuer),
+                    Arc::clone(&provider),
+                    &config.root_images,
+                )
+            })
+            .transpose()?
+            .map(Arc::new);
         let gateway_edge = if let Some(gateway) = gateway_edge_config {
             let issuer_handoff =
                 EncryptedFileHandoffStore::new(gateway_handoff_root.clone(), gateway_handoff_key)

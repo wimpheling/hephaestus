@@ -447,11 +447,8 @@ fn handle_guest(
             read_only: mount.read_only,
         })
         .collect();
-    let state_volume = match (
-        spec.labels.get("hephaestus.agent-state.filesystem-uuid"),
-        spec.labels.get("hephaestus.agent-state.mount-path"),
-    ) {
-        (Some(filesystem_uuid), Some(guest_path)) => Some(GuestStateVolume {
+    let state_volume = match volume_labels(&spec.labels) {
+        Some((filesystem_uuid, guest_path)) => Some(GuestStateVolume {
             filesystem_uuid: filesystem_uuid.clone(),
             guest_path: PathBuf::from(guest_path),
         }),
@@ -539,6 +536,23 @@ fn handle_guest(
         }
     }
     Ok(())
+}
+
+fn volume_labels(labels: &BTreeMap<String, String>) -> Option<(&String, &String)> {
+    let agent = (
+        labels.get("hephaestus.agent-state.filesystem-uuid"),
+        labels.get("hephaestus.agent-state.mount-path"),
+    );
+    let scratch = (
+        labels.get("hephaestus.oci-scratch.filesystem-uuid"),
+        labels.get("hephaestus.oci-scratch.mount-path"),
+    );
+    match (agent, scratch) {
+        ((Some(uuid), Some(path)), (None, None)) | ((None, None), (Some(uuid), Some(path))) => {
+            Some((uuid, path))
+        }
+        _ => None,
+    }
 }
 
 fn validate_authority_sequence(
