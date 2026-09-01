@@ -4,6 +4,11 @@ set -eu
 candidate=/workspace/candidate
 output=/workspace/verification
 
+# Umoci can hold more than the guest's conservative default descriptor limit
+# while unpacking a full Ubuntu rootfs. This applies only to this one-shot,
+# networkless verifier process and its children.
+ulimit -n 8192
+
 rm -rf "$output"/*
 mkdir -p "$output/evidence" "$output/bundle"
 

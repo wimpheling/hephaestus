@@ -103,9 +103,10 @@ produces bounded SBOM, scan, and rootfs outputs. Its trusted command copies
 the pinned offline Trivy database into a fresh job-scoped cache before
 scanning, because analysis cache writes must never alter the read-only verifier
 root. It moves the verified rootfs out of Umoci's temporary bundle and removes
-only the remaining job-owned bundle metadata. Only after that verifier succeeds
-may the host-controlled publisher receive its short-lived exact registry
-credential.
+only the remaining job-owned bundle metadata. Its one-shot guest process has a
+fixed 8,192-descriptor limit for the bounded Ubuntu-rootfs export; it does not
+change host or tenant-agent limits. Only after that verifier succeeds may the
+host-controlled publisher receive its short-lived exact registry credential.
 
 The verifier rejects every HIGH or CRITICAL finding with an available upstream
 fix. Findings without a fix remain recorded in the scan evidence; the reviewed
