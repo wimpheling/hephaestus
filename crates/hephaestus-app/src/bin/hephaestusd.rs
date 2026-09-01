@@ -57,9 +57,20 @@ fn environment_config() -> Result<AppConfig, Box<dyn Error>> {
     let artifact_root = path("HEPHAESTUS_ARTIFACT_ROOT")?;
     let backend_name =
         env::var("HEPHAESTUS_VM_BACKEND").unwrap_or_else(|_| String::from("libkrun"));
-    let root_images = root_images_from_environment(&backend_name)?;
+    let mut root_images = root_images_from_environment(&backend_name)?;
     let runtime_root = path("HEPHAESTUS_RUNTIME_ROOT")?;
     let oci_builder = oci_builder_from_environment(&repository_root, &runtime_root)?;
+    if let Some(worker) = &oci_builder {
+        for (reference, root) in repository_root_images(&worker.root_manifest, &worker.rootfs_root)?
+        {
+            if root_images.insert(reference.clone(), root).is_some() {
+                return Err(format!(
+                    "repository image root {reference:?} conflicts with a configured platform root"
+                )
+                .into());
+            }
+        }
+    }
     let secret_mount_root = path("HEPHAESTUS_SECRET_RUNTIME_ROOT")?;
     let secret_broker_socket = env::var_os("HEPHAESTUS_SECRET_BROKER_SOCKET")
         .map_or_else(|| runtime_root.join("secret-broker.sock"), PathBuf::from);
@@ -486,6 +497,52 @@ fn load_root_image_manifest(
     validate_root_image_entries(manifest.roots)
 }
 
+/// Loads the worker-written project-image manifest without allowing it to add
+/// arbitrary host directories or replace platform roots. Its absence is the
+/// normal state before the first project image is materialized.
+fn repository_root_images(
+    manifest_path: &Path,
+    rootfs_root: &Path,
+) -> Result<BTreeMap<String, RootFilesystem>, Box<dyn Error>> {
+    if !manifest_path.is_absolute() || !rootfs_root.is_absolute() {
+        return Err(
+            String::from("repository image manifest and rootfs root must be absolute").into(),
+        );
+    }
+    if !manifest_path.exists() {
+        return Ok(BTreeMap::new());
+    }
+    let manifest: RootImageManifest = serde_json::from_slice(&std::fs::read(manifest_path)?)?;
+    if manifest.version != ROOT_IMAGE_MANIFEST_VERSION {
+        return Err(format!(
+            "unsupported repository image manifest version {}; expected {}",
+            manifest.version, ROOT_IMAGE_MANIFEST_VERSION
+        )
+        .into());
+    }
+    let trusted_root = std::fs::canonicalize(rootfs_root)?;
+    let mut roots = BTreeMap::new();
+    for (reference, entry) in manifest.roots {
+        OciImageReference::parse(reference.clone()).map_err(|error| {
+            format!("repository image reference {reference:?} is not digest-pinned: {error}")
+        })?;
+        let RootImageManifestEntry::Directory { path } = entry else {
+            return Err(
+                String::from("repository image roots must be materialized directories").into(),
+            );
+        };
+        let path = materialized_path(&reference, path, true)?;
+        if !path.starts_with(&trusted_root) {
+            return Err(format!(
+                "repository image root {reference:?} is outside the worker rootfs root"
+            )
+            .into());
+        }
+        roots.insert(reference, RootFilesystem::Directory { host_path: path });
+    }
+    Ok(roots)
+}
+
 fn validate_root_image_entries(
     entries: BTreeMap<String, RootImageManifestEntry>,
 ) -> Result<BTreeMap<String, RootFilesystem>, Box<dyn Error>> {
@@ -651,6 +708,48 @@ mod manifest_tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn repository_manifest_loads_only_worker_materialized_directories() {
+        let temporary = tempdir().expect("temporary root");
+        let rootfs = temporary.path().join("repository-rootfs");
+        let image = rootfs.join("sha256-aaaaaaaa");
+        std::fs::create_dir_all(&image).expect("materialized image root");
+        let manifest_path = temporary.path().join("repository-roots.json");
+        std::fs::write(
+            &manifest_path,
+            format!(
+                r#"{{"version":1,"roots":{{"registry.example/project/image@sha256:{}":{{"kind":"directory","path":"{}"}}}}}}"#,
+                "a".repeat(64),
+                image.display()
+            ),
+        )
+        .expect("manifest");
+
+        let roots = repository_root_images(&manifest_path, &rootfs).expect("trusted root");
+        assert_eq!(roots.len(), 1);
+
+        std::fs::write(
+            &manifest_path,
+            format!(
+                r#"{{"version":1,"roots":{{"registry.example/project/image@sha256:{}":{{"kind":"directory","path":"{}"}}}}}}"#,
+                "a".repeat(64),
+                temporary.path().display()
+            ),
+        )
+        .expect("outside manifest");
+        assert!(repository_root_images(&manifest_path, &rootfs).is_err());
+    }
+
+    #[test]
+    fn missing_repository_manifest_means_no_project_roots_yet() {
+        let temporary = tempdir().expect("temporary root");
+        let rootfs = temporary.path().join("repository-rootfs");
+        std::fs::create_dir(&rootfs).expect("rootfs root");
+        let roots = repository_root_images(&temporary.path().join("missing.json"), &rootfs)
+            .expect("empty initial state");
+        assert!(roots.is_empty());
     }
 
     #[test]

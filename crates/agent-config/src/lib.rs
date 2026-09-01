@@ -118,12 +118,21 @@ pub struct BuildConfig {
     pub triggers: Vec<String>,
 }
 
-/// A declarative OCI image identity resolved by the catalog before execution.
+/// A declarative OCI image identity resolved when a build is requested.
+///
+/// `key` selects a reviewed platform execution image. `project_image` selects
+/// a ready, materialized image owned by the project containing the agent. The
+/// latter is deliberately accepted only for build contracts: a repository
+/// image is not yet a runtime guest/deployment image.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ImageSelection {
-    /// Stable key in the OCI image catalog.
-    pub key: String,
+    /// Stable key in the reviewed OCI image catalog.
+    #[serde(default)]
+    pub key: Option<String>,
+    /// Stable key of a ready project-owned OCI image.
+    #[serde(default)]
+    pub project_image: Option<String>,
 }
 
 /// Schema version for a repository's OCI image manifest.
@@ -1149,7 +1158,9 @@ fn validate_repository_oci_images(config: &RepositoryOciImagesConfig) -> Vec<Dia
                 "context must be a safe repository-relative path or .",
             );
         }
-        if !valid_key(&image.build.base.key, 64) {
+        if !matches!(&image.build.base.key, Some(key) if valid_key(key, 64))
+            || image.build.base.project_image.is_some()
+        {
             diagnostic(
                 &mut diagnostics,
                 "invalid_repository_oci_image_base",
@@ -1229,6 +1240,30 @@ fn valid_repository_oci_image_path(value: &str, permit_current_directory: bool) 
     valid_relative_path(value)
 }
 
+fn validate_image_selection(
+    diagnostics: &mut Vec<Diagnostic>,
+    field: &str,
+    selection: &ImageSelection,
+    permit_project_image: bool,
+) {
+    match (&selection.key, &selection.project_image) {
+        (Some(key), None) if valid_key(key, 64) => {}
+        (None, Some(key)) if permit_project_image && valid_key(key, 64) => {}
+        (None, Some(_)) => diagnostic(
+            diagnostics,
+            "project_image_not_permitted",
+            format!("{field}.project_image"),
+            "project-owned OCI images may be selected only by an isolated build contract",
+        ),
+        _ => diagnostic(
+            diagnostics,
+            "invalid_image_selection",
+            field,
+            "image must select exactly one lowercase catalog key or project_image key",
+        ),
+    }
+}
+
 // Keeping the ordered checks together preserves stable diagnostic order.
 #[allow(clippy::too_many_lines)]
 fn validate(config: &AgentConfig) -> Vec<Diagnostic> {
@@ -1270,14 +1305,7 @@ fn validate(config: &AgentConfig) -> Vec<Diagnostic> {
             "memory_mib must be between 128 and 1048576",
         );
     }
-    if !valid_key(&config.guest.image.key, 64) {
-        diagnostic(
-            &mut diagnostics,
-            "invalid_guest_image_key",
-            "guest.image.key",
-            "guest image keys must be lowercase and at most 64 characters",
-        );
-    }
+    validate_image_selection(&mut diagnostics, "guest.image", &config.guest.image, false);
     if config.workspace.mount {
         validate_absolute_path(
             &mut diagnostics,
@@ -1415,14 +1443,7 @@ fn validate_v2(config: &AgentConfig, diagnostics: &mut Vec<Diagnostic>) {
         &config.guest.working_directory,
         "invalid_release_working_directory",
     );
-    if !valid_key(&config.guest.image.key, 64) {
-        diagnostic(
-            diagnostics,
-            "invalid_guest_image_key",
-            "guest.image.key",
-            "guest image keys must be lowercase and at most 64 characters",
-        );
-    }
+    validate_image_selection(diagnostics, "guest.image", &config.guest.image, false);
     let Some(build) = &config.build else {
         diagnostic(
             diagnostics,
@@ -1444,14 +1465,7 @@ fn validate_v2(config: &AgentConfig, diagnostics: &mut Vec<Diagnostic>) {
         &build.working_directory,
         "invalid_build_working_directory",
     );
-    if !valid_key(&build.image.key, 64) {
-        diagnostic(
-            diagnostics,
-            "invalid_build_image_key",
-            "build.image.key",
-            "build image keys must be lowercase and at most 64 characters",
-        );
-    }
+    validate_image_selection(diagnostics, "build.image", &build.image, true);
     if build.artifacts.is_empty() || build.artifacts.len() > 128 {
         diagnostic(
             diagnostics,
@@ -2386,7 +2400,10 @@ base = {{ key = "typescript-node-ubuntu" }}
         assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
         let images = parsed.config.expect("valid repository OCI images");
         assert_eq!(images.images.len(), 1);
-        assert_eq!(images.images[0].build.base.key, "typescript-node-ubuntu");
+        assert_eq!(
+            images.images[0].build.base.key.as_deref(),
+            Some("typescript-node-ubuntu")
+        );
     }
 
     #[test]
@@ -2518,10 +2535,48 @@ methods = ["POST"]
         assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
         let config = parsed.config.expect("valid image selection");
         assert_eq!(
-            config.build.as_ref().map(|build| build.image.key.as_str()),
-            Some("typescript-tools")
+            config
+                .build
+                .as_ref()
+                .and_then(|build| build.image.key.as_deref()),
+            Some("typescript-tools"),
         );
-        assert_eq!(config.guest.image.key, "typescript-tools");
+        assert_eq!(config.guest.image.key.as_deref(), Some("typescript-tools"));
+    }
+
+    #[test]
+    fn accepts_a_project_image_for_an_isolated_build_only() {
+        let source = VALID.replacen(
+            "image = { key = \"ubuntu-native\" }",
+            "image = { project_image = \"cooking-blog-hugo\" }",
+            1,
+        );
+        let parsed = parse(source.as_bytes());
+        assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+        assert_eq!(
+            parsed
+                .config
+                .and_then(|config| config.build)
+                .and_then(|build| build.image.project_image),
+            Some(String::from("cooking-blog-hugo"))
+        );
+    }
+
+    #[test]
+    fn rejects_a_project_image_for_a_guest() {
+        let source = VALID.replacen(
+            "image = { key = \"ubuntu-native\" }",
+            "image = { project_image = \"cooking-blog-hugo\" }",
+            2,
+        );
+        let parsed = parse(source.as_bytes());
+        assert!(parsed.config.is_none());
+        assert!(
+            parsed
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "project_image_not_permitted")
+        );
     }
 
     #[test]

@@ -584,8 +584,10 @@ impl BuildApplication {
             .build
             .as_ref()
             .ok_or(BuildError::FailedPrecondition)?;
-        let resolved_build_image = resolve_image(&mut transaction, &build.image).await?;
-        let resolved_guest_image = resolve_image(&mut transaction, &config.guest.image).await?;
+        let resolved_build_image =
+            resolve_image(&mut transaction, request.repository_id, &build.image).await?;
+        let resolved_guest_image =
+            resolve_image(&mut transaction, request.repository_id, &config.guest.image).await?;
         let build_declaration = serde_json::to_value(build).map_err(BuildError::Serialization)?;
         let build_policy = json!({
             "resources": build.resources,
@@ -629,16 +631,19 @@ impl BuildApplication {
         .map_err(BuildError::Persistence)?;
         sqlx::query(
             "INSERT INTO build_request_images
-             (build_request_id, execution_context, image_id, image_key, image_reference)
-             VALUES ($1, 'build', $2, $3, $4),
-                    ($1, 'guest', $5, $6, $7)
+             (build_request_id, execution_context, image_id, repository_oci_image_id,
+              image_key, image_reference)
+             VALUES ($1, 'build', $2, $3, $4, $5),
+                    ($1, 'guest', $6, $7, $8, $9)
              ON CONFLICT (build_request_id, execution_context) DO NOTHING",
         )
         .bind(row.0)
-        .bind(resolved_build_image.id)
+        .bind(resolved_build_image.catalog_image_id)
+        .bind(resolved_build_image.repository_image_id)
         .bind(&resolved_build_image.key)
         .bind(&resolved_build_image.reference)
-        .bind(resolved_guest_image.id)
+        .bind(resolved_guest_image.catalog_image_id)
+        .bind(resolved_guest_image.repository_image_id)
         .bind(&resolved_guest_image.key)
         .bind(&resolved_guest_image.reference)
         .execute(&mut *transaction)
@@ -703,23 +708,44 @@ impl BuildApplication {
 
 #[derive(Debug, FromRow)]
 struct ResolvedImageRow {
-    id: Uuid,
+    catalog_image_id: Option<Uuid>,
+    repository_image_id: Option<Uuid>,
     key: String,
     reference: String,
 }
 
 async fn resolve_image(
     transaction: &mut Transaction<'_, Postgres>,
+    repository_id: Uuid,
     selection: &agent_config::ImageSelection,
 ) -> Result<ResolvedImageRow, BuildError> {
-    let row = sqlx::query_as::<_, ResolvedImageRow>(
-        "SELECT id, key, image_reference AS reference FROM oci_images
-          WHERE key = $1 AND availability_state = 'available'",
-    )
-    .bind(&selection.key)
-    .fetch_optional(&mut **transaction)
-    .await
-    .map_err(BuildError::Persistence)?;
+    let row = match (&selection.key, &selection.project_image) {
+        (Some(key), None) => sqlx::query_as::<_, ResolvedImageRow>(
+            "SELECT id AS catalog_image_id, NULL::uuid AS repository_image_id,
+                    key, image_reference AS reference
+               FROM oci_images
+              WHERE key = $1 AND availability_state = 'available' AND role = 'execution'",
+        )
+        .bind(key)
+        .fetch_optional(&mut **transaction)
+        .await
+        .map_err(BuildError::Persistence)?,
+        (None, Some(key)) => sqlx::query_as::<_, ResolvedImageRow>(
+            "SELECT NULL::uuid AS catalog_image_id, image.id AS repository_image_id,
+                    image.key, image.image_reference AS reference
+               FROM repository_oci_image_definitions AS image
+               JOIN repositories AS repository ON repository.id = $1
+              WHERE image.project_id = repository.project_id
+                AND image.key = $2
+                AND image.status = 'ready'",
+        )
+        .bind(repository_id)
+        .bind(key)
+        .fetch_optional(&mut **transaction)
+        .await
+        .map_err(BuildError::Persistence)?,
+        _ => None,
+    };
     let row = row.ok_or(BuildError::FailedPrecondition)?;
     Ok(row)
 }
