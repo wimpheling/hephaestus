@@ -13,8 +13,9 @@ writable_scratch=/workspace/buildah
 # mount, which the host removes after this one preparation attempt.
 export HOME="$writable_scratch/home"
 export XDG_RUNTIME_DIR="$writable_scratch/runtime"
-mkdir -p "$HOME" "$XDG_RUNTIME_DIR"
-chmod 0700 "$HOME" "$XDG_RUNTIME_DIR"
+export TMPDIR="$writable_scratch/tmp"
+mkdir -p "$HOME" "$XDG_RUNTIME_DIR" "$TMPDIR"
+chmod 0700 "$HOME" "$XDG_RUNTIME_DIR" "$TMPDIR"
 
 # Keep Buildah's private metadata off the platform root and candidate layout.
 # The paths are fresh for this one-shot VM and never survive the operation.
