@@ -6,16 +6,18 @@ set -eu
 readonly_source=/workspace/source
 readonly_base=/workspace/heph-base
 writable_output=/workspace/candidate
+writable_scratch=/workspace/buildah
 
-export HOME=/tmp/heph-agent-home
-export XDG_RUNTIME_DIR=/tmp/heph-agent-runtime
+# The directory-backed VM root is immutable platform input, not a writable
+# guest filesystem. Buildah state belongs on this distinct, fresh private
+# mount, which the host removes after this one preparation attempt.
+export HOME="$writable_scratch/home"
+export XDG_RUNTIME_DIR="$writable_scratch/runtime"
 mkdir -p "$HOME" "$XDG_RUNTIME_DIR"
 chmod 0700 "$HOME" "$XDG_RUNTIME_DIR"
 
-# Platform root filesystems are immutable. Keep Buildah's private metadata in
-# the VM's tmpfs rather than allowing it to select /var/lib or /run from that
-# immutable root. The paths are fresh for this one-shot VM and never mounted
-# back to the host.
+# Keep Buildah's private metadata off the platform root and candidate layout.
+# The paths are fresh for this one-shot VM and never survive the operation.
 buildah_root="$HOME/buildah-root"
 buildah_runroot="$XDG_RUNTIME_DIR/buildah-runroot"
 mkdir -p "$buildah_root" "$buildah_runroot"
