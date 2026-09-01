@@ -334,6 +334,14 @@ fn oci_builder_from_environment(
         &path_or("HEPHAESTUS_SKOPEO", "/usr/bin/skopeo"),
         &path_or("HEPHAESTUS_ORAS", "/usr/bin/oras"),
     )?;
+    // A public registry uses the HTTPS origin derived from its authority. The
+    // local development Zot endpoint is deliberately an explicit HTTP-only
+    // override, shared with the reconciliation and platform-image tooling.
+    let publisher = match env::var("HEPHAESTUS_REGISTRY_PRIVATE_ORIGIN") {
+        Ok(origin) => publisher.with_registry_origin(&origin)?,
+        Err(env::VarError::NotPresent) => publisher,
+        Err(error) => return Err(Box::new(error)),
+    };
     Ok(Some(OciBuilderWorkerConfig {
         runtime,
         publisher,
