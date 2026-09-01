@@ -36,6 +36,13 @@ export HEPHAESTUS_ORAS=/absolute/path/to/oras
 The values are inspected at startup; this does not grant either client to a
 repository image build.
 
+The daemon and its libkrun workers need a soft open-file limit of at least
+`8192`: Umoci needs that bounded capacity to export a full Ubuntu rootfs in the
+isolated verifier VM. `cargo dev run` raises its inherited soft limit to that
+value when the shell's hard limit permits it. For a managed daemon, configure
+the service manager with `LimitNOFILE=8192` (or a higher reviewed value) before
+starting it; do not try to alter a running guest's limits.
+
 The command distinguishes a disabled workflow from an enabled workflow whose
 installed catalog, OCI layouts, immutable tags, or execution-base manifest are
 missing. Fix those prerequisites before starting a daemon; do not hand-edit
@@ -103,10 +110,11 @@ produces bounded SBOM, scan, and rootfs outputs. Its trusted command copies
 the pinned offline Trivy database into a fresh job-scoped cache before
 scanning, because analysis cache writes must never alter the read-only verifier
 root. It moves the verified rootfs out of Umoci's temporary bundle and removes
-only the remaining job-owned bundle metadata. Its one-shot guest process has a
-fixed 8,192-descriptor limit for the bounded Ubuntu-rootfs export; it does not
-change host or tenant-agent limits. Only after that verifier succeeds may the
-host-controlled publisher receive its short-lived exact registry credential.
+only the remaining job-owned bundle metadata. Its one-shot guest process
+inherits the daemon's reviewed 8,192-descriptor capacity for the bounded
+Ubuntu-rootfs export; it does not change host or tenant-agent limits. Only
+after that verifier succeeds may the host-controlled publisher receive its
+short-lived exact registry credential.
 
 The verifier rejects every HIGH or CRITICAL finding with an available upstream
 fix. Findings without a fix remain recorded in the scan evidence; the reviewed

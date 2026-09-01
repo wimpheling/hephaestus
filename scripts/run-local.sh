@@ -12,6 +12,9 @@ readonly DEFAULT_LOCAL_OCI_IMAGE="${HEPHAESTUS_LIBKRUN_UBUNTU_IMAGE:-docker.io/l
 readonly local_oci_images="${HEPHAESTUS_LOCAL_OCI_IMAGES:-${DEFAULT_LOCAL_OCI_IMAGE}}"
 readonly GUEST_TARGET="x86_64-unknown-linux-musl"
 readonly REQUIRED_CONTROLLERS=(cpu io memory pids)
+# An Ubuntu repository-image rootfs needs more descriptors than the common
+# interactive-shell soft default while Umoci verifies and exports it.
+readonly MINIMUM_OPEN_FILES=8192
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly script_dir
@@ -380,6 +383,16 @@ done
     printf 'run-local.sh must run as a non-root user\n' >&2
     exit 1
 }
+if (( $(ulimit -Sn) < MINIMUM_OPEN_FILES )); then
+    ulimit -Sn "${MINIMUM_OPEN_FILES}" || {
+        printf 'local repository-image verification requires a soft open-file limit of at least %s; raise the service LimitNOFILE and retry\n' "${MINIMUM_OPEN_FILES}" >&2
+        exit 1
+    }
+fi
+if (( $(ulimit -Sn) < MINIMUM_OPEN_FILES )); then
+    printf 'local repository-image verification requires a soft open-file limit of at least %s; raise the service LimitNOFILE and retry\n' "${MINIMUM_OPEN_FILES}" >&2
+    exit 1
+fi
 [[ "$(uname -m)" == "x86_64" ]] || {
     printf 'the pinned local libkrun image currently supports x86_64 only\n' >&2
     exit 1
