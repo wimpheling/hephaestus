@@ -126,7 +126,30 @@ fix. Findings without a fix remain recorded in the scan evidence; the reviewed
 platform base is updated when a fix becomes available.
 
 Once materialized, the immutable output can be selected by a normal build or
-release contract. A failed, unverified, or unmaterialized image remains
-unselectable. Use **Build** or **Rebuild** on the project image resource; its
-history records safe requested, preparing, published, materializing, ready, or
-failed transitions.
+release contract. In `agent.toml`, select it explicitly in the isolated build
+contract:
+
+```toml
+[build]
+image = { project_image = "cooking-blog-hugo" }
+command = "/usr/local/bin/hugo"
+working_directory = "/workspace/source"
+```
+
+`project_image` resolves only to a ready image from the same project and the
+request snapshots its immutable digest and project-image identity into the
+resulting build/release provenance. It is deliberately unavailable to
+`[guest]`: guest/runtime roots remain reviewed execution catalog images until
+the deployment runtime has its own project-image policy.
+
+The materializer injects the reviewed `heph-init` bootstrap after verifier
+success, while the root is still private and before it is atomically made
+selectable. A repository Dockerfile cannot provide or replace that bootstrap.
+For a long-running local daemon, restart it after an image becomes ready so it
+loads the newly written, worker-owned root manifest; the restart does not
+rebuild, scan, or republish the image.
+
+A failed, unverified, or unmaterialized image remains unselectable. Use
+**Build** or **Rebuild** on the project image resource; its history records
+safe requested, preparing, published, materializing, ready, or failed
+transitions.
