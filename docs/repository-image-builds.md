@@ -37,10 +37,10 @@ The values are inspected at startup; this does not grant either client to a
 repository image build.
 
 The daemon and its libkrun workers need a soft open-file limit of at least
-`8192`: Umoci needs that bounded capacity to export a full Ubuntu rootfs in the
+`65536`: Umoci needs that bounded capacity to export a full Ubuntu rootfs in the
 isolated verifier VM. `cargo dev run` raises its inherited soft limit to that
 value when the shell's hard limit permits it. For a managed daemon, configure
-the service manager with `LimitNOFILE=8192` (or a higher reviewed value) before
+the service manager with `LimitNOFILE=65536` (or a higher reviewed value) before
 starting it; do not try to alter a running guest's limits.
 
 The command distinguishes a disabled workflow from an enabled workflow whose
@@ -111,7 +111,7 @@ the pinned offline Trivy database into a fresh job-scoped cache before
 scanning, because analysis cache writes must never alter the read-only verifier
 root. It moves the verified rootfs out of Umoci's temporary bundle and removes
 only the remaining job-owned bundle metadata. Its one-shot guest process
-inherits the daemon's reviewed 8,192-descriptor capacity for the bounded
+inherits the daemon's reviewed 65,536-descriptor capacity for the bounded
 Ubuntu-rootfs export. The trusted bootstrap applies that capacity only while
 launching the exact platform verifier command; it then drops to the
 unprivileged guest account for rootless Umoci export. This does not change host

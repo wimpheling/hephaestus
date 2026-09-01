@@ -14,7 +14,7 @@ readonly GUEST_TARGET="x86_64-unknown-linux-musl"
 readonly REQUIRED_CONTROLLERS=(cpu io memory pids)
 # An Ubuntu repository-image rootfs needs more descriptors than the common
 # interactive-shell soft default while Umoci verifies and exports it.
-readonly MINIMUM_OPEN_FILES=8192
+readonly MINIMUM_OPEN_FILES=65536
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly script_dir
