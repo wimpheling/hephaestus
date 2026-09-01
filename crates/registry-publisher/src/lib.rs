@@ -46,10 +46,10 @@ const REGISTRY_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 pub struct PublisherConfiguration {
     authority: RegistryAuthority,
     layout_root: PathBuf,
+    evidence_root: PathBuf,
     credential_root: PathBuf,
     skopeo_binary: PathBuf,
     registry_origin: Url,
-    registry_client: HttpClient,
 }
 
 impl PublisherConfiguration {
@@ -59,28 +59,25 @@ impl PublisherConfiguration {
     ///
     /// Returns an error when a root or executable is relative, missing, or a
     /// symbolic link. The publication inputs must be descendants of
-    /// `layout_root`; temporary credential files are created below
+    /// `layout_root`; verifier evidence must be below `evidence_root`;
+    /// temporary credential files are created below
     /// `credential_root` and removed before this adapter returns.
     pub fn new(
         authority: RegistryAuthority,
         layout_root: &Path,
+        evidence_root: &Path,
         credential_root: &Path,
         skopeo_binary: &Path,
         _oras_binary: &Path,
     ) -> Result<Self, PublisherError> {
-        let registry_client = HttpClient::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .timeout(REGISTRY_REQUEST_TIMEOUT)
-            .build()
-            .map_err(|_| PublisherError::RegistryRead(RegistryReadError::Failed))?;
         let registry_origin = registry_origin(&authority)?;
         Ok(Self {
             authority,
             layout_root: canonical_directory(layout_root)?,
+            evidence_root: canonical_directory(evidence_root)?,
             credential_root: canonical_directory(credential_root)?,
             skopeo_binary: canonical_executable(skopeo_binary)?,
             registry_origin,
-            registry_client,
         })
     }
 
@@ -429,8 +426,64 @@ impl RegistryReadClient for HttpRegistryReadClient {
     }
 }
 
+/// Defers construction of Reqwest's synchronous client until the
+/// host-controlled publication/read-back boundary is entered.
+///
+/// `reqwest::blocking::Client` owns a small Tokio runtime and therefore must
+/// not be constructed while the daemon is configuring itself on a Tokio
+/// worker. Callers run publication through their existing blocking boundary,
+/// so each bounded read creates and drops its client there.
+#[derive(Clone)]
+pub struct LazyHttpRegistryReadClient {
+    origin: Url,
+}
+
+impl LazyHttpRegistryReadClient {
+    const fn new(origin: Url) -> Self {
+        Self { origin }
+    }
+
+    fn reader(&self) -> Result<HttpRegistryReadClient, RegistryReadError> {
+        let client = HttpClient::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(REGISTRY_REQUEST_TIMEOUT)
+            .build()
+            .map_err(|_| RegistryReadError::Failed)?;
+        Ok(HttpRegistryReadClient::new(self.origin.clone(), client))
+    }
+}
+
+impl RegistryReadClient for LazyHttpRegistryReadClient {
+    fn manifest_descriptor(
+        &self,
+        namespace: &str,
+        digest: &Sha256Digest,
+        token: &BearerToken,
+    ) -> Result<OciDescriptor, RegistryReadError> {
+        self.reader()?.manifest_descriptor(namespace, digest, token)
+    }
+
+    fn manifest_bytes(
+        &self,
+        namespace: &str,
+        digest: &Sha256Digest,
+        token: &BearerToken,
+    ) -> Result<Vec<u8>, RegistryReadError> {
+        self.reader()?.manifest_bytes(namespace, digest, token)
+    }
+
+    fn referrers_bytes(
+        &self,
+        namespace: &str,
+        subject: &Sha256Digest,
+        token: &BearerToken,
+    ) -> Result<Vec<u8>, RegistryReadError> {
+        self.reader()?.referrers_bytes(namespace, subject, token)
+    }
+}
+
 /// Controlled publisher with replaceable command and registry-read adapters.
-pub struct ControlledOciPublisher<R, C = HttpRegistryReadClient> {
+pub struct ControlledOciPublisher<R, C = LazyHttpRegistryReadClient> {
     configuration: PublisherConfiguration,
     runner: R,
     reader: C,
@@ -443,10 +496,7 @@ where
     /// Creates a controlled publisher from validated administrator configuration.
     #[must_use]
     pub fn new(configuration: PublisherConfiguration, runner: R) -> Self {
-        let reader = HttpRegistryReadClient::new(
-            configuration.registry_origin.clone(),
-            configuration.registry_client.clone(),
-        );
+        let reader = LazyHttpRegistryReadClient::new(configuration.registry_origin.clone());
         Self {
             configuration,
             runner,
@@ -551,8 +601,11 @@ where
         let layout = trusted_directory(&self.configuration.layout_root, &material.layout)?;
         let source_tag = validate_local_layout(&layout, intent.expected_manifest())?;
         let policy = intent.supply_chain_policy();
-        let evidence =
-            validated_evidence(&self.configuration.layout_root, &material.evidence, policy)?;
+        let evidence = validated_evidence(
+            &self.configuration.evidence_root,
+            &material.evidence,
+            policy,
+        )?;
         Ok(ValidatedMaterial {
             layout,
             source_tag,
@@ -1501,20 +1554,28 @@ mod tests {
     ) {
         let root = tempfile::tempdir().expect("temp root");
         let layouts = root.path().join("layouts");
+        let evidence_root = root.path().join("evidence");
         let credentials = root.path().join("credentials");
         fs::create_dir(&layouts).expect("layouts");
+        fs::create_dir(&evidence_root).expect("evidence root");
         fs::create_dir(&credentials).expect("credentials");
         let skopeo = executable(root.path(), "skopeo");
         let oras = executable(root.path(), "oras");
-        let config =
-            PublisherConfiguration::new(authority(), &layouts, &credentials, &skopeo, &oras)
-                .expect("configuration");
+        let config = PublisherConfiguration::new(
+            authority(),
+            &layouts,
+            &evidence_root,
+            &credentials,
+            &skopeo,
+            &oras,
+        )
+        .expect("configuration");
         let image = layouts.join("image");
         let expected = create_layout(&image);
         let evidence = PublicationEvidenceFiles {
-            sbom: write_file(&layouts, "sbom.json", b"sbom"),
-            provenance: write_file(&layouts, "provenance.json", b"provenance"),
-            scan: write_file(&layouts, "scan.json", b"scan"),
+            sbom: write_file(&evidence_root, "sbom.json", b"sbom"),
+            provenance: write_file(&evidence_root, "provenance.json", b"provenance"),
+            scan: write_file(&evidence_root, "scan.json", b"scan"),
             signature: None,
         };
         (
@@ -1685,7 +1746,7 @@ mod tests {
     fn verifies_an_optional_signature_referrer_when_it_is_published() {
         let (_root, config, mut material, intent) = setup();
         material.evidence.signature = Some(write_file(
-            material.layout.parent().expect("layout parent"),
+            material.evidence.sbom.parent().expect("evidence parent"),
             "signature.json",
             b"signature",
         ));
@@ -1860,8 +1921,15 @@ mod tests {
         let link = root.path().join("layouts/link");
         symlink(target, &link).expect("link");
         material.layout = link;
-        let publisher = scripted_publisher(config, ScriptedRunner::default());
+        let publisher = scripted_publisher(config.clone(), ScriptedRunner::default());
         let issued = token();
+        assert!(matches!(
+            publisher.publish(&intent, &material, issued.token()),
+            Err(PublisherError::UnsafePath)
+        ));
+        material.layout = root.path().join("layouts/image");
+        material.evidence.scan = write_file(root.path(), "outside-scan.json", b"scan");
+        let publisher = scripted_publisher(config, ScriptedRunner::default());
         assert!(matches!(
             publisher.publish(&intent, &material, issued.token()),
             Err(PublisherError::UnsafePath)

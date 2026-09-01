@@ -309,6 +309,7 @@ fn oci_builder_from_environment(
     let materialization_worker_name = env::var("HEPHAESTUS_OCI_BUILDER_MATERIALIZATION_WORKER")
         .unwrap_or_else(|_| format!("oci-rootfs-{host_id}"));
     let output_root = path("HEPHAESTUS_OCI_BUILDER_OUTPUT_ROOT")?;
+    let verification_root = path("HEPHAESTUS_OCI_BUILDER_VERIFICATION_ROOT")?;
     let registry_authority =
         registry_domain::RegistryAuthority::parse(required("HEPHAESTUS_REGISTRY_SERVICE")?)?;
     let runtime = LocalOciRuntimeConfig {
@@ -316,7 +317,7 @@ fn oci_builder_from_environment(
         checkout_root: path("HEPHAESTUS_OCI_BUILDER_CHECKOUT_ROOT")?,
         image_layouts,
         output_root: output_root.clone(),
-        verified_rootfs_root: Some(path("HEPHAESTUS_OCI_BUILDER_VERIFICATION_ROOT")?),
+        verified_rootfs_root: Some(verification_root.clone()),
         git_binary: path_or("HEPHAESTUS_GIT_BINARY", "/usr/bin/git"),
         tar_binary: path_or("HEPHAESTUS_TAR_BINARY", "/usr/bin/tar"),
         buildah_binary: None,
@@ -328,6 +329,7 @@ fn oci_builder_from_environment(
     let publisher = registry_publisher::PublisherConfiguration::new(
         registry_authority,
         &output_root,
+        &verification_root,
         &path("HEPHAESTUS_REGISTRY_CREDENTIAL_ROOT")?,
         &path_or("HEPHAESTUS_SKOPEO", "/usr/bin/skopeo"),
         &path_or("HEPHAESTUS_ORAS", "/usr/bin/oras"),
@@ -346,7 +348,7 @@ fn oci_builder_from_environment(
         verifier_vm_image: builder_catalog_domain::OciImageReference::parse(required(
             "HEPHAESTUS_OCI_VERIFIER_VM_IMAGE",
         )?)?,
-        verification_root: path("HEPHAESTUS_OCI_BUILDER_VERIFICATION_ROOT")?,
+        verification_root,
         scratch_root: path("HEPHAESTUS_OCI_BUILDER_SCRATCH_ROOT")?,
         mkfs_ext4: path_or("HEPHAESTUS_MKFS_EXT4", "/usr/sbin/mkfs.ext4"),
         vm_resources: vm_trait::VmResources {

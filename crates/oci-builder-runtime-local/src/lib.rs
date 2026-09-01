@@ -177,6 +177,13 @@ impl VmOciOperation {
         prepare_empty_directory(&verification)?;
         let result = async {
             self.run_builder(request, &candidate, &scratch).await?;
+            // The builder emits the standard OCI outer-index-to-manifest form.
+            // Convert that untrusted output into the one platform index the
+            // publisher accepts, before it becomes an immutable verifier input.
+            if symlinked_tree(&candidate)? {
+                return Err(OciWorkerError::InvalidOutput);
+            }
+            normalize_layout_to_single_index(&candidate)?;
             seal_candidate_layout(&candidate)?;
             self.run_verifier(request, &candidate, &verification)
                 .await?;
@@ -1664,8 +1671,9 @@ mod tests {
         LocalOciRuntimeConfig, PLATFORM_OCI_BUILDER_ENV, PLATFORM_OCI_VERIFIER_ENV, ScratchDisk,
         VERIFIER_SYFT_CACHE_ENV, VERIFIER_SYFT_CACHE_PATH, VERIFIER_SYFT_UPDATE_ENV,
         VERIFIER_TRIVY_CACHE_ENV, VERIFIER_TRIVY_CACHE_PATH, builder_vm_spec,
-        classify_guest_failure, copy_verified_rootfs, prepare_job_checkout,
-        remove_private_directory, verifier_vm_spec, zot_confirmed_output,
+        classify_guest_failure, copy_verified_rootfs, layout_index_descriptor,
+        normalize_layout_to_single_index, prepare_job_checkout, remove_private_directory,
+        verifier_vm_spec, zot_confirmed_output,
     };
     use builder_catalog_domain::{OciImageId, OciImageReference};
     use oci_builder_worker::{PreparedSource, SourceCheckoutProvider};
@@ -1675,6 +1683,7 @@ mod tests {
         RegistryAuthority, RegistryNamespace, Sha256Digest, SupplyChainEvidence, SupplyChainPolicy,
         SupplyChainReferrer, SupplyChainReferrerKind, VerifiedPublication,
     };
+    use sha2::{Digest, Sha256};
     use std::{collections::BTreeMap, fs, os::unix::fs::PermissionsExt, path::PathBuf};
     use uuid::Uuid;
     use vm_trait::{NetworkMode, RootFilesystem, VmResources};
@@ -1733,6 +1742,48 @@ mod tests {
 
         assert_builder_boundary(&builder, &request, &checkout, &base, &candidate, &scratch);
         assert_verifier_boundary(&verifier, &request, &candidate, &verification);
+    }
+
+    #[test]
+    fn normalizes_the_builder_manifest_into_a_single_platform_index() {
+        let temporary = tempfile::tempdir().expect("temporary root");
+        let layout = temporary.path().join("layout");
+        let blob_root = layout.join("blobs/sha256");
+        fs::create_dir_all(&blob_root).expect("blob root");
+        let manifest = br#"{"schemaVersion":2}"#;
+        let manifest_digest = format!("sha256:{:x}", Sha256::digest(manifest));
+        fs::write(
+            blob_root.join(manifest_digest.trim_start_matches("sha256:")),
+            manifest,
+        )
+        .expect("manifest blob");
+        fs::write(
+            layout.join("index.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "schemaVersion": 2,
+                "manifests": [{
+                    "mediaType": OciMediaType::IMAGE_MANIFEST,
+                    "digest": manifest_digest,
+                    "size": manifest.len(),
+                    "annotations": { "org.opencontainers.image.ref.name": "latest" },
+                }],
+            }))
+            .expect("index bytes"),
+        )
+        .expect("index");
+
+        normalize_layout_to_single_index(&layout).expect("normalize layout");
+        let descriptor = layout_index_descriptor(&layout).expect("platform index descriptor");
+
+        assert!(descriptor.media_type().is_image_index());
+        let index: serde_json::Value =
+            serde_json::from_slice(&fs::read(layout.join("index.json")).expect("normalized index"))
+                .expect("index JSON");
+        assert!(
+            index["manifests"][0]["annotations"]["org.opencontainers.image.ref.name"]
+                .as_str()
+                .is_some_and(|tag| tag.starts_with("heph-sha256-"))
+        );
     }
 
     fn assert_builder_boundary(

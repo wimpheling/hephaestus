@@ -43,7 +43,10 @@ trivy image --input "$candidate" --offline-scan --skip-db-update --skip-java-db-
 # The trusted bootstrap provisions descriptor capacity before dropping to this
 # unprivileged verifier account. Rootless Umoci preserves that boundary while
 # exporting the candidate into the job-owned output mount.
-umoci unpack --rootless --image "$candidate:latest" "$output/bundle" || fail rootfs-export
+candidate_tag=$(grep --only-matching --extended-regexp 'heph-sha256-[0-9a-f]{64}' \
+    "$candidate/index.json" | sort --unique)
+[ "$(printf '%s\n' "$candidate_tag" | wc --lines)" -eq 1 ] || fail layout-reference
+umoci unpack --rootless --image "$candidate:$candidate_tag" "$output/bundle" || fail rootfs-export
 mv "$output/bundle/rootfs" "$output/rootfs" || fail rootfs-handoff
 # Umoci retains bundle metadata next to the exported rootfs. The bundle lives
 # under this fresh job-owned output root, so remove only that temporary
