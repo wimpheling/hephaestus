@@ -737,7 +737,9 @@ async fn resolve_image(
                JOIN repositories AS repository ON repository.id = $1
               WHERE image.project_id = repository.project_id
                 AND image.key = $2
-                AND image.status = 'ready'",
+                AND image.status = 'ready'
+              ORDER BY image.updated_at DESC, image.id DESC
+              LIMIT 1",
         )
         .bind(repository_id)
         .bind(key)

@@ -1231,6 +1231,8 @@ async fn resolve_image(
               WHERE image.project_id = repository.project_id
                 AND image.key = $2
                 AND image.status = 'ready'
+              ORDER BY image.updated_at DESC, image.id DESC
+              LIMIT 1
               FOR SHARE OF image",
         )
         .bind(repository_id.as_uuid())
