@@ -48,6 +48,7 @@ const BUILDER_SCRATCH_DISK_ID: &str = "repository-oci-scratch";
 const BUILDER_SCRATCH_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 const VERIFIER_OUTPUT_GUEST_PATH: &str = "/workspace/verification";
 const PLATFORM_OCI_BUILDER_ENV: &str = "HEPH_PLATFORM_OCI_BUILDER";
+const PLATFORM_OCI_VERIFIER_ENV: &str = "HEPH_PLATFORM_OCI_VERIFIER";
 const VERIFIER_TRIVY_CACHE_ENV: &str = "TRIVY_CACHE_DIR";
 const VERIFIER_TRIVY_CACHE_PATH: &str = "/workspace/verification/trivy-cache";
 const VERIFIER_SYFT_UPDATE_ENV: &str = "SYFT_CHECK_FOR_APP_UPDATE";
@@ -430,6 +431,10 @@ fn verifier_vm_spec(
             // job-scoped writable cache, and Syft must not attempt an update
             // from a networkless guest.
             env: BTreeMap::from([
+                // The root-only bootstrap recognizes the exact verifier
+                // program plus this marker. It is a fixed platform operation,
+                // never repository-controlled guest input.
+                (String::from(PLATFORM_OCI_VERIFIER_ENV), String::from("1")),
                 (
                     String::from(VERIFIER_TRIVY_CACHE_ENV),
                     String::from(VERIFIER_TRIVY_CACHE_PATH),
@@ -1629,10 +1634,11 @@ fn zot_confirmed_output(
 mod tests {
     use super::{
         BUILDER_SCRATCH_DISK_ID, BUILDER_SCRATCH_GUEST_PATH, LocalOciRuntime,
-        LocalOciRuntimeConfig, PLATFORM_OCI_BUILDER_ENV, ScratchDisk, VERIFIER_SYFT_CACHE_ENV,
-        VERIFIER_SYFT_CACHE_PATH, VERIFIER_SYFT_UPDATE_ENV, VERIFIER_TRIVY_CACHE_ENV,
-        VERIFIER_TRIVY_CACHE_PATH, builder_vm_spec, classify_guest_failure, copy_verified_rootfs,
-        prepare_job_checkout, remove_private_directory, verifier_vm_spec, zot_confirmed_output,
+        LocalOciRuntimeConfig, PLATFORM_OCI_BUILDER_ENV, PLATFORM_OCI_VERIFIER_ENV, ScratchDisk,
+        VERIFIER_SYFT_CACHE_ENV, VERIFIER_SYFT_CACHE_PATH, VERIFIER_SYFT_UPDATE_ENV,
+        VERIFIER_TRIVY_CACHE_ENV, VERIFIER_TRIVY_CACHE_PATH, builder_vm_spec,
+        classify_guest_failure, copy_verified_rootfs, prepare_job_checkout,
+        remove_private_directory, verifier_vm_spec, zot_confirmed_output,
     };
     use builder_catalog_domain::{OciImageId, OciImageReference};
     use oci_builder_worker::{PreparedSource, SourceCheckoutProvider};
@@ -1765,6 +1771,7 @@ mod tests {
             verifier.command.program,
             "/usr/libexec/hephaestus/oci-verify"
         );
+        assert_eq!(verifier.command.env[PLATFORM_OCI_VERIFIER_ENV], "1");
         assert!(verifier.command.args.is_empty());
         assert_eq!(
             verifier.labels["hephaestus.kind"],

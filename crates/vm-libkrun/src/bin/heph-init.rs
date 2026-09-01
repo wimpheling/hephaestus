@@ -27,6 +27,9 @@ use zeroize::Zeroizing;
 const CONTROL_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const PLATFORM_OCI_BUILDER_ENV: &str = "HEPH_PLATFORM_OCI_BUILDER";
 const PLATFORM_OCI_BUILDER_PROGRAM: &str = "/usr/libexec/hephaestus/oci-build";
+const PLATFORM_OCI_VERIFIER_ENV: &str = "HEPH_PLATFORM_OCI_VERIFIER";
+const PLATFORM_OCI_VERIFIER_PROGRAM: &str = "/usr/libexec/hephaestus/oci-verify";
+const PLATFORM_OCI_VERIFIER_OPEN_FILES: libc::rlim_t = 8_192;
 const AGENT_UID: u32 = 10_001;
 const AGENT_GID: u32 = 10_001;
 const RUNTIME_AUTHORITY_DIRECTORY: &str = "/run/hephaestus-authority";
@@ -135,21 +138,21 @@ fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         return Ok(());
     }
 
-    let platform_oci_builder = is_platform_oci_builder(&command);
+    let platform_oci_operation = platform_oci_operation(&command);
+    if platform_oci_operation.is_verifier() {
+        provision_verifier_open_files()?;
+    }
     let mut child = Command::new(&command.program);
     child
         .args(&command.args)
         .env_clear()
-        .envs(
-            command
-                .env
-                .iter()
-                .filter(|(key, _)| key.as_str() != PLATFORM_OCI_BUILDER_ENV),
-        )
+        .envs(command.env.iter().filter(|(key, _)| {
+            key.as_str() != PLATFORM_OCI_BUILDER_ENV && key.as_str() != PLATFORM_OCI_VERIFIER_ENV
+        }))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    if !platform_oci_builder {
+    if !platform_oci_operation.is_privileged() {
         child.uid(AGENT_UID).gid(AGENT_GID);
     }
     if let Some(working_dir) = command.working_dir {
@@ -208,12 +211,57 @@ fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     Ok(())
 }
 
-fn is_platform_oci_builder(command: &GuestCommandMessage) -> bool {
-    command.program == PLATFORM_OCI_BUILDER_PROGRAM
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PlatformOciOperation {
+    None,
+    Builder,
+    Verifier,
+}
+
+impl PlatformOciOperation {
+    const fn is_privileged(self) -> bool {
+        !matches!(self, Self::None)
+    }
+
+    const fn is_verifier(self) -> bool {
+        matches!(self, Self::Verifier)
+    }
+}
+
+fn platform_oci_operation(command: &GuestCommandMessage) -> PlatformOciOperation {
+    if command.program == PLATFORM_OCI_BUILDER_PROGRAM
         && command
             .env
             .get(PLATFORM_OCI_BUILDER_ENV)
             .is_some_and(|value| value == "1")
+    {
+        PlatformOciOperation::Builder
+    } else if command.program == PLATFORM_OCI_VERIFIER_PROGRAM
+        && command
+            .env
+            .get(PLATFORM_OCI_VERIFIER_ENV)
+            .is_some_and(|value| value == "1")
+    {
+        PlatformOciOperation::Verifier
+    } else {
+        PlatformOciOperation::None
+    }
+}
+
+#[allow(unsafe_code)]
+fn provision_verifier_open_files() -> io::Result<()> {
+    let limit = libc::rlimit {
+        rlim_cur: PLATFORM_OCI_VERIFIER_OPEN_FILES,
+        rlim_max: PLATFORM_OCI_VERIFIER_OPEN_FILES,
+    };
+    // SAFETY: `limit` is initialized, and this bounded root-only bootstrap
+    // runs before the exact trusted verifier is spawned.
+    let result = unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &raw const limit) };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
 }
 
 #[derive(Serialize)]
@@ -809,7 +857,7 @@ mod vsock {
 
 #[cfg(test)]
 mod tests {
-    use super::{find_ext4_device_in, is_platform_oci_builder};
+    use super::{PlatformOciOperation, find_ext4_device_in, platform_oci_operation};
     use std::{
         collections::BTreeMap,
         fs::{self, File},
@@ -845,19 +893,39 @@ mod tests {
     }
 
     #[test]
-    fn only_the_internal_oci_builder_command_can_use_guest_root() {
+    fn only_exact_internal_oci_operations_can_use_guest_root() {
         let command = GuestCommandMessage {
             program: String::from("/usr/libexec/hephaestus/oci-build"),
             args: Vec::new(),
             env: BTreeMap::from([(String::from("HEPH_PLATFORM_OCI_BUILDER"), String::from("1"))]),
             working_dir: None,
         };
-        assert!(is_platform_oci_builder(&command));
+        assert_eq!(
+            platform_oci_operation(&command),
+            PlatformOciOperation::Builder
+        );
 
         let different_command = GuestCommandMessage {
             program: String::from("/bin/sh"),
             ..command
         };
-        assert!(!is_platform_oci_builder(&different_command));
+        assert_eq!(
+            platform_oci_operation(&different_command),
+            PlatformOciOperation::None
+        );
+
+        let verifier = GuestCommandMessage {
+            program: String::from("/usr/libexec/hephaestus/oci-verify"),
+            args: Vec::new(),
+            env: BTreeMap::from([(
+                String::from("HEPH_PLATFORM_OCI_VERIFIER"),
+                String::from("1"),
+            )]),
+            working_dir: None,
+        };
+        assert_eq!(
+            platform_oci_operation(&verifier),
+            PlatformOciOperation::Verifier
+        );
     }
 }
