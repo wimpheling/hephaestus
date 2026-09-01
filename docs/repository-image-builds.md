@@ -113,9 +113,9 @@ root. It moves the verified rootfs out of Umoci's temporary bundle and removes
 only the remaining job-owned bundle metadata. Its one-shot guest process
 inherits the daemon's reviewed 8,192-descriptor capacity for the bounded
 Ubuntu-rootfs export. The trusted bootstrap applies that capacity only while
-launching the exact platform verifier command as guest root; it does not
-change host or tenant-agent limits. That static verifier uses normal Umoci
-unpack only inside its dedicated microVM; repository code never receives that
+launching the exact platform verifier command; it then drops to the
+unprivileged guest account for rootless Umoci export. This does not change host
+or tenant-agent limits, and repository code never receives bootstrap
 privilege. Only after the verifier succeeds may the host-controlled publisher
 receive its short-lived exact registry credential.
 

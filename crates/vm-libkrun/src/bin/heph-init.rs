@@ -152,7 +152,7 @@ fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    if !platform_oci_operation.is_privileged() {
+    if !platform_oci_operation.runs_as_root() {
         child.uid(AGENT_UID).gid(AGENT_GID);
     }
     if let Some(working_dir) = command.working_dir {
@@ -219,8 +219,8 @@ enum PlatformOciOperation {
 }
 
 impl PlatformOciOperation {
-    const fn is_privileged(self) -> bool {
-        !matches!(self, Self::None)
+    const fn runs_as_root(self) -> bool {
+        matches!(self, Self::Builder)
     }
 
     const fn is_verifier(self) -> bool {
@@ -904,6 +904,7 @@ mod tests {
             platform_oci_operation(&command),
             PlatformOciOperation::Builder
         );
+        assert!(platform_oci_operation(&command).runs_as_root());
 
         let different_command = GuestCommandMessage {
             program: String::from("/bin/sh"),
@@ -927,5 +928,6 @@ mod tests {
             platform_oci_operation(&verifier),
             PlatformOciOperation::Verifier
         );
+        assert!(!platform_oci_operation(&verifier).runs_as_root());
     }
 }
