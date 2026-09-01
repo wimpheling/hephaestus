@@ -116,8 +116,10 @@ Ubuntu-rootfs export. The trusted bootstrap applies that capacity only while
 launching the exact platform verifier command; it then drops to the
 unprivileged guest account for rootless Umoci export. This does not change host
 or tenant-agent limits, and repository code never receives bootstrap
-privilege. Only after the verifier succeeds may the host-controlled publisher
-receive its short-lived exact registry credential.
+privilege. The otherwise-cleared verifier environment supplies rootless Umoci
+only fresh `/tmp` home and runtime directories in that disposable VM, never a
+host mount or reusable cache. Only after the verifier succeeds may the
+host-controlled publisher receive its short-lived exact registry credential.
 
 The verifier rejects every HIGH or CRITICAL finding with an available upstream
 fix. Findings without a fix remain recorded in the scan evidence; the reviewed

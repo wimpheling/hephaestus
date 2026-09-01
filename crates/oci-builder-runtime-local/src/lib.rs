@@ -329,6 +329,8 @@ fn classify_guest_failure(operation: &'static str, output: &[u8]) -> &'static st
         "verifier output cleanup"
     } else if operation == "verifier" && contains(b"heph_oci_failure=output-prepare") {
         "verifier output preparation"
+    } else if operation == "verifier" && contains(b"heph_oci_failure=rootless-environment") {
+        "verifier rootless environment"
     } else if operation == "verifier"
         && (contains(b"heph_oci_failure=cache-prepare") || contains(b"heph_oci_failure=cache-copy"))
     {

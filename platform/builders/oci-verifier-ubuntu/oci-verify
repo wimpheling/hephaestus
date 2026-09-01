@@ -12,6 +12,13 @@ fail() {
 rm -rf "$output"/* || fail output-cleanup
 mkdir -p "$output/evidence" "$output/bundle" || fail output-prepare
 
+# The bootstrap clears ambient environment. Rootless Umoci still requires a
+# writable home and runtime directory, so create them in this disposable VM's
+# private tmpfs rather than exposing host state or reusing a cache.
+export HOME=/tmp/hephaestus-verifier-home
+export XDG_RUNTIME_DIR=/tmp/hephaestus-verifier-runtime
+mkdir -m 0700 -p "$HOME" "$XDG_RUNTIME_DIR" || fail rootless-environment
+
 # Trivy's installed database is an immutable platform input. Its offline scan
 # still writes its filesystem-analysis cache, so give it a fresh job-scoped
 # copy rather than attempting a write into the read-only verifier root.
