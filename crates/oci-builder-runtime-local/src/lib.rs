@@ -325,6 +325,31 @@ fn classify_guest_failure(operation: &'static str, output: &[u8]) -> &'static st
         "builder layout export"
     } else if operation == "builder" && contains(b"heph-base") {
         "builder approved-base import"
+    } else if operation == "verifier" && contains(b"heph_oci_failure=output-cleanup") {
+        "verifier output cleanup"
+    } else if operation == "verifier" && contains(b"heph_oci_failure=output-prepare") {
+        "verifier output preparation"
+    } else if operation == "verifier"
+        && (contains(b"heph_oci_failure=cache-prepare") || contains(b"heph_oci_failure=cache-copy"))
+    {
+        "verifier offline scan cache"
+    } else if operation == "verifier" && contains(b"heph_oci_failure=layout-validate") {
+        "verifier OCI layout validation"
+    } else if operation == "verifier" && contains(b"heph_oci_failure=sbom") {
+        "verifier SBOM generation"
+    } else if operation == "verifier" && contains(b"heph_oci_failure=vulnerability-scan") {
+        "verifier vulnerability scan"
+    } else if operation == "verifier" && contains(b"heph_oci_failure=rootfs-export") {
+        "verifier rootfs export"
+    } else if operation == "verifier" && contains(b"heph_oci_failure=rootfs-handoff") {
+        "verifier rootfs handoff"
+    } else if operation == "verifier" && contains(b"heph_oci_failure=bundle-cleanup") {
+        "verifier bundle cleanup"
+    } else if operation == "verifier"
+        && (contains(b"heph_oci_failure=manifest-read")
+            || contains(b"heph_oci_failure=manifest-write"))
+    {
+        "verifier manifest output"
     } else {
         operation_phase(operation, "execution")
     }
@@ -1951,6 +1976,13 @@ mod tests {
         assert_eq!(
             classify_guest_failure("builder", b"tenant-controlled diagnostic"),
             "builder execution"
+        );
+        assert_eq!(
+            classify_guest_failure(
+                "verifier",
+                b"heph_oci_failure=rootfs-export tenant-controlled diagnostic",
+            ),
+            "verifier rootfs export"
         );
         assert_eq!(
             classify_guest_failure("builder", b"HEPH_OCI_FAILURE=base-import"),

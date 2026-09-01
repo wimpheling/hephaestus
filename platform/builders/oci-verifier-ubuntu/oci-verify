@@ -4,15 +4,20 @@ set -eu
 candidate=/workspace/candidate
 output=/workspace/verification
 
-rm -rf "$output"/*
-mkdir -p "$output/evidence" "$output/bundle"
+fail() {
+    printf 'heph_oci_failure=%s\n' "$1" >&2
+    exit 1
+}
+
+rm -rf "$output"/* || fail output-cleanup
+mkdir -p "$output/evidence" "$output/bundle" || fail output-prepare
 
 # Trivy's installed database is an immutable platform input. Its offline scan
 # still writes its filesystem-analysis cache, so give it a fresh job-scoped
 # copy rather than attempting a write into the read-only verifier root.
 trivy_cache="$output/trivy-cache"
-mkdir "$trivy_cache"
-cp -a /var/lib/hephaestus-trivy/. "$trivy_cache"
+mkdir "$trivy_cache" || fail cache-prepare
+cp -a /var/lib/hephaestus-trivy/. "$trivy_cache" || fail cache-copy
 export TRIVY_CACHE_DIR="$trivy_cache"
 export XDG_CACHE_HOME="$output/syft-cache"
 
@@ -22,21 +27,21 @@ jq -e '
   and (.manifests | type) == "array"
   and (.manifests | length) == 1
   and (.manifests[0].digest | test("^sha256:[0-9a-f]{64}$"))
-' "$candidate/index.json" >/dev/null
+' "$candidate/index.json" >/dev/null || fail layout-validate
 
-syft "oci-dir:$candidate" --output "spdx-json=$output/evidence/sbom.spdx.json"
+syft "oci-dir:$candidate" --output "spdx-json=$output/evidence/sbom.spdx.json" || fail sbom
 trivy image --input "$candidate" --offline-scan --skip-db-update --skip-java-db-update \
     --scanners vuln --ignore-unfixed --exit-code 1 --severity HIGH,CRITICAL \
-    --format json --output "$output/evidence/vulnerability-scan.json"
+    --format json --output "$output/evidence/vulnerability-scan.json" || fail vulnerability-scan
 # This exact static verifier runs as guest root inside its dedicated,
 # networkless operation VM. Normal Umoci unpack is required for that trusted
 # bootstrap; repository code never executes with this privilege.
-umoci unpack --image "$candidate:latest" "$output/bundle"
-mv "$output/bundle/rootfs" "$output/rootfs"
+umoci unpack --image "$candidate:latest" "$output/bundle" || fail rootfs-export
+mv "$output/bundle/rootfs" "$output/rootfs" || fail rootfs-handoff
 # Umoci retains bundle metadata next to the exported rootfs. The bundle lives
 # under this fresh job-owned output root, so remove only that temporary
 # metadata after moving the verified rootfs into its durable handoff path.
-rm -rf -- "$output/bundle"
+rm -rf -- "$output/bundle" || fail bundle-cleanup
 
-manifest=$(jq -er '.manifests[0].digest' "$candidate/index.json")
-printf '%s\n' "$manifest" >"$output/manifest-digest"
+manifest=$(jq -er '.manifests[0].digest' "$candidate/index.json") || fail manifest-read
+printf '%s\n' "$manifest" >"$output/manifest-digest" || fail manifest-write
