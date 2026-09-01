@@ -295,7 +295,7 @@ async fn guest_failure_phase(
                 let remaining = 16_384_usize.saturating_sub(tail.len());
                 tail.extend(bytes.into_iter().take(remaining));
             }
-            Ok(Ok(VmEvent::Exited(_))) | Ok(Err(_)) | Err(_) => break,
+            Ok(Ok(VmEvent::Exited(_)) | Err(_)) | Err(_) => break,
             Ok(Ok(_)) => {}
         }
     }
@@ -1027,10 +1027,11 @@ impl SourceCheckoutProvider for LocalOciRuntime {
         if repository.parent() != Some(self.config.repository_root.as_path()) {
             return Err(OciWorkerError::UnsafeSourcePath);
         }
-        let checkout = self.config.checkout_root.join(job.id.to_string());
-        if checkout.exists() {
-            return Err(OciWorkerError::UnsafeSourcePath);
-        }
+        // A worker may have died after materializing this durable job's source
+        // but before its cleanup ran. Reclaim only the exact, direct child
+        // owned by that job; never follow an unexpected link or remove an
+        // arbitrary path left beneath the private checkout root.
+        let checkout = prepare_job_checkout(&self.config.checkout_root, job.id)?;
         fs::create_dir(&checkout).map_err(OciWorkerError::Filesystem)?;
         let archive = checkout.join("source.tar");
         let archive_status = Command::new(&self.config.git_binary)
@@ -1423,6 +1424,24 @@ fn canonical_directory(path: &Path) -> Result<PathBuf, OciWorkerError> {
     Ok(path)
 }
 
+fn prepare_job_checkout(root: &Path, job_id: uuid::Uuid) -> Result<PathBuf, OciWorkerError> {
+    let checkout = root.join(job_id.to_string());
+    let metadata = match fs::symlink_metadata(&checkout) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(checkout),
+        Err(error) => return Err(OciWorkerError::Filesystem(error)),
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(OciWorkerError::UnsafeSourcePath);
+    }
+    let canonical = fs::canonicalize(&checkout).map_err(OciWorkerError::Filesystem)?;
+    if canonical.parent() != Some(root) {
+        return Err(OciWorkerError::UnsafeSourcePath);
+    }
+    fs::remove_dir_all(canonical).map_err(OciWorkerError::Filesystem)?;
+    Ok(checkout)
+}
+
 fn normalize_layout_to_single_index(layout: &Path) -> Result<PathBuf, OciWorkerError> {
     let index_path = layout.join("index.json");
     let source: serde_json::Value =
@@ -1582,7 +1601,8 @@ mod tests {
         BUILDER_SCRATCH_DISK_ID, BUILDER_SCRATCH_GUEST_PATH, LocalOciRuntime,
         LocalOciRuntimeConfig, PLATFORM_OCI_BUILDER_ENV, ScratchDisk, VERIFIER_SYFT_UPDATE_ENV,
         VERIFIER_TRIVY_CACHE_ENV, VERIFIER_TRIVY_CACHE_PATH, builder_vm_spec,
-        classify_guest_failure, copy_verified_rootfs, verifier_vm_spec, zot_confirmed_output,
+        classify_guest_failure, copy_verified_rootfs, prepare_job_checkout, verifier_vm_spec,
+        zot_confirmed_output,
     };
     use builder_catalog_domain::{OciImageId, OciImageReference};
     use oci_builder_worker::{PreparedSource, SourceCheckoutProvider};
@@ -1920,6 +1940,41 @@ mod tests {
             .expect("remove job checkout");
         assert!(!temporary.path().join("checkouts/job").exists());
         assert!(temporary.path().join("checkouts").exists());
+    }
+
+    #[test]
+    fn recovery_removes_only_an_existing_direct_job_checkout() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let root = temporary.path().join("checkouts");
+        fs::create_dir(&root).expect("checkout root");
+        let job = Uuid::from_u128(42);
+        let stale = root.join(job.to_string());
+        fs::create_dir_all(stale.join("source")).expect("stale job checkout");
+        let unrelated = root.join("unrelated");
+        fs::create_dir(&unrelated).expect("unrelated checkout");
+
+        let checkout = prepare_job_checkout(&root, job).expect("safe stale checkout");
+
+        assert_eq!(checkout, stale);
+        assert!(!checkout.exists());
+        assert!(unrelated.exists());
+    }
+
+    #[test]
+    fn recovery_rejects_a_symlinked_job_checkout() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let root = temporary.path().join("checkouts");
+        let outside = temporary.path().join("outside");
+        fs::create_dir(&root).expect("checkout root");
+        fs::create_dir(&outside).expect("outside directory");
+        let job = Uuid::from_u128(42);
+        std::os::unix::fs::symlink(&outside, root.join(job.to_string())).expect("job symlink");
+
+        assert!(matches!(
+            prepare_job_checkout(&root, job),
+            Err(oci_builder_worker::OciWorkerError::UnsafeSourcePath)
+        ));
+        assert!(outside.exists());
     }
 
     #[test]
