@@ -12,6 +12,17 @@ export XDG_RUNTIME_DIR=/tmp/heph-agent-runtime
 mkdir -p "$HOME" "$XDG_RUNTIME_DIR"
 chmod 0700 "$HOME" "$XDG_RUNTIME_DIR"
 
+# Platform root filesystems are immutable. Keep Buildah's private metadata in
+# the VM's tmpfs rather than allowing it to select /var/lib or /run from that
+# immutable root. The paths are fresh for this one-shot VM and never mounted
+# back to the host.
+buildah_root="$HOME/buildah-root"
+buildah_runroot="$XDG_RUNTIME_DIR/buildah-runroot"
+mkdir -p "$buildah_root" "$buildah_runroot"
+buildah_local() {
+    buildah --storage-driver vfs --root "$buildah_root" --runroot "$buildah_runroot" "$@"
+}
+
 rm -rf "$writable_output"/*
 # The approved base is an OCI layout with a generated immutable reference
 # name, not a mutable `latest` tag. Import that one descriptor into Buildah's
@@ -19,13 +30,13 @@ rm -rf "$writable_output"/*
 base_tag=$(grep --only-matching --extended-regexp 'heph-sha256-[0-9a-f]{64}' \
     "$readonly_base/index.json" | sort --unique)
 [ "$(printf '%s\n' "$base_tag" | wc --lines)" -eq 1 ]
-if ! base_image=$(buildah --storage-driver vfs pull --quiet "oci:${readonly_base}:${base_tag}"); then
+if ! base_image=$(buildah_local pull --quiet "oci:${readonly_base}:${base_tag}"); then
     # This fixed marker is safe operational telemetry. Buildah's raw output is
     # deliberately never retained by the host.
     printf '%s\n' 'HEPH_OCI_FAILURE=base-import' >&2
     exit 125
 fi
-if ! buildah --storage-driver vfs tag "$base_image" heph-base; then
+if ! buildah_local tag "$base_image" heph-base; then
     printf '%s\n' 'HEPH_OCI_FAILURE=base-alias' >&2
     exit 125
 fi
@@ -33,8 +44,7 @@ fi
 # specification is the authoritative boundary and has NetworkMode::Disabled,
 # so the guest cannot obtain a network interface regardless of Dockerfile
 # instructions; `--pull-never` separately rejects image acquisition.
-if ! buildah bud \
-    --storage-driver vfs \
+if ! buildah_local bud \
     --isolation chroot \
     --pull-never \
     --format oci \
@@ -45,7 +55,7 @@ if ! buildah bud \
     printf '%s\n' 'HEPH_OCI_FAILURE=dockerfile-build' >&2
     exit 125
 fi
-if ! buildah --storage-driver vfs push --format oci hephaestus-repository-output "oci:${writable_output}:latest"; then
+if ! buildah_local push --format oci hephaestus-repository-output "oci:${writable_output}:latest"; then
     printf '%s\n' 'HEPH_OCI_FAILURE=layout-export' >&2
     exit 125
 fi
