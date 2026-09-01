@@ -23,8 +23,8 @@ use capability_domain::{
 };
 use control_plane_postgres::launch::PgRunLaunchAuthorizer;
 use control_plane_postgres::{
-    ControlPlanePool, connect as connect_control_plane, is_update_hook_run,
-    load_vm_launch_contract, recoverable_update_hook_run_ids,
+    ControlPlanePool, connect as connect_control_plane, connect_worker as connect_oci_worker,
+    is_update_hook_run, load_vm_launch_contract, recoverable_update_hook_run_ids,
 };
 use event_postgres::{ReleaseOutboxPublisher, ensure_release_jetstream_topology};
 use forge_postgres::PgForgeRepository;
@@ -1148,20 +1148,21 @@ impl HephaestusApp {
                 Arc::new(LibkrunProvider::new(*provider).map_err(component("libkrun provider"))?)
             }
         };
-        let oci_builder_workers = config
-            .oci_builder
-            .take()
-            .map(|worker| {
-                OciBuilderWorkers::initialize(
-                    pool.clone(),
+        let oci_builder_workers = match config.oci_builder.take() {
+            Some(worker) => {
+                let worker_pool = connect_oci_worker(&config.database_url, 4)
+                    .await
+                    .map_err(component("OCI worker PostgreSQL connection"))?;
+                Some(Arc::new(OciBuilderWorkers::initialize(
+                    worker_pool,
                     worker,
                     Arc::clone(&config.registry.token_issuer),
                     Arc::clone(&provider),
                     &config.root_images,
-                )
-            })
-            .transpose()?
-            .map(Arc::new);
+                )?))
+            }
+            None => None,
+        };
         let gateway_edge = if let Some(gateway) = gateway_edge_config {
             let issuer_handoff =
                 EncryptedFileHandoffStore::new(gateway_handoff_root.clone(), gateway_handoff_key)
