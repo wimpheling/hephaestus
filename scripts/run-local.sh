@@ -662,6 +662,7 @@ if "${repository_images_enabled}"; then
         "${repository_image_root}/rootfs" \
         "${repository_image_registry_credentials}"
     export HEPHAESTUS_OCI_BUILDER_ROOTFS_ROOT="${repository_image_root}/rootfs"
+    export HEPHAESTUS_GUEST_INIT_BINARY="${repo_root}/target/${GUEST_TARGET}/release/heph-init"
     export HEPHAESTUS_OCI_BUILDER_BASE_LAYOUT_MANIFEST="${repository_image_workflow[base_layout_manifest]}"
     export HEPHAESTUS_OCI_BUILDER_CHECKOUT_ROOT="${repository_image_root}/checkouts"
     export HEPHAESTUS_OCI_BUILDER_OUTPUT_ROOT="${repository_image_root}/candidates"

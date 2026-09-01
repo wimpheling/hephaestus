@@ -257,6 +257,8 @@ pub struct OciBuilderWorkerConfig {
     pub rootfs_root: PathBuf,
     /// Atomically rewritten digest-to-rootfs manifest for operator inspection.
     pub root_manifest: PathBuf,
+    /// Reviewed guest bootstrap injected only by the trusted materializer.
+    pub guest_init: PathBuf,
     /// Lease duration for preparation and materialization claims.
     pub lease: Duration,
     /// Poll interval used when no durable OCI job is immediately available.
@@ -508,6 +510,7 @@ impl AppConfig {
         if worker.runtime.repository_root != self.repository_root
             || !worker.rootfs_root.is_absolute()
             || !worker.root_manifest.is_absolute()
+            || !worker.guest_init.is_absolute()
             || !worker.verification_root.is_absolute()
             || !worker.scratch_root.is_absolute()
             || !worker.mkfs_ext4.is_absolute()
@@ -1024,6 +1027,7 @@ impl OciBuilderWorkers {
             config.rootfs_root,
             config.lease,
         )
+        .and_then(|worker| worker.with_guest_init(config.guest_init))
         .map_err(component("OCI materialization worker configuration"))?;
         Ok(Self {
             preparation,

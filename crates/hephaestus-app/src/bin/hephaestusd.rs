@@ -381,6 +381,7 @@ fn oci_builder_from_environment(
             || runtime_root.join("repository-builder-roots.json"),
             PathBuf::from,
         ),
+        guest_init: path("HEPHAESTUS_GUEST_INIT_BINARY")?,
         lease: Duration::from_secs(optional_u64("HEPHAESTUS_OCI_BUILDER_LEASE_SECONDS", 900)?),
         poll_interval: Duration::from_millis(optional_u64(
             "HEPHAESTUS_OCI_BUILDER_POLL_MILLISECONDS",
@@ -727,8 +728,8 @@ mod manifest_tests {
         )
         .expect("manifest");
 
-        let roots = repository_root_images(&manifest_path, &rootfs).expect("trusted root");
-        assert_eq!(roots.len(), 1);
+        let image_roots = repository_root_images(&manifest_path, &rootfs).expect("trusted root");
+        assert_eq!(image_roots.len(), 1);
 
         std::fs::write(
             &manifest_path,
@@ -747,9 +748,9 @@ mod manifest_tests {
         let temporary = tempdir().expect("temporary root");
         let rootfs = temporary.path().join("repository-rootfs");
         std::fs::create_dir(&rootfs).expect("rootfs root");
-        let roots = repository_root_images(&temporary.path().join("missing.json"), &rootfs)
+        let image_roots = repository_root_images(&temporary.path().join("missing.json"), &rootfs)
             .expect("empty initial state");
-        assert!(roots.is_empty());
+        assert!(image_roots.is_empty());
     }
 
     #[test]
