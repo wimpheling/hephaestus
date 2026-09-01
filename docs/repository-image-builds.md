@@ -99,9 +99,11 @@ Buildah's ownership-changing temporary storage; it is neither a host mount nor
 reused by another preparation. The source and approved base remain read-only, while the
 candidate layout is separately sealed before verification. A
 distinct verifier VM receives only the candidate OCI layout read-only and
-produces bounded SBOM, scan, and rootfs outputs. Only after that verifier
-succeeds may the host-controlled publisher receive its short-lived exact
-registry credential.
+produces bounded SBOM, scan, and rootfs outputs. Its trusted command copies
+the pinned offline Trivy database into a fresh job-scoped cache before
+scanning, because analysis cache writes must never alter the read-only verifier
+root. Only after that verifier succeeds may the host-controlled publisher
+receive its short-lived exact registry credential.
 
 The verifier rejects every HIGH or CRITICAL finding with an available upstream
 fix. Findings without a fix remain recorded in the scan evidence; the reviewed

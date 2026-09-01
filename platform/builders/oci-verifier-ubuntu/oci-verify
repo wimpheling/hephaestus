@@ -7,6 +7,15 @@ output=/workspace/verification
 rm -rf "$output"/*
 mkdir -p "$output/evidence" "$output/bundle"
 
+# Trivy's installed database is an immutable platform input. Its offline scan
+# still writes its filesystem-analysis cache, so give it a fresh job-scoped
+# copy rather than attempting a write into the read-only verifier root.
+trivy_cache="$output/trivy-cache"
+mkdir "$trivy_cache"
+cp -a /var/lib/hephaestus-trivy/. "$trivy_cache"
+export TRIVY_CACHE_DIR="$trivy_cache"
+export XDG_CACHE_HOME="$output/syft-cache"
+
 # Validate the canonical OCI index before treating its contents as an image.
 jq -e '
   .schemaVersion == 2

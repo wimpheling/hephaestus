@@ -49,8 +49,10 @@ const BUILDER_SCRATCH_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 const VERIFIER_OUTPUT_GUEST_PATH: &str = "/workspace/verification";
 const PLATFORM_OCI_BUILDER_ENV: &str = "HEPH_PLATFORM_OCI_BUILDER";
 const VERIFIER_TRIVY_CACHE_ENV: &str = "TRIVY_CACHE_DIR";
-const VERIFIER_TRIVY_CACHE_PATH: &str = "/var/lib/hephaestus-trivy";
+const VERIFIER_TRIVY_CACHE_PATH: &str = "/workspace/verification/trivy-cache";
 const VERIFIER_SYFT_UPDATE_ENV: &str = "SYFT_CHECK_FOR_APP_UPDATE";
+const VERIFIER_SYFT_CACHE_ENV: &str = "XDG_CACHE_HOME";
+const VERIFIER_SYFT_CACHE_PATH: &str = "/workspace/verification/syft-cache";
 
 /// Fixed local roots and VM resources for repository OCI operations.
 ///
@@ -424,8 +426,9 @@ fn verifier_vm_spec(
             args: Vec::new(),
             // Guest startup deliberately constructs a minimal environment, so
             // platform-operation settings cannot rely on image `ENV` values.
-            // The pinned Trivy database is read-only in the verifier root and
-            // Syft must not attempt an update from a networkless guest.
+            // The verifier command copies the pinned Trivy database into this
+            // job-scoped writable cache, and Syft must not attempt an update
+            // from a networkless guest.
             env: BTreeMap::from([
                 (
                     String::from(VERIFIER_TRIVY_CACHE_ENV),
@@ -434,6 +437,10 @@ fn verifier_vm_spec(
                 (
                     String::from(VERIFIER_SYFT_UPDATE_ENV),
                     String::from("false"),
+                ),
+                (
+                    String::from(VERIFIER_SYFT_CACHE_ENV),
+                    String::from(VERIFIER_SYFT_CACHE_PATH),
                 ),
             ]),
             working_dir: None,
@@ -525,7 +532,30 @@ fn remove_private_directory(path: &Path) -> Result<(), OciWorkerError> {
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
         return Err(OciWorkerError::UnsafeMaterializationPath);
     }
+    restore_directory_tree_owner_write(path)?;
     fs::remove_dir_all(path).map_err(OciWorkerError::Filesystem)
+}
+
+fn restore_directory_tree_owner_write(path: &Path) -> Result<(), OciWorkerError> {
+    let metadata = fs::symlink_metadata(path).map_err(OciWorkerError::Filesystem)?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(OciWorkerError::UnsafeMaterializationPath);
+    }
+    for entry in fs::read_dir(path).map_err(OciWorkerError::Filesystem)? {
+        let entry = entry.map_err(OciWorkerError::Filesystem)?;
+        if entry
+            .file_type()
+            .map_err(OciWorkerError::Filesystem)?
+            .is_dir()
+        {
+            restore_directory_tree_owner_write(&entry.path())?;
+        }
+    }
+    fs::set_permissions(
+        path,
+        fs::Permissions::from_mode(metadata.permissions().mode() | 0o700),
+    )
+    .map_err(OciWorkerError::Filesystem)
 }
 
 fn guest_child_path(
@@ -1599,10 +1629,10 @@ fn zot_confirmed_output(
 mod tests {
     use super::{
         BUILDER_SCRATCH_DISK_ID, BUILDER_SCRATCH_GUEST_PATH, LocalOciRuntime,
-        LocalOciRuntimeConfig, PLATFORM_OCI_BUILDER_ENV, ScratchDisk, VERIFIER_SYFT_UPDATE_ENV,
-        VERIFIER_TRIVY_CACHE_ENV, VERIFIER_TRIVY_CACHE_PATH, builder_vm_spec,
-        classify_guest_failure, copy_verified_rootfs, prepare_job_checkout, verifier_vm_spec,
-        zot_confirmed_output,
+        LocalOciRuntimeConfig, PLATFORM_OCI_BUILDER_ENV, ScratchDisk, VERIFIER_SYFT_CACHE_ENV,
+        VERIFIER_SYFT_CACHE_PATH, VERIFIER_SYFT_UPDATE_ENV, VERIFIER_TRIVY_CACHE_ENV,
+        VERIFIER_TRIVY_CACHE_PATH, builder_vm_spec, classify_guest_failure, copy_verified_rootfs,
+        prepare_job_checkout, remove_private_directory, verifier_vm_spec, zot_confirmed_output,
     };
     use builder_catalog_domain::{OciImageId, OciImageReference};
     use oci_builder_worker::{PreparedSource, SourceCheckoutProvider};
@@ -1727,6 +1757,10 @@ mod tests {
             VERIFIER_TRIVY_CACHE_PATH
         );
         assert_eq!(verifier.command.env[VERIFIER_SYFT_UPDATE_ENV], "false");
+        assert_eq!(
+            verifier.command.env[VERIFIER_SYFT_CACHE_ENV],
+            VERIFIER_SYFT_CACHE_PATH
+        );
         assert_eq!(
             verifier.command.program,
             "/usr/libexec/hephaestus/oci-verify"
@@ -1975,6 +2009,23 @@ mod tests {
             Err(oci_builder_worker::OciWorkerError::UnsafeSourcePath)
         ));
         assert!(outside.exists());
+    }
+
+    #[test]
+    fn cleanup_removes_a_sealed_private_directory_tree() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let sealed = temporary.path().join("sealed");
+        let nested = sealed.join("blobs/sha256");
+        fs::create_dir_all(&nested).expect("sealed tree");
+        fs::write(nested.join("layer"), "layer").expect("sealed layer");
+        for directory in [&sealed, &sealed.join("blobs"), &nested] {
+            fs::set_permissions(directory, fs::Permissions::from_mode(0o500))
+                .expect("seal directory");
+        }
+
+        remove_private_directory(&sealed).expect("remove sealed tree");
+
+        assert!(!sealed.exists());
     }
 
     #[test]
