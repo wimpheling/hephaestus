@@ -24,15 +24,17 @@ import {Socket} from "phoenix"
 import {LiveSocket} from "phoenix_live_view"
 import {hooks as colocatedHooks} from "phoenix-colocated/hephaestus_web"
 import {installNavigationProgress} from "./design_system/hooks/navigation_progress"
+import {installSourceHighlight, SourceHighlight} from "./design_system/hooks/source_highlight"
 import {installTheme} from "./design_system/theme"
 
 installTheme()
+installSourceHighlight()
 
 const csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
 const liveSocket = new LiveSocket("/live", Socket, {
   longPollFallbackMs: 2500,
   params: {_csrf_token: csrfToken},
-  hooks: {...colocatedHooks},
+  hooks: {...colocatedHooks, SourceHighlight},
 })
 
 // Show bounded design-system progress on live navigation and form submits.
@@ -43,6 +45,14 @@ installNavigationProgress()
 // dismisses it; there is deliberately no console or local-storage fallback.
 window.addEventListener("phx:personal-access-token-issued", ({detail}) => {
   window.prompt("Copy this Git credential now. It will not be shown again.", detail.value)
+})
+
+window.addEventListener("hephaestus:copy-to-clipboard", async ({detail}) => {
+  try {
+    await navigator.clipboard.writeText(detail.value)
+  } catch (_error) {
+    window.prompt("Copy this command:", detail.value)
+  }
 })
 
 // connect if there are any LiveViews on the page

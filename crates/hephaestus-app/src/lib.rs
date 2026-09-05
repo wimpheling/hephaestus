@@ -42,7 +42,7 @@ use gateway_edge::{
 };
 use gateway_postgres::{
     GatewayReleaseArtifact, GatewayReleaseArtifactKind, GatewayReleaseMaterializer,
-    PostgresGatewayEdgeAuthority, PostgresGatewayReleaseResolver,
+    PostgresGatewayEdgeAuthority, PostgresGatewayMailboxPublisher, PostgresGatewayReleaseResolver,
 };
 use git_http::{
     CompositeGitAuthenticator, GitAuthenticator, GitHttpLimits, GitHttpService,
@@ -129,7 +129,7 @@ use std::{
     net::SocketAddr,
     os::unix::fs::PermissionsExt,
     path::PathBuf,
-    sync::Arc,
+    sync::{Arc, RwLock},
     time::{Duration, Instant},
 };
 use time::OffsetDateTime;
@@ -151,7 +151,7 @@ use workspace_local::{LocalWorkspaceConfig, LocalWorkspaceManager};
 use workspace_postgres::PgWorkspaceMetadataRepository;
 
 /// Ordered database migration expected by this application version.
-pub const EXPECTED_DATABASE_MIGRATION: i64 = 54;
+pub const EXPECTED_DATABASE_MIGRATION: i64 = 60;
 
 /// OIDC issuer configuration used for bearer-token authentication.
 pub struct OidcConfig {
@@ -661,6 +661,8 @@ struct OciBuilderWorkers {
     >,
     materialization: RootfsMaterializationWorker<PgOciImageProductionJobStore, LocalOciRuntime>,
     manifest: PathBuf,
+    rootfs_root: PathBuf,
+    image_filesystems: Arc<RwLock<BTreeMap<String, RootFilesystem>>>,
     poll_interval: Duration,
 }
 
@@ -962,6 +964,7 @@ impl OciBuilderWorkers {
         token_issuer: Arc<registry_token::RegistryTokenIssuer>,
         provider: Arc<dyn VmProvider>,
         root_images: &BTreeMap<String, RootFilesystem>,
+        image_filesystems: Arc<RwLock<BTreeMap<String, RootFilesystem>>>,
     ) -> Result<Self, AppError> {
         if !config.root_manifest.is_absolute() || config.poll_interval.is_zero() {
             return Err(AppError::Configuration(String::from(
@@ -1024,7 +1027,7 @@ impl OciBuilderWorkers {
             PgOciImageProductionJobStore::new(pool),
             runtime,
             config.materialization_worker_name,
-            config.rootfs_root,
+            config.rootfs_root.clone(),
             config.lease,
         )
         .and_then(|worker| worker.with_guest_init(config.guest_init))
@@ -1033,8 +1036,39 @@ impl OciBuilderWorkers {
             preparation,
             materialization,
             manifest: config.root_manifest,
+            rootfs_root: config.rootfs_root,
+            image_filesystems,
             poll_interval: config.poll_interval,
         })
+    }
+
+    async fn refresh_image_filesystems(&self) -> Result<(), OciWorkerError> {
+        let roots = self.materialization.materialized_roots().await?;
+        {
+            let mut image_filesystems = self
+                .image_filesystems
+                .write()
+                .map_err(|_| OciWorkerError::InvalidConfiguration)?;
+            for root in roots {
+                let canonical =
+                    std::fs::canonicalize(&root.root_path).map_err(OciWorkerError::Filesystem)?;
+                let metadata =
+                    std::fs::symlink_metadata(&canonical).map_err(OciWorkerError::Filesystem)?;
+                if !canonical.starts_with(&self.rootfs_root)
+                    || metadata.file_type().is_symlink()
+                    || !metadata.is_dir()
+                {
+                    return Err(OciWorkerError::UnsafeMaterializationPath);
+                }
+                image_filesystems.insert(
+                    root.image_reference.to_string(),
+                    RootFilesystem::Directory {
+                        host_path: canonical,
+                    },
+                );
+            }
+        }
+        Ok(())
     }
 }
 
@@ -1152,6 +1186,7 @@ impl HephaestusApp {
                 Arc::new(LibkrunProvider::new(*provider).map_err(component("libkrun provider"))?)
             }
         };
+        let image_filesystems = Arc::new(RwLock::new(config.root_images.clone()));
         let oci_builder_workers = match config.oci_builder.take() {
             Some(worker) => {
                 let worker_pool = connect_oci_worker(&config.database_url, 4)
@@ -1163,17 +1198,25 @@ impl HephaestusApp {
                     Arc::clone(&config.registry.token_issuer),
                     Arc::clone(&provider),
                     &config.root_images,
+                    Arc::clone(&image_filesystems),
                 )?))
             }
             None => None,
         };
         let gateway_edge = if let Some(gateway) = gateway_edge_config {
+            // Gateway runtime snapshots and sessions are worker-owned
+            // immutable authority records. Keep issuance on a dedicated
+            // worker-role pool rather than leaking those writes through the
+            // user-scoped control-plane pool.
+            let gateway_authority_pool = connect_oci_worker(&config.database_url, 4)
+                .await
+                .map_err(component("gateway runtime authority PostgreSQL connection"))?;
             let issuer_handoff =
                 EncryptedFileHandoffStore::new(gateway_handoff_root.clone(), gateway_handoff_key)
                     .map_err(component("gateway runtime authority handoff"))?;
             let issuer: Arc<dyn GatewayRuntimeAuthorityIssuer> =
                 Arc::new(PgGatewayRuntimeAuthorityIssuer::new(
-                    pool.clone(),
+                    gateway_authority_pool,
                     issuer_handoff,
                     authz_postgres::AUTHORIZATION_MODEL_VERSION,
                 ));
@@ -1207,7 +1250,10 @@ impl HephaestusApp {
                 ));
             let dispatcher: Arc<dyn GatewayRequestDispatcher> = Arc::new(
                 GatewayDispatcher::new(authority.clone(), handler, authority.clone())
-                    .with_inbound_secret_resolver(inbound),
+                    .with_inbound_secret_resolver(inbound)
+                    .with_mailbox_publisher(Arc::new(PostgresGatewayMailboxPublisher::new(
+                        pool.clone(),
+                    ))),
             );
             let administration = LocalCaddyAdministration::new(&gateway.caddy_admin_url)
                 .map_err(component("gateway Caddy administration"))?;
@@ -1251,7 +1297,7 @@ impl HephaestusApp {
                     workspace_root: config.build_workspace_root,
                     repository_root: config.repository_root.clone(),
                     git_binary: build_git_binary,
-                    image_filesystems: config.root_images.clone(),
+                    image_filesystems: Arc::clone(&image_filesystems),
                     timeout: config.build_timeout,
                 },
             )
@@ -2049,6 +2095,8 @@ async fn oci_builder_pass(workers: &OciBuilderWorkers) {
                 .await
             {
                 tracing::warn!(%error, "OCI builder root manifest update failed");
+            } else if let Err(error) = workers.refresh_image_filesystems().await {
+                tracing::warn!(%error, "OCI builder image cache refresh failed");
             }
         }
         Ok(false) => {}

@@ -26,12 +26,22 @@ pub mod __buffa {
         reg.register_json_any(super::__CREATE_PROJECT_RESPONSE_JSON_ANY);
         reg.register_json_any(super::__PROJECT_JSON_ANY);
         reg.register_json_any(super::__PROJECT_REPOSITORY_JSON_ANY);
+        reg.register_json_any(super::__PROJECT_REPOSITORY_IMAGE_JSON_ANY);
+        reg.register_json_any(
+            super::__PROJECT_REPOSITORY_IMAGE_PREPARATION_EVENT_JSON_ANY,
+        );
         reg.register_json_any(super::__INSTANCE_SUMMARY_JSON_ANY);
         reg.register_json_any(super::__RELEASE_AGENT_OPTION_JSON_ANY);
         reg.register_json_any(super::__GET_PROJECT_REQUEST_JSON_ANY);
         reg.register_json_any(super::__GET_PROJECT_RESPONSE_JSON_ANY);
         reg.register_json_any(super::__LIST_PROJECT_REPOSITORIES_REQUEST_JSON_ANY);
         reg.register_json_any(super::__LIST_PROJECT_REPOSITORIES_RESPONSE_JSON_ANY);
+        reg.register_json_any(super::__LIST_PROJECT_REPOSITORY_IMAGES_REQUEST_JSON_ANY);
+        reg.register_json_any(super::__LIST_PROJECT_REPOSITORY_IMAGES_RESPONSE_JSON_ANY);
+        reg.register_json_any(super::__GET_PROJECT_REPOSITORY_IMAGE_REQUEST_JSON_ANY);
+        reg.register_json_any(super::__GET_PROJECT_REPOSITORY_IMAGE_RESPONSE_JSON_ANY);
+        reg.register_json_any(super::__RETRY_PROJECT_REPOSITORY_IMAGE_REQUEST_JSON_ANY);
+        reg.register_json_any(super::__RETRY_PROJECT_REPOSITORY_IMAGE_RESPONSE_JSON_ANY);
         reg.register_json_any(super::__LIST_PROJECT_INSTANCES_REQUEST_JSON_ANY);
         reg.register_json_any(super::__LIST_PROJECT_INSTANCES_RESPONSE_JSON_ANY);
         reg.register_json_any(super::__LIST_IMPORTABLE_RELEASE_AGENTS_REQUEST_JSON_ANY);
@@ -54,6 +64,14 @@ pub use self::__buffa::view::ProjectOwnedView;
 pub use self::__buffa::view::ProjectRepositoryView;
 #[doc(inline)]
 pub use self::__buffa::view::ProjectRepositoryOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::ProjectRepositoryImageView;
+#[doc(inline)]
+pub use self::__buffa::view::ProjectRepositoryImageOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::ProjectRepositoryImagePreparationEventView;
+#[doc(inline)]
+pub use self::__buffa::view::ProjectRepositoryImagePreparationEventOwnedView;
 #[doc(inline)]
 pub use self::__buffa::view::InstanceSummaryView;
 #[doc(inline)]
@@ -78,6 +96,30 @@ pub use self::__buffa::view::ListProjectRepositoriesRequestOwnedView;
 pub use self::__buffa::view::ListProjectRepositoriesResponseView;
 #[doc(inline)]
 pub use self::__buffa::view::ListProjectRepositoriesResponseOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::ListProjectRepositoryImagesRequestView;
+#[doc(inline)]
+pub use self::__buffa::view::ListProjectRepositoryImagesRequestOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::ListProjectRepositoryImagesResponseView;
+#[doc(inline)]
+pub use self::__buffa::view::ListProjectRepositoryImagesResponseOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::GetProjectRepositoryImageRequestView;
+#[doc(inline)]
+pub use self::__buffa::view::GetProjectRepositoryImageRequestOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::GetProjectRepositoryImageResponseView;
+#[doc(inline)]
+pub use self::__buffa::view::GetProjectRepositoryImageResponseOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::RetryProjectRepositoryImageRequestView;
+#[doc(inline)]
+pub use self::__buffa::view::RetryProjectRepositoryImageRequestOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::RetryProjectRepositoryImageResponseView;
+#[doc(inline)]
+pub use self::__buffa::view::RetryProjectRepositoryImageResponseOwnedView;
 #[doc(inline)]
 pub use self::__buffa::view::ListProjectInstancesRequestView;
 #[doc(inline)]

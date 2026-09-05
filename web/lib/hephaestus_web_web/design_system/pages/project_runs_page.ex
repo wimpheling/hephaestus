@@ -86,6 +86,7 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.ProjectRunsPage do
         destination: "/projects/#{id}/agents"
       },
       %{key: :runs, label: "Runs", icon: "hero-play-circle", destination: "/projects/#{id}/runs"},
+      %{key: :images, label: "Images", icon: "hero-cube", destination: "/projects/#{id}/images"},
       %{
         key: :gateways,
         label: "Gateways",

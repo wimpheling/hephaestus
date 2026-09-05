@@ -50,10 +50,16 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.RepositoryCommitsPage do
             message="No commits on this branch."
           />
           <.frame :for={{dom_id, commit} <- @commits} as="article" id={dom_id} variant={:table_row}>
-            <.frame variant={:resource_detail}>
-              <.text as="strong">{commit.subject}</.text>
-              <.text as="code" variant={:mono}>{short_sha(commit.id)}</.text>
-            </.frame>
+            <.action
+              interaction={:navigate}
+              variant={:resource_row}
+              destination={commit_destination(@model, commit.id)}
+            >
+              <.frame variant={:resource_detail}>
+                <.text as="strong">{commit.subject}</.text>
+                <.text as="code" variant={:mono}>{short_sha(commit.id)}</.text>
+              </.frame>
+            </.action>
             <.frame variant={:resource_detail}>
               <.text as="strong">{commit.author_name}</.text>
               <.text as="small" variant={:muted}>{commit.author_email}</.text>
@@ -68,7 +74,18 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.RepositoryCommitsPage do
 
   defp short_sha(value), do: String.slice(value, 0, 10)
 
-  defp display_time(value) do
+  defp commit_destination(model, commit) do
+    suffix =
+      if model.selected_branch,
+        do: "?ref=#{URI.encode_www_form(model.selected_branch.name)}",
+        else: ""
+
+    "/repositories/#{model.repository["id"]}/commits/#{commit}#{suffix}"
+  end
+
+  defp display_time(%DateTime{} = value), do: Calendar.strftime(value, "%d %b %Y · %H:%M")
+
+  defp display_time(value) when is_binary(value) do
     case DateTime.from_iso8601(value) do
       {:ok, date_time, _offset} -> Calendar.strftime(date_time, "%d %b %Y · %H:%M")
       _error -> value

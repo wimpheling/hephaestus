@@ -730,10 +730,78 @@ fn private_http_response(
     let status = StatusCode::from_u16(response.status)
         .map_err(|_| invalid_private_http("private HTTP response status is invalid".to_owned()))?;
     let headers = private_http_header_pairs(response.headers, "response")?;
+    let mailbox_publication = response
+        .mailbox_publication
+        .map(private_mailbox_publication)
+        .transpose()?;
     Ok(vm_trait::PrivateHttpResponse {
         status,
         headers,
         body: Bytes::from(response.body),
+        mailbox_publication,
+    })
+}
+
+fn private_mailbox_publication(
+    publication: crate::protocol::PrivateMailboxPublicationMessage,
+) -> Result<vm_trait::PrivateMailboxPublication, VmError> {
+    use crate::protocol::{
+        MAX_MAILBOX_PUBLICATION_BODY_BYTES, MAX_MAILBOX_PUBLICATION_CONTENT_TYPE_BYTES,
+        MAX_MAILBOX_PUBLICATION_DEDUPLICATION_KEY_BYTES, MAX_MAILBOX_PUBLICATION_HEADER_NAME_BYTES,
+        MAX_MAILBOX_PUBLICATION_HEADER_VALUE_BYTES, MAX_MAILBOX_PUBLICATION_HEADERS,
+        MAX_MAILBOX_PUBLICATION_METHOD_BYTES, MAX_MAILBOX_PUBLICATION_ROUTE_BYTES,
+        MAX_MAILBOX_PUBLICATION_SLOT_BYTES, MAX_MAILBOX_PUBLICATION_TRACE_CONTEXT_BYTES,
+    };
+    let bounded =
+        |value: &str, maximum| !value.is_empty() && value.len() <= maximum && !value.contains('\0');
+    let valid_method = !publication.method.is_empty()
+        && publication.method.len() <= MAX_MAILBOX_PUBLICATION_METHOD_BYTES
+        && publication
+            .method
+            .bytes()
+            .all(|byte| byte.is_ascii_uppercase());
+    let valid_optional = |value: &Option<String>, maximum| {
+        value
+            .as_ref()
+            .is_none_or(|value| value.len() <= maximum && !value.contains('\0'))
+    };
+    if !bounded(&publication.slot, MAX_MAILBOX_PUBLICATION_SLOT_BYTES)
+        || !valid_method
+        || !bounded(&publication.route, MAX_MAILBOX_PUBLICATION_ROUTE_BYTES)
+        || !publication.route.starts_with('/')
+        || publication.headers.len() > MAX_MAILBOX_PUBLICATION_HEADERS
+        || publication.headers.iter().any(|(name, value)| {
+            !bounded(name, MAX_MAILBOX_PUBLICATION_HEADER_NAME_BYTES)
+                || value.len() > MAX_MAILBOX_PUBLICATION_HEADER_VALUE_BYTES
+                || value.contains('\0')
+        })
+        || !valid_optional(
+            &publication.content_type,
+            MAX_MAILBOX_PUBLICATION_CONTENT_TYPE_BYTES,
+        )
+        || !valid_optional(
+            &publication.trace_context,
+            MAX_MAILBOX_PUBLICATION_TRACE_CONTEXT_BYTES,
+        )
+        || publication.body.len() > MAX_MAILBOX_PUBLICATION_BODY_BYTES
+        || !bounded(
+            &publication.deduplication_key,
+            MAX_MAILBOX_PUBLICATION_DEDUPLICATION_KEY_BYTES,
+        )
+    {
+        return Err(invalid_private_http(
+            "mailbox publication violates provider limits".to_owned(),
+        ));
+    }
+    Ok(vm_trait::PrivateMailboxPublication {
+        slot: publication.slot,
+        method: publication.method,
+        route: publication.route,
+        headers: publication.headers,
+        content_type: publication.content_type,
+        trace_context: publication.trace_context,
+        body: Bytes::from(publication.body),
+        deduplication_key: publication.deduplication_key,
     })
 }
 
@@ -1302,6 +1370,50 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn private_http_response_preserves_one_bounded_mailbox_publication() {
+        let response = super::private_http_response(PrivateHttpResponseMessage {
+            status: 202,
+            headers: Vec::new(),
+            body: Vec::new(),
+            mailbox_publication: Some(crate::protocol::PrivateMailboxPublicationMessage {
+                slot: "recipe-events".to_owned(),
+                method: "POST".to_owned(),
+                route: "/recipes".to_owned(),
+                headers: vec![("source".to_owned(), "gateway".to_owned())],
+                content_type: Some("application/json".to_owned()),
+                trace_context: Some("trace-42".to_owned()),
+                body: b"event".to_vec(),
+                deduplication_key: "telegram-update-42".to_owned(),
+            }),
+        })
+        .expect("bounded response");
+        let publication = response.mailbox_publication.expect("publication");
+        assert_eq!(publication.slot, "recipe-events");
+        assert_eq!(publication.body, bytes::Bytes::from_static(b"event"));
+        assert_eq!(publication.deduplication_key, "telegram-update-42");
+    }
+
+    #[test]
+    fn private_http_response_rejects_an_invalid_mailbox_publication() {
+        let response = super::private_http_response(PrivateHttpResponseMessage {
+            status: 202,
+            headers: Vec::new(),
+            body: Vec::new(),
+            mailbox_publication: Some(crate::protocol::PrivateMailboxPublicationMessage {
+                slot: "recipe-events".to_owned(),
+                method: "post".to_owned(),
+                route: "/recipes".to_owned(),
+                headers: Vec::new(),
+                content_type: None,
+                trace_context: None,
+                body: Vec::new(),
+                deduplication_key: "update-42".to_owned(),
+            }),
+        });
+        assert!(matches!(response, Err(VmError::InvalidSpec { .. })));
+    }
+
     #[tokio::test]
     async fn failed_worker_launch_cleans_runtime_and_cgroup() {
         let temp = TempDir::new().unwrap();
@@ -1802,6 +1914,7 @@ mod tests {
                             status: 201,
                             headers: Vec::new(),
                             body: b"response".to_vec(),
+                            mailbox_publication: None,
                         },
                     }));
                 }

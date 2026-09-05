@@ -556,14 +556,23 @@ a.resource-list-row:hover { background: color-mix(in srgb, var(--ember) 4%, tran
 .file-heading strong { overflow: hidden; font-size: .75rem; text-overflow: ellipsis; white-space: nowrap; }
 .file-heading small { color: var(--muted); font-size: .62rem; }
 .file-heading code { color: var(--muted); font-size: .65rem; }
-.file-viewer pre {
+.file-source {
   overflow-x: auto;
   margin: 0;
-  padding: 1.25rem;
-  font-size: .72rem;
+  padding: 1.1rem 0;
+  color: var(--ink);
+  background: color-mix(in srgb, var(--panel) 92%, var(--paper));
+  font-family: var(--font-mono);
+  font-size: .94rem;
   line-height: 1.65;
   tab-size: 4;
 }
+.file-source-line { display: grid; grid-template-columns: max-content minmax(0, 1fr); min-width: max-content; padding-inline: 1.25rem; }
+.file-source-line.diff-line { grid-template-columns: max-content max-content minmax(0, 1fr); }
+.file-source-number { min-width: 3.25rem; padding-right: 1rem; color: var(--muted); text-align: right; user-select: none; }
+.file-source-content { display: block; padding-left: 1rem; border-left: 1px solid color-mix(in srgb, var(--line) 74%, transparent); white-space: pre; }
+.file-source-line.diff-added { background: color-mix(in srgb, #2f9e44 14%, transparent); }
+.file-source-line.diff-removed { background: color-mix(in srgb, #e03131 14%, transparent); }
 .viewer-empty {
   min-height: 34rem;
   display: grid;
@@ -660,7 +669,7 @@ a.resource-list-row:hover { background: color-mix(in srgb, var(--ember) 4%, tran
 .review-actions { display: flex; justify-content: flex-end; gap: .6rem; margin-top: 1rem; }
 .review-grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(19rem, .75fr); gap: 1rem; margin-top: 1rem; }
 .panel { padding: 1.25rem; }
-.diff-panel pre, .artifact-panel pre {
+.diff-panel pre, .artifact-panel pre:not(.file-source) {
   max-height: 34rem;
   overflow: auto;
   margin: 1rem -1.25rem -1.25rem;

@@ -709,6 +709,7 @@ mod tests {
                 status: StatusCode::CREATED,
                 headers: HeaderMap::new(),
                 body: request.body,
+                mailbox_publication: None,
             })
         }
     }

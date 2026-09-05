@@ -4,11 +4,34 @@ use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, path::PathBuf};
 
 /// Current host-to-guest protocol version.
-pub const PROTOCOL_VERSION: u16 = 6;
+pub const PROTOCOL_VERSION: u16 = 7;
 /// Maximum private HTTP body carried by the authenticated control protocol.
 pub const MAX_PRIVATE_HTTP_BODY_BYTES: usize = 1_048_576;
 /// Maximum private HTTP headers carried by one request or response.
 pub const MAX_PRIVATE_HTTP_HEADERS: usize = 64;
+/// Maximum bytes in one generic mailbox publication body.
+pub const MAX_MAILBOX_PUBLICATION_BODY_BYTES: usize = 1_048_576;
+/// Maximum selected metadata entries in one mailbox publication.
+pub const MAX_MAILBOX_PUBLICATION_HEADERS: usize = 32;
+/// Maximum UTF-8 bytes in a mailbox capability slot.
+pub const MAX_MAILBOX_PUBLICATION_SLOT_BYTES: usize = 64;
+/// Maximum UTF-8 bytes in a generic publication method.
+pub const MAX_MAILBOX_PUBLICATION_METHOD_BYTES: usize = 16;
+/// Maximum UTF-8 bytes in a generic publication route.
+pub const MAX_MAILBOX_PUBLICATION_ROUTE_BYTES: usize = 1_024;
+/// Maximum UTF-8 bytes in one generic publication metadata name.
+pub const MAX_MAILBOX_PUBLICATION_HEADER_NAME_BYTES: usize = 64;
+/// Maximum UTF-8 bytes in one generic publication metadata value.
+pub const MAX_MAILBOX_PUBLICATION_HEADER_VALUE_BYTES: usize = 1_024;
+/// Maximum UTF-8 bytes in a generic publication content type.
+pub const MAX_MAILBOX_PUBLICATION_CONTENT_TYPE_BYTES: usize = 256;
+/// Maximum UTF-8 bytes in a generic publication trace context.
+pub const MAX_MAILBOX_PUBLICATION_TRACE_CONTEXT_BYTES: usize = 512;
+/// Maximum UTF-8 bytes in a stable publication idempotency key.
+pub const MAX_MAILBOX_PUBLICATION_DEDUPLICATION_KEY_BYTES: usize = 256;
+/// Maximum encoded output collected from a one-shot gateway handler.
+pub const MAX_GATEWAY_HANDLER_OUTPUT_BYTES: usize =
+    MAX_PRIVATE_HTTP_BODY_BYTES + MAX_MAILBOX_PUBLICATION_BODY_BYTES + 131_072;
 /// VM label which opts a released command into the one-request gateway ABI.
 ///
 /// This is deliberately an exact contract value rather than a generic
@@ -25,6 +48,8 @@ pub const SECRET_BROKER_VSOCK_PORT: u32 = 19_001;
 /// Guest-private file populated from the authenticated runtime-authority
 /// bootstrap payload before the workload starts.
 pub const GUEST_RUNTIME_AUTHORITY_PATH: &str = "/run/hephaestus-authority/session.json";
+/// Guest environment variable naming this invocation's authority credential.
+pub const RUNTIME_AUTHORITY_PATH_ENV: &str = "HEPH_RUNTIME_AUTHORITY_PATH";
 
 /// Maximum encoded protocol frame size.
 pub const MAX_FRAME_SIZE: usize = 16 * 1024 * 1024;
@@ -168,6 +193,29 @@ pub struct PrivateHttpResponseMessage {
     pub headers: Vec<(String, String)>,
     /// Complete bounded body.
     pub body: Vec<u8>,
+    /// At most one generic mailbox publication candidate.
+    pub mailbox_publication: Option<PrivateMailboxPublicationMessage>,
+}
+
+/// Wire representation of an application-selected mailbox publication.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrivateMailboxPublicationMessage {
+    /// Exact bound capability slot; target and producer remain host-selected.
+    pub slot: String,
+    /// Uppercase normalized application method.
+    pub method: String,
+    /// Normalized absolute application route.
+    pub route: String,
+    /// Bounded application-selected metadata.
+    pub headers: Vec<(String, String)>,
+    /// Optional application media type.
+    pub content_type: Option<String>,
+    /// Optional application trace context.
+    pub trace_context: Option<String>,
+    /// Complete bounded event body.
+    pub body: Vec<u8>,
+    /// Stable application-provided idempotency key.
+    pub deduplication_key: String,
 }
 
 /// Sensitive runtime authority carried only by the bootstrap stream.

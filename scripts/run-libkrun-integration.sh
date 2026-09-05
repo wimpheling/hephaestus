@@ -318,6 +318,17 @@ if [[ "${HEPHAESTUS_APP_LIBKRUN_E2E:-0}" == "1" ]]; then
         --package hephaestus-app \
         --test golden \
         -- --nocapture
+    # Reuse the same disposable authority database and JetStream fixture for
+    # the gateway publication persistence, RLS, and recovery proof. Keeping
+    # it here makes the joined wrapper one complete operator command.
+    run_as_guest_owner env \
+        HEPHAESTUS_POSTGRES_TEST_URL="${postgres_url}" \
+        HEPHAESTUS_NATS_TEST_URL="${nats_url}" \
+        cargo test \
+        --manifest-path "${repo_root}/Cargo.toml" \
+        --package gateway-postgres \
+        --test postgres \
+        -- --nocapture
 elif [[ "${HEPHAESTUS_PHASE1B_INTEGRATION:-0}" == "1" ]]; then
     printf 'Running Phase 1B persistence test with pinned image %s\n' "${ubuntu_image}"
     [[ -n "${HEPHAESTUS_POSTGRES_TEST_URL:-}" ]] ||

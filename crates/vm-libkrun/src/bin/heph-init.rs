@@ -18,9 +18,10 @@ use std::{
 use uuid::Uuid;
 use vm_libkrun::protocol::{
     GUEST_RUNTIME_AUTHORITY_PATH, GuestCommandMessage, GuestLogStream, GuestMessage,
-    GuestStateVolume, HostMessage, MAX_FRAME_SIZE, MAX_PRIVATE_HTTP_BODY_BYTES,
-    MAX_PRIVATE_HTTP_HEADERS, PROTOCOL_VERSION, PrivateHttpRequestMessage,
-    PrivateHttpResponseMessage, RuntimeAuthorityMessage,
+    GuestStateVolume, HostMessage, MAX_FRAME_SIZE, MAX_GATEWAY_HANDLER_OUTPUT_BYTES,
+    MAX_PRIVATE_HTTP_BODY_BYTES, MAX_PRIVATE_HTTP_HEADERS, PROTOCOL_VERSION,
+    PrivateHttpRequestMessage, PrivateHttpResponseMessage, RUNTIME_AUTHORITY_PATH_ENV,
+    RuntimeAuthorityMessage,
 };
 use zeroize::Zeroizing;
 
@@ -74,7 +75,7 @@ fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // on some libkrun/FUSE combinations.
     let runtime_authority_ack = runtime_authority
         .as_deref()
-        .map(persist_runtime_authority)
+        .map(|authority| persist_runtime_authority(authority, &command))
         .transpose()?;
 
     for mount in mounts {
@@ -275,6 +276,7 @@ struct GuestRuntimeAuthority<'a> {
 
 fn persist_runtime_authority(
     authority: &RuntimeAuthorityMessage,
+    command: &GuestCommandMessage,
 ) -> Result<(uuid::Uuid, u64), Box<dyn std::error::Error + Send + Sync>> {
     if authority.generation == 0 {
         return Err("runtime authority generation must be positive".into());
@@ -310,9 +312,16 @@ fn persist_runtime_authority(
             .map(std::string::String::as_str),
     };
     let bytes = Zeroizing::new(serde_json::to_vec(&document)?);
-    match fs::symlink_metadata(GUEST_RUNTIME_AUTHORITY_PATH) {
+    let credential_path = command
+        .env
+        .get(RUNTIME_AUTHORITY_PATH_ENV)
+        .map_or_else(|| Path::new(GUEST_RUNTIME_AUTHORITY_PATH), Path::new);
+    if credential_path.parent() != Some(directory) || credential_path.extension().is_none() {
+        return Err("runtime authority credential path is invalid".into());
+    }
+    match fs::symlink_metadata(credential_path) {
         Ok(metadata) if metadata.file_type().is_file() && !metadata.file_type().is_symlink() => {
-            fs::remove_file(GUEST_RUNTIME_AUTHORITY_PATH)
+            fs::remove_file(credential_path)
                 .map_err(|error| format!("remove stale authority credential: {error}"))?;
         }
         Ok(_) => return Err("stale authority credential is not a regular file".into()),
@@ -323,17 +332,13 @@ fn persist_runtime_authority(
         .create_new(true)
         .write(true)
         .mode(0o400)
-        .open(GUEST_RUNTIME_AUTHORITY_PATH)
+        .open(credential_path)
         .map_err(|error| format!("create authority credential: {error}"))?;
     file.write_all(&bytes)
         .map_err(|error| format!("write authority credential: {error}"))?;
     file.sync_all()
         .map_err(|error| format!("sync authority credential: {error}"))?;
-    chown(
-        Path::new(GUEST_RUNTIME_AUTHORITY_PATH),
-        Some(AGENT_UID),
-        Some(AGENT_GID),
-    )?;
+    chown(credential_path, Some(AGENT_UID), Some(AGENT_GID))?;
     if let Some(credential) = &mut runtime_git_credential {
         credential.clear();
     }
@@ -615,9 +620,9 @@ fn invoke_gateway_handler(
             .ok_or_else(|| io::Error::other("handler stdout is unavailable"))?;
         let mut output = Vec::with_capacity(MAX_PRIVATE_HTTP_BODY_BYTES.min(8_192));
         stdout
-            .take(u64::try_from(MAX_PRIVATE_HTTP_BODY_BYTES + 1).unwrap())
+            .take(u64::try_from(MAX_GATEWAY_HANDLER_OUTPUT_BYTES + 1).unwrap())
             .read_to_end(&mut output)?;
-        if output.len() > MAX_PRIVATE_HTTP_BODY_BYTES {
+        if output.len() > MAX_GATEWAY_HANDLER_OUTPUT_BYTES {
             // Stop a malicious handler before waiting: leaving bytes in its
             // stdout pipe could otherwise deadlock the one-request VM.
             let _signal_result = signal_process(pid, libc::SIGKILL);
@@ -677,6 +682,64 @@ fn validate_private_http_response(response: &PrivateHttpResponseMessage) -> io::
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "private HTTP response violates gateway contract",
+        ));
+    }
+    if let Some(publication) = &response.mailbox_publication {
+        validate_mailbox_publication(publication)?;
+    }
+    Ok(())
+}
+
+fn validate_mailbox_publication(
+    publication: &vm_libkrun::protocol::PrivateMailboxPublicationMessage,
+) -> io::Result<()> {
+    use vm_libkrun::protocol::{
+        MAX_MAILBOX_PUBLICATION_BODY_BYTES, MAX_MAILBOX_PUBLICATION_CONTENT_TYPE_BYTES,
+        MAX_MAILBOX_PUBLICATION_DEDUPLICATION_KEY_BYTES, MAX_MAILBOX_PUBLICATION_HEADER_NAME_BYTES,
+        MAX_MAILBOX_PUBLICATION_HEADER_VALUE_BYTES, MAX_MAILBOX_PUBLICATION_HEADERS,
+        MAX_MAILBOX_PUBLICATION_METHOD_BYTES, MAX_MAILBOX_PUBLICATION_ROUTE_BYTES,
+        MAX_MAILBOX_PUBLICATION_SLOT_BYTES, MAX_MAILBOX_PUBLICATION_TRACE_CONTEXT_BYTES,
+    };
+    let bounded =
+        |value: &str, maximum| !value.is_empty() && value.len() <= maximum && !value.contains('\0');
+    let valid_method = !publication.method.is_empty()
+        && publication.method.len() <= MAX_MAILBOX_PUBLICATION_METHOD_BYTES
+        && publication
+            .method
+            .bytes()
+            .all(|byte| byte.is_ascii_uppercase());
+    let valid_optional = |value: &Option<String>, maximum| {
+        value
+            .as_ref()
+            .is_none_or(|value| value.len() <= maximum && !value.contains('\0'))
+    };
+    if !bounded(&publication.slot, MAX_MAILBOX_PUBLICATION_SLOT_BYTES)
+        || !valid_method
+        || !bounded(&publication.route, MAX_MAILBOX_PUBLICATION_ROUTE_BYTES)
+        || !publication.route.starts_with('/')
+        || publication.headers.len() > MAX_MAILBOX_PUBLICATION_HEADERS
+        || publication.headers.iter().any(|(name, value)| {
+            !bounded(name, MAX_MAILBOX_PUBLICATION_HEADER_NAME_BYTES)
+                || value.len() > MAX_MAILBOX_PUBLICATION_HEADER_VALUE_BYTES
+                || value.contains('\0')
+        })
+        || !valid_optional(
+            &publication.content_type,
+            MAX_MAILBOX_PUBLICATION_CONTENT_TYPE_BYTES,
+        )
+        || !valid_optional(
+            &publication.trace_context,
+            MAX_MAILBOX_PUBLICATION_TRACE_CONTEXT_BYTES,
+        )
+        || publication.body.len() > MAX_MAILBOX_PUBLICATION_BODY_BYTES
+        || !bounded(
+            &publication.deduplication_key,
+            MAX_MAILBOX_PUBLICATION_DEDUPLICATION_KEY_BYTES,
+        )
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "mailbox publication violates gateway contract",
         ));
     }
     Ok(())

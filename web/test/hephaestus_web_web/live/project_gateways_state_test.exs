@@ -16,6 +16,6 @@ defmodule HephaestusWebWeb.ProjectGatewaysStateTest do
 
   test "covers the gateway collection lifecycle contract" do
     assert @covered_statuses == ProjectGatewaysState.statuses()
-    assert ProjectGatewaysState.stream_mode() == :page_scoped
+    assert ProjectGatewaysState.stream_mode() == :none
   end
 end

@@ -1,5 +1,6 @@
 //! Repository browser RPC composition and shared conversions.
 
+mod get_commit_detail;
 mod get_file;
 mod get_tree;
 mod list_branches;
@@ -8,7 +9,11 @@ mod stream_file;
 
 use super::{MediatorAuthenticator, RpcError};
 use crate::application::repository_browser::{
-    Branch, BrowserApplication, BrowserError, TreeEntry as ApplicationTreeEntry,
+    Branch, BrowserApplication, BrowserError, Commit as ApplicationCommit,
+    CommitDetail as ApplicationCommitDetail, DiffFile as ApplicationDiffFile,
+    DiffFileState as ApplicationDiffFileState, DiffHunk as ApplicationDiffHunk,
+    DiffLine as ApplicationDiffLine, DiffLineKind as ApplicationDiffLineKind,
+    TreeEntry as ApplicationTreeEntry,
 };
 use connectrpc::{RequestContext, Router, ServiceRequest, ServiceResult, ServiceStream};
 use control_plane_postgres::ControlPlanePool as PgPool;
@@ -20,9 +25,11 @@ use rpc_proto::{
     messages::hephaestus::{
         common::v1::OpaqueId,
         repository_browser::v1::{
-            Branch as ProtoBranch, GetFileRequest, GetFileResponse, GetTreeRequest,
-            GetTreeResponse, ListBranchesRequest, ListBranchesResponse, ListCommitsRequest,
-            ListCommitsResponse, StreamFileRequest, StreamFileResponse, TreeEntry, TreeEntryType,
+            Branch as ProtoBranch, Commit as ProtoCommit, CommitDetail, DiffFile, DiffFileState,
+            DiffHunk, DiffLine, DiffLineKind, GetCommitDetailRequest, GetCommitDetailResponse,
+            GetFileRequest, GetFileResponse, GetTreeRequest, GetTreeResponse, ListBranchesRequest,
+            ListBranchesResponse, ListCommitsRequest, ListCommitsResponse, StreamFileRequest,
+            StreamFileResponse, TreeEntry, TreeEntryType,
         },
     },
 };
@@ -89,6 +96,13 @@ impl RepositoryBrowserService for RepositoryBrowserRpc {
     ) -> ServiceResult<GetFileResponse> {
         get_file::handle(self, ctx, request).await
     }
+    async fn get_commit_detail(
+        &self,
+        ctx: RequestContext,
+        request: ServiceRequest<'_, GetCommitDetailRequest>,
+    ) -> ServiceResult<GetCommitDetailResponse> {
+        get_commit_detail::handle(self, ctx, request).await
+    }
     async fn stream_file(
         &self,
         ctx: RequestContext,
@@ -113,6 +127,82 @@ fn branch(value: Branch) -> ProtoBranch {
         commit: value.commit,
         committed_at: timestamp(value.committed_at).into(),
         subject: value.subject,
+        ..Default::default()
+    }
+}
+
+fn commit(value: ApplicationCommit) -> ProtoCommit {
+    ProtoCommit {
+        id: value.id,
+        parents: value.parents,
+        author_name: value.author_name,
+        author_email: value.author_email,
+        authored_at: timestamp(value.authored_at).into(),
+        subject: value.subject,
+        ..Default::default()
+    }
+}
+
+fn commit_detail(value: ApplicationCommitDetail) -> CommitDetail {
+    CommitDetail {
+        commit: commit(value.commit).into(),
+        committer_name: value.committer_name,
+        committer_email: value.committer_email,
+        committed_at: timestamp(value.committed_at).into(),
+        body: value.body,
+        selected_parent: value.selected_parent,
+        files: value.files.into_iter().map(diff_file).collect(),
+        truncated: value.truncated,
+        ..Default::default()
+    }
+}
+
+fn diff_file(value: ApplicationDiffFile) -> DiffFile {
+    DiffFile {
+        path: value.path,
+        previous_path: value.previous_path,
+        state: match value.state {
+            ApplicationDiffFileState::Added => DiffFileState::Added,
+            ApplicationDiffFileState::Deleted => DiffFileState::Deleted,
+            ApplicationDiffFileState::Modified => DiffFileState::Modified,
+            ApplicationDiffFileState::Renamed => DiffFileState::Renamed,
+            ApplicationDiffFileState::Binary => DiffFileState::Binary,
+            ApplicationDiffFileState::Truncated => DiffFileState::Truncated,
+            ApplicationDiffFileState::Unavailable => DiffFileState::Unavailable,
+        }
+        .into(),
+        additions: value.additions,
+        deletions: value.deletions,
+        hunks: value.hunks.into_iter().map(diff_hunk).collect(),
+        binary: matches!(value.state, ApplicationDiffFileState::Binary),
+        truncated: value.truncated,
+        ..Default::default()
+    }
+}
+
+fn diff_hunk(value: ApplicationDiffHunk) -> DiffHunk {
+    DiffHunk {
+        old_start: value.old_start,
+        old_lines: value.old_lines,
+        new_start: value.new_start,
+        new_lines: value.new_lines,
+        lines: value.lines.into_iter().map(diff_line).collect(),
+        truncated: value.truncated,
+        ..Default::default()
+    }
+}
+
+fn diff_line(value: ApplicationDiffLine) -> DiffLine {
+    DiffLine {
+        kind: match value.kind {
+            ApplicationDiffLineKind::Context => DiffLineKind::Context,
+            ApplicationDiffLineKind::Added => DiffLineKind::Added,
+            ApplicationDiffLineKind::Removed => DiffLineKind::Removed,
+        }
+        .into(),
+        old_line: value.old_line,
+        new_line: value.new_line,
+        text: value.text,
         ..Default::default()
     }
 }

@@ -1,10 +1,9 @@
 defmodule HephaestusWebWeb.ProjectGatewaysState do
-  @moduledoc "State and reauthorized project-event watch for gateway browsing."
+  @moduledoc "State for the authorized project gateway collection."
 
-  alias HephaestusWeb.RPC.{Client, ProductEvents}
-  alias HephaestusWebWeb.ProductEventReducer
+  alias HephaestusWeb.RPC.Client
 
-  @stream_mode :page_scoped
+  @stream_mode :none
   @statuses [
     :initial,
     :loading,
@@ -28,22 +27,9 @@ defmodule HephaestusWebWeb.ProjectGatewaysState do
 
   def statuses, do: @statuses
   def stream_mode, do: @stream_mode
-  def begin_watch(state), do: ProductEventReducer.begin_watch(state)
-  def watch_scope(state), do: {:project, state.data.project_id}
 
-  def watch(identity, state, owner, generation) do
-    ProductEvents.watch(
-      identity,
-      watch_scope(state),
-      ProductEventReducer.committed_cursor(state.cursor),
-      &deliver_watch(&1, owner, generation)
-    )
-  end
-
-  def reduce(state, {:watch, response}),
-    do: ProductEventReducer.reduce(state, response, [:gateway_changed])
-
-  def reduce(state, :watch_ended), do: ProductEventReducer.reconnect(state)
+  def reduce(state, {:load, generation}),
+    do: {%{state | status: :loading, error: nil, stream_generation: generation}, [:load]}
 
   def reduce(state, {:access_revoked, _reason}),
     do:
@@ -51,7 +37,7 @@ defmodule HephaestusWebWeb.ProjectGatewaysState do
        [{:navigate, :organizations}]}
 
   def reduce(state, {:loaded, generation, gateways}) when generation == state.stream_generation do
-    %{state | data: %{state.data | gateways: gateways}} |> ProductEventReducer.snapshot_complete()
+    {%{state | status: :ready, data: %{state.data | gateways: gateways}, error: nil}, []}
   end
 
   def reduce(state, {:loaded, _generation, _gateways}), do: {state, []}
@@ -74,13 +60,4 @@ defmodule HephaestusWebWeb.ProjectGatewaysState do
   defp page_status(:reconnecting), do: :reconnecting
   defp page_status(status) when status in [:error, :access_revoked], do: :error
   defp page_status(_status), do: :loading
-
-  defp deliver_watch(response, owner, generation) do
-    send(owner, {:page_watch, generation, response})
-
-    case response.item do
-      {kind, _value} when kind in [:retention_gap, :access_revoked] -> :halt
-      _item -> :cont
-    end
-  end
 end

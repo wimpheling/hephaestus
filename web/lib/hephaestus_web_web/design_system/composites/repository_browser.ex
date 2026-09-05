@@ -14,9 +14,13 @@ defmodule HephaestusWebWeb.DesignSystem.Composites.RepositoryBrowser do
   def repository_browser(assigns) do
     ~H"""
     <.frame as="section" id={@id} variant={:repository_browser} aria_label="Repository browser">
-      {render_slot(@navigation)}
-      {render_slot(@tree)}
-      {render_slot(@content)}
+      <.frame as="aside" variant={:file_browser} aria_label="Repository files">
+        {render_slot(@navigation)}
+        {render_slot(@tree)}
+      </.frame>
+      <.frame as="section" variant={:file_viewer} aria_label="File preview">
+        {render_slot(@content)}
+      </.frame>
     </.frame>
     """
   end

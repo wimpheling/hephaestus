@@ -893,8 +893,19 @@ impl LocalOciRuntime {
                 return Err(OciWorkerError::InvalidOutput);
             }
             let verification = entry.path();
-            let digest = fs::read_to_string(regular_output_file(&verification, "manifest-digest")?)
-                .map_err(OciWorkerError::Filesystem)?;
+            let manifest = verification.join("manifest-digest");
+            let manifest_metadata = match fs::symlink_metadata(&manifest) {
+                // A failed verifier leaves its job-scoped evidence root behind
+                // for durable diagnostics. It never had a verified rootfs, so
+                // it cannot poison a later materialization lookup.
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Ok(metadata) => metadata,
+                Err(error) => return Err(OciWorkerError::Filesystem(error)),
+            };
+            if manifest_metadata.file_type().is_symlink() || !manifest_metadata.is_file() {
+                return Err(OciWorkerError::InvalidOutput);
+            }
+            let digest = fs::read_to_string(&manifest).map_err(OciWorkerError::Filesystem)?;
             if digest.trim() != expected {
                 continue;
             }
@@ -1885,6 +1896,33 @@ mod tests {
         assert_eq!(
             fs::read_link(destination.join("bin")).expect("copied link"),
             std::path::Path::new("usr/bin")
+        );
+    }
+
+    #[test]
+    fn verified_rootfs_lookup_skips_incomplete_prior_verifier_attempts() {
+        let temporary = tempfile::tempdir().expect("temporary root");
+        let verification_root = temporary.path().join("verification");
+        fs::create_dir(&verification_root).expect("verification root");
+        fs::create_dir(verification_root.join("failed-attempt")).expect("failed attempt");
+        let complete = verification_root.join("complete-attempt");
+        fs::create_dir_all(complete.join("rootfs/usr/bin")).expect("verified rootfs");
+        let digest = format!("sha256:{}", "a".repeat(64));
+        fs::write(complete.join("manifest-digest"), format!("{digest}\n"))
+            .expect("manifest digest");
+        fs::write(complete.join("rootfs/usr/bin/tool"), "tool").expect("rootfs tool");
+
+        let mut config = configuration(temporary.path());
+        config.verified_rootfs_root = Some(verification_root);
+        let runtime = LocalOciRuntime::initialize(config).expect("safe local runtime");
+        let reference = OciImageReference::parse(format!("registry.example/project@{digest}"))
+            .expect("image reference");
+
+        assert_eq!(
+            runtime
+                .verified_rootfs_for(&reference)
+                .expect("verified rootfs lookup"),
+            Some(complete.join("rootfs"))
         );
     }
 

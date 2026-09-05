@@ -197,6 +197,16 @@ pub enum AvailabilityState {
     Retired,
 }
 
+/// The boundary at which a cataloged OCI image may be selected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImageRole {
+    /// An image that an authorized project may select for a build or guest.
+    Execution,
+    /// An administrator-owned image used only by a fixed platform operation.
+    PlatformOperation,
+}
+
 /// One pinned toolchain advertised by an image.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Toolchain {
@@ -234,6 +244,8 @@ pub struct OciImage {
     pub architectures: Vec<String>,
     /// Availability for new work.
     pub availability: AvailabilityState,
+    /// Whether the image is tenant-selectable or reserved for a platform task.
+    pub role: ImageRole,
     /// Supply-chain provenance.
     pub provenance: ImageProvenance,
     /// Platform policy version that approved the catalog record.
@@ -290,6 +302,9 @@ impl OciImage {
     ///
     /// Returns an error unless the image is available for new work.
     pub fn resolve(&self) -> Result<ResolvedImage, ImageSelectionError> {
+        if self.role == ImageRole::PlatformOperation {
+            return Err(ImageSelectionError::PlatformOperationOnly);
+        }
         match self.availability {
             AvailabilityState::Available => Ok(ResolvedImage {
                 image_id: self.id,
@@ -525,10 +540,60 @@ pub enum ImageCatalogValueError {
 /// Failure when resolving an OCI image for an execution contract.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ImageSelectionError {
+    /// The image is reserved for a platform-owned operation.
+    #[error("selected OCI image is reserved for a platform operation")]
+    PlatformOperationOnly,
     /// The image is temporarily unavailable.
     #[error("selected OCI image is unavailable")]
     Unavailable,
     /// The image is historical-only.
     #[error("selected OCI image was retired")]
     Retired,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        AvailabilityState, ImageKey, ImageProvenance, ImageRole, ImageSelectionError, OciImage,
+        OciImageId, OciImageReference, Toolchain,
+    };
+
+    fn image(role: ImageRole) -> OciImage {
+        OciImage {
+            id: OciImageId::new(),
+            key: ImageKey::parse("oci-builder-ubuntu").expect("valid key"),
+            display_name: String::from("OCI builder Ubuntu"),
+            image_reference: OciImageReference::parse(format!(
+                "registry.example/platform/oci-builder@sha256:{}",
+                "a".repeat(64)
+            ))
+            .expect("valid immutable reference"),
+            toolchains: vec![Toolchain {
+                name: String::from("buildah"),
+                version: String::from("1.43.2"),
+            }],
+            architectures: vec![String::from("x86_64")],
+            availability: AvailabilityState::Available,
+            role,
+            provenance: ImageProvenance {
+                source: String::from("attestation://platform/oci-builder"),
+                signature: None,
+                sbom: None,
+            },
+            platform_policy_version: String::from("image/v1"),
+        }
+    }
+
+    #[test]
+    fn platform_operation_image_is_not_tenant_selectable() {
+        assert_eq!(
+            image(ImageRole::PlatformOperation).resolve(),
+            Err(ImageSelectionError::PlatformOperationOnly)
+        );
+    }
+
+    #[test]
+    fn execution_image_remains_selectable() {
+        assert!(image(ImageRole::Execution).resolve().is_ok());
+    }
 }

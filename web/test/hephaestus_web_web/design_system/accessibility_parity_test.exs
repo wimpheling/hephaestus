@@ -23,6 +23,7 @@ defmodule HephaestusWebWeb.DesignSystem.AccessibilityParityTest do
     :list,
     :repository_tree,
     :root,
+    :source_viewer,
     :table,
     :tag,
     :text,

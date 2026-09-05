@@ -468,6 +468,8 @@ struct DispatchTargetRow {
     release_id: Uuid,
     release_agent_id: Uuid,
     attachment_id: Uuid,
+    target_ref: String,
+    target_commit: String,
     requires_state: bool,
     logical_attempt_count: i32,
 }
@@ -692,7 +694,8 @@ impl MailboxDispatchStore for PostgresMailboxRepository {
         let target = sqlx::query_as::<_, DispatchTargetRow>(
             "SELECT event.mailbox_id, event.instance_id, revision.id AS instance_revision_id,
                     release_agent.release_id, revision.release_agent_id,
-                    attachment.id AS attachment_id, release_agent.requires_state,
+                    attachment.id AS attachment_id, git_ref.git_ref AS target_ref,
+                    git_ref.commit_sha AS target_commit, release_agent.requires_state,
                     delivery.logical_attempt_count
              FROM mailbox_deliveries AS delivery
              JOIN mailbox_events AS event ON event.id = delivery.event_id
@@ -703,10 +706,13 @@ impl MailboxDispatchStore for PostgresMailboxRepository {
              JOIN release_agents AS release_agent ON release_agent.id = revision.release_agent_id
              JOIN releases AS release ON release.id = release_agent.release_id
              JOIN LATERAL (
-                SELECT id FROM agent_attachments
+                SELECT id, repository_id, ref_selector FROM agent_attachments
                 WHERE instance_id = instance.id AND enabled AND removed_at IS NULL
                 ORDER BY created_at, id LIMIT 1
              ) AS attachment ON true
+             JOIN git_refs AS git_ref
+               ON git_ref.repository_id = attachment.repository_id
+              AND git_ref.git_ref = attachment.ref_selector
              WHERE delivery.event_id = $1 AND delivery.disposition = 'eligible'
                AND mailbox.state = 'active' AND instance.run_gate_open
                AND instance.state IN ('active', 'update_rejected')
@@ -795,8 +801,8 @@ impl MailboxDispatchStore for PostgresMailboxRepository {
         sqlx::query(
             "INSERT INTO mailbox_delivery_attempts
               (id, event_id, mailbox_id, attempt_number, state, command_id, instance_id,
-               instance_revision_id, run_id, state_access_outcome)
-             VALUES ($1, $2, $3, $4, 'leased', $5, $6, $7, $8, $9)",
+               instance_revision_id, run_id, target_ref, target_commit, state_access_outcome)
+             VALUES ($1, $2, $3, $4, 'leased', $5, $6, $7, $8, $9, $10, $11)",
         )
         .bind(attempt_id.as_uuid())
         .bind(command.event_id.as_uuid())
@@ -806,6 +812,8 @@ impl MailboxDispatchStore for PostgresMailboxRepository {
         .bind(target.instance_id)
         .bind(target.instance_revision_id)
         .bind(run_id)
+        .bind(&target.target_ref)
+        .bind(&target.target_commit)
         .bind(if target.requires_state {
             "uncertain_access"
         } else {
@@ -894,7 +902,7 @@ impl MailboxDispatchStore for PostgresMailboxRepository {
         .fetch_optional(&mut *transaction)
         .await
         .map_err(dispatch_error)?;
-        let Some((event_id, mailbox_id, attempt_number)) = row else {
+        let Some((event_id, _mailbox_id, attempt_number)) = row else {
             transaction.commit().await.map_err(dispatch_error)?;
             return Ok(());
         };
@@ -947,21 +955,6 @@ impl MailboxDispatchStore for PostgresMailboxRepository {
             .execute(&mut *transaction)
             .await
             .map_err(dispatch_error)?;
-            let attempt_number = u32::try_from(attempt_number).map_err(dispatch_error)?;
-            let retry = MailboxOperationIdentity::retry(
-                MailboxId::from_uuid(mailbox_id),
-                MailboxEventId::from_uuid(event_id),
-                attempt_number,
-            )
-            .id();
-            enqueue_command(
-                &mut transaction,
-                retry.as_uuid(),
-                event_id,
-                MAILBOX_RETRY_SUBJECT,
-                "mailbox.retry.v1",
-            )
-            .await?;
         }
         transaction.commit().await.map_err(dispatch_error)
     }
@@ -1044,6 +1037,21 @@ impl MailboxDispatchStore for PostgresMailboxRepository {
                 .map_err(dispatch_error)?;
                 schedule_retry(&mut transaction, event_id, mailbox_id, attempt_number).await?;
             }
+        }
+        // The retry command must not be published before its durable backoff
+        // expires: a JetStream consumer would acknowledge an early no-op and
+        // leave the delivery stranded. The recovery loop owns that due-time
+        // transition and its deterministic outbox command.
+        let due_retries = sqlx::query_as::<_, (Uuid, Uuid, i32)>(
+            "SELECT event_id, mailbox_id, logical_attempt_count
+             FROM mailbox_deliveries
+             WHERE disposition = 'retryable' AND next_eligible_at <= now()",
+        )
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(dispatch_error)?;
+        for (event_id, mailbox_id, attempt_number) in due_retries {
+            schedule_retry(&mut transaction, event_id, mailbox_id, attempt_number).await?;
         }
         let rows = sqlx::query_as::<_, (Uuid, Uuid, i32)>(
             "UPDATE mailbox_deliveries AS delivery SET disposition = 'retryable',

@@ -18,6 +18,11 @@ defmodule HephaestusWebWeb.DesignSystem.Interactions do
   @doc "Dispatches the colocated theme-selection browser event."
   def set_theme, do: JS.dispatch("phx:set-theme")
 
+  @doc "Dispatches a browser-only copy request without sending the value to LiveView."
+  def copy_to_clipboard(value) when is_binary(value) do
+    JS.dispatch("hephaestus:copy-to-clipboard", detail: %{value: value})
+  end
+
   @doc "Shows a selector with the design-system transition."
   def show(js \\ %JS{}, selector) do
     JS.show(js,

@@ -642,6 +642,20 @@ where
         fs::write(&temporary, bytes).map_err(OciWorkerError::Filesystem)?;
         fs::rename(temporary, manifest).map_err(OciWorkerError::Filesystem)
     }
+
+    /// Lists only durable, successfully materialized roots owned by this
+    /// daemon worker. Callers must still validate the returned host paths
+    /// before supplying them to a VM provider.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the durable materialization store is unavailable.
+    pub async fn materialized_roots(&self) -> Result<Vec<MaterializedRoot>, OciWorkerError> {
+        self.store
+            .materialized_roots(&self.worker_name)
+            .await
+            .map_err(OciWorkerError::Store)
+    }
 }
 
 #[derive(Serialize)]

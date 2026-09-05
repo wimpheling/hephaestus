@@ -14,7 +14,7 @@ use std::{collections::BTreeSet, net::IpAddr, sync::Arc, time::Duration};
 use subtle::ConstantTimeEq;
 use tokio::time::timeout;
 use uuid::Uuid;
-use vm_trait::{PrivateHttpRequest, PrivateHttpResponse, VmInstance};
+use vm_trait::{PrivateHttpRequest, PrivateHttpResponse, PrivateMailboxPublication, VmInstance};
 
 mod integration;
 
@@ -185,6 +185,9 @@ pub struct GatewayResponse {
     pub headers: HeaderMap,
     /// Complete bounded response body; streaming is unsupported.
     pub body: Bytes,
+    /// At most one host-authorized mailbox publication candidate from the
+    /// released handler. This is never exposed to the public HTTP client.
+    pub mailbox_publication: Option<PrivateMailboxPublication>,
 }
 
 /// Safe outcome returned to the provider adapter.
@@ -634,6 +637,19 @@ pub trait GatewayInvocationRecorder: Send + Sync {
     ) -> Result<(), GatewayEdgeError>;
 }
 
+/// Host-only acceptance port for a candidate mailbox event returned by an
+/// `http.v1` handler. The implementation resolves the target and producer
+/// from the invocation's immutable authority; guests never select either.
+#[async_trait]
+pub trait GatewayMailboxPublisher: Send + Sync {
+    /// Accepts one bounded candidate or returns a redacted failure.
+    async fn publish(
+        &self,
+        invocation_id: Uuid,
+        publication: PrivateMailboxPublication,
+    ) -> Result<(), GatewayEdgeError>;
+}
+
 /// Persistable terminal outcome with no request/response payload.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GatewayInvocationOutcome {
@@ -653,6 +669,7 @@ pub struct GatewayDispatcher<R, H, I> {
     handler: H,
     recorder: I,
     inbound_secrets: Option<Arc<dyn GatewayInboundSecretResolver>>,
+    mailbox_publisher: Option<Arc<dyn GatewayMailboxPublisher>>,
 }
 
 impl<R, H, I> GatewayDispatcher<R, H, I> {
@@ -664,6 +681,7 @@ impl<R, H, I> GatewayDispatcher<R, H, I> {
             handler,
             recorder,
             inbound_secrets: None,
+            mailbox_publisher: None,
         }
     }
 
@@ -674,6 +692,14 @@ impl<R, H, I> GatewayDispatcher<R, H, I> {
         resolver: Arc<dyn GatewayInboundSecretResolver>,
     ) -> Self {
         self.inbound_secrets = Some(resolver);
+        self
+    }
+
+    /// Adds the exact-bound mailbox publisher used by gateway releases that
+    /// return a publication candidate.
+    #[must_use]
+    pub fn with_mailbox_publisher(mut self, publisher: Arc<dyn GatewayMailboxPublisher>) -> Self {
+        self.mailbox_publisher = Some(publisher);
         self
     }
 }
@@ -725,8 +751,23 @@ where
         )
         .await;
         let (response, outcome) = match result {
-            Ok(Ok(response)) if validate_response(&route, &response).is_ok() => {
-                (response, GatewayInvocationOutcome::Completed)
+            Ok(Ok(mut response)) if validate_response(&route, &response).is_ok() => {
+                if let Some(publication) = response.mailbox_publication.take() {
+                    let publication_result = match &self.mailbox_publisher {
+                        Some(publisher) => publisher.publish(invocation_id, publication).await,
+                        None => Err(GatewayEdgeError::HandlerUnavailable),
+                    };
+                    if publication_result.is_err() {
+                        (
+                            empty_response(StatusCode::BAD_GATEWAY),
+                            GatewayInvocationOutcome::Failed,
+                        )
+                    } else {
+                        (response, GatewayInvocationOutcome::Completed)
+                    }
+                } else {
+                    (response, GatewayInvocationOutcome::Completed)
+                }
             }
             Ok(Ok(_) | Err(_)) => (
                 empty_response(StatusCode::BAD_GATEWAY),
@@ -737,7 +778,22 @@ where
                 GatewayInvocationOutcome::TimedOut,
             ),
         };
-        let _ = self.recorder.completed(invocation_id, outcome).await;
+        // Do not acknowledge a publication (or any handler result) when its
+        // terminal invocation disposition was not durably recorded. The
+        // caller can safely retry: mailbox acceptance is deduplicated by the
+        // bound producer/key, while this invocation remains visibly pending
+        // for operator recovery rather than being silently forgotten.
+        if self
+            .recorder
+            .completed(invocation_id, outcome)
+            .await
+            .is_err()
+        {
+            return GatewayProviderResponse {
+                response: empty_response(StatusCode::SERVICE_UNAVAILABLE),
+                invocation_id,
+            };
+        }
         GatewayProviderResponse {
             response,
             invocation_id,
@@ -1004,6 +1060,56 @@ fn validate_response(
     {
         return Err(GatewayEdgeError::Contract("response violates route limits"));
     }
+    if let Some(publication) = &response.mailbox_publication {
+        validate_mailbox_publication(publication)?;
+    }
+    Ok(())
+}
+
+fn validate_mailbox_publication(
+    publication: &PrivateMailboxPublication,
+) -> Result<(), GatewayEdgeError> {
+    const MAX_BODY_BYTES: usize = 1_048_576;
+    const MAX_HEADERS: usize = 32;
+    const MAX_SLOT_BYTES: usize = 64;
+    const MAX_METHOD_BYTES: usize = 16;
+    const MAX_ROUTE_BYTES: usize = 1_024;
+    const MAX_HEADER_NAME_BYTES: usize = 64;
+    const MAX_HEADER_VALUE_BYTES: usize = 1_024;
+    const MAX_CONTENT_TYPE_BYTES: usize = 256;
+    const MAX_TRACE_CONTEXT_BYTES: usize = 512;
+    const MAX_DEDUPLICATION_KEY_BYTES: usize = 256;
+    let bounded =
+        |value: &str, maximum| !value.is_empty() && value.len() <= maximum && !value.contains('\0');
+    let valid_optional = |value: &Option<String>, maximum| {
+        value
+            .as_ref()
+            .is_none_or(|value| value.len() <= maximum && !value.contains('\0'))
+    };
+    if !bounded(&publication.slot, MAX_SLOT_BYTES)
+        || publication.method.is_empty()
+        || publication.method.len() > MAX_METHOD_BYTES
+        || !publication
+            .method
+            .bytes()
+            .all(|byte| byte.is_ascii_uppercase())
+        || !bounded(&publication.route, MAX_ROUTE_BYTES)
+        || !publication.route.starts_with('/')
+        || publication.headers.len() > MAX_HEADERS
+        || publication.headers.iter().any(|(name, value)| {
+            !bounded(name, MAX_HEADER_NAME_BYTES)
+                || value.len() > MAX_HEADER_VALUE_BYTES
+                || value.contains('\0')
+        })
+        || !valid_optional(&publication.content_type, MAX_CONTENT_TYPE_BYTES)
+        || !valid_optional(&publication.trace_context, MAX_TRACE_CONTEXT_BYTES)
+        || publication.body.len() > MAX_BODY_BYTES
+        || !bounded(&publication.deduplication_key, MAX_DEDUPLICATION_KEY_BYTES)
+    {
+        return Err(GatewayEdgeError::Contract(
+            "mailbox publication violates gateway limits",
+        ));
+    }
     Ok(())
 }
 
@@ -1026,6 +1132,7 @@ fn empty_response(status: StatusCode) -> GatewayResponse {
         status,
         headers: HeaderMap::new(),
         body: Bytes::new(),
+        mailbox_publication: None,
     }
 }
 
@@ -1034,6 +1141,7 @@ fn gateway_response(response: PrivateHttpResponse) -> GatewayResponse {
         status: response.status,
         headers: response.headers,
         body: response.body,
+        mailbox_publication: response.mailbox_publication,
     }
 }
 
@@ -1050,7 +1158,8 @@ mod tests {
     };
     use vm_fake::{FakeProvider, PrivateHttpResponder};
     use vm_trait::{
-        GuestCommand, NetworkMode, RootFilesystem, VmError, VmProvider, VmResources, VmSpec,
+        GuestCommand, NetworkMode, PrivateMailboxPublication, RootFilesystem, VmError, VmProvider,
+        VmResources, VmSpec,
     };
 
     fn limits() -> GatewayLimits {
@@ -1176,6 +1285,29 @@ mod tests {
         }
     }
 
+    struct CompletionFailureRecorder {
+        completions: AtomicUsize,
+    }
+    #[async_trait]
+    impl GatewayInvocationRecorder for CompletionFailureRecorder {
+        async fn accepted(
+            &self,
+            _: &GatewayRouteBinding,
+            _: Uuid,
+        ) -> Result<Uuid, GatewayEdgeError> {
+            Ok(Uuid::new_v4())
+        }
+
+        async fn completed(
+            &self,
+            _: Uuid,
+            _: GatewayInvocationOutcome,
+        ) -> Result<(), GatewayEdgeError> {
+            self.completions.fetch_add(1, Ordering::SeqCst);
+            Err(GatewayEdgeError::Unavailable)
+        }
+    }
+
     struct EchoHandler;
     #[async_trait]
     impl GatewayVmHandler for EchoHandler {
@@ -1192,7 +1324,36 @@ mod tests {
                 status: StatusCode::ACCEPTED,
                 headers,
                 body: request.body,
+                mailbox_publication: None,
             })
+        }
+    }
+
+    struct AcceptMailbox;
+
+    #[async_trait]
+    impl GatewayMailboxPublisher for AcceptMailbox {
+        async fn publish(
+            &self,
+            _: Uuid,
+            publication: PrivateMailboxPublication,
+        ) -> Result<(), GatewayEdgeError> {
+            assert_eq!(publication.slot, "recipe-events");
+            assert_eq!(publication.deduplication_key, "update-42");
+            Ok(())
+        }
+    }
+
+    struct CountingMailbox(AtomicUsize);
+    #[async_trait]
+    impl GatewayMailboxPublisher for CountingMailbox {
+        async fn publish(
+            &self,
+            _: Uuid,
+            _: PrivateMailboxPublication,
+        ) -> Result<(), GatewayEdgeError> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(())
         }
     }
 
@@ -1238,6 +1399,16 @@ mod tests {
                 status: StatusCode::CREATED,
                 headers: HeaderMap::new(),
                 body: request.body,
+                mailbox_publication: Some(PrivateMailboxPublication {
+                    slot: "recipe-events".to_owned(),
+                    method: "POST".to_owned(),
+                    route: "/recipe".to_owned(),
+                    headers: vec![("source".to_owned(), "gateway".to_owned())],
+                    content_type: Some("application/json".to_owned()),
+                    trace_context: None,
+                    body: Bytes::from_static(b"event"),
+                    deduplication_key: "update-42".to_owned(),
+                }),
             })
         }
     }
@@ -1251,6 +1422,7 @@ mod tests {
                 status: StatusCode::NO_CONTENT,
                 headers: HeaderMap::new(),
                 body: Bytes::new(),
+                mailbox_publication: None,
             })
         }
     }
@@ -1432,7 +1604,8 @@ mod tests {
             calls: AtomicUsize::new(0),
             delay: Duration::ZERO,
         };
-        let dispatcher = GatewayDispatcher::new(Resolver(route()), handler, Recorder);
+        let dispatcher = GatewayDispatcher::new(Resolver(route()), handler, Recorder)
+            .with_mailbox_publisher(Arc::new(AcceptMailbox));
         let mut inbound = request("/gateway/echo");
         inbound
             .headers
@@ -1483,10 +1656,53 @@ mod tests {
         let handler = PrivateHttpVmGatewayHandler::new(FakeGatewayLauncher {
             provider: FakeProvider::new().with_private_http_responder(Arc::new(PrivateEcho)),
         });
-        let dispatcher = GatewayDispatcher::new(Resolver(route()), handler, Recorder);
+        let dispatcher = GatewayDispatcher::new(Resolver(route()), handler, Recorder)
+            .with_mailbox_publisher(Arc::new(AcceptMailbox));
         let response = dispatcher.dispatch(request("/gateway/echo")).await;
         assert_eq!(response.response.status, StatusCode::CREATED);
         assert_eq!(response.response.body, Bytes::from_static(b"ok"));
+        assert!(response.response.mailbox_publication.is_none());
+    }
+
+    #[tokio::test]
+    async fn dispatcher_fails_closed_when_publication_cannot_be_durably_settled() {
+        let publication = Arc::new(CountingMailbox(AtomicUsize::new(0)));
+        let recorder = CompletionFailureRecorder {
+            completions: AtomicUsize::new(0),
+        };
+        let dispatcher = GatewayDispatcher::new(
+            Resolver(route()),
+            PrivateHttpVmGatewayHandler::new(FakeGatewayLauncher {
+                provider: FakeProvider::new().with_private_http_responder(Arc::new(PrivateEcho)),
+            }),
+            recorder,
+        )
+        .with_mailbox_publisher(publication.clone());
+
+        let response = dispatcher.dispatch(request("/gateway/echo")).await;
+
+        assert_eq!(publication.0.load(Ordering::SeqCst), 1);
+        assert_eq!(response.response.status, StatusCode::SERVICE_UNAVAILABLE);
+        assert!(response.response.body.is_empty());
+        assert_ne!(response.invocation_id, Uuid::nil());
+        assert_eq!(dispatcher.recorder.completions.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn mailbox_publication_allows_an_empty_opaque_body() {
+        assert!(
+            validate_mailbox_publication(&PrivateMailboxPublication {
+                slot: String::from("recipe-events"),
+                method: String::from("POST"),
+                route: String::from("/recipe"),
+                headers: Vec::new(),
+                content_type: None,
+                trace_context: None,
+                body: Bytes::new(),
+                deduplication_key: String::from("empty-body"),
+            })
+            .is_ok()
+        );
     }
 
     #[tokio::test]

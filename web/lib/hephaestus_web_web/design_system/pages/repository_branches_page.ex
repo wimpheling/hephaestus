@@ -60,7 +60,9 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.RepositoryBranchesPage do
   defp branch_destination(repository, branch),
     do: "/repositories/#{repository["id"]}/files?ref=#{URI.encode_www_form(branch)}"
 
-  defp display_time(value) do
+  defp display_time(%DateTime{} = value), do: Calendar.strftime(value, "%d %b %Y · %H:%M")
+
+  defp display_time(value) when is_binary(value) do
     case DateTime.from_iso8601(value) do
       {:ok, date_time, _offset} -> Calendar.strftime(date_time, "%d %b %Y · %H:%M")
       _error -> value

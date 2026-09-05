@@ -66,7 +66,7 @@ const ROOT_IMAGE: &str =
 const BROKERED_E2E_RULE_ID: uuid::Uuid = uuid::uuid!("00000000-0000-0000-0000-000000000002");
 const BROKERED_E2E_SENTINEL: &str = "golden-brokered-provider-sentinel-5d1a";
 const GATEWAY_HANDLER: &str =
-    "#!/bin/sh\nexec /usr/libexec/hephaestus/integration-check --private-http-brokered-header\n";
+    "#!/bin/sh\nexec /usr/libexec/hephaestus/integration-check --private-http-brokered-mailbox\n";
 type MailboxTimeoutEvidence = (
     i32,
     uuid::Uuid,
@@ -78,15 +78,19 @@ type MailboxTimeoutEvidence = (
 );
 const GOLDEN_AGENT: &str = r#"#!/bin/sh
   set -eu
+  if test -r /run/hephaestus/mailbox-event.json; then
+      if grep -q '"route":"/gateway/golden-proof"' /run/hephaestus/mailbox-event.json; then
+          test "$(cat /run/hephaestus/mailbox-body)" = "gateway-real-mailbox-body"
+      else
+          grep -q '"route":"/mailbox/golden-proof"' /run/hephaestus/mailbox-event.json
+          test "$(cat /run/hephaestus/mailbox-body)" = "golden-real-mailbox-body"
+      fi
+      printf 'mailbox-body-ok\n' > /var/lib/hephaestus/golden-state
+      exit 0
+  fi
   if test -x /usr/libexec/hephaestus/integration-check \
       && test -r /run/hephaestus-secrets/.runtime-credential; then
       exec /usr/libexec/hephaestus/integration-check --brokered-https-e2e
-  fi
-  if test -r /run/hephaestus/mailbox-event.json; then
-      grep -q '"route":"/mailbox/golden-proof"' /run/hephaestus/mailbox-event.json
-      test "$(cat /run/hephaestus/mailbox-body)" = "golden-real-mailbox-body"
-      printf 'mailbox-body-ok\n' > /var/lib/hephaestus/golden-state
-      exit 0
   fi
   test -r /workspace/repo/input.txt
   test -r /run/hephaestus/parameters.json
@@ -241,6 +245,23 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
     } else {
         None
     };
+    // This mailbox is created before the daemon starts so the released
+    // gateway revision can be bound to it immutably.  The guest only sees the
+    // symbolic `deliver` slot, never this UUID or the producer identity.
+    let gateway_mailbox = if gateway_caddy_e2e {
+        let mailbox_id = MailboxId::new();
+        PostgresMailboxRepository::new(pool.clone())
+            .ensure_mailbox(
+                project.id.as_uuid(),
+                mailbox_id,
+                runtime_types::AgentInstanceId::from_uuid(seeded_instance.instance),
+            )
+            .await
+            .expect("create bound gateway golden mailbox");
+        Some(mailbox_id)
+    } else {
+        None
+    };
     let gateway_edge = if gateway_caddy_e2e {
         let gateway_agent =
             seed_gateway_release_agent(&pool, &seeded_instance, &root.join("release-artifacts"))
@@ -248,7 +269,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
         let fixture = brokered_fixture
             .as_ref()
             .expect("joined gateway proof has brokered fixture authority");
-        seed_gateway_brokered_route(
+        let gateway_fixture = seed_gateway_brokered_route(
             &pool,
             user_id,
             project.id.as_uuid(),
@@ -257,6 +278,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             gateway_agent,
             fixture.import_id,
             fixture.version_id,
+            gateway_mailbox.expect("joined gateway mailbox"),
         )
         .await;
         let dispatcher = TcpListener::bind("127.0.0.1:0")
@@ -266,16 +288,19 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             .local_addr()
             .expect("gateway dispatcher listener address");
         drop(dispatcher);
-        Some(GatewayEdgeConfig {
-            caddy_admin_url: env::var("HEPHAESTUS_CADDY_TEST_ADMIN_URL")
-                .expect("joined Caddy admin URL"),
-            caddy_configuration_template: caddy_configuration(
-                &env::var("HEPHAESTUS_CADDY_TEST_ADMIN_URL").expect("joined Caddy admin URL"),
-            ),
-            caddy_server_name: String::from("shared"),
-            dispatcher_listen,
-            public_authority: String::from("gateway.golden.invalid"),
-        })
+        Some((
+            GatewayEdgeConfig {
+                caddy_admin_url: env::var("HEPHAESTUS_CADDY_TEST_ADMIN_URL")
+                    .expect("joined Caddy admin URL"),
+                caddy_configuration_template: caddy_configuration(
+                    &env::var("HEPHAESTUS_CADDY_TEST_ADMIN_URL").expect("joined Caddy admin URL"),
+                ),
+                caddy_server_name: String::from("shared"),
+                dispatcher_listen,
+                public_authority: String::from("gateway.golden.invalid"),
+            },
+            gateway_fixture,
+        ))
     } else {
         None
     };
@@ -348,7 +373,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             reconciliation_lease: Duration::from_secs(30),
             reconciliation_interval: Duration::from_secs(30),
         },
-        gateway_edge,
+        gateway_edge: gateway_edge.as_ref().map(|(config, _)| config.clone()),
         volumes: LocalVolumeConfig {
             volume_root: backend_fixture.volume_root,
             transient_runtime_roots,
@@ -467,48 +492,96 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
 
     if libkrun_e2e {
         if gateway_caddy_e2e {
-            let public_url =
-                env::var("HEPHAESTUS_CADDY_TEST_PUBLIC_URL").expect("joined Caddy public URL");
-            let response = reqwest::Client::new()
-                .post(format!("{public_url}/gateway/brokered?mode=real"))
-                .header("x-webhook-secret", BROKERED_E2E_SENTINEL)
-                .body("gateway-brokered-request")
+            let admin_url =
+                env::var("HEPHAESTUS_CADDY_TEST_ADMIN_URL").expect("joined Caddy admin URL");
+            let applied_config = reqwest::Client::new()
+                .get(format!("{admin_url}/config/"))
                 .send()
                 .await
-                .expect("Caddy gateway request");
-            if response.status() != reqwest::StatusCode::CREATED {
-                let invocations: Vec<(String, Option<String>, Option<String>)> = sqlx::query_as(
-                    "SELECT invocation.outcome, session.status, session.revocation_reason
-                       FROM gateway_invocations AS invocation
-                       LEFT JOIN gateway_runtime_authority_sessions AS session
-                         ON session.invocation_id = invocation.id
-                      ORDER BY invocation.accepted_at",
-                )
-                .fetch_all(&pool)
+                .expect("load applied Caddy configuration")
+                .error_for_status()
+                .expect("Caddy configuration request succeeds")
+                .text()
                 .await
-                .expect("gateway failure evidence");
-                let authority: Vec<(String, String, String, String, String, String)> =
+                .expect("read applied Caddy configuration");
+            assert!(
+                applied_config.contains("/gateway/brokered"),
+                "Caddy must contain the authoritative gateway route before the public proof: {applied_config}"
+            );
+            let public_url =
+                env::var("HEPHAESTUS_CADDY_TEST_PUBLIC_URL").expect("joined Caddy public URL");
+            let client = reqwest::Client::new();
+            let first = client
+                .post(format!("{public_url}/gateway/brokered?mode=real"))
+                .header("x-webhook-secret", BROKERED_E2E_SENTINEL)
+                .body("gateway-brokered-request-a")
+                .send();
+            let second = client
+                .post(format!("{public_url}/gateway/brokered?mode=real"))
+                .header("x-webhook-secret", BROKERED_E2E_SENTINEL)
+                .body("gateway-brokered-request-b")
+                .send();
+            let (response, distinct) = tokio::join!(first, second);
+            let response = response.expect("first concurrent Caddy gateway request");
+            let distinct = distinct.expect("second concurrent Caddy gateway request");
+            if response.status() != reqwest::StatusCode::CREATED
+                || distinct.status() != reqwest::StatusCode::CREATED
+            {
+                let gateway_diagnostics: (i64, i64, i64, i64, i64, Vec<String>, Vec<String>) =
                     sqlx::query_as(
-                        "SELECT binding.status, imported.status, granted.status, secret.status,
-                                version.status, session.status
-                           FROM gateway_secret_bindings AS binding
-                           JOIN secret_imports AS imported ON imported.id = binding.import_id
-                           JOIN secret_grants AS granted ON granted.id = imported.grant_id
-                           JOIN secrets AS secret ON secret.id = granted.secret_id
-                           JOIN secret_versions AS version ON version.id = binding.secret_version_id
-                           CROSS JOIN gateway_runtime_authority_sessions AS session",
+                        "SELECT
+                         (SELECT count(*) FROM gateway_invocations),
+                         (SELECT count(*) FROM gateway_authorization_snapshots),
+                         (SELECT count(*) FROM gateway_authorization_snapshot_bindings),
+                         (SELECT count(*) FROM gateway_runtime_authority_sessions),
+                         (SELECT count(*) FROM gateway_mailbox_publications),
+                         COALESCE((SELECT array_agg(status ORDER BY id)
+                                   FROM gateway_runtime_authority_sessions), ARRAY[]::text[]),
+                         COALESCE((SELECT array_agg(outcome ORDER BY id)
+                                   FROM gateway_invocations), ARRAY[]::text[])",
                     )
-                    .fetch_all(&pool)
+                    .fetch_one(&pool)
                     .await
-                    .expect("gateway authority failure evidence");
-                eprintln!(
-                    "joined gateway response={} invocations={invocations:?} authority={authority:?}",
-                    response.status()
+                    .expect("load gateway failure diagnostics");
+                panic!(
+                    "joined gateway requests failed: first={}, second={}, invocations={}, snapshots={}, snapshot_bindings={}, sessions={}, publications={}, session_statuses={:?}, invocation_outcomes={:?}",
+                    response.status(),
+                    distinct.status(),
+                    gateway_diagnostics.0,
+                    gateway_diagnostics.1,
+                    gateway_diagnostics.2,
+                    gateway_diagnostics.3,
+                    gateway_diagnostics.4,
+                    gateway_diagnostics.5,
+                    gateway_diagnostics.6,
                 );
             }
             assert_eq!(response.status(), reqwest::StatusCode::CREATED);
+            assert_eq!(distinct.status(), reqwest::StatusCode::CREATED);
             assert_eq!(
                 response.bytes().await.expect("gateway response body"),
+                "gateway-brokered-header-ok"
+            );
+            assert_eq!(
+                distinct
+                    .bytes()
+                    .await
+                    .expect("distinct gateway response body"),
+                "gateway-brokered-header-ok"
+            );
+            // A handler retry emits the same application-supplied key. It is
+            // a fresh gateway invocation but must retain the first logical
+            // mailbox event rather than delivering a second one.
+            let retry = client
+                .post(format!("{public_url}/gateway/brokered?mode=real"))
+                .header("x-webhook-secret", BROKERED_E2E_SENTINEL)
+                .body("gateway-brokered-request-a")
+                .send()
+                .await
+                .expect("Caddy gateway retry");
+            assert_eq!(retry.status(), reqwest::StatusCode::CREATED);
+            assert_eq!(
+                retry.bytes().await.expect("gateway retry response body"),
                 "gateway-brokered-header-ok"
             );
             let evidence: (String, bool, bool) = sqlx::query_as(
@@ -532,6 +605,119 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
                 evidence.2,
                 "gateway invocation held its inbound secret lease"
             );
+            let mailbox = gateway_edge
+                .as_ref()
+                .expect("joined gateway fixture")
+                .1
+                .mailbox_id;
+            let (accepted_publications, duplicate_publications): (i64, i64) = sqlx::query_as(
+                "SELECT count(*) FILTER (WHERE publication.outcome = 'accepted'),
+                        count(*) FILTER (WHERE publication.outcome = 'duplicate')
+                   FROM gateway_mailbox_publications AS publication
+                   JOIN gateway_invocations AS invocation
+                     ON invocation.id = publication.invocation_id
+                  WHERE publication.mailbox_id = $1",
+            )
+            .bind(mailbox.as_uuid())
+            .fetch_one(&pool)
+            .await
+            .expect("gateway mailbox publication provenance");
+            assert_eq!((accepted_publications, duplicate_publications), (2, 1));
+            let (event_count, wake_count, leaked_body): (i64, i64, bool) = sqlx::query_as(
+                "SELECT
+                     (SELECT count(*) FROM mailbox_events WHERE mailbox_id = $1),
+                     (SELECT count(*) FROM outbox
+                       WHERE subject = 'heph.mailbox.v1.wake'
+                         AND id IN (SELECT id FROM mailbox_events WHERE mailbox_id = $1)),
+                     EXISTS (
+                       SELECT 1 FROM gateway_mailbox_publications
+                        WHERE mailbox_id = $1
+                          AND to_jsonb(gateway_mailbox_publications)::text
+                              LIKE '%gateway-real-mailbox-body%'
+                     )",
+            )
+            .bind(mailbox.as_uuid())
+            .fetch_one(&pool)
+            .await
+            .expect("gateway mailbox acceptance evidence");
+            assert_eq!((event_count, wake_count), (2, 2));
+            assert!(!leaked_body, "gateway publication provenance is value-free");
+
+            // This waits for the event emitted by the real libkrun guest to
+            // cross the transactional outbox and JetStream dispatcher into a
+            // separate real target-agent run. The target command rejects an
+            // altered route or body before it can succeed.
+            let delivery = tokio::time::timeout(Duration::from_secs(60), async {
+                loop {
+                    let row = sqlx::query_as::<_, (i64, i64)>(
+                        "SELECT count(DISTINCT delivery.event_id)
+                                  FILTER (WHERE delivery.disposition = 'delivered'),
+                                count(*) FILTER (
+                                    WHERE run.state = 'cleaned_up'
+                                      AND run.outcome = 'succeeded'
+                                )
+                           FROM mailbox_deliveries AS delivery
+                           JOIN mailbox_delivery_attempts AS attempt
+                             ON attempt.event_id = delivery.event_id
+                           JOIN runs AS run ON run.id = attempt.run_id
+                          WHERE delivery.mailbox_id = $1",
+                    )
+                    .bind(mailbox.as_uuid())
+                    .fetch_one(&pool)
+                    .await
+                    .expect("gateway mailbox delivery evidence");
+                    if row == (2, 2) {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(25)).await;
+                }
+            })
+            .await;
+            if delivery.is_err() {
+                let failures: Vec<(String, String, Option<String>, Option<String>)> =
+                    sqlx::query_as(
+                        "SELECT delivery.disposition, run.state, run.outcome, run.failure
+                     FROM mailbox_delivery_attempts AS attempt
+                     JOIN mailbox_deliveries AS delivery ON delivery.event_id = attempt.event_id
+                     JOIN runs AS run ON run.id = attempt.run_id
+                     WHERE delivery.mailbox_id = $1 ORDER BY run.id",
+                    )
+                    .bind(mailbox.as_uuid())
+                    .fetch_all(&pool)
+                    .await
+                    .expect("gateway delivery failures");
+                panic!("real gateway publications reach target-agent dispatch: {failures:?}");
+            }
+
+            // New invocations are denied after the exact bound grant is
+            // revoked. This runs after the already accepted events settled so
+            // it proves live authorization without perturbing their delivery.
+            let fixture = &gateway_edge.as_ref().expect("joined gateway fixture").1;
+            sqlx::query(
+                "UPDATE gateway_mailbox_binding_grants
+                    SET status = 'revoked', revoked_at = now(), revoked_by = $2
+                  WHERE id = $1",
+            )
+            .bind(fixture.grant_id)
+            .bind(user_id.as_uuid())
+            .execute(&pool)
+            .await
+            .expect("revoke bound gateway mailbox grant");
+            let denied = client
+                .post(format!("{public_url}/gateway/brokered?mode=real"))
+                .header("x-webhook-secret", BROKERED_E2E_SENTINEL)
+                .body("gateway-brokered-request-denied")
+                .send()
+                .await
+                .expect("revoked Caddy gateway request");
+            assert_eq!(denied.status(), reqwest::StatusCode::BAD_GATEWAY);
+            let accepted_after_revoke: i64 =
+                sqlx::query_scalar("SELECT count(*) FROM mailbox_events WHERE mailbox_id = $1")
+                    .bind(mailbox.as_uuid())
+                    .fetch_one(&pool)
+                    .await
+                    .expect("revoked grant does not add mailbox events");
+            assert_eq!(accepted_after_revoke, 2);
         }
         if let Some(fixture) = brokered_fixture.take() {
             fixture.upstream.assert_substituted_request().await;
@@ -1069,6 +1255,13 @@ struct SeededInstance {
     release_agent: uuid::Uuid,
 }
 
+/// Exact host-side identity retained by the joined Caddy/libkrun mailbox
+/// proof. The released guest never receives this identifier.
+struct GatewayGoldenFixture {
+    mailbox_id: MailboxId,
+    grant_id: uuid::Uuid,
+}
+
 /// Adds an exact released, stateless gateway handler alongside the reusable
 /// agent. The artifact delegates only to the guest integration checker, which
 /// validates that the daemon replaced the inbound secret before VM delivery.
@@ -1143,7 +1336,9 @@ async fn seed_gateway_release_agent(
 
 /// Seeds immutable gateway route and host-only inbound secret authority.
 // The fixture deliberately names each persisted authority boundary explicitly.
-#[allow(clippy::too_many_arguments)]
+// Keeping this one setup transaction-shaped makes the golden authority graph
+// reviewable without hiding a bound mailbox or grant in a generic helper.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 async fn seed_gateway_brokered_route(
     pool: &sqlx::PgPool,
     actor: UserId,
@@ -1153,7 +1348,8 @@ async fn seed_gateway_brokered_route(
     release_agent_id: uuid::Uuid,
     import_id: uuid::Uuid,
     version_id: uuid::Uuid,
-) {
+    mailbox_id: MailboxId,
+) -> GatewayGoldenFixture {
     let gateway_id = uuid::Uuid::new_v4();
     let revision_id = uuid::Uuid::new_v4();
     let route_id = uuid::Uuid::new_v4();
@@ -1173,10 +1369,10 @@ async fn seed_gateway_brokered_route(
     sqlx::query(
         "INSERT INTO gateway_revisions
            (id, gateway_id, project_id, repository_id, release_id, release_agent_id,
-            release_agent_key, handler_contract, exposure, parameters, secret_slots,
+            release_agent_key, handler_contract, exposure, parameters, secret_slots, mailbox_slots,
             normalized_hash, created_by)
          VALUES ($1, $2, $3, $4, $5, $6, 'golden-gateway', 'http.v1', 'public',
-                 '{}', ARRAY['webhook'], $7, $8)",
+                 '{}', ARRAY['webhook'], ARRAY['deliver'], $7, $8)",
     )
     .bind(revision_id)
     .bind(gateway_id)
@@ -1222,6 +1418,33 @@ async fn seed_gateway_brokered_route(
     .execute(pool)
     .await
     .expect("seed gateway secret binding");
+    let mailbox_binding_id = uuid::Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO gateway_mailbox_bindings
+           (id, gateway_revision_id, gateway_id, project_id, slot_key, mailbox_id,
+            producer_id, created_by)
+         VALUES ($1, $2, $3, $4, 'deliver', $5, 'golden-gateway', $6)",
+    )
+    .bind(mailbox_binding_id)
+    .bind(revision_id)
+    .bind(gateway_id)
+    .bind(project_id)
+    .bind(mailbox_id.as_uuid())
+    .bind(actor.as_uuid())
+    .execute(pool)
+    .await
+    .expect("bind gateway fixture mailbox");
+    let grant_id = uuid::Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO gateway_mailbox_binding_grants (id, binding_id, status, granted_by)
+         VALUES ($1, $2, 'active', $3)",
+    )
+    .bind(grant_id)
+    .bind(mailbox_binding_id)
+    .bind(actor.as_uuid())
+    .execute(pool)
+    .await
+    .expect("grant gateway fixture mailbox publication");
     sqlx::query(
         "INSERT INTO gateway_brokered_secret_rules
            (id, binding_id, gateway_revision_id, gateway_route_id, header_name, normalized_hash)
@@ -1235,6 +1458,10 @@ async fn seed_gateway_brokered_route(
     .execute(pool)
     .await
     .expect("seed gateway brokered inbound rule");
+    GatewayGoldenFixture {
+        mailbox_id,
+        grant_id,
+    }
 }
 
 /// Creates the complete durable secret authority that the daemon resolves at

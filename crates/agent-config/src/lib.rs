@@ -6,7 +6,8 @@ use capability_domain::{
 };
 use forge_domain::GitRef;
 use gateway_domain::{
-    Exposure, GatewayDeclaration, GatewayName, HttpMethod, RouteIntent, RoutePath,
+    Exposure, GatewayDeclaration, GatewayMailboxPublicationSlot, GatewayName, HttpMethod,
+    RouteIntent, RoutePath,
 };
 use git_capability_domain::{
     BranchRefPolicy, BranchUpdatePolicy, ChangedPathGlob, GitCapabilityCeiling,
@@ -212,6 +213,34 @@ pub struct RepositoryGatewayConfig {
     /// Symbolic brokered-secret slots only, never tenant secret values.
     #[serde(default)]
     pub secret_slots: Vec<String>,
+    /// Required, fixed-shape mailbox-publication requirements. Each slot can
+    /// only bind one explicit mailbox and producer identity at installation.
+    #[serde(default)]
+    pub mailbox_publication_slots: Vec<RepositoryGatewayMailboxPublicationSlot>,
+}
+
+/// One repository-declared required mailbox publication slot for a gateway.
+///
+/// Its capability shape is fixed by the platform: `mailbox` + `publish`, with
+/// no optional operations and a required binding. The manifest therefore
+/// accepts no resource kind or operation fields that could broaden authority.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RepositoryGatewayMailboxPublicationSlot {
+    /// Stable release-owned capability slot key.
+    pub key: String,
+    /// Human-readable non-secret reason for this publication path.
+    pub purpose: String,
+}
+
+impl RepositoryGatewayMailboxPublicationSlot {
+    fn to_declaration(
+        &self,
+    ) -> Result<GatewayMailboxPublicationSlot, gateway_domain::GatewayError> {
+        let key = CapabilitySlotKey::parse(self.key.clone())
+            .map_err(|_| gateway_domain::GatewayError::InvalidMailboxPublicationSlot)?;
+        GatewayMailboxPublicationSlot::new(key, self.purpose.clone())
+    }
 }
 
 impl RepositoryGatewayConfig {
@@ -238,6 +267,11 @@ impl RepositoryGatewayConfig {
             parameters: serde_json::to_value(&self.parameters)
                 .map_err(|_| gateway_domain::GatewayError::InvalidDeclaration)?,
             secret_slots: self.secret_slots.clone(),
+            mailbox_publication_slots: self
+                .mailbox_publication_slots
+                .iter()
+                .map(RepositoryGatewayMailboxPublicationSlot::to_declaration)
+                .collect::<Result<Vec<_>, _>>()?,
         })
     }
 }
@@ -1082,6 +1116,9 @@ fn normalized_repository_gateways(
 ) -> RepositoryGatewaysConfig {
     for gateway in &mut config.gateways {
         gateway.secret_slots.sort_unstable();
+        gateway
+            .mailbox_publication_slots
+            .sort_unstable_by(|left, right| left.key.cmp(&right.key));
         for route in &mut gateway.routes {
             route.methods.sort_unstable();
         }
@@ -1210,6 +1247,34 @@ fn validate_repository_gateways(config: &RepositoryGatewaysConfig) -> Vec<Diagno
                 format!("gateways[{gateway_index}].name"),
                 "gateway names must be unique within a repository",
             );
+        }
+        if gateway.mailbox_publication_slots.len() > 32 {
+            diagnostic(
+                &mut diagnostics,
+                "too_many_repository_gateway_mailbox_publication_slots",
+                format!("gateways[{gateway_index}].mailbox_publication_slots"),
+                "a gateway may declare at most 32 mailbox publication slots",
+            );
+        }
+        let mut mailbox_publication_slot_keys = HashSet::new();
+        for (slot_index, slot) in gateway.mailbox_publication_slots.iter().enumerate() {
+            let path = format!("gateways[{gateway_index}].mailbox_publication_slots[{slot_index}]");
+            if slot.to_declaration().is_err() {
+                diagnostic(
+                    &mut diagnostics,
+                    "invalid_repository_gateway_mailbox_publication_slot",
+                    path.clone(),
+                    "mailbox publication slots require a bounded lowercase key and a 1 to 512 character purpose",
+                );
+            }
+            if !mailbox_publication_slot_keys.insert(&slot.key) {
+                diagnostic(
+                    &mut diagnostics,
+                    "duplicate_repository_gateway_mailbox_publication_slot",
+                    format!("{path}.key"),
+                    "mailbox publication slot keys must be unique within a gateway",
+                );
+            }
         }
         match gateway.to_declaration() {
             Ok(declaration) => {
@@ -1810,8 +1875,9 @@ const fn default_true() -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        PublicationMode, REPOSITORY_OCI_IMAGES_VERSION, REUSABLE_RELEASE_VERSION, parse,
-        parse_repository_gateways, parse_repository_oci_images,
+        CapabilityOperation, CapabilityResourceKind, PublicationMode,
+        REPOSITORY_OCI_IMAGES_VERSION, REUSABLE_RELEASE_VERSION, parse, parse_repository_gateways,
+        parse_repository_oci_images,
     };
     use forge_domain::GitRef;
 
@@ -2419,6 +2485,10 @@ exposure = "public"
 secret_slots = ["telegram_secret", "provider_token"]
 parameters = { bot = "build-notifier", enabled = true }
 
+[[gateways.mailbox_publication_slots]]
+key = "update_mailbox"
+purpose = "Deliver accepted provider updates to the cooking agent."
+
 [[gateways.routes]]
 path = "/telegram/updates"
 methods = ["POST", "GET"]
@@ -2454,6 +2524,10 @@ exposure = "public"
 secret_slots = ["provider_token", "telegram_secret"]
 parameters = { bot = "build-notifier", enabled = true }
 
+[[gateways.mailbox_publication_slots]]
+key = "update_mailbox"
+purpose = "Deliver accepted provider updates to the cooking agent."
+
 [[gateways.routes]]
 path = "/telegram/updates"
 methods = ["GET", "POST"]
@@ -2471,6 +2545,13 @@ methods = ["GET", "POST"]
                 .len(),
             32
         );
+        let slot = &config.gateways[0]
+            .to_declaration()
+            .expect("valid declaration")
+            .mailbox_publication_slots[0];
+        assert_eq!(slot.resource_kind(), CapabilityResourceKind::Mailbox);
+        assert_eq!(slot.required_operation(), CapabilityOperation::Publish);
+        assert!(slot.required());
         let reordered = parse_repository_gateways(second.as_bytes());
         assert!(
             reordered.diagnostics.is_empty(),
@@ -2526,6 +2607,48 @@ methods = ["POST"]
         assert!(parsed.config.is_none());
         assert_eq!(parsed.diagnostics[0].code, "invalid_toml");
         assert!(!format!("{:?}", parsed.diagnostics).contains("must-never-be-accepted"));
+
+        let duplicate_mailbox_slots = r#"
+version = 1
+[[gateways]]
+name = "echo"
+agent_name = "echo-handler"
+handler_contract = "http.v1"
+exposure = "public"
+[[gateways.mailbox_publication_slots]]
+key = "agent_mailbox"
+purpose = "Deliver accepted requests."
+[[gateways.mailbox_publication_slots]]
+key = "agent_mailbox"
+purpose = "Deliver retry requests."
+[[gateways.routes]]
+path = "/echo"
+methods = ["POST"]
+"#;
+        let parsed = parse_repository_gateways(duplicate_mailbox_slots.as_bytes());
+        assert!(parsed.config.is_none());
+        assert!(parsed.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "duplicate_repository_gateway_mailbox_publication_slot"
+        }));
+
+        let broadened_mailbox_slot = r#"
+version = 1
+[[gateways]]
+name = "echo"
+agent_name = "echo-handler"
+handler_contract = "http.v1"
+exposure = "public"
+[[gateways.mailbox_publication_slots]]
+key = "agent_mailbox"
+purpose = "Deliver accepted requests."
+optional_operations = ["inspect"]
+[[gateways.routes]]
+path = "/echo"
+methods = ["POST"]
+"#;
+        let parsed = parse_repository_gateways(broadened_mailbox_slot.as_bytes());
+        assert!(parsed.config.is_none());
+        assert_eq!(parsed.diagnostics[0].code, "invalid_toml");
     }
 
     #[test]

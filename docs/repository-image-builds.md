@@ -52,6 +52,7 @@ An operator creates and reviews a platform release explicitly. Replace the
 source, commit, and timestamp with the reviewed immutable release evidence:
 
 ```sh
+cargo dev platform-images import-base
 cargo dev platform-images build \
   --source https://example.invalid/hephaestus \
   --revision <40-or-64-lowercase-commit-sha> \
@@ -145,9 +146,11 @@ the deployment runtime has its own project-image policy.
 The materializer injects the reviewed `heph-init` bootstrap after verifier
 success, while the root is still private and before it is atomically made
 selectable. A repository Dockerfile cannot provide or replace that bootstrap.
-For a long-running local daemon, restart it after an image becomes ready so it
-loads the newly written, worker-owned root manifest; the restart does not
-rebuild, scan, or republish the image.
+The running daemon refreshes its VM image cache only from the worker-owned
+materialization records after it writes the atomic manifest. A ready image is
+therefore available to subsequent builds without a daemon restart. Restarting
+the daemon remains safe and only reloads the same durable roots; it does not
+rebuild, scan, or republish an image.
 
 A failed, unverified, or unmaterialized image remains unselectable. Use
 **Build** or **Rebuild** on the project image resource; its history records

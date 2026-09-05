@@ -90,6 +90,7 @@ struct OciImageRecord {
     toolchains: Value,
     architectures: Vec<String>,
     availability_state: String,
+    role: String,
     provenance: Value,
     signature_reference: Option<String>,
     sbom_reference: Option<String>,
@@ -126,6 +127,7 @@ async fn provision_image_catalog(
                 "key": image.key,
                 "image_reference": image.image_reference,
                 "availability_state": image.availability_state,
+                "role": image.role,
             })).collect::<Vec<_>>(),
         }));
     }
@@ -151,17 +153,18 @@ async fn provision_oci_image(
     let changed = sqlx::query(
         "INSERT INTO oci_images
                (id, key, display_name, image_reference, toolchains,
-                architectures, availability_state, provenance,
+                architectures, availability_state, role, provenance,
                 signature_reference, sbom_reference,
                 platform_policy_version)
              VALUES
-               ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+               ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
              ON CONFLICT (key) DO UPDATE SET
                display_name = EXCLUDED.display_name,
                image_reference = EXCLUDED.image_reference,
                toolchains = EXCLUDED.toolchains,
                architectures = EXCLUDED.architectures,
                availability_state = EXCLUDED.availability_state,
+               role = EXCLUDED.role,
                provenance = EXCLUDED.provenance,
                signature_reference = EXCLUDED.signature_reference,
                sbom_reference = EXCLUDED.sbom_reference,
@@ -176,6 +179,7 @@ async fn provision_oci_image(
     .bind(&image.toolchains)
     .bind(&image.architectures)
     .bind(&image.availability_state)
+    .bind(&image.role)
     .bind(&image.provenance)
     .bind(image.signature_reference.as_deref())
     .bind(image.sbom_reference.as_deref())
@@ -293,6 +297,10 @@ fn parse_image_catalog_record(
             "images[{index}].availability_state is invalid"
         )));
     }
+    let role = optional_string(object, "role")?.unwrap_or_else(|| String::from("execution"));
+    if !matches!(role.as_str(), "execution" | "platform_operation") {
+        return Err(manifest_error(format!("images[{index}].role is invalid")));
+    }
     let provenance = required_value(object, "provenance")?.clone();
     let provenance_object = provenance.as_object().ok_or_else(|| {
         manifest_error(format!("images[{index}].provenance must be a JSON object"))
@@ -320,6 +328,7 @@ fn parse_image_catalog_record(
         toolchains,
         architectures,
         availability_state,
+        role,
         provenance,
         signature_reference,
         sbom_reference,
@@ -817,6 +826,19 @@ mod tests {
         assert_eq!(parsed.schema_version, 1);
         assert_eq!(parsed.images[0].key, "ubuntu-native");
         assert_eq!(parsed.images[0].image_reference, reference);
+        assert_eq!(parsed.images[0].role, "execution");
+    }
+
+    #[test]
+    fn catalog_manifest_accepts_platform_operation_images() {
+        let reference = format!("registry.example/oci-builder@sha256:{TEST_DIGEST}");
+        let manifest = manifest_json(&reference).replace(
+            "\"availability_state\": \"available\",",
+            "\"availability_state\": \"available\",\n                    \"role\": \"platform_operation\",",
+        );
+        let parsed = parse_image_catalog_manifest(&manifest, Path::new("test.json"))
+            .expect("platform operation image should be valid");
+        assert_eq!(parsed.images[0].role, "platform_operation");
     }
 
     #[test]

@@ -31,6 +31,10 @@ universal prompt, workflow, form, or session protocol.
 
 - [`mvp-01.2-replace-controlled-result-publication-with-runtime-git.md`](../done/mvp-01.2-replace-controlled-result-publication-with-runtime-git.md)
 - [MVP 04: destination-bound HTTPS egress](mvp-04-brokered-model-and-outbound-capabilities.md)
+- [`release-owned-distribution-ui-surfaces.md`](../in-progress/release-owned-distribution-ui-surfaces.md)
+  is a blocking dependency. MVP-06 must not introduce its own iframe, static
+  serving, managed UI service, browser handoff, or tab mechanism; it consumes
+  the completed release-owned distribution surface.
 
 ## Implementation checklist
 
@@ -48,6 +52,8 @@ universal prompt, workflow, form, or session protocol.
   - [ ] Add the reference distribution's chat adapter that renders its own
     repository history, writes user input through its own repository contract,
     displays receive state, and shows committed agent responses.
+  - [ ] Mount that adapter only through the completed release-owned
+    distribution UI surface and its declared tab/API bindings.
   - [ ] Keep that adapter and any commands/forms out of the Hephaestus core
     workflow model.
 

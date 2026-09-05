@@ -3280,6 +3280,7 @@ fn parse_capability_resource_kind(
         "gateway" => Ok(CapabilityResourceKind::Gateway),
         "run" => Ok(CapabilityResourceKind::Run),
         "state_volume" => Ok(CapabilityResourceKind::StateVolume),
+        "mailbox" => Ok(CapabilityResourceKind::Mailbox),
         _ => Err(ReleaseServiceError::InvalidStoredData),
     }
 }
@@ -3304,6 +3305,7 @@ fn parse_capability_operation(value: &str) -> Result<CapabilityOperation, Releas
         "delete_tag" => Ok(CapabilityOperation::DeleteTag),
         "trigger_run" => Ok(CapabilityOperation::TriggerRun),
         "manage_attachments" => Ok(CapabilityOperation::ManageAttachments),
+        "publish" => Ok(CapabilityOperation::Publish),
         _ => Err(ReleaseServiceError::InvalidStoredData),
     }
 }
@@ -3368,7 +3370,10 @@ async fn capability_resource_is_in_project(
             .fetch_one(&mut **tx)
             .await?
         }
-        CapabilityResourceKind::Gateway => false,
+        // Mailbox publication is a gateway-only capability. Agent-instance
+        // bindings must not gain a mailbox target merely because the shared
+        // vocabulary can represent one.
+        CapabilityResourceKind::Gateway | CapabilityResourceKind::Mailbox => false,
     };
     Ok(found)
 }
@@ -3385,7 +3390,7 @@ async fn authorize_capability_selection(
         CapabilityResourceKind::AgentInstance => ObjectType::AgentInstance,
         CapabilityResourceKind::Run => ObjectType::Run,
         CapabilityResourceKind::StateVolume => ObjectType::StateVolume,
-        CapabilityResourceKind::Gateway => {
+        CapabilityResourceKind::Gateway | CapabilityResourceKind::Mailbox => {
             return Err(ReleaseServiceError::CapabilityResourceUnavailable);
         }
     };

@@ -1496,6 +1496,7 @@ name = "gateway-domain"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "capability-domain",
  "http",
  "serde",
  "serde_json",
@@ -1528,24 +1529,31 @@ name = "gateway-postgres"
 version = "0.1.0"
 dependencies = [
  "agent-config",
+ "async-nats",
  "async-trait",
  "authz-domain",
  "authz-postgres",
  "capability-domain",
  "forge-domain",
+ "futures-util",
  "gateway-domain",
  "gateway-edge",
  "http",
  "identity-domain",
+ "mailbox-dispatch",
+ "mailbox-domain",
+ "mailbox-postgres",
  "release-domain",
  "runtime-authority",
  "serde",
  "serde_json",
+ "serial_test",
  "sha2",
  "sqlx",
  "thiserror 2.0.19",
  "time",
  "tokio",
+ "tracing",
  "uuid",
  "vm-trait",
 ]
@@ -2466,6 +2474,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "ctrlc",
+ "registry-token",
  "serde",
  "serde_json",
  "syn 2.0.119",
@@ -2473,6 +2482,7 @@ dependencies = [
  "thiserror 2.0.19",
  "time",
  "toml",
+ "zeroize",
 ]
 
 [[package]]
@@ -3264,6 +3274,7 @@ dependencies = [
  "thiserror 2.0.19",
  "tokio",
  "uuid",
+ "vm-trait",
 ]
 
 [[package]]
@@ -4212,6 +4223,7 @@ dependencies = [
  "runtime-authority",
  "sqlx",
  "time",
+ "tracing",
  "uuid",
 ]
 

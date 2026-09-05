@@ -46,6 +46,54 @@ pub type OwnedSetGatewayLifecycleResponseView = ::buffa::view::OwnedView<
         'static,
     >,
 >;
+///Shorthand for `OwnedView<CreateMailboxBindingRequestView<'static>>`.
+pub type OwnedCreateMailboxBindingRequestView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::gateway::v1::__buffa::view::CreateMailboxBindingRequestView<
+        'static,
+    >,
+>;
+///Shorthand for `OwnedView<CreateMailboxBindingResponseView<'static>>`.
+pub type OwnedCreateMailboxBindingResponseView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::gateway::v1::__buffa::view::CreateMailboxBindingResponseView<
+        'static,
+    >,
+>;
+///Shorthand for `OwnedView<RevokeMailboxBindingGrantRequestView<'static>>`.
+pub type OwnedRevokeMailboxBindingGrantRequestView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::gateway::v1::__buffa::view::RevokeMailboxBindingGrantRequestView<
+        'static,
+    >,
+>;
+///Shorthand for `OwnedView<RevokeMailboxBindingGrantResponseView<'static>>`.
+pub type OwnedRevokeMailboxBindingGrantResponseView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::gateway::v1::__buffa::view::RevokeMailboxBindingGrantResponseView<
+        'static,
+    >,
+>;
+///Shorthand for `OwnedView<ListMailboxBindingsRequestView<'static>>`.
+pub type OwnedListMailboxBindingsRequestView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::gateway::v1::__buffa::view::ListMailboxBindingsRequestView<
+        'static,
+    >,
+>;
+///Shorthand for `OwnedView<ListMailboxBindingsResponseView<'static>>`.
+pub type OwnedListMailboxBindingsResponseView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::gateway::v1::__buffa::view::ListMailboxBindingsResponseView<
+        'static,
+    >,
+>;
+///Shorthand for `OwnedView<ListMailboxPublicationsRequestView<'static>>`.
+pub type OwnedListMailboxPublicationsRequestView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::gateway::v1::__buffa::view::ListMailboxPublicationsRequestView<
+        'static,
+    >,
+>;
+///Shorthand for `OwnedView<ListMailboxPublicationsResponseView<'static>>`.
+pub type OwnedListMailboxPublicationsResponseView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::gateway::v1::__buffa::view::ListMailboxPublicationsResponseView<
+        'static,
+    >,
+>;
 impl ::connectrpc::Encodable<
     crate::messages::hephaestus::gateway::v1::ListProjectGatewaysResponse,
 >
@@ -156,6 +204,118 @@ for ::buffa::view::OwnedView<
         ::connectrpc::__codegen::encode_view_body(self.reborrow(), codec)
     }
 }
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::gateway::v1::CreateMailboxBindingResponse,
+>
+for crate::messages::hephaestus::gateway::v1::__buffa::view::CreateMailboxBindingResponseView<
+    '_,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self, codec)
+    }
+}
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::gateway::v1::CreateMailboxBindingResponse,
+>
+for ::buffa::view::OwnedView<
+    crate::messages::hephaestus::gateway::v1::__buffa::view::CreateMailboxBindingResponseView<
+        'static,
+    >,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self.reborrow(), codec)
+    }
+}
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::gateway::v1::RevokeMailboxBindingGrantResponse,
+>
+for crate::messages::hephaestus::gateway::v1::__buffa::view::RevokeMailboxBindingGrantResponseView<
+    '_,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self, codec)
+    }
+}
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::gateway::v1::RevokeMailboxBindingGrantResponse,
+>
+for ::buffa::view::OwnedView<
+    crate::messages::hephaestus::gateway::v1::__buffa::view::RevokeMailboxBindingGrantResponseView<
+        'static,
+    >,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self.reborrow(), codec)
+    }
+}
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::gateway::v1::ListMailboxBindingsResponse,
+>
+for crate::messages::hephaestus::gateway::v1::__buffa::view::ListMailboxBindingsResponseView<
+    '_,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self, codec)
+    }
+}
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::gateway::v1::ListMailboxBindingsResponse,
+>
+for ::buffa::view::OwnedView<
+    crate::messages::hephaestus::gateway::v1::__buffa::view::ListMailboxBindingsResponseView<
+        'static,
+    >,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self.reborrow(), codec)
+    }
+}
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::gateway::v1::ListMailboxPublicationsResponse,
+>
+for crate::messages::hephaestus::gateway::v1::__buffa::view::ListMailboxPublicationsResponseView<
+    '_,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self, codec)
+    }
+}
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::gateway::v1::ListMailboxPublicationsResponse,
+>
+for ::buffa::view::OwnedView<
+    crate::messages::hephaestus::gateway::v1::__buffa::view::ListMailboxPublicationsResponseView<
+        'static,
+    >,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self.reborrow(), codec)
+    }
+}
 /// Full service name for this service.
 pub const GATEWAY_SERVICE_SERVICE_NAME: &str = "hephaestus.gateway.v1.GatewayService";
 /// Static [`Spec`](::connectrpc::Spec) for the server-side `ListProjectGateways` RPC.
@@ -194,6 +354,42 @@ pub const GATEWAY_SERVICE_SET_GATEWAY_LIFECYCLE_SPEC: ::connectrpc::Spec = ::con
         ::connectrpc::StreamType::Unary,
     )
     .with_idempotency_level(::connectrpc::IdempotencyLevel::Unknown);
+/// Static [`Spec`](::connectrpc::Spec) for the server-side `CreateMailboxBinding` RPC.
+///
+/// The dispatcher surfaces this on
+/// [`RequestContext::spec`](::connectrpc::RequestContext::spec).
+pub const GATEWAY_SERVICE_CREATE_MAILBOX_BINDING_SPEC: ::connectrpc::Spec = ::connectrpc::Spec::server(
+        "/hephaestus.gateway.v1.GatewayService/CreateMailboxBinding",
+        ::connectrpc::StreamType::Unary,
+    )
+    .with_idempotency_level(::connectrpc::IdempotencyLevel::Unknown);
+/// Static [`Spec`](::connectrpc::Spec) for the server-side `RevokeMailboxBindingGrant` RPC.
+///
+/// The dispatcher surfaces this on
+/// [`RequestContext::spec`](::connectrpc::RequestContext::spec).
+pub const GATEWAY_SERVICE_REVOKE_MAILBOX_BINDING_GRANT_SPEC: ::connectrpc::Spec = ::connectrpc::Spec::server(
+        "/hephaestus.gateway.v1.GatewayService/RevokeMailboxBindingGrant",
+        ::connectrpc::StreamType::Unary,
+    )
+    .with_idempotency_level(::connectrpc::IdempotencyLevel::Unknown);
+/// Static [`Spec`](::connectrpc::Spec) for the server-side `ListMailboxBindings` RPC.
+///
+/// The dispatcher surfaces this on
+/// [`RequestContext::spec`](::connectrpc::RequestContext::spec).
+pub const GATEWAY_SERVICE_LIST_MAILBOX_BINDINGS_SPEC: ::connectrpc::Spec = ::connectrpc::Spec::server(
+        "/hephaestus.gateway.v1.GatewayService/ListMailboxBindings",
+        ::connectrpc::StreamType::Unary,
+    )
+    .with_idempotency_level(::connectrpc::IdempotencyLevel::NoSideEffects);
+/// Static [`Spec`](::connectrpc::Spec) for the server-side `ListMailboxPublications` RPC.
+///
+/// The dispatcher surfaces this on
+/// [`RequestContext::spec`](::connectrpc::RequestContext::spec).
+pub const GATEWAY_SERVICE_LIST_MAILBOX_PUBLICATIONS_SPEC: ::connectrpc::Spec = ::connectrpc::Spec::server(
+        "/hephaestus.gateway.v1.GatewayService/ListMailboxPublications",
+        ::connectrpc::StreamType::Unary,
+    )
+    .with_idempotency_level(::connectrpc::IdempotencyLevel::NoSideEffects);
 /// Project-scoped management and redacted ingress inspection for repository
 /// gateways. Public request payloads and provider credentials are never part of
 /// this API.
@@ -336,6 +532,101 @@ pub trait GatewayService: Send + Sync + 'static {
         Output = ::connectrpc::ServiceResult<
             impl ::connectrpc::Encodable<
                 crate::messages::hephaestus::gateway::v1::SetGatewayLifecycleResponse,
+            > + Send + use<'a, Self>,
+        >,
+    > + Send;
+    /// Binds one immutable, declared gateway revision slot to exactly one
+    /// same-project mailbox and creates its separately revocable publish grant.
+    ///
+    /// `'a` lets the response body borrow from `&self` (e.g. server-resident state).
+    ///
+    /// `request` is borrowed from the request body and is valid for the
+    /// duration of the call; message fields are read directly on it
+    /// (zero-copy). The response cannot borrow from `request` — use
+    /// `.to_owned_message()` (or copy the specific fields) for anything
+    /// returned, stored, or moved into `tokio::spawn`.
+    fn create_mailbox_binding<'a>(
+        &'a self,
+        ctx: ::connectrpc::RequestContext,
+        request: ::connectrpc::ServiceRequest<
+            '_,
+            crate::messages::hephaestus::gateway::v1::CreateMailboxBindingRequest,
+        >,
+    ) -> impl ::std::future::Future<
+        Output = ::connectrpc::ServiceResult<
+            impl ::connectrpc::Encodable<
+                crate::messages::hephaestus::gateway::v1::CreateMailboxBindingResponse,
+            > + Send + use<'a, Self>,
+        >,
+    > + Send;
+    /// Revokes an active gateway mailbox publish grant without deleting its
+    /// immutable binding or redacted provenance.
+    ///
+    /// `'a` lets the response body borrow from `&self` (e.g. server-resident state).
+    ///
+    /// `request` is borrowed from the request body and is valid for the
+    /// duration of the call; message fields are read directly on it
+    /// (zero-copy). The response cannot borrow from `request` — use
+    /// `.to_owned_message()` (or copy the specific fields) for anything
+    /// returned, stored, or moved into `tokio::spawn`.
+    fn revoke_mailbox_binding_grant<'a>(
+        &'a self,
+        ctx: ::connectrpc::RequestContext,
+        request: ::connectrpc::ServiceRequest<
+            '_,
+            crate::messages::hephaestus::gateway::v1::RevokeMailboxBindingGrantRequest,
+        >,
+    ) -> impl ::std::future::Future<
+        Output = ::connectrpc::ServiceResult<
+            impl ::connectrpc::Encodable<
+                crate::messages::hephaestus::gateway::v1::RevokeMailboxBindingGrantResponse,
+            > + Send + use<'a, Self>,
+        >,
+    > + Send;
+    /// Lists value-free mailbox bindings and their grant lifecycle for one
+    /// readable gateway revision.
+    ///
+    /// `'a` lets the response body borrow from `&self` (e.g. server-resident state).
+    ///
+    /// `request` is borrowed from the request body and is valid for the
+    /// duration of the call; message fields are read directly on it
+    /// (zero-copy). The response cannot borrow from `request` — use
+    /// `.to_owned_message()` (or copy the specific fields) for anything
+    /// returned, stored, or moved into `tokio::spawn`.
+    fn list_mailbox_bindings<'a>(
+        &'a self,
+        ctx: ::connectrpc::RequestContext,
+        request: ::connectrpc::ServiceRequest<
+            '_,
+            crate::messages::hephaestus::gateway::v1::ListMailboxBindingsRequest,
+        >,
+    ) -> impl ::std::future::Future<
+        Output = ::connectrpc::ServiceResult<
+            impl ::connectrpc::Encodable<
+                crate::messages::hephaestus::gateway::v1::ListMailboxBindingsResponse,
+            > + Send + use<'a, Self>,
+        >,
+    > + Send;
+    /// Lists value-free publication provenance for one readable gateway.
+    ///
+    /// `'a` lets the response body borrow from `&self` (e.g. server-resident state).
+    ///
+    /// `request` is borrowed from the request body and is valid for the
+    /// duration of the call; message fields are read directly on it
+    /// (zero-copy). The response cannot borrow from `request` — use
+    /// `.to_owned_message()` (or copy the specific fields) for anything
+    /// returned, stored, or moved into `tokio::spawn`.
+    fn list_mailbox_publications<'a>(
+        &'a self,
+        ctx: ::connectrpc::RequestContext,
+        request: ::connectrpc::ServiceRequest<
+            '_,
+            crate::messages::hephaestus::gateway::v1::ListMailboxPublicationsRequest,
+        >,
+    ) -> impl ::std::future::Future<
+        Output = ::connectrpc::ServiceResult<
+            impl ::connectrpc::Encodable<
+                crate::messages::hephaestus::gateway::v1::ListMailboxPublicationsResponse,
             > + Send + use<'a, Self>,
         >,
     > + Send;
@@ -487,6 +778,122 @@ impl<S: GatewayService> GatewayServiceExt for S {
                 },
             )
             .with_spec(GATEWAY_SERVICE_SET_GATEWAY_LIFECYCLE_SPEC)
+            .route_view(
+                GATEWAY_SERVICE_SERVICE_NAME,
+                "CreateMailboxBinding",
+                {
+                    let svc = ::std::sync::Arc::clone(&self);
+                    ::connectrpc::view_handler_fn(move |
+                        ctx,
+                        req: ::buffa::view::OwnedView<
+                            crate::messages::hephaestus::gateway::v1::__buffa::view::CreateMailboxBindingRequestView<
+                                'static,
+                            >,
+                        >,
+                        format|
+                    {
+                        let svc = ::std::sync::Arc::clone(&svc);
+                        async move {
+                            let sreq = ::connectrpc::ServiceRequest::<
+                                crate::messages::hephaestus::gateway::v1::CreateMailboxBindingRequest,
+                            >::from_parts(req.reborrow(), req.bytes());
+                            svc.create_mailbox_binding(ctx, sreq)
+                                .await?
+                                .encode::<
+                                    crate::messages::hephaestus::gateway::v1::CreateMailboxBindingResponse,
+                                >(format)
+                        }
+                    })
+                },
+            )
+            .with_spec(GATEWAY_SERVICE_CREATE_MAILBOX_BINDING_SPEC)
+            .route_view(
+                GATEWAY_SERVICE_SERVICE_NAME,
+                "RevokeMailboxBindingGrant",
+                {
+                    let svc = ::std::sync::Arc::clone(&self);
+                    ::connectrpc::view_handler_fn(move |
+                        ctx,
+                        req: ::buffa::view::OwnedView<
+                            crate::messages::hephaestus::gateway::v1::__buffa::view::RevokeMailboxBindingGrantRequestView<
+                                'static,
+                            >,
+                        >,
+                        format|
+                    {
+                        let svc = ::std::sync::Arc::clone(&svc);
+                        async move {
+                            let sreq = ::connectrpc::ServiceRequest::<
+                                crate::messages::hephaestus::gateway::v1::RevokeMailboxBindingGrantRequest,
+                            >::from_parts(req.reborrow(), req.bytes());
+                            svc.revoke_mailbox_binding_grant(ctx, sreq)
+                                .await?
+                                .encode::<
+                                    crate::messages::hephaestus::gateway::v1::RevokeMailboxBindingGrantResponse,
+                                >(format)
+                        }
+                    })
+                },
+            )
+            .with_spec(GATEWAY_SERVICE_REVOKE_MAILBOX_BINDING_GRANT_SPEC)
+            .route_view_idempotent(
+                GATEWAY_SERVICE_SERVICE_NAME,
+                "ListMailboxBindings",
+                {
+                    let svc = ::std::sync::Arc::clone(&self);
+                    ::connectrpc::view_handler_fn(move |
+                        ctx,
+                        req: ::buffa::view::OwnedView<
+                            crate::messages::hephaestus::gateway::v1::__buffa::view::ListMailboxBindingsRequestView<
+                                'static,
+                            >,
+                        >,
+                        format|
+                    {
+                        let svc = ::std::sync::Arc::clone(&svc);
+                        async move {
+                            let sreq = ::connectrpc::ServiceRequest::<
+                                crate::messages::hephaestus::gateway::v1::ListMailboxBindingsRequest,
+                            >::from_parts(req.reborrow(), req.bytes());
+                            svc.list_mailbox_bindings(ctx, sreq)
+                                .await?
+                                .encode::<
+                                    crate::messages::hephaestus::gateway::v1::ListMailboxBindingsResponse,
+                                >(format)
+                        }
+                    })
+                },
+            )
+            .with_spec(GATEWAY_SERVICE_LIST_MAILBOX_BINDINGS_SPEC)
+            .route_view_idempotent(
+                GATEWAY_SERVICE_SERVICE_NAME,
+                "ListMailboxPublications",
+                {
+                    let svc = ::std::sync::Arc::clone(&self);
+                    ::connectrpc::view_handler_fn(move |
+                        ctx,
+                        req: ::buffa::view::OwnedView<
+                            crate::messages::hephaestus::gateway::v1::__buffa::view::ListMailboxPublicationsRequestView<
+                                'static,
+                            >,
+                        >,
+                        format|
+                    {
+                        let svc = ::std::sync::Arc::clone(&svc);
+                        async move {
+                            let sreq = ::connectrpc::ServiceRequest::<
+                                crate::messages::hephaestus::gateway::v1::ListMailboxPublicationsRequest,
+                            >::from_parts(req.reborrow(), req.bytes());
+                            svc.list_mailbox_publications(ctx, sreq)
+                                .await?
+                                .encode::<
+                                    crate::messages::hephaestus::gateway::v1::ListMailboxPublicationsResponse,
+                                >(format)
+                        }
+                    })
+                },
+            )
+            .with_spec(GATEWAY_SERVICE_LIST_MAILBOX_PUBLICATIONS_SPEC)
     }
 }
 /// Type-inference marker used by [`Router::add_service`](::connectrpc::Router::add_service).
@@ -563,6 +970,30 @@ impl<T: GatewayService> ::connectrpc::Dispatcher for GatewayServiceServer<T> {
                 Some(
                     ::connectrpc::dispatcher::codegen::MethodDescriptor::unary(false)
                         .with_spec(GATEWAY_SERVICE_SET_GATEWAY_LIFECYCLE_SPEC),
+                )
+            }
+            "CreateMailboxBinding" => {
+                Some(
+                    ::connectrpc::dispatcher::codegen::MethodDescriptor::unary(false)
+                        .with_spec(GATEWAY_SERVICE_CREATE_MAILBOX_BINDING_SPEC),
+                )
+            }
+            "RevokeMailboxBindingGrant" => {
+                Some(
+                    ::connectrpc::dispatcher::codegen::MethodDescriptor::unary(false)
+                        .with_spec(GATEWAY_SERVICE_REVOKE_MAILBOX_BINDING_GRANT_SPEC),
+                )
+            }
+            "ListMailboxBindings" => {
+                Some(
+                    ::connectrpc::dispatcher::codegen::MethodDescriptor::unary(true)
+                        .with_spec(GATEWAY_SERVICE_LIST_MAILBOX_BINDINGS_SPEC),
+                )
+            }
+            "ListMailboxPublications" => {
+                Some(
+                    ::connectrpc::dispatcher::codegen::MethodDescriptor::unary(true)
+                        .with_spec(GATEWAY_SERVICE_LIST_MAILBOX_PUBLICATIONS_SPEC),
                 )
             }
             _ => None,
@@ -662,6 +1093,90 @@ impl<T: GatewayService> ::connectrpc::Dispatcher for GatewayServiceServer<T> {
                         .await?
                         .encode::<
                             crate::messages::hephaestus::gateway::v1::SetGatewayLifecycleResponse,
+                        >(format)
+                })
+            }
+            "CreateMailboxBinding" => {
+                let svc = ::std::sync::Arc::clone(&self.inner);
+                Box::pin(async move {
+                    let body = ::connectrpc::dispatcher::codegen::request_proto_bytes::<
+                        crate::messages::hephaestus::gateway::v1::CreateMailboxBindingRequest,
+                    >(request.encoded()?, format)?;
+                    let req: crate::messages::hephaestus::gateway::v1::__buffa::view::CreateMailboxBindingRequestView<
+                        '_,
+                    > = ::connectrpc::dispatcher::codegen::decode_borrowed_request_view(
+                        &body,
+                    )?;
+                    let req = ::connectrpc::ServiceRequest::<
+                        crate::messages::hephaestus::gateway::v1::CreateMailboxBindingRequest,
+                    >::from_parts(&req, &body);
+                    svc.create_mailbox_binding(ctx, req)
+                        .await?
+                        .encode::<
+                            crate::messages::hephaestus::gateway::v1::CreateMailboxBindingResponse,
+                        >(format)
+                })
+            }
+            "RevokeMailboxBindingGrant" => {
+                let svc = ::std::sync::Arc::clone(&self.inner);
+                Box::pin(async move {
+                    let body = ::connectrpc::dispatcher::codegen::request_proto_bytes::<
+                        crate::messages::hephaestus::gateway::v1::RevokeMailboxBindingGrantRequest,
+                    >(request.encoded()?, format)?;
+                    let req: crate::messages::hephaestus::gateway::v1::__buffa::view::RevokeMailboxBindingGrantRequestView<
+                        '_,
+                    > = ::connectrpc::dispatcher::codegen::decode_borrowed_request_view(
+                        &body,
+                    )?;
+                    let req = ::connectrpc::ServiceRequest::<
+                        crate::messages::hephaestus::gateway::v1::RevokeMailboxBindingGrantRequest,
+                    >::from_parts(&req, &body);
+                    svc.revoke_mailbox_binding_grant(ctx, req)
+                        .await?
+                        .encode::<
+                            crate::messages::hephaestus::gateway::v1::RevokeMailboxBindingGrantResponse,
+                        >(format)
+                })
+            }
+            "ListMailboxBindings" => {
+                let svc = ::std::sync::Arc::clone(&self.inner);
+                Box::pin(async move {
+                    let body = ::connectrpc::dispatcher::codegen::request_proto_bytes::<
+                        crate::messages::hephaestus::gateway::v1::ListMailboxBindingsRequest,
+                    >(request.encoded()?, format)?;
+                    let req: crate::messages::hephaestus::gateway::v1::__buffa::view::ListMailboxBindingsRequestView<
+                        '_,
+                    > = ::connectrpc::dispatcher::codegen::decode_borrowed_request_view(
+                        &body,
+                    )?;
+                    let req = ::connectrpc::ServiceRequest::<
+                        crate::messages::hephaestus::gateway::v1::ListMailboxBindingsRequest,
+                    >::from_parts(&req, &body);
+                    svc.list_mailbox_bindings(ctx, req)
+                        .await?
+                        .encode::<
+                            crate::messages::hephaestus::gateway::v1::ListMailboxBindingsResponse,
+                        >(format)
+                })
+            }
+            "ListMailboxPublications" => {
+                let svc = ::std::sync::Arc::clone(&self.inner);
+                Box::pin(async move {
+                    let body = ::connectrpc::dispatcher::codegen::request_proto_bytes::<
+                        crate::messages::hephaestus::gateway::v1::ListMailboxPublicationsRequest,
+                    >(request.encoded()?, format)?;
+                    let req: crate::messages::hephaestus::gateway::v1::__buffa::view::ListMailboxPublicationsRequestView<
+                        '_,
+                    > = ::connectrpc::dispatcher::codegen::decode_borrowed_request_view(
+                        &body,
+                    )?;
+                    let req = ::connectrpc::ServiceRequest::<
+                        crate::messages::hephaestus::gateway::v1::ListMailboxPublicationsRequest,
+                    >::from_parts(&req, &body);
+                    svc.list_mailbox_publications(ctx, req)
+                        .await?
+                        .encode::<
+                            crate::messages::hephaestus::gateway::v1::ListMailboxPublicationsResponse,
                         >(format)
                 })
             }
@@ -973,6 +1488,186 @@ where
                 &self.config,
                 GATEWAY_SERVICE_SERVICE_NAME,
                 "SetGatewayLifecycle",
+                request,
+                options,
+            )
+            .await
+    }
+    /// Call the CreateMailboxBinding RPC. Sends a request to /hephaestus.gateway.v1.GatewayService/CreateMailboxBinding.
+    pub async fn create_mailbox_binding(
+        &self,
+        request: crate::messages::hephaestus::gateway::v1::CreateMailboxBindingRequest,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::gateway::v1::__buffa::view::CreateMailboxBindingResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        self.create_mailbox_binding_with_options(
+                request,
+                ::connectrpc::client::CallOptions::default(),
+            )
+            .await
+    }
+    /// Call the CreateMailboxBinding RPC with explicit per-call options. Options override [`ClientConfig`](::connectrpc::client::ClientConfig) defaults.
+    pub async fn create_mailbox_binding_with_options(
+        &self,
+        request: crate::messages::hephaestus::gateway::v1::CreateMailboxBindingRequest,
+        options: ::connectrpc::client::CallOptions,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::gateway::v1::__buffa::view::CreateMailboxBindingResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        ::connectrpc::client::call_unary(
+                &self.transport,
+                &self.config,
+                GATEWAY_SERVICE_SERVICE_NAME,
+                "CreateMailboxBinding",
+                request,
+                options,
+            )
+            .await
+    }
+    /// Call the RevokeMailboxBindingGrant RPC. Sends a request to /hephaestus.gateway.v1.GatewayService/RevokeMailboxBindingGrant.
+    pub async fn revoke_mailbox_binding_grant(
+        &self,
+        request: crate::messages::hephaestus::gateway::v1::RevokeMailboxBindingGrantRequest,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::gateway::v1::__buffa::view::RevokeMailboxBindingGrantResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        self.revoke_mailbox_binding_grant_with_options(
+                request,
+                ::connectrpc::client::CallOptions::default(),
+            )
+            .await
+    }
+    /// Call the RevokeMailboxBindingGrant RPC with explicit per-call options. Options override [`ClientConfig`](::connectrpc::client::ClientConfig) defaults.
+    pub async fn revoke_mailbox_binding_grant_with_options(
+        &self,
+        request: crate::messages::hephaestus::gateway::v1::RevokeMailboxBindingGrantRequest,
+        options: ::connectrpc::client::CallOptions,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::gateway::v1::__buffa::view::RevokeMailboxBindingGrantResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        ::connectrpc::client::call_unary(
+                &self.transport,
+                &self.config,
+                GATEWAY_SERVICE_SERVICE_NAME,
+                "RevokeMailboxBindingGrant",
+                request,
+                options,
+            )
+            .await
+    }
+    /// Call the ListMailboxBindings RPC. Sends a request to /hephaestus.gateway.v1.GatewayService/ListMailboxBindings.
+    pub async fn list_mailbox_bindings(
+        &self,
+        request: crate::messages::hephaestus::gateway::v1::ListMailboxBindingsRequest,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::gateway::v1::__buffa::view::ListMailboxBindingsResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        self.list_mailbox_bindings_with_options(
+                request,
+                ::connectrpc::client::CallOptions::default(),
+            )
+            .await
+    }
+    /// Call the ListMailboxBindings RPC with explicit per-call options. Options override [`ClientConfig`](::connectrpc::client::ClientConfig) defaults.
+    pub async fn list_mailbox_bindings_with_options(
+        &self,
+        request: crate::messages::hephaestus::gateway::v1::ListMailboxBindingsRequest,
+        options: ::connectrpc::client::CallOptions,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::gateway::v1::__buffa::view::ListMailboxBindingsResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        ::connectrpc::client::call_unary(
+                &self.transport,
+                &self.config,
+                GATEWAY_SERVICE_SERVICE_NAME,
+                "ListMailboxBindings",
+                request,
+                options,
+            )
+            .await
+    }
+    /// Call the ListMailboxPublications RPC. Sends a request to /hephaestus.gateway.v1.GatewayService/ListMailboxPublications.
+    pub async fn list_mailbox_publications(
+        &self,
+        request: crate::messages::hephaestus::gateway::v1::ListMailboxPublicationsRequest,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::gateway::v1::__buffa::view::ListMailboxPublicationsResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        self.list_mailbox_publications_with_options(
+                request,
+                ::connectrpc::client::CallOptions::default(),
+            )
+            .await
+    }
+    /// Call the ListMailboxPublications RPC with explicit per-call options. Options override [`ClientConfig`](::connectrpc::client::ClientConfig) defaults.
+    pub async fn list_mailbox_publications_with_options(
+        &self,
+        request: crate::messages::hephaestus::gateway::v1::ListMailboxPublicationsRequest,
+        options: ::connectrpc::client::CallOptions,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::gateway::v1::__buffa::view::ListMailboxPublicationsResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        ::connectrpc::client::call_unary(
+                &self.transport,
+                &self.config,
+                GATEWAY_SERVICE_SERVICE_NAME,
+                "ListMailboxPublications",
                 request,
                 options,
             )

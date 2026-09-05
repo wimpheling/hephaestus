@@ -12,9 +12,14 @@ use rpc_proto::{
     messages::hephaestus::{
         common::v1::{OpaqueId, PageRequest, PageResponse},
         gateway::v1::{
-            GatewayIngress, GatewayIngressOutcome, GatewayLifecycle, GatewayRevision, GatewayRoute,
-            GatewaySummary, GetGatewayRequest, GetGatewayResponse, ListGatewayIngressRequest,
-            ListGatewayIngressResponse, ListProjectGatewaysRequest, ListProjectGatewaysResponse,
+            CreateMailboxBindingRequest, CreateMailboxBindingResponse, GatewayIngress,
+            GatewayIngressOutcome, GatewayLifecycle, GatewayMailboxBinding,
+            GatewayMailboxPublication, GatewayRevision, GatewayRoute, GatewaySummary,
+            GetGatewayRequest, GetGatewayResponse, ListGatewayIngressRequest,
+            ListGatewayIngressResponse, ListMailboxBindingsRequest, ListMailboxBindingsResponse,
+            ListMailboxPublicationsRequest, ListMailboxPublicationsResponse,
+            ListProjectGatewaysRequest, ListProjectGatewaysResponse,
+            RevokeMailboxBindingGrantRequest, RevokeMailboxBindingGrantResponse,
             SetGatewayLifecycleRequest, SetGatewayLifecycleResponse,
         },
     },
@@ -199,6 +204,120 @@ impl GatewayService for GatewayRpc {
             ..Default::default()
         })
     }
+
+    async fn create_mailbox_binding(
+        &self,
+        ctx: RequestContext,
+        message: ServiceRequest<'_, CreateMailboxBindingRequest>,
+    ) -> ServiceResult<CreateMailboxBindingResponse> {
+        let request = message.to_owned_message();
+        let identity = mutation(
+            &ctx,
+            &self.authenticator,
+            "CreateMailboxBinding",
+            request.context.as_option(),
+        )?;
+        let binding = self
+            .application
+            .create_mailbox_binding(
+                &identity,
+                id(request.gateway_revision_id.as_option())?,
+                &request.slot_key,
+                id(request.mailbox_id.as_option())?,
+                &request.producer_id,
+            )
+            .await
+            .map_err(|error| map_error(&error))
+            .map_err(into_connect_error)?;
+        let receipt = receipt(&self.receipts, &identity).await?;
+        Response::ok(CreateMailboxBindingResponse {
+            binding: mailbox_binding(binding).into(),
+            receipt: receipt.into(),
+            ..Default::default()
+        })
+    }
+
+    async fn revoke_mailbox_binding_grant(
+        &self,
+        ctx: RequestContext,
+        message: ServiceRequest<'_, RevokeMailboxBindingGrantRequest>,
+    ) -> ServiceResult<RevokeMailboxBindingGrantResponse> {
+        let request = message.to_owned_message();
+        let identity = mutation(
+            &ctx,
+            &self.authenticator,
+            "RevokeMailboxBindingGrant",
+            request.context.as_option(),
+        )?;
+        let binding = self
+            .application
+            .revoke_mailbox_binding_grant(&identity, id(request.binding_id.as_option())?)
+            .await
+            .map_err(|error| map_error(&error))
+            .map_err(into_connect_error)?;
+        let receipt = receipt(&self.receipts, &identity).await?;
+        Response::ok(RevokeMailboxBindingGrantResponse {
+            binding: mailbox_binding(binding).into(),
+            receipt: receipt.into(),
+            ..Default::default()
+        })
+    }
+
+    async fn list_mailbox_bindings(
+        &self,
+        ctx: RequestContext,
+        message: ServiceRequest<'_, ListMailboxBindingsRequest>,
+    ) -> ServiceResult<ListMailboxBindingsResponse> {
+        let identity = query(&ctx, &self.authenticator, "ListMailboxBindings")?;
+        let request = message.to_owned_message();
+        let bindings = self
+            .application
+            .mailbox_bindings(
+                &identity,
+                id(request.gateway_revision_id.as_option())?,
+                page(request.page.as_option())?,
+            )
+            .await
+            .map_err(|error| map_error(&error))
+            .map_err(into_connect_error)?;
+        Response::ok(ListMailboxBindingsResponse {
+            bindings: bindings.into_iter().map(mailbox_binding).collect(),
+            page: PageResponse {
+                stable_order: String::from("id"),
+                ..Default::default()
+            }
+            .into(),
+            ..Default::default()
+        })
+    }
+
+    async fn list_mailbox_publications(
+        &self,
+        ctx: RequestContext,
+        message: ServiceRequest<'_, ListMailboxPublicationsRequest>,
+    ) -> ServiceResult<ListMailboxPublicationsResponse> {
+        let identity = query(&ctx, &self.authenticator, "ListMailboxPublications")?;
+        let request = message.to_owned_message();
+        let publications = self
+            .application
+            .mailbox_publications(
+                &identity,
+                id(request.gateway_id.as_option())?,
+                page(request.page.as_option())?,
+            )
+            .await
+            .map_err(|error| map_error(&error))
+            .map_err(into_connect_error)?;
+        Response::ok(ListMailboxPublicationsResponse {
+            publications: publications.into_iter().map(mailbox_publication).collect(),
+            page: PageResponse {
+                stable_order: String::from("id_desc"),
+                ..Default::default()
+            }
+            .into(),
+            ..Default::default()
+        })
+    }
 }
 
 fn query(
@@ -245,10 +364,40 @@ const fn map_error(error: &GatewayManagementError) -> RpcError {
     match error {
         GatewayManagementError::Denied => RpcError::PermissionDenied,
         GatewayManagementError::NotFound => RpcError::NotFound,
+        GatewayManagementError::InvalidArgument => RpcError::InvalidArgument,
+        GatewayManagementError::Conflict => RpcError::FailedPrecondition,
         GatewayManagementError::Unavailable | GatewayManagementError::Persistence(_) => {
             RpcError::Unavailable
         }
     }
+}
+fn mutation(
+    ctx: &RequestContext,
+    authenticator: &MediatorAuthenticator,
+    method: &str,
+    context: Option<&rpc_proto::messages::hephaestus::common::v1::RequestContext>,
+) -> Result<identity_domain::AuthenticatedIdentity, connectrpc::ConnectError> {
+    request::mutation_identity(
+        ctx,
+        authenticator,
+        &format!("/hephaestus.gateway.v1.GatewayService/{method}"),
+        context,
+    )
+    .map_err(into_connect_error)
+}
+async fn receipt(
+    receipts: &MutationReceipts,
+    identity: &identity_domain::AuthenticatedIdentity,
+) -> Result<rpc_proto::messages::hephaestus::common::v1::MutationReceipt, connectrpc::ConnectError>
+{
+    mutation_receipt(
+        receipts,
+        identity.idempotency_id,
+        identity.user_id,
+        "gateway",
+        "project",
+    )
+    .await
 }
 fn opaque(value: Uuid) -> OpaqueId {
     OpaqueId {
@@ -304,6 +453,53 @@ fn ingress(value: &gateway_postgres::GatewayIngressSummary) -> GatewayIngress {
         outcome: ingress_outcome(&value.outcome).into(),
         accepted_at: timestamp(value.accepted_at).into(),
         completed_at: value.completed_at.map(timestamp).into(),
+        ..Default::default()
+    }
+}
+fn mailbox_binding(value: gateway_postgres::GatewayMailboxBindingSummary) -> GatewayMailboxBinding {
+    GatewayMailboxBinding {
+        id: opaque(value.id).into(),
+        gateway_revision_id: opaque(value.gateway_revision_id).into(),
+        mailbox_id: opaque(value.mailbox_id).into(),
+        slot_key: value.slot_key,
+        producer_id: value.producer_id,
+        grant_id: opaque(value.grant_id).into(),
+        grant_status: value.grant_status,
+        created_at: timestamp(value.created_at).into(),
+        granted_at: timestamp(value.granted_at).into(),
+        revoked_at: value.revoked_at.map(timestamp).into(),
+        ..Default::default()
+    }
+}
+fn mailbox_publication(
+    value: gateway_postgres::GatewayMailboxPublicationSummary,
+) -> GatewayMailboxPublication {
+    GatewayMailboxPublication {
+        id: opaque(value.id).into(),
+        invocation_id: opaque(value.invocation_id).into(),
+        gateway_revision_id: opaque(value.gateway_revision_id).into(),
+        binding_id: value.binding_id.map(opaque).into(),
+        grant_id: value.grant_id.map(opaque).into(),
+        mailbox_id: value.mailbox_id.map(opaque).into(),
+        event_id: value.event_id.map(opaque).into(),
+        slot_key: value.slot_key,
+        outcome: value.outcome,
+        accepted_at: timestamp(value.accepted_at).into(),
+        settled_at: timestamp(value.settled_at).into(),
+        authorization_snapshot_id: value.authorization_snapshot_id.map(opaque).into(),
+        snapshot_binding_ordinal: value
+            .snapshot_binding_ordinal
+            .and_then(|ordinal| u32::try_from(ordinal).ok()),
+        delivery_disposition: value.delivery_disposition.unwrap_or_default(),
+        delivery_attempt_count: value
+            .delivery_attempt_count
+            .and_then(|count| u32::try_from(count).ok())
+            .unwrap_or_default(),
+        delivery_terminal_at: value.delivery_terminal_at.map(timestamp).into(),
+        delivery_attempt_id: value.delivery_attempt_id.map(opaque).into(),
+        run_id: value.run_id.map(opaque).into(),
+        run_state: value.run_state.unwrap_or_default(),
+        run_outcome: value.run_outcome.unwrap_or_default(),
         ..Default::default()
     }
 }

@@ -6,7 +6,7 @@ Owner: Codex
 
 A KVM-capable developer machine can run the Hephaestus stack locally with
 Podman-managed infrastructure and, when explicitly requested, build and
-install the four standard platform OCI images into the persistent local
+install the standard platform OCI images into the persistent local
 Zot/catalog state. Normal `cargo dev` startup never builds, scans,
 publishes, or provisions platform images.
 
@@ -20,13 +20,13 @@ publishes, or provisions platform images.
 | Image operation | Standard OCI image distribution is an explicit heavy operator action and is never a startup, migration, seed, or CI side effect. |
 | Build toolchain | Run Buildah, Skopeo, Syft, Trivy, ORAS, and jq only from a pinned, administrator-built Podman tool image. The host does not need those OCI tools installed. |
 | Persistence | Approved local catalog records, release evidence, and OCI layouts survive `cargo dev` restarts. Local installation receipts are removed only by an explicit scoped clean command. |
-| Supply chain | Build inputs remain pinned; Buildah construction, Syft SBOM, offline Trivy scan, publication, verification, approval, and catalog provisioning remain separate observable phases. Every approved OCI image is materialized through the same lifecycle and is selectable by any execution contract. |
+| Supply chain | Build inputs remain pinned; Buildah construction, Syft SBOM, offline Trivy scan, publication, verification, approval, and catalog provisioning remain separate observable phases. Execution images are selectable by ordinary contracts; operational builder/verifier images are cataloged separately and never tenant-selectable. |
 
 ## Implementation checklist
 
 - [x] Add a `cargo dev platform-images` command group with explicit `status`,
-  `build`, `publish`, and `clean` subcommands; reject implicit/default image
-  operations.
+  `import-base`, `build`, `publish`, and `clean` subcommands; reject
+  implicit/default image operations.
 - [x] Add durable, private local paths for release layouts/evidence and
   installation receipts; include them in scoped inspection and cleanup without
   overlapping existing VM/runtime roots.
@@ -41,10 +41,15 @@ publishes, or provisions platform images.
   the reviewed repository source, dedicated private output, dedicated
   container storage/cache volumes, and narrowly required Buildah isolation
   capabilities mounted.
-- [ ] Implement an explicit controlled pinned-base import into local Zot and
+- [x] Implement an explicit controlled pinned-base import into local Zot and
   record its upstream digest without enabling general pull-through.
-- [x] Implement the explicit four-image build and evidence operation using
-  fixed reviewed definitions and a caller-confirmed source revision/timestamp.
+- [x] Extend the explicit platform-image build and evidence operation from the
+  four ordinary execution images to the platform-owned `oci-builder-ubuntu`
+  and `oci-verifier-ubuntu` VM images. Keep these images unavailable for
+  project Dockerfile bases and ordinary agent execution contracts.
+- [x] Implement the explicit four ordinary execution-image build and evidence
+  operation using fixed reviewed definitions and a caller-confirmed source
+  revision/timestamp.
 - [x] Implement publication, read-back verification, approval, and catalog
   provisioning against local Zot/PostgreSQL. The resulting plain OCI images
   are materialized through the shared image lifecycle and may be selected by
@@ -60,7 +65,7 @@ publishes, or provisions platform images.
 
 - [x] Record one local explicit build/install run for all four images and its
   catalog references.
-- [ ] Record a `cargo dev` restart that consumes the installed catalog without
+- [x] Record a `cargo dev` restart that consumes the installed catalog without
   triggering image work.
 
 ## Container-build evidence
@@ -76,9 +81,26 @@ the nested build rootless without a privileged container.
 
 ## Local publication evidence
 
-On 2026-08-05, that reviewed release was explicitly published through
+On 2026-08-05, that four-image reviewed release was explicitly published through
 `cargo dev platform-images publish --revision
 86d0c0f1dfad5cab56b333aad60fdb3c4a9f38af`. Zot read-back approved all four
 immutable references and the local catalog was applied. The durable receipt is
 under `.local/hephaestus/platform-images/installations/86d0c0f1dfad5cab56b333aad60fdb3c4a9f38af/`
 as `review.json`, `catalog.json`, and `catalog-apply.json`.
+
+## Final local evidence
+
+On 2026-09-01, `cargo dev platform-images import-base` copied the only
+reviewed source `docker.io/library/ubuntu@sha256:4fbb8e6a8395de5a7550b33509421a2bafbc0aab6c06ba2cef9ebffbc7092d90`
+into local Zot as
+`localhost:55000/platform/bases/ubuntu:heph-sha256-4fbb8e6a8395de5a7550b33509421a2bafbc0aab6c06ba2cef9ebffbc7092d90`.
+The private `base-imports/ubuntu.json` receipt records and matches that exact
+upstream and local manifest digest; the command exposes no arbitrary import
+reference. Platform-image build now requires this receipt and copies the base
+only from Zot into its isolated Buildah storage.
+
+The running local supervisor was signalled to restart the daemon. Its daemon
+PID changed from `3228186` to `3407843`; `/healthz` returned `ok` and
+`cargo dev repository-images status` reported the existing installed revision
+`581b939d5ad5e5a81e77ad01ad8931487a8d2bcf` with its immutable builder and
+verifier images. No platform image operation ran during that restart.

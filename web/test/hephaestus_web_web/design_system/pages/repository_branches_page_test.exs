@@ -71,4 +71,26 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.RepositoryBranchesPageTest do
     refute loading =~ "Repository unavailable"
     assert failed =~ "Repository unavailable"
   end
+
+  test "renders branches returned with native UTC datetimes" do
+    model = %{RepositoryPageFixtures.model() | branches_empty?: false}
+
+    html =
+      render_component(&RepositoryBranchesPage.repository_branches/1, %{
+        state: :ready,
+        model: model,
+        branches: [
+          {"branch-main",
+           %{
+             name: "main",
+             ref: "refs/heads/main",
+             commit: "0123456789abcdef",
+             subject: "Add relay",
+             committed_at: ~U[2026-08-11 02:08:52Z]
+           }}
+        ]
+      })
+
+    assert html =~ "11 Aug 2026 · 02:08"
+  end
 end

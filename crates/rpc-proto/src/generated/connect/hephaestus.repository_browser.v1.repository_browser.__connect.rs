@@ -46,6 +46,18 @@ pub type OwnedGetFileResponseView = ::buffa::view::OwnedView<
         'static,
     >,
 >;
+///Shorthand for `OwnedView<GetCommitDetailRequestView<'static>>`.
+pub type OwnedGetCommitDetailRequestView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::repository_browser::v1::__buffa::view::GetCommitDetailRequestView<
+        'static,
+    >,
+>;
+///Shorthand for `OwnedView<GetCommitDetailResponseView<'static>>`.
+pub type OwnedGetCommitDetailResponseView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::repository_browser::v1::__buffa::view::GetCommitDetailResponseView<
+        'static,
+    >,
+>;
 ///Shorthand for `OwnedView<StreamFileRequestView<'static>>`.
 pub type OwnedStreamFileRequestView = ::buffa::view::OwnedView<
     crate::messages::hephaestus::repository_browser::v1::__buffa::view::StreamFileRequestView<
@@ -171,6 +183,34 @@ for ::buffa::view::OwnedView<
     }
 }
 impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::repository_browser::v1::GetCommitDetailResponse,
+>
+for crate::messages::hephaestus::repository_browser::v1::__buffa::view::GetCommitDetailResponseView<
+    '_,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self, codec)
+    }
+}
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::repository_browser::v1::GetCommitDetailResponse,
+>
+for ::buffa::view::OwnedView<
+    crate::messages::hephaestus::repository_browser::v1::__buffa::view::GetCommitDetailResponseView<
+        'static,
+    >,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self.reborrow(), codec)
+    }
+}
+impl ::connectrpc::Encodable<
     crate::messages::hephaestus::repository_browser::v1::StreamFileResponse,
 >
 for crate::messages::hephaestus::repository_browser::v1::__buffa::view::StreamFileResponseView<
@@ -233,6 +273,15 @@ pub const REPOSITORY_BROWSER_SERVICE_GET_TREE_SPEC: ::connectrpc::Spec = ::conne
 /// [`RequestContext::spec`](::connectrpc::RequestContext::spec).
 pub const REPOSITORY_BROWSER_SERVICE_GET_FILE_SPEC: ::connectrpc::Spec = ::connectrpc::Spec::server(
         "/hephaestus.repository_browser.v1.RepositoryBrowserService/GetFile",
+        ::connectrpc::StreamType::Unary,
+    )
+    .with_idempotency_level(::connectrpc::IdempotencyLevel::NoSideEffects);
+/// Static [`Spec`](::connectrpc::Spec) for the server-side `GetCommitDetail` RPC.
+///
+/// The dispatcher surfaces this on
+/// [`RequestContext::spec`](::connectrpc::RequestContext::spec).
+pub const REPOSITORY_BROWSER_SERVICE_GET_COMMIT_DETAIL_SPEC: ::connectrpc::Spec = ::connectrpc::Spec::server(
+        "/hephaestus.repository_browser.v1.RepositoryBrowserService/GetCommitDetail",
         ::connectrpc::StreamType::Unary,
     )
     .with_idempotency_level(::connectrpc::IdempotencyLevel::NoSideEffects);
@@ -385,6 +434,29 @@ pub trait RepositoryBrowserService: Send + Sync + 'static {
         Output = ::connectrpc::ServiceResult<
             impl ::connectrpc::Encodable<
                 crate::messages::hephaestus::repository_browser::v1::GetFileResponse,
+            > + Send + use<'a, Self>,
+        >,
+    > + Send;
+    /// Handle the GetCommitDetail RPC.
+    ///
+    /// `'a` lets the response body borrow from `&self` (e.g. server-resident state).
+    ///
+    /// `request` is borrowed from the request body and is valid for the
+    /// duration of the call; message fields are read directly on it
+    /// (zero-copy). The response cannot borrow from `request` — use
+    /// `.to_owned_message()` (or copy the specific fields) for anything
+    /// returned, stored, or moved into `tokio::spawn`.
+    fn get_commit_detail<'a>(
+        &'a self,
+        ctx: ::connectrpc::RequestContext,
+        request: ::connectrpc::ServiceRequest<
+            '_,
+            crate::messages::hephaestus::repository_browser::v1::GetCommitDetailRequest,
+        >,
+    ) -> impl ::std::future::Future<
+        Output = ::connectrpc::ServiceResult<
+            impl ::connectrpc::Encodable<
+                crate::messages::hephaestus::repository_browser::v1::GetCommitDetailResponse,
             > + Send + use<'a, Self>,
         >,
     > + Send;
@@ -559,6 +631,35 @@ impl<S: RepositoryBrowserService> RepositoryBrowserServiceExt for S {
                 },
             )
             .with_spec(REPOSITORY_BROWSER_SERVICE_GET_FILE_SPEC)
+            .route_view_idempotent(
+                REPOSITORY_BROWSER_SERVICE_SERVICE_NAME,
+                "GetCommitDetail",
+                {
+                    let svc = ::std::sync::Arc::clone(&self);
+                    ::connectrpc::view_handler_fn(move |
+                        ctx,
+                        req: ::buffa::view::OwnedView<
+                            crate::messages::hephaestus::repository_browser::v1::__buffa::view::GetCommitDetailRequestView<
+                                'static,
+                            >,
+                        >,
+                        format|
+                    {
+                        let svc = ::std::sync::Arc::clone(&svc);
+                        async move {
+                            let sreq = ::connectrpc::ServiceRequest::<
+                                crate::messages::hephaestus::repository_browser::v1::GetCommitDetailRequest,
+                            >::from_parts(req.reborrow(), req.bytes());
+                            svc.get_commit_detail(ctx, sreq)
+                                .await?
+                                .encode::<
+                                    crate::messages::hephaestus::repository_browser::v1::GetCommitDetailResponse,
+                                >(format)
+                        }
+                    })
+                },
+            )
+            .with_spec(REPOSITORY_BROWSER_SERVICE_GET_COMMIT_DETAIL_SPEC)
             .route_view_server_stream::<
                 _,
                 _,
@@ -669,6 +770,12 @@ for RepositoryBrowserServiceServer<T> {
                         .with_spec(REPOSITORY_BROWSER_SERVICE_GET_FILE_SPEC),
                 )
             }
+            "GetCommitDetail" => {
+                Some(
+                    ::connectrpc::dispatcher::codegen::MethodDescriptor::unary(true)
+                        .with_spec(REPOSITORY_BROWSER_SERVICE_GET_COMMIT_DETAIL_SPEC),
+                )
+            }
             "StreamFile" => {
                 Some(
                     ::connectrpc::dispatcher::codegen::MethodDescriptor::server_streaming()
@@ -773,6 +880,27 @@ for RepositoryBrowserServiceServer<T> {
                         .await?
                         .encode::<
                             crate::messages::hephaestus::repository_browser::v1::GetFileResponse,
+                        >(format)
+                })
+            }
+            "GetCommitDetail" => {
+                let svc = ::std::sync::Arc::clone(&self.inner);
+                Box::pin(async move {
+                    let body = ::connectrpc::dispatcher::codegen::request_proto_bytes::<
+                        crate::messages::hephaestus::repository_browser::v1::GetCommitDetailRequest,
+                    >(request.encoded()?, format)?;
+                    let req: crate::messages::hephaestus::repository_browser::v1::__buffa::view::GetCommitDetailRequestView<
+                        '_,
+                    > = ::connectrpc::dispatcher::codegen::decode_borrowed_request_view(
+                        &body,
+                    )?;
+                    let req = ::connectrpc::ServiceRequest::<
+                        crate::messages::hephaestus::repository_browser::v1::GetCommitDetailRequest,
+                    >::from_parts(&req, &body);
+                    svc.get_commit_detail(ctx, req)
+                        .await?
+                        .encode::<
+                            crate::messages::hephaestus::repository_browser::v1::GetCommitDetailResponse,
                         >(format)
                 })
             }
@@ -1106,6 +1234,51 @@ where
                 &self.config,
                 REPOSITORY_BROWSER_SERVICE_SERVICE_NAME,
                 "GetFile",
+                request,
+                options,
+            )
+            .await
+    }
+    /// Call the GetCommitDetail RPC. Sends a request to /hephaestus.repository_browser.v1.RepositoryBrowserService/GetCommitDetail.
+    pub async fn get_commit_detail(
+        &self,
+        request: crate::messages::hephaestus::repository_browser::v1::GetCommitDetailRequest,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::repository_browser::v1::__buffa::view::GetCommitDetailResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        self.get_commit_detail_with_options(
+                request,
+                ::connectrpc::client::CallOptions::default(),
+            )
+            .await
+    }
+    /// Call the GetCommitDetail RPC with explicit per-call options. Options override [`ClientConfig`](::connectrpc::client::ClientConfig) defaults.
+    pub async fn get_commit_detail_with_options(
+        &self,
+        request: crate::messages::hephaestus::repository_browser::v1::GetCommitDetailRequest,
+        options: ::connectrpc::client::CallOptions,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::repository_browser::v1::__buffa::view::GetCommitDetailResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        ::connectrpc::client::call_unary(
+                &self.transport,
+                &self.config,
+                REPOSITORY_BROWSER_SERVICE_SERVICE_NAME,
+                "GetCommitDetail",
                 request,
                 options,
             )

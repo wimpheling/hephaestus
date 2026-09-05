@@ -41,8 +41,15 @@ rootless Buildah storage, while `BUILDAH_ISOLATION=chroot` avoids a nested OCI
 runtime mount. No Podman socket, registry credential, or signing-key mount is
 provided.
 
+Before a release build, explicitly import the one reviewed Ubuntu base. The
+command has no source argument: it mirrors only the digest pinned in this
+repository, checks the upstream and Zot manifest digests, and writes a private
+receipt under `.local/hephaestus/platform-images/base-imports/`. It is not a
+general pull-through registry.
+
 ```sh
 cargo dev doctor
+cargo dev platform-images import-base
 cargo dev platform-images build \
   --source https://forge.example/hephaestus \
   --revision 0123456789abcdef0123456789abcdef01234567 \
@@ -62,7 +69,7 @@ cargo dev platform-images status
 ```
 
 `publish` starts local Zot, uses the pinned tool image to publish and read back
-the four immutable layouts, approves them, and applies the OCI image catalog.
+the six immutable layouts, approves them, and applies the OCI image catalog.
 It writes the review, catalog, and catalog-application receipts beneath
 `.local/hephaestus/platform-images/installations/<revision>/`. It never runs
 automatically. `cargo dev platform-images clean --revision <revision>` removes

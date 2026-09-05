@@ -23,6 +23,7 @@ gateway-edge = { path = "../gateway-edge" }
 gateway-domain = { path = "../gateway-domain" }
 http.workspace = true
 identity-domain = { path = "../identity-domain" }
+mailbox-domain = { path = "../mailbox-domain" }
 release-domain = { path = "../release-domain" }
 runtime-authority = { path = "../runtime-authority" }
 serde.workspace = true
@@ -32,8 +33,17 @@ sqlx.workspace = true
 time.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 thiserror.workspace = true
+tracing.workspace = true
 uuid.workspace = true
 vm-trait = { path = "../vm-trait" }
+
+[dev-dependencies]
+async-nats.workspace = true
+futures-util.workspace = true
+mailbox-dispatch = { path = "../mailbox-dispatch" }
+mailbox-postgres = { path = "../mailbox-postgres" }
+serial_test = "3"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [lints]
 workspace = true

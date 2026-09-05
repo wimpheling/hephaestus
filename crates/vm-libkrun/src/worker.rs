@@ -7,7 +7,7 @@ use crate::{
         GuestLogStream, GuestMessage, GuestMount, GuestStateVolume, HostMessage,
         MAX_LOG_CHUNK_SIZE, MAX_METRIC_LABELS, MAX_METRIC_TEXT_SIZE, MAX_PRIVATE_HTTP_BODY_BYTES,
         MAX_PRIVATE_HTTP_HEADERS, MAX_RESULT_MESSAGE_SIZE, PROTOCOL_VERSION,
-        RuntimeAuthorityMessage,
+        RUNTIME_AUTHORITY_PATH_ENV, RuntimeAuthorityMessage,
     },
     validation::{PreparedForward, PreparedSpec},
 };
@@ -432,7 +432,7 @@ fn handle_guest(
 
     let guest_writer = stream.try_clone()?;
     *lock(guest_slot) = Some(guest_writer);
-    let command = GuestCommandMessage {
+    let mut command = GuestCommandMessage {
         program: spec.command.program,
         args: spec.command.args,
         env: spec.command.env,
@@ -462,6 +462,15 @@ fn handle_guest(
             runtime_git_credential: authority.runtime_git_credential,
         })
     });
+    if let Some(authority) = runtime_authority.as_ref() {
+        command.env.insert(
+            String::from(RUNTIME_AUTHORITY_PATH_ENV),
+            format!(
+                "/run/hephaestus-authority/session-{}.json",
+                authority.session_id
+            ),
+        );
+    }
     let gateway_handler = spec
         .labels
         .get(GATEWAY_HANDLER_CONTRACT_LABEL)

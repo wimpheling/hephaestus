@@ -191,7 +191,7 @@ explicit platform policy.
   - [x] Add browser coverage from publication through import and initial agent
     inspection.
 
-- [ ] **8. Provide the OCI image catalog**
+- [x] **8. Provide the OCI image catalog**
   - [x] Replace the daemon environment-variable map with a platform-owned
     catalog exposed through the appropriate UI and service boundary.
   - [x] Configure workers with a versioned, explicit digest-to-rootfs manifest;
@@ -210,10 +210,10 @@ explicit platform policy.
   - [x] Resolve each `agent.toml` image selection through a catalog identity
     to its immutable reference.
   - [x] Reject arbitrary unapproved image pulls and execution.
-  - [ ] Add the initial catalog entries through a reviewed provisioning process:
+  - [x] Add the initial catalog entries through a reviewed provisioning process:
     - [x] Define and attest the initial platform images and digest-manifest
       generator in the manually dispatched release workflow.
-    - [ ] Register the reviewed artifact records for `ubuntu-native`, `rust-ubuntu`,
+    - [x] Register the reviewed artifact records for `ubuntu-native`, `rust-ubuntu`,
       `typescript-node-ubuntu`, and `python-ubuntu`.
     - [x] Define Ubuntu minimal for shell/native execution.
     - [x] Define the Rust image on Ubuntu with pinned Rust and Cargo toolchains.
@@ -323,14 +323,10 @@ The image model replaces the legacy builder/root-image split completely:
 - Resources, network, mounts, state, and secrets belong to their individual
   build or guest execution contracts, not to image metadata.
 
-Still deliberately open:
-
-- Provision reviewed platform OCI artifacts and their local base layouts before
-  enabling repository OCI workers; no manual completion RPC may be treated as
-  execution of an arbitrary caller-provided digest.
-- The four initial platform catalog rows require the reviewed workflow artifact
-  to be applied by an operator. The repository contains the Ubuntu build,
-  scan, attestation, and digest-manifest release path but no fake digests.
+The local reviewed release workflow has now applied the four initial execution
+rows and the two platform-operation rows. All retain their digest-pinned
+references and role split; no manual completion RPC can execute an
+arbitrary caller-provided digest.
 
 ## Required UI and service surface
 
@@ -387,3 +383,8 @@ Still deliberately open:
     full browser suite passed (`10 passed`, exit 0), including the complete
     create-to-import journey and custom build/release watch paths.
   - `git diff --check`
+
+  Local catalog read-back on 2026-09-01 confirmed available reviewed execution
+  records for `ubuntu-native`, `rust-ubuntu`, `typescript-node-ubuntu`, and
+  `python-ubuntu`, plus the non-tenant-selectable `oci-builder-ubuntu` and
+  `oci-verifier-ubuntu` platform-operation records.

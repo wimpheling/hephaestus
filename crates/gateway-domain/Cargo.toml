@@ -10,6 +10,7 @@ context = "gateway"
 
 [dependencies]
 async-trait.workspace = true
+capability-domain = { path = "../capability-domain" }
 http.workspace = true
 serde.workspace = true
 serde_json.workspace = true
