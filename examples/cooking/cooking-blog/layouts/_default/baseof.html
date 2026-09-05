@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="{{ site.Language.LanguageCode }}">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="{{ with .Description }}{{ . }}{{ else }}{{ site.Params.description }}{{ end }}">
+    <title>{{ if .IsHome }}{{ site.Title }}{{ else }}{{ .Title }} | {{ site.Title }}{{ end }}</title>
+    {{ with resources.Get "css/site.css" }}
+      <link rel="stylesheet" href="{{ .RelPermalink }}">
+    {{ end }}
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="container">
+        <a class="site-title" href="{{ site.Home.RelPermalink }}">{{ site.Title }}</a>
+        <nav aria-label="Primary navigation">
+          <a href="{{ "/recipes/" | relURL }}">Recipes</a>
+        </nav>
+      </div>
+    </header>
+    <main class="container">
+      {{ block "main" . }}{{ end }}
+    </main>
+    <footer class="site-footer">
+      <div class="container">{{ site.Title }}</div>
+    </footer>
+  </body>
+</html>

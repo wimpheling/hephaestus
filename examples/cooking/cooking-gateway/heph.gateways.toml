@@ -1,0 +1,15 @@
+version = 1
+
+[[gateways]]
+name = "cooking-gateway"
+agent_name = "cooking-gateway-handler"
+handler_contract = "http.v1"
+exposure = "public"
+
+[[gateways.mailbox_publication_slots]]
+key = "cooking_requests"
+purpose = "Deliver accepted Telegram updates to the cooking agent."
+
+[[gateways.routes]]
+path = "/cooking/telegram"
+methods = ["POST"]

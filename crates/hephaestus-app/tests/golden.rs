@@ -54,6 +54,10 @@ use vm_trait::RootFilesystem;
 use volume_local::LocalVolumeConfig;
 use workspace_local::{LocalWorkspaceConfig, WorkspaceLimits};
 
+#[path = "../../../examples/cooking/tests/scenario.rs"]
+mod cooking;
+#[path = "../../../examples/cooking/tests/inspection.rs"]
+mod cooking_inspection;
 mod support;
 
 use support::backend_fixture;
@@ -131,6 +135,10 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
     };
     let libkrun_e2e = env::var("HEPHAESTUS_APP_LIBKRUN_E2E").as_deref() == Ok("1");
     let gateway_caddy_e2e = env::var("HEPHAESTUS_APP_GATEWAY_CADDY_E2E").as_deref() == Ok("1");
+    assert!(
+        !cooking::enabled() || gateway_caddy_e2e,
+        "cooking requires the joined Caddy/libkrun fixture"
+    );
     assert!(
         !gateway_caddy_e2e || libkrun_e2e,
         "the joined Caddy gateway proof requires the real libkrun backend"
@@ -232,7 +240,16 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
     )
     .await;
     let mut brokered_fixture = if libkrun_e2e {
-        Some(
+        Some(if cooking::enabled() {
+            cooking::seed_brokered_fixture(
+                &pool,
+                user_id,
+                organization_id,
+                project.id.as_uuid(),
+                &seeded_instance,
+            )
+            .await
+        } else {
             seed_brokered_https_fixture(
                 &pool,
                 user_id,
@@ -240,8 +257,8 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
                 project.id.as_uuid(),
                 &seeded_instance,
             )
-            .await,
-        )
+            .await
+        })
     } else {
         None
     };
@@ -451,6 +468,9 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
     tokio::fs::write(source.join("input.txt"), "accepted\n")
         .await
         .expect("input file");
+    if cooking::enabled() {
+        cooking::copy_blog(&source).await;
+    }
     tokio::fs::create_dir(source.join("reports"))
         .await
         .expect("reports directory");
@@ -489,6 +509,28 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
         diagnose_golden_timeout(&pool, repository.id.as_uuid(), run_id).await;
     }
     result_wait.expect("persisted result completion");
+
+    if cooking::enabled() {
+        cooking::exercise(
+            &pool,
+            &running,
+            &seeded_instance,
+            &gateway_edge.as_ref().expect("cooking gateway").1,
+            &root,
+            repository.id.as_uuid(),
+            &input_commit,
+        )
+        .await;
+        brokered_fixture
+            .take()
+            .expect("cooking broker")
+            .upstream
+            .assert_substituted_request()
+            .await;
+        running.shutdown().await.expect("cooking daemon shutdown");
+        cleanup_streams(&nats_url).await;
+        return;
+    }
 
     if libkrun_e2e {
         if gateway_caddy_e2e {
@@ -1039,7 +1081,10 @@ async fn seed_reusable_instance(
     let state_volume_id = uuid::Uuid::new_v4();
     let artifact_id = uuid::Uuid::new_v4();
     let storage_key = uuid::Uuid::new_v4();
-    let artifact = GOLDEN_AGENT.as_bytes();
+    let cooking_artifact = cooking::agent_artifact();
+    let artifact = cooking_artifact
+        .as_deref()
+        .unwrap_or(GOLDEN_AGENT.as_bytes());
     let release_configuration = serde_json::to_value(
         agent_config::parse(agent_config().as_bytes())
             .config
@@ -1063,7 +1108,9 @@ async fn seed_reusable_instance(
         .expect("artifact mode");
     let artifact_hash: [u8; 32] = Sha256::digest(artifact).into();
 
-    let secret_slot_schema = if brokered_https {
+    let secret_slot_schema = if cooking::enabled() {
+        cooking::secret_slots()
+    } else if brokered_https {
         serde_json::json!([{
             "key": "model",
             "purpose": "Call a fixture HTTPS API",
@@ -1150,7 +1197,12 @@ async fn seed_reusable_instance(
         "working_directory": "bin",
         "image_reference": ROOT_IMAGE,
         "root_image_digest": ROOT_IMAGE,
-        "requires_state": true
+        "requires_state": true,
+        "policy_ceiling": {
+            "vcpus": 1,
+            "memory_mib": 512,
+            "network": if brokered_https { "broker_only" } else { "disabled" }
+        }
     }))
     .bind([4_u8; 32].as_slice())
     .bind(secret_slot_schema)
@@ -1198,7 +1250,7 @@ async fn seed_reusable_instance(
             secret_bindings, resource_selection, network_restriction,
             effective_runtime_policy, effective_policy_hash,
             platform_policy_version, runnable, diagnostics, created_by)
-           VALUES ($1, $2, $3, '{}', $4, '[]', $5, $6, $5, $7,
+           VALUES ($1, $2, $3, $9, $4, '[]', $5, $6, $5, $7,
                    'platform/v1', true, '[]', $8)",
     )
     .bind(revision_id)
@@ -1215,6 +1267,7 @@ async fn seed_reusable_instance(
     }))
     .bind([6_u8; 32].as_slice())
     .bind(actor.as_uuid())
+    .bind(cooking::parameters())
     .execute(pool)
     .await
     .expect("seed reusable revision");
@@ -1273,7 +1326,10 @@ async fn seed_gateway_release_agent(
     let agent_id = uuid::Uuid::new_v4();
     let artifact_id = uuid::Uuid::new_v4();
     let storage_key = uuid::Uuid::new_v4();
-    let artifact = GATEWAY_HANDLER.as_bytes();
+    let cooking_artifact = cooking::gateway_artifact();
+    let artifact = cooking_artifact
+        .as_deref()
+        .unwrap_or(GATEWAY_HANDLER.as_bytes());
     let artifact_path = artifact_root.join(storage_key.simple().to_string());
     tokio::fs::write(&artifact_path, artifact)
         .await
@@ -1372,7 +1428,7 @@ async fn seed_gateway_brokered_route(
             release_agent_key, handler_contract, exposure, parameters, secret_slots, mailbox_slots,
             normalized_hash, created_by)
          VALUES ($1, $2, $3, $4, $5, $6, 'golden-gateway', 'http.v1', 'public',
-                 '{}', ARRAY['webhook'], ARRAY['deliver'], $7, $8)",
+                 $9, ARRAY['webhook'], $10, $7, $8)",
     )
     .bind(revision_id)
     .bind(gateway_id)
@@ -1382,18 +1438,33 @@ async fn seed_gateway_brokered_route(
     .bind(release_agent_id)
     .bind([8_u8; 32].as_slice())
     .bind(actor.as_uuid())
+    .bind(if cooking::enabled() {
+        serde_json::json!({"inbound_placeholder":format!("heph-placeholder:v1:{version_id}"), "alice_provider_id":1001, "bob_provider_id":1002})
+    } else {
+        serde_json::json!({})
+    })
+    .bind(vec![if cooking::enabled() {
+        "cooking_requests"
+    } else {
+        "deliver"
+    }])
     .execute(pool)
     .await
     .expect("seed immutable gateway revision");
     sqlx::query(
         "INSERT INTO gateway_routes
            (id, gateway_revision_id, gateway_id, project_id, path, methods)
-         VALUES ($1, $2, $3, $4, '/brokered', ARRAY['POST'])",
+         VALUES ($1, $2, $3, $4, $5, ARRAY['POST'])",
     )
     .bind(route_id)
     .bind(revision_id)
     .bind(gateway_id)
     .bind(project_id)
+    .bind(if cooking::enabled() {
+        "/cooking/telegram"
+    } else {
+        "/brokered"
+    })
     .execute(pool)
     .await
     .expect("seed gateway route");
@@ -1423,7 +1494,7 @@ async fn seed_gateway_brokered_route(
         "INSERT INTO gateway_mailbox_bindings
            (id, gateway_revision_id, gateway_id, project_id, slot_key, mailbox_id,
             producer_id, created_by)
-         VALUES ($1, $2, $3, $4, 'deliver', $5, 'golden-gateway', $6)",
+         VALUES ($1, $2, $3, $4, $7, $5, 'golden-gateway', $6)",
     )
     .bind(mailbox_binding_id)
     .bind(revision_id)
@@ -1431,6 +1502,11 @@ async fn seed_gateway_brokered_route(
     .bind(project_id)
     .bind(mailbox_id.as_uuid())
     .bind(actor.as_uuid())
+    .bind(if cooking::enabled() {
+        "cooking_requests"
+    } else {
+        "deliver"
+    })
     .execute(pool)
     .await
     .expect("bind gateway fixture mailbox");
@@ -1448,13 +1524,18 @@ async fn seed_gateway_brokered_route(
     sqlx::query(
         "INSERT INTO gateway_brokered_secret_rules
            (id, binding_id, gateway_revision_id, gateway_route_id, header_name, normalized_hash)
-         VALUES ($1, $2, $3, $4, 'x-webhook-secret', $5)",
+         VALUES ($1, $2, $3, $4, $6, $5)",
     )
     .bind(uuid::Uuid::new_v4())
     .bind(binding_id)
     .bind(revision_id)
     .bind(route_id)
     .bind([10_u8; 32].as_slice())
+    .bind(if cooking::enabled() {
+        "x-telegram-bot-api-secret-token"
+    } else {
+        "x-webhook-secret"
+    })
     .execute(pool)
     .await
     .expect("seed gateway brokered inbound rule");

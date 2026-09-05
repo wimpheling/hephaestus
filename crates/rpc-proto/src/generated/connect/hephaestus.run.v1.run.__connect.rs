@@ -1,3 +1,15 @@
+///Shorthand for `OwnedView<GetRunProvenanceRequestView<'static>>`.
+pub type OwnedGetRunProvenanceRequestView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::run::v1::__buffa::view::GetRunProvenanceRequestView<
+        'static,
+    >,
+>;
+///Shorthand for `OwnedView<GetRunProvenanceResponseView<'static>>`.
+pub type OwnedGetRunProvenanceResponseView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::run::v1::__buffa::view::GetRunProvenanceResponseView<
+        'static,
+    >,
+>;
 ///Shorthand for `OwnedView<ListProjectRunsRequestView<'static>>`.
 pub type OwnedListProjectRunsRequestView = ::buffa::view::OwnedView<
     crate::messages::hephaestus::run::v1::__buffa::view::ListProjectRunsRequestView<
@@ -30,6 +42,34 @@ pub type OwnedRequestControlResponseView = ::buffa::view::OwnedView<
         'static,
     >,
 >;
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::run::v1::GetRunProvenanceResponse,
+>
+for crate::messages::hephaestus::run::v1::__buffa::view::GetRunProvenanceResponseView<
+    '_,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self, codec)
+    }
+}
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::run::v1::GetRunProvenanceResponse,
+>
+for ::buffa::view::OwnedView<
+    crate::messages::hephaestus::run::v1::__buffa::view::GetRunProvenanceResponseView<
+        'static,
+    >,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self.reborrow(), codec)
+    }
+}
 impl ::connectrpc::Encodable<
     crate::messages::hephaestus::run::v1::ListProjectRunsResponse,
 >
@@ -106,6 +146,15 @@ for ::buffa::view::OwnedView<
 }
 /// Full service name for this service.
 pub const RUN_SERVICE_SERVICE_NAME: &str = "hephaestus.run.v1.RunService";
+/// Static [`Spec`](::connectrpc::Spec) for the server-side `GetRunProvenance` RPC.
+///
+/// The dispatcher surfaces this on
+/// [`RequestContext::spec`](::connectrpc::RequestContext::spec).
+pub const RUN_SERVICE_GET_RUN_PROVENANCE_SPEC: ::connectrpc::Spec = ::connectrpc::Spec::server(
+        "/hephaestus.run.v1.RunService/GetRunProvenance",
+        ::connectrpc::StreamType::Unary,
+    )
+    .with_idempotency_level(::connectrpc::IdempotencyLevel::NoSideEffects);
 /// Static [`Spec`](::connectrpc::Spec) for the server-side `ListProjectRuns` RPC.
 ///
 /// The dispatcher surfaces this on
@@ -184,6 +233,29 @@ pub const RUN_SERVICE_REQUEST_CONTROL_SPEC: ::connectrpc::Spec = ::connectrpc::S
 /// example` doc.
 #[allow(clippy::type_complexity)]
 pub trait RunService: Send + Sync + 'static {
+    /// Handle the GetRunProvenance RPC.
+    ///
+    /// `'a` lets the response body borrow from `&self` (e.g. server-resident state).
+    ///
+    /// `request` is borrowed from the request body and is valid for the
+    /// duration of the call; message fields are read directly on it
+    /// (zero-copy). The response cannot borrow from `request` — use
+    /// `.to_owned_message()` (or copy the specific fields) for anything
+    /// returned, stored, or moved into `tokio::spawn`.
+    fn get_run_provenance<'a>(
+        &'a self,
+        ctx: ::connectrpc::RequestContext,
+        request: ::connectrpc::ServiceRequest<
+            '_,
+            crate::messages::hephaestus::run::v1::GetRunProvenanceRequest,
+        >,
+    ) -> impl ::std::future::Future<
+        Output = ::connectrpc::ServiceResult<
+            impl ::connectrpc::Encodable<
+                crate::messages::hephaestus::run::v1::GetRunProvenanceResponse,
+            > + Send + use<'a, Self>,
+        >,
+    > + Send;
     /// Handle the ListProjectRuns RPC.
     ///
     /// `'a` lets the response body borrow from `&self` (e.g. server-resident state).
@@ -285,6 +357,35 @@ impl<S: RunService> RunServiceExt for S {
         router: ::connectrpc::Router,
     ) -> ::connectrpc::Router {
         router
+            .route_view_idempotent(
+                RUN_SERVICE_SERVICE_NAME,
+                "GetRunProvenance",
+                {
+                    let svc = ::std::sync::Arc::clone(&self);
+                    ::connectrpc::view_handler_fn(move |
+                        ctx,
+                        req: ::buffa::view::OwnedView<
+                            crate::messages::hephaestus::run::v1::__buffa::view::GetRunProvenanceRequestView<
+                                'static,
+                            >,
+                        >,
+                        format|
+                    {
+                        let svc = ::std::sync::Arc::clone(&svc);
+                        async move {
+                            let sreq = ::connectrpc::ServiceRequest::<
+                                crate::messages::hephaestus::run::v1::GetRunProvenanceRequest,
+                            >::from_parts(req.reborrow(), req.bytes());
+                            svc.get_run_provenance(ctx, sreq)
+                                .await?
+                                .encode::<
+                                    crate::messages::hephaestus::run::v1::GetRunProvenanceResponse,
+                                >(format)
+                        }
+                    })
+                },
+            )
+            .with_spec(RUN_SERVICE_GET_RUN_PROVENANCE_SPEC)
             .route_view_idempotent(
                 RUN_SERVICE_SERVICE_NAME,
                 "ListProjectRuns",
@@ -426,6 +527,12 @@ impl<T: RunService> ::connectrpc::Dispatcher for RunServiceServer<T> {
     ) -> Option<::connectrpc::dispatcher::codegen::MethodDescriptor> {
         let method = path.strip_prefix("hephaestus.run.v1.RunService/")?;
         match method {
+            "GetRunProvenance" => {
+                Some(
+                    ::connectrpc::dispatcher::codegen::MethodDescriptor::unary(true)
+                        .with_spec(RUN_SERVICE_GET_RUN_PROVENANCE_SPEC),
+                )
+            }
             "ListProjectRuns" => {
                 Some(
                     ::connectrpc::dispatcher::codegen::MethodDescriptor::unary(true)
@@ -459,6 +566,27 @@ impl<T: RunService> ::connectrpc::Dispatcher for RunServiceServer<T> {
         };
         let _ = (&ctx, &request, &format);
         match method {
+            "GetRunProvenance" => {
+                let svc = ::std::sync::Arc::clone(&self.inner);
+                Box::pin(async move {
+                    let body = ::connectrpc::dispatcher::codegen::request_proto_bytes::<
+                        crate::messages::hephaestus::run::v1::GetRunProvenanceRequest,
+                    >(request.encoded()?, format)?;
+                    let req: crate::messages::hephaestus::run::v1::__buffa::view::GetRunProvenanceRequestView<
+                        '_,
+                    > = ::connectrpc::dispatcher::codegen::decode_borrowed_request_view(
+                        &body,
+                    )?;
+                    let req = ::connectrpc::ServiceRequest::<
+                        crate::messages::hephaestus::run::v1::GetRunProvenanceRequest,
+                    >::from_parts(&req, &body);
+                    svc.get_run_provenance(ctx, req)
+                        .await?
+                        .encode::<
+                            crate::messages::hephaestus::run::v1::GetRunProvenanceResponse,
+                        >(format)
+                })
+            }
             "ListProjectRuns" => {
                 let svc = ::std::sync::Arc::clone(&self.inner);
                 Box::pin(async move {
@@ -589,7 +717,7 @@ impl<T: RunService> ::connectrpc::Dispatcher for RunServiceServer<T> {
 /// let config = ClientConfig::new(uri).with_protocol(Protocol::Grpc);
 ///
 /// let client = RunServiceClient::new(conn, config);
-/// let response = client.list_project_runs(request).await?;
+/// let response = client.get_run_provenance(request).await?;
 /// ```
 ///
 /// # Example (Connect / HTTP/1.1 or ALPN)
@@ -601,7 +729,7 @@ impl<T: RunService> ::connectrpc::Dispatcher for RunServiceServer<T> {
 /// let config = ClientConfig::new("http://localhost:8080".parse()?);
 ///
 /// let client = RunServiceClient::new(http, config);
-/// let response = client.list_project_runs(request).await?;
+/// let response = client.get_run_provenance(request).await?;
 /// ```
 ///
 /// # Working with the response
@@ -611,7 +739,7 @@ impl<T: RunService> ::connectrpc::Dispatcher for RunServiceServer<T> {
 /// message, so field access is zero-copy:
 ///
 /// ```rust,ignore
-/// let resp = client.list_project_runs(request).await?;
+/// let resp = client.get_run_provenance(request).await?;
 /// let name: &str = resp.view().name;  // borrow into the response buffer
 /// ```
 ///
@@ -619,7 +747,7 @@ impl<T: RunService> ::connectrpc::Dispatcher for RunServiceServer<T> {
 /// [`into_owned()`](::connectrpc::client::UnaryResponse::into_owned):
 ///
 /// ```rust,ignore
-/// let owned = client.list_project_runs(request).await?.into_owned();
+/// let owned = client.get_run_provenance(request).await?.into_owned();
 /// ```
 ///
 /// [`into_view()`](::connectrpc::client::UnaryResponse::into_view) keeps the
@@ -651,6 +779,51 @@ where
     /// Get a mutable reference to the client configuration.
     pub fn config_mut(&mut self) -> &mut ::connectrpc::client::ClientConfig {
         &mut self.config
+    }
+    /// Call the GetRunProvenance RPC. Sends a request to /hephaestus.run.v1.RunService/GetRunProvenance.
+    pub async fn get_run_provenance(
+        &self,
+        request: crate::messages::hephaestus::run::v1::GetRunProvenanceRequest,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::run::v1::__buffa::view::GetRunProvenanceResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        self.get_run_provenance_with_options(
+                request,
+                ::connectrpc::client::CallOptions::default(),
+            )
+            .await
+    }
+    /// Call the GetRunProvenance RPC with explicit per-call options. Options override [`ClientConfig`](::connectrpc::client::ClientConfig) defaults.
+    pub async fn get_run_provenance_with_options(
+        &self,
+        request: crate::messages::hephaestus::run::v1::GetRunProvenanceRequest,
+        options: ::connectrpc::client::CallOptions,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::run::v1::__buffa::view::GetRunProvenanceResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        ::connectrpc::client::call_unary(
+                &self.transport,
+                &self.config,
+                RUN_SERVICE_SERVICE_NAME,
+                "GetRunProvenance",
+                request,
+                options,
+            )
+            .await
     }
     /// Call the ListProjectRuns RPC. Sends a request to /hephaestus.run.v1.RunService/ListProjectRuns.
     pub async fn list_project_runs(

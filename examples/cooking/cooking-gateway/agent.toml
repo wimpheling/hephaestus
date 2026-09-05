@@ -1,0 +1,71 @@
+version = 2
+
+[agent]
+name = "Cooking gateway"
+key = "cooking-gateway-handler"
+
+[build]
+command = "/usr/bin/env"
+arguments = ["bash", "build.sh"]
+working_directory = "/workspace/source"
+image = { key = "rust-ubuntu" }
+triggers = ["refs/heads/main"]
+
+[build.resources]
+vcpus = 1
+memory_mib = 512
+
+[build.network]
+profile = "disabled"
+
+[[build.artifacts]]
+path = "bin/cooking-gateway"
+kind = "executable"
+media_type = "application/octet-stream"
+
+[guest]
+image = { key = "rust-ubuntu" }
+command = "bin/cooking-gateway"
+working_directory = "bin"
+
+[resources]
+vcpus = 1
+memory_mib = 256
+
+[workspace]
+mount = false
+path = "/workspace/repo"
+read_only = true
+
+[state_volume]
+enabled = false
+
+[network]
+profile = "disabled"
+
+[triggers]
+push = true
+refs = ["refs/heads/main"]
+
+[[parameters]]
+name = "inbound_placeholder"
+type = "string"
+minimum_length = 1
+maximum_length = 128
+required = true
+
+[[parameters]]
+name = "alice_provider_id"
+type = "integer"
+minimum = 1
+maximum = 9223372036854775807
+required = true
+default = 1001
+
+[[parameters]]
+name = "bob_provider_id"
+type = "integer"
+minimum = 1
+maximum = 9223372036854775807
+required = true
+default = 1002

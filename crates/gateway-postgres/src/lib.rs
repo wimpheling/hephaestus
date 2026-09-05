@@ -115,6 +115,8 @@ impl PostgresGatewayMailboxPublisher {
             .map_err(|_| GatewayEdgeError::Unavailable)?;
         // Serializing on the invocation makes a repeated guest frame observe
         // its earlier publication before it can allocate another body row.
+        // Updates close execution, not durable ingress. The dispatcher binds
+        // queued work only after the gate reopens; recovery states fail closed.
         let invocation: Option<GatewayMailboxAuthorityRow> = sqlx::query_as(
             "SELECT invocation.gateway_revision_id AS revision, binding.id AS binding,
                     binding_grant.id AS grant_id, binding.mailbox_id AS mailbox, binding.producer_id AS producer
@@ -139,8 +141,8 @@ impl PostgresGatewayMailboxPublisher {
                AND session.status = 'active' AND session.expires_at > now()
                AND gateway.lifecycle = 'enabled'
                AND gateway.active_revision_id = invocation.gateway_revision_id
-               AND mailbox.state = 'active' AND instance.run_gate_open
-               AND instance.state IN ('active', 'update_rejected')
+               AND mailbox.state = 'active'
+               AND instance.state IN ('active', 'update_rejected', 'update_draining', 'updating')
              FOR UPDATE OF invocation, session",
         )
         .bind(request.runtime_session_id)
@@ -304,8 +306,8 @@ impl PostgresGatewayMailboxPublisher {
              JOIN gateways gateway ON gateway.id = invocation.gateway_id
              WHERE invocation.id = $2 AND invocation.outcome = 'accepted'
                AND session.status = 'active' AND session.expires_at > now()
-               AND mailbox.state = 'active' AND instance.run_gate_open
-               AND instance.state IN ('active', 'update_rejected')
+               AND mailbox.state = 'active'
+               AND instance.state IN ('active', 'update_rejected', 'update_draining', 'updating')
                AND gateway.lifecycle = 'enabled'
                AND gateway.active_revision_id = invocation.gateway_revision_id
              FOR UPDATE OF invocation, session",
@@ -735,7 +737,7 @@ pub enum GatewayReleaseArtifactKind {
 /// object-store I/O, safe filesystem construction, and cleanup after the VM
 /// is destroyed.
 pub trait GatewayReleaseMaterializer: Send + Sync {
-    /// Builds a fresh read-only release mount for this invocation.
+    /// Builds fresh read-only release and parameter mounts for this invocation.
     ///
     /// # Errors
     ///
@@ -744,7 +746,8 @@ pub trait GatewayReleaseMaterializer: Send + Sync {
         &self,
         invocation_id: Uuid,
         artifacts: &[GatewayReleaseArtifact],
-    ) -> Result<VmMount, GatewayEdgeError>;
+        parameters: &serde_json::Value,
+    ) -> Result<Vec<VmMount>, GatewayEdgeError>;
     /// Removes the materialized tree after provider cleanup.
     ///
     /// # Errors
@@ -811,7 +814,7 @@ impl GatewayReleaseResolver for PostgresGatewayReleaseResolver {
         invocation_id: Uuid,
     ) -> Result<VmSpec, GatewayEdgeError> {
         let row = sqlx::query_as::<_, GatewayLaunchRow>(
-            "SELECT agent.runtime_contract, session.issuance_generation, revision.release_id
+            "SELECT agent.runtime_contract, session.issuance_generation, revision.release_id, revision.parameters
              FROM gateway_invocations AS invocation
              JOIN gateway_revisions AS revision
                ON revision.id = invocation.gateway_revision_id
@@ -863,7 +866,7 @@ impl GatewayReleaseResolver for PostgresGatewayReleaseResolver {
             .as_ref()
             .ok_or(GatewayEdgeError::HandlerUnavailable)?;
         let artifacts = gateway_release_artifacts(&self.pool, row.release_id).await?;
-        let release_mount = materializer.prepare(invocation_id, &artifacts)?;
+        let mounts = materializer.prepare(invocation_id, &artifacts, &row.parameters)?;
         let generation = u64::try_from(row.issuance_generation)
             .ok()
             .and_then(|value| capability_domain::RuntimeCredentialGeneration::new(value).ok())
@@ -877,7 +880,7 @@ impl GatewayReleaseResolver for PostgresGatewayReleaseResolver {
             id: VmId(format!("gateway-{invocation_id}")),
             root,
             disks: Vec::new(),
-            mounts: vec![release_mount],
+            mounts,
             resources: VmResources {
                 vcpus: contract.policy_ceiling.vcpus,
                 memory_mib: contract.policy_ceiling.memory_mib,
@@ -960,6 +963,7 @@ struct GatewayLaunchRow {
     runtime_contract: serde_json::Value,
     issuance_generation: i64,
     release_id: Uuid,
+    parameters: serde_json::Value,
 }
 
 #[derive(sqlx::FromRow)]

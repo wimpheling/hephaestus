@@ -46,6 +46,13 @@ owning instance's authorization relation. PostgreSQL RLS applies those checks
 to interactive access; workers use their dedicated role for durable dispatch
 transitions.
 
+An authorized gateway may continue publishing to an active mailbox while its
+instance is `update_draining` or `updating`. The closed run gate prevents
+dispatch, so accepted work waits for the update to reopen the gate and binds
+the then-active revision. Live gateway, session, slot, and grant checks still
+apply. Disabled, removed, and paused/recovering instances reject new gateway
+publication.
+
 An accepted event advances through these durable states:
 
 ```text

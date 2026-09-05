@@ -17,16 +17,14 @@ impl RunRuntimeCatalog for PgRunRepository {
     async fn load_runtime(&self, run: &Run) -> Result<RunRuntimeInput, RunRuntimeCatalogError> {
         let context = sqlx::query_as::<_, RuntimeContextRow>(
             "SELECT revision.parameters,
-                    request.repository_id, request.git_ref, request.commit_sha,
+                    COALESCE(request.repository_id, attachment.repository_id) AS repository_id,
+                    COALESCE(request.git_ref, mailbox_attempt.target_ref) AS git_ref,
+                    COALESCE(request.commit_sha, mailbox_attempt.target_commit) AS commit_sha,
                     release.state AS release_state,
                     update.id AS update_id,
                     update.expected_current_revision_id AS previous_revision_id,
                     previous_agent.release_id AS previous_release_id,
-                    previous.parameters AS previous_parameters,
-                    EXISTS (
-                        SELECT 1 FROM mailbox_delivery_attempts AS mailbox_attempt
-                        WHERE mailbox_attempt.run_id = stored_run.id
-                    ) AS mailbox_run
+                    previous.parameters AS previous_parameters
              FROM runs AS stored_run
              JOIN agent_instance_revisions AS revision
                ON revision.id = stored_run.instance_revision_id
@@ -37,6 +35,10 @@ impl RunRuntimeCatalog for PgRunRepository {
               AND revision.release_agent_id = release_agent.id
              JOIN releases AS release ON release.id = stored_run.release_id
              LEFT JOIN run_requests AS request ON request.run_id = stored_run.id
+             LEFT JOIN mailbox_delivery_attempts AS mailbox_attempt ON mailbox_attempt.run_id = stored_run.id
+             LEFT JOIN agent_attachments AS attachment
+               ON attachment.id = stored_run.attachment_id
+              AND attachment.instance_id = stored_run.instance_id
              LEFT JOIN agent_updates AS update
                ON update.hook_run_id = stored_run.id
              LEFT JOIN agent_instance_revisions AS previous
@@ -68,7 +70,6 @@ impl RunRuntimeCatalog for PgRunRepository {
             ));
         }
         if run.kind == RunKind::Normal
-            && !context.mailbox_run
             && (context.repository_id.is_none()
                 || context.git_ref.is_none()
                 || context.commit_sha.is_none())
@@ -170,7 +171,6 @@ struct RuntimeContextRow {
     previous_revision_id: Option<Uuid>,
     previous_release_id: Option<Uuid>,
     previous_parameters: Option<Value>,
-    mailbox_run: bool,
 }
 
 #[derive(Debug, FromRow)]

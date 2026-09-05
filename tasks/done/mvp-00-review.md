@@ -76,7 +76,7 @@ browser payloads, screenshots, VM environment, files, or process arguments.
 
 Affected plans: [MVP 03](mvp-03-event-ingress-and-caddy-routing.md),
 [MVP 04](mvp-04-brokered-model-and-outbound-capabilities.md), and
-[MVP 05](mvp-05-golden-cooking-agent-journey.md).
+[MVP 05](../../examples/cooking/SCENARIO.md).
 
 ## 4. Defer session-history integrity to a focused follow-up
 
@@ -127,7 +127,7 @@ depends on MVP 01.2 for the selected runtime-Git/proposal-publication migration.
 
 Affected plans: [MVP 01.2](../done/mvp-01.2-replace-controlled-result-publication-with-runtime-git.md),
 [MVP 04](mvp-04-brokered-model-and-outbound-capabilities.md),
-[MVP 05](mvp-05-golden-cooking-agent-journey.md), and
+[MVP 05](../../examples/cooking/SCENARIO.md), and
 [MVP 06](mvp-06-git-backed-session-chat-journey.md).
 
 ## 9. Defer LLM budget accounting

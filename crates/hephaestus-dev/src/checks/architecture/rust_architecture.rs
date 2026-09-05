@@ -72,6 +72,11 @@ fn should_skip_sentinel_directory(relative: &Path) -> bool {
         || relative.starts_with(".local")
         || relative.starts_with("web/deps")
         || relative.starts_with("web/_build")
+        // The standalone released example vendors checksum-locked third-party
+        // sources for offline builds. Their terminology/test data and generated
+        // Cargo output are not application secret fixtures; scan its own src.
+        || relative.starts_with("examples/cooking/cooking-gateway/vendor")
+        || relative.starts_with("examples/cooking/cooking-gateway/target")
         || relative.starts_with("crates/hephaestus-dev")
         || relative.starts_with("crates/rpc-proto/src/generated")
         || is_test_path(relative)
@@ -462,5 +467,27 @@ mod tests {
         assert!(!super::should_skip_sentinel_directory(Path::new(
             "crates/example"
         )));
+    }
+
+    #[test]
+    fn example_vendor_exclusion_keeps_application_sources_scanned() {
+        for path in [
+            "examples/cooking/cooking-gateway/vendor/memchr/src",
+            "examples/cooking/cooking-gateway/target/debug",
+        ] {
+            assert!(super::should_skip_sentinel_directory(Path::new(path)));
+        }
+        let application = Path::new("examples/cooking/cooking-gateway/src/main.rs");
+        assert!(!super::should_skip_sentinel_directory(application));
+        assert!(!super::should_skip_sentinel_directory(Path::new(
+            "examples/cooking/cooking-gateway/vendor-like"
+        )));
+        let mut diagnostics = Vec::new();
+        super::scan_sentinel_source(
+            application,
+            "const LEAK: &str = \"secret-sentinel\";",
+            &mut diagnostics,
+        );
+        assert_eq!(diagnostics.len(), 1);
     }
 }

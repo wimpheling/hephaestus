@@ -52,6 +52,11 @@ already observed by a guest were erased. Purge removes encrypted material only
 after leases and retention checks permit it while keeping tombstone/audit
 provenance.
 
+For a resolved gateway route with inbound verification, missing, repeated,
+mismatched, revoked, or expired credentials produce an empty HTTP `401` before
+guest invocation. Successful verification rewrites the header to the declared
+non-secret placeholder. Unknown routes continue to return `404`.
+
 ## Grants, imports, and bindings
 
 Organization membership, repository visibility, and public access imply no

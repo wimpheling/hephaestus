@@ -151,7 +151,7 @@ use workspace_local::{LocalWorkspaceConfig, LocalWorkspaceManager};
 use workspace_postgres::PgWorkspaceMetadataRepository;
 
 /// Ordered database migration expected by this application version.
-pub const EXPECTED_DATABASE_MIGRATION: i64 = 60;
+pub const EXPECTED_DATABASE_MIGRATION: i64 = 62;
 
 /// OIDC issuer configuration used for bearer-token authentication.
 pub struct OidcConfig {
@@ -621,7 +621,8 @@ impl GatewayReleaseMaterializer for LocalGatewayReleaseMaterializer {
         &self,
         invocation_id: Uuid,
         artifacts: &[GatewayReleaseArtifact],
-    ) -> Result<VmMount, gateway_edge::GatewayEdgeError> {
+        parameters: &serde_json::Value,
+    ) -> Result<Vec<VmMount>, gateway_edge::GatewayEdgeError> {
         let artifacts = artifacts
             .iter()
             .map(|artifact| RunRuntimeArtifact {
@@ -638,7 +639,7 @@ impl GatewayReleaseMaterializer for LocalGatewayReleaseMaterializer {
             })
             .collect::<Vec<_>>();
         self.runtime
-            .prepare(invocation_id, &artifacts)
+            .prepare(invocation_id, &artifacts, parameters)
             .map_err(|_| gateway_edge::GatewayEdgeError::HandlerUnavailable)
     }
 

@@ -258,7 +258,7 @@ mkdir -p \
 chmod 0700 "${fixture_root}/runtime"
 
 container_name="hephaestus-libkrun-fixture-$$"
-podman pull "${ubuntu_image}"
+podman image exists "${ubuntu_image}" || podman pull "${ubuntu_image}"
 podman create --name "${container_name}" "${ubuntu_image}" /bin/true >/dev/null
 podman export "${container_name}" | tar -C "${fixture_root}/rootfs" -xf -
 podman rm "${container_name}" >/dev/null

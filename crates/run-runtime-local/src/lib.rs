@@ -235,7 +235,8 @@ impl LocalGatewayReleaseRuntime {
             .join(invocation_id.to_string())
     }
 
-    /// Materializes verified artifacts into a fresh read-only `/release` tree.
+    /// Materializes verified artifacts and exact revision parameters into
+    /// read-only `/release` and `/run/hephaestus` trees.
     ///
     /// # Errors
     ///
@@ -245,9 +246,15 @@ impl LocalGatewayReleaseRuntime {
         &self,
         invocation_id: Uuid,
         artifacts: &[RunRuntimeArtifact],
-    ) -> Result<VmMount, RunRuntimeError> {
+        parameters: &serde_json::Value,
+    ) -> Result<Vec<VmMount>, RunRuntimeError> {
         if artifacts.is_empty() || artifacts.len() > MAX_RUNTIME_ARTIFACTS {
             return Err(runtime_error("release artifact count is invalid"));
+        }
+        let parameter_bytes = serde_json::to_vec(parameters)
+            .map_err(|_| runtime_error("gateway parameters are invalid"))?;
+        if !parameters.is_object() || parameter_bytes.len() > 65_536 {
+            return Err(runtime_error("gateway parameters exceed the object bound"));
         }
         let gateways = self.runtime_root.join("gateways");
         fs::create_dir_all(&gateways).map_err(filesystem)?;
@@ -274,14 +281,26 @@ impl LocalGatewayReleaseRuntime {
                 materialize_artifact(&self.release_artifact_root, &release, artifact)?;
             }
             make_tree_read_only(&release)?;
+            let control = staging.join("control");
+            create_directory(&control, 0o700)?;
+            write_bytes(&control.join("parameters.json"), &parameter_bytes)?;
+            make_tree_read_only(&control)?;
             fs::rename(&staging, &active).map_err(filesystem)?;
             fs::set_permissions(&active, fs::Permissions::from_mode(0o500)).map_err(filesystem)?;
-            Ok::<_, RunRuntimeError>(VmMount {
-                tag: gateway_runtime_mount_tag(invocation_id),
-                host_path: active.join("release"),
-                guest_path: PathBuf::from("/release"),
-                read_only: true,
-            })
+            Ok::<_, RunRuntimeError>(vec![
+                VmMount {
+                    tag: gateway_runtime_mount_tag(invocation_id),
+                    host_path: active.join("release"),
+                    guest_path: PathBuf::from("/release"),
+                    read_only: true,
+                },
+                VmMount {
+                    tag: format!("gwp-{}", invocation_id.simple()),
+                    host_path: active.join("control"),
+                    guest_path: PathBuf::from("/run/hephaestus"),
+                    read_only: true,
+                },
+            ])
         })();
         if result.is_err() {
             let _cleanup = fs::remove_dir_all(&staging);
@@ -732,7 +751,7 @@ mod tests {
             release_artifact_root: store_root,
         };
 
-        let mount = runtime
+        let mounts = runtime
             .prepare(
                 invocation,
                 &[RunRuntimeArtifact {
@@ -743,8 +762,32 @@ mod tests {
                     size_bytes: u64::try_from(bytes.len()).expect("length"),
                     storage_key: key,
                 }],
+                &serde_json::json!({"inbound_placeholder":"public-identifier","alice_provider_id":1001}),
             )
             .expect("materialize gateway release");
+        let mount = &mounts[0];
+        assert_eq!(mounts.len(), 2);
+        let control = &mounts[1];
+        assert_eq!(
+            control.guest_path,
+            std::path::PathBuf::from("/run/hephaestus")
+        );
+        assert!(control.read_only);
+        let parameters: serde_json::Value = serde_json::from_slice(
+            &fs::read(control.host_path.join("parameters.json")).expect("sealed parameters"),
+        )
+        .expect("parameter JSON");
+        assert_eq!(parameters["alice_provider_id"], 1001);
+        assert_eq!(parameters["inbound_placeholder"], "public-identifier");
+        assert_eq!(
+            fs::metadata(control.host_path.join("parameters.json"))
+                .expect("parameter mode")
+                .permissions()
+                .mode()
+                & 0o222,
+            0,
+            "ordinary parameters are sealed before guest launch"
+        );
         assert_eq!(mount.guest_path, std::path::PathBuf::from("/release"));
         assert!(mount.read_only);
         assert_eq!(

@@ -2230,15 +2230,8 @@ impl<K: KeyProvider + Send + Sync> SecretRuntimeService<K> {
                 Permission::UseBrokered,
             )
             .await?;
-        if !lease.destinations.is_empty()
-            && !lease
-                .destinations
-                .iter()
-                .any(|value| value == &request.destination)
-        {
-            return Err(SecretServiceError::BrokerRequestDenied);
-        }
-        self.authorize_brokered_https_snapshot(&session, &lease, request)
+        let (https_request, rule_id) = self
+            .authorize_https_operation(&session, &lease, request)
             .await?;
         let (context, encrypted) = load_runtime_version(
             &self.resolver_pool,
@@ -2257,8 +2250,24 @@ impl<K: KeyProvider + Send + Sync> SecretRuntimeService<K> {
                 &request.operation,
                 &request.body,
             )
-            .await
-            .map_err(SecretServiceError::BrokerAdapter)?;
+            .await;
+        if let Some(request_id) = https_request {
+            let succeeded = response.as_ref().is_ok_and(|response| {
+                response.status == secret_application::BrokerStatus::Succeeded
+                    && response.body.len() <= 65_536
+            });
+            record_https_operation(
+                &self.resolver_pool,
+                &session,
+                &lease,
+                request_id,
+                rule_id,
+                None,
+                Some(if succeeded { "succeeded" } else { "failed" }),
+            )
+            .await?;
+        }
+        let response = response.map_err(SecretServiceError::BrokerAdapter)?;
         if response.body.len() > 65_536 {
             return Err(SecretServiceError::BrokerResponseTooLarge);
         }
@@ -2275,7 +2284,7 @@ impl<K: KeyProvider + Send + Sync> SecretRuntimeService<K> {
         // it to Persistence would obscure the post-upstream fail-closed
         // result and make callers retry a request whose authority was gone.
         ?;
-        self.authorize_brokered_https_snapshot(&session, &lease, request)
+        self.authorize_brokered_https_snapshot(&session, &lease, request, rule_id)
             .await?;
         record_runtime_use(
             &self.resolver_pool,
@@ -2286,6 +2295,64 @@ impl<K: KeyProvider + Send + Sync> SecretRuntimeService<K> {
         .await
         .map_err(|_| SecretServiceError::Persistence)?;
         Ok(response)
+    }
+
+    async fn authorize_https_operation(
+        &self,
+        session: &RuntimeSessionRow,
+        lease: &RuntimeLeaseAuthorizationRow,
+        request: &BrokerRequest,
+    ) -> Result<(Option<Uuid>, Option<Uuid>), SecretServiceError> {
+        let https_request = (request.operation == "https_v1").then(Uuid::new_v4);
+        let rule_id = serde_json::from_slice::<serde_json::Value>(&request.body)
+            .ok()
+            .and_then(|value| {
+                value
+                    .get("rule_id")
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(|id| Uuid::parse_str(id).ok())
+            });
+        if !lease.destinations.is_empty()
+            && !lease
+                .destinations
+                .iter()
+                .any(|value| value == &request.destination)
+        {
+            if let Some(request_id) = https_request {
+                record_https_operation(
+                    &self.resolver_pool,
+                    session,
+                    lease,
+                    request_id,
+                    rule_id,
+                    Some("deny"),
+                    None,
+                )
+                .await?;
+            }
+            return Err(SecretServiceError::BrokerRequestDenied);
+        }
+        let authorization = self
+            .authorize_brokered_https_snapshot(session, lease, request, rule_id)
+            .await;
+        if let Some(request_id) = https_request {
+            record_https_operation(
+                &self.resolver_pool,
+                session,
+                lease,
+                request_id,
+                rule_id,
+                Some(if authorization.is_ok() {
+                    "allow"
+                } else {
+                    "deny"
+                }),
+                None,
+            )
+            .await?;
+        }
+        authorization?;
+        Ok((https_request, rule_id))
     }
 
     async fn authenticate_session(
@@ -2366,17 +2433,12 @@ impl<K: KeyProvider + Send + Sync> SecretRuntimeService<K> {
         session: &RuntimeSessionRow,
         lease: &RuntimeLeaseAuthorizationRow,
         request: &BrokerRequest,
+        rule_id: Option<Uuid>,
     ) -> Result<(), SecretServiceError> {
         if request.operation != "https_v1" {
             return Ok(());
         }
-        let value: serde_json::Value = serde_json::from_slice(&request.body)
-            .map_err(|_| SecretServiceError::BrokerRequestDenied)?;
-        let rule_id = value
-            .get("rule_id")
-            .and_then(serde_json::Value::as_str)
-            .and_then(|value| Uuid::parse_str(value).ok())
-            .ok_or(SecretServiceError::BrokerRequestDenied)?;
+        let rule_id = rule_id.ok_or(SecretServiceError::BrokerRequestDenied)?;
         let origin = format!("https://{}", request.destination);
         let found: Option<Uuid> = sqlx::query_scalar(
             "SELECT snapshot.id
@@ -3056,6 +3118,49 @@ async fn record_runtime_use(
     tx.commit()
         .await
         .map_err(|_| SecretServiceError::Persistence)?;
+    Ok(())
+}
+
+// The decision commits before the external call, and its outcome commits after.
+// A decision without an outcome honestly represents an interrupted operation.
+async fn record_https_operation(
+    pool: &PgPool,
+    session: &RuntimeSessionRow,
+    lease: &RuntimeLeaseAuthorizationRow,
+    request_id: Uuid,
+    rule_id: Option<Uuid>,
+    decision: Option<&str>,
+    outcome: Option<&str>,
+) -> Result<(), SecretServiceError> {
+    let inserted = sqlx::query(
+        "INSERT INTO brokered_secret_audit_events
+         (id, lease_snapshot_id, rule_id, runtime_session_id, run_id,
+          request_id, event_kind, decision, outcome, occurred_at)
+         SELECT $1, snapshot.id, snapshot.rule_id, snapshot.runtime_session_id,
+                snapshot.run_id, $2, $3, $4, $5, now()
+         FROM brokered_secret_lease_snapshots snapshot
+         WHERE snapshot.lease_id = $6 AND snapshot.runtime_session_id = $7
+           AND snapshot.run_id = $8 AND snapshot.rule_id = $9",
+    )
+    .bind(Uuid::new_v4())
+    .bind(request_id)
+    .bind(if decision.is_some() {
+        "authorization_decision"
+    } else {
+        "substitution_use"
+    })
+    .bind(decision)
+    .bind(outcome)
+    .bind(lease.lease_id)
+    .bind(session.session_id)
+    .bind(session.run_id)
+    .bind(rule_id)
+    .execute(pool)
+    .await
+    .map_err(|_| SecretServiceError::Persistence)?;
+    if (decision == Some("allow") || outcome.is_some()) && inserted.rows_affected() != 1 {
+        return Err(SecretServiceError::Persistence);
+    }
     Ok(())
 }
 

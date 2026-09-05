@@ -87,7 +87,7 @@ the exact verification commands and test counts.
 
 ## Implementation evidence (pending live journey)
 
-- Source fixture: `/home/a/projects/cooking/cooking-gateway`; it uses one
+- Source fixture: [`examples/cooking/cooking-gateway`](../../examples/cooking/cooking-gateway); it uses one
   `cooking_requests` slot and a stable `telegram-update-<update_id>`
   deduplication key, with no mailbox identifiers, broker/database access, or
   credentials in its source.

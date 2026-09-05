@@ -2,6 +2,9 @@
 
 Hephaestus is a single-node Git forge and agent runtime proof of concept.
 
+See the [cooking example](examples/cooking/README.md) for the MVP-05 scenario,
+application source code, and a command that runs it through the real local stack.
+
 - [Git forge and agent ingestion](docs/git-forge.md)
 - [Database-native identity and authorization](docs/authorization.md)
 - [Daemon composition and lifecycle](docs/application.md)

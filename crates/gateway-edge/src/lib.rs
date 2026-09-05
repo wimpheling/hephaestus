@@ -742,8 +742,9 @@ where
                 .completed(invocation_id, GatewayInvocationOutcome::Rejected)
                 .await;
             // Missing, repeated, mismatched, revoked, and expired values
-            // intentionally share the same public result as an unknown route.
-            return fallback(StatusCode::NOT_FOUND);
+            // share a bounded authentication failure without exposing which
+            // credential check failed. Unknown routes remain 404.
+            return fallback(StatusCode::UNAUTHORIZED);
         };
         let result = timeout(
             route.limits.execution_timeout,
@@ -1589,14 +1590,26 @@ mod tests {
                 "heph-placeholder:v1:gateway-proof"
             ))
         );
-        let mut invalid = request("/gateway/echo");
-        invalid
-            .headers
-            .insert("x-hook-secret", HeaderValue::from_static("wrong-secret"));
-        assert_eq!(
-            dispatcher.dispatch(invalid).await.response.status,
-            StatusCode::NOT_FOUND
-        );
+        for values in [
+            vec![],
+            vec!["wrong-secret"],
+            vec!["gateway-secret-sentinel", "gateway-secret-sentinel"],
+        ] {
+            *capture.0.lock().expect("clear capture") = None;
+            let mut invalid = request("/gateway/echo");
+            for value in values {
+                invalid
+                    .headers
+                    .append("x-hook-secret", HeaderValue::from_static(value));
+            }
+            let response = dispatcher.dispatch(invalid).await.response;
+            assert_eq!(response.status, StatusCode::UNAUTHORIZED);
+            assert!(response.body.is_empty());
+            assert!(
+                capture.0.lock().expect("capture").is_none(),
+                "rejected credentials never reach the guest"
+            );
+        }
     }
     #[tokio::test]
     async fn dispatcher_rejects_forwarded_header_before_launch() {

@@ -50,7 +50,7 @@ with the actual libkrun VM boundary.
 - [`provision-local-platform-builder-images.md`](provision-local-platform-builder-images.md)
 - [`../done/repository-oci-builders.md`](../done/repository-oci-builders.md)
 - [`expose-agent-release-build-journey.md`](expose-agent-release-build-journey.md)
-- [`../todo/mvp-05-golden-cooking-agent-journey.md`](../todo/mvp-05-golden-cooking-agent-journey.md)
+- [MVP-05 cooking scenario](../../examples/cooking/SCENARIO.md)
 
 ## Non-goals
 
