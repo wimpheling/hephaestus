@@ -7,8 +7,14 @@ Owner: codex
 Complete the remaining [cooking acceptance specification](../../examples/cooking/SCENARIO.md)
 using the [existing example](../../examples/cooking/README.md). Extend the
 verified first-request journey into a reproducible build/install, multi-request,
-upgrade/recovery, security and real-Telegram proof. This task is not an instruction
+upgrade/recovery and security E2E proof. This task is not an instruction
 to start those implementations during the current documentation update.
+
+MVP-05 tests Hephaestus capabilities using deterministic model and relay
+endpoints and simulated Telegram-style ingress. Real Telegram delivery, accounts,
+Bot API tokens and public Internet deployment are excluded, not deferred
+completion requirements. The suite must be reproducibly runnable locally and in
+CI; runner and CI implementation details remain to be validated before coding.
 
 ## Verified baseline
 
@@ -20,7 +26,7 @@ Application unit tests cover replay/restart, the framed broker protocol and
 SQLite migration/rollback. The full quality gate passed after consolidation.
 
 The harness seeds release metadata. It does not prove isolated application
-builds, ordinary installation, real Telegram delivery, browser operation or
+builds, ordinary installation, browser operation or
 the entire failure/update matrix. Existing generic subsystem tests are useful
 prerequisites but do not close the cooking-specific acceptance requirements.
 
@@ -29,9 +35,9 @@ prerequisites but do not close the cooking-specific acceptance requirements.
 | Area | Current assessment |
 | --- | --- |
 | Core execution, releases, mailboxes, authority, secrets, controlled Git and inspection | Implemented foundations with a passing joined first-request proof. No additional broad core subsystem is currently established as necessary. |
-| Build/install and Hugo artifact lifecycle | Existing primitives; the example's actual workflow and artifact delivery still need exercising. Any missing public operation must be demonstrated, then implemented narrowly. Seed SQL is not a substitute for product installation. |
+| Build/install and Hugo artifact lifecycle | Existing build/release primitives are reusable. Audit found no product caller for `PostgresGatewayInstaller` and no public mailbox allocation operation; gateway secret binding and parameter installation also need verification. The runner needs both Python and Rust image roots, and the blog needs its actual build declaration. Implement demonstrated gaps narrowly. Seed SQL is not a substitute for product installation. |
 | Concurrency, updates, recovery and revocation | Existing mechanisms and focused tests; complete cooking integration remains unverified. Tests may expose further platform defects. |
-| Real Telegram relay | Known missing application implementation: relay.py currently uses only deterministic transport. External deployment and real account configuration are also absent. |
+| Deterministic relay | Exercise the actual relay application with deterministic transport to verify Hephaestus outbound capabilities. Real Telegram transport, accounts, deployment and Bot API tokens are outside MVP-05. |
 | Browser journey | Cooking-specific automation and evidence are missing. Establish actual gaps in existing management pages before adding UI features. A custom chat UI is not required. |
 
 Keep Telegram parsing, family policy, model behavior, SQLite schema and relay
@@ -42,6 +48,17 @@ remote phone-controlled development as prerequisites for this bounded scenario.
 The relay runs externally; the existing short-lived gateway contract suffices.
 
 ## Remaining work, in execution order
+
+The [E2E matrix](../../examples/cooking/TEST-MATRIX.md) records the required
+triggers and observable outcomes. Keep implementation and evidence aligned with it.
+
+- [ ] **0. Establish reproducible execution and CI**
+  - [ ] Verify runtime prerequisites and repeatable pinned image preparation.
+  - [ ] Provide one local/CI entry point with bounded timeouts, isolated resources,
+    cleanup and redacted retained diagnostics.
+  - [ ] Run the existing cooking journey on a CI runner with real libkrun/KVM.
+  - [ ] Expand that job with the remaining matrix as implemented; fail on missing
+    required capabilities and report actual executed cases.
 
 - [ ] **1. Exercise real builds and installation**
   - [ ] Provide repeatable preparation of separate forge source repositories
@@ -98,21 +115,12 @@ The relay runs externally; the existing short-lived gateway contract suffices.
     arguments and browser evidence for secret sentinels. Existing log/outbox
     checks cover only part of the required surfaces.
 
-- [ ] **5. Implement and exercise real Telegram transport**
-  - [ ] Implement the external relay's real HTTPS Telegram adapter with bounded
-    request/response handling, external token custody and redacted diagnostics;
-    retain deterministic transport for automated tests.
-  - [ ] Specify and test lost-response/ambiguous-send handling. A local SQLite
-    idempotency key alone cannot promise exactly-once delivery across an
-    external send and a crash before recording its outcome.
-  - [ ] Configure a persistent test installation, two actual family identities,
-    the external relay and public HTTPS ingress scoped to the gateway route.
-    Keep development OIDC, database, NATS and administration private.
-  - [ ] Obtain the user's actual deployment/account choices and explicit
-    authorization before configuring external services or sending Telegram
-    messages. No real credentials are needed for workstreams 1–4.
-  - [ ] Run the two-user Telegram smoke and independent Bot API token rotation;
-    retain redacted evidence and verify the raw token never enters a guest.
+- [ ] **5. Exercise deterministic outbound failure handling**
+  - [ ] Inject relay failures and lost responses through deterministic transport
+    while exercising the real broker and relay application. Assert bounded
+    outcomes, durable inspection and the documented retry/recovery behavior.
+  - [ ] Distinguish one logical application effect from retried physical calls;
+    do not infer exactly-once external delivery from a local idempotency ledger.
 
 - [ ] **6. Browser acceptance and final evidence**
   - [ ] Extend the existing Playwright management journey for cooking
@@ -125,7 +133,7 @@ The relay runs externally; the existing short-lived gateway contract suffices.
     document any agreed scope change explicitly instead of dropping assertions.
   - [ ] Run Rust formatting, workspace all-target/all-feature Clippy,
     workspace all-feature tests and rustdoc, then `cargo dev quality`.
-  - [ ] Run the explicit real-stack cooking, fault/update, Telegram and browser
+  - [ ] Run the explicit real-stack cooking, fault/update, deterministic relay and browser
     scenarios; record optional test gates as executed or skipped, not simply green.
   - [ ] Run `mix precommit`, Mélange drift/doctor and OpenFGA compatibility
     checks required by SCENARIO.md, and the complete sentinel scan.

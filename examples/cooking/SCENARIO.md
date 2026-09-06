@@ -27,9 +27,9 @@ platform-specific Telegram or cooking abstractions.
 | Gateway boundary | The public gateway is a separate principal with a synchronous HTTP handler under the shared Caddy `/gateway/` namespace. It may publish only to the cooking-agent mailbox and has no repository or cooking-agent state authority. |
 | Agent authority | The cooking agent may consume its mailbox, use its state, call its model API and Telegram relay through explicitly bound HTTPS destinations, and read/propose changes to one blog repository. |
 | Publication | Canonical Git mutation remains a host-side controlled operation with exact target commit and authorization provenance. |
-| Credentials | Model and Telegram-inbound verification credentials remain brokered and unavailable as raw guest values. The cooking agent receives only a brokered credential for the Telegram relay. The relay alone holds the raw Telegram Bot API token in its external secret store because Telegram requires it in a URL path. The gateway receives only a non-secret inbound-verification placeholder. |
+| Credentials | Model and Telegram-inbound verification credentials remain brokered and unavailable as raw guest values. The cooking agent receives only a brokered credential for the Telegram relay. The deterministic relay requires no Telegram Bot API token. The gateway receives only a non-secret inbound-verification placeholder. |
 | State | Recipe memory is durable application state in the instance volume; the process may stop and reconstruct from state and mailbox events. |
-| Testability | Deterministic model and relay-transport tests are required for automation. A real Telegram smoke is required before MVP completion and uses the relay without weakening guest credential controls. |
+| Testability | Deterministic model and relay-transport tests are required for automation. The E2E suite must run reproducibly locally and in CI without Telegram accounts, Bot API tokens or real provider delivery. |
 
 ## Acceptance-fixture specification
 
@@ -48,7 +48,7 @@ repositories:
 | --- | --- | --- |
 | `cooking-gateway` | Telegram-style gateway | Validates inbound requests, applies application user policy and deduplication, and publishes a bounded mailbox event. |
 | `cooking-agent` | Stateful cooking agent | Maintains recipe memory, invokes the model and outbound messaging APIs, renders the blog, and owns application retries/idempotency. |
-| `telegram-relay` | External outbound Telegram relay | Authenticates cooking-agent requests, owns the raw Bot API token outside Hephaestus guests, and calls Telegram's real Bot API. |
+| `telegram-relay` | External outbound Telegram relay | Authenticates cooking-agent requests and records deterministic delivery outcomes outside Hephaestus guests. |
 | `cooking-blog` | Hugo static cooking blog | Receives controlled result proposals on `refs/heads/main`; its pinned Hugo build produces the HTML release artifact, and it contains no agent credentials or platform control data. |
 
 Exactly two configured family identities, `alice` and `bob`, are authorized.
@@ -146,17 +146,15 @@ The fixture declares three brokered secret uses:
 | Telegram relay API | Cooking agent | An exact relay origin and request-header placeholder are substituted only at the host broker. |
 
 The relay accepts only a bounded application message request and a stable
-idempotency key. It authenticates the cooking agent, then calls Telegram's
-real Bot API using its raw bot token in the required URL path. The raw token
-is stored and used only by the relay's external deployment; it is never a
-Hephaestus secret binding, guest mount, application parameter, source file,
-log value, or product event. The relay returns a redacted bounded outcome.
+idempotency key. It authenticates the cooking agent and uses deterministic
+transport to record delivery outcomes, returning a redacted bounded response.
+Failure tests inject rejection, lost responses and uncertain outcomes to exercise
+Hephaestus broker behavior and application recovery without a live provider.
 
-Deterministic model and relay-transport tests use fixed non-secret responses.
-The required real Telegram smoke exercises the same relay request contract
-with the two configured family accounts. It requires a public HTTPS ingress
-for the gateway (for example, a deliberately configured tunnel during local
-development) and must record no credential in its evidence. Both released
+Model and relay responses are deterministic. Ingress uses simulated Telegram-style
+updates from fixture identities; no real Telegram accounts, Bot API tokens,
+messages or Internet-reachable deployment are required by MVP-05.
+Both released
 guests are network-disabled except for their declared boundary: the gateway
 has its private HTTP handler and mailbox publication; the cooking agent uses
 only brokered HTTPS. Resource limits, ordinary parameters, capability
@@ -186,8 +184,8 @@ The recorded fixture evidence must prove all of the following:
 - concurrent requests from `alice` and `bob` receive the gateway contract and
   produce serialized, idempotent cooking-agent effects;
 - all valid model and relay calls use only their exact declared HTTPS bindings,
-  no guest observes a provider credential, and the relay alone makes the
-  real Telegram Bot API call;
+  no guest observes a raw fixture credential, and deterministic relay outcomes
+  remain inspectable;
 - each accepted recipe creates a controlled proposal/result from the exact
   blog target commit, and canonical Git changes only through the host-side
   publisher;
@@ -218,7 +216,8 @@ The recorded fixture evidence must prove all of the following:
 This task does not produce a universal assistant, beginner distribution,
 catalog, Operator/Admin Agent, Project Agent, web search, browser use,
 WebSockets, streaming services, general scheduling, real-provider availability
-guarantees, or production marketing material.
+guarantees, real Telegram transport or account integration, Bot API token
+management, public Internet deployment, or production marketing material.
 
 ## Implementation checklist
 
@@ -267,9 +266,9 @@ implementation gaps, and the evidence required to close its remaining items.
     publish immutable releases with
     exact source, build, artifact-manifest, runtime-policy, capability, and
     secret-slot provenance.
-  - [ ] Deploy the relay independently with its external raw-token secret
-    store, bounded request contract, redacted logs, and Telegram API egress
-    restricted to the intended provider origin.
+  - [ ] Run the relay outside the guests as part of the disposable test stack,
+    with deterministic transport, a bounded authenticated request contract and
+    redacted logs.
   - [ ] Create a second compatible cooking-agent release with a real state
     update hook and a visible behavior or schema change.
   - [x] Add unit and conformance tests for protocol parsing, user policy,
@@ -286,8 +285,8 @@ implementation gaps, and the evidence required to close its remaining items.
   - [x] Bind a public `/gateway/` Caddy route to the gateway's synchronous HTTP
     handler, record its resolved URL, and bind gateway publication only to the
     cooking mailbox.
-    Verified on the local Caddy listener; Internet-reachable HTTPS for Telegram
-    remains a deployment step.
+    Verified on the local Caddy listener; Internet-reachable deployment is
+    outside MVP-05 scope.
   - [x] Bind three separate fixture secrets for model, relay and inbound
     verification, with exact host-side substitution and no raw guest values.
   - [ ] Create and bind model-API, Telegram-relay, and Telegram-verification
@@ -308,7 +307,7 @@ implementation gaps, and the evidence required to close its remaining items.
     brokered model and actual deterministic relay code, persist SQLite state,
     and produce a recipe. Check missing/invalid verification and unknown-user
     responses through this same gateway.
-  - [ ] Send simultaneous real Telegram requests from both authorized users
+  - [ ] Send simultaneous simulated Telegram-style requests from both fixture users
     through Caddy and receive the handler's specified bounded HTTP responses.
   - [ ] Send valid, missing, invalid, and rotated-secret Telegram requests and
     verify that the authorized inbound header is rewritten to the placeholder,
@@ -340,8 +339,7 @@ implementation gaps, and the evidence required to close its remaining items.
     directly.
   - [ ] Rotate the Telegram verification, relay-authentication, and model
     credentials and prove later operations use the new exact versions while
-    earlier run provenance remains intact; rotate the relay's Bot API token
-    independently without exposing it to a guest.
+    earlier run provenance remains intact.
   - [ ] Revoke broker authority during an active journey and verify live denial,
     honest in-flight semantics, durable audit, and safe recovery.
 
@@ -399,8 +397,7 @@ implementation gaps, and the evidence required to close its remaining items.
     call, result publication, update hook, revision activation, and cleanup.
   - [ ] Scan PostgreSQL, NATS, logs, traces, metrics, filesystems, browser
     payloads, screenshots, VM environment, files, and process arguments for
-    application-API and Telegram verification-secret sentinels; separately
-    verify the relay's raw Bot API token is absent from its logs and evidence.
+    model-API, relay-authentication and inbound verification-secret sentinels.
 
 - [ ] **9. Verify and document**
   - [x] Document how the reference applications own their loops and protocol
@@ -458,8 +455,9 @@ recorded separately at handoff.
 
 This fixture imports exact application artifacts and seeds release metadata;
 isolated build/publication of all reference releases remains separate work.
-Real Telegram delivery and the wider concurrency, revocation, crash,
-update/recovery and browser matrix are still required before completing MVP-05.
+The wider concurrency, revocation, crash, update/recovery and browser matrix
+and reproducible local and CI execution are still required before completing
+MVP-05. Real Telegram integration is excluded from acceptance.
 
 Record source repository commits, build/release/instance/revision IDs, route
 and mailbox IDs, state-volume and fenced-lease IDs, dispatch order and

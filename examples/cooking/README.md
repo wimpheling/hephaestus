@@ -6,6 +6,7 @@ the automated scenario, its acceptance specification, and the run command.
 | File or directory | What it contains |
 | --- | --- |
 | [SCENARIO.md](SCENARIO.md) | Full MVP-05 acceptance specification and remaining checklist. |
+| [TEST-MATRIX.md](TEST-MATRIX.md) | Required E2E triggers and observable outcomes, including local/CI execution. |
 | [Remaining-work task](../../tasks/in-progress/mvp-05.1-complete-cooking-acceptance.md) | Sequenced implementation and verification needed to finish MVP-05. |
 | [run.sh](run.sh) | Command to run the real-stack automated example. |
 | [tests/scenario.rs](tests/scenario.rs) | Executable scenario: fixture setup, inbound requests, cooking run, Git result and Hugo checks. Start with `exercise`. |
@@ -86,9 +87,11 @@ the exact immutable gateway revision in a bounded read-only control mount.
 This is an installed-artifact execution proof. The harness seeds immutable
 release/build metadata and imports the selected artifacts, following the
 existing golden fixture; it does not prove isolated builds of all three source
-repositories or completion of the entire MVP-05 checklist. Real Telegram smoke,
-the broader concurrency/crash/update/recovery matrix, and isolated release
-publication remain separate acceptance work.
+repositories or completion of the entire MVP-05 checklist. The broader
+concurrency/crash/update/recovery matrix, isolated release publication, and
+reproducible local and CI execution remain acceptance work. Real Telegram
+transport, accounts, Bot API tokens and public Internet deployment are outside
+MVP-05 scope; deterministic endpoints exercise Hephaestus capabilities.
 
 ## Recorded verification, 2026-09-05
 

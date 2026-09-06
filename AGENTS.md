@@ -1,5 +1,26 @@
 # Contributor Instructions
 
+## Agent methodology
+
+- Use `gpt-6-astra` with `medium` reasoning effort for the main thread and
+  orchestration: user discussion, architectural analysis, acceptance criteria,
+  task decomposition, resolving ambiguity, and final review.
+- Use `gpt-5.6-luna` with `high` reasoning effort for subagents handling bounded
+  coding tasks, repository exploration, information gathering, focused analysis,
+  test implementation, running checks, and failure investigation. Delegate
+  substantial execution work when it can proceed independently alongside useful
+  main-thread work.
+- Give each subagent a precise scope, relevant context, and an expected result.
+  Coordinate file ownership for concurrent edits and avoid duplicating work.
+  Handle tiny tasks directly when delegation overhead exceeds the work.
+- Subagents should return evidence, verification results, and unresolved
+  questions. Escalate design decisions, unclear requirements, and repeated stalls
+  to the main thread. Astra remains responsible for reviewing the integrated
+  result against the acceptance criteria.
+- Select the model and reasoning effort explicitly when spawning subagents.
+  This file records the policy; the main-thread model and effort must be selected
+  in the session or runtime configuration, not changed by these instructions.
+
 ## Rust quality policy
 
 - Keep the workspace's strict Rust, Clippy, and rustdoc lint configuration
