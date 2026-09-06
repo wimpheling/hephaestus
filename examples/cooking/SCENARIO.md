@@ -222,6 +222,17 @@ guarantees, or production marketing material.
 
 ## Implementation checklist
 
+Checked items below are backed by the deterministic installed-artifact journey
+and focused tests recorded on 2026-09-05. Parent items stay open when any part
+is unfinished. Local fixture installation is not evidence of the full release
+build/install workflow, and application unit tests are not evidence of the
+complete real-stack restart/update/crash matrix.
+
+The actionable remaining-work plan is
+[Complete MVP-05 acceptance](../../tasks/in-progress/mvp-05.1-complete-cooking-acceptance.md).
+This document remains the acceptance specification; the task records sequencing,
+implementation gaps, and the evidence required to close its remaining items.
+
 - [x] **1. Specify the complete acceptance fixture**
   - [x] **Define released application behavior**
     - [x] Specify the gateway request validation, Telegram update parsing,
@@ -248,8 +259,10 @@ guarantees, or production marketing material.
     - [x] Define acceptance assertions for every allowed and denied operation.
 
 - [ ] **2. Build and publish the reference releases**
-  - [ ] Create small reviewable source repositories for the gateway, cooking
-    agent, and outbound Telegram relay without privileged framework dependencies.
+  - [x] Create small reviewable gateway, cooking-agent, and outbound relay
+    application sources without privileged framework dependencies. They now
+    live together under `examples/cooking/`; creating their forge repositories
+    through the real build/install workflow remains below.
   - [ ] Build the gateway and cooking agent in isolated build guests and
     publish immutable releases with
     exact source, build, artifact-manifest, runtime-policy, capability, and
@@ -259,44 +272,55 @@ guarantees, or production marketing material.
     restricted to the intended provider origin.
   - [ ] Create a second compatible cooking-agent release with a real state
     update hook and a visible behavior or schema change.
-  - [ ] Add unit and conformance tests for protocol parsing, user policy,
+  - [x] Add unit and conformance tests for protocol parsing, user policy,
     application deduplication, recipe transactions, blog rendering, update
     idempotency, and rollback.
-  - [ ] Prove normal guests execute imported read-only artifacts rather than
+  - [x] Prove normal guests execute imported read-only artifacts rather than
     source trees or runtime-downloaded executable dependencies.
 
 - [ ] **3. Install and bind the product slice**
   - [ ] Import the gateway and cooking releases into one project as distinct
     instances and immutable revisions.
-  - [ ] Allocate cooking-agent state and its durable mailbox without giving
+  - [x] Allocate cooking-agent state and its durable mailbox without giving
     either resource to the gateway.
-  - [ ] Bind a public `/gateway/` Caddy route to the gateway's synchronous HTTP
+  - [x] Bind a public `/gateway/` Caddy route to the gateway's synchronous HTTP
     handler, record its resolved URL, and bind gateway publication only to the
     cooking mailbox.
+    Verified on the local Caddy listener; Internet-reachable HTTPS for Telegram
+    remains a deployment step.
+  - [x] Bind three separate fixture secrets for model, relay and inbound
+    verification, with exact host-side substitution and no raw guest values.
   - [ ] Create and bind model-API, Telegram-relay, and Telegram-verification
     secrets without exposing values to the binding user or either guest. Bind
     their exact placeholder, destination, and gateway-route substitution rules;
     provision the raw Bot API token only in the relay's external secret store.
-  - [ ] Bind the cooking agent to one exact blog repository/ref and bounded
+  - [x] Bind the cooking agent to one exact blog repository/ref and bounded
     HTTPS destination and placeholder-substitution bindings.
   - [ ] Record the exact installation, revision, attachment, route,
     authorization snapshot, state volume, fenced lease, dispatch order, and
     secret binding fixture IDs.
+    The disposable run's redacted route/revision/mailbox/run/lease/version/result
+    evidence is recorded; retain the complete installation manifest when the
+    real build/import workflow is exercised.
 
 - [ ] **4. Exercise normal operation**
+  - [x] Send one simulated Alice request through real Caddy/libkrun, exercise
+    brokered model and actual deterministic relay code, persist SQLite state,
+    and produce a recipe. Check missing/invalid verification and unknown-user
+    responses through this same gateway.
   - [ ] Send simultaneous real Telegram requests from both authorized users
     through Caddy and receive the handler's specified bounded HTTP responses.
   - [ ] Send valid, missing, invalid, and rotated-secret Telegram requests and
     verify that the authorized inbound header is rewritten to the placeholder,
     gateway repository code returns the specified responses, and no cooking
     agent, repository, HTTPS egress, or state authority is used before rejection.
-  - [ ] Verify the gateway normalizes and publishes only the expected bounded
+  - [x] Verify the gateway normalizes and publishes only the expected bounded
     events to the cooking mailbox.
   - [ ] Verify stateful cooking runs serialize, call the declared model API and
     Telegram relay through destination-bound placeholder substitution, update
     recipe memory transactionally, and handle ordinary API responses in
     repository code.
-  - [ ] Verify a generated blog change uses the exact target commit, creates a
+  - [x] Verify a generated blog change uses the exact target commit, creates a
     controlled proposal/result, and reaches canonical Git only through the
     authorized host-side publisher.
   - [ ] Stop the cooking process, deliver another message, and verify restart
@@ -305,7 +329,7 @@ guarantees, or production marketing material.
     application effect despite at-least-once platform delivery.
 
 - [ ] **5. Prove the authority boundary**
-  - [ ] Send an event from an unauthorized Telegram identity and verify
+  - [x] Send an event from an unauthorized Telegram identity and verify
     rejection without cooking-agent, repository, HTTPS egress, or state authority.
   - [ ] Run an adversarial gateway release and prove it cannot inspect cooking
     state, read the blog repository, publish to another mailbox, broaden its
@@ -322,6 +346,9 @@ guarantees, or production marketing material.
     honest in-flight semantics, durable audit, and safe recovery.
 
 - [ ] **6. Update and recover the stateful agent**
+  - [x] Verify the application's v1-to-v2 SQLite migration, re-entry and
+    explicit rollback in unit tests; separately verify gateway acceptance
+    during closed update gates and dispatch after reopening in PostgreSQL.
   - [ ] Start the second cooking-agent release update, close the run gate,
     accept and defer simultaneous Telegram events, drain old runs, and acquire
     the exclusive state lease.
@@ -337,11 +364,14 @@ guarantees, or production marketing material.
     audit record.
 
 - [ ] **7. Inspect exact provenance**
-  - [ ] From the project UI or inspection API, resolve one journey from public
+  - [x] From the project UI or inspection API, resolve one journey from public
     request through route, gateway revision, normalized mailbox event,
     cooking-agent revision, authorization snapshot, state volume, fenced
     lease, dispatch order, state-access outcome, HTTPS egress uses, Git
     result, and final disposition.
+  - [x] Deny outsider and wrong-audience inspection of the cooking run;
+    verify secret metadata permission filtering, pagination and retained
+    secret-version history with focused PostgreSQL tests.
   - [ ] Verify tombstoning an attachment or revoking a release, route, grant,
     or secret preserves historical resolution while denying new unauthorized
     work.
@@ -349,10 +379,15 @@ guarantees, or production marketing material.
     state contents, parameters marked sensitive, secret metadata, provider
     payloads, or hidden project resources through provenance views or live
     updates.
-  - [ ] Capture stable fixture IDs and screenshots suitable for technical
-    product documentation without including secret or private family data.
+  - [x] Capture redacted fixture IDs and application hashes in the example
+    README, clearly identifying them as evidence from disposable resources.
+  - [ ] Capture browser screenshots suitable for technical product
+    documentation without including secret or private family data.
 
 - [ ] **8. Automate the real-system journey**
+  - [x] Add a runnable deterministic single-request Caddy/libkrun/PostgreSQL/
+    NATS test with brokered calls, controlled approval, authenticated
+    inspection and cleanup; run it with the optional pinned Hugo HTML check.
   - [ ] Add a real-PostgreSQL and NATS integration scenario covering install,
     binding, concurrent ingress, stateful dispatch, Git publication,
     update/recovery, revocation, and exact provenance.
@@ -368,14 +403,20 @@ guarantees, or production marketing material.
     verify the relay's raw Bot API token is absent from its logs and evidence.
 
 - [ ] **9. Verify and document**
-  - [ ] Document how the reference applications own their loops and protocol
+  - [x] Document how the reference applications own their loops and protocol
     semantics while platform authority remains external.
   - [ ] Document how to reproduce the deterministic local journey and inspect
     every allowed, denied, update, and recovery result.
-  - [ ] Run `cargo fmt --all -- --check`.
-  - [ ] Run `cargo clippy --workspace --all-targets --all-features`.
-  - [ ] Run `cargo test --workspace --all-features`.
-  - [ ] Run `cargo doc --workspace --all-features --no-deps`.
+  - [x] Document how to locate and reproduce the current deterministic example
+    and application-only tests from `examples/cooking/README.md`.
+  - [x] Run `cargo fmt --all -- --check`.
+  - [x] Run `cargo clippy --workspace --all-targets --all-features`.
+  - [x] Run `cargo test --workspace --all-features`.
+  - [x] Run `cargo doc --workspace --all-features --no-deps`.
+  - [x] Run `cargo dev quality` on the consolidated example: architecture,
+    protobuf, Rust, Phoenix (233 tests) and focused UI (92 tests) passed.
+    These are baseline results, not completion of the opt-in acceptance matrix;
+    rerun required checks after the remaining implementation changes.
   - [ ] Run real-PostgreSQL, NATS, Caddy, libkrun, broker, update, Git, and
     failure-injection scenarios.
   - [ ] Run `mix precommit` in `web/`.

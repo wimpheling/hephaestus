@@ -6,6 +6,7 @@ the automated scenario, its acceptance specification, and the run command.
 | File or directory | What it contains |
 | --- | --- |
 | [SCENARIO.md](SCENARIO.md) | Full MVP-05 acceptance specification and remaining checklist. |
+| [Remaining-work task](../../tasks/in-progress/mvp-05.1-complete-cooking-acceptance.md) | Sequenced implementation and verification needed to finish MVP-05. |
 | [run.sh](run.sh) | Command to run the real-stack automated example. |
 | [tests/scenario.rs](tests/scenario.rs) | Executable scenario: fixture setup, inbound requests, cooking run, Git result and Hugo checks. Start with `exercise`. |
 | [tests/inspection.rs](tests/inspection.rs) | Authenticated provenance queries, denied queries and proposal approval. |
