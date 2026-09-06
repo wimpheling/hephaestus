@@ -1,5 +1,7 @@
 //! Run query and durable control RPC adapters.
 
+mod get_run_provenance;
+
 use super::{
     MediatorAuthenticator, MutationReceipts, RpcError, into_connect_error, mutation_receipt,
     request,
@@ -16,10 +18,10 @@ use rpc_proto::{
         artifact::v1::{Artifact, ArtifactProvenance},
         common::v1::{MetricLabel, OpaqueId, PageRequest, PageResponse, RuntimeMetric},
         run::v1::{
-            ControlState, GetRunRequest, GetRunResponse, ListProjectRunsRequest,
-            ListProjectRunsResponse, RequestControlRequest, RequestControlResponse, ResultProposal,
-            Run, RunControlKind, RunEvent, RunFailure, RunMetrics, RunResult, RunSummary,
-            run_control_target, run_event,
+            ControlState, GetRunProvenanceRequest, GetRunProvenanceResponse, GetRunRequest,
+            GetRunResponse, ListProjectRunsRequest, ListProjectRunsResponse, RequestControlRequest,
+            RequestControlResponse, ResultProposal, Run, RunControlKind, RunEvent, RunFailure,
+            RunMetrics, RunResult, RunSummary, run_control_target, run_event,
         },
     },
 };
@@ -71,6 +73,14 @@ pub fn register(
 
 #[allow(refining_impl_trait)]
 impl RunService for RunRpc {
+    async fn get_run_provenance(
+        &self,
+        ctx: RequestContext,
+        message: ServiceRequest<'_, GetRunProvenanceRequest>,
+    ) -> ServiceResult<GetRunProvenanceResponse> {
+        get_run_provenance::handle(self, ctx, message).await
+    }
+
     async fn list_project_runs(
         &self,
         ctx: RequestContext,

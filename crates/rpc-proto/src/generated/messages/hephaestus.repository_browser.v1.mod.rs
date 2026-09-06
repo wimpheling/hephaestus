@@ -25,6 +25,10 @@ pub mod __buffa {
         reg.register_json_any(super::__BRANCH_JSON_ANY);
         reg.register_json_any(super::__COMMIT_JSON_ANY);
         reg.register_json_any(super::__TREE_ENTRY_JSON_ANY);
+        reg.register_json_any(super::__DIFF_LINE_JSON_ANY);
+        reg.register_json_any(super::__DIFF_HUNK_JSON_ANY);
+        reg.register_json_any(super::__DIFF_FILE_JSON_ANY);
+        reg.register_json_any(super::__COMMIT_DETAIL_JSON_ANY);
         reg.register_json_any(super::__LIST_BRANCHES_REQUEST_JSON_ANY);
         reg.register_json_any(super::__LIST_BRANCHES_RESPONSE_JSON_ANY);
         reg.register_json_any(super::__LIST_COMMITS_REQUEST_JSON_ANY);
@@ -33,6 +37,8 @@ pub mod __buffa {
         reg.register_json_any(super::__GET_TREE_RESPONSE_JSON_ANY);
         reg.register_json_any(super::__GET_FILE_REQUEST_JSON_ANY);
         reg.register_json_any(super::__GET_FILE_RESPONSE_JSON_ANY);
+        reg.register_json_any(super::__GET_COMMIT_DETAIL_REQUEST_JSON_ANY);
+        reg.register_json_any(super::__GET_COMMIT_DETAIL_RESPONSE_JSON_ANY);
         reg.register_json_any(super::__STREAM_FILE_REQUEST_JSON_ANY);
         reg.register_json_any(super::__STREAM_FILE_RESPONSE_JSON_ANY);
     }
@@ -49,6 +55,22 @@ pub use self::__buffa::view::CommitOwnedView;
 pub use self::__buffa::view::TreeEntryView;
 #[doc(inline)]
 pub use self::__buffa::view::TreeEntryOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::DiffLineView;
+#[doc(inline)]
+pub use self::__buffa::view::DiffLineOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::DiffHunkView;
+#[doc(inline)]
+pub use self::__buffa::view::DiffHunkOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::DiffFileView;
+#[doc(inline)]
+pub use self::__buffa::view::DiffFileOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::CommitDetailView;
+#[doc(inline)]
+pub use self::__buffa::view::CommitDetailOwnedView;
 #[doc(inline)]
 pub use self::__buffa::view::ListBranchesRequestView;
 #[doc(inline)]
@@ -81,6 +103,14 @@ pub use self::__buffa::view::GetFileRequestOwnedView;
 pub use self::__buffa::view::GetFileResponseView;
 #[doc(inline)]
 pub use self::__buffa::view::GetFileResponseOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::GetCommitDetailRequestView;
+#[doc(inline)]
+pub use self::__buffa::view::GetCommitDetailRequestOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::GetCommitDetailResponseView;
+#[doc(inline)]
+pub use self::__buffa::view::GetCommitDetailResponseOwnedView;
 #[doc(inline)]
 pub use self::__buffa::view::StreamFileRequestView;
 #[doc(inline)]

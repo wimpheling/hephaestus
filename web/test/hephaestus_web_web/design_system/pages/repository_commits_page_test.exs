@@ -55,4 +55,29 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.RepositoryCommitsPageTest do
       refute html =~ "Repository unavailable"
     end
   end
+
+  test "renders commits returned with native UTC datetimes" do
+    model = %{RepositoryPageFixtures.model() | commits_empty?: false}
+    form = Phoenix.Component.to_form(model.browse_form, as: :browse)
+
+    html =
+      render_component(&RepositoryCommitsPage.repository_commits/1, %{
+        state: :ready,
+        model: model,
+        commits: [
+          {"commit-1",
+           %{
+             id: "0123456789abcdef",
+             subject: "Add relay",
+             author_name: "Ada",
+             author_email: "ada@example.test",
+             authored_at: ~U[2026-08-11 02:08:52Z]
+           }}
+        ],
+        branch_form: form,
+        select_branch_event: "select-branch"
+      })
+
+    assert html =~ "11 Aug 2026 · 02:08"
+  end
 end

@@ -34,6 +34,42 @@ pub type OwnedListProjectRepositoriesResponseView = ::buffa::view::OwnedView<
         'static,
     >,
 >;
+///Shorthand for `OwnedView<ListProjectRepositoryImagesRequestView<'static>>`.
+pub type OwnedListProjectRepositoryImagesRequestView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::project::v1::__buffa::view::ListProjectRepositoryImagesRequestView<
+        'static,
+    >,
+>;
+///Shorthand for `OwnedView<ListProjectRepositoryImagesResponseView<'static>>`.
+pub type OwnedListProjectRepositoryImagesResponseView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::project::v1::__buffa::view::ListProjectRepositoryImagesResponseView<
+        'static,
+    >,
+>;
+///Shorthand for `OwnedView<GetProjectRepositoryImageRequestView<'static>>`.
+pub type OwnedGetProjectRepositoryImageRequestView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::project::v1::__buffa::view::GetProjectRepositoryImageRequestView<
+        'static,
+    >,
+>;
+///Shorthand for `OwnedView<GetProjectRepositoryImageResponseView<'static>>`.
+pub type OwnedGetProjectRepositoryImageResponseView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::project::v1::__buffa::view::GetProjectRepositoryImageResponseView<
+        'static,
+    >,
+>;
+///Shorthand for `OwnedView<RetryProjectRepositoryImageRequestView<'static>>`.
+pub type OwnedRetryProjectRepositoryImageRequestView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::project::v1::__buffa::view::RetryProjectRepositoryImageRequestView<
+        'static,
+    >,
+>;
+///Shorthand for `OwnedView<RetryProjectRepositoryImageResponseView<'static>>`.
+pub type OwnedRetryProjectRepositoryImageResponseView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::project::v1::__buffa::view::RetryProjectRepositoryImageResponseView<
+        'static,
+    >,
+>;
 ///Shorthand for `OwnedView<ListProjectInstancesRequestView<'static>>`.
 pub type OwnedListProjectInstancesRequestView = ::buffa::view::OwnedView<
     crate::messages::hephaestus::project::v1::__buffa::view::ListProjectInstancesRequestView<
@@ -141,6 +177,90 @@ for ::buffa::view::OwnedView<
     }
 }
 impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::project::v1::ListProjectRepositoryImagesResponse,
+>
+for crate::messages::hephaestus::project::v1::__buffa::view::ListProjectRepositoryImagesResponseView<
+    '_,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self, codec)
+    }
+}
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::project::v1::ListProjectRepositoryImagesResponse,
+>
+for ::buffa::view::OwnedView<
+    crate::messages::hephaestus::project::v1::__buffa::view::ListProjectRepositoryImagesResponseView<
+        'static,
+    >,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self.reborrow(), codec)
+    }
+}
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::project::v1::GetProjectRepositoryImageResponse,
+>
+for crate::messages::hephaestus::project::v1::__buffa::view::GetProjectRepositoryImageResponseView<
+    '_,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self, codec)
+    }
+}
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::project::v1::GetProjectRepositoryImageResponse,
+>
+for ::buffa::view::OwnedView<
+    crate::messages::hephaestus::project::v1::__buffa::view::GetProjectRepositoryImageResponseView<
+        'static,
+    >,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self.reborrow(), codec)
+    }
+}
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::project::v1::RetryProjectRepositoryImageResponse,
+>
+for crate::messages::hephaestus::project::v1::__buffa::view::RetryProjectRepositoryImageResponseView<
+    '_,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self, codec)
+    }
+}
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::project::v1::RetryProjectRepositoryImageResponse,
+>
+for ::buffa::view::OwnedView<
+    crate::messages::hephaestus::project::v1::__buffa::view::RetryProjectRepositoryImageResponseView<
+        'static,
+    >,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self.reborrow(), codec)
+    }
+}
+impl ::connectrpc::Encodable<
     crate::messages::hephaestus::project::v1::ListProjectInstancesResponse,
 >
 for crate::messages::hephaestus::project::v1::__buffa::view::ListProjectInstancesResponseView<
@@ -225,6 +345,33 @@ pub const PROJECT_SERVICE_LIST_PROJECT_REPOSITORIES_SPEC: ::connectrpc::Spec = :
         ::connectrpc::StreamType::Unary,
     )
     .with_idempotency_level(::connectrpc::IdempotencyLevel::NoSideEffects);
+/// Static [`Spec`](::connectrpc::Spec) for the server-side `ListProjectRepositoryImages` RPC.
+///
+/// The dispatcher surfaces this on
+/// [`RequestContext::spec`](::connectrpc::RequestContext::spec).
+pub const PROJECT_SERVICE_LIST_PROJECT_REPOSITORY_IMAGES_SPEC: ::connectrpc::Spec = ::connectrpc::Spec::server(
+        "/hephaestus.project.v1.ProjectService/ListProjectRepositoryImages",
+        ::connectrpc::StreamType::Unary,
+    )
+    .with_idempotency_level(::connectrpc::IdempotencyLevel::NoSideEffects);
+/// Static [`Spec`](::connectrpc::Spec) for the server-side `GetProjectRepositoryImage` RPC.
+///
+/// The dispatcher surfaces this on
+/// [`RequestContext::spec`](::connectrpc::RequestContext::spec).
+pub const PROJECT_SERVICE_GET_PROJECT_REPOSITORY_IMAGE_SPEC: ::connectrpc::Spec = ::connectrpc::Spec::server(
+        "/hephaestus.project.v1.ProjectService/GetProjectRepositoryImage",
+        ::connectrpc::StreamType::Unary,
+    )
+    .with_idempotency_level(::connectrpc::IdempotencyLevel::NoSideEffects);
+/// Static [`Spec`](::connectrpc::Spec) for the server-side `RetryProjectRepositoryImage` RPC.
+///
+/// The dispatcher surfaces this on
+/// [`RequestContext::spec`](::connectrpc::RequestContext::spec).
+pub const PROJECT_SERVICE_RETRY_PROJECT_REPOSITORY_IMAGE_SPEC: ::connectrpc::Spec = ::connectrpc::Spec::server(
+        "/hephaestus.project.v1.ProjectService/RetryProjectRepositoryImage",
+        ::connectrpc::StreamType::Unary,
+    )
+    .with_idempotency_level(::connectrpc::IdempotencyLevel::Unknown);
 /// Static [`Spec`](::connectrpc::Spec) for the server-side `ListProjectInstances` RPC.
 ///
 /// The dispatcher surfaces this on
@@ -360,6 +507,75 @@ pub trait ProjectService: Send + Sync + 'static {
         Output = ::connectrpc::ServiceResult<
             impl ::connectrpc::Encodable<
                 crate::messages::hephaestus::project::v1::ListProjectRepositoriesResponse,
+            > + Send + use<'a, Self>,
+        >,
+    > + Send;
+    /// Handle the ListProjectRepositoryImages RPC.
+    ///
+    /// `'a` lets the response body borrow from `&self` (e.g. server-resident state).
+    ///
+    /// `request` is borrowed from the request body and is valid for the
+    /// duration of the call; message fields are read directly on it
+    /// (zero-copy). The response cannot borrow from `request` — use
+    /// `.to_owned_message()` (or copy the specific fields) for anything
+    /// returned, stored, or moved into `tokio::spawn`.
+    fn list_project_repository_images<'a>(
+        &'a self,
+        ctx: ::connectrpc::RequestContext,
+        request: ::connectrpc::ServiceRequest<
+            '_,
+            crate::messages::hephaestus::project::v1::ListProjectRepositoryImagesRequest,
+        >,
+    ) -> impl ::std::future::Future<
+        Output = ::connectrpc::ServiceResult<
+            impl ::connectrpc::Encodable<
+                crate::messages::hephaestus::project::v1::ListProjectRepositoryImagesResponse,
+            > + Send + use<'a, Self>,
+        >,
+    > + Send;
+    /// Handle the GetProjectRepositoryImage RPC.
+    ///
+    /// `'a` lets the response body borrow from `&self` (e.g. server-resident state).
+    ///
+    /// `request` is borrowed from the request body and is valid for the
+    /// duration of the call; message fields are read directly on it
+    /// (zero-copy). The response cannot borrow from `request` — use
+    /// `.to_owned_message()` (or copy the specific fields) for anything
+    /// returned, stored, or moved into `tokio::spawn`.
+    fn get_project_repository_image<'a>(
+        &'a self,
+        ctx: ::connectrpc::RequestContext,
+        request: ::connectrpc::ServiceRequest<
+            '_,
+            crate::messages::hephaestus::project::v1::GetProjectRepositoryImageRequest,
+        >,
+    ) -> impl ::std::future::Future<
+        Output = ::connectrpc::ServiceResult<
+            impl ::connectrpc::Encodable<
+                crate::messages::hephaestus::project::v1::GetProjectRepositoryImageResponse,
+            > + Send + use<'a, Self>,
+        >,
+    > + Send;
+    /// Handle the RetryProjectRepositoryImage RPC.
+    ///
+    /// `'a` lets the response body borrow from `&self` (e.g. server-resident state).
+    ///
+    /// `request` is borrowed from the request body and is valid for the
+    /// duration of the call; message fields are read directly on it
+    /// (zero-copy). The response cannot borrow from `request` — use
+    /// `.to_owned_message()` (or copy the specific fields) for anything
+    /// returned, stored, or moved into `tokio::spawn`.
+    fn retry_project_repository_image<'a>(
+        &'a self,
+        ctx: ::connectrpc::RequestContext,
+        request: ::connectrpc::ServiceRequest<
+            '_,
+            crate::messages::hephaestus::project::v1::RetryProjectRepositoryImageRequest,
+        >,
+    ) -> impl ::std::future::Future<
+        Output = ::connectrpc::ServiceResult<
+            impl ::connectrpc::Encodable<
+                crate::messages::hephaestus::project::v1::RetryProjectRepositoryImageResponse,
             > + Send + use<'a, Self>,
         >,
     > + Send;
@@ -530,6 +746,93 @@ impl<S: ProjectService> ProjectServiceExt for S {
             .with_spec(PROJECT_SERVICE_LIST_PROJECT_REPOSITORIES_SPEC)
             .route_view_idempotent(
                 PROJECT_SERVICE_SERVICE_NAME,
+                "ListProjectRepositoryImages",
+                {
+                    let svc = ::std::sync::Arc::clone(&self);
+                    ::connectrpc::view_handler_fn(move |
+                        ctx,
+                        req: ::buffa::view::OwnedView<
+                            crate::messages::hephaestus::project::v1::__buffa::view::ListProjectRepositoryImagesRequestView<
+                                'static,
+                            >,
+                        >,
+                        format|
+                    {
+                        let svc = ::std::sync::Arc::clone(&svc);
+                        async move {
+                            let sreq = ::connectrpc::ServiceRequest::<
+                                crate::messages::hephaestus::project::v1::ListProjectRepositoryImagesRequest,
+                            >::from_parts(req.reborrow(), req.bytes());
+                            svc.list_project_repository_images(ctx, sreq)
+                                .await?
+                                .encode::<
+                                    crate::messages::hephaestus::project::v1::ListProjectRepositoryImagesResponse,
+                                >(format)
+                        }
+                    })
+                },
+            )
+            .with_spec(PROJECT_SERVICE_LIST_PROJECT_REPOSITORY_IMAGES_SPEC)
+            .route_view_idempotent(
+                PROJECT_SERVICE_SERVICE_NAME,
+                "GetProjectRepositoryImage",
+                {
+                    let svc = ::std::sync::Arc::clone(&self);
+                    ::connectrpc::view_handler_fn(move |
+                        ctx,
+                        req: ::buffa::view::OwnedView<
+                            crate::messages::hephaestus::project::v1::__buffa::view::GetProjectRepositoryImageRequestView<
+                                'static,
+                            >,
+                        >,
+                        format|
+                    {
+                        let svc = ::std::sync::Arc::clone(&svc);
+                        async move {
+                            let sreq = ::connectrpc::ServiceRequest::<
+                                crate::messages::hephaestus::project::v1::GetProjectRepositoryImageRequest,
+                            >::from_parts(req.reborrow(), req.bytes());
+                            svc.get_project_repository_image(ctx, sreq)
+                                .await?
+                                .encode::<
+                                    crate::messages::hephaestus::project::v1::GetProjectRepositoryImageResponse,
+                                >(format)
+                        }
+                    })
+                },
+            )
+            .with_spec(PROJECT_SERVICE_GET_PROJECT_REPOSITORY_IMAGE_SPEC)
+            .route_view(
+                PROJECT_SERVICE_SERVICE_NAME,
+                "RetryProjectRepositoryImage",
+                {
+                    let svc = ::std::sync::Arc::clone(&self);
+                    ::connectrpc::view_handler_fn(move |
+                        ctx,
+                        req: ::buffa::view::OwnedView<
+                            crate::messages::hephaestus::project::v1::__buffa::view::RetryProjectRepositoryImageRequestView<
+                                'static,
+                            >,
+                        >,
+                        format|
+                    {
+                        let svc = ::std::sync::Arc::clone(&svc);
+                        async move {
+                            let sreq = ::connectrpc::ServiceRequest::<
+                                crate::messages::hephaestus::project::v1::RetryProjectRepositoryImageRequest,
+                            >::from_parts(req.reborrow(), req.bytes());
+                            svc.retry_project_repository_image(ctx, sreq)
+                                .await?
+                                .encode::<
+                                    crate::messages::hephaestus::project::v1::RetryProjectRepositoryImageResponse,
+                                >(format)
+                        }
+                    })
+                },
+            )
+            .with_spec(PROJECT_SERVICE_RETRY_PROJECT_REPOSITORY_IMAGE_SPEC)
+            .route_view_idempotent(
+                PROJECT_SERVICE_SERVICE_NAME,
                 "ListProjectInstances",
                 {
                     let svc = ::std::sync::Arc::clone(&self);
@@ -658,6 +961,24 @@ impl<T: ProjectService> ::connectrpc::Dispatcher for ProjectServiceServer<T> {
                         .with_spec(PROJECT_SERVICE_LIST_PROJECT_REPOSITORIES_SPEC),
                 )
             }
+            "ListProjectRepositoryImages" => {
+                Some(
+                    ::connectrpc::dispatcher::codegen::MethodDescriptor::unary(true)
+                        .with_spec(PROJECT_SERVICE_LIST_PROJECT_REPOSITORY_IMAGES_SPEC),
+                )
+            }
+            "GetProjectRepositoryImage" => {
+                Some(
+                    ::connectrpc::dispatcher::codegen::MethodDescriptor::unary(true)
+                        .with_spec(PROJECT_SERVICE_GET_PROJECT_REPOSITORY_IMAGE_SPEC),
+                )
+            }
+            "RetryProjectRepositoryImage" => {
+                Some(
+                    ::connectrpc::dispatcher::codegen::MethodDescriptor::unary(false)
+                        .with_spec(PROJECT_SERVICE_RETRY_PROJECT_REPOSITORY_IMAGE_SPEC),
+                )
+            }
             "ListProjectInstances" => {
                 Some(
                     ::connectrpc::dispatcher::codegen::MethodDescriptor::unary(true)
@@ -746,6 +1067,69 @@ impl<T: ProjectService> ::connectrpc::Dispatcher for ProjectServiceServer<T> {
                         .await?
                         .encode::<
                             crate::messages::hephaestus::project::v1::ListProjectRepositoriesResponse,
+                        >(format)
+                })
+            }
+            "ListProjectRepositoryImages" => {
+                let svc = ::std::sync::Arc::clone(&self.inner);
+                Box::pin(async move {
+                    let body = ::connectrpc::dispatcher::codegen::request_proto_bytes::<
+                        crate::messages::hephaestus::project::v1::ListProjectRepositoryImagesRequest,
+                    >(request.encoded()?, format)?;
+                    let req: crate::messages::hephaestus::project::v1::__buffa::view::ListProjectRepositoryImagesRequestView<
+                        '_,
+                    > = ::connectrpc::dispatcher::codegen::decode_borrowed_request_view(
+                        &body,
+                    )?;
+                    let req = ::connectrpc::ServiceRequest::<
+                        crate::messages::hephaestus::project::v1::ListProjectRepositoryImagesRequest,
+                    >::from_parts(&req, &body);
+                    svc.list_project_repository_images(ctx, req)
+                        .await?
+                        .encode::<
+                            crate::messages::hephaestus::project::v1::ListProjectRepositoryImagesResponse,
+                        >(format)
+                })
+            }
+            "GetProjectRepositoryImage" => {
+                let svc = ::std::sync::Arc::clone(&self.inner);
+                Box::pin(async move {
+                    let body = ::connectrpc::dispatcher::codegen::request_proto_bytes::<
+                        crate::messages::hephaestus::project::v1::GetProjectRepositoryImageRequest,
+                    >(request.encoded()?, format)?;
+                    let req: crate::messages::hephaestus::project::v1::__buffa::view::GetProjectRepositoryImageRequestView<
+                        '_,
+                    > = ::connectrpc::dispatcher::codegen::decode_borrowed_request_view(
+                        &body,
+                    )?;
+                    let req = ::connectrpc::ServiceRequest::<
+                        crate::messages::hephaestus::project::v1::GetProjectRepositoryImageRequest,
+                    >::from_parts(&req, &body);
+                    svc.get_project_repository_image(ctx, req)
+                        .await?
+                        .encode::<
+                            crate::messages::hephaestus::project::v1::GetProjectRepositoryImageResponse,
+                        >(format)
+                })
+            }
+            "RetryProjectRepositoryImage" => {
+                let svc = ::std::sync::Arc::clone(&self.inner);
+                Box::pin(async move {
+                    let body = ::connectrpc::dispatcher::codegen::request_proto_bytes::<
+                        crate::messages::hephaestus::project::v1::RetryProjectRepositoryImageRequest,
+                    >(request.encoded()?, format)?;
+                    let req: crate::messages::hephaestus::project::v1::__buffa::view::RetryProjectRepositoryImageRequestView<
+                        '_,
+                    > = ::connectrpc::dispatcher::codegen::decode_borrowed_request_view(
+                        &body,
+                    )?;
+                    let req = ::connectrpc::ServiceRequest::<
+                        crate::messages::hephaestus::project::v1::RetryProjectRepositoryImageRequest,
+                    >::from_parts(&req, &body);
+                    svc.retry_project_repository_image(ctx, req)
+                        .await?
+                        .encode::<
+                            crate::messages::hephaestus::project::v1::RetryProjectRepositoryImageResponse,
                         >(format)
                 })
             }
@@ -1054,6 +1438,141 @@ where
                 &self.config,
                 PROJECT_SERVICE_SERVICE_NAME,
                 "ListProjectRepositories",
+                request,
+                options,
+            )
+            .await
+    }
+    /// Call the ListProjectRepositoryImages RPC. Sends a request to /hephaestus.project.v1.ProjectService/ListProjectRepositoryImages.
+    pub async fn list_project_repository_images(
+        &self,
+        request: crate::messages::hephaestus::project::v1::ListProjectRepositoryImagesRequest,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::project::v1::__buffa::view::ListProjectRepositoryImagesResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        self.list_project_repository_images_with_options(
+                request,
+                ::connectrpc::client::CallOptions::default(),
+            )
+            .await
+    }
+    /// Call the ListProjectRepositoryImages RPC with explicit per-call options. Options override [`ClientConfig`](::connectrpc::client::ClientConfig) defaults.
+    pub async fn list_project_repository_images_with_options(
+        &self,
+        request: crate::messages::hephaestus::project::v1::ListProjectRepositoryImagesRequest,
+        options: ::connectrpc::client::CallOptions,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::project::v1::__buffa::view::ListProjectRepositoryImagesResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        ::connectrpc::client::call_unary(
+                &self.transport,
+                &self.config,
+                PROJECT_SERVICE_SERVICE_NAME,
+                "ListProjectRepositoryImages",
+                request,
+                options,
+            )
+            .await
+    }
+    /// Call the GetProjectRepositoryImage RPC. Sends a request to /hephaestus.project.v1.ProjectService/GetProjectRepositoryImage.
+    pub async fn get_project_repository_image(
+        &self,
+        request: crate::messages::hephaestus::project::v1::GetProjectRepositoryImageRequest,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::project::v1::__buffa::view::GetProjectRepositoryImageResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        self.get_project_repository_image_with_options(
+                request,
+                ::connectrpc::client::CallOptions::default(),
+            )
+            .await
+    }
+    /// Call the GetProjectRepositoryImage RPC with explicit per-call options. Options override [`ClientConfig`](::connectrpc::client::ClientConfig) defaults.
+    pub async fn get_project_repository_image_with_options(
+        &self,
+        request: crate::messages::hephaestus::project::v1::GetProjectRepositoryImageRequest,
+        options: ::connectrpc::client::CallOptions,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::project::v1::__buffa::view::GetProjectRepositoryImageResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        ::connectrpc::client::call_unary(
+                &self.transport,
+                &self.config,
+                PROJECT_SERVICE_SERVICE_NAME,
+                "GetProjectRepositoryImage",
+                request,
+                options,
+            )
+            .await
+    }
+    /// Call the RetryProjectRepositoryImage RPC. Sends a request to /hephaestus.project.v1.ProjectService/RetryProjectRepositoryImage.
+    pub async fn retry_project_repository_image(
+        &self,
+        request: crate::messages::hephaestus::project::v1::RetryProjectRepositoryImageRequest,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::project::v1::__buffa::view::RetryProjectRepositoryImageResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        self.retry_project_repository_image_with_options(
+                request,
+                ::connectrpc::client::CallOptions::default(),
+            )
+            .await
+    }
+    /// Call the RetryProjectRepositoryImage RPC with explicit per-call options. Options override [`ClientConfig`](::connectrpc::client::ClientConfig) defaults.
+    pub async fn retry_project_repository_image_with_options(
+        &self,
+        request: crate::messages::hephaestus::project::v1::RetryProjectRepositoryImageRequest,
+        options: ::connectrpc::client::CallOptions,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::project::v1::__buffa::view::RetryProjectRepositoryImageResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        ::connectrpc::client::call_unary(
+                &self.transport,
+                &self.config,
+                PROJECT_SERVICE_SERVICE_NAME,
+                "RetryProjectRepositoryImage",
                 request,
                 options,
             )

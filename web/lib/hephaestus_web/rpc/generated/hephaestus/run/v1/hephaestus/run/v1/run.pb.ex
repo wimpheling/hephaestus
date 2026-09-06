@@ -241,6 +241,65 @@ defmodule Hephaestus.Run.V1.GetRunResponse do
   field(:run, 1, type: Hephaestus.Run.V1.Run)
 end
 
+defmodule Hephaestus.Run.V1.GetRunProvenanceRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.run.v1.GetRunProvenanceRequest",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:run_id, 1, type: Hephaestus.Common.V1.OpaqueId, json_name: "runId")
+  field(:page, 2, type: Hephaestus.Common.V1.PageRequest)
+end
+
+defmodule Hephaestus.Run.V1.RunHttpsUse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.run.v1.RunHttpsUse",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:id, 1, type: Hephaestus.Common.V1.OpaqueId)
+  field(:request_id, 2, type: Hephaestus.Common.V1.OpaqueId, json_name: "requestId")
+  field(:lease_id, 3, type: Hephaestus.Common.V1.OpaqueId, json_name: "leaseId")
+  field(:binding_id, 4, type: Hephaestus.Common.V1.OpaqueId, json_name: "bindingId")
+  field(:secret_version_id, 5, type: Hephaestus.Common.V1.OpaqueId, json_name: "secretVersionId")
+  field(:rule_id, 6, type: Hephaestus.Common.V1.OpaqueId, json_name: "ruleId")
+  field(:event_kind, 7, type: :string, json_name: "eventKind")
+  field(:decision, 8, type: :string)
+  field(:outcome, 9, type: :string)
+  field(:occurred_at, 10, type: Google.Protobuf.Timestamp, json_name: "occurredAt")
+end
+
+defmodule Hephaestus.Run.V1.GetRunProvenanceResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.run.v1.GetRunProvenanceResponse",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:run_id, 1, type: Hephaestus.Common.V1.OpaqueId, json_name: "runId")
+
+  field(:authorization_snapshot_id, 2,
+    type: Hephaestus.Common.V1.OpaqueId,
+    json_name: "authorizationSnapshotId"
+  )
+
+  field(:authorization_model_version, 3, type: :string, json_name: "authorizationModelVersion")
+  field(:authorization_snapshot_hash, 4, type: :string, json_name: "authorizationSnapshotHash")
+
+  field(:https_uses, 5,
+    repeated: true,
+    type: Hephaestus.Run.V1.RunHttpsUse,
+    json_name: "httpsUses"
+  )
+
+  field(:page, 6, type: Hephaestus.Common.V1.PageResponse)
+end
+
 defmodule Hephaestus.Run.V1.RunControlTarget do
   @moduledoc false
 
@@ -291,6 +350,12 @@ defmodule Hephaestus.Run.V1.RunService.Service do
   @moduledoc false
 
   use GRPC.Service, name: "hephaestus.run.v1.RunService", protoc_gen_elixir_version: "0.17.0"
+
+  rpc(
+    :GetRunProvenance,
+    Hephaestus.Run.V1.GetRunProvenanceRequest,
+    Hephaestus.Run.V1.GetRunProvenanceResponse
+  )
 
   rpc(
     :ListProjectRuns,

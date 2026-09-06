@@ -23,8 +23,8 @@ use capability_domain::{
 };
 use control_plane_postgres::launch::PgRunLaunchAuthorizer;
 use control_plane_postgres::{
-    ControlPlanePool, connect as connect_control_plane, is_update_hook_run,
-    load_vm_launch_contract, recoverable_update_hook_run_ids,
+    ControlPlanePool, connect as connect_control_plane, connect_worker as connect_oci_worker,
+    is_update_hook_run, load_vm_launch_contract, recoverable_update_hook_run_ids,
 };
 use event_postgres::{ReleaseOutboxPublisher, ensure_release_jetstream_topology};
 use forge_postgres::PgForgeRepository;
@@ -42,7 +42,7 @@ use gateway_edge::{
 };
 use gateway_postgres::{
     GatewayReleaseArtifact, GatewayReleaseArtifactKind, GatewayReleaseMaterializer,
-    PostgresGatewayEdgeAuthority, PostgresGatewayReleaseResolver,
+    PostgresGatewayEdgeAuthority, PostgresGatewayMailboxPublisher, PostgresGatewayReleaseResolver,
 };
 use git_http::{
     CompositeGitAuthenticator, GitAuthenticator, GitHttpLimits, GitHttpService,
@@ -59,11 +59,12 @@ use mailbox_dispatch::{
 use mailbox_postgres::PostgresMailboxRepository;
 use oci_builder_postgres::{PgOciImageProductionJobStore, PgRepositoryOciImagePublicationStore};
 use oci_builder_runtime_local::{
-    ForgeZotOciPublisher, ForgeZotPublicationConfig, LocalOciRuntime, LocalOciRuntimeConfig,
+    ForgeZotOciPublisher, LocalOciRuntime, LocalOciRuntimeConfig, VmOciOperation,
+    VmOciOperationConfig, VmPublishedOciEngine,
 };
 use oci_builder_worker::{
-    BuildahEngine, OciImageProductionWorker, OciWorkerError, PublishedBuildahEngine,
-    RegistryPublisherTokenIssuer, RootfsMaterializationWorker,
+    OciImageProductionWorker, OciWorkerError, RegistryPublisherTokenIssuer,
+    RootfsMaterializationWorker,
 };
 use registry_domain::{PolicyVersion, RegistryNamespace, SupplyChainPolicy};
 use registry_http::{
@@ -128,7 +129,7 @@ use std::{
     net::SocketAddr,
     os::unix::fs::PermissionsExt,
     path::PathBuf,
-    sync::Arc,
+    sync::{Arc, RwLock},
     time::{Duration, Instant},
 };
 use time::OffsetDateTime;
@@ -150,7 +151,7 @@ use workspace_local::{LocalWorkspaceConfig, LocalWorkspaceManager};
 use workspace_postgres::PgWorkspaceMetadataRepository;
 
 /// Ordered database migration expected by this application version.
-pub const EXPECTED_DATABASE_MIGRATION: i64 = 47;
+pub const EXPECTED_DATABASE_MIGRATION: i64 = 62;
 
 /// OIDC issuer configuration used for bearer-token authentication.
 pub struct OidcConfig {
@@ -230,14 +231,24 @@ pub struct RuntimePolicy {
 pub struct OciBuilderWorkerConfig {
     /// Administrator-owned local Git/OCI/scanner runtime.
     pub runtime: LocalOciRuntimeConfig,
-    /// Trusted post-build SBOM tooling.
-    pub publication_tooling: ForgeZotPublicationConfig,
     /// Fixed Zot publication boundary and trusted OCI client binaries.
     pub publisher: PublisherConfiguration,
     /// Immutable policy revision recorded with every repository publication.
     pub publication_policy_version: PolicyVersion,
     /// Required evidence policy for repository builder images.
     pub publication_policy: SupplyChainPolicy,
+    /// Exact operational root reference for the isolated Buildah VM.
+    pub builder_vm_image: OciImageReference,
+    /// Exact operational root reference for the independent verifier VM.
+    pub verifier_vm_image: OciImageReference,
+    /// Private verifier evidence/export root.
+    pub verification_root: PathBuf,
+    /// Private, per-operation Buildah storage root mounted only into builders.
+    pub scratch_root: PathBuf,
+    /// Absolute trusted formatter for per-operation ext4 scratch disks.
+    pub mkfs_ext4: PathBuf,
+    /// Fixed resources for both one-shot operation VMs.
+    pub vm_resources: VmResources,
     /// Stable identity for durable OCI preparation claims.
     pub preparation_worker_name: String,
     /// Stable daemon-local identity for rootfs materialization claims.
@@ -246,6 +257,8 @@ pub struct OciBuilderWorkerConfig {
     pub rootfs_root: PathBuf,
     /// Atomically rewritten digest-to-rootfs manifest for operator inspection.
     pub root_manifest: PathBuf,
+    /// Reviewed guest bootstrap injected only by the trusted materializer.
+    pub guest_init: PathBuf,
     /// Lease duration for preparation and materialization claims.
     pub lease: Duration,
     /// Poll interval used when no durable OCI job is immediately available.
@@ -497,6 +510,12 @@ impl AppConfig {
         if worker.runtime.repository_root != self.repository_root
             || !worker.rootfs_root.is_absolute()
             || !worker.root_manifest.is_absolute()
+            || !worker.guest_init.is_absolute()
+            || !worker.verification_root.is_absolute()
+            || !worker.scratch_root.is_absolute()
+            || !worker.mkfs_ext4.is_absolute()
+            || worker.vm_resources.vcpus == 0
+            || worker.vm_resources.memory_mib == 0
             || worker.lease.is_zero()
             || worker.poll_interval.is_zero()
         {
@@ -510,6 +529,13 @@ impl AppConfig {
             return Err(AppError::Configuration(String::from(
                 "libkrun image roots must include the OCI builder rootfs root",
             )));
+        }
+        for reference in [&worker.builder_vm_image, &worker.verifier_vm_image] {
+            if !self.root_images.contains_key(reference.as_str()) {
+                return Err(AppError::Configuration(String::from(
+                    "OCI operational VM image is not present in the root image manifest",
+                )));
+            }
         }
         Ok(())
     }
@@ -595,7 +621,8 @@ impl GatewayReleaseMaterializer for LocalGatewayReleaseMaterializer {
         &self,
         invocation_id: Uuid,
         artifacts: &[GatewayReleaseArtifact],
-    ) -> Result<VmMount, gateway_edge::GatewayEdgeError> {
+        parameters: &serde_json::Value,
+    ) -> Result<Vec<VmMount>, gateway_edge::GatewayEdgeError> {
         let artifacts = artifacts
             .iter()
             .map(|artifact| RunRuntimeArtifact {
@@ -612,7 +639,7 @@ impl GatewayReleaseMaterializer for LocalGatewayReleaseMaterializer {
             })
             .collect::<Vec<_>>();
         self.runtime
-            .prepare(invocation_id, &artifacts)
+            .prepare(invocation_id, &artifacts, parameters)
             .map_err(|_| gateway_edge::GatewayEdgeError::HandlerUnavailable)
     }
 
@@ -627,16 +654,16 @@ struct OciBuilderWorkers {
     preparation: OciImageProductionWorker<
         PgOciImageProductionJobStore,
         LocalOciRuntime,
-        PublishedBuildahEngine<
-            ForgeZotOciPublisher<
-                PgRepositoryOciImagePublicationStore,
-                InternalRegistryTokens,
-                SystemCommandRunner,
-            >,
+        VmPublishedOciEngine<
+            PgRepositoryOciImagePublicationStore,
+            InternalRegistryTokens,
+            SystemCommandRunner,
         >,
     >,
     materialization: RootfsMaterializationWorker<PgOciImageProductionJobStore, LocalOciRuntime>,
     manifest: PathBuf,
+    rootfs_root: PathBuf,
+    image_filesystems: Arc<RwLock<BTreeMap<String, RootFilesystem>>>,
     poll_interval: Duration,
 }
 
@@ -936,19 +963,42 @@ impl OciBuilderWorkers {
         pool: PgPool,
         config: OciBuilderWorkerConfig,
         token_issuer: Arc<registry_token::RegistryTokenIssuer>,
+        provider: Arc<dyn VmProvider>,
+        root_images: &BTreeMap<String, RootFilesystem>,
+        image_filesystems: Arc<RwLock<BTreeMap<String, RootFilesystem>>>,
     ) -> Result<Self, AppError> {
         if !config.root_manifest.is_absolute() || config.poll_interval.is_zero() {
             return Err(AppError::Configuration(String::from(
                 "OCI builder manifest path must be absolute and poll interval must be positive",
             )));
         }
-        let buildah = BuildahEngine::new(
-            config.runtime.buildah_binary.clone(),
-            config.runtime.buildah_output_prefix.clone(),
-        )
-        .map_err(component("OCI Buildah configuration"))?;
         let runtime = LocalOciRuntime::initialize(config.runtime)
             .map_err(component("OCI local runtime configuration"))?;
+        let builder_root = root_images
+            .get(config.builder_vm_image.as_str())
+            .cloned()
+            .ok_or_else(|| {
+                AppError::Configuration(String::from("OCI builder VM root is unavailable"))
+            })?;
+        let verifier_root = root_images
+            .get(config.verifier_vm_image.as_str())
+            .cloned()
+            .ok_or_else(|| {
+                AppError::Configuration(String::from("OCI verifier VM root is unavailable"))
+            })?;
+        let operation = VmOciOperation::initialize(
+            provider,
+            VmOciOperationConfig {
+                builder_root,
+                verifier_root,
+                candidate_root: runtime.output_root().to_path_buf(),
+                scratch_root: config.scratch_root,
+                mkfs_ext4: config.mkfs_ext4,
+                verification_root: config.verification_root,
+                resources: config.vm_resources,
+            },
+        )
+        .map_err(component("OCI VM operation configuration"))?;
         let publication_store = PgRepositoryOciImagePublicationStore::new(
             pool.clone(),
             PgRegistryStore::new(pool.clone()),
@@ -956,13 +1006,9 @@ impl OciBuilderWorkers {
             config.publication_policy_version,
             config.publication_policy,
         );
-        let publication_tooling = config
-            .publication_tooling
-            .initialize()
-            .map_err(component("OCI publication tooling"))?;
         let publisher = ForgeZotOciPublisher::new(
             runtime.clone(),
-            publication_tooling,
+            None,
             publication_store,
             InternalRegistryTokens {
                 issuer: token_issuer,
@@ -972,7 +1018,7 @@ impl OciBuilderWorkers {
         let preparation = OciImageProductionWorker::new(
             PgOciImageProductionJobStore::new(pool.clone()),
             runtime.clone(),
-            PublishedBuildahEngine::new(buildah, publisher),
+            VmPublishedOciEngine::new(operation, publisher),
             config.preparation_worker_name,
             config.materialization_worker_name.clone(),
             config.lease,
@@ -982,16 +1028,48 @@ impl OciBuilderWorkers {
             PgOciImageProductionJobStore::new(pool),
             runtime,
             config.materialization_worker_name,
-            config.rootfs_root,
+            config.rootfs_root.clone(),
             config.lease,
         )
+        .and_then(|worker| worker.with_guest_init(config.guest_init))
         .map_err(component("OCI materialization worker configuration"))?;
         Ok(Self {
             preparation,
             materialization,
             manifest: config.root_manifest,
+            rootfs_root: config.rootfs_root,
+            image_filesystems,
             poll_interval: config.poll_interval,
         })
+    }
+
+    async fn refresh_image_filesystems(&self) -> Result<(), OciWorkerError> {
+        let roots = self.materialization.materialized_roots().await?;
+        {
+            let mut image_filesystems = self
+                .image_filesystems
+                .write()
+                .map_err(|_| OciWorkerError::InvalidConfiguration)?;
+            for root in roots {
+                let canonical =
+                    std::fs::canonicalize(&root.root_path).map_err(OciWorkerError::Filesystem)?;
+                let metadata =
+                    std::fs::symlink_metadata(&canonical).map_err(OciWorkerError::Filesystem)?;
+                if !canonical.starts_with(&self.rootfs_root)
+                    || metadata.file_type().is_symlink()
+                    || !metadata.is_dir()
+                {
+                    return Err(OciWorkerError::UnsafeMaterializationPath);
+                }
+                image_filesystems.insert(
+                    root.image_reference.to_string(),
+                    RootFilesystem::Directory {
+                        host_path: canonical,
+                    },
+                );
+            }
+        }
+        Ok(())
     }
 }
 
@@ -1101,18 +1179,6 @@ impl HephaestusApp {
             config.secret_broker_adapter,
         ));
 
-        let oci_builder_workers = config
-            .oci_builder
-            .take()
-            .map(|worker| {
-                OciBuilderWorkers::initialize(
-                    pool.clone(),
-                    worker,
-                    Arc::clone(&config.registry.token_issuer),
-                )
-            })
-            .transpose()?
-            .map(Arc::new);
         let provider: Arc<dyn VmProvider> = match config.vm_backend {
             VmBackendConfig::Fake => Arc::new(FakeProvider::new()),
             VmBackendConfig::FixtureResult => Arc::new(ResultFixtureProvider),
@@ -1121,13 +1187,37 @@ impl HephaestusApp {
                 Arc::new(LibkrunProvider::new(*provider).map_err(component("libkrun provider"))?)
             }
         };
+        let image_filesystems = Arc::new(RwLock::new(config.root_images.clone()));
+        let oci_builder_workers = match config.oci_builder.take() {
+            Some(worker) => {
+                let worker_pool = connect_oci_worker(&config.database_url, 4)
+                    .await
+                    .map_err(component("OCI worker PostgreSQL connection"))?;
+                Some(Arc::new(OciBuilderWorkers::initialize(
+                    worker_pool,
+                    worker,
+                    Arc::clone(&config.registry.token_issuer),
+                    Arc::clone(&provider),
+                    &config.root_images,
+                    Arc::clone(&image_filesystems),
+                )?))
+            }
+            None => None,
+        };
         let gateway_edge = if let Some(gateway) = gateway_edge_config {
+            // Gateway runtime snapshots and sessions are worker-owned
+            // immutable authority records. Keep issuance on a dedicated
+            // worker-role pool rather than leaking those writes through the
+            // user-scoped control-plane pool.
+            let gateway_authority_pool = connect_oci_worker(&config.database_url, 4)
+                .await
+                .map_err(component("gateway runtime authority PostgreSQL connection"))?;
             let issuer_handoff =
                 EncryptedFileHandoffStore::new(gateway_handoff_root.clone(), gateway_handoff_key)
                     .map_err(component("gateway runtime authority handoff"))?;
             let issuer: Arc<dyn GatewayRuntimeAuthorityIssuer> =
                 Arc::new(PgGatewayRuntimeAuthorityIssuer::new(
-                    pool.clone(),
+                    gateway_authority_pool,
                     issuer_handoff,
                     authz_postgres::AUTHORIZATION_MODEL_VERSION,
                 ));
@@ -1161,7 +1251,10 @@ impl HephaestusApp {
                 ));
             let dispatcher: Arc<dyn GatewayRequestDispatcher> = Arc::new(
                 GatewayDispatcher::new(authority.clone(), handler, authority.clone())
-                    .with_inbound_secret_resolver(inbound),
+                    .with_inbound_secret_resolver(inbound)
+                    .with_mailbox_publisher(Arc::new(PostgresGatewayMailboxPublisher::new(
+                        pool.clone(),
+                    ))),
             );
             let administration = LocalCaddyAdministration::new(&gateway.caddy_admin_url)
                 .map_err(component("gateway Caddy administration"))?;
@@ -1205,7 +1298,7 @@ impl HephaestusApp {
                     workspace_root: config.build_workspace_root,
                     repository_root: config.repository_root.clone(),
                     git_binary: build_git_binary,
-                    image_filesystems: config.root_images.clone(),
+                    image_filesystems: Arc::clone(&image_filesystems),
                     timeout: config.build_timeout,
                 },
             )
@@ -2003,6 +2096,8 @@ async fn oci_builder_pass(workers: &OciBuilderWorkers) {
                 .await
             {
                 tracing::warn!(%error, "OCI builder root manifest update failed");
+            } else if let Err(error) = workers.refresh_image_filesystems().await {
+                tracing::warn!(%error, "OCI builder image cache refresh failed");
             }
         }
         Ok(false) => {}

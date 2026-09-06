@@ -17,7 +17,9 @@ use std::{
 const BROKERED_E2E_RULE_ID: &str = "00000000-0000-0000-0000-000000000002";
 const BROKERED_E2E_PLACEHOLDER: &str = "heph-placeholder:v1:00000000-0000-0000-0000-000000000002";
 const BROKERED_E2E_CREDENTIAL_PATH: &str = "/run/hephaestus-secrets/.runtime-credential";
-use vm_libkrun::protocol::{PrivateHttpRequestMessage, PrivateHttpResponseMessage};
+use vm_libkrun::protocol::{
+    PrivateHttpRequestMessage, PrivateHttpResponseMessage, PrivateMailboxPublicationMessage,
+};
 use vm_trait::RUNTIME_AUTHORITY_CREDENTIAL_BYTES;
 
 fn main() {
@@ -32,6 +34,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         Some("--private-http-handler") => return private_http_handler().map_err(Into::into),
         Some("--private-http-brokered-header") => {
             return private_http_brokered_header_handler().map_err(Into::into);
+        }
+        Some("--private-http-brokered-mailbox") => {
+            return private_http_brokered_mailbox_handler().map_err(Into::into);
         }
         Some("--serve-http") => return serve_http().map_err(Into::into),
         Some("--expect-network-disabled") => return expect_network_disabled(),
@@ -121,6 +126,7 @@ fn private_http_handler() -> io::Result<()> {
         status: 201,
         headers: vec![("content-type".to_owned(), "text/plain".to_owned())],
         body: b"gateway-real-vm-response".to_vec(),
+        mailbox_publication: None,
     };
     ciborium::into_writer(&response, io::stdout().lock()).map_err(io::Error::other)
 }
@@ -151,6 +157,62 @@ fn private_http_brokered_header_handler() -> io::Result<()> {
         status: 201,
         headers: vec![("content-type".to_owned(), "text/plain".to_owned())],
         body: b"gateway-brokered-header-ok".to_vec(),
+        mailbox_publication: None,
+    };
+    ciborium::into_writer(&response, io::stdout().lock()).map_err(io::Error::other)
+}
+
+/// Real-guest fixture for the bounded gateway-to-mailbox handoff.  The
+/// mailbox name and producer identity deliberately never enter the guest:
+/// this only selects the release-declared symbolic slot and supplies a stable
+/// application-level idempotency key.
+fn private_http_brokered_mailbox_handler() -> io::Result<()> {
+    let request: PrivateHttpRequestMessage =
+        ciborium::from_reader(io::stdin().lock()).map_err(io::Error::other)?;
+    if request.method != "POST" || request.path_and_query != "/gateway/brokered?mode=real" {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "unexpected brokered mailbox gateway request",
+        ));
+    }
+    let placeholder = request
+        .headers
+        .iter()
+        .find(|(name, _)| name == "x-webhook-secret")
+        .map(|(_, value)| value.as_str());
+    if !placeholder.is_some_and(|value| value.starts_with("heph-placeholder:v1:")) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "gateway secret was not replaced by its placeholder",
+        ));
+    }
+    let deduplication_key = match request.body.as_slice() {
+        b"gateway-brokered-request-a" => "gateway-real-request-a",
+        b"gateway-brokered-request-b" => "gateway-real-request-b",
+        // This is accepted by the handler so the golden path can prove that
+        // revocation stops an otherwise valid, fresh gateway request.
+        b"gateway-brokered-request-denied" => "gateway-real-request-denied",
+        _ => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "unexpected brokered mailbox gateway request body",
+            ));
+        }
+    };
+    let response = PrivateHttpResponseMessage {
+        status: 201,
+        headers: vec![("content-type".to_owned(), "text/plain".to_owned())],
+        body: b"gateway-brokered-header-ok".to_vec(),
+        mailbox_publication: Some(PrivateMailboxPublicationMessage {
+            slot: "deliver".to_owned(),
+            method: "POST".to_owned(),
+            route: "/gateway/golden-proof".to_owned(),
+            headers: vec![("x-gateway-fixture".to_owned(), "real".to_owned())],
+            content_type: Some("application/octet-stream".to_owned()),
+            trace_context: None,
+            body: b"gateway-real-mailbox-body".to_vec(),
+            deduplication_key: deduplication_key.to_owned(),
+        }),
     };
     ciborium::into_writer(&response, io::stdout().lock()).map_err(io::Error::other)
 }
@@ -385,9 +447,9 @@ struct RuntimeAuthorityCredential {
 }
 
 fn read_runtime_authority() -> Result<RuntimeAuthorityCredential, Box<dyn std::error::Error>> {
-    let authority: GuestRuntimeAuthority = serde_json::from_slice(&fs::read(
-        vm_libkrun::protocol::GUEST_RUNTIME_AUTHORITY_PATH,
-    )?)?;
+    let authority_path = std::env::var(vm_libkrun::protocol::RUNTIME_AUTHORITY_PATH_ENV)
+        .unwrap_or_else(|_| String::from(vm_libkrun::protocol::GUEST_RUNTIME_AUTHORITY_PATH));
+    let authority: GuestRuntimeAuthority = serde_json::from_slice(&fs::read(authority_path)?)?;
     if authority.generation == 0 {
         return Err("runtime authority generation is invalid".into());
     }

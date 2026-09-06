@@ -258,7 +258,7 @@ mkdir -p \
 chmod 0700 "${fixture_root}/runtime"
 
 container_name="hephaestus-libkrun-fixture-$$"
-podman pull "${ubuntu_image}"
+podman image exists "${ubuntu_image}" || podman pull "${ubuntu_image}"
 podman create --name "${container_name}" "${ubuntu_image}" /bin/true >/dev/null
 podman export "${container_name}" | tar -C "${fixture_root}/rootfs" -xf -
 podman rm "${container_name}" >/dev/null
@@ -317,6 +317,17 @@ if [[ "${HEPHAESTUS_APP_LIBKRUN_E2E:-0}" == "1" ]]; then
         --manifest-path "${repo_root}/Cargo.toml" \
         --package hephaestus-app \
         --test golden \
+        -- --nocapture
+    # Reuse the same disposable authority database and JetStream fixture for
+    # the gateway publication persistence, RLS, and recovery proof. Keeping
+    # it here makes the joined wrapper one complete operator command.
+    run_as_guest_owner env \
+        HEPHAESTUS_POSTGRES_TEST_URL="${postgres_url}" \
+        HEPHAESTUS_NATS_TEST_URL="${nats_url}" \
+        cargo test \
+        --manifest-path "${repo_root}/Cargo.toml" \
+        --package gateway-postgres \
+        --test postgres \
         -- --nocapture
 elif [[ "${HEPHAESTUS_PHASE1B_INTEGRATION:-0}" == "1" ]]; then
     printf 'Running Phase 1B persistence test with pinned image %s\n' "${ubuntu_image}"

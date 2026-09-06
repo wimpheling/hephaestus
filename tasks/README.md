@@ -1,5 +1,9 @@
 # Coding-agent task system
 
+See the [product roadmap](roadmap.md) for the next product stages and scope
+boundaries. It guides prioritization; task locations remain authoritative for
+implementation status.
+
 This directory is the repository-local work queue for coding agents. Task
 state is represented by the task file's location:
 

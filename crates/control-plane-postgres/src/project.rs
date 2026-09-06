@@ -20,6 +20,8 @@ pub enum ProjectError {
     PermissionDenied,
     #[error("project was not found")]
     NotFound,
+    #[error("project image cannot be retried in its current state")]
+    Conflict,
     #[error("project query failed")]
     Persistence(#[source] sqlx::Error),
     #[error("project page is invalid")]
@@ -43,6 +45,32 @@ pub struct ProjectRepositoryRow {
     pub is_public: bool,
     pub attachment_count: i64,
     pub run_count: i64,
+}
+
+/// Redacted project-owned repository OCI image projection.
+#[derive(FromRow)]
+pub struct ProjectRepositoryImageRow {
+    pub id: Uuid,
+    pub repository_id: Uuid,
+    pub key: String,
+    pub display_name: String,
+    pub source_revision: String,
+    pub base_image_reference: String,
+    pub status: String,
+    pub image_reference: Option<String>,
+    pub failure_reason: Option<String>,
+    pub updated_at: OffsetDateTime,
+}
+
+/// One bounded redacted preparation transition for a project image.
+#[derive(FromRow)]
+pub struct ProjectRepositoryImagePreparationEventRow {
+    pub id: Uuid,
+    pub phase: String,
+    pub outcome: String,
+    pub output_digest: Option<String>,
+    pub safe_reason: Option<String>,
+    pub occurred_at: OffsetDateTime,
 }
 
 #[derive(FromRow)]
@@ -152,6 +180,111 @@ impl ProjectApplication {
         .map_err(ProjectError::Persistence)?;
         tx.commit().await.map_err(ProjectError::Persistence)?;
         finish_page(rows, page)
+    }
+
+    /// Lists authorized image resources without exposing filesystem paths,
+    /// registry credentials, raw verifier output, or source contents.
+    pub async fn repository_images(
+        &self,
+        identity: &AuthenticatedIdentity,
+        project_id: Uuid,
+        page: Page,
+    ) -> Result<PageResult<ProjectRepositoryImageRow>, ProjectError> {
+        let mut tx = self.transaction(identity).await?;
+        require_permission(&mut tx, "can_read", "project", project_id).await?;
+        let rows = sqlx::query_as(
+            "SELECT image.id, image.source_repository_id AS repository_id,
+                    image.key, image.display_name, image.source_revision,
+                    image.base_image_reference, image.status,
+                    image.image_reference, image.failure_reason, image.updated_at
+               FROM repository_oci_image_definitions AS image
+              WHERE image.project_id = $1 AND ($2::uuid IS NULL OR image.id > $2)
+              ORDER BY image.id
+              LIMIT $3",
+        )
+        .bind(project_id)
+        .bind(page.after)
+        .bind(page.size + 1)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(ProjectError::Persistence)?;
+        tx.commit().await.map_err(ProjectError::Persistence)?;
+        finish_page(rows, page)
+    }
+
+    /// Returns one authorized image and its most recent bounded preparation
+    /// evidence. Private worker paths, credentials, and raw tool output are
+    /// never selected from the database.
+    pub async fn repository_image(
+        &self,
+        identity: &AuthenticatedIdentity,
+        image_id: Uuid,
+        page: Page,
+    ) -> Result<
+        (
+            ProjectRepositoryImageRow,
+            PageResult<ProjectRepositoryImagePreparationEventRow>,
+        ),
+        ProjectError,
+    > {
+        let mut tx = self.transaction(identity).await?;
+        require_permission(&mut tx, "can_read", "repository_oci_image", image_id).await?;
+        let image = sqlx::query_as::<_, ProjectRepositoryImageRow>(
+            "SELECT image.id, image.source_repository_id AS repository_id,
+                    image.key, image.display_name, image.source_revision,
+                    image.base_image_reference, image.status,
+                    image.image_reference, image.failure_reason, image.updated_at
+               FROM repository_oci_image_definitions AS image
+              WHERE image.id = $1",
+        )
+        .bind(image_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(ProjectError::Persistence)?
+        .ok_or(ProjectError::NotFound)?;
+        let history = sqlx::query_as::<_, ProjectRepositoryImagePreparationEventRow>(
+            "SELECT event.id, event.phase, event.outcome, event.output_digest,
+                    event.safe_reason, event.created_at AS occurred_at
+               FROM repository_oci_image_preparation_events AS event
+              WHERE event.definition_id = $1 AND ($2::uuid IS NULL OR event.id > $2)
+              ORDER BY event.id
+              LIMIT $3",
+        )
+        .bind(image_id)
+        .bind(page.after)
+        .bind(page.size + 1)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(ProjectError::Persistence)?;
+        tx.commit().await.map_err(ProjectError::Persistence)?;
+        Ok((image, finish_page(history, page)?))
+    }
+
+    /// Requeues only a failed immutable repository image using its original
+    /// source revision and approved base. Ready and in-flight images cannot be
+    /// overwritten through this control.
+    pub async fn retry_repository_image(
+        &self,
+        identity: &AuthenticatedIdentity,
+        image_id: Uuid,
+    ) -> Result<ProjectRepositoryImageRow, ProjectError> {
+        let mut tx = self.transaction(identity).await?;
+        require_permission(&mut tx, "can_manage", "repository_oci_image", image_id).await?;
+        let image = sqlx::query_as::<_, ProjectRepositoryImageRow>(
+            "UPDATE repository_oci_image_definitions
+                SET status = 'producing', updated_at = now()
+              WHERE id = $1 AND status = 'failed'
+              RETURNING id, source_repository_id AS repository_id, key, display_name,
+                        source_revision, base_image_reference, status, image_reference,
+                        failure_reason, updated_at",
+        )
+        .bind(image_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(ProjectError::Persistence)?
+        .ok_or(ProjectError::Conflict)?;
+        tx.commit().await.map_err(ProjectError::Persistence)?;
+        Ok(image)
     }
 
     pub async fn instances(
@@ -309,4 +442,10 @@ macro_rules! row_id {
     )+};
 }
 
-row_id!(ProjectRepositoryRow, InstanceRow, ReleaseAgentRow);
+row_id!(
+    ProjectRepositoryRow,
+    ProjectRepositoryImageRow,
+    ProjectRepositoryImagePreparationEventRow,
+    InstanceRow,
+    ReleaseAgentRow
+);

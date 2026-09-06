@@ -6,7 +6,9 @@ defmodule HephaestusWebWeb.ProjectGatewaysLive do
   alias HephaestusWebWeb.DesignSystem.Pages.ProjectGatewaysPage
   alias HephaestusWebWeb.{PageStream, ProjectGatewaysState}
 
-  @stream_mode :page_scoped
+  # Gateway browsing is a finite, authorized read like the other project tabs.
+  # Lifecycle detail owns its own explicit refresh after a mutation.
+  @stream_mode :none
 
   @impl true
   def mount(%{"project_id" => project_id}, _session, socket) do
@@ -17,14 +19,15 @@ defmodule HephaestusWebWeb.ProjectGatewaysLive do
       socket
       |> assign(:project_id, project_id)
       |> assign(:page_state, state)
-      |> assign(:watch_task, nil)
       |> assign(:snapshot_task, nil)
       |> assign(:page_title, "Gateways")
 
     if connected?(socket) do
+      {state, [:load]} = ProjectGatewaysState.reduce(state, {:load, 1})
+
       {:ok,
        socket
-       |> PageStream.start_watch(ProjectGatewaysState)
+       |> assign(:page_state, state)
        |> PageStream.start_snapshot(ProjectGatewaysState)}
     else
       {:ok, socket}
@@ -32,25 +35,6 @@ defmodule HephaestusWebWeb.ProjectGatewaysLive do
   end
 
   @impl true
-  def handle_info(
-        {:page_watch, generation, response},
-        %{assigns: %{page_state: %{stream_generation: generation}}} = socket
-      ) do
-    {socket, effects} = PageStream.reduce_watch(socket, ProjectGatewaysState, response)
-    {:noreply, PageStream.apply_effects(socket, ProjectGatewaysState, effects)}
-  end
-
-  def handle_info(
-        {:page_watch_ended, generation, result},
-        %{assigns: %{page_state: %{stream_generation: generation}}} = socket
-      ) do
-    {socket, effects} = PageStream.reduce_ended(socket, ProjectGatewaysState, result)
-    {:noreply, PageStream.apply_effects(socket, ProjectGatewaysState, effects)}
-  end
-
-  def handle_info({:page_watch, _generation, _response}, socket), do: {:noreply, socket}
-  def handle_info({:page_watch_ended, _generation, _result}, socket), do: {:noreply, socket}
-
   def handle_info({ref, event}, %{assigns: %{snapshot_task: %Task{ref: ref}}} = socket) do
     Process.demonitor(ref, [:flush])
     {state, effects} = ProjectGatewaysState.reduce(socket.assigns.page_state, event)
@@ -71,11 +55,7 @@ defmodule HephaestusWebWeb.ProjectGatewaysLive do
   def handle_info(_message, socket), do: {:noreply, socket}
 
   @impl true
-  def terminate(_reason, socket) do
-    PageStream.cancel(socket.assigns[:watch_task])
-    PageStream.cancel(socket.assigns[:snapshot_task])
-    :ok
-  end
+  def terminate(_reason, socket), do: PageStream.cancel(socket.assigns[:snapshot_task])
 
   @impl true
   def render(assigns) do

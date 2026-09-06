@@ -5,7 +5,8 @@ usage() {
     printf '%s\n' \
         'usage: write-platform-image-catalog.sh --output path --registry registry/repository \' \
         '  --ubuntu-digest sha256:... --rust-digest sha256:... \' \
-        '  --typescript-digest sha256:... --python-digest sha256:...' >&2
+        '  --typescript-digest sha256:... --python-digest sha256:... \' \
+        '  --oci-builder-digest sha256:... --oci-verifier-digest sha256:...' >&2
     exit 64
 }
 
@@ -15,6 +16,8 @@ ubuntu_digest=''
 rust_digest=''
 typescript_digest=''
 python_digest=''
+oci_builder_digest=''
+oci_verifier_digest=''
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -24,19 +27,23 @@ while [[ $# -gt 0 ]]; do
         --rust-digest) rust_digest=${2:-}; shift 2 ;;
         --typescript-digest) typescript_digest=${2:-}; shift 2 ;;
         --python-digest) python_digest=${2:-}; shift 2 ;;
+        --oci-builder-digest) oci_builder_digest=${2:-}; shift 2 ;;
+        --oci-verifier-digest) oci_verifier_digest=${2:-}; shift 2 ;;
         *) usage ;;
     esac
 done
 
 [[ -n "$output" && -n "$registry" && -n "$ubuntu_digest" && -n "$rust_digest" \
-    && -n "$typescript_digest" && -n "$python_digest" ]] || usage
+    && -n "$typescript_digest" && -n "$python_digest" && -n "$oci_builder_digest" \
+    && -n "$oci_verifier_digest" ]] || usage
 
 [[ "$registry" =~ ^[a-z0-9][a-z0-9.-]*(:[0-9]{1,5})?/platform/images$ ]] || {
     printf 'registry must be a forge authority followed by /platform/images\n' >&2
     exit 65
 }
 
-for digest in "$ubuntu_digest" "$rust_digest" "$typescript_digest" "$python_digest"; do
+for digest in "$ubuntu_digest" "$rust_digest" "$typescript_digest" "$python_digest" \
+    "$oci_builder_digest" "$oci_verifier_digest"; do
     [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || {
         printf 'invalid OCI digest: %s\n' "$digest" >&2
         exit 65
@@ -52,6 +59,10 @@ typescript_signature=${HEPHAESTUS_TYPESCRIPT_SIGNATURE_REFERENCE:-}
 typescript_sbom=${HEPHAESTUS_TYPESCRIPT_SBOM_REFERENCE:-}
 python_signature=${HEPHAESTUS_PYTHON_SIGNATURE_REFERENCE:-}
 python_sbom=${HEPHAESTUS_PYTHON_SBOM_REFERENCE:-}
+oci_builder_signature=${HEPHAESTUS_OCI_BUILDER_SIGNATURE_REFERENCE:-}
+oci_builder_sbom=${HEPHAESTUS_OCI_BUILDER_SBOM_REFERENCE:-}
+oci_verifier_signature=${HEPHAESTUS_OCI_VERIFIER_SIGNATURE_REFERENCE:-}
+oci_verifier_sbom=${HEPHAESTUS_OCI_VERIFIER_SBOM_REFERENCE:-}
 absolute_uri_pattern='^[a-zA-Z][a-zA-Z0-9+.-]*://[^[:space:]"\\]+$'
 evidence_pattern='^[^[:space:]"\\]+@sha256:[0-9a-f]{64}$'
 
@@ -60,7 +71,8 @@ evidence_pattern='^[^[:space:]"\\]+@sha256:[0-9a-f]{64}$'
     exit 65
 }
 
-for evidence in "$ubuntu_sbom" "$rust_sbom" "$typescript_sbom" "$python_sbom"; do
+for evidence in "$ubuntu_sbom" "$rust_sbom" "$typescript_sbom" "$python_sbom" \
+    "$oci_builder_sbom" "$oci_verifier_sbom"; do
     [[ "$evidence" =~ $evidence_pattern ]] || {
         printf 'supply-chain evidence must be a digest-pinned OCI reference: %s\n' \
             "$evidence" >&2
@@ -68,7 +80,8 @@ for evidence in "$ubuntu_sbom" "$rust_sbom" "$typescript_sbom" "$python_sbom"; d
     }
 done
 
-for evidence in "$ubuntu_signature" "$rust_signature" "$typescript_signature" "$python_signature"; do
+for evidence in "$ubuntu_signature" "$rust_signature" "$typescript_signature" "$python_signature" \
+    "$oci_builder_signature" "$oci_verifier_signature"; do
     [[ -z "$evidence" || "$evidence" =~ $evidence_pattern ]] || {
         printf 'optional signature evidence must be a digest-pinned OCI reference: %s\n' \
             "$evidence" >&2
@@ -88,6 +101,8 @@ ubuntu_signature_json=$(json_optional_reference "$ubuntu_signature")
 rust_signature_json=$(json_optional_reference "$rust_signature")
 typescript_signature_json=$(json_optional_reference "$typescript_signature")
 python_signature_json=$(json_optional_reference "$python_signature")
+oci_builder_signature_json=$(json_optional_reference "$oci_builder_signature")
+oci_verifier_signature_json=$(json_optional_reference "$oci_verifier_signature")
 
 mkdir -p "$(dirname "$output")"
 cat >"$output" <<EOF
@@ -102,6 +117,7 @@ cat >"$output" <<EOF
       "toolchains": [{"name":"Ubuntu","version":"24.04"},{"name":"Bash","version":"5.2.21"},{"name":"Git","version":"2.43.0"}],
       "architectures": ["x86_64"],
       "availability_state": "available",
+      "role": "execution",
       "provenance": {"source":"${provenance_source}","signature":${ubuntu_signature_json},"sbom":"${ubuntu_sbom}"},
       "platform_policy_version": "image/v1"
     },
@@ -113,6 +129,7 @@ cat >"$output" <<EOF
       "toolchains": [{"name":"Ubuntu","version":"24.04"},{"name":"Rust","version":"1.88.0"},{"name":"Cargo","version":"1.88.0"}],
       "architectures": ["x86_64"],
       "availability_state": "available",
+      "role": "execution",
       "provenance": {"source":"${provenance_source}","signature":${rust_signature_json},"sbom":"${rust_sbom}"},
       "platform_policy_version": "image/v1"
     },
@@ -124,6 +141,7 @@ cat >"$output" <<EOF
       "toolchains": [{"name":"Ubuntu","version":"24.04"},{"name":"Node","version":"24.19.0"},{"name":"pnpm","version":"11.20.0"},{"name":"TypeScript","version":"5.9.3"}],
       "architectures": ["x86_64"],
       "availability_state": "available",
+      "role": "execution",
       "provenance": {"source":"${provenance_source}","signature":${typescript_signature_json},"sbom":"${typescript_sbom}"},
       "platform_policy_version": "image/v1"
     },
@@ -135,7 +153,32 @@ cat >"$output" <<EOF
       "toolchains": [{"name":"Ubuntu","version":"24.04"},{"name":"CPython","version":"3.13.5"},{"name":"pip","version":"25.1.1"}],
       "architectures": ["x86_64"],
       "availability_state": "available",
+      "role": "execution",
       "provenance": {"source":"${provenance_source}","signature":${python_signature_json},"sbom":"${python_sbom}"},
+      "platform_policy_version": "image/v1"
+    },
+    {
+      "id": "8e3a9283-02fd-46a7-9b2f-81953ad8201f",
+      "key": "oci-builder-ubuntu",
+      "display_name": "OCI builder operation",
+      "image_reference": "${registry}/oci-builder-ubuntu@${oci_builder_digest}",
+      "toolchains": [{"name":"Ubuntu","version":"24.04"},{"name":"Buildah","version":"platform-pinned"}],
+      "architectures": ["x86_64"],
+      "availability_state": "available",
+      "role": "platform_operation",
+      "provenance": {"source":"${provenance_source}","signature":${oci_builder_signature_json},"sbom":"${oci_builder_sbom}"},
+      "platform_policy_version": "image/v1"
+    },
+    {
+      "id": "f0f2cfe5-2da6-44f3-b02b-10c27da415bf",
+      "key": "oci-verifier-ubuntu",
+      "display_name": "OCI verifier operation",
+      "image_reference": "${registry}/oci-verifier-ubuntu@${oci_verifier_digest}",
+      "toolchains": [{"name":"Ubuntu","version":"24.04"},{"name":"Trivy","version":"platform-pinned"},{"name":"Syft","version":"platform-pinned"},{"name":"Umoci","version":"platform-pinned"}],
+      "architectures": ["x86_64"],
+      "availability_state": "available",
+      "role": "platform_operation",
+      "provenance": {"source":"${provenance_source}","signature":${oci_verifier_signature_json},"sbom":"${oci_verifier_sbom}"},
       "platform_policy_version": "image/v1"
     }
   ]

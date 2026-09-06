@@ -256,11 +256,6 @@ impl RuntimeSessionRepository for PgGatewayRuntimeSessionRepository {
         else {
             return Err(RuntimeAuthorityError::IdentityMismatch);
         };
-        if session.snapshot.bindings().next().is_some() {
-            // Gateway capability binding persistence is introduced separately;
-            // never claim a copied ceiling we cannot prove exactly yet.
-            return Err(RuntimeAuthorityError::Persistence);
-        }
         let mut transaction = self.pool.begin().await.map_err(storage)?;
         sqlx::query(
             "INSERT INTO gateway_authorization_snapshots
@@ -277,6 +272,7 @@ impl RuntimeSessionRepository for PgGatewayRuntimeSessionRepository {
         .execute(&mut *transaction)
         .await
         .map_err(storage)?;
+        insert_gateway_snapshot_bindings(&mut transaction, session.snapshot).await?;
         let generation = i64::try_from(session.generation.get()).map_err(storage)?;
         sqlx::query(
             "INSERT INTO gateway_runtime_authority_sessions
@@ -382,6 +378,7 @@ impl RuntimeSessionRepository for PgGatewayRuntimeSessionRepository {
 /// Gateway authority issuer built from the common session/handoff machinery.
 pub struct PgGatewayRuntimeAuthorityIssuer<H> {
     issuer: RuntimeSessionIssuer<PgGatewayRuntimeSessionRepository, H>,
+    pool: PgPool,
     authorization_model_version: String,
 }
 
@@ -394,9 +391,10 @@ where
     pub fn new(pool: PgPool, handoff: H, authorization_model_version: impl Into<String>) -> Self {
         Self {
             issuer: RuntimeSessionIssuer::new(
-                PgGatewayRuntimeSessionRepository::new(pool),
+                PgGatewayRuntimeSessionRepository::new(pool.clone()),
                 handoff,
             ),
+            pool,
             authorization_model_version: authorization_model_version.into(),
         }
     }
@@ -411,7 +409,8 @@ where
         &self,
         request: GatewayRuntimeSessionRequest,
     ) -> Result<StoredRuntimeSession, RuntimeAuthorityError> {
-        let snapshot = gateway_snapshot(request, &self.authorization_model_version)?;
+        let snapshot =
+            gateway_snapshot(&self.pool, request, &self.authorization_model_version).await?;
         let identity = capability_domain::RuntimeSessionIdentity::new(
             RuntimeSessionId::from_uuid(request.invocation_id.as_uuid()),
             snapshot.principal(),
@@ -429,10 +428,31 @@ where
     }
 }
 
-fn gateway_snapshot(
+async fn gateway_snapshot(
+    pool: &PgPool,
     request: GatewayRuntimeSessionRequest,
     authorization_model_version: &str,
 ) -> Result<AuthorizationSnapshot, RuntimeAuthorityError> {
+    let rows = sqlx::query_as::<_, GatewaySnapshotBindingRow>(
+        "SELECT binding.id AS binding_id, binding_grant.id AS grant_id, binding.slot_key,
+                binding.mailbox_id AS resource_id
+         FROM gateway_mailbox_bindings AS binding
+         JOIN gateway_mailbox_binding_grants AS binding_grant
+           ON binding_grant.binding_id = binding.id
+         WHERE binding.gateway_id = $1
+           AND binding.gateway_revision_id = $2
+           AND binding_grant.status = 'active'
+         ORDER BY binding.slot_key, binding.id",
+    )
+    .bind(request.gateway_id)
+    .bind(request.gateway_revision_id)
+    .fetch_all(pool)
+    .await
+    .map_err(storage)?;
+    let mut bindings = Vec::with_capacity(rows.len());
+    for row in rows {
+        bindings.push(gateway_mailbox_binding(row)?);
+    }
     AuthorizationSnapshot::new(
         AuthorizationSnapshotId::from_uuid(request.invocation_id.as_uuid()),
         WorkloadPrincipal::new(
@@ -441,9 +461,103 @@ fn gateway_snapshot(
             request.gateway_revision_id,
         ),
         authorization_model_version,
-        Vec::new(),
+        bindings,
     )
     .map_err(|_| RuntimeAuthorityError::Persistence)
+}
+
+async fn insert_gateway_snapshot_bindings(
+    transaction: &mut Transaction<'_, Postgres>,
+    snapshot: &AuthorizationSnapshot,
+) -> Result<(), RuntimeAuthorityError> {
+    let rows = sqlx::query_as::<_, GatewaySnapshotBindingRow>(
+        "SELECT binding.id AS binding_id, binding_grant.id AS grant_id, binding.slot_key,
+                binding.mailbox_id AS resource_id
+         FROM gateway_mailbox_bindings AS binding
+         JOIN gateway_mailbox_binding_grants AS binding_grant
+           ON binding_grant.binding_id = binding.id
+         WHERE binding.gateway_id = $1
+           AND binding.gateway_revision_id = $2
+           AND binding_grant.status = 'active'
+         ORDER BY binding.slot_key, binding.id",
+    )
+    .bind(snapshot.principal().id)
+    .bind(snapshot.principal().revision_id)
+    .fetch_all(&mut **transaction)
+    .await
+    .map_err(storage)?;
+    if rows.len() != snapshot.bindings().len() {
+        return Err(RuntimeAuthorityError::Persistence);
+    }
+    for (ordinal, row) in rows.into_iter().enumerate() {
+        let persisted = gateway_mailbox_binding(GatewaySnapshotBindingRow {
+            binding_id: row.binding_id,
+            grant_id: row.grant_id,
+            slot_key: row.slot_key.clone(),
+            resource_id: row.resource_id,
+        })?;
+        let expected = snapshot
+            .bindings()
+            .find(|binding| binding.id() == persisted.id())
+            .filter(|binding| *binding == &persisted)
+            .ok_or(RuntimeAuthorityError::Persistence)?;
+        sqlx::query(
+            "INSERT INTO gateway_authorization_snapshot_bindings
+                (snapshot_id, gateway_revision_id, ordinal, binding_id, grant_id,
+                 binding_hash, slot_key, resource_kind, resource_id,
+                 granted_operations)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, 'mailbox', $8, ARRAY['publish']::text[])",
+        )
+        .bind(snapshot.id().as_uuid())
+        .bind(snapshot.principal().revision_id)
+        .bind(i32::try_from(ordinal).map_err(storage)?)
+        .bind(row.binding_id)
+        .bind(row.grant_id)
+        .bind(expected.normalized_hash().as_bytes().as_slice())
+        .bind(row.slot_key)
+        .bind(row.resource_id)
+        .execute(&mut **transaction)
+        .await
+        .map_err(storage)?;
+    }
+    Ok(())
+}
+
+#[derive(FromRow)]
+struct GatewaySnapshotBindingRow {
+    binding_id: Uuid,
+    grant_id: Uuid,
+    slot_key: String,
+    resource_id: Uuid,
+}
+
+fn gateway_mailbox_binding(
+    row: GatewaySnapshotBindingRow,
+) -> Result<CapabilityBinding, RuntimeAuthorityError> {
+    // Gateway declarations only support this fixed mailbox/publish shape.
+    // The immutable binding ID is also the stable synthetic requirement ID,
+    // making the resulting authority hash reproducible from persisted facts.
+    let requirement = CapabilityRequirement::new(
+        CapabilityRequirementId::from_uuid(row.binding_id),
+        CapabilitySlotKey::parse(row.slot_key).map_err(storage)?,
+        CapabilityResourceKind::Mailbox,
+        [CapabilityOperation::Publish],
+        [],
+        true,
+    )
+    .map_err(storage)?;
+    let binding = CapabilityBinding::bind(
+        CapabilityBindingId::from_uuid(row.binding_id),
+        &requirement,
+        CapabilityResource::new(CapabilityResourceKind::Mailbox, row.resource_id),
+        [CapabilityOperation::Publish],
+    )
+    .map_err(storage)?;
+    // `grant_id` is deliberately selected with every snapshot row. It is
+    // persisted alongside this binding below, rather than being trusted from
+    // mutable current grant state when a gateway later publishes.
+    let _ = row.grant_id;
+    Ok(binding)
 }
 
 fn stored_binding(
@@ -503,6 +617,7 @@ fn resource_kind(value: &str) -> Result<CapabilityResourceKind, RuntimeAuthority
         "gateway" => Ok(CapabilityResourceKind::Gateway),
         "run" => Ok(CapabilityResourceKind::Run),
         "state_volume" => Ok(CapabilityResourceKind::StateVolume),
+        "mailbox" => Ok(CapabilityResourceKind::Mailbox),
         _ => Err(RuntimeAuthorityError::Persistence),
     }
 }
@@ -529,6 +644,7 @@ fn operations(values: &[String]) -> Result<Vec<CapabilityOperation>, RuntimeAuth
             "delete_tag" => Ok(CapabilityOperation::DeleteTag),
             "trigger_run" => Ok(CapabilityOperation::TriggerRun),
             "manage_attachments" => Ok(CapabilityOperation::ManageAttachments),
+            "publish" => Ok(CapabilityOperation::Publish),
             _ => Err(RuntimeAuthorityError::Persistence),
         })
         .collect()
@@ -855,24 +971,36 @@ fn storage<T>(_: T) -> RuntimeAuthorityError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use time::Duration;
 
     #[test]
-    fn gateway_snapshot_is_a_gateway_principal_with_no_ambient_authority() {
-        let invocation_id = capability_domain::GatewayInvocationId::new();
-        let snapshot = gateway_snapshot(
-            GatewayRuntimeSessionRequest {
-                invocation_id,
-                gateway_id: Uuid::new_v4(),
-                gateway_revision_id: Uuid::new_v4(),
-                issued_at: OffsetDateTime::now_utc(),
-                expires_at: OffsetDateTime::now_utc() + Duration::seconds(30),
-            },
-            "gateway-test-v1",
-        )
-        .expect("valid gateway snapshot");
-        assert_eq!(snapshot.id().as_uuid(), invocation_id.as_uuid());
-        assert_eq!(snapshot.principal().kind, WorkloadKind::Gateway);
-        assert_eq!(snapshot.bindings().len(), 0);
+    fn gateway_mailbox_snapshot_binding_is_exact_publish_authority() {
+        let binding_id = Uuid::new_v4();
+        let mailbox_id = Uuid::new_v4();
+        let binding = gateway_mailbox_binding(GatewaySnapshotBindingRow {
+            binding_id,
+            grant_id: Uuid::new_v4(),
+            slot_key: "accepted-event".to_owned(),
+            resource_id: mailbox_id,
+        })
+        .expect("valid exact mailbox publication binding");
+        assert_eq!(binding.id().as_uuid(), binding_id);
+        assert_eq!(binding.resource().kind, CapabilityResourceKind::Mailbox);
+        assert_eq!(binding.resource().id, mailbox_id);
+        assert_eq!(
+            binding.granted_operations().collect::<Vec<_>>(),
+            vec![CapabilityOperation::Publish]
+        );
+    }
+
+    #[test]
+    fn parses_mailbox_publish_persisted_authority() {
+        assert_eq!(
+            resource_kind("mailbox").expect("mailbox is a supported persisted resource"),
+            CapabilityResourceKind::Mailbox
+        );
+        assert_eq!(
+            operations(&["publish".to_owned()]).expect("publish is supported"),
+            vec![CapabilityOperation::Publish]
+        );
     }
 }

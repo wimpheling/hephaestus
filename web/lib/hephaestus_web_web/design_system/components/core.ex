@@ -106,6 +106,7 @@ defmodule HephaestusWebWeb.DesignSystem.Components.Core do
   attr :download, :any, default: nil
   attr :name, :string, default: nil
   attr :value, :any, default: nil
+  attr :click, :any, default: nil
   attr :disabled, :boolean, default: false
   attr :variant, :string, values: ~w(primary)
   slot :inner_block, required: true
@@ -130,7 +131,13 @@ defmodule HephaestusWebWeb.DesignSystem.Components.Core do
       """
     else
       ~H"""
-      <button name={@name} value={@value} disabled={@disabled} class={@classes}>
+      <button
+        name={@name}
+        value={@value}
+        disabled={@disabled}
+        phx-click={@click}
+        class={@classes}
+      >
         {render_slot(@inner_block)}
       </button>
       """

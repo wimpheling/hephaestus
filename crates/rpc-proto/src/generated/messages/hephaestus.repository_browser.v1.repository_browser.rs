@@ -161,6 +161,366 @@ impl ::buffa::Enumeration for TreeEntryType {
         ]
     }
 }
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[repr(i32)]
+pub enum DiffFileState {
+    DIFF_FILE_STATE_UNSPECIFIED = 0i32,
+    DIFF_FILE_STATE_ADDED = 1i32,
+    DIFF_FILE_STATE_DELETED = 2i32,
+    DIFF_FILE_STATE_MODIFIED = 3i32,
+    DIFF_FILE_STATE_RENAMED = 4i32,
+    DIFF_FILE_STATE_BINARY = 5i32,
+    DIFF_FILE_STATE_TRUNCATED = 6i32,
+    DIFF_FILE_STATE_UNAVAILABLE = 7i32,
+}
+impl DiffFileState {
+    ///Idiomatic alias for [`Self::DIFF_FILE_STATE_UNSPECIFIED`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Unspecified: Self = Self::DIFF_FILE_STATE_UNSPECIFIED;
+    ///Idiomatic alias for [`Self::DIFF_FILE_STATE_ADDED`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Added: Self = Self::DIFF_FILE_STATE_ADDED;
+    ///Idiomatic alias for [`Self::DIFF_FILE_STATE_DELETED`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Deleted: Self = Self::DIFF_FILE_STATE_DELETED;
+    ///Idiomatic alias for [`Self::DIFF_FILE_STATE_MODIFIED`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Modified: Self = Self::DIFF_FILE_STATE_MODIFIED;
+    ///Idiomatic alias for [`Self::DIFF_FILE_STATE_RENAMED`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Renamed: Self = Self::DIFF_FILE_STATE_RENAMED;
+    ///Idiomatic alias for [`Self::DIFF_FILE_STATE_BINARY`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Binary: Self = Self::DIFF_FILE_STATE_BINARY;
+    ///Idiomatic alias for [`Self::DIFF_FILE_STATE_TRUNCATED`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Truncated: Self = Self::DIFF_FILE_STATE_TRUNCATED;
+    ///Idiomatic alias for [`Self::DIFF_FILE_STATE_UNAVAILABLE`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Unavailable: Self = Self::DIFF_FILE_STATE_UNAVAILABLE;
+}
+impl ::core::default::Default for DiffFileState {
+    fn default() -> Self {
+        Self::DIFF_FILE_STATE_UNSPECIFIED
+    }
+}
+impl ::serde::Serialize for DiffFileState {
+    fn serialize<S: ::serde::Serializer>(
+        &self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        s.serialize_str(::buffa::Enumeration::proto_name(self))
+    }
+}
+impl<'de> ::serde::Deserialize<'de> for DiffFileState {
+    fn deserialize<D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        struct _V;
+        impl ::serde::de::Visitor<'_> for _V {
+            type Value = DiffFileState;
+            fn expecting(
+                &self,
+                f: &mut ::core::fmt::Formatter<'_>,
+            ) -> ::core::fmt::Result {
+                f.write_str(
+                    concat!("a string, integer, or null for ", stringify!(DiffFileState)),
+                )
+            }
+            fn visit_str<E: ::serde::de::Error>(
+                self,
+                v: &str,
+            ) -> ::core::result::Result<DiffFileState, E> {
+                <DiffFileState as ::buffa::Enumeration>::from_proto_name(v)
+                    .ok_or_else(|| { ::serde::de::Error::unknown_variant(v, &[]) })
+            }
+            fn visit_i64<E: ::serde::de::Error>(
+                self,
+                v: i64,
+            ) -> ::core::result::Result<DiffFileState, E> {
+                let v32 = i32::try_from(v)
+                    .map_err(|_| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("enum value {v} out of i32 range"),
+                        )
+                    })?;
+                <DiffFileState as ::buffa::Enumeration>::from_i32(v32)
+                    .ok_or_else(|| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("unknown enum value {v32}"),
+                        )
+                    })
+            }
+            fn visit_u64<E: ::serde::de::Error>(
+                self,
+                v: u64,
+            ) -> ::core::result::Result<DiffFileState, E> {
+                let v32 = i32::try_from(v)
+                    .map_err(|_| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("enum value {v} out of i32 range"),
+                        )
+                    })?;
+                <DiffFileState as ::buffa::Enumeration>::from_i32(v32)
+                    .ok_or_else(|| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("unknown enum value {v32}"),
+                        )
+                    })
+            }
+            fn visit_unit<E: ::serde::de::Error>(
+                self,
+            ) -> ::core::result::Result<DiffFileState, E> {
+                ::core::result::Result::Ok(::core::default::Default::default())
+            }
+        }
+        d.deserialize_any(_V)
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for DiffFileState {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+impl ::buffa::Enumeration for DiffFileState {
+    fn from_i32(value: i32) -> ::core::option::Option<Self> {
+        match value {
+            0i32 => ::core::option::Option::Some(Self::DIFF_FILE_STATE_UNSPECIFIED),
+            1i32 => ::core::option::Option::Some(Self::DIFF_FILE_STATE_ADDED),
+            2i32 => ::core::option::Option::Some(Self::DIFF_FILE_STATE_DELETED),
+            3i32 => ::core::option::Option::Some(Self::DIFF_FILE_STATE_MODIFIED),
+            4i32 => ::core::option::Option::Some(Self::DIFF_FILE_STATE_RENAMED),
+            5i32 => ::core::option::Option::Some(Self::DIFF_FILE_STATE_BINARY),
+            6i32 => ::core::option::Option::Some(Self::DIFF_FILE_STATE_TRUNCATED),
+            7i32 => ::core::option::Option::Some(Self::DIFF_FILE_STATE_UNAVAILABLE),
+            _ => ::core::option::Option::None,
+        }
+    }
+    fn to_i32(&self) -> i32 {
+        *self as i32
+    }
+    fn proto_name(&self) -> &'static str {
+        match self {
+            Self::DIFF_FILE_STATE_UNSPECIFIED => "DIFF_FILE_STATE_UNSPECIFIED",
+            Self::DIFF_FILE_STATE_ADDED => "DIFF_FILE_STATE_ADDED",
+            Self::DIFF_FILE_STATE_DELETED => "DIFF_FILE_STATE_DELETED",
+            Self::DIFF_FILE_STATE_MODIFIED => "DIFF_FILE_STATE_MODIFIED",
+            Self::DIFF_FILE_STATE_RENAMED => "DIFF_FILE_STATE_RENAMED",
+            Self::DIFF_FILE_STATE_BINARY => "DIFF_FILE_STATE_BINARY",
+            Self::DIFF_FILE_STATE_TRUNCATED => "DIFF_FILE_STATE_TRUNCATED",
+            Self::DIFF_FILE_STATE_UNAVAILABLE => "DIFF_FILE_STATE_UNAVAILABLE",
+        }
+    }
+    fn from_proto_name(name: &str) -> ::core::option::Option<Self> {
+        match name {
+            "DIFF_FILE_STATE_UNSPECIFIED" => {
+                ::core::option::Option::Some(Self::DIFF_FILE_STATE_UNSPECIFIED)
+            }
+            "DIFF_FILE_STATE_ADDED" => {
+                ::core::option::Option::Some(Self::DIFF_FILE_STATE_ADDED)
+            }
+            "DIFF_FILE_STATE_DELETED" => {
+                ::core::option::Option::Some(Self::DIFF_FILE_STATE_DELETED)
+            }
+            "DIFF_FILE_STATE_MODIFIED" => {
+                ::core::option::Option::Some(Self::DIFF_FILE_STATE_MODIFIED)
+            }
+            "DIFF_FILE_STATE_RENAMED" => {
+                ::core::option::Option::Some(Self::DIFF_FILE_STATE_RENAMED)
+            }
+            "DIFF_FILE_STATE_BINARY" => {
+                ::core::option::Option::Some(Self::DIFF_FILE_STATE_BINARY)
+            }
+            "DIFF_FILE_STATE_TRUNCATED" => {
+                ::core::option::Option::Some(Self::DIFF_FILE_STATE_TRUNCATED)
+            }
+            "DIFF_FILE_STATE_UNAVAILABLE" => {
+                ::core::option::Option::Some(Self::DIFF_FILE_STATE_UNAVAILABLE)
+            }
+            _ => ::core::option::Option::None,
+        }
+    }
+    fn values() -> &'static [Self] {
+        &[
+            Self::DIFF_FILE_STATE_UNSPECIFIED,
+            Self::DIFF_FILE_STATE_ADDED,
+            Self::DIFF_FILE_STATE_DELETED,
+            Self::DIFF_FILE_STATE_MODIFIED,
+            Self::DIFF_FILE_STATE_RENAMED,
+            Self::DIFF_FILE_STATE_BINARY,
+            Self::DIFF_FILE_STATE_TRUNCATED,
+            Self::DIFF_FILE_STATE_UNAVAILABLE,
+        ]
+    }
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[repr(i32)]
+pub enum DiffLineKind {
+    DIFF_LINE_KIND_UNSPECIFIED = 0i32,
+    DIFF_LINE_KIND_CONTEXT = 1i32,
+    DIFF_LINE_KIND_ADDED = 2i32,
+    DIFF_LINE_KIND_REMOVED = 3i32,
+}
+impl DiffLineKind {
+    ///Idiomatic alias for [`Self::DIFF_LINE_KIND_UNSPECIFIED`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Unspecified: Self = Self::DIFF_LINE_KIND_UNSPECIFIED;
+    ///Idiomatic alias for [`Self::DIFF_LINE_KIND_CONTEXT`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Context: Self = Self::DIFF_LINE_KIND_CONTEXT;
+    ///Idiomatic alias for [`Self::DIFF_LINE_KIND_ADDED`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Added: Self = Self::DIFF_LINE_KIND_ADDED;
+    ///Idiomatic alias for [`Self::DIFF_LINE_KIND_REMOVED`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Removed: Self = Self::DIFF_LINE_KIND_REMOVED;
+}
+impl ::core::default::Default for DiffLineKind {
+    fn default() -> Self {
+        Self::DIFF_LINE_KIND_UNSPECIFIED
+    }
+}
+impl ::serde::Serialize for DiffLineKind {
+    fn serialize<S: ::serde::Serializer>(
+        &self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        s.serialize_str(::buffa::Enumeration::proto_name(self))
+    }
+}
+impl<'de> ::serde::Deserialize<'de> for DiffLineKind {
+    fn deserialize<D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        struct _V;
+        impl ::serde::de::Visitor<'_> for _V {
+            type Value = DiffLineKind;
+            fn expecting(
+                &self,
+                f: &mut ::core::fmt::Formatter<'_>,
+            ) -> ::core::fmt::Result {
+                f.write_str(
+                    concat!("a string, integer, or null for ", stringify!(DiffLineKind)),
+                )
+            }
+            fn visit_str<E: ::serde::de::Error>(
+                self,
+                v: &str,
+            ) -> ::core::result::Result<DiffLineKind, E> {
+                <DiffLineKind as ::buffa::Enumeration>::from_proto_name(v)
+                    .ok_or_else(|| { ::serde::de::Error::unknown_variant(v, &[]) })
+            }
+            fn visit_i64<E: ::serde::de::Error>(
+                self,
+                v: i64,
+            ) -> ::core::result::Result<DiffLineKind, E> {
+                let v32 = i32::try_from(v)
+                    .map_err(|_| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("enum value {v} out of i32 range"),
+                        )
+                    })?;
+                <DiffLineKind as ::buffa::Enumeration>::from_i32(v32)
+                    .ok_or_else(|| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("unknown enum value {v32}"),
+                        )
+                    })
+            }
+            fn visit_u64<E: ::serde::de::Error>(
+                self,
+                v: u64,
+            ) -> ::core::result::Result<DiffLineKind, E> {
+                let v32 = i32::try_from(v)
+                    .map_err(|_| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("enum value {v} out of i32 range"),
+                        )
+                    })?;
+                <DiffLineKind as ::buffa::Enumeration>::from_i32(v32)
+                    .ok_or_else(|| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("unknown enum value {v32}"),
+                        )
+                    })
+            }
+            fn visit_unit<E: ::serde::de::Error>(
+                self,
+            ) -> ::core::result::Result<DiffLineKind, E> {
+                ::core::result::Result::Ok(::core::default::Default::default())
+            }
+        }
+        d.deserialize_any(_V)
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for DiffLineKind {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+impl ::buffa::Enumeration for DiffLineKind {
+    fn from_i32(value: i32) -> ::core::option::Option<Self> {
+        match value {
+            0i32 => ::core::option::Option::Some(Self::DIFF_LINE_KIND_UNSPECIFIED),
+            1i32 => ::core::option::Option::Some(Self::DIFF_LINE_KIND_CONTEXT),
+            2i32 => ::core::option::Option::Some(Self::DIFF_LINE_KIND_ADDED),
+            3i32 => ::core::option::Option::Some(Self::DIFF_LINE_KIND_REMOVED),
+            _ => ::core::option::Option::None,
+        }
+    }
+    fn to_i32(&self) -> i32 {
+        *self as i32
+    }
+    fn proto_name(&self) -> &'static str {
+        match self {
+            Self::DIFF_LINE_KIND_UNSPECIFIED => "DIFF_LINE_KIND_UNSPECIFIED",
+            Self::DIFF_LINE_KIND_CONTEXT => "DIFF_LINE_KIND_CONTEXT",
+            Self::DIFF_LINE_KIND_ADDED => "DIFF_LINE_KIND_ADDED",
+            Self::DIFF_LINE_KIND_REMOVED => "DIFF_LINE_KIND_REMOVED",
+        }
+    }
+    fn from_proto_name(name: &str) -> ::core::option::Option<Self> {
+        match name {
+            "DIFF_LINE_KIND_UNSPECIFIED" => {
+                ::core::option::Option::Some(Self::DIFF_LINE_KIND_UNSPECIFIED)
+            }
+            "DIFF_LINE_KIND_CONTEXT" => {
+                ::core::option::Option::Some(Self::DIFF_LINE_KIND_CONTEXT)
+            }
+            "DIFF_LINE_KIND_ADDED" => {
+                ::core::option::Option::Some(Self::DIFF_LINE_KIND_ADDED)
+            }
+            "DIFF_LINE_KIND_REMOVED" => {
+                ::core::option::Option::Some(Self::DIFF_LINE_KIND_REMOVED)
+            }
+            _ => ::core::option::Option::None,
+        }
+    }
+    fn values() -> &'static [Self] {
+        &[
+            Self::DIFF_LINE_KIND_UNSPECIFIED,
+            Self::DIFF_LINE_KIND_CONTEXT,
+            Self::DIFF_LINE_KIND_ADDED,
+            Self::DIFF_LINE_KIND_REMOVED,
+        ]
+    }
+}
 #[derive(Clone, PartialEq, Default)]
 #[derive(::serde::Serialize, ::serde::Deserialize)]
 #[serde(default)]
@@ -859,6 +1219,1080 @@ pub const __TREE_ENTRY_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa:
     type_url: "type.googleapis.com/hephaestus.repository_browser.v1.TreeEntry",
     to_json: ::buffa::type_registry::any_to_json::<TreeEntry>,
     from_json: ::buffa::type_registry::any_from_json::<TreeEntry>,
+    is_wkt: false,
+};
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct DiffLine {
+    /// Field 1: `kind`
+    #[serde(
+        rename = "kind",
+        with = "::buffa::json_helpers::proto_enum",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_default_enum_value"
+    )]
+    pub kind: ::buffa::EnumValue<DiffLineKind>,
+    /// Field 2: `old_line`
+    #[serde(
+        rename = "oldLine",
+        alias = "old_line",
+        with = "::buffa::json_helpers::opt_uint32",
+        skip_serializing_if = "::core::option::Option::is_none"
+    )]
+    pub old_line: ::core::option::Option<u32>,
+    /// Field 3: `new_line`
+    #[serde(
+        rename = "newLine",
+        alias = "new_line",
+        with = "::buffa::json_helpers::opt_uint32",
+        skip_serializing_if = "::core::option::Option::is_none"
+    )]
+    pub new_line: ::core::option::Option<u32>,
+    /// Field 4: `text`
+    #[serde(
+        rename = "text",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub text: ::buffa::alloc::string::String,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for DiffLine {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("DiffLine")
+            .field("kind", &self.kind)
+            .field("old_line", &self.old_line)
+            .field("new_line", &self.new_line)
+            .field("text", &self.text)
+            .finish()
+    }
+}
+impl DiffLine {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.repository_browser.v1.DiffLine";
+}
+impl DiffLine {
+    #[must_use = "with_* setters return `self` by value; assign or chain the result"]
+    #[inline]
+    ///Sets [`Self::old_line`] to `Some(value)`, consuming and returning `self`.
+    pub fn with_old_line(mut self, value: u32) -> Self {
+        self.old_line = Some(value);
+        self
+    }
+    #[must_use = "with_* setters return `self` by value; assign or chain the result"]
+    #[inline]
+    ///Sets [`Self::new_line`] to `Some(value)`, consuming and returning `self`.
+    pub fn with_new_line(mut self, value: u32) -> Self {
+        self.new_line = Some(value);
+        self
+    }
+}
+::buffa::impl_default_instance!(DiffLine);
+impl ::buffa::MessageName for DiffLine {
+    const PACKAGE: &'static str = "hephaestus.repository_browser.v1";
+    const NAME: &'static str = "DiffLine";
+    const FULL_NAME: &'static str = "hephaestus.repository_browser.v1.DiffLine";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.repository_browser.v1.DiffLine";
+}
+impl ::buffa::Message for DiffLine {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, _cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        {
+            let val = self.kind.to_i32();
+            if val != 0 {
+                size += 1u32 + ::buffa::types::int32_encoded_len(val) as u32;
+            }
+        }
+        if let Some(v) = self.old_line {
+            size += 1u32 + ::buffa::types::uint32_encoded_len(v) as u32;
+        }
+        if let Some(v) = self.new_line {
+            size += 1u32 + ::buffa::types::uint32_encoded_len(v) as u32;
+        }
+        if !self.text.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.text) as u32;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        _cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        {
+            let val = self.kind.to_i32();
+            if val != 0 {
+                ::buffa::types::put_int32_field(1u32, val, buf);
+            }
+        }
+        if let Some(v) = self.old_line {
+            ::buffa::types::put_uint32_field(2u32, v, buf);
+        }
+        if let Some(v) = self.new_line {
+            ::buffa::types::put_uint32_field(3u32, v, buf);
+        }
+        if !self.text.is_empty() {
+            ::buffa::types::put_string_field(4u32, &self.text, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.kind = ::buffa::EnumValue::from(::buffa::types::decode_int32(buf)?);
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.old_line = ::core::option::Option::Some(
+                    ::buffa::types::decode_uint32(buf)?,
+                );
+            }
+            3u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.new_line = ::core::option::Option::Some(
+                    ::buffa::types::decode_uint32(buf)?,
+                );
+            }
+            4u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.text, buf)?;
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.kind = ::buffa::EnumValue::from(0);
+        self.old_line = ::core::option::Option::None;
+        self.new_line = ::core::option::Option::None;
+        self.text.clear();
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for DiffLine {
+    const PROTO_FQN: &'static str = "hephaestus.repository_browser.v1.DiffLine";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for DiffLine {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __DIFF_LINE_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/hephaestus.repository_browser.v1.DiffLine",
+    to_json: ::buffa::type_registry::any_to_json::<DiffLine>,
+    from_json: ::buffa::type_registry::any_from_json::<DiffLine>,
+    is_wkt: false,
+};
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct DiffHunk {
+    /// Field 1: `old_start`
+    #[serde(
+        rename = "oldStart",
+        alias = "old_start",
+        with = "::buffa::json_helpers::uint32",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_u32"
+    )]
+    pub old_start: u32,
+    /// Field 2: `old_lines`
+    #[serde(
+        rename = "oldLines",
+        alias = "old_lines",
+        with = "::buffa::json_helpers::uint32",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_u32"
+    )]
+    pub old_lines: u32,
+    /// Field 3: `new_start`
+    #[serde(
+        rename = "newStart",
+        alias = "new_start",
+        with = "::buffa::json_helpers::uint32",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_u32"
+    )]
+    pub new_start: u32,
+    /// Field 4: `new_lines`
+    #[serde(
+        rename = "newLines",
+        alias = "new_lines",
+        with = "::buffa::json_helpers::uint32",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_u32"
+    )]
+    pub new_lines: u32,
+    /// Field 5: `lines`
+    #[serde(
+        rename = "lines",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_vec",
+        deserialize_with = "::buffa::json_helpers::null_as_default"
+    )]
+    pub lines: ::buffa::alloc::vec::Vec<DiffLine>,
+    /// Field 6: `truncated`
+    #[serde(
+        rename = "truncated",
+        with = "::buffa::json_helpers::proto_bool",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_false"
+    )]
+    pub truncated: bool,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for DiffHunk {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("DiffHunk")
+            .field("old_start", &self.old_start)
+            .field("old_lines", &self.old_lines)
+            .field("new_start", &self.new_start)
+            .field("new_lines", &self.new_lines)
+            .field("lines", &self.lines)
+            .field("truncated", &self.truncated)
+            .finish()
+    }
+}
+impl DiffHunk {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.repository_browser.v1.DiffHunk";
+}
+::buffa::impl_default_instance!(DiffHunk);
+impl ::buffa::MessageName for DiffHunk {
+    const PACKAGE: &'static str = "hephaestus.repository_browser.v1";
+    const NAME: &'static str = "DiffHunk";
+    const FULL_NAME: &'static str = "hephaestus.repository_browser.v1.DiffHunk";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.repository_browser.v1.DiffHunk";
+}
+impl ::buffa::Message for DiffHunk {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if self.old_start != 0u32 {
+            size += 1u32 + ::buffa::types::uint32_encoded_len(self.old_start) as u32;
+        }
+        if self.old_lines != 0u32 {
+            size += 1u32 + ::buffa::types::uint32_encoded_len(self.old_lines) as u32;
+        }
+        if self.new_start != 0u32 {
+            size += 1u32 + ::buffa::types::uint32_encoded_len(self.new_start) as u32;
+        }
+        if self.new_lines != 0u32 {
+            size += 1u32 + ::buffa::types::uint32_encoded_len(self.new_lines) as u32;
+        }
+        for v in &self.lines {
+            let __slot = __cache.reserve();
+            let inner_size = v.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.truncated {
+            size += 1u32 + ::buffa::types::BOOL_ENCODED_LEN as u32;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        __cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if self.old_start != 0u32 {
+            ::buffa::types::put_uint32_field(1u32, self.old_start, buf);
+        }
+        if self.old_lines != 0u32 {
+            ::buffa::types::put_uint32_field(2u32, self.old_lines, buf);
+        }
+        if self.new_start != 0u32 {
+            ::buffa::types::put_uint32_field(3u32, self.new_start, buf);
+        }
+        if self.new_lines != 0u32 {
+            ::buffa::types::put_uint32_field(4u32, self.new_lines, buf);
+        }
+        for v in &self.lines {
+            ::buffa::types::put_len_delimited_header(5u32, __cache.consume_next(), buf);
+            v.write_to(__cache, buf);
+        }
+        if self.truncated {
+            ::buffa::types::put_bool_field(6u32, self.truncated, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.old_start = ::buffa::types::decode_uint32(buf)?;
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.old_lines = ::buffa::types::decode_uint32(buf)?;
+            }
+            3u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.new_start = ::buffa::types::decode_uint32(buf)?;
+            }
+            4u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.new_lines = ::buffa::types::decode_uint32(buf)?;
+            }
+            5u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                let mut elem = ::core::default::Default::default();
+                ::buffa::Message::merge_length_delimited(&mut elem, buf, ctx)?;
+                self.lines.push(elem);
+            }
+            6u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.truncated = ::buffa::types::decode_bool(buf)?;
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.old_start = 0u32;
+        self.old_lines = 0u32;
+        self.new_start = 0u32;
+        self.new_lines = 0u32;
+        self.lines.clear();
+        self.truncated = false;
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for DiffHunk {
+    const PROTO_FQN: &'static str = "hephaestus.repository_browser.v1.DiffHunk";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for DiffHunk {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __DIFF_HUNK_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/hephaestus.repository_browser.v1.DiffHunk",
+    to_json: ::buffa::type_registry::any_to_json::<DiffHunk>,
+    from_json: ::buffa::type_registry::any_from_json::<DiffHunk>,
+    is_wkt: false,
+};
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct DiffFile {
+    /// Field 1: `path`
+    #[serde(
+        rename = "path",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub path: ::buffa::alloc::string::String,
+    /// Field 2: `previous_path`
+    #[serde(
+        rename = "previousPath",
+        alias = "previous_path",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub previous_path: ::buffa::alloc::string::String,
+    /// Field 3: `state`
+    #[serde(
+        rename = "state",
+        with = "::buffa::json_helpers::proto_enum",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_default_enum_value"
+    )]
+    pub state: ::buffa::EnumValue<DiffFileState>,
+    /// Field 4: `additions`
+    #[serde(
+        rename = "additions",
+        with = "::buffa::json_helpers::uint64",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_u64"
+    )]
+    pub additions: u64,
+    /// Field 5: `deletions`
+    #[serde(
+        rename = "deletions",
+        with = "::buffa::json_helpers::uint64",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_u64"
+    )]
+    pub deletions: u64,
+    /// Field 6: `hunks`
+    #[serde(
+        rename = "hunks",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_vec",
+        deserialize_with = "::buffa::json_helpers::null_as_default"
+    )]
+    pub hunks: ::buffa::alloc::vec::Vec<DiffHunk>,
+    /// Field 7: `binary`
+    #[serde(
+        rename = "binary",
+        with = "::buffa::json_helpers::proto_bool",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_false"
+    )]
+    pub binary: bool,
+    /// Field 8: `truncated`
+    #[serde(
+        rename = "truncated",
+        with = "::buffa::json_helpers::proto_bool",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_false"
+    )]
+    pub truncated: bool,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for DiffFile {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("DiffFile")
+            .field("path", &self.path)
+            .field("previous_path", &self.previous_path)
+            .field("state", &self.state)
+            .field("additions", &self.additions)
+            .field("deletions", &self.deletions)
+            .field("hunks", &self.hunks)
+            .field("binary", &self.binary)
+            .field("truncated", &self.truncated)
+            .finish()
+    }
+}
+impl DiffFile {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.repository_browser.v1.DiffFile";
+}
+::buffa::impl_default_instance!(DiffFile);
+impl ::buffa::MessageName for DiffFile {
+    const PACKAGE: &'static str = "hephaestus.repository_browser.v1";
+    const NAME: &'static str = "DiffFile";
+    const FULL_NAME: &'static str = "hephaestus.repository_browser.v1.DiffFile";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.repository_browser.v1.DiffFile";
+}
+impl ::buffa::Message for DiffFile {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if !self.path.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.path) as u32;
+        }
+        if !self.previous_path.is_empty() {
+            size
+                += 1u32 + ::buffa::types::string_encoded_len(&self.previous_path) as u32;
+        }
+        {
+            let val = self.state.to_i32();
+            if val != 0 {
+                size += 1u32 + ::buffa::types::int32_encoded_len(val) as u32;
+            }
+        }
+        if self.additions != 0u64 {
+            size += 1u32 + ::buffa::types::uint64_encoded_len(self.additions) as u32;
+        }
+        if self.deletions != 0u64 {
+            size += 1u32 + ::buffa::types::uint64_encoded_len(self.deletions) as u32;
+        }
+        for v in &self.hunks {
+            let __slot = __cache.reserve();
+            let inner_size = v.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.binary {
+            size += 1u32 + ::buffa::types::BOOL_ENCODED_LEN as u32;
+        }
+        if self.truncated {
+            size += 1u32 + ::buffa::types::BOOL_ENCODED_LEN as u32;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        __cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if !self.path.is_empty() {
+            ::buffa::types::put_string_field(1u32, &self.path, buf);
+        }
+        if !self.previous_path.is_empty() {
+            ::buffa::types::put_string_field(2u32, &self.previous_path, buf);
+        }
+        {
+            let val = self.state.to_i32();
+            if val != 0 {
+                ::buffa::types::put_int32_field(3u32, val, buf);
+            }
+        }
+        if self.additions != 0u64 {
+            ::buffa::types::put_uint64_field(4u32, self.additions, buf);
+        }
+        if self.deletions != 0u64 {
+            ::buffa::types::put_uint64_field(5u32, self.deletions, buf);
+        }
+        for v in &self.hunks {
+            ::buffa::types::put_len_delimited_header(6u32, __cache.consume_next(), buf);
+            v.write_to(__cache, buf);
+        }
+        if self.binary {
+            ::buffa::types::put_bool_field(7u32, self.binary, buf);
+        }
+        if self.truncated {
+            ::buffa::types::put_bool_field(8u32, self.truncated, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.path, buf)?;
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.previous_path, buf)?;
+            }
+            3u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.state = ::buffa::EnumValue::from(
+                    ::buffa::types::decode_int32(buf)?,
+                );
+            }
+            4u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.additions = ::buffa::types::decode_uint64(buf)?;
+            }
+            5u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.deletions = ::buffa::types::decode_uint64(buf)?;
+            }
+            6u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                let mut elem = ::core::default::Default::default();
+                ::buffa::Message::merge_length_delimited(&mut elem, buf, ctx)?;
+                self.hunks.push(elem);
+            }
+            7u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.binary = ::buffa::types::decode_bool(buf)?;
+            }
+            8u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.truncated = ::buffa::types::decode_bool(buf)?;
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.path.clear();
+        self.previous_path.clear();
+        self.state = ::buffa::EnumValue::from(0);
+        self.additions = 0u64;
+        self.deletions = 0u64;
+        self.hunks.clear();
+        self.binary = false;
+        self.truncated = false;
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for DiffFile {
+    const PROTO_FQN: &'static str = "hephaestus.repository_browser.v1.DiffFile";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for DiffFile {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __DIFF_FILE_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/hephaestus.repository_browser.v1.DiffFile",
+    to_json: ::buffa::type_registry::any_to_json::<DiffFile>,
+    from_json: ::buffa::type_registry::any_from_json::<DiffFile>,
+    is_wkt: false,
+};
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct CommitDetail {
+    /// Field 1: `commit`
+    #[serde(
+        rename = "commit",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub commit: ::buffa::MessageField<Commit>,
+    /// Field 2: `committer_name`
+    #[serde(
+        rename = "committerName",
+        alias = "committer_name",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub committer_name: ::buffa::alloc::string::String,
+    /// Field 3: `committer_email`
+    #[serde(
+        rename = "committerEmail",
+        alias = "committer_email",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub committer_email: ::buffa::alloc::string::String,
+    /// Field 4: `committed_at`
+    #[serde(
+        rename = "committedAt",
+        alias = "committed_at",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub committed_at: ::buffa::MessageField<::buffa_types::google::protobuf::Timestamp>,
+    /// Field 5: `body`
+    #[serde(
+        rename = "body",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub body: ::buffa::alloc::string::String,
+    /// Field 6: `selected_parent`
+    #[serde(
+        rename = "selectedParent",
+        alias = "selected_parent",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub selected_parent: ::buffa::alloc::string::String,
+    /// Field 7: `files`
+    #[serde(
+        rename = "files",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_vec",
+        deserialize_with = "::buffa::json_helpers::null_as_default"
+    )]
+    pub files: ::buffa::alloc::vec::Vec<DiffFile>,
+    /// Field 8: `truncated`
+    #[serde(
+        rename = "truncated",
+        with = "::buffa::json_helpers::proto_bool",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_false"
+    )]
+    pub truncated: bool,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for CommitDetail {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("CommitDetail")
+            .field("commit", &self.commit)
+            .field("committer_name", &self.committer_name)
+            .field("committer_email", &self.committer_email)
+            .field("committed_at", &self.committed_at)
+            .field("body", &self.body)
+            .field("selected_parent", &self.selected_parent)
+            .field("files", &self.files)
+            .field("truncated", &self.truncated)
+            .finish()
+    }
+}
+impl CommitDetail {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.repository_browser.v1.CommitDetail";
+}
+::buffa::impl_default_instance!(CommitDetail);
+impl ::buffa::MessageName for CommitDetail {
+    const PACKAGE: &'static str = "hephaestus.repository_browser.v1";
+    const NAME: &'static str = "CommitDetail";
+    const FULL_NAME: &'static str = "hephaestus.repository_browser.v1.CommitDetail";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.repository_browser.v1.CommitDetail";
+}
+impl ::buffa::Message for CommitDetail {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if self.commit.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.commit.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if !self.committer_name.is_empty() {
+            size
+                += 1u32
+                    + ::buffa::types::string_encoded_len(&self.committer_name) as u32;
+        }
+        if !self.committer_email.is_empty() {
+            size
+                += 1u32
+                    + ::buffa::types::string_encoded_len(&self.committer_email) as u32;
+        }
+        if self.committed_at.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.committed_at.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if !self.body.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.body) as u32;
+        }
+        if !self.selected_parent.is_empty() {
+            size
+                += 1u32
+                    + ::buffa::types::string_encoded_len(&self.selected_parent) as u32;
+        }
+        for v in &self.files {
+            let __slot = __cache.reserve();
+            let inner_size = v.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.truncated {
+            size += 1u32 + ::buffa::types::BOOL_ENCODED_LEN as u32;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        __cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if self.commit.is_set() {
+            ::buffa::types::put_len_delimited_header(1u32, __cache.consume_next(), buf);
+            self.commit.write_to(__cache, buf);
+        }
+        if !self.committer_name.is_empty() {
+            ::buffa::types::put_string_field(2u32, &self.committer_name, buf);
+        }
+        if !self.committer_email.is_empty() {
+            ::buffa::types::put_string_field(3u32, &self.committer_email, buf);
+        }
+        if self.committed_at.is_set() {
+            ::buffa::types::put_len_delimited_header(4u32, __cache.consume_next(), buf);
+            self.committed_at.write_to(__cache, buf);
+        }
+        if !self.body.is_empty() {
+            ::buffa::types::put_string_field(5u32, &self.body, buf);
+        }
+        if !self.selected_parent.is_empty() {
+            ::buffa::types::put_string_field(6u32, &self.selected_parent, buf);
+        }
+        for v in &self.files {
+            ::buffa::types::put_len_delimited_header(7u32, __cache.consume_next(), buf);
+            v.write_to(__cache, buf);
+        }
+        if self.truncated {
+            ::buffa::types::put_bool_field(8u32, self.truncated, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.commit.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.committer_name, buf)?;
+            }
+            3u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.committer_email, buf)?;
+            }
+            4u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.committed_at.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            5u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.body, buf)?;
+            }
+            6u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.selected_parent, buf)?;
+            }
+            7u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                let mut elem = ::core::default::Default::default();
+                ::buffa::Message::merge_length_delimited(&mut elem, buf, ctx)?;
+                self.files.push(elem);
+            }
+            8u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.truncated = ::buffa::types::decode_bool(buf)?;
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.commit = ::buffa::MessageField::none();
+        self.committer_name.clear();
+        self.committer_email.clear();
+        self.committed_at = ::buffa::MessageField::none();
+        self.body.clear();
+        self.selected_parent.clear();
+        self.files.clear();
+        self.truncated = false;
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for CommitDetail {
+    const PROTO_FQN: &'static str = "hephaestus.repository_browser.v1.CommitDetail";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for CommitDetail {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __COMMIT_DETAIL_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/hephaestus.repository_browser.v1.CommitDetail",
+    to_json: ::buffa::type_registry::any_to_json::<CommitDetail>,
+    from_json: ::buffa::type_registry::any_from_json::<CommitDetail>,
     is_wkt: false,
 };
 #[derive(Clone, PartialEq, Default)]
@@ -2308,6 +3742,435 @@ pub const __GET_FILE_RESPONSE_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = :
     type_url: "type.googleapis.com/hephaestus.repository_browser.v1.GetFileResponse",
     to_json: ::buffa::type_registry::any_to_json::<GetFileResponse>,
     from_json: ::buffa::type_registry::any_from_json::<GetFileResponse>,
+    is_wkt: false,
+};
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct GetCommitDetailRequest {
+    /// Field 1: `repository_id`
+    #[serde(
+        rename = "repositoryId",
+        alias = "repository_id",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub repository_id: ::buffa::MessageField<super::super::common::v1::OpaqueId>,
+    /// Field 2: `branch`
+    #[serde(
+        rename = "branch",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub branch: ::buffa::alloc::string::String,
+    /// Field 3: `commit`
+    #[serde(
+        rename = "commit",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub commit: ::buffa::alloc::string::String,
+    /// Empty selects the first parent. Root commits use the empty tree.
+    ///
+    /// Field 4: `parent`
+    #[serde(
+        rename = "parent",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub parent: ::buffa::alloc::string::String,
+    /// Field 5: `page`
+    #[serde(
+        rename = "page",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub page: ::buffa::MessageField<super::super::common::v1::PageRequest>,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for GetCommitDetailRequest {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("GetCommitDetailRequest")
+            .field("repository_id", &self.repository_id)
+            .field("branch", &self.branch)
+            .field("commit", &self.commit)
+            .field("parent", &self.parent)
+            .field("page", &self.page)
+            .finish()
+    }
+}
+impl GetCommitDetailRequest {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.repository_browser.v1.GetCommitDetailRequest";
+}
+::buffa::impl_default_instance!(GetCommitDetailRequest);
+impl ::buffa::MessageName for GetCommitDetailRequest {
+    const PACKAGE: &'static str = "hephaestus.repository_browser.v1";
+    const NAME: &'static str = "GetCommitDetailRequest";
+    const FULL_NAME: &'static str = "hephaestus.repository_browser.v1.GetCommitDetailRequest";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.repository_browser.v1.GetCommitDetailRequest";
+}
+impl ::buffa::Message for GetCommitDetailRequest {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if self.repository_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.repository_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if !self.branch.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.branch) as u32;
+        }
+        if !self.commit.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.commit) as u32;
+        }
+        if !self.parent.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.parent) as u32;
+        }
+        if self.page.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.page.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        __cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if self.repository_id.is_set() {
+            ::buffa::types::put_len_delimited_header(1u32, __cache.consume_next(), buf);
+            self.repository_id.write_to(__cache, buf);
+        }
+        if !self.branch.is_empty() {
+            ::buffa::types::put_string_field(2u32, &self.branch, buf);
+        }
+        if !self.commit.is_empty() {
+            ::buffa::types::put_string_field(3u32, &self.commit, buf);
+        }
+        if !self.parent.is_empty() {
+            ::buffa::types::put_string_field(4u32, &self.parent, buf);
+        }
+        if self.page.is_set() {
+            ::buffa::types::put_len_delimited_header(5u32, __cache.consume_next(), buf);
+            self.page.write_to(__cache, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.repository_id.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.branch, buf)?;
+            }
+            3u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.commit, buf)?;
+            }
+            4u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.parent, buf)?;
+            }
+            5u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.page.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.repository_id = ::buffa::MessageField::none();
+        self.branch.clear();
+        self.commit.clear();
+        self.parent.clear();
+        self.page = ::buffa::MessageField::none();
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for GetCommitDetailRequest {
+    const PROTO_FQN: &'static str = "hephaestus.repository_browser.v1.GetCommitDetailRequest";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for GetCommitDetailRequest {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __GET_COMMIT_DETAIL_REQUEST_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/hephaestus.repository_browser.v1.GetCommitDetailRequest",
+    to_json: ::buffa::type_registry::any_to_json::<GetCommitDetailRequest>,
+    from_json: ::buffa::type_registry::any_from_json::<GetCommitDetailRequest>,
+    is_wkt: false,
+};
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct GetCommitDetailResponse {
+    /// Field 1: `selected_branch`
+    #[serde(
+        rename = "selectedBranch",
+        alias = "selected_branch",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub selected_branch: ::buffa::MessageField<Branch>,
+    /// Field 2: `detail`
+    #[serde(
+        rename = "detail",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub detail: ::buffa::MessageField<CommitDetail>,
+    /// Field 3: `page`
+    #[serde(
+        rename = "page",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub page: ::buffa::MessageField<super::super::common::v1::PageResponse>,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for GetCommitDetailResponse {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("GetCommitDetailResponse")
+            .field("selected_branch", &self.selected_branch)
+            .field("detail", &self.detail)
+            .field("page", &self.page)
+            .finish()
+    }
+}
+impl GetCommitDetailResponse {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.repository_browser.v1.GetCommitDetailResponse";
+}
+::buffa::impl_default_instance!(GetCommitDetailResponse);
+impl ::buffa::MessageName for GetCommitDetailResponse {
+    const PACKAGE: &'static str = "hephaestus.repository_browser.v1";
+    const NAME: &'static str = "GetCommitDetailResponse";
+    const FULL_NAME: &'static str = "hephaestus.repository_browser.v1.GetCommitDetailResponse";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.repository_browser.v1.GetCommitDetailResponse";
+}
+impl ::buffa::Message for GetCommitDetailResponse {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if self.selected_branch.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.selected_branch.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.detail.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.detail.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.page.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.page.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        __cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if self.selected_branch.is_set() {
+            ::buffa::types::put_len_delimited_header(1u32, __cache.consume_next(), buf);
+            self.selected_branch.write_to(__cache, buf);
+        }
+        if self.detail.is_set() {
+            ::buffa::types::put_len_delimited_header(2u32, __cache.consume_next(), buf);
+            self.detail.write_to(__cache, buf);
+        }
+        if self.page.is_set() {
+            ::buffa::types::put_len_delimited_header(3u32, __cache.consume_next(), buf);
+            self.page.write_to(__cache, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.selected_branch.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.detail.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            3u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.page.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.selected_branch = ::buffa::MessageField::none();
+        self.detail = ::buffa::MessageField::none();
+        self.page = ::buffa::MessageField::none();
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for GetCommitDetailResponse {
+    const PROTO_FQN: &'static str = "hephaestus.repository_browser.v1.GetCommitDetailResponse";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for GetCommitDetailResponse {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __GET_COMMIT_DETAIL_RESPONSE_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/hephaestus.repository_browser.v1.GetCommitDetailResponse",
+    to_json: ::buffa::type_registry::any_to_json::<GetCommitDetailResponse>,
+    from_json: ::buffa::type_registry::any_from_json::<GetCommitDetailResponse>,
     is_wkt: false,
 };
 #[derive(Clone, PartialEq, Default)]

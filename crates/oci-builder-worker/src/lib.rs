@@ -13,6 +13,7 @@ use std::{
     collections::BTreeMap,
     ffi::OsString,
     fs,
+    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::Stdio,
     time::Duration,
@@ -132,12 +133,16 @@ pub struct PreparedSource {
 /// Arguments exposed to an isolated OCI build engine.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IsolatedOciBuild {
+    /// Durable preparation attempt that owns every transient VM workspace.
+    pub job_id: Uuid,
     /// Repository OCI image definition being prepared.
     pub image_id: OciImageId,
     /// Opaque durable project identity that owns this image.
     pub project_id: Uuid,
     /// Absolute canonical Dockerfile path.
     pub dockerfile: PathBuf,
+    /// Absolute canonical root of the exact read-only checkout.
+    pub checkout_root: PathBuf,
     /// Absolute canonical context path.
     pub context: PathBuf,
     /// Local immutable OCI layout bound as the `heph-base` build context.
@@ -450,6 +455,7 @@ pub struct RootfsMaterializationWorker<S, E> {
     exporter: E,
     worker_name: String,
     rootfs_root: PathBuf,
+    guest_init: Option<PathBuf>,
     lease: Duration,
 }
 
@@ -491,8 +497,28 @@ where
             exporter,
             worker_name,
             rootfs_root,
+            guest_init: None,
             lease,
         })
+    }
+
+    /// Installs the reviewed guest bootstrap into each newly materialized
+    /// execution root. Repository Dockerfiles cannot provide or replace it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error unless the configured bootstrap is an absolute regular
+    /// host file owned by the daemon configuration.
+    pub fn with_guest_init(mut self, guest_init: PathBuf) -> Result<Self, OciWorkerError> {
+        if !guest_init.is_absolute() {
+            return Err(OciWorkerError::InvalidConfiguration);
+        }
+        let metadata = fs::symlink_metadata(&guest_init).map_err(OciWorkerError::Filesystem)?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(OciWorkerError::InvalidConfiguration);
+        }
+        self.guest_init = Some(fs::canonicalize(guest_init).map_err(OciWorkerError::Filesystem)?);
+        Ok(self)
     }
 
     /// Materializes at most one claimed job through an empty staging directory.
@@ -556,6 +582,12 @@ where
             let _ = fs::remove_dir_all(staging);
             return Err(OciWorkerError::UnsafeMaterializationPath);
         }
+        if let Some(guest_init) = &self.guest_init
+            && let Err(error) = install_guest_init(staging, guest_init)
+        {
+            let _ = fs::remove_dir_all(staging);
+            return Err(error);
+        }
         fs::rename(staging, destination).map_err(OciWorkerError::Filesystem)
     }
 
@@ -610,6 +642,20 @@ where
         fs::write(&temporary, bytes).map_err(OciWorkerError::Filesystem)?;
         fs::rename(temporary, manifest).map_err(OciWorkerError::Filesystem)
     }
+
+    /// Lists only durable, successfully materialized roots owned by this
+    /// daemon worker. Callers must still validate the returned host paths
+    /// before supplying them to a VM provider.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the durable materialization store is unavailable.
+    pub async fn materialized_roots(&self) -> Result<Vec<MaterializedRoot>, OciWorkerError> {
+        self.store
+            .materialized_roots(&self.worker_name)
+            .await
+            .map_err(OciWorkerError::Store)
+    }
 }
 
 #[derive(Serialize)]
@@ -624,6 +670,33 @@ enum RootManifestEntry {
     Directory { path: PathBuf },
 }
 
+fn install_guest_init(root: &Path, guest_init: &Path) -> Result<(), OciWorkerError> {
+    let mut directory = root.to_path_buf();
+    for component in ["usr", "libexec", "hephaestus"] {
+        directory.push(component);
+        match fs::symlink_metadata(&directory) {
+            Ok(metadata) if metadata.file_type().is_dir() && !metadata.file_type().is_symlink() => {
+            }
+            Ok(_) => return Err(OciWorkerError::UnsafeMaterializationPath),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                fs::create_dir(&directory).map_err(OciWorkerError::Filesystem)?;
+                fs::set_permissions(&directory, fs::Permissions::from_mode(0o755))
+                    .map_err(OciWorkerError::Filesystem)?;
+            }
+            Err(error) => return Err(OciWorkerError::Filesystem(error)),
+        }
+    }
+    let destination = directory.join("heph-init");
+    match fs::symlink_metadata(&destination) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Ok(_) => return Err(OciWorkerError::UnsafeMaterializationPath),
+        Err(error) => return Err(OciWorkerError::Filesystem(error)),
+    }
+    fs::copy(guest_init, &destination).map_err(OciWorkerError::Filesystem)?;
+    fs::set_permissions(destination, fs::Permissions::from_mode(0o755))
+        .map_err(OciWorkerError::Filesystem)
+}
+
 fn isolated_request(
     job: &ClaimedProductionJob,
     source: &PreparedSource,
@@ -636,9 +709,11 @@ fn isolated_request(
     let dockerfile_text = fs::read_to_string(&dockerfile).map_err(OciWorkerError::Filesystem)?;
     DockerfilePolicy::validate(&dockerfile_text)?;
     Ok(IsolatedOciBuild {
+        job_id: job.id,
         image_id: job.image_id,
         project_id: job.project_id,
         dockerfile,
+        checkout_root: checkout,
         context,
         base_oci_layout,
         base_reference: job.base_reference.clone(),
@@ -994,6 +1069,17 @@ pub enum OciWorkerError {
     /// The isolated OCI image exited unsuccessfully.
     #[error("isolated OCI image failed")]
     BuildFailed,
+    /// A dedicated builder or verifier VM did not complete successfully.
+    ///
+    /// The phase and exit code are fixed operational metadata. They deliberately
+    /// exclude guest output, which can contain repository-controlled source.
+    #[error("isolated OCI {phase} VM failed (safe exit code {exit_code:?})")]
+    IsolatedVmFailed {
+        /// Fixed platform operation phase.
+        phase: &'static str,
+        /// Guest process exit code when the VM reported one.
+        exit_code: Option<i32>,
+    },
 }
 
 #[cfg(test)]
@@ -1251,9 +1337,11 @@ mod tests {
         let engine = BuildahEngine::new(PathBuf::from("/usr/bin/buildah"), String::from("output"))
             .expect("engine");
         let request = IsolatedOciBuild {
+            job_id: Uuid::new_v4(),
             image_id: OciImageId::new(),
             project_id: Uuid::new_v4(),
             dockerfile: PathBuf::from("/source/Dockerfile"),
+            checkout_root: PathBuf::from("/source"),
             context: PathBuf::from("/source"),
             base_oci_layout: PathBuf::from("/bases/ubuntu"),
             base_reference: OciImageReference::parse(format!(
@@ -1427,5 +1515,24 @@ mod tests {
                 .expect("test materialization failed lock")
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn guest_init_installation_rejects_a_repository_supplied_target() {
+        let temporary = tempfile::tempdir().expect("temporary root tree");
+        let bootstrap = temporary.path().join("heph-init");
+        fs::write(&bootstrap, b"reviewed bootstrap").expect("bootstrap");
+        let root = temporary.path().join("rootfs");
+        fs::create_dir_all(root.join("usr/libexec/hephaestus")).expect("rootfs");
+
+        install_guest_init(&root, &bootstrap).expect("first installation");
+        assert_eq!(
+            fs::read(root.join("usr/libexec/hephaestus/heph-init")).expect("installed bootstrap"),
+            b"reviewed bootstrap"
+        );
+        assert!(matches!(
+            install_guest_init(&root, &bootstrap),
+            Err(OciWorkerError::UnsafeMaterializationPath)
+        ));
     }
 }

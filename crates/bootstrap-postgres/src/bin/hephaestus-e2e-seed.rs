@@ -421,13 +421,22 @@ async fn seed_builder_catalog(pool: &sqlx::PgPool) -> Result<(), Box<dyn Error>>
     )
     .execute(pool)
     .await?;
+    seed_fixture_publication_verification(pool).await
+}
+
+async fn seed_fixture_publication_verification(pool: &sqlx::PgPool) -> Result<(), Box<dyn Error>> {
     sqlx::query(
         "INSERT INTO registry_publication_platforms
            (publication_id, digest, size, media_type, operating_system, architecture)
-         VALUES
-           ('20000000-0000-4000-8000-000000000003',
-            'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-            1, 'application/vnd.oci.image.manifest.v1+json', 'linux', 'x86_64')
+         SELECT '20000000-0000-4000-8000-000000000003',
+                'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                1, 'application/vnd.oci.image.manifest.v1+json', 'linux', 'x86_64'
+           WHERE EXISTS (
+               SELECT 1
+                 FROM registry_publications
+                WHERE id = '20000000-0000-4000-8000-000000000003'
+                  AND state IN ('pending', 'publishing')
+           )
          ON CONFLICT (publication_id, digest) DO NOTHING",
     )
     .execute(pool)
@@ -435,22 +444,32 @@ async fn seed_builder_catalog(pool: &sqlx::PgPool) -> Result<(), Box<dyn Error>>
     sqlx::query(
         "INSERT INTO registry_publication_evidence
            (publication_id, kind, subject_digest, digest, size, media_type, artifact_type)
-         VALUES
-           ('20000000-0000-4000-8000-000000000003', 'sbom',
-            'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-            'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
-            1, 'application/vnd.oci.artifact.manifest.v1+json',
-            'application/vnd.cyclonedx+json'),
-           ('20000000-0000-4000-8000-000000000003', 'provenance',
-            'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-            'sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
-            1, 'application/vnd.oci.artifact.manifest.v1+json',
-            'application/vnd.in-toto+json'),
-           ('20000000-0000-4000-8000-000000000003', 'scan',
-            'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-            'sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
-            1, 'application/vnd.oci.artifact.manifest.v1+json',
-            'application/vnd.cyclonedx+json')
+         SELECT '20000000-0000-4000-8000-000000000003', evidence.kind,
+                evidence.subject_digest, evidence.digest, evidence.size,
+                evidence.media_type, evidence.artifact_type
+           FROM (VALUES
+               ('sbom',
+                'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+                1, 'application/vnd.oci.artifact.manifest.v1+json',
+                'application/vnd.cyclonedx+json'),
+               ('provenance',
+                'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                'sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+                1, 'application/vnd.oci.artifact.manifest.v1+json',
+                'application/vnd.in-toto+json'),
+               ('scan',
+                'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                'sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+                1, 'application/vnd.oci.artifact.manifest.v1+json',
+                'application/vnd.cyclonedx+json')
+           ) AS evidence(kind, subject_digest, digest, size, media_type, artifact_type)
+          WHERE EXISTS (
+              SELECT 1
+                FROM registry_publications
+               WHERE id = '20000000-0000-4000-8000-000000000003'
+                 AND state IN ('pending', 'publishing')
+          )
          ON CONFLICT (publication_id, kind) DO NOTHING",
     )
     .execute(pool)
@@ -524,4 +543,44 @@ async fn bootstrap_forge(
         }
     };
     Ok((project_id, repository))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::seed_builder_catalog;
+    use sqlx::postgres::PgPoolOptions;
+
+    const FIXTURE_PUBLICATION_ID: &str = "20000000-0000-4000-8000-000000000003";
+
+    #[tokio::test]
+    async fn builder_catalog_seed_is_repeatable_after_approval() {
+        let Ok(database_url) = std::env::var("HEPHAESTUS_POSTGRES_TEST_URL") else {
+            eprintln!("skipping: HEPHAESTUS_POSTGRES_TEST_URL is not set");
+            return;
+        };
+        let pool = PgPoolOptions::new()
+            .max_connections(5)
+            .connect(&database_url)
+            .await
+            .expect("connect PostgreSQL");
+        sqlx::migrate!("../../migrations")
+            .run(&pool)
+            .await
+            .expect("migrate PostgreSQL");
+
+        seed_builder_catalog(&pool)
+            .await
+            .expect("initial catalog seed succeeds");
+        seed_builder_catalog(&pool)
+            .await
+            .expect("repeated catalog seed must not rewrite immutable evidence");
+
+        let state: String =
+            sqlx::query_scalar("SELECT state FROM registry_publications WHERE id = $1::uuid")
+                .bind(FIXTURE_PUBLICATION_ID)
+                .fetch_one(&pool)
+                .await
+                .expect("fixture publication exists");
+        assert_eq!(state, "approved");
+    }
 }

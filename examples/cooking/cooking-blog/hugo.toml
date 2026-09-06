@@ -1,0 +1,7 @@
+baseURL = "https://cooking.example.invalid/"
+languageCode = "en-us"
+title = "Cooking Notes"
+disableKinds = ["taxonomy", "term", "RSS", "sitemap"]
+
+[params]
+  description = "Small, dependable recipes for everyday cooking."

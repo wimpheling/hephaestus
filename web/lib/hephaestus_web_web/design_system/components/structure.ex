@@ -40,6 +40,8 @@ defmodule HephaestusWebWeb.DesignSystem.Components.Structure do
       :timeline_dot,
       :confirmation,
       :repository_browser,
+      :file_browser,
+      :file_viewer,
       :tree_level,
       :tree_directory,
       :tree_summary,
@@ -313,6 +315,30 @@ defmodule HephaestusWebWeb.DesignSystem.Components.Structure do
     """
   end
 
+  attr :id, :string, required: true
+  attr :contents, :string, default: nil
+  attr :diff_lines, :list, default: []
+  attr :aria_label, :string, default: "File contents"
+
+  attr :language, :string,
+    default: "text",
+    values: ["elixir", "json", "markdown", "rust", "shell", "sql", "text", "toml", "yaml"]
+
+  @doc "Renders escaped source text without template whitespace and with stable line numbers."
+  def source_viewer(assigns) do
+    assigns = assign(assigns, :lines, numbered_source_lines(assigns.contents || ""))
+
+    ~H"""
+    <pre
+      id={@id}
+      class="file-source"
+      aria-label={@aria_label}
+      phx-hook="SourceHighlight"
+      data-source-language={@language}
+    ><code :if={!is_nil(@contents)}><span :for={{line, number} <- @lines} id={"#{@id}-L#{number}"} class="file-source-line"><span class="file-source-number" aria-hidden="true">{number}</span><span class="file-source-content">{line}</span></span></code><code :if={is_nil(@contents)}><span :for={{line, number} <- Enum.with_index(@diff_lines, 1)} id={"#{@id}-L#{number}"} class={["file-source-line", "diff-line", diff_line_class(line)]}><span class="file-source-number" aria-hidden="true">{diff_prefix(line)} {line["old_line"] || ""}</span><span class="file-source-number" aria-hidden="true">{line["new_line"] || ""}</span><span class="file-source-content">{line["text"]}</span></span></code></pre>
+    """
+  end
+
   attr :node, :map, required: true
   attr :current_path, :string, default: nil
 
@@ -345,6 +371,37 @@ defmodule HephaestusWebWeb.DesignSystem.Components.Structure do
     """
   end
 
+  defp numbered_source_lines(contents) do
+    contents
+    |> String.split("\n", trim: false)
+    |> drop_terminal_source_line(contents)
+    |> Enum.with_index(1)
+  end
+
+  defp diff_prefix(line) do
+    case to_string(line["kind"] || "") |> String.replace_prefix("DIFF_LINE_KIND_", "") do
+      "ADDED" -> "+"
+      "REMOVED" -> "-"
+      _context -> " "
+    end
+  end
+
+  defp diff_line_class(line) do
+    case diff_prefix(line) do
+      "+" -> "diff-added"
+      "-" -> "diff-removed"
+      _context -> nil
+    end
+  end
+
+  defp drop_terminal_source_line(lines, contents) do
+    if contents != "" and String.ends_with?(contents, "\n") do
+      List.delete_at(lines, -1)
+    else
+      lines
+    end
+  end
+
   defp frame_classes(:organization_header, _layout), do: "organization-hero"
   defp frame_classes(:organization_mark, _layout), do: "org-mark"
   defp frame_classes(:organization_body, _layout), do: "org-copy"
@@ -370,6 +427,8 @@ defmodule HephaestusWebWeb.DesignSystem.Components.Structure do
   defp frame_classes(:timeline_dot, _layout), do: "timeline-dot"
   defp frame_classes(:confirmation, _layout), do: "danger-confirmation"
   defp frame_classes(:repository_browser, _layout), do: "repository-browser"
+  defp frame_classes(:file_browser, _layout), do: "file-browser"
+  defp frame_classes(:file_viewer, _layout), do: "file-viewer"
   defp frame_classes(:tree_level, _layout), do: "tree-level"
   defp frame_classes(:tree_directory, _layout), do: nil
   defp frame_classes(:tree_summary, _layout), do: nil

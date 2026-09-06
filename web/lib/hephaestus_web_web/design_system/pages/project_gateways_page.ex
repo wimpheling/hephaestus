@@ -77,6 +77,12 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.ProjectGatewaysPage do
         destination: "/projects/#{project_id}/runs"
       },
       %{
+        key: :images,
+        label: "Images",
+        icon: "hero-cube",
+        destination: "/projects/#{project_id}/images"
+      },
+      %{
         key: :gateways,
         label: "Gateways",
         icon: "hero-globe-alt",

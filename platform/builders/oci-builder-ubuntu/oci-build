@@ -1,0 +1,81 @@
+#!/bin/sh
+set -eu
+
+# All paths are fixed by the VM adapter. The repository controls only the
+# read-only Dockerfile/context contents; no argument is evaluated as shell.
+readonly_source=/workspace/source
+readonly_base=/workspace/heph-base
+writable_output=/workspace/candidate
+writable_scratch=/workspace/buildah
+
+# The directory-backed VM root is immutable platform input, not a writable
+# guest filesystem. Buildah state belongs on this distinct, fresh private
+# mount, which the host removes after this one preparation attempt.
+export HOME="$writable_scratch/home"
+export XDG_RUNTIME_DIR="$writable_scratch/runtime"
+export TMPDIR="$writable_scratch/tmp"
+mkdir -p "$HOME" "$XDG_RUNTIME_DIR" "$TMPDIR"
+chmod 0700 "$HOME" "$XDG_RUNTIME_DIR" "$TMPDIR"
+
+# Keep Buildah's private metadata off the platform root and candidate layout.
+# The paths are fresh for this one-shot VM and never survive the operation.
+buildah_root="$HOME/buildah-root"
+buildah_runroot="$XDG_RUNTIME_DIR/buildah-runroot"
+mkdir -p "$buildah_root" "$buildah_runroot"
+buildah_mapped() {
+    # libkrun exposes the guest's root mapping, not host subordinate IDs. Use
+    # the complete fixed guest range so Buildah can unpack approved OCI layer
+    # ownership without consulting host /etc/subuid or /etc/subgid.
+    buildah \
+        --storage-driver vfs \
+        --root "$buildah_root" \
+        --runroot "$buildah_runroot" \
+        --userns-uid-map 0:0:65536 \
+        --userns-gid-map 0:0:65536 \
+        "$@"
+}
+buildah_host() {
+    buildah \
+        --storage-driver vfs \
+        --root "$buildah_root" \
+        --runroot "$buildah_runroot" \
+        "$@"
+}
+
+rm -rf "$writable_output"/*
+# The approved base is an OCI layout with a generated immutable reference
+# name, not a mutable `latest` tag. Import that one descriptor into Buildah's
+# private VM-local store and assign the reserved Dockerfile name afterwards.
+base_tag=$(grep --only-matching --extended-regexp 'heph-sha256-[0-9a-f]{64}' \
+    "$readonly_base/index.json" | sort --unique)
+[ "$(printf '%s\n' "$base_tag" | wc --lines)" -eq 1 ]
+if ! base_image=$(buildah_mapped pull --quiet "oci:${readonly_base}:${base_tag}"); then
+    # This fixed marker is safe operational telemetry. Buildah's raw output is
+    # deliberately never retained by the host.
+    printf '%s\n' 'HEPH_OCI_FAILURE=base-import' >&2
+    exit 125
+fi
+if ! buildah_mapped tag "$base_image" heph-base; then
+    printf '%s\n' 'HEPH_OCI_FAILURE=base-alias' >&2
+    exit 125
+fi
+# Buildah 1.33 rejects `--network none` with `--isolation chroot`. The VM
+# specification is the authoritative boundary and has NetworkMode::Disabled,
+# so the guest cannot obtain a network interface regardless of Dockerfile
+# instructions; `--pull-never` separately rejects image acquisition.
+if ! buildah_host bud \
+    --isolation chroot \
+    --userns host \
+    --pull-never \
+    --format oci \
+    --layers=false \
+    --file "$1" \
+    --tag hephaestus-repository-output \
+    "$2"; then
+    printf '%s\n' 'HEPH_OCI_FAILURE=dockerfile-build' >&2
+    exit 125
+fi
+if ! buildah_host push --format oci hephaestus-repository-output "oci:${writable_output}:latest"; then
+    printf '%s\n' 'HEPH_OCI_FAILURE=layout-export' >&2
+    exit 125
+fi

@@ -1,6 +1,6 @@
 # Platform OCI image release operation
 
-The four reviewed Dockerfiles in this directory are released by two
+The six reviewed Dockerfiles in this directory are released by two
 administrator-operated scripts and the trusted `hephaestus-registry-release`
 command. They are not a GitHub Actions or GHCR workflow, and tags are never an
 execution input.
@@ -41,8 +41,15 @@ rootless Buildah storage, while `BUILDAH_ISOLATION=chroot` avoids a nested OCI
 runtime mount. No Podman socket, registry credential, or signing-key mount is
 provided.
 
+Before a release build, explicitly import the one reviewed Ubuntu base. The
+command has no source argument: it mirrors only the digest pinned in this
+repository, checks the upstream and Zot manifest digests, and writes a private
+receipt under `.local/hephaestus/platform-images/base-imports/`. It is not a
+general pull-through registry.
+
 ```sh
 cargo dev doctor
+cargo dev platform-images import-base
 cargo dev platform-images build \
   --source https://forge.example/hephaestus \
   --revision 0123456789abcdef0123456789abcdef01234567 \
@@ -62,7 +69,7 @@ cargo dev platform-images status
 ```
 
 `publish` starts local Zot, uses the pinned tool image to publish and read back
-the four immutable layouts, approves them, and applies the OCI image catalog.
+the six immutable layouts, approves them, and applies the OCI image catalog.
 It writes the review, catalog, and catalog-application receipts beneath
 `.local/hephaestus/platform-images/installations/<revision>/`. It never runs
 automatically. `cargo dev platform-images clean --revision <revision>` removes
@@ -103,6 +110,19 @@ complete vulnerability result is retained and published as scan evidence. A
 second deterministic policy report fails the build for fixable `HIGH` or
 `CRITICAL` findings. Unfixed findings remain visible in the complete report but
 do not make an image permanently unreleasable when no patched package exists.
+
+The bundled local release toolchain pins Syft `1.51.1-hephaestus.1` and Trivy
+`0.74.0-hephaestus.1`. Both are reproducibly built from checksummed upstream
+sources using Go 1.26.6 because their released binaries still embed an outdated
+Go runtime with fixable findings. The Syft 1.51.1 source archive SHA-256 is
+`da8d83cdca78f2c553e08a5ecb9734016a05adb904168531f582bebfbb9bb2cf`; the
+Trivy 0.74.0 source archive SHA-256 is
+`04268af574690b84bc3474a5f19e002cd6da3e16899fac9fd39c6e84e7843940`; and
+the Go 1.26.6 archive SHA-256 is
+`708effb774be8237570d0add163225abbdfaf4fca28b2611df167beba4feef89`.
+Updating either is a reviewed platform-release input: update the exact source
+and toolchain checksums, expected-version check, and this record, then perform
+a fresh scan rather than copying prior evidence.
 
 For an optional operator approval, provide a private directory containing one
 `<builder-key>.json` artifact per builder, together with a pinned Cosign and a
@@ -169,7 +189,7 @@ scripts/build-platform-builder-layouts.sh \
 Publication goes through `hephaestus-registry-release`, not through
 pre-issued token files. The command creates or resumes the durable publication
 intent, issues an internal short-lived RS256 token for exactly one
-`platform/builders/<key>` repository and `pull,push` actions, publishes the
+`platform/images/<key>` repository and `pull,push` actions, publishes the
 image and OCI evidence layouts through controlled Skopeo, reads Zot back with
 the bounded direct bearer client, verifies evidence, and commits approval. The
 token is never saved as a release input or written to the review/catalog output.
@@ -195,7 +215,7 @@ scripts/publish-platform-builders.sh \
 ```
 
 The wrapper accepts only `HEPHAESTUS_FORGE_REGISTRY_AUTHORITY` and the exact
-`platform/builders/<key>` destinations. It supplies the private layout and
+`platform/images/<key>` destinations. It supplies the private layout and
 credential roots to `hephaestus-registry-release`, then accepts only its
 approved, read-back digest and referrer identities. Required evidence is SPDX
 SBOM, in-toto provenance, and vulnerability scan. A Cosign-verified approval

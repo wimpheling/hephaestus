@@ -1,0 +1,20 @@
+:root {
+  color: #202124;
+  background: #fffdf8;
+  font-family: system-ui, sans-serif;
+  line-height: 1.5;
+}
+
+body { margin: 0; }
+.container { box-sizing: border-box; margin: 0 auto; max-width: 48rem; padding: 1.25rem; }
+.site-header, .site-footer { background: #2f4f3a; color: #fff; }
+.site-header .container { align-items: center; display: flex; justify-content: space-between; }
+.site-title, nav a { color: inherit; text-decoration: none; }
+.site-title { font-size: 1.25rem; font-weight: 700; }
+nav a { text-decoration: underline; }
+.page-header { border-bottom: 1px solid #d8d2c7; margin-bottom: 1.5rem; }
+.lede, .intro { color: #4e504c; }
+.recipe-list { list-style: none; margin: 0; padding: 0; }
+.recipe-list li { border-bottom: 1px solid #d8d2c7; padding: 1rem 0; }
+.recipe-list p { margin-bottom: 0; }
+a { color: #1d5a3c; }

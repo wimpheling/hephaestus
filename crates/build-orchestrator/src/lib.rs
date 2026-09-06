@@ -24,7 +24,7 @@ use std::{
     os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Component, Path, PathBuf},
     process::Command,
-    sync::Arc,
+    sync::{Arc, RwLock},
     time::Duration,
 };
 use tokio::sync::broadcast;
@@ -57,8 +57,9 @@ pub struct BuildExecutorConfig {
     /// Absolute trusted Git executable.
     pub git_binary: PathBuf,
     /// Materialized immutable OCI images, keyed by exact digest-pinned
-    /// reference. The same cache is shared by build and guest execution.
-    pub image_filesystems: BTreeMap<String, RootFilesystem>,
+    /// reference. The daemon refreshes this cache only after its trusted OCI
+    /// materializer has atomically installed a rootfs.
+    pub image_filesystems: Arc<RwLock<BTreeMap<String, RootFilesystem>>>,
     /// Maximum wall-clock duration for one build guest.
     pub timeout: Duration,
 }
@@ -445,12 +446,20 @@ impl BuildExecutor {
         workspace: &PreparedBuildWorkspace,
     ) -> Result<VmSpec, BuildExecutionError> {
         let build = &claimed.input.build;
-        let root = self
-            .config
-            .image_filesystems
-            .get(&claimed.input.image_reference)
-            .cloned()
-            .ok_or(BuildExecutionError::ImageUnavailable)?;
+        let root = {
+            let image_filesystems = self
+                .config
+                .image_filesystems
+                .read()
+                // A poisoned in-process cache is never a reason to select an
+                // unverified root. Treat it as unavailable until the daemon is
+                // restarted from its durable manifest.
+                .map_err(|_| BuildExecutionError::ImageUnavailable)?;
+            image_filesystems
+                .get(&claimed.input.image_reference)
+                .cloned()
+                .ok_or(BuildExecutionError::ImageUnavailable)?
+        };
         let network = match build.network.profile {
             NetworkProfile::Disabled => NetworkMode::Disabled,
             NetworkProfile::Egress => NetworkMode::UserMode {
@@ -1205,7 +1214,7 @@ refs = []
             workspace_root: fs::canonicalize(&workspaces).expect("workspace path"),
             repository_root: fs::canonicalize(&repositories).expect("repository path"),
             git_binary: fs::canonicalize("/usr/bin/git").expect("Git binary"),
-            image_filesystems: BTreeMap::new(),
+            image_filesystems: Arc::new(RwLock::new(BTreeMap::new())),
             timeout: Duration::from_secs(30),
         };
         let build = agent_config::parse(CONFIG.as_bytes())

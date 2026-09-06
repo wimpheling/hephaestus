@@ -23,6 +23,7 @@ defmodule HephaestusWebWeb.DesignSystem.Showcase do
       %{id: :list, render: :list_example},
       %{id: :repository_tree, render: :repository_tree_example},
       %{id: :root, render: :root_example},
+      %{id: :source_viewer, render: :source_viewer_example},
       %{id: :table, render: :table_example},
       %{id: :tag, render: :tag_example},
       %{id: :text, render: :text_example},
@@ -61,6 +62,7 @@ defmodule HephaestusWebWeb.DesignSystem.Showcase do
   def example(%{id: :list} = assigns), do: list_example(assigns)
   def example(%{id: :repository_tree} = assigns), do: repository_tree_example(assigns)
   def example(%{id: :root} = assigns), do: root_example(assigns)
+  def example(%{id: :source_viewer} = assigns), do: source_viewer_example(assigns)
   def example(%{id: :table} = assigns), do: table_example(assigns)
   def example(%{id: :tag} = assigns), do: tag_example(assigns)
   def example(%{id: :text} = assigns), do: text_example(assigns)
@@ -190,6 +192,12 @@ defmodule HephaestusWebWeb.DesignSystem.Showcase do
   defp root_example(assigns) do
     ~H"""
     <.root page_title="Showcase" inner_content="Root content" />
+    """
+  end
+
+  defp source_viewer_example(assigns) do
+    ~H"""
+    <.source_viewer id="showcase-source" contents="line one\nline two" />
     """
   end
 

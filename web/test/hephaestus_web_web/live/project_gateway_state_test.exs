@@ -19,14 +19,20 @@ defmodule HephaestusWebWeb.ProjectGatewayStateTest do
     assert ProjectGatewayState.stream_mode() == :page_scoped
   end
 
-  test "gateway list treats only gateway invalidations as a snapshot trigger" do
-    state = barrier_ready(ProjectGatewaysState.new(%{project_id: "project-1"}))
+  test "gateway list is loaded through one finite authorized snapshot" do
+    state = ProjectGatewaysState.new(%{project_id: "project-1"})
 
-    {_ignored, []} =
-      ProjectGatewaysState.reduce(state, {:watch, event(:repository_changed, "repository")})
+    {loading, [:load]} = ProjectGatewaysState.reduce(state, {:load, 1})
 
-    {_changed, [:snapshot]} =
-      ProjectGatewaysState.reduce(state, {:watch, event(:gateway_changed, "gateway")})
+    {ready, []} =
+      ProjectGatewaysState.reduce(loading, {
+        :loaded,
+        1,
+        [%{"id" => "gateway-1", "lifecycle" => "enabled"}]
+      })
+
+    assert %{status: :ready, gateways: [%{"id" => "gateway-1"}]} =
+             ProjectGatewaysState.present(ready)
   end
 
   test "gateway detail waits for its lifecycle receipt before refreshing" do

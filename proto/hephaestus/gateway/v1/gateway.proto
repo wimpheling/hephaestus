@@ -53,6 +53,55 @@ service GatewayService {
     option (hephaestus.options.v1.max_request_bytes) = 8192;
     option (hephaestus.options.v1.max_response_bytes) = 4096;
   }
+  // Binds one immutable, declared gateway revision slot to exactly one
+  // same-project mailbox and creates its separately revocable publish grant.
+  rpc CreateMailboxBinding(CreateMailboxBindingRequest) returns (CreateMailboxBindingResponse) {
+    option (hephaestus.options.v1.authorization) = {
+      permission: "gateway.mailbox_binding.create"
+      audience: "/hephaestus.gateway.v1.GatewayService/CreateMailboxBinding"
+      actor_source: ACTOR_SOURCE_MEDIATOR_JWT_METADATA
+    };
+    option (hephaestus.options.v1.operation_kind) = OPERATION_KIND_MUTATION;
+    option (hephaestus.options.v1.max_request_bytes) = 8192;
+    option (hephaestus.options.v1.max_response_bytes) = 8192;
+  }
+  // Revokes an active gateway mailbox publish grant without deleting its
+  // immutable binding or redacted provenance.
+  rpc RevokeMailboxBindingGrant(RevokeMailboxBindingGrantRequest) returns (RevokeMailboxBindingGrantResponse) {
+    option (hephaestus.options.v1.authorization) = {
+      permission: "gateway.mailbox_binding.revoke"
+      audience: "/hephaestus.gateway.v1.GatewayService/RevokeMailboxBindingGrant"
+      actor_source: ACTOR_SOURCE_MEDIATOR_JWT_METADATA
+    };
+    option (hephaestus.options.v1.operation_kind) = OPERATION_KIND_MUTATION;
+    option (hephaestus.options.v1.max_request_bytes) = 8192;
+    option (hephaestus.options.v1.max_response_bytes) = 8192;
+  }
+  // Lists value-free mailbox bindings and their grant lifecycle for one
+  // readable gateway revision.
+  rpc ListMailboxBindings(ListMailboxBindingsRequest) returns (ListMailboxBindingsResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (hephaestus.options.v1.authorization) = {
+      permission: "gateway.mailbox_binding.list"
+      audience: "/hephaestus.gateway.v1.GatewayService/ListMailboxBindings"
+      actor_source: ACTOR_SOURCE_MEDIATOR_JWT_METADATA
+    };
+    option (hephaestus.options.v1.operation_kind) = OPERATION_KIND_QUERY;
+    option (hephaestus.options.v1.max_request_bytes) = 8192;
+    option (hephaestus.options.v1.max_response_bytes) = 1048576;
+  }
+  // Lists value-free publication provenance for one readable gateway.
+  rpc ListMailboxPublications(ListMailboxPublicationsRequest) returns (ListMailboxPublicationsResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (hephaestus.options.v1.authorization) = {
+      permission: "gateway.mailbox_publication.list"
+      audience: "/hephaestus.gateway.v1.GatewayService/ListMailboxPublications"
+      actor_source: ACTOR_SOURCE_MEDIATOR_JWT_METADATA
+    };
+    option (hephaestus.options.v1.operation_kind) = OPERATION_KIND_QUERY;
+    option (hephaestus.options.v1.max_request_bytes) = 8192;
+    option (hephaestus.options.v1.max_response_bytes) = 1048576;
+  }
 }
 
 enum GatewayLifecycle {
@@ -107,6 +156,51 @@ message GatewayIngress {
   optional google.protobuf.Timestamp completed_at = 6;
 }
 
+// Redacted immutable binding metadata. Neither mailbox event bodies nor
+// guest/runtime credentials are represented by this API.
+message GatewayMailboxBinding {
+  hephaestus.common.v1.OpaqueId id = 1;
+  hephaestus.common.v1.OpaqueId gateway_revision_id = 2;
+  hephaestus.common.v1.OpaqueId mailbox_id = 3;
+  string slot_key = 4;
+  string producer_id = 5;
+  hephaestus.common.v1.OpaqueId grant_id = 6;
+  string grant_status = 7;
+  google.protobuf.Timestamp created_at = 8;
+  google.protobuf.Timestamp granted_at = 9;
+  optional google.protobuf.Timestamp revoked_at = 10;
+}
+
+// Value-free, joined provenance from a gateway invocation through its exact
+// authorization snapshot, mailbox delivery, and most recent run. Neither the
+// event envelope nor request, credential, or guest data is represented here.
+message GatewayMailboxPublication {
+  hephaestus.common.v1.OpaqueId id = 1;
+  hephaestus.common.v1.OpaqueId invocation_id = 2;
+  hephaestus.common.v1.OpaqueId gateway_revision_id = 3;
+  optional hephaestus.common.v1.OpaqueId binding_id = 4;
+  optional hephaestus.common.v1.OpaqueId grant_id = 5;
+  optional hephaestus.common.v1.OpaqueId mailbox_id = 6;
+  optional hephaestus.common.v1.OpaqueId event_id = 7;
+  string slot_key = 8;
+  string outcome = 9;
+  google.protobuf.Timestamp accepted_at = 10;
+  google.protobuf.Timestamp settled_at = 11;
+  // The immutable gateway authorization snapshot selected for the invocation.
+  optional hephaestus.common.v1.OpaqueId authorization_snapshot_id = 12;
+  // The exact immutable mailbox-binding copy within that snapshot.
+  optional uint32 snapshot_binding_ordinal = 13;
+  // Current or terminal durable delivery state for the accepted event.
+  string delivery_disposition = 14;
+  uint32 delivery_attempt_count = 15;
+  optional google.protobuf.Timestamp delivery_terminal_at = 16;
+  // The most recent delivery attempt, when the dispatcher has started one.
+  optional hephaestus.common.v1.OpaqueId delivery_attempt_id = 17;
+  optional hephaestus.common.v1.OpaqueId run_id = 18;
+  string run_state = 19;
+  string run_outcome = 20;
+}
+
 message ListProjectGatewaysRequest {
   hephaestus.common.v1.OpaqueId project_id = 1;
   hephaestus.common.v1.PageRequest page = 2;
@@ -141,4 +235,40 @@ message SetGatewayLifecycleRequest {
 message SetGatewayLifecycleResponse {
   GatewaySummary gateway = 1;
   hephaestus.common.v1.MutationReceipt receipt = 2;
+}
+
+message CreateMailboxBindingRequest {
+  hephaestus.common.v1.RequestContext context = 1;
+  hephaestus.common.v1.OpaqueId gateway_revision_id = 2;
+  string slot_key = 3;
+  hephaestus.common.v1.OpaqueId mailbox_id = 4;
+  string producer_id = 5;
+}
+message CreateMailboxBindingResponse {
+  GatewayMailboxBinding binding = 1;
+  hephaestus.common.v1.MutationReceipt receipt = 2;
+}
+message RevokeMailboxBindingGrantRequest {
+  hephaestus.common.v1.RequestContext context = 1;
+  hephaestus.common.v1.OpaqueId binding_id = 2;
+}
+message RevokeMailboxBindingGrantResponse {
+  GatewayMailboxBinding binding = 1;
+  hephaestus.common.v1.MutationReceipt receipt = 2;
+}
+message ListMailboxBindingsRequest {
+  hephaestus.common.v1.OpaqueId gateway_revision_id = 1;
+  hephaestus.common.v1.PageRequest page = 2;
+}
+message ListMailboxBindingsResponse {
+  repeated GatewayMailboxBinding bindings = 1;
+  hephaestus.common.v1.PageResponse page = 2;
+}
+message ListMailboxPublicationsRequest {
+  hephaestus.common.v1.OpaqueId gateway_id = 1;
+  hephaestus.common.v1.PageRequest page = 2;
+}
+message ListMailboxPublicationsResponse {
+  repeated GatewayMailboxPublication publications = 1;
+  hephaestus.common.v1.PageResponse page = 2;
 }

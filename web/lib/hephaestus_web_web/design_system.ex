@@ -56,6 +56,7 @@ defmodule HephaestusWebWeb.DesignSystem do
   defdelegate repository_tree(assigns), to: Structure
   defdelegate show(selector), to: Interactions
   defdelegate show(js, selector), to: Interactions
+  defdelegate source_viewer(assigns), to: Structure
   defdelegate action(assigns), to: Structure
   defdelegate table(assigns), to: Core
   defdelegate tag(assigns), to: Navigation
@@ -127,6 +128,7 @@ defmodule HephaestusWebWeb.DesignSystem do
           :download,
           :name,
           :value,
+          :click,
           :disabled,
           :variant
         ],
@@ -307,6 +309,16 @@ defmodule HephaestusWebWeb.DesignSystem do
         slots: [:inner_block],
         showcase_id: :tag,
         a11y_test_id: :tag
+      },
+      %{
+        name: :source_viewer,
+        tier: :component,
+        module: Structure,
+        function: :source_viewer,
+        attrs: [:id, :contents, :diff_lines, :aria_label, :language],
+        slots: [],
+        showcase_id: :source_viewer,
+        a11y_test_id: :source_viewer
       },
       %{
         name: :text,

@@ -35,6 +35,29 @@ pub async fn connect(
         .await
 }
 
+/// Opens a pool whose connections are confined to worker-owned data paths.
+///
+/// # Errors
+///
+/// Returns the connection or role-selection error from `PostgreSQL`.
+pub async fn connect_worker(
+    database_url: &str,
+    max_connections: u32,
+) -> Result<ControlPlanePool, sqlx::Error> {
+    sqlx::postgres::PgPoolOptions::new()
+        .max_connections(max_connections)
+        .after_connect(|connection, _metadata| {
+            Box::pin(async move {
+                sqlx::query("SET ROLE hephaestus_worker")
+                    .execute(connection)
+                    .await
+                    .map(|_| ())
+            })
+        })
+        .connect(database_url)
+        .await
+}
+
 /// Returns runs whose revoked raw leases require cancellation.
 pub async fn revoked_raw_run_ids(pool: &ControlPlanePool) -> Result<Vec<uuid::Uuid>, sqlx::Error> {
     sqlx::query_scalar(

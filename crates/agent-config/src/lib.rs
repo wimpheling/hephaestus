@@ -6,7 +6,8 @@ use capability_domain::{
 };
 use forge_domain::GitRef;
 use gateway_domain::{
-    Exposure, GatewayDeclaration, GatewayName, HttpMethod, RouteIntent, RoutePath,
+    Exposure, GatewayDeclaration, GatewayMailboxPublicationSlot, GatewayName, HttpMethod,
+    RouteIntent, RoutePath,
 };
 use git_capability_domain::{
     BranchRefPolicy, BranchUpdatePolicy, ChangedPathGlob, GitCapabilityCeiling,
@@ -118,12 +119,21 @@ pub struct BuildConfig {
     pub triggers: Vec<String>,
 }
 
-/// A declarative OCI image identity resolved by the catalog before execution.
+/// A declarative OCI image identity resolved when a build is requested.
+///
+/// `key` selects a reviewed platform execution image. `project_image` selects
+/// a ready, materialized image owned by the project containing the agent. The
+/// latter is deliberately accepted only for build contracts: a repository
+/// image is not yet a runtime guest/deployment image.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ImageSelection {
-    /// Stable key in the OCI image catalog.
-    pub key: String,
+    /// Stable key in the reviewed OCI image catalog.
+    #[serde(default)]
+    pub key: Option<String>,
+    /// Stable key of a ready project-owned OCI image.
+    #[serde(default)]
+    pub project_image: Option<String>,
 }
 
 /// Schema version for a repository's OCI image manifest.
@@ -203,6 +213,34 @@ pub struct RepositoryGatewayConfig {
     /// Symbolic brokered-secret slots only, never tenant secret values.
     #[serde(default)]
     pub secret_slots: Vec<String>,
+    /// Required, fixed-shape mailbox-publication requirements. Each slot can
+    /// only bind one explicit mailbox and producer identity at installation.
+    #[serde(default)]
+    pub mailbox_publication_slots: Vec<RepositoryGatewayMailboxPublicationSlot>,
+}
+
+/// One repository-declared required mailbox publication slot for a gateway.
+///
+/// Its capability shape is fixed by the platform: `mailbox` + `publish`, with
+/// no optional operations and a required binding. The manifest therefore
+/// accepts no resource kind or operation fields that could broaden authority.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RepositoryGatewayMailboxPublicationSlot {
+    /// Stable release-owned capability slot key.
+    pub key: String,
+    /// Human-readable non-secret reason for this publication path.
+    pub purpose: String,
+}
+
+impl RepositoryGatewayMailboxPublicationSlot {
+    fn to_declaration(
+        &self,
+    ) -> Result<GatewayMailboxPublicationSlot, gateway_domain::GatewayError> {
+        let key = CapabilitySlotKey::parse(self.key.clone())
+            .map_err(|_| gateway_domain::GatewayError::InvalidMailboxPublicationSlot)?;
+        GatewayMailboxPublicationSlot::new(key, self.purpose.clone())
+    }
 }
 
 impl RepositoryGatewayConfig {
@@ -229,6 +267,11 @@ impl RepositoryGatewayConfig {
             parameters: serde_json::to_value(&self.parameters)
                 .map_err(|_| gateway_domain::GatewayError::InvalidDeclaration)?,
             secret_slots: self.secret_slots.clone(),
+            mailbox_publication_slots: self
+                .mailbox_publication_slots
+                .iter()
+                .map(RepositoryGatewayMailboxPublicationSlot::to_declaration)
+                .collect::<Result<Vec<_>, _>>()?,
         })
     }
 }
@@ -1073,6 +1116,9 @@ fn normalized_repository_gateways(
 ) -> RepositoryGatewaysConfig {
     for gateway in &mut config.gateways {
         gateway.secret_slots.sort_unstable();
+        gateway
+            .mailbox_publication_slots
+            .sort_unstable_by(|left, right| left.key.cmp(&right.key));
         for route in &mut gateway.routes {
             route.methods.sort_unstable();
         }
@@ -1149,7 +1195,9 @@ fn validate_repository_oci_images(config: &RepositoryOciImagesConfig) -> Vec<Dia
                 "context must be a safe repository-relative path or .",
             );
         }
-        if !valid_key(&image.build.base.key, 64) {
+        if !matches!(&image.build.base.key, Some(key) if valid_key(key, 64))
+            || image.build.base.project_image.is_some()
+        {
             diagnostic(
                 &mut diagnostics,
                 "invalid_repository_oci_image_base",
@@ -1200,6 +1248,34 @@ fn validate_repository_gateways(config: &RepositoryGatewaysConfig) -> Vec<Diagno
                 "gateway names must be unique within a repository",
             );
         }
+        if gateway.mailbox_publication_slots.len() > 32 {
+            diagnostic(
+                &mut diagnostics,
+                "too_many_repository_gateway_mailbox_publication_slots",
+                format!("gateways[{gateway_index}].mailbox_publication_slots"),
+                "a gateway may declare at most 32 mailbox publication slots",
+            );
+        }
+        let mut mailbox_publication_slot_keys = HashSet::new();
+        for (slot_index, slot) in gateway.mailbox_publication_slots.iter().enumerate() {
+            let path = format!("gateways[{gateway_index}].mailbox_publication_slots[{slot_index}]");
+            if slot.to_declaration().is_err() {
+                diagnostic(
+                    &mut diagnostics,
+                    "invalid_repository_gateway_mailbox_publication_slot",
+                    path.clone(),
+                    "mailbox publication slots require a bounded lowercase key and a 1 to 512 character purpose",
+                );
+            }
+            if !mailbox_publication_slot_keys.insert(&slot.key) {
+                diagnostic(
+                    &mut diagnostics,
+                    "duplicate_repository_gateway_mailbox_publication_slot",
+                    format!("{path}.key"),
+                    "mailbox publication slot keys must be unique within a gateway",
+                );
+            }
+        }
         match gateway.to_declaration() {
             Ok(declaration) => {
                 if declaration.validate().is_err() {
@@ -1227,6 +1303,30 @@ fn valid_repository_oci_image_path(value: &str, permit_current_directory: bool) 
         return true;
     }
     valid_relative_path(value)
+}
+
+fn validate_image_selection(
+    diagnostics: &mut Vec<Diagnostic>,
+    field: &str,
+    selection: &ImageSelection,
+    permit_project_image: bool,
+) {
+    match (&selection.key, &selection.project_image) {
+        (Some(key), None) if valid_key(key, 64) => {}
+        (None, Some(key)) if permit_project_image && valid_key(key, 64) => {}
+        (None, Some(_)) => diagnostic(
+            diagnostics,
+            "project_image_not_permitted",
+            format!("{field}.project_image"),
+            "project-owned OCI images may be selected only by an isolated build contract",
+        ),
+        _ => diagnostic(
+            diagnostics,
+            "invalid_image_selection",
+            field,
+            "image must select exactly one lowercase catalog key or project_image key",
+        ),
+    }
 }
 
 // Keeping the ordered checks together preserves stable diagnostic order.
@@ -1270,14 +1370,7 @@ fn validate(config: &AgentConfig) -> Vec<Diagnostic> {
             "memory_mib must be between 128 and 1048576",
         );
     }
-    if !valid_key(&config.guest.image.key, 64) {
-        diagnostic(
-            &mut diagnostics,
-            "invalid_guest_image_key",
-            "guest.image.key",
-            "guest image keys must be lowercase and at most 64 characters",
-        );
-    }
+    validate_image_selection(&mut diagnostics, "guest.image", &config.guest.image, false);
     if config.workspace.mount {
         validate_absolute_path(
             &mut diagnostics,
@@ -1415,14 +1508,7 @@ fn validate_v2(config: &AgentConfig, diagnostics: &mut Vec<Diagnostic>) {
         &config.guest.working_directory,
         "invalid_release_working_directory",
     );
-    if !valid_key(&config.guest.image.key, 64) {
-        diagnostic(
-            diagnostics,
-            "invalid_guest_image_key",
-            "guest.image.key",
-            "guest image keys must be lowercase and at most 64 characters",
-        );
-    }
+    validate_image_selection(diagnostics, "guest.image", &config.guest.image, false);
     let Some(build) = &config.build else {
         diagnostic(
             diagnostics,
@@ -1444,14 +1530,7 @@ fn validate_v2(config: &AgentConfig, diagnostics: &mut Vec<Diagnostic>) {
         &build.working_directory,
         "invalid_build_working_directory",
     );
-    if !valid_key(&build.image.key, 64) {
-        diagnostic(
-            diagnostics,
-            "invalid_build_image_key",
-            "build.image.key",
-            "build image keys must be lowercase and at most 64 characters",
-        );
-    }
+    validate_image_selection(diagnostics, "build.image", &build.image, true);
     if build.artifacts.is_empty() || build.artifacts.len() > 128 {
         diagnostic(
             diagnostics,
@@ -1796,8 +1875,9 @@ const fn default_true() -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        PublicationMode, REPOSITORY_OCI_IMAGES_VERSION, REUSABLE_RELEASE_VERSION, parse,
-        parse_repository_gateways, parse_repository_oci_images,
+        CapabilityOperation, CapabilityResourceKind, PublicationMode,
+        REPOSITORY_OCI_IMAGES_VERSION, REUSABLE_RELEASE_VERSION, parse, parse_repository_gateways,
+        parse_repository_oci_images,
     };
     use forge_domain::GitRef;
 
@@ -2386,7 +2466,10 @@ base = {{ key = "typescript-node-ubuntu" }}
         assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
         let images = parsed.config.expect("valid repository OCI images");
         assert_eq!(images.images.len(), 1);
-        assert_eq!(images.images[0].build.base.key, "typescript-node-ubuntu");
+        assert_eq!(
+            images.images[0].build.base.key.as_deref(),
+            Some("typescript-node-ubuntu")
+        );
     }
 
     #[test]
@@ -2401,6 +2484,10 @@ handler_contract = "http.v1"
 exposure = "public"
 secret_slots = ["telegram_secret", "provider_token"]
 parameters = { bot = "build-notifier", enabled = true }
+
+[[gateways.mailbox_publication_slots]]
+key = "update_mailbox"
+purpose = "Deliver accepted provider updates to the cooking agent."
 
 [[gateways.routes]]
 path = "/telegram/updates"
@@ -2437,6 +2524,10 @@ exposure = "public"
 secret_slots = ["provider_token", "telegram_secret"]
 parameters = { bot = "build-notifier", enabled = true }
 
+[[gateways.mailbox_publication_slots]]
+key = "update_mailbox"
+purpose = "Deliver accepted provider updates to the cooking agent."
+
 [[gateways.routes]]
 path = "/telegram/updates"
 methods = ["GET", "POST"]
@@ -2454,6 +2545,13 @@ methods = ["GET", "POST"]
                 .len(),
             32
         );
+        let slot = &config.gateways[0]
+            .to_declaration()
+            .expect("valid declaration")
+            .mailbox_publication_slots[0];
+        assert_eq!(slot.resource_kind(), CapabilityResourceKind::Mailbox);
+        assert_eq!(slot.required_operation(), CapabilityOperation::Publish);
+        assert!(slot.required());
         let reordered = parse_repository_gateways(second.as_bytes());
         assert!(
             reordered.diagnostics.is_empty(),
@@ -2509,6 +2607,48 @@ methods = ["POST"]
         assert!(parsed.config.is_none());
         assert_eq!(parsed.diagnostics[0].code, "invalid_toml");
         assert!(!format!("{:?}", parsed.diagnostics).contains("must-never-be-accepted"));
+
+        let duplicate_mailbox_slots = r#"
+version = 1
+[[gateways]]
+name = "echo"
+agent_name = "echo-handler"
+handler_contract = "http.v1"
+exposure = "public"
+[[gateways.mailbox_publication_slots]]
+key = "agent_mailbox"
+purpose = "Deliver accepted requests."
+[[gateways.mailbox_publication_slots]]
+key = "agent_mailbox"
+purpose = "Deliver retry requests."
+[[gateways.routes]]
+path = "/echo"
+methods = ["POST"]
+"#;
+        let parsed = parse_repository_gateways(duplicate_mailbox_slots.as_bytes());
+        assert!(parsed.config.is_none());
+        assert!(parsed.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "duplicate_repository_gateway_mailbox_publication_slot"
+        }));
+
+        let broadened_mailbox_slot = r#"
+version = 1
+[[gateways]]
+name = "echo"
+agent_name = "echo-handler"
+handler_contract = "http.v1"
+exposure = "public"
+[[gateways.mailbox_publication_slots]]
+key = "agent_mailbox"
+purpose = "Deliver accepted requests."
+optional_operations = ["inspect"]
+[[gateways.routes]]
+path = "/echo"
+methods = ["POST"]
+"#;
+        let parsed = parse_repository_gateways(broadened_mailbox_slot.as_bytes());
+        assert!(parsed.config.is_none());
+        assert_eq!(parsed.diagnostics[0].code, "invalid_toml");
     }
 
     #[test]
@@ -2518,10 +2658,48 @@ methods = ["POST"]
         assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
         let config = parsed.config.expect("valid image selection");
         assert_eq!(
-            config.build.as_ref().map(|build| build.image.key.as_str()),
-            Some("typescript-tools")
+            config
+                .build
+                .as_ref()
+                .and_then(|build| build.image.key.as_deref()),
+            Some("typescript-tools"),
         );
-        assert_eq!(config.guest.image.key, "typescript-tools");
+        assert_eq!(config.guest.image.key.as_deref(), Some("typescript-tools"));
+    }
+
+    #[test]
+    fn accepts_a_project_image_for_an_isolated_build_only() {
+        let source = VALID.replacen(
+            "image = { key = \"ubuntu-native\" }",
+            "image = { project_image = \"cooking-blog-hugo\" }",
+            1,
+        );
+        let parsed = parse(source.as_bytes());
+        assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+        assert_eq!(
+            parsed
+                .config
+                .and_then(|config| config.build)
+                .and_then(|build| build.image.project_image),
+            Some(String::from("cooking-blog-hugo"))
+        );
+    }
+
+    #[test]
+    fn rejects_a_project_image_for_a_guest() {
+        let source = VALID.replacen(
+            "image = { key = \"ubuntu-native\" }",
+            "image = { project_image = \"cooking-blog-hugo\" }",
+            2,
+        );
+        let parsed = parse(source.as_bytes());
+        assert!(parsed.config.is_none());
+        assert!(
+            parsed
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "project_image_not_permitted")
+        );
     }
 
     #[test]

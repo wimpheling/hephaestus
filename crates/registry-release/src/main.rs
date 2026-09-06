@@ -325,6 +325,7 @@ fn publisher_configuration(
     let configuration = PublisherConfiguration::new(
         authority,
         &absolute_path("HEPHAESTUS_REGISTRY_LAYOUT_ROOT")?,
+        &absolute_path("HEPHAESTUS_REGISTRY_LAYOUT_ROOT")?,
         &absolute_path("HEPHAESTUS_REGISTRY_CREDENTIAL_ROOT")?,
         &absolute_path("HEPHAESTUS_SKOPEO")?,
         &absolute_path("HEPHAESTUS_ORAS")?,

@@ -2,6 +2,9 @@
 
 Hephaestus is a single-node Git forge and agent runtime proof of concept.
 
+See the [cooking example](examples/cooking/README.md) for the MVP-05 scenario,
+application source code, and a command that runs it through the real local stack.
+
 - [Git forge and agent ingestion](docs/git-forge.md)
 - [Database-native identity and authorization](docs/authorization.md)
 - [Daemon composition and lifecycle](docs/application.md)
@@ -10,6 +13,7 @@ Hephaestus is a single-node Git forge and agent runtime proof of concept.
 - [Reusable releases and project agent instances](docs/releases-and-instances.md)
 - [Secret delegation and runtime delivery](docs/secrets.md)
 - [VM runtime](docs/vm-runtime.md)
+- [Repository-owned OCI image builds](docs/repository-image-builds.md)
 
 Hephaestus is a secure, developer-focused Git forge and autonomous agent
 runtime. It runs agents in isolated microVMs, manages repositories and pull
@@ -18,6 +22,61 @@ execution telemetry to a live dashboard.
 
 The current proof of concept is powered by Rust, PostgreSQL/Mélange,
 libkrun/libkrunfw, and NATS JetStream.
+
+## Getting started
+
+Use this path to start a persistent local development environment. It runs
+PostgreSQL, NATS JetStream, a local OIDC issuer, the Rust daemon, Zot, and
+Phoenix LiveView. The host must meet the
+[libkrun backend contract](docs/vm-libkrun.md), including KVM access.
+
+First, check the host prerequisites:
+
+```sh
+cargo dev doctor
+```
+
+The local runtime-authority handoff requires a host-only 32-byte key. Create
+it once before the first start (or whenever the configured key file is
+missing):
+
+```sh
+install -d -m 700 .local/hephaestus/runtime-handoff
+umask 077
+head -c 32 /dev/urandom > .local/hephaestus/runtime-handoff/key
+chmod 400 .local/hephaestus/runtime-handoff/key
+
+export HEPHAESTUS_RUNTIME_AUTHORITY_HANDOFF_KEY_FILE="$PWD/.local/hephaestus/runtime-handoff/key"
+```
+
+This key protects the local host-to-VM runtime-authority handoff. It is not an
+application or provider credential; keep it local, mode `0400`, and out of
+source control.
+
+Start the stack in the foreground:
+
+```sh
+cargo dev run
+```
+
+The bare `cargo dev` form is equivalent. Open the local control plane at
+<http://127.0.0.1:4000>. Press Ctrl-C for a clean shutdown; persistent local
+state is retained.
+
+### Optional: recreate all local state
+
+To discard every local development resource and recreate it from scratch while
+the supervisor is stopped, run:
+
+```sh
+cargo dev state reinit --all
+```
+
+This deletes the local PostgreSQL and NATS volumes, registry storage,
+repositories, artifacts, agent volumes, workspaces, secret keys, OCI cache,
+fixtures, runtime files, and logs. It does not modify source files or Git
+history. Recreate or re-export the handoff-key setting above before starting
+again if its file is absent.
 
 ## Workspace
 
@@ -87,12 +146,15 @@ implementations:
   result refs.
 - [Live review control plane](docs/live-review.md): browser OIDC, RLS-aware
   reads, re-authorized live updates, durable controls, and CAS approval.
+- [Repository-owned OCI image builds](docs/repository-image-builds.md):
+  explicit platform-image installation, isolated builder/verifier VMs, project
+  Images resources, and the offline image contract.
 - [Contributor instructions](AGENTS.md): repository-wide Rust quality and
   validation requirements.
 - [Project TODO](TODO.md): deferred architectural decisions and completed
   runtime milestones.
 
-## Development
+## `cargo dev`
 
 The Rust workspace requires Rust 1.88 or newer.
 
@@ -100,18 +162,10 @@ The Rust workspace requires Rust 1.88 or newer.
 cargo dev quality
 ```
 
-For a persistent manual-smoke environment using real libkrun/KVM microVMs,
-run:
-
-```sh
-cargo dev
-```
-
-`cargo dev` incrementally builds and starts PostgreSQL, NATS JetStream, a local
-OIDC issuer, the Rust daemon, and Phoenix LiveView in the foreground. Press
-Ctrl-C for a clean shutdown that retains state. Use `cargo dev --watch` to
-rebuild changed Rust components and restart the daemon after successful builds;
-Phoenix retains its native code and asset watchers.
+Use `cargo dev run --watch` to rebuild changed Rust components and restart the
+daemon after successful builds; Phoenix retains its native code and asset
+watchers. `scripts/run-local.sh` is the CLI's underlying supervisor
+implementation, not the supported user entry point.
 
 The development CLI also exposes typed maintenance commands:
 

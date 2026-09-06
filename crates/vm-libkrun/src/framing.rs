@@ -209,6 +209,7 @@ mod tests {
                     status: 201,
                     headers: Vec::new(),
                     body: vec![4, 5, 6],
+                    mailbox_publication: None,
                 },
             },
         ];

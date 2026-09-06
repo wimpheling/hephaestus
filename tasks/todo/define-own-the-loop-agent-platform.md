@@ -816,7 +816,7 @@ MVP 06 chat journey
 
 - [ ] **5. Prove the golden cooking-agent journey**
   - [ ] Complete
-    [MVP 05: Golden cooking-agent journey](mvp-05-golden-cooking-agent-journey.md).
+    [MVP 05: Golden cooking-agent journey](../../examples/cooking/SCENARIO.md).
   - [ ] Verify the deterministic real-system journey exercises authorized and
     denied users, gateway isolation, stateful operation, brokered credentials,
     controlled Git publication, release update, recovery, and complete

@@ -1,0 +1,87 @@
+version = 2
+
+[agent]
+name = "Cooking agent"
+key = "cooking-agent"
+
+[build]
+command = "/bin/sh"
+arguments = ["build.sh"]
+working_directory = "/workspace/source"
+image = { key = "python-ubuntu" }
+triggers = ["refs/heads/main"]
+
+[build.resources]
+vcpus = 1
+memory_mib = 256
+
+[build.network]
+profile = "disabled"
+
+[[build.artifacts]]
+path = "bin/cooking-agent"
+kind = "executable"
+media_type = "text/x-python"
+
+[guest]
+image = { key = "python-ubuntu" }
+command = "bin/cooking-agent"
+working_directory = "bin"
+
+[resources]
+vcpus = 1
+memory_mib = 256
+
+[workspace]
+mount = true
+path = "/workspace/repo"
+read_only = true
+
+[state_volume]
+enabled = true
+
+[network]
+profile = "broker_only"
+
+[triggers]
+push = false
+refs = []
+
+[[parameters]]
+name = "model_rule_id"
+type = "string"
+minimum_length = 36
+maximum_length = 36
+required = true
+
+[[parameters]]
+name = "relay_rule_id"
+type = "string"
+minimum_length = 36
+maximum_length = 36
+required = true
+
+[[secret_slots]]
+key = "model"
+purpose = "Generate bounded recipes"
+required = true
+delivery_modes = ["brokered"]
+phases = ["normal"]
+destinations = ["api.model.example"]
+
+[[secret_slots]]
+key = "telegram_relay"
+purpose = "Send idempotent family replies through the external relay"
+required = true
+delivery_modes = ["brokered"]
+phases = ["normal"]
+destinations = ["relay.cooking.example"]
+
+[update_hook]
+command = "bin/cooking-agent"
+arguments = ["--migrate"]
+timeout_seconds = 30
+
+[update_hook.resources]
+vcpus = 1
+memory_mib = 256

@@ -36,5 +36,5 @@ export HEPHAESTUS_REGISTRY_CREDENTIAL_ROOT=/state/credentials
     --input-root "$release_root" \
     --review-output "$install_root/review.json" \
     --catalog-output "$install_root/catalog.json"
-/tools/hephaestus-operator provision-builder-catalog "$install_root/catalog.json" >"$install_root/catalog-apply.json"
-printf '%s\n' "published and cataloged four approved platform builders for $revision"
+/tools/hephaestus-operator provision-image-catalog "$install_root/catalog.json" >"$install_root/catalog-apply.json"
+printf '%s\n' "published and cataloged six approved platform images for $revision"

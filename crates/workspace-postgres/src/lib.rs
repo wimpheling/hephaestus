@@ -38,7 +38,15 @@ impl WorkspaceMetadataRepository for PgWorkspaceMetadataRepository {
         let row = sqlx::query_as::<_, RequestRow>(
             "SELECT request.repository_id, request.commit_sha, request.instance_id, release.configuration AS configuration
              FROM run_requests request JOIN releases release ON release.id = request.release_id
-             WHERE request.command_id = $1 AND request.dispatch_state <> 'denied'",
+             WHERE request.command_id = $1 AND request.dispatch_state <> 'denied'
+             UNION ALL
+             SELECT attachment.repository_id, attempt.target_commit, run.instance_id, release.configuration AS configuration
+             FROM mailbox_delivery_attempts attempt
+             JOIN runs run ON run.id = attempt.run_id
+             JOIN agent_attachments attachment ON attachment.id = run.attachment_id
+               AND attachment.instance_id = run.instance_id
+             JOIN releases release ON release.id = run.release_id
+             WHERE attempt.command_id = $1 AND attempt.target_commit IS NOT NULL",
         ).bind(command_id).fetch_optional(&self.pool).await.map_err(error)?;
         Ok(row.map(Into::into))
     }

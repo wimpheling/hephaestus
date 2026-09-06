@@ -942,7 +942,13 @@ fn inspect_repository_oci_image(
         dockerfile_path: image.build.dockerfile,
         context_path: image.build.context,
         context_digest,
-        base_key: image.build.base.key,
+        base_key: image
+            .build
+            .base
+            .key
+            .ok_or(ForgeRepositoryError::InvalidMetadata(
+                "repository OCI image base must select an execution catalog image",
+            ))?,
     })
 }
 
@@ -1029,7 +1035,7 @@ async fn persist_repository_oci_image_revisions(
         let base_reference: Option<String> = sqlx::query_scalar(
             "SELECT image_reference
              FROM oci_images
-             WHERE key = $1 AND availability_state = 'available'
+             WHERE key = $1 AND availability_state = 'available' AND role = 'execution'
              FOR SHARE",
         )
         .bind(&image.base_key)
@@ -1107,8 +1113,8 @@ async fn persist_build_request(
     let declared_artifacts =
         serde_json::to_value(&build.artifacts).map_err(ForgeRepositoryError::Serialization)?;
     let build_definition_hash: [u8; 32] = Sha256::digest(&build_definition).into();
-    let build_image = resolve_image(transaction, &build.image.key).await?;
-    let guest_image = resolve_image(transaction, &guest_image.key).await?;
+    let build_image = resolve_image(transaction, repository_id, &build.image).await?;
+    let guest_image = resolve_image(transaction, repository_id, guest_image).await?;
     let requested_id = BuildRequestId::new();
     let stored_id: Uuid = sqlx::query_scalar(
         "INSERT INTO build_requests
@@ -1142,13 +1148,15 @@ async fn persist_build_request(
     for (execution_context, image) in [("build", &build_image), ("guest", &guest_image)] {
         sqlx::query(
             "INSERT INTO build_request_images
-                (build_request_id, execution_context, image_id, image_key, image_reference)
-             VALUES ($1, $2, $3, $4, $5)
+                (build_request_id, execution_context, image_id, repository_oci_image_id,
+                 image_key, image_reference)
+             VALUES ($1, $2, $3, $4, $5, $6)
              ON CONFLICT DO NOTHING",
         )
         .bind(stored_id)
         .bind(execution_context)
-        .bind(image.id)
+        .bind(image.catalog_image_id)
+        .bind(image.repository_image_id)
         .bind(&image.key)
         .bind(&image.image_reference)
         .execute(&mut **transaction)
@@ -1192,26 +1200,49 @@ async fn persist_build_request(
 
 #[derive(Debug, sqlx::FromRow)]
 struct ResolvedImageRow {
-    id: Uuid,
+    catalog_image_id: Option<Uuid>,
+    repository_image_id: Option<Uuid>,
     key: String,
     image_reference: String,
 }
 
 async fn resolve_image(
     transaction: &mut Transaction<'_, Postgres>,
-    key: &str,
+    repository_id: RepositoryId,
+    selection: &agent_config::ImageSelection,
 ) -> Result<ResolvedImageRow, ForgeRepositoryError> {
-    sqlx::query_as::<_, ResolvedImageRow>(
-        "SELECT id, key, image_reference
-           FROM oci_images
-          WHERE key = $1 AND availability_state = 'available'
-          FOR SHARE",
-    )
-    .bind(key)
-    .fetch_optional(&mut **transaction)
-    .await
-    .map_err(storage)?
-    .ok_or(ForgeRepositoryError::InvalidMetadata(
+    let image = match (&selection.key, &selection.project_image) {
+        (Some(key), None) => sqlx::query_as::<_, ResolvedImageRow>(
+            "SELECT id AS catalog_image_id, NULL::uuid AS repository_image_id,
+                    key, image_reference
+               FROM oci_images
+              WHERE key = $1 AND availability_state = 'available' AND role = 'execution'
+              FOR SHARE",
+        )
+        .bind(key)
+        .fetch_optional(&mut **transaction)
+        .await
+        .map_err(storage)?,
+        (None, Some(key)) => sqlx::query_as::<_, ResolvedImageRow>(
+            "SELECT NULL::uuid AS catalog_image_id, image.id AS repository_image_id,
+                    image.key, image.image_reference
+               FROM repository_oci_image_definitions AS image
+               JOIN repositories AS repository ON repository.id = $1
+              WHERE image.project_id = repository.project_id
+                AND image.key = $2
+                AND image.status = 'ready'
+              ORDER BY image.updated_at DESC, image.id DESC
+              LIMIT 1
+              FOR SHARE OF image",
+        )
+        .bind(repository_id.as_uuid())
+        .bind(key)
+        .fetch_optional(&mut **transaction)
+        .await
+        .map_err(storage)?,
+        _ => None,
+    };
+    image.ok_or(ForgeRepositoryError::InvalidMetadata(
         "selected OCI image is unavailable",
     ))
 }

@@ -15,7 +15,7 @@ use std::{
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     sync::{
-        Arc,
+        Arc, RwLock,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::Duration,
@@ -118,14 +118,14 @@ async fn exact_guest_output_becomes_one_immutable_draft() {
             workspace_root,
             repository_root,
             git_binary: fs::canonicalize("/usr/bin/git").expect("Git binary"),
-            image_filesystems: BTreeMap::from([(
+            image_filesystems: Arc::new(RwLock::new(BTreeMap::from([(
                 String::from(
                     "build@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 ),
                 RootFilesystem::Directory {
                     host_path: root_image,
                 },
-            )]),
+            )]))),
             timeout: Duration::from_secs(10),
         },
     )

@@ -4,6 +4,8 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.RepositoryFilesPage do
   use Phoenix.Component
   import HephaestusWebWeb.DesignSystem
 
+  alias HephaestusWebWeb.DesignSystem.Interactions
+
   @states [:loading, :error, :reconnecting, :ready]
   attr :state, :atom, required: true, values: @states
   attr :model, :map, required: true
@@ -62,9 +64,13 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.RepositoryFilesPage do
               </.frame>
               <.text as="code" variant={:mono}>{short_sha(@model.file.entry.object_id)}</.text>
             </.frame>
-            <.text :if={@model.file} as="pre" id="file-contents" variant={:mono}>
-              {@model.file.contents}
-            </.text>
+            <.source_viewer
+              :if={@model.file}
+              id={"file-contents-#{@model.file.entry.object_id}"}
+              contents={@model.file.contents}
+              language={@model.file.language}
+              aria_label={"Contents of #{@model.file.entry.path}"}
+            />
             <.page_state
               :if={@model.file_error}
               id="file-preview-error"
@@ -103,6 +109,19 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.RepositoryFilesPage do
         <.text as="code" variant={:mono}>
           {Map.get(@model, :remote_url) || "Remote URL unavailable"}
         </.text>
+      </.frame>
+
+      <.frame as="section" id="repository-clone" variant={:panel}>
+        <.text as="strong">Clone this repository</.text>
+        <.text as="small" variant={:muted}>
+          Copy and run this command. The destination is a shell-safe form of the repository name.
+        </.text>
+        <.text as="pre" variant={:mono}>
+          {Map.get(@model, :clone_command) || "git clone <remote-url> repository"}
+        </.text>
+        <.button click={Interactions.copy_to_clipboard(Map.get(@model, :clone_command) || "")}>
+          Copy clone command
+        </.button>
       </.frame>
 
       <.frame as="section" id="repository-push-instructions" variant={:panel}>

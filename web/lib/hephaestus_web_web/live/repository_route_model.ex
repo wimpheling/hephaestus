@@ -2,7 +2,7 @@ defmodule HephaestusWebWeb.RepositoryRouteModel do
   @moduledoc false
 
   alias HephaestusWeb.RPC.{Client, Error, ProductEvents}
-  alias HephaestusWebWeb.ProductEventReducer
+  alias HephaestusWebWeb.{GitRemote, ProductEventReducer}
 
   @statuses [
     :initial,
@@ -45,9 +45,11 @@ defmodule HephaestusWebWeb.RepositoryRouteModel do
         current_path: nil,
         file: nil,
         file_error: nil,
+        commit_detail: nil,
         params: %{},
         uri: nil,
-        remote_url: nil
+        remote_url: nil,
+        clone_command: nil
       },
       form: %{browse: %{"branch" => ""}}
     )
@@ -208,12 +210,15 @@ defmodule HephaestusWebWeb.RepositoryRouteModel do
            {:ok, selected_branch} <- select_branch(repository, branches, params["ref"]),
            {:ok, route_data} <-
              load_route(action, repository_id, selected_branch, params, identity) do
+        remote_url = GitRemote.url(repository_id)
+
         {:ok,
          route_data
          |> Map.merge(%{
            repository_id: repository_id,
            repository: repository,
-           remote_url: remote_url(uri, repository_id),
+           remote_url: remote_url,
+           clone_command: GitRemote.clone_command(repository, remote_url),
            selected_branch: selected_branch,
            branch_options: Enum.map(branches, & &1.name),
            branches: branches,
@@ -226,7 +231,7 @@ defmodule HephaestusWebWeb.RepositoryRouteModel do
   end
 
   defp branches_for(identity, repository_id, action)
-       when action in [:files, :commits, :branches],
+       when action in [:files, :commits, :commit_detail, :branches],
        do: Client.branches(identity, repository_id)
 
   defp branches_for(_identity, _repository_id, _action), do: {:ok, []}
@@ -267,12 +272,14 @@ defmodule HephaestusWebWeb.RepositoryRouteModel do
       current_path: state.data.current_path,
       file: state.data.file,
       file_error: state.data.file_error,
+      commit_detail: state.data.commit_detail,
       branches: state.data.branches,
       commits: state.data.commits,
       builds: state.data.builds,
       releases: state.data.releases,
       attached_instances: state.data.attached_instances,
       remote_url: state.data.remote_url,
+      clone_command: state.data.clone_command,
       default_branch: repository && friendly_ref(repository["default_branch"]),
       error: state.error,
       tabs: tabs(repository, state.data.selected_branch),
@@ -282,7 +289,7 @@ defmodule HephaestusWebWeb.RepositoryRouteModel do
   end
 
   defp load_route(action, _repository_id, nil, _params, _identity)
-       when action in [:files, :commits] do
+       when action in [:files, :commits, :commit_detail] do
     {:ok, empty_route_data()}
   end
 
@@ -310,6 +317,19 @@ defmodule HephaestusWebWeb.RepositoryRouteModel do
     end
   end
 
+  defp load_route(:commit_detail, repository_id, selected_branch, params, identity) do
+    case params["commit"] do
+      commit when is_binary(commit) ->
+        with {:ok, detail} <-
+               Client.commit_detail(identity, repository_id, selected_branch.name, commit) do
+          {:ok, empty_route_data() |> Map.put(:commit_detail, detail)}
+        end
+
+      _missing_commit ->
+        {:error, :commit_not_found}
+    end
+  end
+
   defp load_route(:builds, repository_id, _selected_branch, _params, identity) do
     with {:ok, builds} <- Client.list_builds(identity, repository_id) do
       {:ok, empty_route_data() |> Map.put(:builds, builds)}
@@ -331,7 +351,7 @@ defmodule HephaestusWebWeb.RepositoryRouteModel do
     end
   end
 
-  defp relevant_events(action) when action in [:files, :commits, :branches],
+  defp relevant_events(action) when action in [:files, :commits, :commit_detail, :branches],
     do: [:repository_changed, :repository_ref_changed]
 
   defp relevant_events(:releases),
@@ -358,6 +378,7 @@ defmodule HephaestusWebWeb.RepositoryRouteModel do
       current_path: nil,
       file: nil,
       file_error: nil,
+      commit_detail: nil,
       commits: [],
       builds: [],
       releases: [],
@@ -517,27 +538,6 @@ defmodule HephaestusWebWeb.RepositoryRouteModel do
   defp local_path(uri) when is_binary(uri) do
     parsed = URI.parse(uri)
     if parsed.query, do: "#{parsed.path}?#{parsed.query}", else: parsed.path
-  end
-
-  # Git credentials must never be embedded in this URL. Keep only the public
-  # request origin and the canonical repository UUID route component.
-  defp remote_url(nil, repository_id), do: "/#{repository_id}"
-
-  defp remote_url(uri, repository_id) when is_binary(uri) do
-    parsed = URI.parse(uri)
-
-    case {parsed.scheme, parsed.host} do
-      {scheme, host} when is_binary(scheme) and is_binary(host) ->
-        URI.to_string(%URI{
-          scheme: scheme,
-          host: host,
-          port: parsed.port,
-          path: "/#{repository_id}"
-        })
-
-      _missing_origin ->
-        "/#{repository_id}"
-    end
   end
 
   defp friendly_ref("refs/heads/" <> branch), do: branch

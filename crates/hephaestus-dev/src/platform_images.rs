@@ -6,14 +6,42 @@ use crate::{
     process::{DevError, Result, directory_size, remove_path, run, run_quiet},
     zot,
 };
-use std::{fs, os::unix::fs::PermissionsExt, process::Command};
+use registry_token::{
+    AuthorizationDecision, KeyId, RegistryService, RegistryTokenIssuer, RepositoryActions,
+    RepositoryName, ScopeRequest, SigningKey, TokenIssuer, TokenLifetime, TokenSubject,
+    UnixTimestamp,
+};
+use serde::{Deserialize, Serialize};
+use std::{
+    fs::{self, OpenOptions},
+    io::Write,
+    os::unix::fs::PermissionsExt,
+    path::{Path, PathBuf},
+    process::Command,
+};
+use time::OffsetDateTime;
+use zeroize::Zeroizing;
 
 const TOOL_IMAGE: &str = "localhost/hephaestus-platform-build-tools:dev";
 const UBUNTU_BASE: &str = "docker.io/library/ubuntu@sha256:4fbb8e6a8395de5a7550b33509421a2bafbc0aab6c06ba2cef9ebffbc7092d90";
+const UBUNTU_BASE_REPOSITORY: &str = "platform/bases/ubuntu";
+const UBUNTU_BASE_TAG: &str =
+    "heph-sha256-4fbb8e6a8395de5a7550b33509421a2bafbc0aab6c06ba2cef9ebffbc7092d90";
+const IMPORT_RECEIPT_VERSION: u8 = 1;
+
+#[derive(Debug, Deserialize, PartialEq, Eq, Serialize)]
+struct ImportedBaseReceipt {
+    version: u8,
+    upstream_reference: String,
+    upstream_manifest_digest: String,
+    local_reference: String,
+    local_manifest_digest: String,
+}
 
 /// Lists local release outputs and completed installations without starting a
 /// build, scanner, registry publication, or VM materialization operation.
 pub fn status(context: &DevContext) -> Result<()> {
+    print_base_import(context)?;
     print_directory(
         "platform image releases",
         &context.platform_image_releases(),
@@ -25,7 +53,70 @@ pub fn status(context: &DevContext) -> Result<()> {
     Ok(())
 }
 
-/// Runs the reviewed four-image construction script only after the caller has
+/// Imports the single reviewed Ubuntu manifest from its pinned upstream
+/// reference to local Zot. There is deliberately no caller-controlled source
+/// argument: this command is not a general registry mirror.
+pub fn import_base(context: &DevContext) -> Result<()> {
+    zot::start(context)?;
+    build_tool_image(context)?;
+    let receipt = expected_base_receipt(context);
+    let receipt_path = base_import_receipt_path(context);
+    if receipt_path.exists() {
+        let existing = read_base_receipt(&receipt_path)?;
+        if existing == receipt {
+            println!("reviewed Ubuntu base is already imported into local Zot");
+            return Ok(());
+        }
+        return Err(DevError::Invalid(format!(
+            "platform base import receipt does not match the reviewed base: {}",
+            receipt_path.display()
+        )));
+    }
+    fs::create_dir_all(context.platform_image_base_imports())?;
+    fs::set_permissions(
+        context.platform_image_base_imports(),
+        fs::Permissions::from_mode(0o700),
+    )?;
+    let token = issue_zot_token(
+        context,
+        UBUNTU_BASE_REPOSITORY,
+        RepositoryActions::pull_push(),
+    )?;
+    println!("importing the reviewed Ubuntu base into local Zot");
+    let command = [
+        "sh",
+        "-ec",
+        "actual=$(skopeo inspect --raw \"docker://$HEPHAESTUS_PLATFORM_UBUNTU_BASE\" | sha256sum | cut --delimiter=' ' --fields=1) && actual=sha256:$actual && test \"$actual\" = \"$HEPHAESTUS_PLATFORM_UBUNTU_DIGEST\" && skopeo copy --all --dest-tls-verify=false --dest-registry-token \"$HEPHAESTUS_PLATFORM_ZOT_TOKEN\" --preserve-digests \"docker://$HEPHAESTUS_PLATFORM_UBUNTU_BASE\" \"docker://$HEPHAESTUS_PLATFORM_UBUNTU_LOCAL_REFERENCE\" && actual=$(skopeo inspect --raw --tls-verify=false --registry-token \"$HEPHAESTUS_PLATFORM_ZOT_TOKEN\" \"docker://$HEPHAESTUS_PLATFORM_UBUNTU_LOCAL_REFERENCE\" | sha256sum | cut --delimiter=' ' --fields=1) && actual=sha256:$actual && test \"$actual\" = \"$HEPHAESTUS_PLATFORM_UBUNTU_DIGEST\"",
+    ];
+    let result = run(Command::new("podman")
+        .args(["run", "--rm", "--network=host"])
+        .args([
+            "--env",
+            &format!("HEPHAESTUS_PLATFORM_UBUNTU_BASE={UBUNTU_BASE}"),
+        ])
+        .args([
+            "--env",
+            &format!("HEPHAESTUS_PLATFORM_UBUNTU_DIGEST={}", ubuntu_base_digest()),
+        ])
+        .args([
+            "--env",
+            &format!(
+                "HEPHAESTUS_PLATFORM_UBUNTU_LOCAL_REFERENCE={}",
+                receipt.local_reference
+            ),
+        ])
+        .args(["--env", &format!("HEPHAESTUS_PLATFORM_ZOT_TOKEN={token}")])
+        .arg(TOOL_IMAGE)
+        .args(command)
+        .current_dir(&context.repository_root));
+    if result.is_ok() {
+        write_base_receipt(&receipt_path, &receipt)?;
+        println!("reviewed Ubuntu base imported and verified in local Zot");
+    }
+    result
+}
+
+/// Runs the reviewed six-image construction script only after the caller has
 /// provided immutable release provenance. Publication remains a separate
 /// explicit operation.
 pub fn build(context: &DevContext, arguments: &PlatformImageBuildArgs) -> Result<()> {
@@ -49,11 +140,18 @@ pub fn build(context: &DevContext, arguments: &PlatformImageBuildArgs) -> Result
             script.display()
         )));
     }
+    let base = read_base_receipt(&base_import_receipt_path(context))?;
+    if base != expected_base_receipt(context) {
+        return Err(DevError::Invalid(
+            "local Zot base-import receipt does not match the reviewed Ubuntu base; run cargo dev platform-images import-base"
+                .into(),
+        ));
+    }
     build_tool_image(context)?;
     create_volume(&context.platform_image_tool_storage_volume())?;
     create_volume(&context.platform_image_tool_cache_volume())?;
     println!(
-        "building four platform images into {}; this explicit operation may take several minutes",
+        "building six platform images into {}; this explicit operation may take several minutes",
         release_root.display()
     );
     let source_mount = format!("{}:/workspace:ro,Z", context.repository_root.display());
@@ -74,10 +172,11 @@ pub fn build(context: &DevContext, arguments: &PlatformImageBuildArgs) -> Result
         "HEPHAESTUS_PLATFORM_RELEASE_OUTPUT_ROOT={}",
         release_root.display()
     );
+    let pull_token = issue_zot_token(context, UBUNTU_BASE_REPOSITORY, RepositoryActions::pull())?;
     let script_arguments = [
         "sh",
         "-ec",
-        "buildah pull \"$HEPHAESTUS_PLATFORM_UBUNTU_BASE\" >/dev/null && trivy image --download-db-only >/dev/null && exec /workspace/scripts/build-platform-builder-layouts.sh --output-root \"$HEPHAESTUS_PLATFORM_RELEASE_OUTPUT_ROOT\" --source \"$HEPHAESTUS_PLATFORM_RELEASE_SOURCE\" --revision \"$HEPHAESTUS_PLATFORM_RELEASE_REVISION\" --created \"$HEPHAESTUS_PLATFORM_RELEASE_CREATED\"",
+        "skopeo copy --src-tls-verify=false --src-registry-token \"$HEPHAESTUS_PLATFORM_ZOT_TOKEN\" \"docker://$HEPHAESTUS_PLATFORM_UBUNTU_LOCAL_REFERENCE\" \"containers-storage:$HEPHAESTUS_PLATFORM_UBUNTU_BASE\" >/dev/null && trivy image --download-db-only >/dev/null && exec /workspace/scripts/build-platform-builder-layouts.sh --output-root \"$HEPHAESTUS_PLATFORM_RELEASE_OUTPUT_ROOT\" --source \"$HEPHAESTUS_PLATFORM_RELEASE_SOURCE\" --revision \"$HEPHAESTUS_PLATFORM_RELEASE_REVISION\" --created \"$HEPHAESTUS_PLATFORM_RELEASE_CREATED\"",
     ];
     // Keep the outer Podman invocation rootless, but let the tool container use
     // its mapped container root. Buildah then uses that existing user namespace
@@ -105,6 +204,17 @@ pub fn build(context: &DevContext, arguments: &PlatformImageBuildArgs) -> Result
             "--env",
             &format!("HEPHAESTUS_PLATFORM_UBUNTU_BASE={UBUNTU_BASE}"),
         ])
+        .args([
+            "--env",
+            &format!(
+                "HEPHAESTUS_PLATFORM_UBUNTU_LOCAL_REFERENCE={}",
+                base.local_reference
+            ),
+        ])
+        .args([
+            "--env",
+            &format!("HEPHAESTUS_PLATFORM_ZOT_TOKEN={pull_token}"),
+        ])
         .args(["--env", &source_environment])
         .args(["--env", &revision_environment])
         .args(["--env", &created_environment])
@@ -114,9 +224,12 @@ pub fn build(context: &DevContext, arguments: &PlatformImageBuildArgs) -> Result
         .args(["--env", "HEPHAESTUS_SKOPEO=/usr/bin/skopeo"])
         .args(["--env", "HEPHAESTUS_SKOPEO_VERSION=skopeo version 1.22.2"])
         .args(["--env", "HEPHAESTUS_SYFT=/usr/local/bin/syft"])
-        .args(["--env", "HEPHAESTUS_SYFT_VERSION=syft 1.50.0"])
+        .args(["--env", "HEPHAESTUS_SYFT_VERSION=syft 1.51.1-hephaestus.1"])
         .args(["--env", "HEPHAESTUS_TRIVY=/usr/local/bin/trivy"])
-        .args(["--env", "HEPHAESTUS_TRIVY_VERSION=Version: 0.73.0"])
+        .args([
+            "--env",
+            "HEPHAESTUS_TRIVY_VERSION=Version: 0.74.0-hephaestus.1",
+        ])
         .args(["--env", "HEPHAESTUS_JQ=/usr/bin/jq"])
         .args(["--env", "HEPHAESTUS_JQ_VERSION=jq-1.8.1"])
         .arg(TOOL_IMAGE)
@@ -197,7 +310,7 @@ pub fn publish(context: &DevContext, arguments: &PlatformImagePublishArgs) -> Re
         }
     }
     println!(
-        "publishing four reviewed platform images and applying their local catalog; this explicit operation may take several minutes"
+        "publishing six reviewed platform images and applying their local catalog; this explicit operation may take several minutes"
     );
     run(Command::new("podman")
         .args(["run", "--rm", "--network=host"])
@@ -288,6 +401,163 @@ fn create_volume(volume: &str) -> Result<()> {
     Ok(())
 }
 
+fn print_base_import(context: &DevContext) -> Result<()> {
+    let path = base_import_receipt_path(context);
+    match fs::symlink_metadata(&path) {
+        Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {
+            let receipt = read_base_receipt(&path)?;
+            println!(
+                "platform base import      {:>10}  {} ({})",
+                metadata.len(),
+                receipt.local_reference,
+                receipt.upstream_manifest_digest
+            );
+            Ok(())
+        }
+        Ok(_) => Err(DevError::Invalid(format!(
+            "platform base import receipt must be a non-symlink file: {}",
+            path.display()
+        ))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            println!(
+                "platform base import      {:>10}  missing ({})",
+                0,
+                path.display()
+            );
+            Ok(())
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn base_import_receipt_path(context: &DevContext) -> PathBuf {
+    context.platform_image_base_imports().join("ubuntu.json")
+}
+
+fn expected_base_receipt(context: &DevContext) -> ImportedBaseReceipt {
+    let digest = ubuntu_base_digest().to_owned();
+    ImportedBaseReceipt {
+        version: IMPORT_RECEIPT_VERSION,
+        upstream_reference: UBUNTU_BASE.into(),
+        upstream_manifest_digest: digest.clone(),
+        local_reference: format!(
+            "{}/{UBUNTU_BASE_REPOSITORY}:{UBUNTU_BASE_TAG}",
+            context.zot_service()
+        ),
+        local_manifest_digest: digest,
+    }
+}
+
+fn ubuntu_base_digest() -> &'static str {
+    UBUNTU_BASE.split_once('@').map_or("", |(_, digest)| digest)
+}
+
+fn read_base_receipt(path: &Path) -> Result<ImportedBaseReceipt> {
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err(DevError::Invalid(format!(
+            "platform base import receipt must be a non-symlink file: {}",
+            path.display()
+        )));
+    }
+    let receipt = serde_json::from_slice(&fs::read(path)?).map_err(|error| {
+        DevError::Invalid(format!(
+            "platform base import receipt is not valid JSON: {} ({error})",
+            path.display()
+        ))
+    })?;
+    validate_base_receipt(&receipt)?;
+    Ok(receipt)
+}
+
+fn validate_base_receipt(receipt: &ImportedBaseReceipt) -> Result<()> {
+    if receipt.version != IMPORT_RECEIPT_VERSION
+        || receipt.upstream_reference != UBUNTU_BASE
+        || receipt.upstream_manifest_digest != ubuntu_base_digest()
+        || receipt.local_manifest_digest != ubuntu_base_digest()
+    {
+        return Err(DevError::Invalid(
+            "platform base import receipt does not describe the reviewed Ubuntu digest".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn write_base_receipt(path: &Path, receipt: &ImportedBaseReceipt) -> Result<()> {
+    let contents = serde_json::to_vec_pretty(receipt).map_err(|error| {
+        DevError::Invalid(format!(
+            "could not serialize platform base import receipt: {error}"
+        ))
+    })?;
+    let temporary = path.with_extension(format!("{}.tmp", std::process::id()));
+    let _ignored = remove_path(&temporary);
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)?;
+    file.write_all(&contents)?;
+    file.write_all(b"\n")?;
+    file.sync_all()?;
+    fs::set_permissions(&temporary, fs::Permissions::from_mode(0o600))?;
+    fs::rename(temporary, path)?;
+    Ok(())
+}
+
+fn issue_zot_token(
+    context: &DevContext,
+    repository: &str,
+    actions: RepositoryActions,
+) -> Result<String> {
+    let service = context
+        .zot_service()
+        .parse::<RegistryService>()
+        .map_err(|error| DevError::Invalid(format!("invalid local Zot service: {error}")))?;
+    let private_key = Zeroizing::new(fs::read(context.zot_signing_key())?);
+    let key = SigningKey::rs256_pem(
+        "local-v1"
+            .parse::<KeyId>()
+            .map_err(|error| DevError::Invalid(format!("invalid local Zot key id: {error}")))?,
+        &private_key,
+    )
+    .map_err(|error| DevError::Invalid(format!("invalid local Zot signing key: {error}")))?;
+    let issuer = RegistryTokenIssuer::new(
+        DevContext::zot_token_realm()
+            .parse::<TokenIssuer>()
+            .map_err(|error| DevError::Invalid(format!("invalid local Zot issuer: {error}")))?,
+        service.clone(),
+        key,
+        TokenLifetime::new(300).map_err(|error| {
+            DevError::Invalid(format!("invalid local Zot token lifetime: {error}"))
+        })?,
+    );
+    let repository = repository
+        .parse::<RepositoryName>()
+        .map_err(|error| DevError::Invalid(format!("invalid platform base repository: {error}")))?;
+    let request = ScopeRequest::parse(
+        service.as_str(),
+        &format!("repository:{repository}:pull,push"),
+    )
+    .map_err(|error| DevError::Invalid(format!("invalid local Zot token scope: {error}")))?;
+    let mut authorization = AuthorizationDecision::deny_all();
+    authorization.grant(repository, actions);
+    let now = u64::try_from(OffsetDateTime::now_utc().unix_timestamp()).map_err(|error| {
+        DevError::Invalid(format!("invalid local clock for Zot token: {error}"))
+    })?;
+    issuer
+        .issue(
+            "workload:platform-base-import"
+                .parse::<TokenSubject>()
+                .map_err(|error| {
+                    DevError::Invalid(format!("invalid local Zot subject: {error}"))
+                })?,
+            &request,
+            &authorization,
+            UnixTimestamp::new(now),
+        )
+        .map(|token| token.token().as_str().to_owned())
+        .map_err(|error| DevError::Invalid(format!("could not issue local Zot token: {error}")))
+}
+
 fn validate_revision(revision: &str) -> Result<()> {
     let valid_length = matches!(revision.len(), 40 | 64);
     if valid_length
@@ -328,7 +598,10 @@ fn print_directory(label: &str, path: &std::path::Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::validate_revision;
+    use super::{
+        IMPORT_RECEIPT_VERSION, ImportedBaseReceipt, UBUNTU_BASE, ubuntu_base_digest,
+        validate_base_receipt, validate_revision,
+    };
 
     #[test]
     fn accepts_only_immutable_lowercase_revisions() {
@@ -336,5 +609,17 @@ mod tests {
         assert!(validate_revision(&"b".repeat(64)).is_ok());
         assert!(validate_revision(&"A".repeat(40)).is_err());
         assert!(validate_revision("../unsafe").is_err());
+    }
+
+    #[test]
+    fn rejects_base_import_receipts_that_change_the_reviewed_digest() {
+        let receipt = ImportedBaseReceipt {
+            version: IMPORT_RECEIPT_VERSION,
+            upstream_reference: UBUNTU_BASE.into(),
+            upstream_manifest_digest: ubuntu_base_digest().into(),
+            local_reference: "localhost:55000/platform/bases/ubuntu:reviewed".into(),
+            local_manifest_digest: "sha256:deadbeef".into(),
+        };
+        assert!(validate_base_receipt(&receipt).is_err());
     }
 }

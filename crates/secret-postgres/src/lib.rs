@@ -562,9 +562,10 @@ impl SecretMountMetadata for PostgresSecretMountMetadata {
     ) -> Result<Option<SecretDispatchInput>, run_orchestrator::RunSecretError> {
         return sqlx::query_as::<_, DispatchInputRow>(
             "SELECT revision.secret_bindings,
-                    COALESCE(request.actor_id, update.actor_id) AS actor_id,
-                    request.request_id,
-                    request.git_ref, request.commit_sha
+                    COALESCE(request.actor_id, update.actor_id, binding_grant.granted_by) AS actor_id,
+                    COALESCE(request.request_id, invocation.request_id) AS request_id,
+                    COALESCE(request.git_ref, attempt.target_ref) AS git_ref,
+                    COALESCE(request.commit_sha, attempt.target_commit) AS commit_sha
              FROM runs AS stored_run
              JOIN agent_instance_revisions AS revision
                ON revision.id = stored_run.instance_revision_id
@@ -572,6 +573,14 @@ impl SecretMountMetadata for PostgresSecretMountMetadata {
              LEFT JOIN run_requests AS request ON request.run_id = stored_run.id
              LEFT JOIN agent_updates AS update
                ON update.hook_run_id = stored_run.id
+             LEFT JOIN mailbox_delivery_attempts AS attempt ON attempt.run_id = stored_run.id
+             LEFT JOIN gateway_mailbox_publications AS publication
+               ON publication.event_id = attempt.event_id
+              AND publication.outcome IN ('accepted', 'duplicate')
+             LEFT JOIN gateway_mailbox_binding_grants AS binding_grant
+               ON binding_grant.id = publication.grant_id
+             LEFT JOIN gateway_invocations AS invocation
+               ON invocation.id = publication.invocation_id
              WHERE stored_run.id = $1
                AND stored_run.instance_id = $2
                AND stored_run.instance_revision_id = $3",

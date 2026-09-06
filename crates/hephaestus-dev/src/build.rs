@@ -50,7 +50,20 @@ fn build_runtime(context: &DevContext) -> Result<()> {
 fn build_daemon(context: &DevContext) -> Result<()> {
     println!("building daemon and development support binaries");
     run(Command::new("cargo")
-        .args(["build", "--package", "hephaestus-app", "--bins"])
+        .args([
+            "build",
+            "--package",
+            "hephaestus-app",
+            "--bins",
+            "--package",
+            "git-http",
+            "--bin",
+            "pre-receive",
+            "--package",
+            "bootstrap-postgres",
+            "--bin",
+            "hephaestus-e2e-seed",
+        ])
         .current_dir(&context.repository_root))
 }
 

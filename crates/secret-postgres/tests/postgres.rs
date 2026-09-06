@@ -47,6 +47,21 @@ struct FakeBroker {
 
 struct AcceptingBroker;
 
+struct FailingBroker;
+
+#[async_trait::async_trait]
+impl BrokerAdapter for FailingBroker {
+    async fn invoke(
+        &self,
+        _credential: &SecretValue,
+        _destination: &str,
+        _operation: &str,
+        _body: &[u8],
+    ) -> Result<BrokerResponse, BrokerAdapterError> {
+        Err(BrokerAdapterError::Retryable)
+    }
+}
+
 #[async_trait::async_trait]
 impl BrokerAdapter for AcceptingBroker {
     async fn invoke(
@@ -781,6 +796,7 @@ async fn encrypted_rotation_delegation_revocation_and_purge_are_atomic() {
         .expect("live exact authority should resolve at dispatch");
     assert_eq!(authority.leases.len(), 1);
     assert_eq!(authority.leases[0].version_id, first_version);
+    assert_https_inspection(&pool, &fixture, run_id, first_version).await;
     let snapshot: (Uuid, String, String, String, Option<String>) = sqlx::query_as(
         "SELECT rule_id, destination_origin, location_kind, header_name, header_prefix
            FROM brokered_secret_lease_snapshots
@@ -888,6 +904,65 @@ async fn encrypted_rotation_delegation_revocation_and_purge_are_atomic() {
         .await
         .expect("exact brokered HTTPS snapshot should authorize");
     assert_eq!(https_response.status, BrokerStatus::Succeeded);
+    let actual_calls: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM brokered_secret_audit_events decision
+         JOIN brokered_secret_audit_events outcome ON outcome.request_id = decision.request_id
+         WHERE decision.run_id = $1 AND decision.event_kind = 'authorization_decision'
+           AND decision.decision = 'allow' AND outcome.event_kind = 'substitution_use'
+           AND outcome.outcome = 'succeeded'",
+    )
+    .bind(run_id.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("real HTTPS correlated audit");
+    assert_eq!(actual_calls, 1);
+    let failed = runtime
+        .use_brokered(
+            &authority.credential,
+            &BrokerRequest {
+                run_id,
+                slot: SecretSlotKey::parse("model").expect("slot"),
+                destination: String::from("api.example.test"),
+                operation: String::from("https_v1"),
+                body: https_body.clone(),
+            },
+            &FailingBroker,
+        )
+        .await;
+    assert!(matches!(failed, Err(SecretServiceError::BrokerAdapter(_))));
+    let failed_calls: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM brokered_secret_audit_events WHERE run_id=$1 AND outcome='failed'",
+    )
+    .bind(run_id.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("failed HTTPS evidence");
+    assert_eq!(failed_calls, 1);
+    let denied = runtime
+        .use_brokered(
+            &authority.credential,
+            &BrokerRequest {
+                run_id,
+                slot: SecretSlotKey::parse("model").expect("slot"),
+                destination: String::from("other.example.test"),
+                operation: String::from("https_v1"),
+                body: https_body.clone(),
+            },
+            &AcceptingBroker,
+        )
+        .await;
+    assert!(matches!(
+        denied,
+        Err(SecretServiceError::BrokerRequestDenied)
+    ));
+    let denied_calls: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM brokered_secret_audit_events WHERE run_id=$1 AND decision='deny'",
+    )
+    .bind(run_id.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("denied HTTPS evidence");
+    assert_eq!(denied_calls, 1);
     for request in [
         BrokerRequest {
             run_id,
@@ -1356,6 +1431,29 @@ async fn encrypted_rotation_delegation_revocation_and_purge_are_atomic() {
         .revoke_secret(&owner, key("revoke", secret_id.as_uuid()), secret_id)
         .await
         .expect("owner should revoke");
+    let mut inspection = authz_postgres::begin_actor_transaction(&pool, &owner)
+        .await
+        .expect("historical inspection actor");
+    sqlx::query("SET LOCAL ROLE hephaestus_app")
+        .execute(&mut *inspection)
+        .await
+        .expect("historical application role");
+    let historical_versions: Vec<Uuid> =
+        sqlx::query_scalar("SELECT secret_version_id FROM inspect_run_https_uses($1, NULL, 200)")
+            .bind(run_id.as_uuid())
+            .fetch_all(&mut *inspection)
+            .await
+            .expect("inspect after rotation and revocation");
+    assert!(historical_versions.len() >= 4);
+    assert!(
+        historical_versions
+            .iter()
+            .all(|version| *version == first_version.as_uuid())
+    );
+    inspection
+        .rollback()
+        .await
+        .expect("close historical inspection");
     let broker_after_revocation = runtime
         .use_brokered(
             &authority.credential,
@@ -1451,6 +1549,67 @@ async fn encrypted_rotation_delegation_revocation_and_purge_are_atomic() {
         .await
         .expect("purged tombstone");
     assert_eq!(status, "purged");
+}
+
+async fn assert_https_inspection(
+    pool: &PgPool,
+    fixture: &Fixture,
+    run_id: RunId,
+    version: SecretVersionId,
+) {
+    let mut ids = [Uuid::new_v4(), Uuid::new_v4()];
+    ids.sort_unstable();
+    for id in ids {
+        sqlx::query(
+            "INSERT INTO brokered_secret_audit_events
+             (id, lease_snapshot_id, rule_id, runtime_session_id, run_id,
+              request_id, event_kind, decision, occurred_at)
+             SELECT $1, id, rule_id, runtime_session_id, run_id,
+                    $1, 'authorization_decision', 'allow', now()
+             FROM brokered_secret_lease_snapshots WHERE run_id = $2",
+        )
+        .bind(id)
+        .bind(run_id.as_uuid())
+        .execute(pool)
+        .await
+        .expect("seed audit evidence");
+    }
+    for (user, visible) in [
+        (fixture.owner, true),
+        (fixture.ordinary_member, false),
+        (fixture.other_owner, false),
+    ] {
+        let mut tx = authz_postgres::begin_actor_transaction(pool, &identity(user))
+            .await
+            .expect("actor transaction");
+        sqlx::query("SET LOCAL ROLE hephaestus_app")
+            .execute(&mut *tx)
+            .await
+            .expect("exercise application privileges");
+        let first: Vec<(Uuid, Uuid)> =
+            sqlx::query_as("SELECT id, secret_version_id FROM inspect_run_https_uses($1, NULL, 1)")
+                .bind(run_id.as_uuid())
+                .fetch_all(&mut *tx)
+                .await
+                .expect("inspect first page");
+        if visible {
+            assert_eq!(first, vec![(ids[0], version.as_uuid())]);
+            let second: Vec<Uuid> =
+                sqlx::query_scalar("SELECT id FROM inspect_run_https_uses($1, $2, 1)")
+                    .bind(run_id.as_uuid())
+                    .bind(ids[0])
+                    .fetch_all(&mut *tx)
+                    .await
+                    .expect("inspect next page");
+            assert_eq!(second, vec![ids[1]]);
+        } else {
+            assert!(
+                first.is_empty(),
+                "run access alone must not reveal secret metadata"
+            );
+        }
+        tx.rollback().await.expect("close inspection");
+    }
 }
 
 async fn pool() -> Option<PgPool> {

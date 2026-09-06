@@ -53,7 +53,7 @@ fn reflection_inventory_contains_every_application_service_and_method() {
             .iter()
             .map(|service| service.methods().len())
             .sum::<usize>(),
-        75
+        84
     );
 
     let reflector = connectrpc_reflection::Reflector::from_descriptor_pool(pool)
@@ -349,7 +349,7 @@ fn every_method_declares_auth_kind_limits_and_retry_policy() {
         }
     }
 
-    assert_eq!(methods, 75, "review the policy when adding an RPC method");
+    assert_eq!(methods, 84, "review the policy when adding an RPC method");
 }
 
 #[test]

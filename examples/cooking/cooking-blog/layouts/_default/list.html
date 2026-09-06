@@ -1,0 +1,16 @@
+{{ define "main" }}
+  <header class="page-header">
+    <h1>{{ .Title }}</h1>
+    {{ with .Content }}<div class="intro">{{ . }}</div>{{ end }}
+  </header>
+  {{ $pages := .RegularPages.ByTitle }}
+  {{ if $pages }}
+    <ul class="recipe-list">
+      {{ range $pages }}
+        <li><a href="{{ .RelPermalink }}">{{ .Title }}</a>{{ with .Description }}<p>{{ . }}</p>{{ end }}</li>
+      {{ end }}
+    </ul>
+  {{ else }}
+    <p>No recipes have been published yet.</p>
+  {{ end }}
+{{ end }}

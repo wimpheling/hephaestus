@@ -144,12 +144,28 @@ impl DevContext {
         self.local_root.join("platform-images/installations")
     }
 
+    /// Immutable evidence for explicitly imported reviewed platform bases.
+    pub fn platform_image_base_imports(&self) -> PathBuf {
+        self.local_root.join("platform-images/base-imports")
+    }
+
     pub fn platform_image_tool_storage_volume(&self) -> String {
         format!("{}-platform-image-tool-storage", self.namespace)
     }
 
     pub fn platform_image_tool_cache_volume(&self) -> String {
         format!("{}-platform-image-tool-cache", self.namespace)
+    }
+
+    /// Private operator state for the explicitly enabled repository-image VM
+    /// workflow. It is separate from tenant repositories and VM runtime data.
+    pub fn repository_image_workflow_root(&self) -> PathBuf {
+        self.local_root.join("repository-images")
+    }
+
+    /// Generated local daemon configuration for the enabled workflow.
+    pub fn repository_image_workflow_file(&self) -> PathBuf {
+        self.repository_image_workflow_root().join("workflow.env")
     }
 
     pub fn seed_file(&self) -> PathBuf {

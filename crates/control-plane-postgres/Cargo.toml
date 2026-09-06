@@ -20,7 +20,7 @@ release-domain = { path = "../release-domain" }
 run-domain = { path = "../run-domain" }
 run-orchestrator = { path = "../run-orchestrator" }
 secret-domain = { path = "../secret-domain" }
-tokio = { workspace = true, features = ["fs", "io-util", "sync"] }
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "rt", "sync"] }
 serde_json.workspace = true
 serde.workspace = true
 sqlx.workspace = true

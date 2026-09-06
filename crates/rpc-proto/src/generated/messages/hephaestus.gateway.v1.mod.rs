@@ -26,6 +26,8 @@ pub mod __buffa {
         reg.register_json_any(super::__GATEWAY_REVISION_JSON_ANY);
         reg.register_json_any(super::__GATEWAY_SUMMARY_JSON_ANY);
         reg.register_json_any(super::__GATEWAY_INGRESS_JSON_ANY);
+        reg.register_json_any(super::__GATEWAY_MAILBOX_BINDING_JSON_ANY);
+        reg.register_json_any(super::__GATEWAY_MAILBOX_PUBLICATION_JSON_ANY);
         reg.register_json_any(super::__LIST_PROJECT_GATEWAYS_REQUEST_JSON_ANY);
         reg.register_json_any(super::__LIST_PROJECT_GATEWAYS_RESPONSE_JSON_ANY);
         reg.register_json_any(super::__GET_GATEWAY_REQUEST_JSON_ANY);
@@ -34,6 +36,14 @@ pub mod __buffa {
         reg.register_json_any(super::__LIST_GATEWAY_INGRESS_RESPONSE_JSON_ANY);
         reg.register_json_any(super::__SET_GATEWAY_LIFECYCLE_REQUEST_JSON_ANY);
         reg.register_json_any(super::__SET_GATEWAY_LIFECYCLE_RESPONSE_JSON_ANY);
+        reg.register_json_any(super::__CREATE_MAILBOX_BINDING_REQUEST_JSON_ANY);
+        reg.register_json_any(super::__CREATE_MAILBOX_BINDING_RESPONSE_JSON_ANY);
+        reg.register_json_any(super::__REVOKE_MAILBOX_BINDING_GRANT_REQUEST_JSON_ANY);
+        reg.register_json_any(super::__REVOKE_MAILBOX_BINDING_GRANT_RESPONSE_JSON_ANY);
+        reg.register_json_any(super::__LIST_MAILBOX_BINDINGS_REQUEST_JSON_ANY);
+        reg.register_json_any(super::__LIST_MAILBOX_BINDINGS_RESPONSE_JSON_ANY);
+        reg.register_json_any(super::__LIST_MAILBOX_PUBLICATIONS_REQUEST_JSON_ANY);
+        reg.register_json_any(super::__LIST_MAILBOX_PUBLICATIONS_RESPONSE_JSON_ANY);
     }
 }
 #[doc(inline)]
@@ -52,6 +62,14 @@ pub use self::__buffa::view::GatewaySummaryOwnedView;
 pub use self::__buffa::view::GatewayIngressView;
 #[doc(inline)]
 pub use self::__buffa::view::GatewayIngressOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::GatewayMailboxBindingView;
+#[doc(inline)]
+pub use self::__buffa::view::GatewayMailboxBindingOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::GatewayMailboxPublicationView;
+#[doc(inline)]
+pub use self::__buffa::view::GatewayMailboxPublicationOwnedView;
 #[doc(inline)]
 pub use self::__buffa::view::ListProjectGatewaysRequestView;
 #[doc(inline)]
@@ -84,5 +102,37 @@ pub use self::__buffa::view::SetGatewayLifecycleRequestOwnedView;
 pub use self::__buffa::view::SetGatewayLifecycleResponseView;
 #[doc(inline)]
 pub use self::__buffa::view::SetGatewayLifecycleResponseOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::CreateMailboxBindingRequestView;
+#[doc(inline)]
+pub use self::__buffa::view::CreateMailboxBindingRequestOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::CreateMailboxBindingResponseView;
+#[doc(inline)]
+pub use self::__buffa::view::CreateMailboxBindingResponseOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::RevokeMailboxBindingGrantRequestView;
+#[doc(inline)]
+pub use self::__buffa::view::RevokeMailboxBindingGrantRequestOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::RevokeMailboxBindingGrantResponseView;
+#[doc(inline)]
+pub use self::__buffa::view::RevokeMailboxBindingGrantResponseOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::ListMailboxBindingsRequestView;
+#[doc(inline)]
+pub use self::__buffa::view::ListMailboxBindingsRequestOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::ListMailboxBindingsResponseView;
+#[doc(inline)]
+pub use self::__buffa::view::ListMailboxBindingsResponseOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::ListMailboxPublicationsRequestView;
+#[doc(inline)]
+pub use self::__buffa::view::ListMailboxPublicationsRequestOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::ListMailboxPublicationsResponseView;
+#[doc(inline)]
+pub use self::__buffa::view::ListMailboxPublicationsResponseOwnedView;
 #[doc(inline)]
 pub use self::__buffa::register_types;

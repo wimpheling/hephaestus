@@ -8,12 +8,13 @@ mod context;
 mod diagnostics;
 mod platform_images;
 mod process;
+mod repository_images;
 mod state;
 mod supervisor;
 mod zot;
 
 use clap::Parser;
-use cli::{CacheCommand, Cli, Command, PlatformImageCommand, StateCommand};
+use cli::{CacheCommand, Cli, Command, PlatformImageCommand, RepositoryImageCommand, StateCommand};
 use context::DevContext;
 use std::process::ExitCode;
 
@@ -52,11 +53,20 @@ fn execute() -> process::Result<()> {
         },
         Some(Command::PlatformImages { command }) => match command {
             PlatformImageCommand::Status => platform_images::status(&context),
+            PlatformImageCommand::ImportBase => platform_images::import_base(&context),
             PlatformImageCommand::Build(arguments) => platform_images::build(&context, &arguments),
             PlatformImageCommand::Publish(arguments) => {
                 platform_images::publish(&context, &arguments)
             }
             PlatformImageCommand::Clean(arguments) => platform_images::clean(&context, &arguments),
+        },
+        Some(Command::RepositoryImages { command }) => match command {
+            RepositoryImageCommand::Status => repository_images::status(&context),
+            RepositoryImageCommand::Enable(arguments) => {
+                repository_images::enable(&context, &arguments)
+            }
+            RepositoryImageCommand::Disable => repository_images::disable(&context),
+            RepositoryImageCommand::Clean => repository_images::clean(&context),
         },
         Some(Command::Check { command }) => checks::run(&context, command),
         Some(Command::Quality) => checks::quality(&context),

@@ -8,6 +8,17 @@ import "hephaestus/common/v1/common.proto";
 import "hephaestus/options/v1/options.proto";
 
 service RunService {
+  rpc GetRunProvenance(GetRunProvenanceRequest) returns (GetRunProvenanceResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (hephaestus.options.v1.authorization) = {
+      permission: "run.read"
+      audience: "/hephaestus.run.v1.RunService/GetRunProvenance"
+      actor_source: ACTOR_SOURCE_MEDIATOR_JWT_METADATA
+    };
+    option (hephaestus.options.v1.operation_kind) = OPERATION_KIND_QUERY;
+    option (hephaestus.options.v1.max_request_bytes) = 8192;
+    option (hephaestus.options.v1.max_response_bytes) = 4194304;
+  }
   rpc ListProjectRuns(ListProjectRunsRequest) returns (ListProjectRunsResponse) {
     option idempotency_level = NO_SIDE_EFFECTS;
     option (hephaestus.options.v1.authorization) = {
@@ -154,6 +165,32 @@ message GetRunRequest {
 }
 message GetRunResponse {
   Run run = 1;
+}
+message GetRunProvenanceRequest {
+  hephaestus.common.v1.OpaqueId run_id = 1;
+  hephaestus.common.v1.PageRequest page = 2;
+}
+// No request bodies, destinations, headers, or credentials are projected.
+message RunHttpsUse {
+  hephaestus.common.v1.OpaqueId id = 1;
+  hephaestus.common.v1.OpaqueId request_id = 2;
+  hephaestus.common.v1.OpaqueId lease_id = 3;
+  hephaestus.common.v1.OpaqueId binding_id = 4;
+  hephaestus.common.v1.OpaqueId secret_version_id = 5;
+  hephaestus.common.v1.OpaqueId rule_id = 6;
+  string event_kind = 7;
+  string decision = 8;
+  string outcome = 9;
+  google.protobuf.Timestamp occurred_at = 10;
+}
+message GetRunProvenanceResponse {
+  hephaestus.common.v1.OpaqueId run_id = 1;
+  hephaestus.common.v1.OpaqueId authorization_snapshot_id = 2;
+  string authorization_model_version = 3;
+  string authorization_snapshot_hash = 4;
+  // Only uses whose secret metadata the caller may inspect are included.
+  repeated RunHttpsUse https_uses = 5;
+  hephaestus.common.v1.PageResponse page = 6;
 }
 message RunControlTarget {
   oneof target {

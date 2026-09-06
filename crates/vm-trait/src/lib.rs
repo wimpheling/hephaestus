@@ -291,6 +291,37 @@ pub struct PrivateHttpResponse {
     pub headers: HeaderMap,
     /// Complete bounded response body.
     pub body: Bytes,
+    /// Optional, bounded request to publish one generic event through a
+    /// mailbox capability already bound by the trusted host.
+    ///
+    /// This is data on the existing private response channel, not a guest
+    /// network connection or a mailbox credential.  The host fixes the target
+    /// mailbox and producer from `slot` before it authorizes acceptance.
+    pub mailbox_publication: Option<PrivateMailboxPublication>,
+}
+
+/// One candidate generic mailbox publication returned by an `http.v1` guest.
+///
+/// The fields deliberately preserve only normalized request-like data.  The
+/// guest cannot select a target mailbox or producer identity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrivateMailboxPublication {
+    /// Exact immutable capability slot selected by the released gateway.
+    pub slot: String,
+    /// Uppercase normalized application method.
+    pub method: String,
+    /// Normalized absolute application route.
+    pub route: String,
+    /// Bounded application-selected metadata, not HTTP forwarding headers.
+    pub headers: Vec<(String, String)>,
+    /// Optional bounded media type selected by the application.
+    pub content_type: Option<String>,
+    /// Optional bounded application trace context.
+    pub trace_context: Option<String>,
+    /// Complete bounded event body.
+    pub body: Bytes,
+    /// Stable application-provided idempotency key.
+    pub deduplication_key: String,
 }
 
 /// A best-effort, live VM lifecycle event.

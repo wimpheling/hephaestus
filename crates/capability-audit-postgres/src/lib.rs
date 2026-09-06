@@ -231,6 +231,7 @@ fn resource_kind(value: &str) -> Result<CapabilityResourceKind, CapabilityAuditE
         "gateway" => Ok(CapabilityResourceKind::Gateway),
         "run" => Ok(CapabilityResourceKind::Run),
         "state_volume" => Ok(CapabilityResourceKind::StateVolume),
+        "mailbox" => Ok(CapabilityResourceKind::Mailbox),
         _ => Err(CapabilityAuditError::InvalidEvidence),
     }
 }
@@ -255,6 +256,24 @@ fn operation(value: &str) -> Result<CapabilityOperation, CapabilityAuditError> {
         "delete_tag" => Ok(CapabilityOperation::DeleteTag),
         "trigger_run" => Ok(CapabilityOperation::TriggerRun),
         "manage_attachments" => Ok(CapabilityOperation::ManageAttachments),
+        "publish" => Ok(CapabilityOperation::Publish),
         _ => Err(CapabilityAuditError::InvalidEvidence),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_mailbox_publish_evidence() {
+        assert_eq!(
+            resource_kind("mailbox").expect("mailbox is a supported evidence resource"),
+            CapabilityResourceKind::Mailbox
+        );
+        assert_eq!(
+            operation("publish").expect("publish is a supported evidence operation"),
+            CapabilityOperation::Publish
+        );
     }
 }

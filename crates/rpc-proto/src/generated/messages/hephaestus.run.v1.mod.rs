@@ -43,6 +43,9 @@ pub mod __buffa {
         reg.register_json_any(super::__LIST_PROJECT_RUNS_RESPONSE_JSON_ANY);
         reg.register_json_any(super::__GET_RUN_REQUEST_JSON_ANY);
         reg.register_json_any(super::__GET_RUN_RESPONSE_JSON_ANY);
+        reg.register_json_any(super::__GET_RUN_PROVENANCE_REQUEST_JSON_ANY);
+        reg.register_json_any(super::__RUN_HTTPS_USE_JSON_ANY);
+        reg.register_json_any(super::__GET_RUN_PROVENANCE_RESPONSE_JSON_ANY);
         reg.register_json_any(super::__RUN_CONTROL_TARGET_JSON_ANY);
         reg.register_json_any(super::__REQUEST_CONTROL_REQUEST_JSON_ANY);
         reg.register_json_any(super::__REQUEST_CONTROL_RESPONSE_JSON_ANY);
@@ -92,6 +95,18 @@ pub use self::__buffa::view::GetRunRequestOwnedView;
 pub use self::__buffa::view::GetRunResponseView;
 #[doc(inline)]
 pub use self::__buffa::view::GetRunResponseOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::GetRunProvenanceRequestView;
+#[doc(inline)]
+pub use self::__buffa::view::GetRunProvenanceRequestOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::RunHttpsUseView;
+#[doc(inline)]
+pub use self::__buffa::view::RunHttpsUseOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::GetRunProvenanceResponseView;
+#[doc(inline)]
+pub use self::__buffa::view::GetRunProvenanceResponseOwnedView;
 #[doc(inline)]
 pub use self::__buffa::view::RunControlTargetView;
 #[doc(inline)]

@@ -3,9 +3,9 @@
 use async_trait::async_trait;
 use builder_catalog_application::{ImageCatalog, ImageCatalogError, RegistryPublicationCatalog};
 use builder_catalog_domain::{
-    AvailabilityState, ImageCatalogValueError, ImageKey, ImageProvenance, OciImage, OciImageId,
-    OciImagePublication, OciImageReference, RegistryAvailabilityState, RegistryEvidence,
-    RegistryPublication, RegistryPublicationState, Toolchain,
+    AvailabilityState, ImageCatalogValueError, ImageKey, ImageProvenance, ImageRole, OciImage,
+    OciImageId, OciImagePublication, OciImageReference, RegistryAvailabilityState,
+    RegistryEvidence, RegistryPublication, RegistryPublicationState, Toolchain,
 };
 use identity_domain::AuthenticatedIdentity;
 use serde_json::Value;
@@ -92,7 +92,7 @@ impl ImageCatalog for PgOciImageCatalog {
     async fn list_images(&self) -> Result<Vec<OciImage>, ImageCatalogError> {
         let rows = sqlx::query_as::<_, OciImageRow>(
             "SELECT id, key, display_name, image_reference, toolchains, architectures,
-                    availability_state, provenance, signature_reference, sbom_reference,
+                    availability_state, role, provenance, signature_reference, sbom_reference,
                     platform_policy_version
              FROM oci_images ORDER BY key, id",
         )
@@ -105,7 +105,7 @@ impl ImageCatalog for PgOciImageCatalog {
     async fn get_image(&self, id: OciImageId) -> Result<OciImage, ImageCatalogError> {
         let row = sqlx::query_as::<_, OciImageRow>(
             "SELECT id, key, display_name, image_reference, toolchains, architectures,
-                    availability_state, provenance, signature_reference, sbom_reference,
+                    availability_state, role, provenance, signature_reference, sbom_reference,
                     platform_policy_version
              FROM oci_images WHERE id = $1",
         )
@@ -123,7 +123,7 @@ impl ImageCatalog for PgOciImageCatalog {
     ) -> Result<OciImage, ImageCatalogError> {
         let row = sqlx::query_as::<_, OciImageRow>(
             "SELECT id, key, display_name, image_reference, toolchains, architectures,
-                    availability_state, provenance, signature_reference, sbom_reference,
+                    availability_state, role, provenance, signature_reference, sbom_reference,
                     platform_policy_version
              FROM oci_images WHERE image_reference = $1",
         )
@@ -181,6 +181,7 @@ struct OciImageRow {
     toolchains: Value,
     architectures: Vec<String>,
     availability_state: String,
+    role: String,
     provenance: Value,
     signature_reference: Option<String>,
     sbom_reference: Option<String>,
@@ -201,6 +202,7 @@ impl OciImageRow {
                 .map_err(storage)?,
             architectures: self.architectures,
             availability: availability_state(&self.availability_state).map_err(invalid_data)?,
+            role: image_role(&self.role).map_err(invalid_data)?,
             provenance: ImageProvenance {
                 source: provenance.source,
                 signature: self.signature_reference.or(provenance.signature),
@@ -256,6 +258,14 @@ fn availability_state(value: &str) -> Result<AvailabilityState, ImageCatalogValu
         "available" => Ok(AvailabilityState::Available),
         "unavailable" => Ok(AvailabilityState::Unavailable),
         "retired" => Ok(AvailabilityState::Retired),
+        _ => Err(ImageCatalogValueError::InvalidStoredValue),
+    }
+}
+
+fn image_role(value: &str) -> Result<ImageRole, ImageCatalogValueError> {
+    match value {
+        "execution" => Ok(ImageRole::Execution),
+        "platform_operation" => Ok(ImageRole::PlatformOperation),
         _ => Err(ImageCatalogValueError::InvalidStoredValue),
     }
 }

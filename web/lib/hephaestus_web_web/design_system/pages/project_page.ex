@@ -74,7 +74,7 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.ProjectPage do
 
   attr :active, :atom,
     required: true,
-    values: [:repositories, :agents, :runs, :settings]
+    values: [:repositories, :agents, :runs, :images, :settings]
 
   attr :organization_index_destination, :string, required: true
   attr :organization_destination, :string, required: true
@@ -125,6 +125,12 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.ProjectPage do
         label: "Runs",
         icon: "hero-play-circle",
         destination: "/projects/#{project_id}/runs"
+      },
+      %{
+        key: :images,
+        label: "Images",
+        icon: "hero-cube",
+        destination: "/projects/#{project_id}/images"
       },
       %{
         key: :gateways,

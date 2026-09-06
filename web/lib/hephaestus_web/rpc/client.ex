@@ -22,11 +22,15 @@ defmodule HephaestusWeb.RPC.Client do
   }
 
   alias Hephaestus.Gateway.V1.{
+    CreateMailboxBindingRequest,
     GatewayLifecycle,
     GatewayService,
     GetGatewayRequest,
     ListGatewayIngressRequest,
+    ListMailboxBindingsRequest,
+    ListMailboxPublicationsRequest,
     ListProjectGatewaysRequest,
+    RevokeMailboxBindingGrantRequest,
     SetGatewayLifecycleRequest
   }
 
@@ -79,11 +83,14 @@ defmodule HephaestusWeb.RPC.Client do
 
   alias Hephaestus.Project.V1.{
     CreateProjectRequest,
+    GetProjectRepositoryImageRequest,
     GetProjectRequest,
     ListImportableReleaseAgentsRequest,
     ListProjectInstancesRequest,
+    ListProjectRepositoryImagesRequest,
     ListProjectRepositoriesRequest,
-    ProjectService
+    ProjectService,
+    RetryProjectRepositoryImageRequest
   }
 
   alias Hephaestus.Release.V1.{
@@ -102,6 +109,7 @@ defmodule HephaestusWeb.RPC.Client do
   }
 
   alias Hephaestus.RepositoryBrowser.V1.{
+    GetCommitDetailRequest,
     GetFileRequest,
     GetTreeRequest,
     ListBranchesRequest,
@@ -345,6 +353,50 @@ defmodule HephaestusWeb.RPC.Client do
         :repositories
       )
 
+  @doc "Lists redacted project-owned repository OCI image resources."
+  def list_project_repository_images(identity, project_id),
+    do:
+      paged_by_id(
+        identity,
+        "/hephaestus.project.v1.ProjectService/ListProjectRepositoryImages",
+        ListProjectRepositoryImagesRequest,
+        :project_id,
+        project_id,
+        &ProjectService.Stub.list_project_repository_images/3,
+        :images
+      )
+
+  @doc "Returns one redacted project repository image and bounded phase history."
+  def get_project_repository_image(identity, image_id) do
+    request = %GetProjectRepositoryImageRequest{
+      image_id: id(image_id),
+      page: %PageRequest{page_size: 100}
+    }
+
+    case Invoke.unary(
+           identity,
+           "/hephaestus.project.v1.ProjectService/GetProjectRepositoryImage",
+           request,
+           &ProjectService.Stub.get_project_repository_image/3,
+           retry: :safe_query,
+           maximum_response_bytes: 65_536
+         ) do
+      {:ok, response} -> {:ok, Projection.to_value(response)}
+      {:error, error} -> {:error, error}
+    end
+  end
+
+  @doc "Retries only a failed repository image with its original immutable inputs."
+  def retry_project_repository_image(identity, image_id),
+    do:
+      mutation(
+        identity,
+        "/hephaestus.project.v1.ProjectService/RetryProjectRepositoryImage",
+        RetryProjectRepositoryImageRequest,
+        [image_id: id(image_id)],
+        &ProjectService.Stub.retry_project_repository_image/3
+      )
+
   def list_project_instances(identity, project_id),
     do:
       paged_by_id(
@@ -410,6 +462,65 @@ defmodule HephaestusWeb.RPC.Client do
           next: gateway_lifecycle(next)
         ],
         &GatewayService.Stub.set_gateway_lifecycle/3
+      )
+
+  @doc "Creates one exact gateway revision mailbox binding and active grant."
+  def create_gateway_mailbox_binding(
+        identity,
+        gateway_revision_id,
+        slot_key,
+        mailbox_id,
+        producer_id
+      ),
+      do:
+        mutation(
+          identity,
+          "/hephaestus.gateway.v1.GatewayService/CreateMailboxBinding",
+          CreateMailboxBindingRequest,
+          [
+            gateway_revision_id: id(gateway_revision_id),
+            slot_key: slot_key,
+            mailbox_id: id(mailbox_id),
+            producer_id: producer_id
+          ],
+          &GatewayService.Stub.create_mailbox_binding/3
+        )
+
+  @doc "Revokes a gateway mailbox publication grant while retaining provenance."
+  def revoke_gateway_mailbox_binding_grant(identity, binding_id),
+    do:
+      mutation(
+        identity,
+        "/hephaestus.gateway.v1.GatewayService/RevokeMailboxBindingGrant",
+        RevokeMailboxBindingGrantRequest,
+        [binding_id: id(binding_id)],
+        &GatewayService.Stub.revoke_mailbox_binding_grant/3
+      )
+
+  @doc "Lists redacted exact mailbox bindings for a gateway revision."
+  def list_gateway_mailbox_bindings(identity, gateway_revision_id),
+    do:
+      paged_by_id(
+        identity,
+        "/hephaestus.gateway.v1.GatewayService/ListMailboxBindings",
+        ListMailboxBindingsRequest,
+        :gateway_revision_id,
+        gateway_revision_id,
+        &GatewayService.Stub.list_mailbox_bindings/3,
+        :bindings
+      )
+
+  @doc "Lists value-free mailbox-publication provenance for one gateway."
+  def list_gateway_mailbox_publications(identity, gateway_id),
+    do:
+      paged_by_id(
+        identity,
+        "/hephaestus.gateway.v1.GatewayService/ListMailboxPublications",
+        ListMailboxPublicationsRequest,
+        :gateway_id,
+        gateway_id,
+        &GatewayService.Stub.list_mailbox_publications/3,
+        :publications
       )
 
   def list_importable_release_agents(identity, project_id),
@@ -711,6 +822,28 @@ defmodule HephaestusWeb.RPC.Client do
 
       {:error, error} ->
         {:error, error}
+    end
+  end
+
+  def commit_detail(identity, repository_id, branch, commit, parent \\ "") do
+    request = %GetCommitDetailRequest{
+      repository_id: id(repository_id),
+      branch: branch,
+      commit: commit,
+      parent: parent,
+      page: %PageRequest{page_size: 20}
+    }
+
+    case Invoke.unary(
+           identity,
+           "/hephaestus.repository_browser.v1.RepositoryBrowserService/GetCommitDetail",
+           request,
+           &RepositoryBrowserService.Stub.get_commit_detail/3,
+           retry: :safe_query,
+           maximum_response_bytes: 4_194_304
+         ) do
+      {:ok, response} -> {:ok, Projection.to_value(response.detail)}
+      {:error, error} -> {:error, error}
     end
   end
 

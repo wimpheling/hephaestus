@@ -151,6 +151,7 @@ assert_web_isolation() {
             HEPHAESTUS_BROWSER_OIDC_CLIENT_SECRET \
             HEPHAESTUS_BROWSER_OIDC_ISSUER \
             HEPHAESTUS_BROWSER_OIDC_REDIRECT_URI \
+            HEPHAESTUS_GIT_HTTP_ORIGIN \
             HEPHAESTUS_RPC_ENDPOINT \
             HEPHAESTUS_RPC_MEDIATOR_SECRET |
             sort
@@ -331,6 +332,7 @@ podman run --detach \
     --env PHX_SERVER=true \
     --env PORT="${web_port}" \
     --env HEPHAESTUS_RPC_ENDPOINT="127.0.0.1:${daemon_port}" \
+    --env HEPHAESTUS_GIT_HTTP_ORIGIN="${daemon_url}" \
     --env HEPHAESTUS_RPC_MEDIATOR_SECRET="${HEPHAESTUS_RPC_MEDIATOR_SECRET}" \
     --env HEPHAESTUS_BROWSER_OIDC_ISSUER="${oidc_url}" \
     --env HEPHAESTUS_BROWSER_OIDC_CLIENT_ID="hephaestus-web" \

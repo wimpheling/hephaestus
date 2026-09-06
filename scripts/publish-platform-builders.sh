@@ -2,9 +2,9 @@
 # Publish reviewed platform OCI layouts to the forge-owned Zot registry.
 set -euo pipefail
 
-readonly builders=(ubuntu-native rust-ubuntu typescript-node-ubuntu python-ubuntu)
+readonly builders=(ubuntu-native rust-ubuntu typescript-node-ubuntu python-ubuntu oci-builder-ubuntu oci-verifier-ubuntu)
 readonly script_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
-readonly catalog_generator="$script_root/scripts/write-platform-builder-catalog.sh"
+readonly catalog_generator="$script_root/scripts/write-platform-image-catalog.sh"
 
 die() { printf '%s\n' "$*" >&2; exit 65; }
 usage() {
@@ -114,7 +114,7 @@ for key in "${builders[@]}"; do
     is_absolute_uri "$source" || die "invalid source in release input for $key"
     is_revision "$revision" || die "invalid revision in release input for $key"
     is_created "$created" || die "invalid created timestamp in release input for $key"
-    declare -a release_arguments=(publish-platform-builder --key "$key" --layout "$layout")
+    declare -a release_arguments=(publish-platform-image --key "$key" --layout "$layout")
     for kind in sbom provenance scan approval; do
         # An approval artifact is optional under the current policy. `jq -e`
         # returns non-zero for its intentionally empty path, so do not let
@@ -145,7 +145,7 @@ for key in "${builders[@]}"; do
     [[ $("$jq_binary" -er '.state' <<<"$publication") == approved ]] || die "publication was not approved for $key"
     remote=$("$jq_binary" -er '.manifest_digest' <<<"$publication")
     [[ "$remote" == "$digest" ]] || die "approved Zot digest differs for $key"
-    [[ $("$jq_binary" -er '.reference' <<<"$publication") == "$authority/platform/builders/$key@$digest" ]] || die "approved Zot namespace differs for $key"
+    [[ $("$jq_binary" -er '.reference' <<<"$publication") == "$authority/platform/images/$key@$digest" ]] || die "approved Zot namespace differs for $key"
     remote_digests[$key]=$remote
     for kind in sbom provenance scan signature; do
         referrer=$("$jq_binary" -er --arg kind "$kind" '.evidence[] | select(.kind == $kind) | .reference' <<<"$publication") || true
@@ -172,9 +172,15 @@ HEPHAESTUS_TYPESCRIPT_SIGNATURE_REFERENCE=${signature_refs[typescript-node-ubunt
 HEPHAESTUS_TYPESCRIPT_SBOM_REFERENCE=${sbom_refs[typescript-node-ubuntu]} \
 HEPHAESTUS_PYTHON_SIGNATURE_REFERENCE=${signature_refs[python-ubuntu]:-} \
 HEPHAESTUS_PYTHON_SBOM_REFERENCE=${sbom_refs[python-ubuntu]} \
-"$catalog_generator" --output "$catalog_output" --registry "$authority/platform/builders" \
+HEPHAESTUS_OCI_BUILDER_SIGNATURE_REFERENCE=${signature_refs[oci-builder-ubuntu]:-} \
+HEPHAESTUS_OCI_BUILDER_SBOM_REFERENCE=${sbom_refs[oci-builder-ubuntu]} \
+HEPHAESTUS_OCI_VERIFIER_SIGNATURE_REFERENCE=${signature_refs[oci-verifier-ubuntu]:-} \
+HEPHAESTUS_OCI_VERIFIER_SBOM_REFERENCE=${sbom_refs[oci-verifier-ubuntu]} \
+"$catalog_generator" --output "$catalog_output" --registry "$authority/platform/images" \
     --ubuntu-digest "${remote_digests[ubuntu-native]}" --rust-digest "${remote_digests[rust-ubuntu]}" \
-    --typescript-digest "${remote_digests[typescript-node-ubuntu]}" --python-digest "${remote_digests[python-ubuntu]}"
+    --typescript-digest "${remote_digests[typescript-node-ubuntu]}" --python-digest "${remote_digests[python-ubuntu]}" \
+    --oci-builder-digest "${remote_digests[oci-builder-ubuntu]}" \
+    --oci-verifier-digest "${remote_digests[oci-verifier-ubuntu]}"
 
 "$jq_binary" -n -S \
     --slurpfile release_input "$root/.platform-builder-release.json" \
@@ -183,6 +189,8 @@ HEPHAESTUS_PYTHON_SBOM_REFERENCE=${sbom_refs[python-ubuntu]} \
     --arg rust "${remote_digests[rust-ubuntu]}" --arg rust_sbom "${sbom_refs[rust-ubuntu]}" --arg rust_provenance "${provenance_refs[rust-ubuntu]}" --arg rust_scan "${scan_refs[rust-ubuntu]}" --arg rust_signature "${signature_refs[rust-ubuntu]:-}" \
     --arg typescript "${remote_digests[typescript-node-ubuntu]}" --arg typescript_sbom "${sbom_refs[typescript-node-ubuntu]}" --arg typescript_provenance "${provenance_refs[typescript-node-ubuntu]}" --arg typescript_scan "${scan_refs[typescript-node-ubuntu]}" --arg typescript_signature "${signature_refs[typescript-node-ubuntu]:-}" \
     --arg python "${remote_digests[python-ubuntu]}" --arg python_sbom "${sbom_refs[python-ubuntu]}" --arg python_provenance "${provenance_refs[python-ubuntu]}" --arg python_scan "${scan_refs[python-ubuntu]}" --arg python_signature "${signature_refs[python-ubuntu]:-}" \
-    'def optional: if length > 0 then . else null end; {schema_version:1,kind:"hephaestus.platform-builder.release-review.v1",source:$source,revision:$revision,created:$created,authority:$authority,architecture:"x86_64",toolchain:$release_input[0].toolchain,policy_result:"evidence_attached_and_read_back",builders:[{key:"ubuntu-native",reference:($authority+"/platform/builders/ubuntu-native@"+$ubuntu),evidence:{sbom:$ubuntu_sbom,provenance:$ubuntu_provenance,scan:$ubuntu_scan,signature_or_approval:($ubuntu_signature | optional)}},{key:"rust-ubuntu",reference:($authority+"/platform/builders/rust-ubuntu@"+$rust),evidence:{sbom:$rust_sbom,provenance:$rust_provenance,scan:$rust_scan,signature_or_approval:($rust_signature | optional)}},{key:"typescript-node-ubuntu",reference:($authority+"/platform/builders/typescript-node-ubuntu@"+$typescript),evidence:{sbom:$typescript_sbom,provenance:$typescript_provenance,scan:$typescript_scan,signature_or_approval:($typescript_signature | optional)}},{key:"python-ubuntu",reference:($authority+"/platform/builders/python-ubuntu@"+$python),evidence:{sbom:$python_sbom,provenance:$python_provenance,scan:$python_scan,signature_or_approval:($python_signature | optional)}}]}' \
+    --arg oci_builder "${remote_digests[oci-builder-ubuntu]}" --arg oci_builder_sbom "${sbom_refs[oci-builder-ubuntu]}" --arg oci_builder_provenance "${provenance_refs[oci-builder-ubuntu]}" --arg oci_builder_scan "${scan_refs[oci-builder-ubuntu]}" --arg oci_builder_signature "${signature_refs[oci-builder-ubuntu]:-}" \
+    --arg oci_verifier "${remote_digests[oci-verifier-ubuntu]}" --arg oci_verifier_sbom "${sbom_refs[oci-verifier-ubuntu]}" --arg oci_verifier_provenance "${provenance_refs[oci-verifier-ubuntu]}" --arg oci_verifier_scan "${scan_refs[oci-verifier-ubuntu]}" --arg oci_verifier_signature "${signature_refs[oci-verifier-ubuntu]:-}" \
+    'def optional: if length > 0 then . else null end; def image($key;$digest;$sbom;$provenance;$scan;$signature): {key:$key,reference:($authority+"/platform/images/"+$key+"@"+$digest),evidence:{sbom:$sbom,provenance:$provenance,scan:$scan,signature_or_approval:($signature | optional)}}; {schema_version:1,kind:"hephaestus.platform-image.release-review.v1",source:$source,revision:$revision,created:$created,authority:$authority,architecture:"x86_64",toolchain:$release_input[0].toolchain,policy_result:"evidence_attached_and_read_back",images:[image("ubuntu-native";$ubuntu;$ubuntu_sbom;$ubuntu_provenance;$ubuntu_scan;$ubuntu_signature),image("rust-ubuntu";$rust;$rust_sbom;$rust_provenance;$rust_scan;$rust_signature),image("typescript-node-ubuntu";$typescript;$typescript_sbom;$typescript_provenance;$typescript_scan;$typescript_signature),image("python-ubuntu";$python;$python_sbom;$python_provenance;$python_scan;$python_signature),image("oci-builder-ubuntu";$oci_builder;$oci_builder_sbom;$oci_builder_provenance;$oci_builder_scan;$oci_builder_signature),image("oci-verifier-ubuntu";$oci_verifier;$oci_verifier_sbom;$oci_verifier_provenance;$oci_verifier_scan;$oci_verifier_signature)]}' \
     >"$review_output"
-printf '%s\n' "published four platform builders to $authority; review $review_output before applying $catalog_output"
+printf '%s\n' "published six platform images to $authority; review $review_output before applying $catalog_output"

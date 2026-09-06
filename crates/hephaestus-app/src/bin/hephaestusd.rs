@@ -57,9 +57,20 @@ fn environment_config() -> Result<AppConfig, Box<dyn Error>> {
     let artifact_root = path("HEPHAESTUS_ARTIFACT_ROOT")?;
     let backend_name =
         env::var("HEPHAESTUS_VM_BACKEND").unwrap_or_else(|_| String::from("libkrun"));
-    let root_images = root_images_from_environment(&backend_name)?;
+    let mut root_images = root_images_from_environment(&backend_name)?;
     let runtime_root = path("HEPHAESTUS_RUNTIME_ROOT")?;
     let oci_builder = oci_builder_from_environment(&repository_root, &runtime_root)?;
+    if let Some(worker) = &oci_builder {
+        for (reference, root) in repository_root_images(&worker.root_manifest, &worker.rootfs_root)?
+        {
+            if root_images.insert(reference.clone(), root).is_some() {
+                return Err(format!(
+                    "repository image root {reference:?} conflicts with a configured platform root"
+                )
+                .into());
+            }
+        }
+    }
     let secret_mount_root = path("HEPHAESTUS_SECRET_RUNTIME_ROOT")?;
     let secret_broker_socket = env::var_os("HEPHAESTUS_SECRET_BROKER_SOCKET")
         .map_or_else(|| runtime_root.join("secret-broker.sock"), PathBuf::from);
@@ -72,14 +83,24 @@ fn environment_config() -> Result<AppConfig, Box<dyn Error>> {
         "fixture" => VmBackendConfig::FixtureResult,
         "libkrun" => {
             let mut image_roots: Vec<_> = root_images.values().map(root_filesystem_path).collect();
+            let mut mount_roots = vec![workspace_root.clone(), secret_mount_root.clone()];
             if let Some(worker) = &oci_builder {
                 image_roots.push(worker.rootfs_root.clone());
+                append_repository_image_mount_roots(
+                    &mut mount_roots,
+                    &worker.runtime,
+                    &worker.verification_root,
+                );
+            }
+            let mut disk_roots = vec![volume_root.clone()];
+            if let Some(worker) = &oci_builder {
+                disk_roots.push(worker.scratch_root.clone());
             }
             let mut config = LibkrunConfig::new(
                 &runtime_root,
                 image_roots,
-                vec![volume_root.clone()],
-                vec![workspace_root.clone(), secret_mount_root.clone()],
+                disk_roots,
+                mount_roots,
                 path("HEPHAESTUS_LIBKRUN_WORKER")?,
                 path("HEPHAESTUS_CGROUP_ROOT")?,
             );
@@ -299,6 +320,7 @@ fn oci_builder_from_environment(
     let materialization_worker_name = env::var("HEPHAESTUS_OCI_BUILDER_MATERIALIZATION_WORKER")
         .unwrap_or_else(|_| format!("oci-rootfs-{host_id}"));
     let output_root = path("HEPHAESTUS_OCI_BUILDER_OUTPUT_ROOT")?;
+    let verification_root = path("HEPHAESTUS_OCI_BUILDER_VERIFICATION_ROOT")?;
     let registry_authority =
         registry_domain::RegistryAuthority::parse(required("HEPHAESTUS_REGISTRY_SERVICE")?)?;
     let runtime = LocalOciRuntimeConfig {
@@ -306,33 +328,52 @@ fn oci_builder_from_environment(
         checkout_root: path("HEPHAESTUS_OCI_BUILDER_CHECKOUT_ROOT")?,
         image_layouts,
         output_root: output_root.clone(),
+        verified_rootfs_root: Some(verification_root.clone()),
         git_binary: path_or("HEPHAESTUS_GIT_BINARY", "/usr/bin/git"),
         tar_binary: path_or("HEPHAESTUS_TAR_BINARY", "/usr/bin/tar"),
-        buildah_binary: path_or("HEPHAESTUS_BUILDAH_BINARY", "/usr/bin/buildah"),
-        trivy_binary: path_or("HEPHAESTUS_TRIVY_BINARY", "/usr/bin/trivy"),
-        umoci_binary: path_or("HEPHAESTUS_UMOCI_BINARY", "/usr/bin/umoci"),
+        buildah_binary: None,
+        trivy_binary: None,
+        umoci_binary: env::var_os("HEPHAESTUS_UMOCI_BINARY").map(PathBuf::from),
         buildah_output_prefix: env::var("HEPHAESTUS_OCI_BUILDER_OUTPUT_PREFIX")
             .unwrap_or_else(|_| String::from("heph-builder")),
     };
     let publisher = registry_publisher::PublisherConfiguration::new(
         registry_authority,
         &output_root,
+        &verification_root,
         &path("HEPHAESTUS_REGISTRY_CREDENTIAL_ROOT")?,
         &path_or("HEPHAESTUS_SKOPEO", "/usr/bin/skopeo"),
         &path_or("HEPHAESTUS_ORAS", "/usr/bin/oras"),
     )?;
+    // A public registry uses the HTTPS origin derived from its authority. The
+    // local development Zot endpoint is deliberately an explicit HTTP-only
+    // override, shared with the reconciliation and platform-image tooling.
+    let publisher = match env::var("HEPHAESTUS_REGISTRY_PRIVATE_ORIGIN") {
+        Ok(origin) => publisher.with_registry_origin(&origin)?,
+        Err(env::VarError::NotPresent) => publisher,
+        Err(error) => return Err(Box::new(error)),
+    };
     Ok(Some(OciBuilderWorkerConfig {
         runtime,
-        publication_tooling: oci_builder_runtime_local::ForgeZotPublicationConfig {
-            syft_binary: path_or("HEPHAESTUS_SYFT_BINARY", "/usr/bin/syft"),
-            syft_config: path("HEPHAESTUS_SYFT_CONFIG")?,
-        },
         publisher,
         publication_policy_version: registry_domain::PolicyVersion::parse(
             env::var("HEPHAESTUS_REGISTRY_POLICY_VERSION")
                 .unwrap_or_else(|_| String::from("registry/v1")),
         )?,
         publication_policy: registry_domain::SupplyChainPolicy::without_signature(),
+        builder_vm_image: builder_catalog_domain::OciImageReference::parse(required(
+            "HEPHAESTUS_OCI_BUILDER_VM_IMAGE",
+        )?)?,
+        verifier_vm_image: builder_catalog_domain::OciImageReference::parse(required(
+            "HEPHAESTUS_OCI_VERIFIER_VM_IMAGE",
+        )?)?,
+        verification_root,
+        scratch_root: path("HEPHAESTUS_OCI_BUILDER_SCRATCH_ROOT")?,
+        mkfs_ext4: path_or("HEPHAESTUS_MKFS_EXT4", "/usr/sbin/mkfs.ext4"),
+        vm_resources: vm_trait::VmResources {
+            vcpus: optional_u64("HEPHAESTUS_OCI_BUILDER_VM_VCPUS", 1)?.try_into()?,
+            memory_mib: optional_u64("HEPHAESTUS_OCI_BUILDER_VM_MEMORY_MIB", 1024)?.try_into()?,
+        },
         preparation_worker_name,
         materialization_worker_name,
         rootfs_root: PathBuf::from(rootfs_root),
@@ -340,6 +381,7 @@ fn oci_builder_from_environment(
             || runtime_root.join("repository-builder-roots.json"),
             PathBuf::from,
         ),
+        guest_init: path("HEPHAESTUS_GUEST_INIT_BINARY")?,
         lease: Duration::from_secs(optional_u64("HEPHAESTUS_OCI_BUILDER_LEASE_SECONDS", 900)?),
         poll_interval: Duration::from_millis(optional_u64(
             "HEPHAESTUS_OCI_BUILDER_POLL_MILLISECONDS",
@@ -454,6 +496,52 @@ fn load_root_image_manifest(
         .into());
     }
     validate_root_image_entries(manifest.roots)
+}
+
+/// Loads the worker-written project-image manifest without allowing it to add
+/// arbitrary host directories or replace platform roots. Its absence is the
+/// normal state before the first project image is materialized.
+fn repository_root_images(
+    manifest_path: &Path,
+    rootfs_root: &Path,
+) -> Result<BTreeMap<String, RootFilesystem>, Box<dyn Error>> {
+    if !manifest_path.is_absolute() || !rootfs_root.is_absolute() {
+        return Err(
+            String::from("repository image manifest and rootfs root must be absolute").into(),
+        );
+    }
+    if !manifest_path.exists() {
+        return Ok(BTreeMap::new());
+    }
+    let manifest: RootImageManifest = serde_json::from_slice(&std::fs::read(manifest_path)?)?;
+    if manifest.version != ROOT_IMAGE_MANIFEST_VERSION {
+        return Err(format!(
+            "unsupported repository image manifest version {}; expected {}",
+            manifest.version, ROOT_IMAGE_MANIFEST_VERSION
+        )
+        .into());
+    }
+    let trusted_root = std::fs::canonicalize(rootfs_root)?;
+    let mut roots = BTreeMap::new();
+    for (reference, entry) in manifest.roots {
+        OciImageReference::parse(reference.clone()).map_err(|error| {
+            format!("repository image reference {reference:?} is not digest-pinned: {error}")
+        })?;
+        let RootImageManifestEntry::Directory { path } = entry else {
+            return Err(
+                String::from("repository image roots must be materialized directories").into(),
+            );
+        };
+        let path = materialized_path(&reference, path, true)?;
+        if !path.starts_with(&trusted_root) {
+            return Err(format!(
+                "repository image root {reference:?} is outside the worker rootfs root"
+            )
+            .into());
+        }
+        roots.insert(reference, RootFilesystem::Directory { host_path: path });
+    }
+    Ok(roots)
 }
 
 fn validate_root_image_entries(
@@ -624,6 +712,48 @@ mod manifest_tests {
     }
 
     #[test]
+    fn repository_manifest_loads_only_worker_materialized_directories() {
+        let temporary = tempdir().expect("temporary root");
+        let rootfs = temporary.path().join("repository-rootfs");
+        let image = rootfs.join("sha256-aaaaaaaa");
+        std::fs::create_dir_all(&image).expect("materialized image root");
+        let manifest_path = temporary.path().join("repository-roots.json");
+        std::fs::write(
+            &manifest_path,
+            format!(
+                r#"{{"version":1,"roots":{{"registry.example/project/image@sha256:{}":{{"kind":"directory","path":"{}"}}}}}}"#,
+                "a".repeat(64),
+                image.display()
+            ),
+        )
+        .expect("manifest");
+
+        let image_roots = repository_root_images(&manifest_path, &rootfs).expect("trusted root");
+        assert_eq!(image_roots.len(), 1);
+
+        std::fs::write(
+            &manifest_path,
+            format!(
+                r#"{{"version":1,"roots":{{"registry.example/project/image@sha256:{}":{{"kind":"directory","path":"{}"}}}}}}"#,
+                "a".repeat(64),
+                temporary.path().display()
+            ),
+        )
+        .expect("outside manifest");
+        assert!(repository_root_images(&manifest_path, &rootfs).is_err());
+    }
+
+    #[test]
+    fn missing_repository_manifest_means_no_project_roots_yet() {
+        let temporary = tempdir().expect("temporary root");
+        let rootfs = temporary.path().join("repository-rootfs");
+        std::fs::create_dir(&rootfs).expect("rootfs root");
+        let image_roots = repository_root_images(&temporary.path().join("missing.json"), &rootfs)
+            .expect("empty initial state");
+        assert!(image_roots.is_empty());
+    }
+
+    #[test]
     fn legacy_fixture_pair_still_resolves_to_a_directory_root() {
         let temporary = tempdir().expect("temporary root");
         let roots = legacy_fixture_root_images(
@@ -640,6 +770,20 @@ mod manifest_tests {
 
 fn path_or(name: &str, fallback: &str) -> PathBuf {
     env::var_os(name).map_or_else(|| PathBuf::from(fallback), PathBuf::from)
+}
+
+fn append_repository_image_mount_roots(
+    mount_roots: &mut Vec<PathBuf>,
+    runtime: &LocalOciRuntimeConfig,
+    verification_root: &Path,
+) {
+    // Repository-image operational VMs mount only these private,
+    // administrator-configured directories. The operation spec still selects
+    // one exact job-derived child from each root.
+    mount_roots.push(runtime.checkout_root.clone());
+    mount_roots.push(runtime.output_root.clone());
+    mount_roots.push(verification_root.to_path_buf());
+    mount_roots.extend(runtime.image_layouts.values().cloned());
 }
 
 fn load_secret_keys(
@@ -688,9 +832,10 @@ fn load_secret_keys(
 
 #[cfg(test)]
 mod tests {
-    use super::load_secret_keys;
+    use super::{append_repository_image_mount_roots, load_secret_keys};
+    use oci_builder_runtime_local::LocalOciRuntimeConfig;
     use secret_store::KeyProvider;
-    use std::{fs, os::unix::fs::PermissionsExt};
+    use std::{collections::BTreeMap, fs, os::unix::fs::PermissionsExt, path::PathBuf};
 
     #[test]
     fn loads_a_strict_multi_version_key_directory() {
@@ -718,5 +863,43 @@ mod tests {
         )
         .expect("unsafe key mode");
         assert!(load_secret_keys(&directory, String::from("local-v2")).is_err());
+    }
+
+    #[test]
+    fn repository_image_vm_roots_include_each_operation_input_and_output() {
+        let runtime = LocalOciRuntimeConfig {
+            repository_root: PathBuf::from("/repositories"),
+            checkout_root: PathBuf::from("/private/checkouts"),
+            image_layouts: BTreeMap::from([(
+                String::from("registry.example/base@sha256:aaaaaaaa"),
+                PathBuf::from("/private/bases/approved"),
+            )]),
+            output_root: PathBuf::from("/private/candidates"),
+            verified_rootfs_root: Some(PathBuf::from("/private/verification")),
+            git_binary: PathBuf::from("/usr/bin/git"),
+            tar_binary: PathBuf::from("/usr/bin/tar"),
+            buildah_binary: None,
+            trivy_binary: None,
+            umoci_binary: None,
+            buildah_output_prefix: String::from("heph-builder"),
+        };
+        let mut roots = vec![PathBuf::from("/workspace")];
+
+        append_repository_image_mount_roots(
+            &mut roots,
+            &runtime,
+            &PathBuf::from("/private/verification"),
+        );
+
+        assert_eq!(
+            roots,
+            vec![
+                PathBuf::from("/workspace"),
+                PathBuf::from("/private/checkouts"),
+                PathBuf::from("/private/candidates"),
+                PathBuf::from("/private/verification"),
+                PathBuf::from("/private/bases/approved"),
+            ]
+        );
     }
 }

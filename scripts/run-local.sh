@@ -12,6 +12,9 @@ readonly DEFAULT_LOCAL_OCI_IMAGE="${HEPHAESTUS_LIBKRUN_UBUNTU_IMAGE:-docker.io/l
 readonly local_oci_images="${HEPHAESTUS_LOCAL_OCI_IMAGES:-${DEFAULT_LOCAL_OCI_IMAGE}}"
 readonly GUEST_TARGET="x86_64-unknown-linux-musl"
 readonly REQUIRED_CONTROLLERS=(cpu io memory pids)
+# An Ubuntu repository-image rootfs needs more descriptors than the common
+# interactive-shell soft default while Umoci verifies and exports it.
+readonly MINIMUM_OPEN_FILES=65536
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly script_dir
@@ -19,6 +22,7 @@ repo_root="$(cd -- "${script_dir}/.." && pwd -P)"
 readonly repo_root
 local_root="${HEPHAESTUS_LOCAL_ROOT:-${repo_root}/.local/hephaestus}"
 readonly local_root
+readonly repository_image_workflow_file="${local_root}/repository-images/workflow.env"
 readonly image_cache="${local_root}/oci-images"
 readonly image_manifest="${image_cache}/manifest.json"
 readonly runtime_root="${HEPHAESTUS_LOCAL_RUNTIME_ROOT:-/tmp/hephaestus-runtime-$(id -u)}"
@@ -35,6 +39,10 @@ fi
 
 declare -a oci_image_references=()
 declare -A oci_image_digests=()
+declare -A repository_image_workflow=()
+declare -A local_oci_layouts=()
+declare -A local_oci_layout_tags=()
+repository_images_enabled=false
 IFS=',' read -r -a configured_oci_images <<<"${local_oci_images}"
 for reference in "${configured_oci_images[@]}"; do
     reference="${reference//[[:space:]]/}"
@@ -56,6 +64,86 @@ if (( ${#oci_image_references[@]} == 0 )); then
     printf 'HEPHAESTUS_LOCAL_OCI_IMAGES must contain at least one image\n' >&2
     exit 1
 fi
+
+add_oci_image_reference() {
+    local reference="$1"
+    local digest
+    [[ "${reference}" =~ ^[A-Za-z0-9._/:+-]+@sha256:[0-9a-f]{64}$ ]] || {
+        printf 'repository-image workflow contains an invalid immutable OCI reference\n' >&2
+        return 1
+    }
+    digest="${reference##*@sha256:}"
+    if [[ -n "${oci_image_digests[${digest}]:-}" && "${oci_image_digests[${digest}]}" != "${reference}" ]]; then
+        printf 'repository-image workflow maps one digest to multiple references\n' >&2
+        return 1
+    fi
+    if [[ -z "${oci_image_digests[${digest}]:-}" ]]; then
+        oci_image_references+=("${reference}")
+        oci_image_digests[${digest}]="${reference}"
+    fi
+}
+
+load_repository_image_workflow() {
+    [[ -e "${repository_image_workflow_file}" ]] || return 0
+    [[ -f "${repository_image_workflow_file}" && ! -L "${repository_image_workflow_file}" ]] || {
+        printf 'repository-image workflow file is unsafe: %s\n' "${repository_image_workflow_file}" >&2
+        return 1
+    }
+    local mode key value
+    mode="$(stat --format='%a' -- "${repository_image_workflow_file}")"
+    (( (8#${mode} & 0077) == 0 )) || {
+        printf 'repository-image workflow file must not be group or world readable\n' >&2
+        return 1
+    }
+    while IFS='=' read -r key value; do
+        [[ -n "${key}" && -n "${value}" && "${key}" =~ ^[a-z_]+$ ]] || {
+            printf 'repository-image workflow file is malformed\n' >&2
+            return 1
+        }
+        case "${key}" in
+            version|platform_revision|builder_vm_image|builder_layout|builder_layout_tag|verifier_vm_image|verifier_layout|verifier_layout_tag|base_layout_manifest) ;;
+            *) printf 'repository-image workflow contains an unsupported key: %s\n' "${key}" >&2; return 1 ;;
+        esac
+        [[ -z "${repository_image_workflow[${key}]:-}" ]] || {
+            printf 'repository-image workflow contains a duplicate key: %s\n' "${key}" >&2
+            return 1
+        }
+        repository_image_workflow[${key}]="${value}"
+    done <"${repository_image_workflow_file}"
+    [[ "${repository_image_workflow[version]:-}" == 1 ]] || {
+        printf 'repository-image workflow version is unsupported\n' >&2
+        return 1
+    }
+    for key in builder_vm_image builder_layout builder_layout_tag verifier_vm_image verifier_layout verifier_layout_tag base_layout_manifest; do
+        [[ -n "${repository_image_workflow[${key}]:-}" ]] || {
+            printf 'repository-image workflow is incomplete: %s\n' "${key}" >&2
+            return 1
+        }
+    done
+    for key in builder_layout verifier_layout; do
+        value="$(realpath -e -- "${repository_image_workflow[${key}]}")" || return 1
+        [[ "${value}" == "${local_root}/platform-images/releases/"* && ! -L "${value}" && -f "${value}/index.json" && -f "${value}/oci-layout" ]] || {
+            printf 'repository-image workflow layout is not an installed platform release: %s\n' "${repository_image_workflow[${key}]}" >&2
+            return 1
+        }
+        repository_image_workflow[${key}]="${value}"
+    done
+    value="$(realpath -e -- "${repository_image_workflow[base_layout_manifest]}")" || return 1
+    [[ "${value}" == "${local_root}/repository-images/"* && -f "${value}" && ! -L "${value}" ]] || {
+        printf 'repository-image base-layout manifest is unsafe\n' >&2
+        return 1
+    }
+    repository_image_workflow[base_layout_manifest]="${value}"
+    add_oci_image_reference "${repository_image_workflow[builder_vm_image]}"
+    add_oci_image_reference "${repository_image_workflow[verifier_vm_image]}"
+    local_oci_layouts[${repository_image_workflow[builder_vm_image]}]="${repository_image_workflow[builder_layout]}"
+    local_oci_layout_tags[${repository_image_workflow[builder_vm_image]}]="${repository_image_workflow[builder_layout_tag]}"
+    local_oci_layouts[${repository_image_workflow[verifier_vm_image]}]="${repository_image_workflow[verifier_layout]}"
+    local_oci_layout_tags[${repository_image_workflow[verifier_vm_image]}]="${repository_image_workflow[verifier_layout_tag]}"
+    repository_images_enabled=true
+}
+
+load_repository_image_workflow
 
 image_digest() {
     local reference="$1"
@@ -84,9 +172,15 @@ if [[ ! "${local_postgres_port}" =~ ^[0-9]+$ ]] || (( local_postgres_port < 1024
     printf 'HEPHAESTUS_LOCAL_POSTGRES_PORT must be between 1024 and 65535\n' >&2
     exit 1
 fi
+readonly local_daemon_port="${HEPHAESTUS_LOCAL_DAEMON_PORT:-8080}"
+if [[ ! "${local_daemon_port}" =~ ^[0-9]+$ ]] || (( local_daemon_port < 1024 || local_daemon_port > 65535 || local_daemon_port == local_postgres_port )); then
+    printf 'HEPHAESTUS_LOCAL_DAEMON_PORT must be between 1024 and 65535 and differ from PostgreSQL\n' >&2
+    exit 1
+fi
+readonly local_daemon_url="http://127.0.0.1:${local_daemon_port}"
 readonly local_zot_port="${HEPHAESTUS_LOCAL_ZOT_PORT:-55000}"
-if [[ ! "${local_zot_port}" =~ ^[0-9]+$ ]] || (( local_zot_port < 1024 || local_zot_port > 65535 || local_zot_port == local_postgres_port )); then
-    printf 'HEPHAESTUS_LOCAL_ZOT_PORT must be between 1024 and 65535 and differ from PostgreSQL\n' >&2
+if [[ ! "${local_zot_port}" =~ ^[0-9]+$ ]] || (( local_zot_port < 1024 || local_zot_port > 65535 || local_zot_port == local_postgres_port || local_zot_port == local_daemon_port )); then
+    printf 'HEPHAESTUS_LOCAL_ZOT_PORT must be between 1024 and 65535 and differ from PostgreSQL and the daemon\n' >&2
     exit 1
 fi
 readonly registry_token_private_key="${local_root}/zot/secrets/registry-token-signing-key.pem"
@@ -289,6 +383,16 @@ done
     printf 'run-local.sh must run as a non-root user\n' >&2
     exit 1
 }
+if (( $(ulimit -Sn) < MINIMUM_OPEN_FILES )); then
+    ulimit -Sn "${MINIMUM_OPEN_FILES}" || {
+        printf 'local repository-image verification requires a soft open-file limit of at least %s; raise the service LimitNOFILE and retry\n' "${MINIMUM_OPEN_FILES}" >&2
+        exit 1
+    }
+fi
+if (( $(ulimit -Sn) < MINIMUM_OPEN_FILES )); then
+    printf 'local repository-image verification requires a soft open-file limit of at least %s; raise the service LimitNOFILE and retry\n' "${MINIMUM_OPEN_FILES}" >&2
+    exit 1
+fi
 [[ "$(uname -m)" == "x86_64" ]] || {
     printf 'the pinned local libkrun image currently supports x86_64 only\n' >&2
     exit 1
@@ -358,9 +462,12 @@ cargo build \
 
 materialize_oci_image() {
     local reference="$1"
+    local layout="${local_oci_layouts[${reference}]:-}"
+    local layout_tag="${local_oci_layout_tags[${reference}]:-}"
     local destination
     local staging
     local container
+    local image_source
     destination="$(image_cache_path "${reference}")"
     if [[ -f "${destination}/.hephaestus-image" ]]; then
         [[ -d "${destination}" && ! -L "${destination}" && ! -L "${destination}/.hephaestus-image" ]] || {
@@ -379,9 +486,19 @@ materialize_oci_image() {
     }
     staging="$(mktemp -d "${image_cache}/.image.XXXXXX")"
     container="$(image_container_name "${reference}")"
-    podman pull "${reference}"
+    if [[ -n "${layout}" ]]; then
+        [[ -n "${layout_tag}" ]] || {
+            printf 'installed platform OCI layout has no immutable tag: %s\n' "${reference}" >&2
+            rm -rf -- "${staging}"
+            return 1
+        }
+        image_source="oci:${layout}:${layout_tag}"
+    else
+        podman pull "${reference}"
+        image_source="${reference}"
+    fi
     podman rm --force "${container}" >/dev/null 2>&1 || true
-    if ! podman create --name "${container}" "${reference}" /bin/true >/dev/null \
+    if ! podman create --name "${container}" "${image_source}" /bin/true >/dev/null \
         || ! podman export "${container}" | tar -C "${staging}" -xf -; then
         podman rm --force "${container}" >/dev/null 2>&1 || true
         rm -rf -- "${staging}"
@@ -401,6 +518,23 @@ materialize_oci_image() {
     printf 'heph-agent:x:10001:10001:Hephaestus agent:/nonexistent:/sbin/nologin\n' \
         >>"${staging}/etc/passwd"
     printf 'heph-agent:x:10001:\n' >>"${staging}/etc/group"
+    if "${repository_images_enabled}" \
+        && [[ "${reference}" == "${repository_image_workflow[builder_vm_image]}" ]]; then
+        # `podman export` deliberately clears set-id bits. The vetted builder
+        # operation image needs only the distribution's standard uidmap
+        # helpers to create its nested rootless Buildah mapping inside this
+        # already-isolated microVM. Never restore set-id bits for an ordinary
+        # execution or repository-produced image.
+        for helper in newuidmap newgidmap; do
+            [[ -f "${staging}/usr/bin/${helper}" && ! -L "${staging}/usr/bin/${helper}" ]] || {
+                printf 'OCI builder operation root is missing %s\n' "${helper}" >&2
+                rm -rf -- "${staging}"
+                return 1
+            }
+        done
+        chmod 4755 "${staging}/usr/bin/newuidmap"
+        chmod 2755 "${staging}/usr/bin/newgidmap"
+    fi
     printf '%s\n' "${reference}" >"${staging}/.hephaestus-image"
     mv -- "${staging}" "${destination}"
 }
@@ -469,7 +603,10 @@ wait_for_url \
     "${local_root}/logs/oidc.log"
 
 cd "${repo_root}"
-cargo build -p hephaestus-app --bins -p git-http --bin pre-receive
+cargo build \
+    -p hephaestus-app --bins \
+    -p git-http --bin pre-receive \
+    -p bootstrap-postgres --bin hephaestus-e2e-seed
 
 readonly database_url="postgres://postgres:postgres@127.0.0.1:${local_postgres_port}/hephaestus?sslmode=disable"
 HEPHAESTUS_DATABASE_URL="${database_url}" \
@@ -481,7 +618,7 @@ HEPHAESTUS_BROWSER_OIDC_ISSUER="http://127.0.0.1:5556" \
 
 export HEPHAESTUS_DATABASE_URL="${database_url}"
 export HEPHAESTUS_NATS_URL="nats://127.0.0.1:54222"
-export HEPHAESTUS_HTTP_LISTEN="127.0.0.1:8080"
+export HEPHAESTUS_HTTP_LISTEN="127.0.0.1:${local_daemon_port}"
 export HEPHAESTUS_REPOSITORY_ROOT="${local_root}/repositories"
 export HEPHAESTUS_GIT_HTTP_BACKEND="$(git --exec-path)/git-http-backend"
 export HEPHAESTUS_GIT_PRE_RECEIVE_HOOK="${repo_root}/target/debug/pre-receive"
@@ -498,7 +635,7 @@ export HEPHAESTUS_SECRET_KEY_DIRECTORY="${secret_key_directory}"
 export HEPHAESTUS_SECRET_KEY_REFERENCE="${secret_key_reference}"
 export HEPHAESTUS_RPC_MEDIATOR_SECRET="${internal_command_token}"
 export HEPHAESTUS_REGISTRY_TOKEN_PRIVATE_KEY="${registry_token_private_key}"
-export HEPHAESTUS_REGISTRY_TOKEN_ISSUER="http://127.0.0.1:8080/v1/registry/token"
+export HEPHAESTUS_REGISTRY_TOKEN_ISSUER="${local_daemon_url}/v1/registry/token"
 export HEPHAESTUS_REGISTRY_SERVICE="localhost:${local_zot_port}"
 export HEPHAESTUS_REGISTRY_PRIVATE_ORIGIN="http://127.0.0.1:${local_zot_port}/"
 export HEPHAESTUS_REGISTRY_TOKEN_KEY_ID="local-v1"
@@ -506,6 +643,45 @@ export HEPHAESTUS_REGISTRY_TOKEN_LIFETIME_SECONDS="300"
 export HEPHAESTUS_REGISTRY_NOTIFICATION_CALLBACK_TOKEN_FILE="${registry_notification_callback_file}"
 unset HEPHAESTUS_ROOT_IMAGE_PATH HEPHAESTUS_ROOT_IMAGE_REFERENCE
 export HEPHAESTUS_ROOT_IMAGE_MANIFEST="${image_manifest}"
+if "${repository_images_enabled}"; then
+    readonly repository_image_root="${local_root}/repository-images"
+    readonly repository_image_registry_credentials="${repository_image_root}/registry-credentials"
+    mkdir -p -- \
+        "${repository_image_root}/checkouts" \
+        "${repository_image_root}/candidates" \
+        "${repository_image_root}/scratch" \
+        "${repository_image_root}/verification" \
+        "${repository_image_root}/rootfs" \
+        "${repository_image_registry_credentials}"
+    chmod 0700 \
+        "${repository_image_root}" \
+        "${repository_image_root}/checkouts" \
+        "${repository_image_root}/candidates" \
+        "${repository_image_root}/scratch" \
+        "${repository_image_root}/verification" \
+        "${repository_image_root}/rootfs" \
+        "${repository_image_registry_credentials}"
+    export HEPHAESTUS_OCI_BUILDER_ROOTFS_ROOT="${repository_image_root}/rootfs"
+    export HEPHAESTUS_GUEST_INIT_BINARY="${repo_root}/target/${GUEST_TARGET}/release/heph-init"
+    export HEPHAESTUS_OCI_BUILDER_BASE_LAYOUT_MANIFEST="${repository_image_workflow[base_layout_manifest]}"
+    export HEPHAESTUS_OCI_BUILDER_CHECKOUT_ROOT="${repository_image_root}/checkouts"
+    export HEPHAESTUS_OCI_BUILDER_OUTPUT_ROOT="${repository_image_root}/candidates"
+    export HEPHAESTUS_OCI_BUILDER_SCRATCH_ROOT="${repository_image_root}/scratch"
+    export HEPHAESTUS_OCI_BUILDER_VERIFICATION_ROOT="${repository_image_root}/verification"
+    export HEPHAESTUS_OCI_BUILDER_VM_IMAGE="${repository_image_workflow[builder_vm_image]}"
+    export HEPHAESTUS_OCI_VERIFIER_VM_IMAGE="${repository_image_workflow[verifier_vm_image]}"
+    export HEPHAESTUS_REGISTRY_CREDENTIAL_ROOT="${repository_image_registry_credentials}"
+    if [[ -z "${HEPHAESTUS_SKOPEO:-}" ]]; then
+        export HEPHAESTUS_SKOPEO="$(command -v skopeo || true)"
+    fi
+    if [[ -z "${HEPHAESTUS_ORAS:-}" ]]; then
+        export HEPHAESTUS_ORAS="$(command -v oras || true)"
+    fi
+    [[ -n "${HEPHAESTUS_SKOPEO}" && -n "${HEPHAESTUS_ORAS}" ]] || {
+        printf 'repository-image workflow needs host-controlled skopeo and oras; install them or set HEPHAESTUS_SKOPEO/HEPHAESTUS_ORAS\n' >&2
+        exit 1
+    }
+fi
 export HEPHAESTUS_VM_BACKEND="libkrun"
 export HEPHAESTUS_LIBKRUN_WORKER="${repo_root}/target/debug/hephaestus-vm-libkrun-worker"
 export HEPHAESTUS_CGROUP_ROOT="${cgroup_root}"
@@ -524,7 +700,7 @@ start_daemon() {
         >"${local_root}/logs/daemon.log" 2>&1 &
     daemon_pid="$!"
     printf '%s\n' "${daemon_pid}" >"${daemon_pid_file}"
-    wait_for_url "http://127.0.0.1:8080/healthz" \
+    wait_for_url "${local_daemon_url}/healthz" \
         "${local_root}/logs/daemon.log"
 }
 
@@ -545,6 +721,8 @@ podman run --detach --rm \
     --env MIX_ENV=dev \
     --env PHX_SERVER=true \
     --env PORT=4000 \
+    --env HEPHAESTUS_RPC_ENDPOINT="127.0.0.1:${local_daemon_port}" \
+    --env HEPHAESTUS_GIT_HTTP_ORIGIN="${local_daemon_url}" \
     --env HEPHAESTUS_RPC_MEDIATOR_SECRET="${internal_command_token}" \
     --env HEPHAESTUS_BROWSER_OIDC_ISSUER="http://127.0.0.1:5556" \
     --env HEPHAESTUS_BROWSER_OIDC_CLIENT_ID="hephaestus-web" \
@@ -568,7 +746,7 @@ readonly repository_id
 
 printf '\nHephaestus is ready for manual smoke testing.\n\n'
 printf '  Web UI:        http://127.0.0.1:4000\n'
-printf '  Git endpoint:  http://127.0.0.1:8080/%s\n' "${repository_id}"
+printf '  Git endpoint:  %s/%s\n' "${local_daemon_url}" "${repository_id}"
 printf '  Login:         reviewer (Continue as Ada Reviewer)\n'
 printf '  VM backend:    libkrun/KVM with %s materialized OCI image(s)\n' "${#oci_image_references[@]}"
 printf '  OCI images:    %s\n' "${image_manifest}"
@@ -577,8 +755,8 @@ printf '  Data:          %s\n\n' "${local_root}"
 printf 'Create a fresh Git bearer token with:\n\n'
 printf '  export HEPHAESTUS_GIT_TOKEN="$(curl --fail --silent http://127.0.0.1:5556/test/git-token)"\n\n'
 printf 'Then clone with:\n\n'
-printf '  git -c http.extraHeader="Authorization: Bearer ${HEPHAESTUS_GIT_TOKEN}" clone http://127.0.0.1:8080/%s\n\n' \
-    "${repository_id}"
+printf '  git -c http.extraHeader="Authorization: Bearer ${HEPHAESTUS_GIT_TOKEN}" clone %s/%s\n\n' \
+    "${local_daemon_url}" "${repository_id}"
 printf 'Daemon log: %s\n' "${local_root}/logs/daemon.log"
 printf 'Web log:    %s\n' "${local_root}/logs/web.log"
 printf 'Press Ctrl-C here to stop services while retaining local data.\n\n'

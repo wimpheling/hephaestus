@@ -7,7 +7,7 @@ use crate::{
         GuestLogStream, GuestMessage, GuestMount, GuestStateVolume, HostMessage,
         MAX_LOG_CHUNK_SIZE, MAX_METRIC_LABELS, MAX_METRIC_TEXT_SIZE, MAX_PRIVATE_HTTP_BODY_BYTES,
         MAX_PRIVATE_HTTP_HEADERS, MAX_RESULT_MESSAGE_SIZE, PROTOCOL_VERSION,
-        RuntimeAuthorityMessage,
+        RUNTIME_AUTHORITY_PATH_ENV, RuntimeAuthorityMessage,
     },
     validation::{PreparedForward, PreparedSpec},
 };
@@ -432,7 +432,7 @@ fn handle_guest(
 
     let guest_writer = stream.try_clone()?;
     *lock(guest_slot) = Some(guest_writer);
-    let command = GuestCommandMessage {
+    let mut command = GuestCommandMessage {
         program: spec.command.program,
         args: spec.command.args,
         env: spec.command.env,
@@ -447,11 +447,8 @@ fn handle_guest(
             read_only: mount.read_only,
         })
         .collect();
-    let state_volume = match (
-        spec.labels.get("hephaestus.agent-state.filesystem-uuid"),
-        spec.labels.get("hephaestus.agent-state.mount-path"),
-    ) {
-        (Some(filesystem_uuid), Some(guest_path)) => Some(GuestStateVolume {
+    let state_volume = match volume_labels(&spec.labels) {
+        Some((filesystem_uuid, guest_path)) => Some(GuestStateVolume {
             filesystem_uuid: filesystem_uuid.clone(),
             guest_path: PathBuf::from(guest_path),
         }),
@@ -465,6 +462,15 @@ fn handle_guest(
             runtime_git_credential: authority.runtime_git_credential,
         })
     });
+    if let Some(authority) = runtime_authority.as_ref() {
+        command.env.insert(
+            String::from(RUNTIME_AUTHORITY_PATH_ENV),
+            format!(
+                "/run/hephaestus-authority/session-{}.json",
+                authority.session_id
+            ),
+        );
+    }
     let gateway_handler = spec
         .labels
         .get(GATEWAY_HANDLER_CONTRACT_LABEL)
@@ -539,6 +545,23 @@ fn handle_guest(
         }
     }
     Ok(())
+}
+
+fn volume_labels(labels: &BTreeMap<String, String>) -> Option<(&String, &String)> {
+    let agent = (
+        labels.get("hephaestus.agent-state.filesystem-uuid"),
+        labels.get("hephaestus.agent-state.mount-path"),
+    );
+    let scratch = (
+        labels.get("hephaestus.oci-scratch.filesystem-uuid"),
+        labels.get("hephaestus.oci-scratch.mount-path"),
+    );
+    match (agent, scratch) {
+        ((Some(uuid), Some(path)), (None, None)) | ((None, None), (Some(uuid), Some(path))) => {
+            Some((uuid, path))
+        }
+        _ => None,
+    }
 }
 
 fn validate_authority_sequence(

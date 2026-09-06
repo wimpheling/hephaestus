@@ -2,9 +2,12 @@
 
 mod create_project;
 mod get_project;
+mod get_project_repository_image;
 mod list_importable_release_agents;
 mod list_project_instances;
 mod list_project_repositories;
+mod list_project_repository_images;
+mod retry_project_repository_image;
 
 use super::{MediatorAuthenticator, RpcError};
 use crate::application::project::{Page, ProjectApplication, ProjectError};
@@ -18,10 +21,13 @@ use rpc_proto::{
     messages::hephaestus::{
         common::v1::{OpaqueId, PageRequest},
         project::v1::{
-            CreateProjectRequest, CreateProjectResponse, GetProjectRequest, GetProjectResponse,
+            CreateProjectRequest, CreateProjectResponse, GetProjectRepositoryImageRequest,
+            GetProjectRepositoryImageResponse, GetProjectRequest, GetProjectResponse,
             ListImportableReleaseAgentsRequest, ListImportableReleaseAgentsResponse,
             ListProjectInstancesRequest, ListProjectInstancesResponse,
             ListProjectRepositoriesRequest, ListProjectRepositoriesResponse,
+            ListProjectRepositoryImagesRequest, ListProjectRepositoryImagesResponse,
+            RetryProjectRepositoryImageRequest, RetryProjectRepositoryImageResponse,
         },
     },
 };
@@ -92,6 +98,30 @@ impl ProjectService for ProjectRpc {
         request: ServiceRequest<'_, ListProjectRepositoriesRequest>,
     ) -> ServiceResult<ListProjectRepositoriesResponse> {
         list_project_repositories::handle(self, ctx, request).await
+    }
+
+    async fn list_project_repository_images(
+        &self,
+        ctx: RequestContext,
+        request: ServiceRequest<'_, ListProjectRepositoryImagesRequest>,
+    ) -> ServiceResult<ListProjectRepositoryImagesResponse> {
+        list_project_repository_images::handle(self, ctx, request).await
+    }
+
+    async fn get_project_repository_image(
+        &self,
+        ctx: RequestContext,
+        request: ServiceRequest<'_, GetProjectRepositoryImageRequest>,
+    ) -> ServiceResult<GetProjectRepositoryImageResponse> {
+        get_project_repository_image::handle(self, ctx, request).await
+    }
+
+    async fn retry_project_repository_image(
+        &self,
+        ctx: RequestContext,
+        request: ServiceRequest<'_, RetryProjectRepositoryImageRequest>,
+    ) -> ServiceResult<RetryProjectRepositoryImageResponse> {
+        retry_project_repository_image::handle(self, ctx, request).await
     }
 
     async fn list_project_instances(
@@ -178,6 +208,7 @@ fn map_error(error: ProjectError) -> RpcError {
     match error {
         ProjectError::PermissionDenied => RpcError::PermissionDenied,
         ProjectError::NotFound => RpcError::NotFound,
+        ProjectError::Conflict => RpcError::FailedPrecondition,
         ProjectError::InvalidPage => RpcError::InvalidArgument,
         ProjectError::Persistence(source) => {
             tracing::error!(error = %source, "project query failed");

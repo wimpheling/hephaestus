@@ -42,6 +42,32 @@ pub struct PageResult<T> {
 }
 
 #[derive(FromRow)]
+pub struct AuthorizationProvenance {
+    pub id: Uuid,
+    pub authorization_model_version: String,
+    pub normalized_hash: String,
+}
+
+#[derive(FromRow)]
+pub struct HttpsUse {
+    pub id: Uuid,
+    pub request_id: Uuid,
+    pub lease_id: Uuid,
+    pub binding_id: Uuid,
+    pub secret_version_id: Uuid,
+    pub rule_id: Uuid,
+    pub event_kind: String,
+    pub decision: Option<String>,
+    pub outcome: Option<String>,
+    pub occurred_at: OffsetDateTime,
+}
+
+pub struct RunProvenance {
+    pub snapshot: Option<AuthorizationProvenance>,
+    pub uses: PageResult<HttpsUse>,
+}
+
+#[derive(FromRow)]
 pub struct RunSummary {
     pub id: Uuid,
     pub state: String,
@@ -239,6 +265,46 @@ pub async fn is_update_hook_run(pool: &PgPool, run_id: Uuid) -> Result<bool, sql
 }
 
 impl RunApplication {
+    pub async fn get_run_provenance(
+        &self,
+        identity: &AuthenticatedIdentity,
+        id: Uuid,
+        page: Page,
+    ) -> Result<RunProvenance, RunError> {
+        if !(1..=200).contains(&page.size) {
+            return Err(RunError::InvalidPage);
+        }
+        let mut tx = begin_actor_transaction(&self.pool, identity)
+            .await
+            .map_err(RunError::Persistence)?;
+        sqlx::query_scalar::<_, Uuid>("SELECT id FROM runs WHERE id = $1 AND check_permission('user', hephaestus_actor_id(), 'can_read', 'run', id::text) = 1")
+            .bind(id).fetch_optional(&mut *tx).await.map_err(RunError::Persistence)?
+            .ok_or(RunError::NotFound)?;
+        let snapshot = sqlx::query_as::<_, AuthorizationProvenance>(
+            "SELECT id, authorization_model_version, encode(normalized_hash, 'hex') AS normalized_hash FROM run_authorization_snapshots WHERE run_id = $1"
+        ).bind(id).fetch_optional(&mut *tx).await.map_err(RunError::Persistence)?;
+        let mut values =
+            sqlx::query_as::<_, HttpsUse>("SELECT * FROM inspect_run_https_uses($1, $2, $3)")
+                .bind(id)
+                .bind(page.after)
+                .bind(i32::try_from(page.size + 1).map_err(|_| RunError::InvalidPage)?)
+                .fetch_all(&mut *tx)
+                .await
+                .map_err(RunError::Persistence)?;
+        tx.commit().await.map_err(RunError::Persistence)?;
+        let size = usize::try_from(page.size).map_err(|_| RunError::InvalidPage)?;
+        let more = values.len() > size;
+        values.truncate(size);
+        let next = more
+            .then(|| values.last())
+            .flatten()
+            .map(|row| row.id.to_string());
+        Ok(RunProvenance {
+            snapshot,
+            uses: PageResult { values, next },
+        })
+    }
+
     pub const fn new(pool: PgPool, result_artifact_root: PathBuf) -> Self {
         Self {
             pool,
@@ -303,8 +369,11 @@ impl RunApplication {
                     release.repository_id AS source_repository_id, repository.id AS repository_id,
                     repository.name AS repository_name, project.id AS project_id,
                     project.name AS project_name, organization.id AS organization_id,
-                    organization.name AS organization_name, request.commit_sha AS input_commit,
-                    request.git_ref, request.attempt, result.id AS result_id, result.result_commit,
+                    organization.name AS organization_name,
+                    COALESCE(request.commit_sha, delivery.target_commit) AS input_commit,
+                    COALESCE(request.git_ref, delivery.target_ref) AS git_ref,
+                    COALESCE(request.attempt, delivery.attempt_number) AS attempt,
+                    result.id AS result_id, result.result_commit,
                     result.result_ref, result.result_tree, result.message AS result_message,
                     result.artifact_manifest_hash, proposal.id AS proposal_id,
                     proposal.state AS proposal_state, proposal.target_ref AS proposal_target_ref,
@@ -312,12 +381,17 @@ impl RunApplication {
              FROM runs run JOIN agent_instances instance ON instance.id = run.instance_id
              JOIN projects instance_project ON instance_project.id = instance.project_id
              JOIN releases release ON release.id = run.release_id
-             JOIN run_requests request ON request.run_id = run.id
-             JOIN repositories repository ON repository.id = request.repository_id
+             LEFT JOIN run_requests request ON request.run_id = run.id
+             LEFT JOIN mailbox_delivery_attempts delivery ON delivery.run_id = run.id
+             LEFT JOIN agent_attachments attachment ON attachment.id = run.attachment_id
+             JOIN repositories repository
+               ON repository.id = COALESCE(request.repository_id, attachment.repository_id)
              JOIN projects project ON project.id = repository.project_id
              JOIN organizations organization ON organization.id = project.organization_id
              LEFT JOIN run_results result ON result.run_id = run.id
-             LEFT JOIN review_proposals proposal ON proposal.run_id = run.id WHERE run.id = $1",
+             LEFT JOIN review_proposals proposal ON proposal.run_id = run.id
+             WHERE run.id = $1 AND check_permission('user', hephaestus_actor_id(),
+                 'can_read', 'run', run.id::text) = 1",
         )
         .bind(id)
         .fetch_optional(&mut *tx)

@@ -43,6 +43,11 @@ pub enum Command {
         #[command(subcommand)]
         command: PlatformImageCommand,
     },
+    /// Explicitly enable or inspect repository-owned OCI image preparation.
+    RepositoryImages {
+        #[command(subcommand)]
+        command: RepositoryImageCommand,
+    },
     /// Run repository quality and architecture checks.
     Check {
         #[command(subcommand)]
@@ -275,12 +280,34 @@ pub enum CacheCommand {
 pub enum PlatformImageCommand {
     /// Show persisted local platform image release and installation state.
     Status,
-    /// Build the four reviewed platform images into a fresh private local release directory.
+    /// Import the one reviewed digest-pinned Ubuntu base into local Zot.
+    ImportBase,
+    /// Build the six reviewed platform images into a fresh private local release directory.
     Build(PlatformImageBuildArgs),
     /// Publish one reviewed local release, approve it, and provision its catalog.
     Publish(PlatformImagePublishArgs),
     /// Remove one completed local platform-image installation receipt.
     Clean(PlatformImageCleanArgs),
+}
+
+/// Explicit enablement and inspection for repository-owned OCI image builds.
+#[derive(Debug, Subcommand)]
+pub enum RepositoryImageCommand {
+    /// Show whether the repository-image VM workflow is enabled and usable.
+    Status,
+    /// Enable the workflow from one immutable installed platform-image revision.
+    Enable(RepositoryImageEnableArgs),
+    /// Disable the workflow without deleting platform-image releases or catalog records.
+    Disable,
+    /// Remove only generated local repository-image workflow state.
+    Clean,
+}
+
+#[derive(Debug, Args)]
+pub struct RepositoryImageEnableArgs {
+    /// Immutable platform-image revision previously published locally.
+    #[arg(long)]
+    pub revision: String,
 }
 
 #[derive(Debug, Args)]

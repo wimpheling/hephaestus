@@ -166,6 +166,8 @@ pub enum CapabilityResourceKind {
     Run,
     /// A persistent private state volume.
     StateVolume,
+    /// A durable agent-instance mailbox.
+    Mailbox,
 }
 
 impl CapabilityResourceKind {
@@ -179,6 +181,7 @@ impl CapabilityResourceKind {
             Self::Gateway => "gateway",
             Self::Run => "run",
             Self::StateVolume => "state_volume",
+            Self::Mailbox => "mailbox",
         }
     }
 }
@@ -223,6 +226,8 @@ pub enum CapabilityOperation {
     TriggerRun,
     /// Manage repository/ref attachments.
     ManageAttachments,
+    /// Publish one bounded generic event to a mailbox.
+    Publish,
 }
 
 impl CapabilityOperation {
@@ -248,6 +253,7 @@ impl CapabilityOperation {
             Self::DeleteTag => "delete_tag",
             Self::TriggerRun => "trigger_run",
             Self::ManageAttachments => "manage_attachments",
+            Self::Publish => "publish",
         }
     }
 
@@ -256,11 +262,11 @@ impl CapabilityOperation {
     pub const fn is_legal_for(self, resource_kind: CapabilityResourceKind) -> bool {
         use CapabilityOperation::{
             Attach, Cancel, Configure, CreateRef, CreateTag, DeleteRef, DeleteTag, Execute,
-            ForceUpdateRef, GitRead, Inspect, ManageAttachments, Pause, Recover, Restore,
+            ForceUpdateRef, GitRead, Inspect, ManageAttachments, Pause, Publish, Recover, Restore,
             TriggerRun, Update, UpdateRef,
         };
         use CapabilityResourceKind::{
-            AgentInstance, Gateway, Project, Repository, Run, StateVolume,
+            AgentInstance, Gateway, Mailbox, Project, Repository, Run, StateVolume,
         };
 
         match resource_kind {
@@ -285,6 +291,7 @@ impl CapabilityOperation {
             }
             Run => matches!(self, Inspect | Cancel | Recover),
             StateVolume => matches!(self, Inspect | Attach | Restore),
+            Mailbox => matches!(self, Publish),
         }
     }
 }

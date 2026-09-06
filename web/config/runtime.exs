@@ -41,6 +41,9 @@ config :hephaestus_web,
         "HEPHAESTUS_BROWSER_OIDC_REDIRECT_URI",
         "http://localhost:4000/auth/oidc/callback"
       )
+  ],
+  git_http: [
+    origin: System.get_env("HEPHAESTUS_GIT_HTTP_ORIGIN", "http://127.0.0.1:8080")
   ]
 
 if config_env() == :dev do

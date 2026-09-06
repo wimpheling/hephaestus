@@ -4,6 +4,7 @@
 //! code. It is the exact shared vocabulary for the control plane and edge.
 
 use async_trait::async_trait;
+use capability_domain::{CapabilityOperation, CapabilityResourceKind, CapabilitySlotKey};
 use http::{HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -66,6 +67,8 @@ pub trait GatewayInboundSecretResolver: Send + Sync {
 pub const MAX_BODY_BYTES: u32 = 1_048_576;
 /// Maximum routes declared by one gateway revision.
 pub const MAX_ROUTES: usize = 32;
+/// Maximum mailbox-publication slots declared by one gateway revision.
+pub const MAX_MAILBOX_PUBLICATION_SLOTS: usize = 32;
 /// The sole supported gateway HTTP handler contract.
 pub const HTTP_HANDLER_CONTRACT_V1: &str = "http.v1";
 
@@ -295,7 +298,59 @@ pub struct GatewayDeclaration {
     pub parameters: serde_json::Value,
     /// Symbolic secret slot names only.
     pub secret_slots: Vec<String>,
+    /// Required, fixed-shape authority to publish to explicitly bound agent
+    /// mailboxes. These are symbolic release requirements; a gateway never
+    /// chooses a mailbox or producer identity at invocation time.
+    pub mailbox_publication_slots: Vec<GatewayMailboxPublicationSlot>,
 }
+
+/// One symbolic, required mailbox-publication requirement of a gateway revision.
+///
+/// The shape is intentionally closed: every declared slot requires a mailbox
+/// resource and the `publish` operation. Binding a concrete mailbox and its
+/// stable producer identity remains a control-plane action.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GatewayMailboxPublicationSlot {
+    /// Stable release-owned slot key.
+    pub key: CapabilitySlotKey,
+    /// Human-readable, non-secret reason the gateway publishes to this mailbox.
+    pub purpose: String,
+}
+
+impl GatewayMailboxPublicationSlot {
+    /// Creates one required fixed-shape mailbox publication slot.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GatewayError::InvalidMailboxPublicationSlot`] if the purpose
+    /// is empty or exceeds the bounded declaration size.
+    pub fn new(key: CapabilitySlotKey, purpose: impl Into<String>) -> Result<Self, GatewayError> {
+        let purpose = purpose.into();
+        if purpose.trim().is_empty() || purpose.len() > 512 {
+            return Err(GatewayError::InvalidMailboxPublicationSlot);
+        }
+        Ok(Self { key, purpose })
+    }
+
+    /// Returns the only resource category this slot can bind.
+    #[must_use]
+    pub const fn resource_kind(&self) -> CapabilityResourceKind {
+        CapabilityResourceKind::Mailbox
+    }
+
+    /// Returns the only operation every binding must grant.
+    #[must_use]
+    pub const fn required_operation(&self) -> CapabilityOperation {
+        CapabilityOperation::Publish
+    }
+
+    /// Gateway mailbox publication slots are always required before execution.
+    #[must_use]
+    pub const fn required(&self) -> bool {
+        true
+    }
+}
+
 impl GatewayDeclaration {
     /// Validates an installation declaration and returns its normalized identity hash.
     ///
@@ -331,6 +386,16 @@ impl GatewayDeclaration {
         {
             return Err(GatewayError::InvalidSecretSlot);
         }
+        if self.mailbox_publication_slots.len() > MAX_MAILBOX_PUBLICATION_SLOTS {
+            return Err(GatewayError::InvalidMailboxPublicationSlot);
+        }
+        let mut mailbox_publication_slot_keys = BTreeSet::new();
+        for slot in &self.mailbox_publication_slots {
+            GatewayMailboxPublicationSlot::new(slot.key.clone(), slot.purpose.clone())?;
+            if !mailbox_publication_slot_keys.insert(slot.key.clone()) {
+                return Err(GatewayError::DuplicateMailboxPublicationSlot);
+            }
+        }
         let bytes = serde_json::to_vec(self).map_err(|_| GatewayError::InvalidDeclaration)?;
         Ok(Sha256::digest(bytes).into())
     }
@@ -360,6 +425,12 @@ pub enum GatewayError {
     /// A secret-slot name is malformed.
     #[error("invalid gateway secret slot")]
     InvalidSecretSlot,
+    /// A mailbox-publication slot is malformed or exceeds its bounded shape.
+    #[error("invalid gateway mailbox publication slot")]
+    InvalidMailboxPublicationSlot,
+    /// A declaration repeats a mailbox-publication slot key.
+    #[error("duplicate gateway mailbox publication slot")]
+    DuplicateMailboxPublicationSlot,
     /// An inbound secret matcher is malformed.
     #[error("invalid inbound gateway secret rule")]
     InvalidInboundSecretRule,
@@ -386,7 +457,44 @@ mod tests {
             ],
             parameters: serde_json::json!({}),
             secret_slots: vec!["telegram_secret".into()],
+            mailbox_publication_slots: vec![
+                GatewayMailboxPublicationSlot::new(
+                    CapabilitySlotKey::parse("agent_mailbox").unwrap(),
+                    "Deliver accepted gateway updates to the agent.",
+                )
+                .unwrap(),
+            ],
         };
         assert!(declaration.validate().is_ok());
+        let slot = &declaration.mailbox_publication_slots[0];
+        assert_eq!(slot.resource_kind(), CapabilityResourceKind::Mailbox);
+        assert_eq!(slot.required_operation(), CapabilityOperation::Publish);
+        assert!(slot.required());
+    }
+
+    #[test]
+    fn rejects_duplicate_mailbox_publication_slots() {
+        let slot = GatewayMailboxPublicationSlot::new(
+            CapabilitySlotKey::parse("agent_mailbox").unwrap(),
+            "Deliver accepted gateway updates to the agent.",
+        )
+        .unwrap();
+        let declaration = GatewayDeclaration {
+            name: GatewayName::parse("telegram").unwrap(),
+            agent_name: String::from("telegram-handler"),
+            handler_contract: HTTP_HANDLER_CONTRACT_V1.into(),
+            exposure: Exposure::Public,
+            routes: vec![
+                RouteIntent::new(RoutePath::parse("/telegram").unwrap(), [HttpMethod::Post])
+                    .unwrap(),
+            ],
+            parameters: serde_json::json!({}),
+            secret_slots: vec![],
+            mailbox_publication_slots: vec![slot.clone(), slot],
+        };
+        assert_eq!(
+            declaration.validate(),
+            Err(GatewayError::DuplicateMailboxPublicationSlot)
+        );
     }
 }

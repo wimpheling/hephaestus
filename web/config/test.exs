@@ -25,4 +25,5 @@ config :hephaestus_web,
   rpc: [
     endpoint: "rpc.test:443",
     mediator_secret: "test-rpc-mediator-secret-that-is-never-transmitted"
-  ]
+  ],
+  git_http: [origin: "https://git.test:9443"]
