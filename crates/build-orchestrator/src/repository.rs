@@ -65,6 +65,12 @@ pub enum BuildRepositoryError {
 /// Provider-neutral durable build persistence boundary.
 #[async_trait]
 pub trait BuildRepository: Send + Sync + 'static {
+    /// Returns the exact immutable image reference selected for one request.
+    ///
+    /// This read is intentionally separate from claiming so a worker can
+    /// avoid changing durable execution state while its local materialized
+    /// image cache is still catching up with the durable selection.
+    async fn image_reference(&self, id: BuildRequestId) -> Result<String, BuildRepositoryError>;
     /// Archives the active failed attempt and resets the execution for a
     /// trusted retry worker.
     async fn reset_for_retry(&self, id: BuildRequestId) -> Result<(), BuildRepositoryError>;

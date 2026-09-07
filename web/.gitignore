@@ -1,6 +1,9 @@
 # The directory Mix will write compiled artifacts to.
 /_build/
 
+# Hex and Mix archive cache kept outside the project source.
+/.mix/
+
 # If you run "mix test --cover", coverage assets end up here.
 /cover/
 
@@ -34,4 +37,3 @@ hephaestus_web-*.tar
 # In case you use Node.js/npm, you want to ignore these.
 npm-debug.log
 /assets/node_modules/
-

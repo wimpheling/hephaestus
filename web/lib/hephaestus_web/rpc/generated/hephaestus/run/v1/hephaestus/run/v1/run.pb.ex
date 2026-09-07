@@ -193,6 +193,7 @@ defmodule Hephaestus.Run.V1.Run do
   field(:metrics, 30, type: Hephaestus.Run.V1.RunMetrics)
   field(:patch_preview, 31, proto3_optional: true, type: :string, json_name: "patchPreview")
   field(:manifest_preview, 32, proto3_optional: true, type: :string, json_name: "manifestPreview")
+  field(:retry_supported, 33, type: :bool, json_name: "retrySupported")
 end
 
 defmodule Hephaestus.Run.V1.ListProjectRunsRequest do

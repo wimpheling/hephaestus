@@ -167,6 +167,8 @@ message InstanceSummary {
   int64 attachment_count = 15;
   int64 run_count = 16;
   optional google.protobuf.Timestamp last_run_at = 17;
+  // Current non-removed mailbox owned by this instance, when allocated.
+  optional hephaestus.common.v1.OpaqueId mailbox_id = 18;
 }
 
 message ReleaseAgentOption {

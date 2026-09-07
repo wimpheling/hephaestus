@@ -1,5 +1,6 @@
 //! Agent-instance RPC adapters.
 
+mod create_mailbox;
 mod get_instance;
 
 use super::{
@@ -22,6 +23,7 @@ use release_domain::{
     InstanceName, NetworkAccess, ParameterName, ParameterValue, RefSelector, RuntimePolicy,
     TriggerPolicy,
 };
+use release_postgres::BrokeredRuleCopy;
 use rpc_proto::{
     connect::hephaestus::instance::v1::AgentInstanceService,
     messages::hephaestus::{
@@ -32,10 +34,10 @@ use rpc_proto::{
         },
         instance::v1::{
             BindSecretRequest, BindSecretResponse, ControlMailboxRequest, ControlMailboxResponse,
-            CreateAttachmentRequest, CreateAttachmentResponse, CreateUpdateRequest,
-            CreateUpdateResponse, DeclareBrokeredHttpsRuleRequest,
-            DeclareBrokeredHttpsRuleResponse, GetInstanceRequest, GetInstanceResponse,
-            ImportAgentRequest, ImportAgentResponse,
+            CreateAttachmentRequest, CreateAttachmentResponse, CreateMailboxRequest,
+            CreateMailboxResponse, CreateUpdateRequest, CreateUpdateResponse,
+            DeclareBrokeredHttpsRuleRequest, DeclareBrokeredHttpsRuleResponse, GetInstanceRequest,
+            GetInstanceResponse, ImportAgentRequest, ImportAgentResponse,
             MailboxControlAction as ProtoMailboxControlAction, RecoverUpdateRequest,
             RecoverUpdateResponse, RecoveryAction, RecoveryDecision, RemovalState,
             RemoveAttachmentRequest, RemoveAttachmentResponse, ReviseCapabilitiesRequest,
@@ -106,6 +108,14 @@ impl AgentInstanceService for InstanceRpc {
         request: ServiceRequest<'_, GetInstanceRequest>,
     ) -> ServiceResult<GetInstanceResponse> {
         get_instance::handle(self, ctx, request).await
+    }
+
+    async fn create_mailbox(
+        &self,
+        ctx: RequestContext,
+        request: ServiceRequest<'_, CreateMailboxRequest>,
+    ) -> ServiceResult<CreateMailboxResponse> {
+        create_mailbox::handle(self, ctx, request).await
     }
 
     async fn control_mailbox(
@@ -382,12 +392,16 @@ impl AgentInstanceService for InstanceRpc {
                         request.candidate_release_agent_id.as_option(),
                     )?,
                     parameters: parameters(request.parameters)?,
+                    brokered_rule_copies: brokered_rule_copies(request.brokered_rule_copies)?,
                     selected_policy: policy(request.selected_policy.as_option())?,
                 },
             )
             .await
             .map_err(into_connect_error)?;
-        let hook_run_id = json_id(&value, "hook_run_id")?;
+        let hook_run_id = value
+            .get("hook_run_id")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
         let receipt = mutation_receipt(
             &self.receipts,
             identity.idempotency_id,
@@ -399,13 +413,17 @@ impl AgentInstanceService for InstanceRpc {
         Response::ok(CreateUpdateResponse {
             update_id: opaque(json_id(&value, "update_id")?).into(),
             candidate_revision_id: opaque(json_id(&value, "candidate_revision_id")?).into(),
-            hook_run_id: opaque(hook_run_id.clone()).into(),
-            operation: Operation {
-                id: opaque(hook_run_id).into(),
-                state: OperationState::Queued.into(),
-                ..Default::default()
-            }
-            .into(),
+            hook_run_id: hook_run_id.as_ref().map(|id| opaque(id.clone())).into(),
+            operation: hook_run_id
+                .map(|id| {
+                    Operation {
+                        id: opaque(id).into(),
+                        state: OperationState::Queued.into(),
+                        ..Default::default()
+                    }
+                    .into()
+                })
+                .unwrap_or_default(),
             receipt: receipt.into(),
             ..Default::default()
         })
@@ -734,6 +752,20 @@ fn parameters(
                 None => return Err(into_connect_error(RpcError::InvalidArgument)),
             };
             Ok((name, value))
+        })
+        .collect()
+}
+
+fn brokered_rule_copies(
+    values: Vec<rpc_proto::messages::hephaestus::instance::v1::BrokeredRuleCopy>,
+) -> Result<Vec<BrokeredRuleCopy>, connectrpc::ConnectError> {
+    values
+        .into_iter()
+        .map(|value| {
+            Ok(BrokeredRuleCopy {
+                source_rule_id: parse_id(value.source_rule_id.as_option())?,
+                candidate_rule_id: parse_id(value.candidate_rule_id.as_option())?,
+            })
         })
         .collect()
 }

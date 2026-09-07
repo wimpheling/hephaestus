@@ -24,14 +24,22 @@ use mailbox_domain::{
     EnvelopeRoute, MailboxEnvelope, MailboxEventId, SelectedHeaderName, SelectedHeaderValue,
     TraceContext,
 };
-use release_domain::ReleaseId;
+use release_domain::{
+    ParameterDeclaration, ParameterDocument, ParameterName, ParameterValue, ReleaseCommandKey,
+    ReleaseId,
+};
 use runtime_authority::{
     GatewayRuntimeAuthorityIssuer, GatewayRuntimeSessionRequest, RuntimeHandoffStore,
 };
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Postgres, Transaction};
-use std::{collections::BTreeMap, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::PathBuf,
+    sync::Arc,
+    time::Duration,
+};
 use time::OffsetDateTime;
 use uuid::Uuid;
 use vm_trait::{
@@ -1158,12 +1166,16 @@ pub struct GatewayManagementRevision {
     pub id: Uuid,
     /// Source release identity.
     pub release_id: Option<Uuid>,
+    /// Exact published agent identity that produced this revision.
+    pub release_agent_id: Option<Uuid>,
     /// Supported handler contract.
     pub handler_contract: String,
     /// Declared exposure policy.
     pub exposure: String,
     /// Symbolic declared secret slot names only.
     pub secret_slots: Vec<String>,
+    /// Symbolic mailbox slots declared by the immutable source manifest.
+    pub mailbox_slots: Vec<String>,
     /// Immutable creation time.
     pub created_at: OffsetDateTime,
     /// Immutable route intents in this revision.
@@ -1280,6 +1292,64 @@ pub struct PostgresGatewayManagement {
     authorizer: Arc<PostgresMelangeAuthorizer>,
 }
 
+/// One explicitly selected inbound secret for a configured gateway revision.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GatewaySecretSelection {
+    /// Declaration slot receiving this imported secret.
+    pub slot_key: String,
+    /// Project-owned import authority.
+    pub import_id: Uuid,
+    /// Exact immutable secret version.
+    pub secret_version_id: Uuid,
+    /// Declared route receiving the brokered header.
+    pub route_path: String,
+    /// Header populated by the broker.
+    pub header_name: String,
+}
+
+/// Runtime values and secret selections for one immutable gateway revision.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigureGatewayRequest {
+    /// Gateway whose active revision is being configured.
+    pub gateway_id: Uuid,
+    /// Active revision expected by the caller.
+    pub expected_revision_id: Uuid,
+    /// Typed values validated against the published agent schema.
+    pub parameters: BTreeMap<ParameterName, ParameterValue>,
+    /// Explicit inbound secret selections; no existing grants are copied.
+    pub secret_selections: Vec<GatewaySecretSelection>,
+}
+
+/// Result of configuring one immutable gateway revision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConfigureGatewayResult {
+    /// New active immutable revision, or the original result on replay.
+    pub revision_id: Uuid,
+}
+
+/// Safe failures for the narrow gateway configuration operation.
+#[derive(Debug, thiserror::Error)]
+pub enum GatewayConfigureError {
+    /// Caller lacks project/gateway/secret-import authority.
+    #[error("gateway configuration is not authorized")]
+    Denied,
+    /// Selected gateway or revision is absent.
+    #[error("gateway configuration target is unavailable")]
+    NotFound,
+    /// Typed values or secret selections violate the released declaration.
+    #[error("gateway configuration request is invalid")]
+    InvalidArgument,
+    /// The expected active revision has changed.
+    #[error("gateway configuration target is stale")]
+    Stale,
+    /// The same idempotency key was submitted with another payload.
+    #[error("gateway configuration idempotency key conflicts")]
+    Conflict,
+    /// Database operation failed.
+    #[error("gateway configuration is unavailable")]
+    Persistence(#[from] sqlx::Error),
+}
+
 impl PostgresGatewayManagement {
     /// Creates the management adapter over the control-plane connection pool.
     #[must_use]
@@ -1351,7 +1421,7 @@ impl PostgresGatewayManagement {
         .await?
         .ok_or(GatewayManagementError::NotFound)?;
         let revisions = sqlx::query_as::<_, GatewayRevisionRow>(
-            "SELECT id, release_id, handler_contract, exposure, secret_slots, created_at
+            "SELECT id, release_id, release_agent_id, handler_contract, exposure, secret_slots, mailbox_slots, created_at
              FROM gateway_revisions WHERE gateway_id = $1 ORDER BY created_at DESC, id DESC",
         )
         .bind(gateway_id)
@@ -1369,9 +1439,11 @@ impl PostgresGatewayManagement {
             result.push(GatewayManagementRevision {
                 id: revision.id,
                 release_id: revision.release_id,
+                release_agent_id: revision.release_agent_id,
                 handler_contract: revision.handler_contract,
                 exposure: revision.exposure,
                 secret_slots: revision.secret_slots,
+                mailbox_slots: revision.mailbox_slots,
                 created_at: revision.created_at,
                 routes: routes.into_iter().map(Into::into).collect(),
             });
@@ -1455,6 +1527,10 @@ impl PostgresGatewayManagement {
     /// # Errors
     ///
     /// Returns an authorization, absence, bounded-input, or persistence error.
+    // This transaction deliberately keeps authority, immutable binding, and
+    // committed receipt/outbox work together so a grant cannot be published
+    // without its corresponding product event.
+    #[allow(clippy::too_many_lines)]
     pub async fn create_mailbox_binding(
         &self,
         identity: &AuthenticatedIdentity,
@@ -1488,6 +1564,63 @@ impl PostgresGatewayManagement {
             ObjectRef::new(ObjectType::AgentInstance, instance_id),
         )
         .await?;
+        let command_key = binding_command_key(identity, "create_gateway_mailbox_binding");
+        let payload_hash = binding_payload_hash(
+            "create_gateway_mailbox_binding",
+            gateway_revision_id,
+            slot_key,
+            Some(mailbox_id),
+            producer_id,
+            None,
+        );
+        let inserted = sqlx::query(
+            "INSERT INTO gateway_mailbox_binding_commands
+                (command_key, operation, gateway_revision_id, slot_key, mailbox_id,
+                 producer_id, payload_hash, actor_id, request_id)
+             VALUES ($1, 'create_gateway_mailbox_binding', $2, $3, $4, $5, $6, $7, $8)
+             ON CONFLICT (command_key) DO NOTHING",
+        )
+        .bind(command_key.as_bytes().as_slice())
+        .bind(gateway_revision_id)
+        .bind(slot_key)
+        .bind(mailbox_id)
+        .bind(producer_id)
+        .bind(payload_hash.as_slice())
+        .bind(identity.user_id.as_uuid())
+        .bind(identity.request_id.as_uuid())
+        .execute(&mut *tx)
+        .await?;
+        if inserted.rows_affected() == 0 {
+            let prior = sqlx::query_as::<_, GatewayMailboxBindingCommandRow>(
+                "SELECT operation, gateway_revision_id, slot_key, mailbox_id,
+                        producer_id, target_binding_id, payload_hash, actor_id,
+                        result_binding_id
+                 FROM gateway_mailbox_binding_commands WHERE command_key = $1",
+            )
+            .bind(command_key.as_bytes().as_slice())
+            .fetch_optional(&mut *tx)
+            .await?
+            .ok_or(GatewayManagementError::Unavailable)?;
+            if prior.operation != "create_gateway_mailbox_binding"
+                || prior.gateway_revision_id != gateway_revision_id
+                || prior.slot_key.as_deref() != Some(slot_key)
+                || prior.mailbox_id != Some(mailbox_id)
+                || prior.producer_id.as_deref() != Some(producer_id)
+                || prior.target_binding_id.is_some()
+                || prior.payload_hash.as_slice() != payload_hash.as_slice()
+                || prior.actor_id != identity.user_id.as_uuid()
+            {
+                return Err(GatewayManagementError::Conflict);
+            }
+            let binding_id = prior
+                .result_binding_id
+                .ok_or(GatewayManagementError::Unavailable)?;
+            let row = load_mailbox_binding(&mut tx, binding_id)
+                .await?
+                .ok_or(GatewayManagementError::Unavailable)?;
+            tx.commit().await?;
+            return Ok(row.into());
+        }
         // Binding lifecycle writes remain under the actor-scoped application
         // role. The runtime worker may settle publications, but cannot mint
         // or impersonate an operator's authority grant.
@@ -1522,8 +1655,334 @@ impl PostgresGatewayManagement {
         .fetch_optional(&mut *tx)
         .await?
         .ok_or(GatewayManagementError::NotFound)?;
+        sqlx::query(
+            "UPDATE gateway_mailbox_binding_commands
+             SET result_binding_id = $2, completed_at = now()
+             WHERE command_key = $1",
+        )
+        .bind(command_key.as_bytes().as_slice())
+        .bind(binding_id)
+        .execute(&mut *tx)
+        .await?;
         tx.commit().await?;
         Ok(row.into())
+    }
+
+    /// Validates runtime values and explicit secret selections against the
+    /// published release, then atomically creates and activates an immutable
+    /// configured revision. Existing mailbox and secret grants are never
+    /// copied; a new revision therefore remains fail-closed until callers
+    /// explicitly create its bindings.
+    ///
+    /// # Errors
+    ///
+    /// Returns authorization, stale-target, bounded-input, idempotency, or
+    /// persistence failures without exposing secret metadata.
+    #[allow(clippy::too_many_lines)]
+    pub async fn configure(
+        &self,
+        identity: &AuthenticatedIdentity,
+        command: ConfigureGatewayRequest,
+    ) -> Result<ConfigureGatewayResult, GatewayConfigureError> {
+        let mut tx = begin_actor_transaction(&self.pool, identity).await?;
+        self.require(
+            &mut tx,
+            identity,
+            Permission::CanManage,
+            ObjectRef::new(ObjectType::Gateway, command.gateway_id),
+        )
+        .await
+        .map_err(|error| match error {
+            GatewayManagementError::Denied => GatewayConfigureError::Denied,
+            GatewayManagementError::Persistence(error) => GatewayConfigureError::Persistence(error),
+            _ => GatewayConfigureError::Persistence(sqlx::Error::Protocol(
+                "authorization lookup failed".into(),
+            )),
+        })?;
+        let current = sqlx::query_as::<_, ConfigureRevisionRow>(
+            "SELECT gateway.project_id, gateway.repository_id, gateway.active_revision_id,
+                    gateway.lifecycle,
+                    revision.release_id, revision.release_agent_id, revision.release_agent_key,
+                    revision.handler_contract, revision.exposure, revision.secret_slots,
+                    revision.mailbox_slots,
+                    agent.parameter_schema, release.state AS release_state
+             FROM gateways AS gateway
+             JOIN gateway_revisions AS revision
+               ON revision.gateway_id = gateway.id AND revision.id = $2
+             LEFT JOIN release_agents AS agent ON agent.id = revision.release_agent_id
+             LEFT JOIN releases AS release ON release.id = revision.release_id
+             WHERE gateway.id = $1 AND revision.id = $2",
+        )
+        .bind(command.gateway_id)
+        .bind(command.expected_revision_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(GatewayConfigureError::NotFound)?;
+        // The durable command ledger is consulted before the active-revision
+        // CAS check. A successful retry must replay after another revision
+        // becomes active without reactivating its original result.
+        let release_id = current.release_id.ok_or(GatewayConfigureError::Stale)?;
+        let release_agent_id = current
+            .release_agent_id
+            .ok_or(GatewayConfigureError::Stale)?;
+        let declarations: Vec<ParameterDeclaration> = serde_json::from_value(
+            current
+                .parameter_schema
+                .ok_or(GatewayConfigureError::InvalidArgument)?,
+        )
+        .map_err(|_| GatewayConfigureError::InvalidArgument)?;
+        let parameters = ParameterDocument::resolve(&declarations, &command.parameters)
+            .map_err(|_| GatewayConfigureError::InvalidArgument)?;
+        let routes = sqlx::query_as::<_, ConfigureRouteRow>(
+            "SELECT path, methods, enabled FROM gateway_routes
+             WHERE gateway_revision_id = $1 ORDER BY path, id",
+        )
+        .bind(command.expected_revision_id)
+        .fetch_all(&mut *tx)
+        .await?;
+        let mut slots = BTreeSet::new();
+        for selection in &command.secret_selections {
+            if !valid_gateway_slot(&selection.slot_key)
+                || !slots.insert(selection.slot_key.clone())
+                || selection.route_path.is_empty()
+                || !valid_header_name(&selection.header_name)
+            {
+                return Err(GatewayConfigureError::InvalidArgument);
+            }
+            if !current
+                .secret_slots
+                .iter()
+                .any(|slot| slot == &selection.slot_key)
+            {
+                return Err(GatewayConfigureError::InvalidArgument);
+            }
+            let route = routes
+                .iter()
+                .find(|route| route.path == selection.route_path);
+            if route.is_none() {
+                return Err(GatewayConfigureError::InvalidArgument);
+            }
+            self.require(
+                &mut tx,
+                identity,
+                Permission::BindBrokered,
+                ObjectRef::new(ObjectType::SecretImport, selection.import_id),
+            )
+            .await
+            .map_err(|error| match error {
+                GatewayManagementError::Persistence(error) => {
+                    GatewayConfigureError::Persistence(error)
+                }
+                _ => GatewayConfigureError::Denied,
+            })?;
+            let valid: bool = sqlx::query_scalar(
+                "SELECT EXISTS (
+                   SELECT 1 FROM secret_imports imported
+                   JOIN secret_grants granted ON granted.id = imported.grant_id
+                   JOIN secrets owned ON owned.id = imported.secret_id
+                   JOIN secret_versions version ON version.id = $2 AND version.secret_id = owned.id
+                   WHERE imported.id = $1 AND imported.target_kind = 'project'
+                     AND imported.target_id = $3 AND imported.status = 'active'
+                     AND granted.status = 'active' AND owned.status = 'active'
+                     AND version.status = 'active' AND version.revoked_at IS NULL
+                     AND version.purged_at IS NULL
+                     AND 'normal' = ANY(granted.phases)
+                     AND 'brokered' = ANY(granted.delivery_modes)
+                     AND 'brokered' = ANY(owned.allowed_delivery_modes)
+                     AND cardinality(granted.destinations) = 0
+                 )",
+            )
+            .bind(selection.import_id)
+            .bind(selection.secret_version_id)
+            .bind(current.project_id)
+            .fetch_one(&mut *tx)
+            .await?;
+            if !valid {
+                return Err(GatewayConfigureError::NotFound);
+            }
+        }
+        let payload_hash = configure_payload_hash(
+            command.gateway_id,
+            command.expected_revision_id,
+            release_id,
+            release_agent_id,
+            parameters.hash().as_bytes(),
+            &command.secret_selections,
+        );
+        let command_key = ReleaseCommandKey::derive(
+            "configure_gateway",
+            &[identity.idempotency_id.as_uuid().as_bytes()],
+        );
+        let inserted = sqlx::query(
+            "INSERT INTO gateway_configure_commands
+               (command_key, operation, gateway_id, expected_revision_id, payload_hash, actor_id, request_id)
+             VALUES ($1, 'configure_gateway', $2, $3, $4, $5, $6)
+             ON CONFLICT (command_key) DO NOTHING",
+        )
+        .bind(command_key.as_bytes().as_slice())
+        .bind(command.gateway_id)
+        .bind(command.expected_revision_id)
+        .bind(payload_hash.as_slice())
+        .bind(identity.user_id.as_uuid())
+        .bind(identity.request_id.as_uuid())
+        .execute(&mut *tx)
+        .await?;
+        if inserted.rows_affected() == 0 {
+            let prior = sqlx::query_as::<_, ConfigureCommandRow>(
+                "SELECT gateway_id, expected_revision_id, payload_hash, actor_id, result_revision_id
+                 FROM gateway_configure_commands WHERE command_key = $1",
+            )
+            .bind(command_key.as_bytes().as_slice())
+            .fetch_optional(&mut *tx)
+            .await?
+            .ok_or(GatewayConfigureError::Persistence(sqlx::Error::RowNotFound))?;
+            if prior.gateway_id != command.gateway_id
+                || prior.expected_revision_id != command.expected_revision_id
+                || prior.payload_hash != payload_hash.as_slice()
+                || prior.actor_id != identity.user_id.as_uuid()
+            {
+                return Err(GatewayConfigureError::Conflict);
+            }
+            let revision_id =
+                prior
+                    .result_revision_id
+                    .ok_or(GatewayConfigureError::Persistence(sqlx::Error::Protocol(
+                        "incomplete configuration command".into(),
+                    )))?;
+            tx.commit().await?;
+            return Ok(ConfigureGatewayResult { revision_id });
+        }
+        if current.lifecycle != "enabled"
+            || current.active_revision_id != Some(command.expected_revision_id)
+            || current.release_state.as_deref() != Some("published")
+        {
+            return Err(GatewayConfigureError::Stale);
+        }
+        sqlx::query("SET LOCAL ROLE hephaestus_worker")
+            .execute(&mut *tx)
+            .await?;
+        // Serialize competing fresh keys on the aggregate before creating a
+        // revision. The first winner changes the active revision; followers
+        // then observe a clean stale result instead of a uniqueness error.
+        let still_active: bool = sqlx::query_scalar(
+            "SELECT lifecycle = 'enabled' AND active_revision_id = $2
+             FROM gateways WHERE id = $1 FOR UPDATE",
+        )
+        .bind(command.gateway_id)
+        .bind(command.expected_revision_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .unwrap_or(false);
+        if !still_active {
+            return Err(GatewayConfigureError::Stale);
+        }
+        // Reinstalling a declaration may select a previously configured
+        // predecessor again. A fresh command must create a fresh authority
+        // scope without borrowing the old revision's grants. Command replay
+        // is resolved by the ledger above, using the stable payload hash.
+        let mut revision_digest = Sha256::new();
+        revision_digest.update(b"hephaestus.gateway.configured-revision.v1\0");
+        revision_digest.update(payload_hash);
+        revision_digest.update(command_key.as_bytes());
+        let revision_hash: [u8; 32] = revision_digest.finalize().into();
+        let revision_id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO gateway_revisions
+               (id, gateway_id, project_id, repository_id, release_id, release_agent_id,
+                release_agent_key, handler_contract, exposure, parameters, secret_slots,
+                mailbox_slots, normalized_hash, created_by)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)",
+        )
+        .bind(revision_id)
+        .bind(command.gateway_id)
+        .bind(current.project_id)
+        .bind(current.repository_id)
+        .bind(release_id)
+        .bind(release_agent_id)
+        .bind(current.release_agent_key)
+        .bind(current.handler_contract)
+        .bind(current.exposure)
+        .bind(
+            serde_json::to_value(parameters.values())
+                .map_err(|_| GatewayConfigureError::InvalidArgument)?,
+        )
+        .bind(&current.secret_slots)
+        .bind(&current.mailbox_slots)
+        .bind(revision_hash.as_slice())
+        .bind(identity.user_id.as_uuid())
+        .execute(&mut *tx)
+        .await?;
+        let mut cloned_routes = BTreeMap::new();
+        for route in routes {
+            let new_route = Uuid::new_v4();
+            sqlx::query(
+                "INSERT INTO gateway_routes (id,gateway_revision_id,gateway_id,project_id,path,methods,enabled)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7)",
+            )
+            .bind(new_route)
+            .bind(revision_id)
+            .bind(command.gateway_id)
+            .bind(current.project_id)
+            .bind(&route.path)
+            .bind(&route.methods)
+            .bind(route.enabled)
+            .execute(&mut *tx)
+            .await?;
+            cloned_routes.insert(route.path, new_route);
+        }
+        for selection in &command.secret_selections {
+            let binding_id = Uuid::new_v4();
+            let selection_hash = secret_selection_hash(selection, revision_id);
+            sqlx::query(
+                "INSERT INTO gateway_secret_bindings
+                   (id,gateway_id,gateway_revision_id,import_id,slot_key,secret_version_id,status,normalized_hash)
+                 VALUES ($1,$2,$3,$4,$5,$6,'active',$7)",
+            )
+            .bind(binding_id)
+            .bind(command.gateway_id)
+            .bind(revision_id)
+            .bind(selection.import_id)
+            .bind(&selection.slot_key)
+            .bind(selection.secret_version_id)
+            .bind(selection_hash.as_slice())
+            .execute(&mut *tx)
+            .await?;
+            sqlx::query(
+                "INSERT INTO gateway_brokered_secret_rules
+                   (id,binding_id,gateway_revision_id,gateway_route_id,header_name,normalized_hash)
+                 VALUES ($1,$2,$3,$4,$5,$6)",
+            )
+            .bind(Uuid::new_v4())
+            .bind(binding_id)
+            .bind(revision_id)
+            .bind(cloned_routes[&selection.route_path])
+            .bind(&selection.header_name)
+            .bind(selection_hash.as_slice())
+            .execute(&mut *tx)
+            .await?;
+        }
+        let changed = sqlx::query(
+            "UPDATE gateways SET active_revision_id = $2, updated_at = now()
+             WHERE id = $1 AND active_revision_id = $3",
+        )
+        .bind(command.gateway_id)
+        .bind(revision_id)
+        .bind(command.expected_revision_id)
+        .execute(&mut *tx)
+        .await?;
+        if changed.rows_affected() != 1 {
+            return Err(GatewayConfigureError::Stale);
+        }
+        sqlx::query(
+            "UPDATE gateway_configure_commands SET result_revision_id = $2, completed_at = now()
+             WHERE command_key = $1",
+        )
+        .bind(command_key.as_bytes().as_slice())
+        .bind(revision_id)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(ConfigureGatewayResult { revision_id })
     }
 
     /// Revokes the active publication grant while retaining immutable binding
@@ -1532,6 +1991,9 @@ impl PostgresGatewayManagement {
     /// # Errors
     ///
     /// Returns an authorization, absence, stale-state, or persistence error.
+    // Revocation retains the immutable publication chain while atomically
+    // recording the grant transition and its committed product event.
+    #[allow(clippy::too_many_lines)]
     pub async fn revoke_mailbox_binding_grant(
         &self,
         identity: &AuthenticatedIdentity,
@@ -1562,6 +2024,61 @@ impl PostgresGatewayManagement {
             ObjectRef::new(ObjectType::AgentInstance, target.instance_id),
         )
         .await?;
+        let command_key = binding_command_key(identity, "revoke_gateway_mailbox_binding_grant");
+        let payload_hash = binding_payload_hash(
+            "revoke_gateway_mailbox_binding_grant",
+            target.gateway_revision_id,
+            "",
+            None,
+            "",
+            Some(binding_id),
+        );
+        let inserted = sqlx::query(
+            "INSERT INTO gateway_mailbox_binding_commands
+                (command_key, operation, gateway_revision_id, target_binding_id,
+                 payload_hash, actor_id, request_id)
+             VALUES ($1, 'revoke_gateway_mailbox_binding_grant', $2, $3, $4, $5, $6)
+             ON CONFLICT (command_key) DO NOTHING",
+        )
+        .bind(command_key.as_bytes().as_slice())
+        .bind(target.gateway_revision_id)
+        .bind(binding_id)
+        .bind(payload_hash.as_slice())
+        .bind(identity.user_id.as_uuid())
+        .bind(identity.request_id.as_uuid())
+        .execute(&mut *tx)
+        .await?;
+        if inserted.rows_affected() == 0 {
+            let prior = sqlx::query_as::<_, GatewayMailboxBindingCommandRow>(
+                "SELECT operation, gateway_revision_id, slot_key, mailbox_id,
+                        producer_id, target_binding_id, payload_hash, actor_id,
+                        result_binding_id
+                 FROM gateway_mailbox_binding_commands WHERE command_key = $1",
+            )
+            .bind(command_key.as_bytes().as_slice())
+            .fetch_optional(&mut *tx)
+            .await?
+            .ok_or(GatewayManagementError::Unavailable)?;
+            if prior.operation != "revoke_gateway_mailbox_binding_grant"
+                || prior.gateway_revision_id != target.gateway_revision_id
+                || prior.target_binding_id != Some(binding_id)
+                || prior.slot_key.is_some()
+                || prior.mailbox_id.is_some()
+                || prior.producer_id.is_some()
+                || prior.payload_hash.as_slice() != payload_hash.as_slice()
+                || prior.actor_id != identity.user_id.as_uuid()
+            {
+                return Err(GatewayManagementError::Conflict);
+            }
+            let result_binding_id = prior
+                .result_binding_id
+                .ok_or(GatewayManagementError::Unavailable)?;
+            let row = load_mailbox_binding(&mut tx, result_binding_id)
+                .await?
+                .ok_or(GatewayManagementError::Unavailable)?;
+            tx.commit().await?;
+            return Ok(row.into());
+        }
         let row = sqlx::query_as::<_, GatewayMailboxBindingRow>(
             "WITH updated AS (
                  UPDATE gateway_mailbox_binding_grants
@@ -1579,6 +2096,15 @@ impl PostgresGatewayManagement {
         .fetch_optional(&mut *tx)
         .await?
         .ok_or(GatewayManagementError::Conflict)?;
+        sqlx::query(
+            "UPDATE gateway_mailbox_binding_commands
+             SET result_binding_id = $2, completed_at = now()
+             WHERE command_key = $1",
+        )
+        .bind(command_key.as_bytes().as_slice())
+        .bind(binding_id)
+        .execute(&mut *tx)
+        .await?;
         tx.commit().await?;
         Ok(row.into())
     }
@@ -1733,6 +2259,90 @@ pub enum GatewayManagementError {
     Persistence(#[from] sqlx::Error),
 }
 
+#[derive(sqlx::FromRow)]
+struct ConfigureRevisionRow {
+    project_id: Uuid,
+    repository_id: Uuid,
+    active_revision_id: Option<Uuid>,
+    lifecycle: String,
+    release_id: Option<Uuid>,
+    release_agent_id: Option<Uuid>,
+    release_agent_key: Option<String>,
+    handler_contract: String,
+    exposure: String,
+    secret_slots: Vec<String>,
+    mailbox_slots: Vec<String>,
+    parameter_schema: Option<serde_json::Value>,
+    release_state: Option<String>,
+}
+
+#[derive(sqlx::FromRow)]
+struct ConfigureRouteRow {
+    path: String,
+    methods: Vec<String>,
+    enabled: bool,
+}
+
+#[derive(sqlx::FromRow)]
+struct ConfigureCommandRow {
+    gateway_id: Uuid,
+    expected_revision_id: Uuid,
+    payload_hash: Vec<u8>,
+    actor_id: Uuid,
+    result_revision_id: Option<Uuid>,
+}
+
+fn valid_header_name(value: &str) -> bool {
+    http::HeaderName::from_bytes(value.as_bytes()).is_ok()
+}
+
+fn configure_payload_hash(
+    gateway_id: Uuid,
+    expected_revision_id: Uuid,
+    release_id: Uuid,
+    release_agent_id: Uuid,
+    parameter_hash: &[u8],
+    selections: &[GatewaySecretSelection],
+) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(b"hephaestus.gateway.configure.v1\0");
+    digest.update(gateway_id.as_bytes());
+    digest.update(expected_revision_id.as_bytes());
+    digest.update(release_id.as_bytes());
+    digest.update(release_agent_id.as_bytes());
+    digest.update(parameter_hash);
+    let mut ordered = selections.to_vec();
+    ordered.sort_by(|left, right| {
+        left.slot_key
+            .cmp(&right.slot_key)
+            .then_with(|| left.route_path.cmp(&right.route_path))
+            .then_with(|| left.header_name.cmp(&right.header_name))
+    });
+    for selection in ordered {
+        digest.update(selection.slot_key.as_bytes());
+        digest.update([0]);
+        digest.update(selection.import_id.as_bytes());
+        digest.update(selection.secret_version_id.as_bytes());
+        digest.update(selection.route_path.as_bytes());
+        digest.update([0]);
+        digest.update(selection.header_name.as_bytes());
+        digest.update([0]);
+    }
+    digest.finalize().into()
+}
+
+fn secret_selection_hash(selection: &GatewaySecretSelection, revision_id: Uuid) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(b"hephaestus.gateway.secret-selection.v1\0");
+    digest.update(revision_id.as_bytes());
+    digest.update(selection.slot_key.as_bytes());
+    digest.update(selection.import_id.as_bytes());
+    digest.update(selection.secret_version_id.as_bytes());
+    digest.update(selection.route_path.as_bytes());
+    digest.update(selection.header_name.as_bytes());
+    digest.finalize().into()
+}
+
 fn valid_gateway_slot(value: &str) -> bool {
     (1..=64).contains(&value.len())
         && value.as_bytes().first().is_some_and(u8::is_ascii_lowercase)
@@ -1774,9 +2384,11 @@ impl From<GatewaySummaryRow> for GatewayManagementSummary {
 struct GatewayRevisionRow {
     id: Uuid,
     release_id: Option<Uuid>,
+    release_agent_id: Option<Uuid>,
     handler_contract: String,
     exposure: String,
     secret_slots: Vec<String>,
+    mailbox_slots: Vec<String>,
     created_at: OffsetDateTime,
 }
 #[derive(sqlx::FromRow)]
@@ -1851,6 +2463,70 @@ struct GatewayMailboxBindingTargetRow {
     gateway_revision_id: Uuid,
     instance_id: Uuid,
 }
+
+#[derive(sqlx::FromRow)]
+struct GatewayMailboxBindingCommandRow {
+    operation: String,
+    gateway_revision_id: Uuid,
+    slot_key: Option<String>,
+    mailbox_id: Option<Uuid>,
+    producer_id: Option<String>,
+    target_binding_id: Option<Uuid>,
+    payload_hash: Vec<u8>,
+    actor_id: Uuid,
+    result_binding_id: Option<Uuid>,
+}
+
+async fn load_mailbox_binding(
+    tx: &mut Transaction<'_, Postgres>,
+    binding_id: Uuid,
+) -> Result<Option<GatewayMailboxBindingRow>, sqlx::Error> {
+    sqlx::query_as::<_, GatewayMailboxBindingRow>(
+        "SELECT binding.id, binding.gateway_revision_id, binding.mailbox_id,
+                binding.slot_key, binding.producer_id, binding_grant.id AS grant_id,
+                binding_grant.status AS grant_status, binding.created_at,
+                binding_grant.granted_at, binding_grant.revoked_at
+         FROM gateway_mailbox_bindings binding
+         JOIN gateway_mailbox_binding_grants binding_grant
+           ON binding_grant.binding_id = binding.id
+         WHERE binding.id = $1",
+    )
+    .bind(binding_id)
+    .fetch_optional(&mut **tx)
+    .await
+}
+
+fn binding_command_key(identity: &AuthenticatedIdentity, operation: &str) -> ReleaseCommandKey {
+    ReleaseCommandKey::derive(operation, &[identity.idempotency_id.as_uuid().as_bytes()])
+}
+
+fn binding_payload_hash(
+    operation: &str,
+    gateway_revision_id: Uuid,
+    slot_key: &str,
+    mailbox_id: Option<Uuid>,
+    producer_id: &str,
+    target_binding_id: Option<Uuid>,
+) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(operation.as_bytes());
+    digest.update([0]);
+    digest.update(gateway_revision_id.as_bytes());
+    digest.update([0]);
+    digest.update(slot_key.as_bytes());
+    digest.update([0]);
+    if let Some(mailbox_id) = mailbox_id {
+        digest.update(mailbox_id.as_bytes());
+    }
+    digest.update([0]);
+    digest.update(producer_id.as_bytes());
+    digest.update([0]);
+    if let Some(target_binding_id) = target_binding_id {
+        digest.update(target_binding_id.as_bytes());
+    }
+    digest.finalize().into()
+}
+
 #[derive(sqlx::FromRow)]
 struct GatewayMailboxPublicationManagementRow {
     id: Uuid,
@@ -1930,6 +2606,19 @@ pub struct InstallGatewayManifestResult {
     pub gateways: Vec<InstalledGateway>,
 }
 
+/// Immutable source coordinates for one published gateway release.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublishedGatewayRelease {
+    /// Published release identity.
+    pub release_id: ReleaseId,
+    /// Project owning the release repository.
+    pub project_id: ProjectId,
+    /// Repository containing the release source.
+    pub repository_id: RepositoryId,
+    /// Exact source commit recorded by the release.
+    pub source_commit: String,
+}
+
 /// Safe installation failure. Manifest diagnostics are intentionally retained
 /// for trusted repository feedback; no database details are exposed.
 #[derive(Debug, thiserror::Error)]
@@ -1946,6 +2635,9 @@ pub enum GatewayInstallError {
     /// The repository, release, or project boundary is unavailable.
     #[error("gateway installation target is unavailable")]
     Unavailable,
+    /// The idempotency occurrence already belongs to another release.
+    #[error("gateway installation idempotency key conflicts")]
+    Conflict,
     /// The durable gateway declaration could not be written.
     #[error("gateway installation persistence failed")]
     Persistence(#[from] sqlx::Error),
@@ -1965,6 +2657,46 @@ impl PostgresGatewayInstaller {
         Self { pool, authorizer }
     }
 
+    /// Resolves a published release after checking project management
+    /// authority. The returned commit is the immutable source coordinate the
+    /// application layer must use to retrieve the repository gateway manifest.
+    ///
+    /// # Errors
+    ///
+    /// Returns a safe authorization, publication-state, or persistence
+    /// failure. Draft and revoked releases are intentionally indistinguishable
+    /// from unavailable release targets.
+    pub async fn published_release(
+        &self,
+        identity: &AuthenticatedIdentity,
+        release_id: ReleaseId,
+    ) -> Result<PublishedGatewayRelease, GatewayInstallError> {
+        let mut tx = begin_actor_transaction(&self.pool, identity).await?;
+        let target = sqlx::query_as::<_, PublishedGatewayReleaseRow>(
+            "SELECT release.id, repositories.project_id, release.repository_id,
+                    release.source_commit, release.state
+             FROM releases AS release
+             JOIN repositories ON repositories.id = release.repository_id
+             WHERE release.id = $1",
+        )
+        .bind(release_id.as_uuid())
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(GatewayInstallError::Unavailable)?;
+        self.require_manage(&mut tx, identity, ProjectId::from_uuid(target.project_id))
+            .await?;
+        if target.state != "published" {
+            return Err(GatewayInstallError::Unavailable);
+        }
+        tx.commit().await?;
+        Ok(PublishedGatewayRelease {
+            release_id: ReleaseId::from_uuid(target.id),
+            project_id: ProjectId::from_uuid(target.project_id),
+            repository_id: RepositoryId::from_uuid(target.repository_id),
+            source_commit: target.source_commit,
+        })
+    }
+
     /// Parses, authorizes, and installs the exact source manifest.
     ///
     /// Reinstalling an identical declaration selects its existing immutable
@@ -1982,16 +2714,36 @@ impl PostgresGatewayInstaller {
     ) -> Result<InstallGatewayManifestResult, GatewayInstallError> {
         let config = parse_manifest(&command.manifest)?;
         let mut tx = begin_actor_transaction(&self.pool, identity).await?;
+        // Gateway rows are the receipt-producing aggregate. Mark this
+        // mutation so an idempotent reinstall that keeps the same revision
+        // still records one scoped product event for its fresh command key.
+        sqlx::query("SET LOCAL hephaestus.gateway_install = 'true'")
+            .execute(&mut *tx)
+            .await?;
         self.require_manage(&mut tx, identity, command.project_id)
             .await?;
         require_repository_boundary(&mut tx, &command).await?;
+        let command_key = installation_command_key(identity);
+        if let Some(previous) =
+            claim_installation_command(&mut tx, command_key, identity, &command).await?
+        {
+            tx.commit().await?;
+            return Ok(InstallGatewayManifestResult { gateways: previous });
+        }
+
+        // Application role performs all authorization and command-ledger
+        // writes. Immutable gateway materialization is a separate trusted
+        // worker transition with the narrow grants declared by the migration.
+        sqlx::query("SET LOCAL ROLE hephaestus_worker")
+            .execute(&mut *tx)
+            .await?;
 
         let mut installed = Vec::with_capacity(config.gateways.len());
         for configured in config.gateways {
             let declaration = configured
                 .to_declaration()
                 .map_err(|_| GatewayInstallError::Unavailable)?;
-            let normalized_hash = declaration
+            let declaration_hash = declaration
                 .validate()
                 .map_err(|_| GatewayInstallError::Unavailable)?;
             // A gateway is always released code, never a floating repository
@@ -1999,6 +2751,8 @@ impl PostgresGatewayInstaller {
             // immutable revision so later dispatch cannot silently select a
             // different agent in the same release.
             let release_agent = resolve_release_agent(&mut tx, &command, &declaration).await?;
+            let normalized_hash =
+                installation_hash(declaration_hash, command.release_id, release_agent.id);
             installed.push(
                 install_declaration(
                     &mut tx,
@@ -2012,6 +2766,19 @@ impl PostgresGatewayInstaller {
                 )
                 .await?,
             );
+        }
+        for (ordinal, gateway) in installed.iter().enumerate() {
+            sqlx::query(
+                "INSERT INTO gateway_install_command_results
+                    (command_key, ordinal, gateway_id, revision_id)
+                 VALUES ($1, $2, $3, $4)",
+            )
+            .bind(command_key.as_bytes().as_slice())
+            .bind(i32::try_from(ordinal + 1).map_err(|_| GatewayInstallError::Unavailable)?)
+            .bind(gateway.gateway_id.as_uuid())
+            .bind(gateway.revision_id.as_uuid())
+            .execute(&mut *tx)
+            .await?;
         }
         tx.commit().await?;
         Ok(InstallGatewayManifestResult {
@@ -2101,6 +2868,100 @@ async fn resolve_release_agent(
 }
 
 #[derive(sqlx::FromRow)]
+struct PublishedGatewayReleaseRow {
+    id: Uuid,
+    project_id: Uuid,
+    repository_id: Uuid,
+    source_commit: String,
+    state: String,
+}
+
+#[derive(sqlx::FromRow)]
+struct InstallationCommandRow {
+    operation: String,
+    project_id: Uuid,
+    repository_id: Uuid,
+    release_id: Uuid,
+    actor_id: Uuid,
+}
+
+#[derive(sqlx::FromRow)]
+struct InstallationCommandResultRow {
+    gateway_id: Uuid,
+    revision_id: Uuid,
+}
+
+fn installation_command_key(identity: &AuthenticatedIdentity) -> ReleaseCommandKey {
+    ReleaseCommandKey::derive(
+        "install_release_gateways",
+        &[identity.idempotency_id.as_uuid().as_bytes()],
+    )
+}
+
+async fn claim_installation_command(
+    tx: &mut Transaction<'_, Postgres>,
+    key: ReleaseCommandKey,
+    identity: &AuthenticatedIdentity,
+    command: &InstallGatewayManifest,
+) -> Result<Option<Vec<InstalledGateway>>, GatewayInstallError> {
+    let inserted = sqlx::query(
+        "INSERT INTO gateway_install_commands
+             (command_key, operation, project_id, repository_id, release_id,
+              actor_id, request_id)
+         VALUES ($1, 'install_release_gateways', $2, $3, $4, $5, $6)
+         ON CONFLICT (command_key) DO NOTHING",
+    )
+    .bind(key.as_bytes().as_slice())
+    .bind(command.project_id.as_uuid())
+    .bind(command.repository_id.as_uuid())
+    .bind(
+        command
+            .release_id
+            .ok_or(GatewayInstallError::Unavailable)?
+            .as_uuid(),
+    )
+    .bind(identity.user_id.as_uuid())
+    .bind(identity.request_id.as_uuid())
+    .execute(&mut **tx)
+    .await?;
+    if inserted.rows_affected() == 1 {
+        return Ok(None);
+    }
+    let stored = sqlx::query_as::<_, InstallationCommandRow>(
+        "SELECT operation, project_id, repository_id, release_id, actor_id
+         FROM gateway_install_commands WHERE command_key = $1",
+    )
+    .bind(key.as_bytes().as_slice())
+    .fetch_optional(&mut **tx)
+    .await?
+    .ok_or(GatewayInstallError::Unavailable)?;
+    let release_id = command.release_id.ok_or(GatewayInstallError::Unavailable)?;
+    if stored.operation != "install_release_gateways"
+        || stored.project_id != command.project_id.as_uuid()
+        || stored.repository_id != command.repository_id.as_uuid()
+        || stored.release_id != release_id.as_uuid()
+        || stored.actor_id != identity.user_id.as_uuid()
+    {
+        return Err(GatewayInstallError::Conflict);
+    }
+    let results = sqlx::query_as::<_, InstallationCommandResultRow>(
+        "SELECT gateway_id, revision_id
+         FROM gateway_install_command_results
+         WHERE command_key = $1 ORDER BY ordinal",
+    )
+    .bind(key.as_bytes().as_slice())
+    .fetch_all(&mut **tx)
+    .await?
+    .into_iter()
+    .map(|row| InstalledGateway {
+        gateway_id: GatewayId::from_uuid(row.gateway_id),
+        revision_id: GatewayRevisionId::from_uuid(row.revision_id),
+    })
+    .collect();
+    Ok(Some(results))
+}
+
+#[derive(sqlx::FromRow)]
 struct ReleaseAgentBindingRow {
     id: Uuid,
     key: String,
@@ -2108,9 +2969,15 @@ struct ReleaseAgentBindingRow {
 
 fn parse_manifest(source: &[u8]) -> Result<RepositoryGatewaysConfig, GatewayInstallError> {
     let parsed = parse_repository_gateways(source);
-    parsed.config.ok_or(GatewayInstallError::InvalidManifest {
-        diagnostics: parsed.diagnostics,
-    })
+    let config = parsed.config.ok_or(GatewayInstallError::InvalidManifest {
+        diagnostics: parsed.diagnostics.clone(),
+    })?;
+    if config.gateways.is_empty() {
+        return Err(GatewayInstallError::InvalidManifest {
+            diagnostics: parsed.diagnostics,
+        });
+    }
+    Ok(config)
 }
 
 async fn require_repository_boundary(
@@ -2129,10 +2996,18 @@ async fn require_repository_boundary(
     }
     if let Some(release_id) = command.release_id {
         let release_exists: bool = sqlx::query_scalar(
-            "SELECT EXISTS (SELECT 1 FROM releases WHERE id = $1 AND repository_id = $2)",
+            "SELECT EXISTS (
+                 SELECT 1 FROM releases
+                 JOIN repositories ON repositories.id = releases.repository_id
+                 WHERE releases.id = $1
+                   AND releases.repository_id = $2
+                   AND repositories.project_id = $3
+                   AND releases.state = 'published'
+             )",
         )
         .bind(release_id.as_uuid())
         .bind(command.repository_id.as_uuid())
+        .bind(command.project_id.as_uuid())
         .fetch_one(&mut **tx)
         .await?;
         if !release_exists {
@@ -2247,6 +3122,21 @@ async fn install_declaration(
     })
 }
 
+fn installation_hash(
+    declaration_hash: [u8; 32],
+    release_id: Option<ReleaseId>,
+    release_agent_id: Uuid,
+) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(b"hephaestus-gateway-install-v1\0");
+    digest.update(declaration_hash);
+    if let Some(release_id) = release_id {
+        digest.update(release_id.as_uuid().as_bytes());
+    }
+    digest.update(release_agent_id.as_bytes());
+    digest.finalize().into()
+}
+
 const fn exposure_name(exposure: Exposure) -> &'static str {
     match exposure {
         Exposure::Public => "public",
@@ -2293,6 +3183,7 @@ methods = ["POST"]
         let parsed = parse_manifest(source).expect("valid repository source");
         assert_eq!(parsed.gateways.len(), 1);
         assert!(parse_manifest(b"version = 2").is_err());
+        assert!(parse_manifest(&vec![b'x'; 1_048_577]).is_err());
     }
 
     #[test]
@@ -2459,6 +3350,25 @@ methods = ["POST"]
         assert_ne!(
             before_cutover,
             desired_configuration_revision(&[first, replacement])
+        );
+    }
+
+    #[test]
+    fn installation_hash_is_stable_per_release_and_agent() {
+        let declaration = [7_u8; 32];
+        let release = ReleaseId::new();
+        let agent = Uuid::new_v4();
+        assert_eq!(
+            installation_hash(declaration, Some(release), agent),
+            installation_hash(declaration, Some(release), agent)
+        );
+        assert_ne!(
+            installation_hash(declaration, Some(release), agent),
+            installation_hash(declaration, Some(ReleaseId::new()), agent)
+        );
+        assert_ne!(
+            installation_hash(declaration, Some(release), agent),
+            installation_hash(declaration, Some(release), Uuid::new_v4())
         );
     }
 }

@@ -92,6 +92,7 @@ pub struct InstanceRow {
     pub attachment_count: i64,
     pub run_count: i64,
     pub last_run_at: Option<OffsetDateTime>,
+    pub mailbox_id: Option<Uuid>,
 }
 
 #[derive(FromRow)]
@@ -299,6 +300,7 @@ impl ProjectApplication {
             "SELECT instance.id, instance.name, instance.state,
                     instance.run_gate_open, instance.active_revision_id,
                     instance.state_volume_id, instance.updated_at,
+                    mailbox.id AS mailbox_id,
                     revision.runnable, revision.platform_policy_version,
                     revision.diagnostics, release.id AS release_id,
                     release.version AS release_version, release.state AS release_state,
@@ -308,13 +310,15 @@ impl ProjectApplication {
                     max(run.updated_at) AS last_run_at
              FROM agent_instances instance
              LEFT JOIN agent_instance_revisions revision ON revision.id = instance.active_revision_id
+             LEFT JOIN mailboxes mailbox ON mailbox.instance_id = instance.id
+                  AND mailbox.state <> 'removed'
              LEFT JOIN release_agents release_agent ON release_agent.id = revision.release_agent_id
              LEFT JOIN releases release ON release.id = release_agent.release_id
              LEFT JOIN agent_attachments attachment ON attachment.instance_id = instance.id
                   AND attachment.removed_at IS NULL
              LEFT JOIN runs run ON run.instance_id = instance.id
              WHERE instance.project_id = $1 AND ($2::uuid IS NULL OR instance.id > $2)
-             GROUP BY instance.id, revision.id, release.id, release_agent.id
+             GROUP BY instance.id, revision.id, release.id, release_agent.id, mailbox.id
              ORDER BY instance.id
              LIMIT $3",
         )

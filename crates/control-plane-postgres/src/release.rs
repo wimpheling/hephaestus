@@ -133,6 +133,8 @@ impl ReleaseApplication {
                      WHERE agent.release_id = release.id)::bigint AS agent_count
              FROM releases release
              WHERE release.repository_id = $1
+               AND check_permission('user', hephaestus_actor_id(), 'can_read',
+                   'release', release.id::text) = 1
                AND ($2::uuid IS NULL OR (release.created_at, release.id) <
                     (SELECT cursor.created_at, cursor.id
                      FROM releases cursor WHERE cursor.id = $2))
@@ -185,7 +187,9 @@ impl ReleaseApplication {
              JOIN repositories repository ON repository.id = release.repository_id
              JOIN projects project ON project.id = repository.project_id
              JOIN organizations organization ON organization.id = project.organization_id
-             WHERE release.id = $1",
+             WHERE release.id = $1
+               AND check_permission('user', hephaestus_actor_id(), 'can_read',
+                   'release', release.id::text) = 1",
         )
         .bind(id)
         .fetch_optional(&mut *transaction)
@@ -295,7 +299,10 @@ impl ReleaseApplication {
         let rows = sqlx::query_as::<_, ArtifactRow>(
             "SELECT id, path, kind, mode, encode(content_hash, 'hex') AS sha256,
                     size_bytes, media_type
-             FROM release_artifacts WHERE release_id = $1
+             FROM release_artifacts
+             WHERE release_id = $1
+               AND check_permission('user', hephaestus_actor_id(), 'can_read',
+                   'release', release_id::text) = 1
              ORDER BY path, id",
         )
         .bind(release_id)

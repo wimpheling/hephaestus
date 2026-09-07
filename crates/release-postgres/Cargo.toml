@@ -7,6 +7,7 @@ rust-version.workspace = true
 
 [dependencies]
 agent-config = { path = "../agent-config" }
+brokered-egress-domain = { path = "../brokered-egress-domain" }
 authz-domain = { path = "../authz-domain" }
 authz-postgres = { path = "../authz-postgres" }
 capability-domain = { path = "../capability-domain" }
@@ -28,6 +29,14 @@ uuid.workspace = true
 [dev-dependencies]
 async-nats.workspace = true
 event-postgres = { path = "../event-postgres" }
+futures-util.workspace = true
+mailbox-domain = { path = "../mailbox-domain" }
+mailbox-dispatch = { path = "../mailbox-dispatch" }
+mailbox-postgres = { path = "../mailbox-postgres" }
+secret-application = { path = "../secret-application" }
+secret-domain = { path = "../secret-domain" }
+secret-postgres = { path = "../secret-postgres" }
+secret-store = { path = "../secret-store" }
 serial_test = "3"
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 

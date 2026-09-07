@@ -656,6 +656,10 @@ fn import_summary(value: ApplicationImport) -> ImportSummary {
         secret_state: secret_state(&value.secret_status).into(),
         policy: proto_policy(&value.delivery_modes, &value.phases, value.destinations).into(),
         expires_at: value.expires_at.map(timestamp).into(),
+        active_version_id: value
+            .active_version_id
+            .map(|id| opaque(id.to_string()))
+            .into(),
         ..Default::default()
     }
 }

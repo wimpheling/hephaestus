@@ -22,6 +22,30 @@ pub type OwnedGetGatewayResponseView = ::buffa::view::OwnedView<
         'static,
     >,
 >;
+///Shorthand for `OwnedView<InstallReleaseGatewaysRequestView<'static>>`.
+pub type OwnedInstallReleaseGatewaysRequestView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::gateway::v1::__buffa::view::InstallReleaseGatewaysRequestView<
+        'static,
+    >,
+>;
+///Shorthand for `OwnedView<InstallReleaseGatewaysResponseView<'static>>`.
+pub type OwnedInstallReleaseGatewaysResponseView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::gateway::v1::__buffa::view::InstallReleaseGatewaysResponseView<
+        'static,
+    >,
+>;
+///Shorthand for `OwnedView<ConfigureGatewayRequestView<'static>>`.
+pub type OwnedConfigureGatewayRequestView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::gateway::v1::__buffa::view::ConfigureGatewayRequestView<
+        'static,
+    >,
+>;
+///Shorthand for `OwnedView<ConfigureGatewayResponseView<'static>>`.
+pub type OwnedConfigureGatewayResponseView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::gateway::v1::__buffa::view::ConfigureGatewayResponseView<
+        'static,
+    >,
+>;
 ///Shorthand for `OwnedView<ListGatewayIngressRequestView<'static>>`.
 pub type OwnedListGatewayIngressRequestView = ::buffa::view::OwnedView<
     crate::messages::hephaestus::gateway::v1::__buffa::view::ListGatewayIngressRequestView<
@@ -138,6 +162,62 @@ impl ::connectrpc::Encodable<
 >
 for ::buffa::view::OwnedView<
     crate::messages::hephaestus::gateway::v1::__buffa::view::GetGatewayResponseView<
+        'static,
+    >,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self.reborrow(), codec)
+    }
+}
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::gateway::v1::InstallReleaseGatewaysResponse,
+>
+for crate::messages::hephaestus::gateway::v1::__buffa::view::InstallReleaseGatewaysResponseView<
+    '_,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self, codec)
+    }
+}
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::gateway::v1::InstallReleaseGatewaysResponse,
+>
+for ::buffa::view::OwnedView<
+    crate::messages::hephaestus::gateway::v1::__buffa::view::InstallReleaseGatewaysResponseView<
+        'static,
+    >,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self.reborrow(), codec)
+    }
+}
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::gateway::v1::ConfigureGatewayResponse,
+>
+for crate::messages::hephaestus::gateway::v1::__buffa::view::ConfigureGatewayResponseView<
+    '_,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self, codec)
+    }
+}
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::gateway::v1::ConfigureGatewayResponse,
+>
+for ::buffa::view::OwnedView<
+    crate::messages::hephaestus::gateway::v1::__buffa::view::ConfigureGatewayResponseView<
         'static,
     >,
 > {
@@ -336,6 +416,24 @@ pub const GATEWAY_SERVICE_GET_GATEWAY_SPEC: ::connectrpc::Spec = ::connectrpc::S
         ::connectrpc::StreamType::Unary,
     )
     .with_idempotency_level(::connectrpc::IdempotencyLevel::NoSideEffects);
+/// Static [`Spec`](::connectrpc::Spec) for the server-side `InstallReleaseGateways` RPC.
+///
+/// The dispatcher surfaces this on
+/// [`RequestContext::spec`](::connectrpc::RequestContext::spec).
+pub const GATEWAY_SERVICE_INSTALL_RELEASE_GATEWAYS_SPEC: ::connectrpc::Spec = ::connectrpc::Spec::server(
+        "/hephaestus.gateway.v1.GatewayService/InstallReleaseGateways",
+        ::connectrpc::StreamType::Unary,
+    )
+    .with_idempotency_level(::connectrpc::IdempotencyLevel::Unknown);
+/// Static [`Spec`](::connectrpc::Spec) for the server-side `ConfigureGateway` RPC.
+///
+/// The dispatcher surfaces this on
+/// [`RequestContext::spec`](::connectrpc::RequestContext::spec).
+pub const GATEWAY_SERVICE_CONFIGURE_GATEWAY_SPEC: ::connectrpc::Spec = ::connectrpc::Spec::server(
+        "/hephaestus.gateway.v1.GatewayService/ConfigureGateway",
+        ::connectrpc::StreamType::Unary,
+    )
+    .with_idempotency_level(::connectrpc::IdempotencyLevel::Unknown);
 /// Static [`Spec`](::connectrpc::Spec) for the server-side `ListGatewayIngress` RPC.
 ///
 /// The dispatcher surfaces this on
@@ -486,6 +584,56 @@ pub trait GatewayService: Send + Sync + 'static {
         Output = ::connectrpc::ServiceResult<
             impl ::connectrpc::Encodable<
                 crate::messages::hephaestus::gateway::v1::GetGatewayResponse,
+            > + Send + use<'a, Self>,
+        >,
+    > + Send;
+    /// Installs the gateway declarations from one published release's exact
+    /// repository commit. The manifest is resolved by the service and is never
+    /// supplied by a caller.
+    ///
+    /// `'a` lets the response body borrow from `&self` (e.g. server-resident state).
+    ///
+    /// `request` is borrowed from the request body and is valid for the
+    /// duration of the call; message fields are read directly on it
+    /// (zero-copy). The response cannot borrow from `request` — use
+    /// `.to_owned_message()` (or copy the specific fields) for anything
+    /// returned, stored, or moved into `tokio::spawn`.
+    fn install_release_gateways<'a>(
+        &'a self,
+        ctx: ::connectrpc::RequestContext,
+        request: ::connectrpc::ServiceRequest<
+            '_,
+            crate::messages::hephaestus::gateway::v1::InstallReleaseGatewaysRequest,
+        >,
+    ) -> impl ::std::future::Future<
+        Output = ::connectrpc::ServiceResult<
+            impl ::connectrpc::Encodable<
+                crate::messages::hephaestus::gateway::v1::InstallReleaseGatewaysResponse,
+            > + Send + use<'a, Self>,
+        >,
+    > + Send;
+    /// Creates one immutable runtime revision from the currently active
+    /// published declaration. Runtime values and secret versions are selected
+    /// explicitly; source declarations remain release owned.
+    ///
+    /// `'a` lets the response body borrow from `&self` (e.g. server-resident state).
+    ///
+    /// `request` is borrowed from the request body and is valid for the
+    /// duration of the call; message fields are read directly on it
+    /// (zero-copy). The response cannot borrow from `request` — use
+    /// `.to_owned_message()` (or copy the specific fields) for anything
+    /// returned, stored, or moved into `tokio::spawn`.
+    fn configure_gateway<'a>(
+        &'a self,
+        ctx: ::connectrpc::RequestContext,
+        request: ::connectrpc::ServiceRequest<
+            '_,
+            crate::messages::hephaestus::gateway::v1::ConfigureGatewayRequest,
+        >,
+    ) -> impl ::std::future::Future<
+        Output = ::connectrpc::ServiceResult<
+            impl ::connectrpc::Encodable<
+                crate::messages::hephaestus::gateway::v1::ConfigureGatewayResponse,
             > + Send + use<'a, Self>,
         >,
     > + Send;
@@ -720,6 +868,64 @@ impl<S: GatewayService> GatewayServiceExt for S {
                 },
             )
             .with_spec(GATEWAY_SERVICE_GET_GATEWAY_SPEC)
+            .route_view(
+                GATEWAY_SERVICE_SERVICE_NAME,
+                "InstallReleaseGateways",
+                {
+                    let svc = ::std::sync::Arc::clone(&self);
+                    ::connectrpc::view_handler_fn(move |
+                        ctx,
+                        req: ::buffa::view::OwnedView<
+                            crate::messages::hephaestus::gateway::v1::__buffa::view::InstallReleaseGatewaysRequestView<
+                                'static,
+                            >,
+                        >,
+                        format|
+                    {
+                        let svc = ::std::sync::Arc::clone(&svc);
+                        async move {
+                            let sreq = ::connectrpc::ServiceRequest::<
+                                crate::messages::hephaestus::gateway::v1::InstallReleaseGatewaysRequest,
+                            >::from_parts(req.reborrow(), req.bytes());
+                            svc.install_release_gateways(ctx, sreq)
+                                .await?
+                                .encode::<
+                                    crate::messages::hephaestus::gateway::v1::InstallReleaseGatewaysResponse,
+                                >(format)
+                        }
+                    })
+                },
+            )
+            .with_spec(GATEWAY_SERVICE_INSTALL_RELEASE_GATEWAYS_SPEC)
+            .route_view(
+                GATEWAY_SERVICE_SERVICE_NAME,
+                "ConfigureGateway",
+                {
+                    let svc = ::std::sync::Arc::clone(&self);
+                    ::connectrpc::view_handler_fn(move |
+                        ctx,
+                        req: ::buffa::view::OwnedView<
+                            crate::messages::hephaestus::gateway::v1::__buffa::view::ConfigureGatewayRequestView<
+                                'static,
+                            >,
+                        >,
+                        format|
+                    {
+                        let svc = ::std::sync::Arc::clone(&svc);
+                        async move {
+                            let sreq = ::connectrpc::ServiceRequest::<
+                                crate::messages::hephaestus::gateway::v1::ConfigureGatewayRequest,
+                            >::from_parts(req.reborrow(), req.bytes());
+                            svc.configure_gateway(ctx, sreq)
+                                .await?
+                                .encode::<
+                                    crate::messages::hephaestus::gateway::v1::ConfigureGatewayResponse,
+                                >(format)
+                        }
+                    })
+                },
+            )
+            .with_spec(GATEWAY_SERVICE_CONFIGURE_GATEWAY_SPEC)
             .route_view_idempotent(
                 GATEWAY_SERVICE_SERVICE_NAME,
                 "ListGatewayIngress",
@@ -960,6 +1166,18 @@ impl<T: GatewayService> ::connectrpc::Dispatcher for GatewayServiceServer<T> {
                         .with_spec(GATEWAY_SERVICE_GET_GATEWAY_SPEC),
                 )
             }
+            "InstallReleaseGateways" => {
+                Some(
+                    ::connectrpc::dispatcher::codegen::MethodDescriptor::unary(false)
+                        .with_spec(GATEWAY_SERVICE_INSTALL_RELEASE_GATEWAYS_SPEC),
+                )
+            }
+            "ConfigureGateway" => {
+                Some(
+                    ::connectrpc::dispatcher::codegen::MethodDescriptor::unary(false)
+                        .with_spec(GATEWAY_SERVICE_CONFIGURE_GATEWAY_SPEC),
+                )
+            }
             "ListGatewayIngress" => {
                 Some(
                     ::connectrpc::dispatcher::codegen::MethodDescriptor::unary(true)
@@ -1051,6 +1269,48 @@ impl<T: GatewayService> ::connectrpc::Dispatcher for GatewayServiceServer<T> {
                         .await?
                         .encode::<
                             crate::messages::hephaestus::gateway::v1::GetGatewayResponse,
+                        >(format)
+                })
+            }
+            "InstallReleaseGateways" => {
+                let svc = ::std::sync::Arc::clone(&self.inner);
+                Box::pin(async move {
+                    let body = ::connectrpc::dispatcher::codegen::request_proto_bytes::<
+                        crate::messages::hephaestus::gateway::v1::InstallReleaseGatewaysRequest,
+                    >(request.encoded()?, format)?;
+                    let req: crate::messages::hephaestus::gateway::v1::__buffa::view::InstallReleaseGatewaysRequestView<
+                        '_,
+                    > = ::connectrpc::dispatcher::codegen::decode_borrowed_request_view(
+                        &body,
+                    )?;
+                    let req = ::connectrpc::ServiceRequest::<
+                        crate::messages::hephaestus::gateway::v1::InstallReleaseGatewaysRequest,
+                    >::from_parts(&req, &body);
+                    svc.install_release_gateways(ctx, req)
+                        .await?
+                        .encode::<
+                            crate::messages::hephaestus::gateway::v1::InstallReleaseGatewaysResponse,
+                        >(format)
+                })
+            }
+            "ConfigureGateway" => {
+                let svc = ::std::sync::Arc::clone(&self.inner);
+                Box::pin(async move {
+                    let body = ::connectrpc::dispatcher::codegen::request_proto_bytes::<
+                        crate::messages::hephaestus::gateway::v1::ConfigureGatewayRequest,
+                    >(request.encoded()?, format)?;
+                    let req: crate::messages::hephaestus::gateway::v1::__buffa::view::ConfigureGatewayRequestView<
+                        '_,
+                    > = ::connectrpc::dispatcher::codegen::decode_borrowed_request_view(
+                        &body,
+                    )?;
+                    let req = ::connectrpc::ServiceRequest::<
+                        crate::messages::hephaestus::gateway::v1::ConfigureGatewayRequest,
+                    >::from_parts(&req, &body);
+                    svc.configure_gateway(ctx, req)
+                        .await?
+                        .encode::<
+                            crate::messages::hephaestus::gateway::v1::ConfigureGatewayResponse,
                         >(format)
                 })
             }
@@ -1398,6 +1658,96 @@ where
                 &self.config,
                 GATEWAY_SERVICE_SERVICE_NAME,
                 "GetGateway",
+                request,
+                options,
+            )
+            .await
+    }
+    /// Call the InstallReleaseGateways RPC. Sends a request to /hephaestus.gateway.v1.GatewayService/InstallReleaseGateways.
+    pub async fn install_release_gateways(
+        &self,
+        request: crate::messages::hephaestus::gateway::v1::InstallReleaseGatewaysRequest,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::gateway::v1::__buffa::view::InstallReleaseGatewaysResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        self.install_release_gateways_with_options(
+                request,
+                ::connectrpc::client::CallOptions::default(),
+            )
+            .await
+    }
+    /// Call the InstallReleaseGateways RPC with explicit per-call options. Options override [`ClientConfig`](::connectrpc::client::ClientConfig) defaults.
+    pub async fn install_release_gateways_with_options(
+        &self,
+        request: crate::messages::hephaestus::gateway::v1::InstallReleaseGatewaysRequest,
+        options: ::connectrpc::client::CallOptions,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::gateway::v1::__buffa::view::InstallReleaseGatewaysResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        ::connectrpc::client::call_unary(
+                &self.transport,
+                &self.config,
+                GATEWAY_SERVICE_SERVICE_NAME,
+                "InstallReleaseGateways",
+                request,
+                options,
+            )
+            .await
+    }
+    /// Call the ConfigureGateway RPC. Sends a request to /hephaestus.gateway.v1.GatewayService/ConfigureGateway.
+    pub async fn configure_gateway(
+        &self,
+        request: crate::messages::hephaestus::gateway::v1::ConfigureGatewayRequest,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::gateway::v1::__buffa::view::ConfigureGatewayResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        self.configure_gateway_with_options(
+                request,
+                ::connectrpc::client::CallOptions::default(),
+            )
+            .await
+    }
+    /// Call the ConfigureGateway RPC with explicit per-call options. Options override [`ClientConfig`](::connectrpc::client::ClientConfig) defaults.
+    pub async fn configure_gateway_with_options(
+        &self,
+        request: crate::messages::hephaestus::gateway::v1::ConfigureGatewayRequest,
+        options: ::connectrpc::client::CallOptions,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::gateway::v1::__buffa::view::ConfigureGatewayResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        ::connectrpc::client::call_unary(
+                &self.transport,
+                &self.config,
+                GATEWAY_SERVICE_SERVICE_NAME,
+                "ConfigureGateway",
                 request,
                 options,
             )

@@ -5,6 +5,8 @@ defmodule HephaestusWebWeb.AgentInstanceState do
   alias HephaestusWebWeb.ProductEventReducer
 
   @stream_mode :page_scoped
+  @uuid_pattern ~r/\A[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\z/i
+  @max_brokered_rule_copy_rows 32
   @statuses [
     :initial,
     :loading,
@@ -24,6 +26,7 @@ defmodule HephaestusWebWeb.AgentInstanceState do
     "create-update",
     "recover-update",
     "bind-secret",
+    "create-mailbox",
     "control-mailbox"
   ]
 
@@ -113,6 +116,16 @@ defmodule HephaestusWebWeb.AgentInstanceState do
 
     {%{state | status: :submitting, error: nil, stream_generation: generation},
      [{:command, generation, event, params}]}
+  end
+
+  def reduce(%__MODULE__{} = state, {:interaction, "add-brokered-rule-copy", _params}) do
+    count = min(brokered_rule_copy_count(state) + 1, @max_brokered_rule_copy_rows)
+    {%{state | data: Map.put(state.data, :brokered_rule_copy_count, count)}, []}
+  end
+
+  def reduce(%__MODULE__{} = state, {:interaction, "remove-brokered-rule-copy", _params}) do
+    count = max(brokered_rule_copy_count(state) - 1, 0)
+    {%{state | data: Map.put(state.data, :brokered_rule_copy_count, count)}, []}
   end
 
   def reduce(%__MODULE__{stream_generation: generation} = state, {
@@ -206,6 +219,7 @@ defmodule HephaestusWebWeb.AgentInstanceState do
       attachments: state.data[:attachments] || [],
       updates: state.data[:updates] || [],
       recent_runs: (instance && instance["recent_runs"]) || [],
+      brokered_rule_copy_count: brokered_rule_copy_count(state),
       forms: state.form,
       error: state.error,
       destinations: destinations(instance)
@@ -218,6 +232,8 @@ defmodule HephaestusWebWeb.AgentInstanceState do
     {%{state | status: status, error: nil, stream_generation: generation},
      [{:load, generation, state.data.instance_id}]}
   end
+
+  defp brokered_rule_copy_count(state), do: state.data[:brokered_rule_copy_count] || 0
 
   defp snapshot_data(state, instance) do
     data =
@@ -386,7 +402,9 @@ defmodule HephaestusWebWeb.AgentInstanceState do
            find_by_id(instance["update_candidates"], attributes["release_agent_id"]),
          {:ok, parameters} <-
            typed_parameters(candidate["parameter_schema"], attributes["parameters"] || %{}),
-         {:ok, policy} <- selected_policy(attributes, candidate) do
+         {:ok, policy} <- selected_policy(attributes, candidate),
+         {:ok, brokered_rule_copies} <-
+           validate_brokered_rule_copies(attributes["brokered_rule_copies"]) do
       execute_and_reload(
         identity,
         "create_update",
@@ -395,7 +413,8 @@ defmodule HephaestusWebWeb.AgentInstanceState do
           "expected_revision_id" => current["id"],
           "candidate_release_agent_id" => candidate["id"],
           "parameters" => parameters,
-          "selected_policy" => policy
+          "selected_policy" => policy,
+          "brokered_rule_copies" => brokered_rule_copies
         },
         instance_id,
         "Candidate update created and reviewed."
@@ -441,6 +460,15 @@ defmodule HephaestusWebWeb.AgentInstanceState do
         attributes["instance_id"],
         "Secret binding activated in a new immutable revision."
       )
+    end
+  end
+
+  defp execute_command(identity, "create-mailbox", attributes) do
+    with {:ok, response} <- Client.create_mailbox(identity, attributes["instance_id"]),
+         {:ok, receipt} <- ProductEventReducer.receipt(response) do
+      {:ok, receipt, "Mailbox ready: #{response["mailbox_id"]}"}
+    else
+      {:error, reason} -> {:error, command_error(reason)}
     end
   end
 
@@ -503,7 +531,8 @@ defmodule HephaestusWebWeb.AgentInstanceState do
       attributes["expected_revision_id"],
       attributes["candidate_release_agent_id"],
       attributes["parameters"],
-      attributes["selected_policy"]
+      attributes["selected_policy"],
+      attributes["brokered_rule_copies"] || []
     )
   end
 
@@ -640,9 +669,52 @@ defmodule HephaestusWebWeb.AgentInstanceState do
     |> Enum.reject(&(&1 == ""))
   end
 
+  @doc "Validates optional indexed broker-rule copy rows before RPC conversion."
+  @spec validate_brokered_rule_copies(term()) ::
+          {:ok, [%{String.t() => String.t()}]} | {:error, :invalid_brokered_rule_copies}
+  def validate_brokered_rule_copies(nil), do: {:ok, []}
+
+  def validate_brokered_rule_copies(copies) when is_map(copies) do
+    copies
+    |> Enum.sort_by(fn {index, _copy} -> index end)
+    |> Enum.map(fn {_index, copy} -> copy end)
+    |> validate_brokered_rule_copies()
+  end
+
+  def validate_brokered_rule_copies(copies) when is_list(copies) do
+    Enum.reduce_while(copies, {:ok, []}, fn copy, {:ok, valid} ->
+      case copy do
+        %{"source_rule_id" => "", "candidate_rule_id" => ""} ->
+          {:cont, {:ok, valid}}
+
+        %{"source_rule_id" => source, "candidate_rule_id" => candidate}
+        when is_binary(source) and is_binary(candidate) and byte_size(source) > 0 and
+               byte_size(candidate) > 0 ->
+          if valid_rule_id?(source) and valid_rule_id?(candidate) do
+            {:cont,
+             {:ok, [%{"source_rule_id" => source, "candidate_rule_id" => candidate} | valid]}}
+          else
+            {:halt, {:error, :invalid_brokered_rule_copies}}
+          end
+
+        _invalid ->
+          {:halt, {:error, :invalid_brokered_rule_copies}}
+      end
+    end)
+    |> case do
+      {:ok, valid} -> {:ok, Enum.reverse(valid)}
+      error -> error
+    end
+  end
+
+  def validate_brokered_rule_copies(_invalid), do: {:error, :invalid_brokered_rule_copies}
+
+  defp valid_rule_id?(value), do: Regex.match?(@uuid_pattern, value)
+
   defp command_error({:rejected, _status}), do: "Command was denied or failed validation."
   defp command_error({:unavailable, _reason}), do: "Command service is temporarily unavailable."
   defp command_error({:invalid_parameter, name}), do: "Parameter #{name} is invalid."
+  defp command_error(:invalid_brokered_rule_copies), do: "Brokered rule copies are invalid."
 
   defp command_error({:missing_capability, slot}),
     do: "Required capability #{slot} needs an exact resource selection."

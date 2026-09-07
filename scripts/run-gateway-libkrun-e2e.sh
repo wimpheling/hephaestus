@@ -11,7 +11,7 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly script_dir
 repo_root="$(cd -- "${script_dir}/.." && pwd -P)"
 readonly repo_root
-caddy_image="${HEPHAESTUS_CADDY_TEST_IMAGE:-docker.io/library/caddy:2.10.2-alpine}"
+caddy_image="${HEPHAESTUS_CADDY_TEST_IMAGE:-docker.io/library/caddy@sha256:d8c17a862962def15cde69863a3a463f25a2664942eafd7bdbf050e9c3116b83}"
 readonly caddy_image
 container_name="hephaestus-gateway-libkrun-caddy-${PPID}-${RANDOM}"
 fixture_root="$(mktemp -d)"

@@ -30,8 +30,9 @@ platform manifest compatibility, beyond plain TOML syntax.
 These results establish local application behavior only. The platform's joined
 PostgreSQL/NATS/Caddy/libkrun fixture separately proves installed release execution,
 broker substitution, mailbox delivery and controlled result/provenance. Local
-tests do not establish real Telegram delivery, public deployment, release build
-publication provenance, or the remaining complete MVP-05 acceptance matrix.
+tests do not establish release build publication provenance or the remaining
+complete MVP-05 acceptance matrix. Real Telegram delivery and public deployment
+are outside MVP-05 scope.
 
 ## Joined installed slice
 
@@ -57,8 +58,8 @@ The reviewed runtime image was
 `localhost/hephaestus/python-ubuntu@sha256:cf5f70330594d10e4445178f1371ca63fd8e9e4dae54ddd78612796288c26ae9`.
 The fixture seeds installation/release records and validates exact imported
 artifacts; it does not replace isolated application build/publication evidence.
-The real Telegram smoke and broader concurrent/update/crash acceptance matrix
-remain outside this one-request proof.
+The broader concurrent/update/crash acceptance matrix remains outside this
+one-request proof. Real Telegram integration is excluded from MVP-05.
 
 This journey also exposed two generic target-resolution omissions: mailbox runs
 had no Git receive run_request, so runtime context and workspace lookup failed

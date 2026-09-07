@@ -3,6 +3,9 @@
 use agent_config::{AgentConfig, NetworkProfile, ParameterDefault, REUSABLE_RELEASE_VERSION};
 use authz_domain::{AuthorizationDecision, ObjectRef, ObjectType, Permission, Subject};
 use authz_postgres::{PostgresMelangeAuthorizer, audit_decision, begin_actor_transaction};
+use brokered_egress_domain::{
+    BrokeredSecretRule, BrokeredSecretRuleId, ExactHttpsOrigin, HeaderName, HttpInjectionLocation,
+};
 use capability_domain::{
     CapabilityBinding, CapabilityBindingId, CapabilityError, CapabilityOperation,
     CapabilityRequirement, CapabilityRequirementId, CapabilityResource, CapabilityResourceKind,
@@ -34,6 +37,8 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 const RUN_START_SUBJECT: &str = "hephaestus.run.start";
+const MAILBOX_WAKE_SUBJECT: &str = "heph.mailbox.v1.wake";
+const MAILBOX_WAKE_EVENT_TYPE: &str = "mailbox.wake.v1";
 
 /// PostgreSQL-backed release and instance command service.
 pub struct ReleaseService {
@@ -238,7 +243,22 @@ impl ReleaseService {
             config
                 .update_hook
                 .as_ref()
-                .map(serde_json::to_value)
+                .map(|hook| {
+                    serde_json::to_value(json!({
+                        "command": hook.command,
+                        "arguments": hook.arguments,
+                        "timeout_seconds": hook.timeout_seconds,
+                        // Update-hook declarations currently specify only
+                        // CPU and memory.  They inherit the release's
+                        // provider-neutral network ceiling so the stored
+                        // RuntimePolicy remains complete and typed.
+                        "resources": RuntimePolicy {
+                            vcpus: hook.resources.vcpus,
+                            memory_mib: hook.resources.memory_mib,
+                            network: policy.network,
+                        },
+                    }))
+                })
                 .transpose()?,
         )
         .bind(config.publication.mode.as_str())
@@ -979,7 +999,7 @@ impl ReleaseService {
             return Err(ReleaseServiceError::StaleInstanceRevision);
         }
         let carried_secrets: Vec<RevisionBindingRow> = sqlx::query_as(
-            "SELECT binding.import_id, binding.slot_key,
+            "SELECT binding.id, binding.import_id, binding.slot_key,
                     binding.delivery_mode, binding.phases,
                     binding.attachment_ids, binding.destinations,
                     binding.effective_policy, binding.effective_policy_hash
@@ -1310,7 +1330,7 @@ impl ReleaseService {
             &command.platform_policy,
         )?;
         let carried: Vec<RevisionBindingRow> = sqlx::query_as(
-            "SELECT binding.import_id, binding.slot_key,
+            "SELECT binding.id, binding.import_id, binding.slot_key,
                     binding.delivery_mode, binding.phases,
                     binding.attachment_ids, binding.destinations,
                     binding.effective_policy, binding.effective_policy_hash
@@ -1591,8 +1611,6 @@ impl ReleaseService {
         }
         let declarations: Vec<ParameterDeclaration> =
             serde_json::from_value(candidate.parameter_schema)?;
-        let parameters = ParameterDocument::resolve(&declarations, &command.parameters)
-            .map_err(ReleaseServiceError::InvalidParameters)?;
         let release_policy = policy_from_contract(&candidate.runtime_contract)?;
         let effective = RuntimePolicy::resolve(
             &release_policy,
@@ -1600,7 +1618,7 @@ impl ReleaseService {
             &command.platform_policy,
         )?;
         let carried: Vec<RevisionBindingRow> = sqlx::query_as(
-            "SELECT binding.import_id, binding.slot_key,
+            "SELECT binding.id, binding.import_id, binding.slot_key,
                     binding.delivery_mode, binding.phases,
                     binding.attachment_ids, binding.destinations,
                     binding.effective_policy, binding.effective_policy_hash
@@ -1621,8 +1639,58 @@ impl ReleaseService {
         .bind(command.expected_revision_id.as_uuid())
         .fetch_all(&mut *tx)
         .await?;
+        let brokered_rules: Vec<BrokeredRuleCloneRow> = sqlx::query_as(
+            "SELECT rule.id, rule.binding_id, secret.active_version_id AS secret_version_id,
+                    rule.destination_origin, rule.location_kind,
+                    rule.header_name, rule.header_prefix
+             FROM brokered_secret_rules AS rule
+             JOIN agent_secret_bindings AS binding
+               ON binding.id = rule.binding_id
+              AND binding.instance_revision_id = rule.instance_revision_id
+             JOIN secret_imports AS imported ON imported.id = binding.import_id
+             JOIN secret_grants AS source_grant
+               ON source_grant.id = imported.grant_id
+             JOIN secrets AS secret ON secret.id = imported.secret_id
+             WHERE rule.instance_revision_id = $1
+               AND binding.status = 'active'
+               AND binding.delivery_mode = 'brokered'
+               AND imported.status = 'active'
+               AND source_grant.status = 'active'
+               AND (source_grant.expires_at IS NULL
+                    OR source_grant.expires_at > now())
+               AND secret.status = 'active'
+               AND secret.active_version_id IS NOT NULL",
+        )
+        .bind(command.expected_revision_id.as_uuid())
+        .fetch_all(&mut *tx)
+        .await?;
+        let parameters = ParameterDocument::resolve(&declarations, &command.parameters)
+            .map_err(ReleaseServiceError::InvalidParameters)?;
         let expected: Vec<Uuid> = serde_json::from_value(current.secret_bindings)?;
         let mut diagnostics = Vec::new();
+        let source_rule_ids = brokered_rules
+            .iter()
+            .map(|rule| rule.id)
+            .collect::<BTreeSet<_>>();
+        let (rule_copies, copy_diagnostics) =
+            validate_brokered_rule_copies(&source_rule_ids, &command.brokered_rule_copies);
+        diagnostics.extend(copy_diagnostics);
+        for candidate_rule_id in rule_copies.values() {
+            let exists: bool = sqlx::query_scalar(
+                "SELECT EXISTS(
+                     SELECT 1 FROM brokered_secret_rules WHERE id = $1
+                 )",
+            )
+            .bind(candidate_rule_id)
+            .fetch_one(&mut *tx)
+            .await?;
+            if exists {
+                diagnostics.push(json!({
+                    "code": "brokered_rule_copy_target_conflict",
+                    "field": "brokered_rule_copies"
+                }));
+            }
+        }
         if carried.len() != expected.len() {
             diagnostics.push(json!({
                 "code": "secret_binding_unavailable",
@@ -1767,6 +1835,26 @@ impl ReleaseService {
                 command.candidate_revision_id,
                 binding,
                 identity,
+            )
+            .await?;
+        }
+        for rule in &brokered_rules {
+            let Some(candidate_rule_id) = rule_copies.get(&rule.id).copied() else {
+                continue;
+            };
+            let binding_id = carried
+                .iter()
+                .zip(&new_binding_ids)
+                .find_map(|(binding, binding_id)| {
+                    (binding.id == rule.binding_id).then_some(*binding_id)
+                })
+                .ok_or(ReleaseServiceError::InvalidStoredData)?;
+            clone_brokered_secret_rule(
+                &mut tx,
+                rule,
+                binding_id,
+                command.candidate_revision_id,
+                candidate_rule_id,
             )
             .await?;
         }
@@ -1961,10 +2049,13 @@ impl ReleaseService {
                  JOIN runs ON runs.id = provenance.run_id
                  WHERE provenance.instance_id = $1
                    AND provenance.phase = 'normal'
-                   AND runs.state NOT IN (
-                       'succeeded', 'failed', 'cancelled', 'cleaning_up',
-                       'cleaned_up'
-                   )
+                   AND runs.state <> 'cleaned_up'
+             ) OR EXISTS(
+                 SELECT 1
+                 FROM runs
+                 WHERE runs.instance_id = $1
+                   AND runs.run_kind = 'normal'
+                   AND runs.state <> 'cleaned_up'
              )",
         )
         .bind(update.instance_id)
@@ -1975,7 +2066,7 @@ impl ReleaseService {
             return Err(ReleaseServiceError::UpdateDrainPending);
         }
         let start_id = CommandId::new();
-        sqlx::query(
+        let insert_result = sqlx::query(
             "INSERT INTO runs
              (id, instance_id, instance_revision_id, release_id,
               release_agent_id, run_kind, command_id, state, requires_state,
@@ -1991,7 +2082,14 @@ impl ReleaseService {
         .bind(start_id.as_uuid())
         .bind(update.requires_state)
         .execute(&mut *tx)
-        .await?;
+        .await;
+        match insert_result {
+            Ok(_) => {}
+            Err(error) if is_update_admission_generation_conflict(&error) => {
+                return Err(ReleaseServiceError::UpdateAdmissionGenerationRace);
+            }
+            Err(error) => return Err(error.into()),
+        }
         let changed = sqlx::query(
             "UPDATE agent_updates
              SET state = 'hook_running', hook_run_id = $2, updated_at = now()
@@ -2055,6 +2153,41 @@ impl ReleaseService {
         .await?;
         tx.commit().await?;
         Ok(())
+    }
+
+    /// Reads the hook run durably admitted for an update after a concurrent
+    /// reconciler wins the admission race.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the update is unavailable, the actor is unauthorized, or
+    /// `PostgreSQL` cannot read the lifecycle row.
+    pub async fn current_update_hook_run(
+        &self,
+        identity: &AuthenticatedIdentity,
+        update_id: AgentUpdateId,
+    ) -> Result<Option<RunId>, ReleaseServiceError> {
+        let mut tx = begin_actor_transaction(&self.pool, identity).await?;
+        let instance_id: Uuid =
+            sqlx::query_scalar("SELECT instance_id FROM agent_updates WHERE id = $1 FOR UPDATE")
+                .bind(update_id.as_uuid())
+                .fetch_optional(&mut *tx)
+                .await?
+                .ok_or(ReleaseServiceError::Unavailable)?;
+        self.require(
+            &mut tx,
+            identity,
+            Permission::CanUpdate,
+            ObjectRef::new(ObjectType::AgentInstance, instance_id),
+        )
+        .await?;
+        let hook_run_id: Option<Uuid> =
+            sqlx::query_scalar("SELECT hook_run_id FROM agent_updates WHERE id = $1")
+                .bind(update_id.as_uuid())
+                .fetch_one(&mut *tx)
+                .await?;
+        tx.commit().await?;
+        Ok(hook_run_id.map(RunId::from_uuid))
     }
 
     /// Applies an explicit operator decision to a paused update.
@@ -2129,6 +2262,7 @@ impl ReleaseService {
                      SET state = 'draining', hook_run_id = NULL,
                          hook_exit_code = NULL, hook_exit_signal = NULL,
                          final_decision = NULL, completed_at = NULL,
+                         actor_id = $3,
                          diagnostics = diagnostics || $2::jsonb,
                          updated_at = now()
                      WHERE id = $1",
@@ -2138,6 +2272,7 @@ impl ReleaseService {
                     "code": "operator_retry_after_uncertain_hook",
                     "field": "update_hook"
                 }]))
+                .bind(identity.user_id.as_uuid())
                 .execute(&mut *tx)
                 .await?;
                 sqlx::query(
@@ -2226,6 +2361,7 @@ impl ReleaseService {
                     update.candidate_revision_id,
                 )
                 .await?;
+                enqueue_mailbox_wakes(&mut tx, update.instance_id).await?;
                 "update.recovery_activation_resumed"
             }
         };
@@ -2527,6 +2663,7 @@ impl ReleaseService {
         mark_volume_lease(&mut tx, update_id, "released").await?;
         materialize_deferred_triggers(&mut tx, update.instance_id, update.candidate_revision_id)
             .await?;
+        enqueue_mailbox_wakes(&mut tx, update.instance_id).await?;
         append_event(
             &mut tx,
             update_id.as_uuid(),
@@ -2621,6 +2758,7 @@ struct RevisionUpdateRow {
 
 #[derive(sqlx::FromRow)]
 struct RevisionBindingRow {
+    id: Uuid,
     import_id: Uuid,
     slot_key: String,
     delivery_mode: String,
@@ -2629,6 +2767,17 @@ struct RevisionBindingRow {
     destinations: Vec<String>,
     effective_policy: Value,
     effective_policy_hash: Vec<u8>,
+}
+
+#[derive(sqlx::FromRow)]
+struct BrokeredRuleCloneRow {
+    id: Uuid,
+    binding_id: Uuid,
+    secret_version_id: Uuid,
+    destination_origin: String,
+    location_kind: String,
+    header_name: String,
+    header_prefix: Option<String>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -3906,6 +4055,105 @@ async fn clone_revision_binding(
     Ok(())
 }
 
+fn validate_brokered_rule_copies(
+    source_rule_ids: &BTreeSet<Uuid>,
+    copies: &[BrokeredRuleCopy],
+) -> (BTreeMap<Uuid, Uuid>, Vec<Value>) {
+    let mut source_copies = BTreeSet::new();
+    let mut candidate_copies = BTreeSet::new();
+    let mut rule_copies = BTreeMap::new();
+    let mut diagnostics = Vec::new();
+    for copy in copies {
+        let valid_ids = copy.source_rule_id != Uuid::nil()
+            && copy.candidate_rule_id != Uuid::nil()
+            && copy.source_rule_id != copy.candidate_rule_id;
+        if !valid_ids {
+            diagnostics.push(json!({
+                "code": "brokered_rule_copy_invalid_id",
+                "field": "brokered_rule_copies"
+            }));
+            continue;
+        }
+        if !source_rule_ids.contains(&copy.source_rule_id) {
+            diagnostics.push(json!({
+                "code": "brokered_rule_copy_source_unavailable",
+                "field": "brokered_rule_copies"
+            }));
+            continue;
+        }
+        if !source_copies.insert(copy.source_rule_id)
+            || !candidate_copies.insert(copy.candidate_rule_id)
+        {
+            diagnostics.push(json!({
+                "code": "brokered_rule_copy_duplicate",
+                "field": "brokered_rule_copies"
+            }));
+            continue;
+        }
+        rule_copies.insert(copy.source_rule_id, copy.candidate_rule_id);
+    }
+    for source_rule_id in source_rule_ids {
+        if !rule_copies.contains_key(source_rule_id) {
+            diagnostics.push(json!({
+                "code": "brokered_rule_copy_missing",
+                "field": "brokered_rule_copies"
+            }));
+        }
+    }
+    (rule_copies, diagnostics)
+}
+
+async fn clone_brokered_secret_rule(
+    tx: &mut Transaction<'_, Postgres>,
+    source: &BrokeredRuleCloneRow,
+    binding_id: Uuid,
+    revision_id: AgentInstanceRevisionId,
+    rule_id: Uuid,
+) -> Result<(), ReleaseServiceError> {
+    let destination = ExactHttpsOrigin::parse(&source.destination_origin)
+        .map_err(|_| ReleaseServiceError::InvalidStoredData)?;
+    let header = HeaderName::parse(&source.header_name)
+        .map_err(|_| ReleaseServiceError::InvalidStoredData)?;
+    let location = match (source.location_kind.as_str(), source.header_prefix.clone()) {
+        ("outbound_header_value", None) => HttpInjectionLocation::OutboundHeaderValue { header },
+        ("outbound_header_prefix", Some(prefix)) => {
+            HttpInjectionLocation::OutboundHeaderPrefix { header, prefix }
+        }
+        _ => return Err(ReleaseServiceError::InvalidStoredData),
+    };
+    let rule = BrokeredSecretRule {
+        id: BrokeredSecretRuleId::from_uuid(rule_id),
+        binding_id,
+        instance_revision_id: revision_id.as_uuid(),
+        secret_version_id: source.secret_version_id,
+        destination: Some(destination),
+        location,
+        gateway_route_id: None,
+    }
+    .normalized()
+    .map_err(|_| ReleaseServiceError::InvalidStoredData)?;
+    let normalized_hash = rule.normalized_hash();
+    sqlx::query(
+        "INSERT INTO brokered_secret_rules
+           (id, binding_id, instance_revision_id, secret_version_id, direction,
+            destination_origin, location_kind, header_name, header_prefix,
+            normalized_hash)
+         VALUES ($1, $2, $3, $4, 'outbound', $5, $6, $7, $8, $9)",
+    )
+    .bind(rule_id)
+    .bind(binding_id)
+    .bind(revision_id.as_uuid())
+    .bind(source.secret_version_id)
+    .bind(&source.destination_origin)
+    .bind(&source.location_kind)
+    .bind(&source.header_name)
+    .bind(&source.header_prefix)
+    .bind(normalized_hash.as_slice())
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
 fn required_slot_diagnostics(
     schema: &Value,
     bound_slots: &std::collections::HashSet<&str>,
@@ -4049,7 +4297,54 @@ async fn reopen_after_update(
     .execute(&mut **tx)
     .await?;
     mark_volume_lease(tx, update_id, "released").await?;
-    materialize_deferred_triggers(tx, instance_id, revision_id).await
+    materialize_deferred_triggers(tx, instance_id, revision_id).await?;
+    enqueue_mailbox_wakes(tx, instance_id).await
+}
+
+/// Re-wakes accepted mailbox deliveries after an instance gate reopens.
+///
+/// A dispatch command can be consumed while an update has the instance gate
+/// closed.  The delivery remains eligible in that case, but the consumed
+/// command cannot be replayed after activation.  These identifier-only wake
+/// records are committed with the gate transition, so the outbox publisher
+/// supplies a new authoritative dispatch command without creating a run or
+/// changing the delivery attempt count.
+async fn enqueue_mailbox_wakes(
+    tx: &mut Transaction<'_, Postgres>,
+    instance_id: Uuid,
+) -> Result<(), ReleaseServiceError> {
+    let event_ids: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT event_id
+         FROM mailbox_deliveries
+         WHERE instance_id = $1
+           AND (disposition IN ('pending', 'eligible')
+                OR (disposition = 'retryable' AND next_eligible_at <= now()))
+         ORDER BY updated_at, event_id",
+    )
+    .bind(instance_id)
+    .fetch_all(&mut **tx)
+    .await?;
+    for event_id in event_ids {
+        let operation_id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO outbox
+             (id, aggregate_type, aggregate_id, subject, event_type, payload, occurred_at)
+             VALUES ($1, 'mailbox_event', $2, $3, $4,
+                     jsonb_build_object(
+                         'schema_version', 1,
+                         'command_kind', 'wake',
+                         'operation_id', $1,
+                         'mailbox_event_id', $2
+                     ), now())",
+        )
+        .bind(operation_id)
+        .bind(event_id)
+        .bind(MAILBOX_WAKE_SUBJECT)
+        .bind(MAILBOX_WAKE_EVENT_TYPE)
+        .execute(&mut **tx)
+        .await?;
+    }
+    Ok(())
 }
 
 async fn materialize_deferred_triggers(
@@ -4351,6 +4646,17 @@ fn enrich_message_payload(payload: &mut Value, event_id: Uuid) {
         .or_insert(Value::Null);
 }
 
+fn is_update_admission_generation_conflict(error: &sqlx::Error) -> bool {
+    let Some(database_error) = error.as_database_error() else {
+        return false;
+    };
+    database_error.code().as_deref() == Some("23505")
+        && matches!(
+            database_error.constraint(),
+            Some("runs_pkey" | "runs_exact_revision_unique" | "runs_command_id_key")
+        )
+}
+
 /// Stable non-sensitive release service failure.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
@@ -4409,6 +4715,9 @@ pub enum ReleaseServiceError {
     /// Pre-gate normal requests or runs have not drained.
     #[error("agent update is waiting for normal runs to drain")]
     UpdateDrainPending,
+    /// A concurrent update-hook admission won the durable run identity race.
+    #[error("agent update hook admission raced another generation")]
+    UpdateAdmissionGenerationRace,
     /// Persistent state volume is not ready for an exclusive update lease.
     #[error("agent update state volume is unavailable")]
     UpdateVolumeUnavailable,
@@ -4438,14 +4747,17 @@ pub enum ReleaseServiceError {
 #[cfg(test)]
 mod tests {
     use super::{
-        capability_grant_permission, deterministic_requirement_id, release_capability_requirements,
-        release_capability_requirements_hash, update_contract_diagnostics,
+        BrokeredRuleCopy, capability_grant_permission, deterministic_requirement_id,
+        release_capability_requirements, release_capability_requirements_hash,
+        update_contract_diagnostics, validate_brokered_rule_copies,
     };
     use agent_config::CapabilitySlotDeclaration;
     use authz_domain::Permission;
     use capability_domain::{CapabilityOperation, CapabilityResourceKind};
     use release_domain::ReleaseAgentId;
-    use serde_json::json;
+    use serde_json::{Value, json};
+    use std::collections::BTreeSet;
+    use uuid::Uuid;
 
     #[test]
     fn update_state_contract_diagnostics_are_complete_and_stably_ordered() {
@@ -4473,6 +4785,54 @@ mod tests {
             update_contract_diagnostics(true, true, Some(&json!({"command": "bin/update"})))
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn broker_rule_copy_validation_requires_exact_one_to_one_coverage() {
+        let source = Uuid::new_v4();
+        let candidate = Uuid::new_v4();
+        let other_source = Uuid::new_v4();
+        let sources = BTreeSet::from([source, other_source]);
+        let (mapping, diagnostics) = validate_brokered_rule_copies(
+            &sources,
+            &[BrokeredRuleCopy {
+                source_rule_id: source,
+                candidate_rule_id: candidate,
+            }],
+        );
+        assert_eq!(mapping.len(), 1);
+        assert!(diagnostics.iter().any(|value| {
+            value.get("code").and_then(Value::as_str) == Some("brokered_rule_copy_missing")
+        }));
+
+        let (_, diagnostics) = validate_brokered_rule_copies(
+            &BTreeSet::from([source]),
+            &[
+                BrokeredRuleCopy {
+                    source_rule_id: source,
+                    candidate_rule_id: candidate,
+                },
+                BrokeredRuleCopy {
+                    source_rule_id: source,
+                    candidate_rule_id: Uuid::new_v4(),
+                },
+            ],
+        );
+        assert!(diagnostics.iter().any(|value| {
+            value.get("code").and_then(Value::as_str) == Some("brokered_rule_copy_duplicate")
+        }));
+
+        let (_, diagnostics) = validate_brokered_rule_copies(
+            &BTreeSet::from([source]),
+            &[BrokeredRuleCopy {
+                source_rule_id: Uuid::new_v4(),
+                candidate_rule_id: candidate,
+            }],
+        );
+        assert!(diagnostics.iter().any(|value| {
+            value.get("code").and_then(Value::as_str)
+                == Some("brokered_rule_copy_source_unavailable")
+        }));
     }
 
     #[test]

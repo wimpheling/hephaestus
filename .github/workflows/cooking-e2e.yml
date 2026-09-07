@@ -1,0 +1,68 @@
+name: Cooking E2E
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cooking-kvm-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  cooking:
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: [self-hosted, Linux, X64, heph-kvm]
+    timeout-minutes: 30
+    env:
+      HEPHAESTUS_COOKING_RUNNER_ENV: ${{ vars.HEPHAESTUS_COOKING_RUNNER_ENV }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run real cooking builds, installation, faults and updates
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          : "${HEPHAESTUS_COOKING_RUNNER_ENV:?configure the reviewed KVM runner environment file}"
+          [[ "$HEPHAESTUS_COOKING_RUNNER_ENV" = /* ]]
+          [[ -f "$HEPHAESTUS_COOKING_RUNNER_ENV" && ! -L "$HEPHAESTUS_COOKING_RUNNER_ENV" ]]
+          runner_profile="$(realpath -- "$HEPHAESTUS_COOKING_RUNNER_ENV")"
+          checkout_root="$(realpath -- "$GITHUB_WORKSPACE")"
+          case "$runner_profile" in
+            "$checkout_root"|"$checkout_root"/*)
+              printf 'The reviewed runner environment must be outside the checkout.\n' >&2
+              exit 1
+              ;;
+          esac
+          set -a
+          source "$runner_profile"
+          set +a
+          export HEPHAESTUS_APP_COOKING_BUILD_PROOF=1
+          export HEPHAESTUS_COOKING_UPDATE_E2E=1
+          export HEPHAESTUS_COOKING_BROWSER_E2E=1
+          export HEPHAESTUS_COOKING_SOURCE_ROOT="$GITHUB_WORKSPACE/examples/cooking"
+          export HEPHAESTUS_COOKING_OCI_BASE_IMPORT_DIAGNOSTIC=0
+          export HEPHAESTUS_APP_UPDATE_ADMISSION_E2E=0
+          export HEPHAESTUS_APP_UPDATE_ADMISSION_RACE_E2E=0
+          export HEPHAESTUS_COOKING_TIMEOUT_SECONDS=1500
+          export HEPHAESTUS_COOKING_DIAGNOSTICS_DIR="$RUNNER_TEMP/cooking-e2e-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          scripts/test-ui-e2e-host-bridge.sh
+          examples/cooking/run.sh
+      - name: Check retained evidence for fixture credentials
+        id: evidence
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          python3 -B scripts/check-browser-evidence.py \
+            "$RUNNER_TEMP/cooking-e2e-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+      - name: Retain checked cooking diagnostics
+        if: ${{ always() && steps.evidence.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: cooking-e2e-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/cooking-e2e-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: error
+          retention-days: 7

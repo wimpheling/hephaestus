@@ -5,10 +5,13 @@
 //! the handler returns; neither identity is present in this program.
 
 use serde::{Deserialize, Serialize};
-use std::io::{self, Read, Write};
+use std::io::{self, ErrorKind, Read, Write};
+use std::net::{SocketAddr, TcpStream};
+use std::time::Duration;
 
 const COOKING_REQUESTS_SLOT: &str = "cooking_requests";
 const TELEGRAM_ROUTE: &str = "/gateway/cooking/telegram";
+const GUEST_PROBE_TIMEOUT: Duration = Duration::from_millis(250);
 
 #[derive(Deserialize)]
 struct Parameters {
@@ -84,9 +87,40 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         return Err("invalid gateway parameters".into());
     }
+    assert_gateway_boundary()?;
     let response = handle(&request, &parameters);
     ciborium::into_writer(&response, io::stdout())?;
     io::stdout().flush()?;
+    Ok(())
+}
+
+/// The gateway has no workspace, state, or brokered provider mounts. Keep
+/// this check in the released executable so a joined cooking request proves
+/// those confinement decisions at the actual guest boundary.
+fn assert_gateway_boundary() -> Result<(), &'static str> {
+    for path in [
+        "/workspace/repo/hugo.toml",
+        "/var/lib/hephaestus/cooking.sqlite3",
+        "/run/hephaestus-secrets/model",
+        "/run/hephaestus-secrets/telegram_relay",
+        "/workspace/repo/.git/HEAD",
+    ] {
+        if std::fs::read(path).is_ok() {
+            return Err("gateway accessed a resource outside its declared mounts");
+        }
+    }
+    // TEST-NET-2 is reserved for documentation and must never be a reachable
+    // provider; only an explicit network-unreachable policy error passes.
+    let address = SocketAddr::from(([198, 51, 100, 1], 443));
+    match TcpStream::connect_timeout(&address, GUEST_PROBE_TIMEOUT) {
+        Ok(_) => return Err("gateway direct network access is enabled"),
+        Err(error)
+            if matches!(
+                error.kind(),
+                ErrorKind::NetworkUnreachable | ErrorKind::PermissionDenied
+            ) => {}
+        Err(_) => return Err("gateway network denial was not authoritative"),
+    }
     Ok(())
 }
 

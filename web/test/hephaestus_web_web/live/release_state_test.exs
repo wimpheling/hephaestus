@@ -61,6 +61,29 @@ defmodule HephaestusWebWeb.ReleaseStateTest do
     assert ReleaseState.present(revoked).state == :error
   end
 
+  test "gateway installation ignores stale replies and only navigates after success" do
+    {loading, [{:load, generation, _}]} =
+      ReleaseState.reduce(ReleaseState.new("release-1"), :load)
+
+    {ready, []} = ReleaseState.reduce(loading, {:loaded, generation, {:ok, release()}})
+
+    {submitting, [{:install_gateways, generation, "release-1"}]} =
+      ReleaseState.reduce(ready, :install_gateways)
+
+    assert ReleaseState.reduce(submitting, {:gateways_installed, generation - 1, {:ok, %{}}}) ==
+             {submitting, []}
+
+    {failed, [{:flash, :error, _}]} =
+      ReleaseState.reduce(submitting, {:gateways_installed, generation, {:error, :forbidden}})
+
+    assert failed.status == :ready
+
+    {installed, [{:flash, :info, _}, {:navigate, "/projects/project-1/gateways"}]} =
+      ReleaseState.reduce(submitting, {:gateways_installed, generation, {:ok, %{}}})
+
+    assert installed.status == :ready
+  end
+
   defp release do
     %{
       "id" => "release-1",

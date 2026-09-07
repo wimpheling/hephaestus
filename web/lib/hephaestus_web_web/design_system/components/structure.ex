@@ -177,6 +177,7 @@ defmodule HephaestusWebWeb.DesignSystem.Components.Structure do
     values: [
       nil,
       "accept-secret-import",
+      "add-brokered-rule-copy",
       "bind-secret",
       "control-mailbox",
       "create-attachment",
@@ -197,6 +198,7 @@ defmodule HephaestusWebWeb.DesignSystem.Components.Structure do
       "set-secret-enabled",
       "set-draft-version",
       "publish-release",
+      "remove-brokered-rule-copy",
       "retry-build",
       "verification-rebuild"
     ]

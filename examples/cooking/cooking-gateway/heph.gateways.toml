@@ -5,6 +5,7 @@ name = "cooking-gateway"
 agent_name = "cooking-gateway-handler"
 handler_contract = "http.v1"
 exposure = "public"
+secret_slots = ["webhook"]
 
 [[gateways.mailbox_publication_slots]]
 key = "cooking_requests"

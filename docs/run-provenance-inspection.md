@@ -42,5 +42,6 @@ pagination, a run reader without secret inspection, and an unrelated owner:
 HEPHAESTUS_POSTGRES_TEST_URL=postgres://... cargo test -p secret-postgres --test postgres --all-features
 ```
 
-The complete MVP-05 crash, update, real Telegram and VM acceptance scenarios
-remain separate from this inspection API check.
+The complete MVP-05 crash, update, deterministic outbound and VM acceptance
+scenarios remain separate from this inspection API check. Real Telegram
+integration is outside MVP-05 scope.

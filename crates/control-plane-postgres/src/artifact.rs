@@ -1,6 +1,7 @@
 //! Authorized, bounded artifact read application operations.
 
-use authz_postgres::begin_actor_transaction;
+use authz_domain::{ObjectRef, ObjectType, Permission, Subject};
+use authz_postgres::{PostgresMelangeAuthorizer, audit_decision, begin_actor_transaction};
 use identity_domain::AuthenticatedIdentity;
 use release_artifact_store::{ArtifactStoreError, LocalArtifactStore};
 use serde_json::Value;
@@ -94,6 +95,9 @@ pub enum ArtifactError {
     /// Durable metadata did not match the canonical object.
     #[error("artifact metadata is inconsistent")]
     InvalidStoredData,
+    /// The authorization evaluator could not decide whether the release is readable.
+    #[error("artifact authorization failed")]
+    Authorization(#[source] authz_domain::AuthzError),
 }
 
 /// Executes artifact reads after RLS authorization and safe-store resolution.
@@ -101,6 +105,7 @@ pub struct ArtifactApplication {
     pool: PgPool,
     store: LocalArtifactStore,
     cursor_key: [u8; 32],
+    authorizer: PostgresMelangeAuthorizer,
 }
 
 impl ArtifactApplication {
@@ -109,6 +114,7 @@ impl ArtifactApplication {
             pool,
             store,
             cursor_key,
+            authorizer: PostgresMelangeAuthorizer,
         }
     }
 
@@ -239,6 +245,34 @@ impl ArtifactApplication {
         .await
         .map_err(ArtifactError::Persistence)?
         .ok_or(ArtifactError::NotFound)?;
+        let object = ObjectRef::new(ObjectType::Release, row.release_id);
+        let decision = self
+            .authorizer
+            .check(
+                &mut transaction,
+                Subject::User(identity.user_id),
+                Permission::CanRead,
+                object,
+            )
+            .await
+            .map_err(ArtifactError::Authorization)?;
+        audit_decision(
+            &mut transaction,
+            identity.user_id,
+            Permission::CanRead,
+            object,
+            decision,
+            identity.request_id,
+        )
+        .await
+        .map_err(ArtifactError::Persistence)?;
+        if !decision.is_allowed() {
+            transaction
+                .commit()
+                .await
+                .map_err(ArtifactError::Persistence)?;
+            return Err(ArtifactError::NotFound);
+        }
         transaction
             .commit()
             .await

@@ -1,5 +1,10 @@
 //! Shared daemon integration-test fixtures.
 
+pub mod rpc;
+pub mod update_admission;
+pub(crate) mod vm_observer;
+pub(crate) mod vm_observer_assertions;
+
 use async_trait::async_trait;
 use hephaestus_app::VmBackendConfig;
 use std::{
@@ -9,6 +14,7 @@ use std::{
 };
 use tokio::sync::{broadcast, watch};
 use vm_libkrun::LibkrunConfig;
+use vm_observer::VmSpecObserver;
 use vm_trait::{StopMode, VmError, VmEvent, VmExit, VmId, VmInstance, VmProvider, VmSpec};
 
 /// The VM backend and storage paths a daemon integration test needs.
@@ -23,6 +29,51 @@ pub struct BackendFixture {
     pub(crate) transient_runtime_roots: Vec<PathBuf>,
 }
 
+impl BackendFixture {
+    /// Wraps the final real libkrun provider after all root allowlists are set.
+    ///
+    /// The test caller supplies encoded fixture fingerprints. Values are
+    /// scanned during provision and discarded before any summary is retained.
+    pub(crate) fn install_vm_observer(
+        &mut self,
+        patterns: Vec<Vec<u8>>,
+        secret_broker_socket: &Path,
+        required_image_roots: &[PathBuf],
+    ) -> Result<Arc<VmSpecObserver>, VmError> {
+        let VmBackendConfig::Libkrun(provider) = &self.backend else {
+            return Err(VmError::InvalidState(
+                "VM specification observation requires the libkrun backend",
+            ));
+        };
+        let mut provider = (**provider).clone();
+        if provider
+            .broker_socket_path
+            .as_ref()
+            .is_some_and(|path| path != secret_broker_socket)
+        {
+            return Err(VmError::InvalidSpec {
+                field: String::from("broker_socket_path"),
+                reason: String::from("libkrun broker socket does not match the application broker"),
+            });
+        }
+        if required_image_roots
+            .iter()
+            .any(|root| !provider.image_roots.contains(root))
+        {
+            return Err(VmError::InvalidSpec {
+                field: String::from("image_roots"),
+                reason: String::from("libkrun image roots omit a required worker root"),
+            });
+        }
+        provider.broker_socket_path = Some(secret_broker_socket.to_owned());
+        let provider = Arc::new(vm_libkrun::LibkrunProvider::new(provider)?);
+        let observer = VmSpecObserver::new(provider, patterns)?;
+        let backend_provider: Arc<dyn VmProvider> = observer.clone();
+        self.backend = VmBackendConfig::Custom(backend_provider);
+        Ok(observer)
+    }
+}
+
 /// Creates the backend used by daemon integration tests.
 pub async fn backend_fixture(temporary_root: &Path) -> BackendFixture {
     if env::var("HEPHAESTUS_APP_LIBKRUN_E2E").as_deref() == Ok("1") {
@@ -34,7 +85,7 @@ pub async fn backend_fixture(temporary_root: &Path) -> BackendFixture {
         let worker = required_path("HEPHAESTUS_LIBKRUN_WORKER");
         let cgroup_root = required_path("HEPHAESTUS_LIBKRUN_CGROUP_ROOT");
         let volume_root = disk_root.join(format!("app-golden-volumes-{}", uuid::Uuid::new_v4()));
-        let provider = LibkrunConfig::new(
+        let mut provider = LibkrunConfig::new(
             runtime_root.clone(),
             vec![image_root],
             vec![disk_root],
@@ -42,6 +93,13 @@ pub async fn backend_fixture(temporary_root: &Path) -> BackendFixture {
             worker,
             cgroup_root,
         );
+        if env::var("HEPHAESTUS_APP_COOKING_BUILD_PROOF").as_deref() == Ok("1") {
+            // The OCI builder VMM reserves its guest memory in addition to
+            // the Buildah process and virtio-fs mappings. The packaged Hugo
+            // image measured below the reviewed 8 GiB ceiling. Other fixtures
+            // retain the provider's default 2 GiB worker ceiling.
+            provider.limits.memory_max_bytes = 8 * 1024 * 1024 * 1024;
+        }
         BackendFixture {
             backend: VmBackendConfig::Libkrun(Box::new(provider)),
             root_image,

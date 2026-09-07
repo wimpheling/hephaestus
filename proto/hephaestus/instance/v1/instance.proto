@@ -19,6 +19,16 @@ service AgentInstanceService {
     option (hephaestus.options.v1.max_request_bytes) = 4096;
     option (hephaestus.options.v1.max_response_bytes) = 4194304;
   }
+  rpc CreateMailbox(CreateMailboxRequest) returns (CreateMailboxResponse) {
+    option (hephaestus.options.v1.authorization) = {
+      permission: "instance.manage"
+      audience: "/hephaestus.instance.v1.AgentInstanceService/CreateMailbox"
+      actor_source: ACTOR_SOURCE_MEDIATOR_JWT_METADATA
+    };
+    option (hephaestus.options.v1.operation_kind) = OPERATION_KIND_MUTATION;
+    option (hephaestus.options.v1.max_request_bytes) = 4096;
+    option (hephaestus.options.v1.max_response_bytes) = 4096;
+  }
   rpc ImportAgent(ImportAgentRequest) returns (ImportAgentResponse) {
     option (hephaestus.options.v1.authorization) = {
       permission: "instance.import"
@@ -455,6 +465,11 @@ message CreateUpdateRequest {
   hephaestus.common.v1.OpaqueId candidate_release_agent_id = 4;
   repeated hephaestus.common.v1.ParameterValue parameters = 5;
   hephaestus.common.v1.RuntimePolicy selected_policy = 6;
+  repeated BrokeredRuleCopy brokered_rule_copies = 7;
+}
+message BrokeredRuleCopy {
+  hephaestus.common.v1.OpaqueId source_rule_id = 1;
+  hephaestus.common.v1.OpaqueId candidate_rule_id = 2;
 }
 message CreateUpdateResponse {
   hephaestus.common.v1.OpaqueId update_id = 1;
@@ -533,5 +548,13 @@ message ControlMailboxResponse {
   // Whether this request changed the durable state. A false value is a safe,
   // non-disclosing no-op, not evidence that a particular event exists.
   bool changed = 1;
+  hephaestus.common.v1.MutationReceipt receipt = 2;
+}
+message CreateMailboxRequest {
+  hephaestus.common.v1.RequestContext context = 1;
+  hephaestus.common.v1.OpaqueId instance_id = 2;
+}
+message CreateMailboxResponse {
+  hephaestus.common.v1.OpaqueId mailbox_id = 1;
   hephaestus.common.v1.MutationReceipt receipt = 2;
 }

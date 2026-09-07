@@ -151,6 +151,8 @@ message Run {
   RunMetrics metrics = 30;
   optional string patch_preview = 31;
   optional string manifest_preview = 32;
+  // Retry is available only when this run has an accepted forge request.
+  bool retry_supported = 33;
 }
 message ListProjectRunsRequest {
   hephaestus.common.v1.OpaqueId project_id = 1;

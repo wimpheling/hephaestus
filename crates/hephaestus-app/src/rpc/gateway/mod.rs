@@ -1,22 +1,29 @@
 //! Gateway management and redacted ingress RPC boundary.
 
+mod configure_gateway;
+mod install_release_gateways;
+
 use super::{
     MediatorAuthenticator, MutationReceipts, RpcError, into_connect_error, mutation_receipt,
     request,
 };
+use crate::application::gateway::GatewayInstallApplication;
 use connectrpc::{RequestContext, Response, Router, ServiceRequest, ServiceResult};
 use control_plane_postgres::ControlPlanePool as PgPool;
-use gateway_postgres::{GatewayManagementError, GatewayPage, PostgresGatewayManagement};
+use gateway_postgres::{
+    GatewayManagementError, GatewayPage, PostgresGatewayInstaller, PostgresGatewayManagement,
+};
 use rpc_proto::{
     connect::hephaestus::gateway::v1::{GatewayService, GatewayServiceExt},
     messages::hephaestus::{
         common::v1::{OpaqueId, PageRequest, PageResponse},
         gateway::v1::{
-            CreateMailboxBindingRequest, CreateMailboxBindingResponse, GatewayIngress,
-            GatewayIngressOutcome, GatewayLifecycle, GatewayMailboxBinding,
-            GatewayMailboxPublication, GatewayRevision, GatewayRoute, GatewaySummary,
-            GetGatewayRequest, GetGatewayResponse, ListGatewayIngressRequest,
-            ListGatewayIngressResponse, ListMailboxBindingsRequest, ListMailboxBindingsResponse,
+            ConfigureGatewayRequest, ConfigureGatewayResponse, CreateMailboxBindingRequest,
+            CreateMailboxBindingResponse, GatewayIngress, GatewayIngressOutcome, GatewayLifecycle,
+            GatewayMailboxBinding, GatewayMailboxPublication, GatewayRevision, GatewayRoute,
+            GatewaySummary, GetGatewayRequest, GetGatewayResponse, InstallReleaseGatewaysRequest,
+            InstallReleaseGatewaysResponse, ListGatewayIngressRequest, ListGatewayIngressResponse,
+            ListMailboxBindingsRequest, ListMailboxBindingsResponse,
             ListMailboxPublicationsRequest, ListMailboxPublicationsResponse,
             ListProjectGatewaysRequest, ListProjectGatewaysResponse,
             RevokeMailboxBindingGrantRequest, RevokeMailboxBindingGrantResponse,
@@ -25,6 +32,7 @@ use rpc_proto::{
     },
 };
 use std::str::FromStr;
+use std::sync::Arc;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -33,17 +41,23 @@ const MAX_PAGE_SIZE: u32 = 100;
 
 pub struct GatewayRpc {
     application: PostgresGatewayManagement,
+    installer_application: GatewayInstallApplication,
     authenticator: MediatorAuthenticator,
     receipts: MutationReceipts,
 }
 
 impl GatewayRpc {
-    fn new(pool: PgPool, authenticator: MediatorAuthenticator, receipts: MutationReceipts) -> Self {
+    fn new(
+        pool: &PgPool,
+        storage: Arc<forge_service::GitStorage>,
+        authenticator: MediatorAuthenticator,
+        receipts: MutationReceipts,
+    ) -> Self {
+        let authorizer = Arc::new(authz_postgres::PostgresMelangeAuthorizer);
+        let installer = PostgresGatewayInstaller::new(pool.clone(), Arc::clone(&authorizer));
         Self {
-            application: PostgresGatewayManagement::new(
-                pool,
-                std::sync::Arc::new(authz_postgres::PostgresMelangeAuthorizer),
-            ),
+            application: PostgresGatewayManagement::new(pool.clone(), Arc::clone(&authorizer)),
+            installer_application: GatewayInstallApplication::new(installer, storage),
             authenticator,
             receipts,
         }
@@ -53,12 +67,13 @@ impl GatewayRpc {
 /// Registers the gateway management service.
 pub fn register(
     router: Router,
-    pool: PgPool,
+    pool: &PgPool,
+    storage: Arc<forge_service::GitStorage>,
     authenticator: MediatorAuthenticator,
     receipts: MutationReceipts,
 ) -> Router {
     GatewayServiceExt::register(
-        std::sync::Arc::new(GatewayRpc::new(pool, authenticator, receipts)),
+        Arc::new(GatewayRpc::new(pool, storage, authenticator, receipts)),
         router,
     )
 }
@@ -116,6 +131,22 @@ impl GatewayService for GatewayRpc {
             .into(),
             ..Default::default()
         })
+    }
+
+    async fn install_release_gateways(
+        &self,
+        ctx: RequestContext,
+        message: ServiceRequest<'_, InstallReleaseGatewaysRequest>,
+    ) -> ServiceResult<InstallReleaseGatewaysResponse> {
+        install_release_gateways::handle(self, ctx, message).await
+    }
+
+    async fn configure_gateway(
+        &self,
+        ctx: RequestContext,
+        message: ServiceRequest<'_, ConfigureGatewayRequest>,
+    ) -> ServiceResult<ConfigureGatewayResponse> {
+        configure_gateway::handle(self, ctx, message).await
     }
 
     async fn list_gateway_ingress(
@@ -428,9 +459,11 @@ fn revision(value: gateway_postgres::GatewayManagementRevision) -> GatewayRevisi
     GatewayRevision {
         id: opaque(value.id).into(),
         release_id: value.release_id.map(opaque).into(),
+        release_agent_id: value.release_agent_id.map(opaque).into(),
         handler_contract: value.handler_contract,
         exposure: value.exposure,
         secret_slots: value.secret_slots,
+        mailbox_slots: value.mailbox_slots,
         created_at: timestamp(value.created_at).into(),
         routes: value.routes.into_iter().map(route).collect(),
         ..Default::default()

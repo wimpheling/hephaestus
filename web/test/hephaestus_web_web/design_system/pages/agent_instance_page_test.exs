@@ -81,6 +81,37 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.AgentInstancePageTest do
     assert html =~ ~s(phx-value-action="retry")
   end
 
+  test "renders generic brokered copy controls for arbitrary rule slots" do
+    html =
+      render_component(
+        &AgentInstancePage.agent_instance/1,
+        %{assigns() | brokered_rule_copy_count: 2}
+      )
+
+    assert html =~ ~s(id="brokered-rule-copies")
+    assert html =~ ~s(id="brokered-rule-copy-0-source")
+    assert html =~ ~s(name="update[brokered_rule_copies][0][source_rule_id]")
+    assert html =~ "Copy 1 source rule ID"
+    assert html =~ "Copy 2 candidate rule ID"
+    refute html =~ "model source rule ID"
+    refute html =~ "relay source rule ID"
+  end
+
+  test "renders a third generic row without parameter-name inference" do
+    html =
+      render_component(
+        &AgentInstancePage.agent_instance/1,
+        %{assigns() | brokered_rule_copy_count: 3}
+      )
+
+    assert html =~ ~s(id="brokered-rule-copy-2-source")
+    assert html =~ "Copy 3 candidate rule ID"
+    assert html =~ ~s(data-testid="add-brokered-rule-copy")
+    assert html =~ ~s(data-testid="remove-brokered-rule-copy")
+    refute html =~ "model_rule_id"
+    refute html =~ "relay_rule_id"
+  end
+
   test "renders mailbox scheduling evidence without application payload data" do
     instance =
       instance()
@@ -121,6 +152,7 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.AgentInstancePageTest do
       attachment_form: Phoenix.Component.to_form(%{}, as: :attachment),
       revision_form: Phoenix.Component.to_form(%{}, as: :revision),
       update_form: Phoenix.Component.to_form(%{}, as: :update),
+      brokered_rule_copy_count: 0,
       binding_form: Phoenix.Component.to_form(%{}, as: :binding),
       capability_form: Phoenix.Component.to_form(%{}, as: :capabilities),
       organization_index_destination: "/organizations",

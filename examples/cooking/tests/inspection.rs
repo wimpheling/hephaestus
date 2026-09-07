@@ -6,18 +6,38 @@ use sqlx::PgPool;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-pub async fn inspect(pool: &PgPool, running: &hephaestus_app::RunningHephaestus, run_id: Uuid) {
+pub async fn inspect(
+    pool: &PgPool,
+    running: &hephaestus_app::RunningHephaestus,
+    run_id: Uuid,
+    event_id: Uuid,
+    approve_result: bool,
+) -> Value {
+    inspect_with_https_uses(pool, running, run_id, event_id, approve_result, 4).await
+}
+
+/// Inspects a run whose controlled fault path may repeat one broker call.
+/// The expected count remains explicit so the happy path keeps its exact
+/// four-use assertion while retries prove their additional physical use.
+pub async fn inspect_with_https_uses(
+    pool: &PgPool,
+    running: &hephaestus_app::RunningHephaestus,
+    run_id: Uuid,
+    event_id: Uuid,
+    approve_result: bool,
+    expected_https_uses: usize,
+) -> Value {
     let owner: Uuid = sqlx::query_scalar(
         "SELECT user_id FROM external_identities WHERE issuer = $1 AND subject = 'golden-subject'",
     )
-    .bind(super::ISSUER)
+    .bind(super::golden_issuer())
     .fetch_one(pool)
     .await
     .expect("golden inspection owner");
     let client = reqwest::Client::new();
     let mut provenance = Value::Null;
     let mut result_run = Value::Null;
-    inspect_source(pool, running, &client, owner, run_id).await;
+    inspect_source(pool, running, &client, owner, run_id, event_id).await;
     for method in ["GetRun", "GetRunProvenance"] {
         let audience = format!("/hephaestus.run.v1.RunService/{method}");
         let url = format!("http://{}{audience}", running.http_addr());
@@ -67,24 +87,29 @@ pub async fn inspect(pool: &PgPool, running: &hephaestus_app::RunningHephaestus,
             .unwrap_or_default()
             .is_empty()
     );
-    inspect_https(pool, run_id, &provenance).await;
+    inspect_https(pool, run_id, &provenance, expected_https_uses).await;
     assert!(
         !provenance
             .to_string()
             .contains(super::BROKERED_E2E_SENTINEL)
     );
-    approve(pool, running, &client, owner, &result_run).await;
+    super::cooking::assert_no_credentials(&provenance.to_string());
+    if approve_result {
+        approve(pool, running, &client, owner, &result_run).await;
+    }
+    result_run
 }
 
-async fn inspect_https(pool: &PgPool, run_id: Uuid, provenance: &Value) {
+async fn inspect_https(
+    pool: &PgPool,
+    run_id: Uuid,
+    provenance: &Value,
+    expected_https_uses: usize,
+) {
     let uses = provenance["httpsUses"]
         .as_array()
         .expect("visible HTTPS evidence");
-    assert_eq!(
-        uses.len(),
-        4,
-        "model and relay each record authorization and substitution"
-    );
+    assert_eq!(uses.len(), expected_https_uses);
     let mut rules = std::collections::BTreeSet::new();
     for usage in uses {
         for field in [
@@ -107,13 +132,15 @@ async fn inspect_https(pool: &PgPool, run_id: Uuid, provenance: &Value) {
         assert_eq!(usage["bindingId"]["value"], expected.1.to_string());
         assert_eq!(usage["secretVersionId"]["value"], expected.2.to_string());
     }
-    assert_eq!(
-        rules,
+    let expected_rules = if expected_https_uses == 2 {
+        std::collections::BTreeSet::from(["00000000-0000-0000-0000-000000000004"])
+    } else {
         std::collections::BTreeSet::from([
             "00000000-0000-0000-0000-000000000003",
             "00000000-0000-0000-0000-000000000004",
         ])
-    );
+    };
+    assert_eq!(rules, expected_rules);
 }
 
 async fn inspect_source(
@@ -122,6 +149,7 @@ async fn inspect_source(
     client: &reqwest::Client,
     owner: Uuid,
     run_id: Uuid,
+    event_id: Uuid,
 ) {
     let source: (Uuid, Uuid, Uuid, Uuid) = sqlx::query_as(
         "SELECT run.instance_id,delivery.event_id,revision.gateway_id,lease.id
@@ -134,6 +162,10 @@ async fn inspect_source(
     .fetch_one(pool)
     .await
     .expect("exact ingress and state chain");
+    assert_eq!(
+        source.1, event_id,
+        "inspection must resolve the requested event"
+    );
     let gateway = get_json(
         client,
         running,
@@ -260,9 +292,28 @@ async fn approve(
     .expect("controlled publication completes");
 }
 
+/// Requests approval for a separately inspected proposal. The caller uses
+/// this for a stale competing proposal after canonical Git has advanced.
+pub async fn approve_for_test(
+    pool: &PgPool,
+    running: &hephaestus_app::RunningHephaestus,
+    run: &Value,
+) {
+    let owner: Uuid = sqlx::query_scalar(
+        "SELECT user_id FROM external_identities WHERE issuer = $1 AND subject = 'golden-subject'",
+    )
+    .bind(super::golden_issuer())
+    .fetch_one(pool)
+    .await
+    .expect("golden approval owner");
+    approve(pool, running, &reqwest::Client::new(), owner, run).await;
+}
+
 fn assertion(user: Uuid, audience: &str) -> String {
     let now = OffsetDateTime::now_utc().unix_timestamp();
-    let signing_key = hephaestus_app::rpc::mediator_signing_key(b"golden-internal-command-token");
+    let signing_key = hephaestus_app::rpc::mediator_signing_key(
+        b"golden-internal-command-token-with-sufficient-entropy",
+    );
     encode(
         &Header::new(Algorithm::HS256),
         &json!({

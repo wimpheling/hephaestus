@@ -30,7 +30,8 @@ const PLATFORM_OCI_BUILDER_ENV: &str = "HEPH_PLATFORM_OCI_BUILDER";
 const PLATFORM_OCI_BUILDER_PROGRAM: &str = "/usr/libexec/hephaestus/oci-build";
 const PLATFORM_OCI_VERIFIER_ENV: &str = "HEPH_PLATFORM_OCI_VERIFIER";
 const PLATFORM_OCI_VERIFIER_PROGRAM: &str = "/usr/libexec/hephaestus/oci-verify";
-const PLATFORM_OCI_VERIFIER_OPEN_FILES: libc::rlim_t = 65_536;
+const GUEST_COMMAND_OPEN_FILES: libc::rlim_t = 65_536;
+const BUILD_GUEST_ENV: &str = "HEPH_BUILD_GUEST";
 const AGENT_UID: u32 = 10_001;
 const AGENT_GID: u32 = 10_001;
 const RUNTIME_AUTHORITY_DIRECTORY: &str = "/run/hephaestus-authority";
@@ -140,15 +141,23 @@ fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
 
     let platform_oci_operation = platform_oci_operation(&command);
-    if platform_oci_operation.is_verifier() {
-        provision_verifier_open_files()?;
+    if platform_oci_operation.needs_large_fd_limit()
+        || command
+            .env
+            .get(BUILD_GUEST_ENV)
+            .is_some_and(|value| value == "1")
+    {
+        provision_guest_open_files()?;
     }
     let mut child = Command::new(&command.program);
     child
         .args(&command.args)
         .env_clear()
         .envs(command.env.iter().filter(|(key, _)| {
-            key.as_str() != PLATFORM_OCI_BUILDER_ENV && key.as_str() != PLATFORM_OCI_VERIFIER_ENV
+            !matches!(
+                key.as_str(),
+                PLATFORM_OCI_BUILDER_ENV | PLATFORM_OCI_VERIFIER_ENV | BUILD_GUEST_ENV
+            )
         }))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -224,8 +233,8 @@ impl PlatformOciOperation {
         matches!(self, Self::Builder)
     }
 
-    const fn is_verifier(self) -> bool {
-        matches!(self, Self::Verifier)
+    const fn needs_large_fd_limit(self) -> bool {
+        !matches!(self, Self::None)
     }
 }
 
@@ -250,13 +259,13 @@ fn platform_oci_operation(command: &GuestCommandMessage) -> PlatformOciOperation
 }
 
 #[allow(unsafe_code)]
-fn provision_verifier_open_files() -> io::Result<()> {
+fn provision_guest_open_files() -> io::Result<()> {
     let limit = libc::rlimit {
-        rlim_cur: PLATFORM_OCI_VERIFIER_OPEN_FILES,
-        rlim_max: PLATFORM_OCI_VERIFIER_OPEN_FILES,
+        rlim_cur: GUEST_COMMAND_OPEN_FILES,
+        rlim_max: GUEST_COMMAND_OPEN_FILES,
     };
     // SAFETY: `limit` is initialized, and this bounded root-only bootstrap
-    // runs before the exact trusted verifier is spawned.
+    // runs before the unprivileged build command is spawned.
     let result = unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &raw const limit) };
     if result == 0 {
         Ok(())

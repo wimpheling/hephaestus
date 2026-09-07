@@ -309,6 +309,10 @@ export RUST_LOG="hephaestus_app=debug,git_http=debug,forge_service=debug,run_orc
 daemon_pid="$!"
 wait_for_url "${daemon_url}/healthz" "${fixture_root}/daemon.log"
 
+# Install the locked Phoenix asset dependencies on the host before the
+# isolated Phoenix setup container compiles its mounted asset tree.
+npm ci --prefix "${repo_root}/web/assets"
+
 # The repository may also be mounted by the persistent local server, so keep
 # one shared SELinux label across development containers.
 podman run --rm \
@@ -345,18 +349,33 @@ wait_for_url "${web_url}/" "${fixture_root}/web.log"
 assert_web_isolation
 
 cd "${repo_root}/e2e/playwright"
-HEPHAESTUS_E2E_DATABASE_URL="${database_url}" \
+if HEPHAESTUS_E2E_DATABASE_URL="${database_url}" \
 HEPHAESTUS_REPOSITORY_ROOT="${fixture_root}/repositories" \
 HEPHAESTUS_GIT_URL="${daemon_url}" \
 HEPHAESTUS_WEB_URL="${web_url}" \
 HEPHAESTUS_OIDC_URL="${oidc_url}" \
-HEPHAESTUS_E2E_EVIDENCE_DIR="${fixture_root}/screenshots" \
+HEPHAESTUS_E2E_EVIDENCE_DIR="${repo_root}/e2e/playwright/test-results/journey" \
     bash -c '
         if [[ -n "${HEPHAESTUS_PLAYWRIGHT_GREP:-}" ]]; then
             exec npx playwright test --grep "${HEPHAESTUS_PLAYWRIGHT_GREP}"
         fi
         exec npm test
     '
+then
+    browser_status=0
+else
+    browser_status="$?"
+fi
+# Inspect compressed trace resources too, including failures. Browser traces
+# start after request-only fixture secret creation in the sensitive journey.
+evidence_paths=("${repo_root}/e2e/playwright/test-results")
+if [[ -n "${CI:-}" ]]; then
+    evidence_paths+=("${repo_root}/e2e/playwright/playwright-report")
+fi
+python3 "${script_dir}/check-browser-evidence.py" "${evidence_paths[@]}"
+if [[ "${browser_status}" -ne 0 ]]; then
+    exit "${browser_status}"
+fi
 
 capture_web_logs
 podman exec "${postgres_container}" pg_dump --username postgres --dbname hephaestus \

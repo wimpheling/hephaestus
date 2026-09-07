@@ -12,6 +12,10 @@ context = "platform"
 # SQLx is retained only for cfg(test) and integration-test database fixtures.
 sqlx_test_dependency = true
 
+[features]
+default = []
+test-fixtures = []
+
 [dependencies]
 agent-config = { path = "../agent-config" }
 builder-catalog-application = { path = "../builder-catalog-application" }
@@ -111,6 +115,7 @@ workspace-postgres = { path = "../workspace-postgres" }
 workspace-domain = { path = "../workspace-domain" }
 
 [dev-dependencies]
+base64.workspace = true
 registry-token = { path = "../registry-token" }
 rpc-proto = { path = "../rpc-proto", features = ["client"] }
 brokered-egress-domain = { path = "../brokered-egress-domain" }

@@ -4,6 +4,7 @@ pub mod artifact;
 pub mod build;
 pub mod commands;
 pub mod event;
+pub mod gateway;
 pub mod identity;
 pub mod instance;
 pub mod organization;

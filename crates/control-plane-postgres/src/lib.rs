@@ -19,7 +19,10 @@ pub mod repository;
 pub mod repository_browser;
 pub mod run;
 
-pub use run::{is_update_hook_run, load_vm_launch_contract, recoverable_update_hook_run_ids};
+pub use run::{
+    PendingUpdateAdmission, is_update_hook_run, load_vm_launch_contract, pending_update_admissions,
+    recoverable_update_hook_run_ids,
+};
 
 /// Opaque database pool supplied by the composition root.
 pub type ControlPlanePool = sqlx::PgPool;

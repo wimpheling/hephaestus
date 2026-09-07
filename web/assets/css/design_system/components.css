@@ -809,7 +809,9 @@ a.resource-list-row:hover { background: color-mix(in srgb, var(--ember) 4%, tran
 .phx-submit-loading, .phx-click-loading { cursor: wait; opacity: .62; }
 
 /* Generated component compatibility */
-.alert { position: fixed; right: 1rem; top: 5.5rem; z-index: 50; max-width: 28rem; padding: 1rem; border: 1px solid var(--line); border-radius: .45rem; background: var(--panel); box-shadow: var(--shadow); }
+.toast { position: fixed; right: 1rem; top: 5.5rem; z-index: 50; }
+.toast > .alert { position: static; }
+.alert { max-width: 28rem; padding: 1rem; border: 1px solid var(--line); border-radius: .45rem; background: var(--panel); box-shadow: var(--shadow); }
 .alert-info { border-left: 3px solid var(--green); }
 .alert-error { border-left: 3px solid var(--red); }
 .fieldset { margin: 0 0 1rem; }

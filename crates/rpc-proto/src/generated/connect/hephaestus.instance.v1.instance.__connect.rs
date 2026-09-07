@@ -10,6 +10,18 @@ pub type OwnedGetInstanceResponseView = ::buffa::view::OwnedView<
         'static,
     >,
 >;
+///Shorthand for `OwnedView<CreateMailboxRequestView<'static>>`.
+pub type OwnedCreateMailboxRequestView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::instance::v1::__buffa::view::CreateMailboxRequestView<
+        'static,
+    >,
+>;
+///Shorthand for `OwnedView<CreateMailboxResponseView<'static>>`.
+pub type OwnedCreateMailboxResponseView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::instance::v1::__buffa::view::CreateMailboxResponseView<
+        'static,
+    >,
+>;
 ///Shorthand for `OwnedView<ImportAgentRequestView<'static>>`.
 pub type OwnedImportAgentRequestView = ::buffa::view::OwnedView<
     crate::messages::hephaestus::instance::v1::__buffa::view::ImportAgentRequestView<
@@ -160,6 +172,34 @@ impl ::connectrpc::Encodable<
 >
 for ::buffa::view::OwnedView<
     crate::messages::hephaestus::instance::v1::__buffa::view::GetInstanceResponseView<
+        'static,
+    >,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self.reborrow(), codec)
+    }
+}
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::instance::v1::CreateMailboxResponse,
+>
+for crate::messages::hephaestus::instance::v1::__buffa::view::CreateMailboxResponseView<
+    '_,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self, codec)
+    }
+}
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::instance::v1::CreateMailboxResponse,
+>
+for ::buffa::view::OwnedView<
+    crate::messages::hephaestus::instance::v1::__buffa::view::CreateMailboxResponseView<
         'static,
     >,
 > {
@@ -489,6 +529,15 @@ pub const AGENT_INSTANCE_SERVICE_GET_INSTANCE_SPEC: ::connectrpc::Spec = ::conne
         ::connectrpc::StreamType::Unary,
     )
     .with_idempotency_level(::connectrpc::IdempotencyLevel::NoSideEffects);
+/// Static [`Spec`](::connectrpc::Spec) for the server-side `CreateMailbox` RPC.
+///
+/// The dispatcher surfaces this on
+/// [`RequestContext::spec`](::connectrpc::RequestContext::spec).
+pub const AGENT_INSTANCE_SERVICE_CREATE_MAILBOX_SPEC: ::connectrpc::Spec = ::connectrpc::Spec::server(
+        "/hephaestus.instance.v1.AgentInstanceService/CreateMailbox",
+        ::connectrpc::StreamType::Unary,
+    )
+    .with_idempotency_level(::connectrpc::IdempotencyLevel::Unknown);
 /// Static [`Spec`](::connectrpc::Spec) for the server-side `ImportAgent` RPC.
 ///
 /// The dispatcher surfaces this on
@@ -659,6 +708,29 @@ pub trait AgentInstanceService: Send + Sync + 'static {
         Output = ::connectrpc::ServiceResult<
             impl ::connectrpc::Encodable<
                 crate::messages::hephaestus::instance::v1::GetInstanceResponse,
+            > + Send + use<'a, Self>,
+        >,
+    > + Send;
+    /// Handle the CreateMailbox RPC.
+    ///
+    /// `'a` lets the response body borrow from `&self` (e.g. server-resident state).
+    ///
+    /// `request` is borrowed from the request body and is valid for the
+    /// duration of the call; message fields are read directly on it
+    /// (zero-copy). The response cannot borrow from `request` — use
+    /// `.to_owned_message()` (or copy the specific fields) for anything
+    /// returned, stored, or moved into `tokio::spawn`.
+    fn create_mailbox<'a>(
+        &'a self,
+        ctx: ::connectrpc::RequestContext,
+        request: ::connectrpc::ServiceRequest<
+            '_,
+            crate::messages::hephaestus::instance::v1::CreateMailboxRequest,
+        >,
+    ) -> impl ::std::future::Future<
+        Output = ::connectrpc::ServiceResult<
+            impl ::connectrpc::Encodable<
+                crate::messages::hephaestus::instance::v1::CreateMailboxResponse,
             > + Send + use<'a, Self>,
         >,
     > + Send;
@@ -977,6 +1049,35 @@ impl<S: AgentInstanceService> AgentInstanceServiceExt for S {
                 },
             )
             .with_spec(AGENT_INSTANCE_SERVICE_GET_INSTANCE_SPEC)
+            .route_view(
+                AGENT_INSTANCE_SERVICE_SERVICE_NAME,
+                "CreateMailbox",
+                {
+                    let svc = ::std::sync::Arc::clone(&self);
+                    ::connectrpc::view_handler_fn(move |
+                        ctx,
+                        req: ::buffa::view::OwnedView<
+                            crate::messages::hephaestus::instance::v1::__buffa::view::CreateMailboxRequestView<
+                                'static,
+                            >,
+                        >,
+                        format|
+                    {
+                        let svc = ::std::sync::Arc::clone(&svc);
+                        async move {
+                            let sreq = ::connectrpc::ServiceRequest::<
+                                crate::messages::hephaestus::instance::v1::CreateMailboxRequest,
+                            >::from_parts(req.reborrow(), req.bytes());
+                            svc.create_mailbox(ctx, sreq)
+                                .await?
+                                .encode::<
+                                    crate::messages::hephaestus::instance::v1::CreateMailboxResponse,
+                                >(format)
+                        }
+                    })
+                },
+            )
+            .with_spec(AGENT_INSTANCE_SERVICE_CREATE_MAILBOX_SPEC)
             .route_view(
                 AGENT_INSTANCE_SERVICE_SERVICE_NAME,
                 "ImportAgent",
@@ -1359,6 +1460,12 @@ for AgentInstanceServiceServer<T> {
                         .with_spec(AGENT_INSTANCE_SERVICE_GET_INSTANCE_SPEC),
                 )
             }
+            "CreateMailbox" => {
+                Some(
+                    ::connectrpc::dispatcher::codegen::MethodDescriptor::unary(false)
+                        .with_spec(AGENT_INSTANCE_SERVICE_CREATE_MAILBOX_SPEC),
+                )
+            }
             "ImportAgent" => {
                 Some(
                     ::connectrpc::dispatcher::codegen::MethodDescriptor::unary(false)
@@ -1461,6 +1568,27 @@ for AgentInstanceServiceServer<T> {
                         .await?
                         .encode::<
                             crate::messages::hephaestus::instance::v1::GetInstanceResponse,
+                        >(format)
+                })
+            }
+            "CreateMailbox" => {
+                let svc = ::std::sync::Arc::clone(&self.inner);
+                Box::pin(async move {
+                    let body = ::connectrpc::dispatcher::codegen::request_proto_bytes::<
+                        crate::messages::hephaestus::instance::v1::CreateMailboxRequest,
+                    >(request.encoded()?, format)?;
+                    let req: crate::messages::hephaestus::instance::v1::__buffa::view::CreateMailboxRequestView<
+                        '_,
+                    > = ::connectrpc::dispatcher::codegen::decode_borrowed_request_view(
+                        &body,
+                    )?;
+                    let req = ::connectrpc::ServiceRequest::<
+                        crate::messages::hephaestus::instance::v1::CreateMailboxRequest,
+                    >::from_parts(&req, &body);
+                    svc.create_mailbox(ctx, req)
+                        .await?
+                        .encode::<
+                            crate::messages::hephaestus::instance::v1::CreateMailboxResponse,
                         >(format)
                 })
             }
@@ -1868,6 +1996,51 @@ where
                 &self.config,
                 AGENT_INSTANCE_SERVICE_SERVICE_NAME,
                 "GetInstance",
+                request,
+                options,
+            )
+            .await
+    }
+    /// Call the CreateMailbox RPC. Sends a request to /hephaestus.instance.v1.AgentInstanceService/CreateMailbox.
+    pub async fn create_mailbox(
+        &self,
+        request: crate::messages::hephaestus::instance::v1::CreateMailboxRequest,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::instance::v1::__buffa::view::CreateMailboxResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        self.create_mailbox_with_options(
+                request,
+                ::connectrpc::client::CallOptions::default(),
+            )
+            .await
+    }
+    /// Call the CreateMailbox RPC with explicit per-call options. Options override [`ClientConfig`](::connectrpc::client::ClientConfig) defaults.
+    pub async fn create_mailbox_with_options(
+        &self,
+        request: crate::messages::hephaestus::instance::v1::CreateMailboxRequest,
+        options: ::connectrpc::client::CallOptions,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::instance::v1::__buffa::view::CreateMailboxResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        ::connectrpc::client::call_unary(
+                &self.transport,
+                &self.config,
+                AGENT_INSTANCE_SERVICE_SERVICE_NAME,
+                "CreateMailbox",
                 request,
                 options,
             )

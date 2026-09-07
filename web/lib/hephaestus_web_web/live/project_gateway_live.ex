@@ -49,6 +49,36 @@ defmodule HephaestusWebWeb.ProjectGatewayLive do
   end
 
   @impl true
+  def handle_event("configure", %{"configure" => attributes}, socket) do
+    {state, _effects} =
+      ProjectGatewayState.reduce(socket.assigns.page_state, {:configure, attributes})
+
+    identity = socket.assigns.current_identity
+
+    {:noreply,
+     socket
+     |> assign(:page_state, state)
+     |> start_async(:configure, fn ->
+       ProjectGatewayState.execute(state, {:configure, identity, attributes})
+     end)}
+  end
+
+  @impl true
+  def handle_event("bind-mailbox", %{"gateway_binding" => attributes}, socket) do
+    {state, _effects} =
+      ProjectGatewayState.reduce(socket.assigns.page_state, {:bind, attributes})
+
+    identity = socket.assigns.current_identity
+
+    {:noreply,
+     socket
+     |> assign(:page_state, state)
+     |> start_async(:bind_mailbox, fn ->
+       ProjectGatewayState.execute(state, {:bind, identity, attributes})
+     end)}
+  end
+
+  @impl true
   def handle_async(:transition, {:ok, {:ok, response}}, socket) do
     {state, effects} =
       ProjectGatewayState.reduce(socket.assigns.page_state, {:transitioned, response})
@@ -61,6 +91,69 @@ defmodule HephaestusWebWeb.ProjectGatewayLive do
 
   def handle_async(:transition, _result, socket) do
     {state, effects} = ProjectGatewayState.reduce(socket.assigns.page_state, :lifecycle_failed)
+
+    {:noreply,
+     socket
+     |> assign(:page_state, state)
+     |> put_flash(:error, state.error)
+     |> PageStream.apply_effects(ProjectGatewayState, effects)}
+  end
+
+  @impl true
+  def handle_async(:configure, {:ok, {:configured, generation, response}}, socket) do
+    {state, effects} =
+      ProjectGatewayState.reduce(socket.assigns.page_state, {:configured, generation, response})
+
+    {:noreply,
+     socket
+     |> assign(:page_state, state)
+     |> PageStream.apply_effects(ProjectGatewayState, effects)}
+  end
+
+  def handle_async(:configure, {:ok, {:failed, _reason}}, socket) do
+    {state, effects} = ProjectGatewayState.reduce(socket.assigns.page_state, :configure_failed)
+
+    {:noreply,
+     socket
+     |> assign(:page_state, state)
+     |> put_flash(:error, state.error)
+     |> PageStream.apply_effects(ProjectGatewayState, effects)}
+  end
+
+  def handle_async(:configure, {:exit, _reason}, socket) do
+    {state, effects} = ProjectGatewayState.reduce(socket.assigns.page_state, :configure_failed)
+
+    {:noreply,
+     socket
+     |> assign(:page_state, state)
+     |> put_flash(:error, state.error)
+     |> PageStream.apply_effects(ProjectGatewayState, effects)}
+  end
+
+  @impl true
+  def handle_async(:bind_mailbox, {:ok, {:bound, generation, response}}, socket) do
+    {state, effects} =
+      ProjectGatewayState.reduce(socket.assigns.page_state, {:bound, generation, response})
+
+    {:noreply,
+     socket
+     |> assign(:page_state, state)
+     |> put_flash(:info, "Mailbox binding created.")
+     |> PageStream.apply_effects(ProjectGatewayState, effects)}
+  end
+
+  def handle_async(:bind_mailbox, {:ok, {:failed, _reason}}, socket) do
+    {state, effects} = ProjectGatewayState.reduce(socket.assigns.page_state, :bind_failed)
+
+    {:noreply,
+     socket
+     |> assign(:page_state, state)
+     |> put_flash(:error, state.error)
+     |> PageStream.apply_effects(ProjectGatewayState, effects)}
+  end
+
+  def handle_async(:bind_mailbox, {:exit, _reason}, socket) do
+    {state, effects} = ProjectGatewayState.reduce(socket.assigns.page_state, :bind_failed)
 
     {:noreply,
      socket
@@ -131,9 +224,19 @@ defmodule HephaestusWebWeb.ProjectGatewayLive do
         state={@presentation.status}
         gateway={@presentation.gateway}
         ingress={@presentation.ingress}
+        instances={@presentation.instances}
+        bindings={@presentation.bindings}
+        binding_slots={@presentation.binding_slots}
+        binding_form={@presentation.binding_form}
+        release_catalog={@presentation.release_catalog}
+        secret_authority={@presentation.secret_authority}
+        secrets={@presentation.secrets}
+        configure_form={@presentation.configure_form}
         gateways_destination={~p"/projects/#{@project_id}/gateways"}
         lifecycle_event="lifecycle"
         lifecycle_actions={@presentation.lifecycle_actions}
+        configure_event="configure"
+        bind_event="bind-mailbox"
       />
     </Layouts.app>
     """

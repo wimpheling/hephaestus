@@ -200,7 +200,8 @@ pub(crate) fn service(
     let router = IdentityServiceExt::register(identity, Router::new());
     let router = gateway::register(
         router,
-        pool.clone(),
+        pool,
+        Arc::clone(&storage),
         MediatorAuthenticator::new(mediator_signing_key),
         mutation_receipts.clone(),
     );

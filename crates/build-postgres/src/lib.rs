@@ -76,6 +76,20 @@ fn claimed(
 
 #[async_trait]
 impl BuildRepository for PgBuildRepository {
+    async fn image_reference(&self, id: BuildRequestId) -> Result<String, BuildRepositoryError> {
+        sqlx::query_scalar(
+            "SELECT image_reference
+               FROM build_request_images
+              WHERE build_request_id = $1
+                AND execution_context = 'build'",
+        )
+        .bind(id.as_uuid())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(storage)?
+        .ok_or(BuildRepositoryError::Unavailable)
+    }
+
     async fn reset_for_retry(&self, id: BuildRequestId) -> Result<(), BuildRepositoryError> {
         let mut tx = self.pool.begin().await.map_err(storage)?;
         let changed = sqlx::query(

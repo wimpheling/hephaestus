@@ -1,0 +1,52 @@
+version = 2
+
+[agent]
+name = "Cooking site verifier"
+key = "cooking-site-verifier"
+
+[build]
+command = "/bin/sh"
+arguments = ["build.sh"]
+working_directory = "/workspace/source"
+image = { project_image = "cooking-blog-hugo" }
+triggers = ["refs/heads/main"]
+
+[build.resources]
+vcpus = 1
+memory_mib = 256
+
+[build.network]
+profile = "disabled"
+
+[[build.artifacts]]
+path = "public"
+kind = "directory"
+
+[[build.artifacts]]
+path = "bin/check-site"
+kind = "executable"
+media_type = "text/x-python"
+
+[guest]
+image = { key = "python-ubuntu" }
+command = "bin/check-site"
+working_directory = "bin"
+
+[resources]
+vcpus = 1
+memory_mib = 256
+
+[workspace]
+mount = false
+path = "/workspace/repo"
+read_only = true
+
+[state_volume]
+enabled = false
+
+[network]
+profile = "disabled"
+
+[triggers]
+push = false
+refs = []

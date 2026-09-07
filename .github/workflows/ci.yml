@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:17-alpine
+        image: docker.io/library/postgres@sha256:af194ccf3e2d7fe367012c7b88ce8b816c5c889b18a5b316799a1f0d7eac746a
         env:
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: hephaestus
@@ -29,13 +29,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.85"
+          toolchain: "1.88"
           components: clippy,rustfmt
       - uses: Swatinem/rust-cache@v2
       - name: Install integration dependencies
         run: sudo apt-get update && sudo apt-get install -y e2fsprogs
       - name: Start JetStream
-        run: docker run --detach --rm --name hephaestus-nats --publish 4222:4222 nats:2.11-alpine -js
+        run: docker run --detach --rm --name hephaestus-nats --publish 4222:4222 docker.io/library/nats@sha256:e4bf19f15fd3218814a4e3c9e0064e1334bd8aa20d5984b9f1a0afd084f8cc00 -js
       - name: Verify Mélange generation
         run: |
           scripts/install-melange.sh
@@ -54,10 +54,47 @@ jobs:
         run: cargo clippy --workspace --all-targets --all-features
       - name: Tests
         run: cargo test --workspace --all-features -- --test-threads=1
+      - name: Deferred update admission and reconciler race
+        timeout-minutes: 15
+        env:
+          CONTAINER_ENGINE: docker
+        run: scripts/test-update-admission-postgres-nats.sh
       - name: Mélange doctor
         run: scripts/check-authz.sh
       - name: Documentation
         run: cargo doc --workspace --all-features --no-deps
+
+  cooking-applications:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.88"
+      - uses: Swatinem/rust-cache@v2
+      - name: Install musl toolchain
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Install musl target
+        run: rustup target add x86_64-unknown-linux-musl
+      - name: Test cooking gateway
+        working-directory: examples/cooking/cooking-gateway
+        run: |
+          cargo test --locked --offline --all-features
+          cargo build --locked --offline --release --target x86_64-unknown-linux-musl
+      - name: Test cooking agent, deterministic relay and Hugo output
+        working-directory: examples/cooking/cooking-agent
+        run: |
+          set -Eeuo pipefail
+          hugo_root="$(mktemp -d)"
+          trap 'rm -rf -- "$hugo_root"' EXIT
+          ../cooking-blog/verify-hugo.sh "$hugo_root/hugo"
+          COOKING_HUGO_BINARY="$hugo_root/hugo" python3 -B -m unittest -v
+      - name: Check cooking blog
+        working-directory: examples/cooking/cooking-blog
+        run: python3 check.py
+      - name: Test browser evidence scanner
+        run: python3 -m unittest discover -s scripts -p test_browser_evidence.py
 
   live-review-browser:
     runs-on: ubuntu-latest
@@ -65,7 +102,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.85"
+          toolchain: "1.88"
       - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-node@v4
         with:

@@ -239,14 +239,14 @@ impl VmOciOperation {
     }
 
     async fn run_guest(&self, phase: &'static str, spec: VmSpec) -> Result<(), OciWorkerError> {
-        let instance =
-            self.provider
-                .provision(spec)
-                .await
-                .map_err(|_| OciWorkerError::IsolatedVmFailed {
-                    phase,
-                    exit_code: None,
-                })?;
+        let Ok(instance) = self.provider.provision(spec).await else {
+            // Provider errors may wrap arbitrary source text. Preserve only
+            // the fixed operation phase at this logging boundary.
+            return Err(OciWorkerError::IsolatedVmFailed {
+                phase,
+                exit_code: None,
+            });
+        };
         let mut events = instance.subscribe_events();
         if instance.start().await.is_err() {
             let _ignored = instance.destroy().await;
@@ -259,6 +259,13 @@ impl VmOciOperation {
         let completed = exit
             .as_ref()
             .is_some_and(|exit| exit.code == Some(0) && exit.signal.is_none());
+        if !completed {
+            eprintln!(
+                "isolated OCI {phase} guest exit code={:?} signal={:?}",
+                exit.as_ref().and_then(|value| value.code),
+                exit.as_ref().and_then(|value| value.signal),
+            );
+        }
         let failure_phase = if completed {
             None
         } else {
@@ -302,14 +309,26 @@ async fn guest_failure_phase(
         let received = tokio::time::timeout(Duration::from_millis(250), events.recv()).await;
         match received {
             Ok(Ok(VmEvent::Log { bytes, .. })) => {
-                let remaining = 16_384_usize.saturating_sub(tail.len());
-                tail.extend(bytes.into_iter().take(remaining));
+                retain_log_tail(&mut tail, &bytes);
             }
-            Ok(Ok(VmEvent::Exited(_)) | Err(_)) | Err(_) => break,
-            Ok(Ok(_)) => {}
+            Ok(Ok(VmEvent::Exited(_)) | Err(tokio::sync::broadcast::error::RecvError::Closed))
+            | Err(_) => break,
+            Ok(Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => {}
         }
     }
     classify_guest_failure(operation, &tail)
+}
+
+fn retain_log_tail(tail: &mut Vec<u8>, bytes: &[u8]) {
+    const LIMIT: usize = 16_384;
+    if bytes.len() >= LIMIT {
+        tail.clear();
+        tail.extend_from_slice(&bytes[bytes.len() - LIMIT..]);
+    } else {
+        let discarded = (tail.len() + bytes.len()).saturating_sub(LIMIT);
+        tail.drain(..discarded);
+        tail.extend_from_slice(bytes);
+    }
 }
 
 fn classify_guest_failure(operation: &'static str, output: &[u8]) -> &'static str {
@@ -330,8 +349,6 @@ fn classify_guest_failure(operation: &'static str, output: &[u8]) -> &'static st
         "builder Dockerfile build"
     } else if operation == "builder" && contains(b"heph_oci_failure=layout-export") {
         "builder layout export"
-    } else if operation == "builder" && contains(b"heph-base") {
-        "builder approved-base import"
     } else if operation == "verifier" && contains(b"heph_oci_failure=output-cleanup") {
         "verifier output cleanup"
     } else if operation == "verifier" && contains(b"heph_oci_failure=output-prepare") {
@@ -2080,8 +2097,34 @@ mod tests {
             "builder approved-base import"
         );
         assert_eq!(
+            classify_guest_failure("builder", b"STEP 1/3: FROM heph-base\nRUN build-hugo"),
+            "builder execution"
+        );
+        assert_eq!(
             classify_guest_failure("verifier", b"operation not permitted"),
             "verifier execution"
+        );
+    }
+
+    #[test]
+    fn bounded_log_tail_keeps_failure_markers_after_large_build_output() {
+        let mut tail = Vec::new();
+        super::retain_log_tail(&mut tail, &vec![b'x'; 20_000]);
+        let marker = b"\nHEPH_OCI_FAILURE=dockerfile-build\n";
+        super::retain_log_tail(&mut tail, &marker[..10]);
+        super::retain_log_tail(&mut tail, &marker[10..]);
+        assert_eq!(tail.len(), 16_384);
+        assert_eq!(
+            classify_guest_failure("builder", &tail),
+            "builder Dockerfile build"
+        );
+        let mut oversized = vec![b'x'; 20_000];
+        oversized.extend_from_slice(marker);
+        super::retain_log_tail(&mut tail, &oversized);
+        assert_eq!(tail.len(), 16_384);
+        assert_eq!(
+            classify_guest_failure("builder", &tail),
+            "builder Dockerfile build"
         );
     }
 

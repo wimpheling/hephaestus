@@ -23,6 +23,121 @@ use std::{collections::BTreeMap, env, sync::Arc, time::Duration};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+#[tokio::test]
+#[serial]
+async fn instance_mailbox_allocation_is_authorized_idempotent_and_receipted() {
+    let Ok(database_url) = env::var("HEPHAESTUS_POSTGRES_TEST_URL") else {
+        eprintln!("SKIP mailbox allocation integration: HEPHAESTUS_POSTGRES_TEST_URL is unset");
+        return;
+    };
+    let pool = PgPoolOptions::new()
+        .max_connections(4)
+        .connect(&database_url)
+        .await
+        .expect("connect real PostgreSQL");
+    sqlx::migrate!("../../migrations")
+        .run(&pool)
+        .await
+        .expect("apply mailbox allocation migration");
+    let fixture = seed_instance(&pool).await;
+    sqlx::query("INSERT INTO project_maintainers (project_id, user_id) VALUES ($1, $2)")
+        .bind(fixture.project)
+        .bind(fixture.owner.user_id.as_uuid())
+        .execute(&pool)
+        .await
+        .expect("project manager");
+    let store = PostgresMailboxRepository::new(pool.clone());
+    let first = store
+        .allocate(&fixture.owner, fixture.instance)
+        .await
+        .expect("project and instance manager allocates mailbox");
+    let replay = store
+        .allocate(&fixture.owner, fixture.instance)
+        .await
+        .expect("same request retries idempotently");
+    assert_eq!(first, replay);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM mailboxes WHERE instance_id = $1",)
+            .bind(fixture.instance.as_uuid())
+            .fetch_one(&pool)
+            .await
+            .expect("count allocated mailbox"),
+        1
+    );
+    let fresh_operation = fixture.owner.clone().with_idempotency_id(RequestId::new());
+    assert_eq!(
+        store
+            .allocate(&fresh_operation, fixture.instance)
+            .await
+            .expect("fresh operation reuses the instance mailbox"),
+        first
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM application_events
+             WHERE occurrence_id = $1 AND scope_kind = 'agent_instance'
+               AND scope_id = $2 AND aggregate_type = 'agent_instance'",
+        )
+        .bind(fixture.owner.idempotency_id.as_uuid())
+        .bind(fixture.instance.as_uuid())
+        .fetch_one(&pool)
+        .await
+        .expect("load allocation receipt event"),
+        1
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM application_events
+             WHERE occurrence_id = $1 AND scope_kind = 'agent_instance'
+               AND scope_id = $2 AND aggregate_type = 'agent_instance'",
+        )
+        .bind(fresh_operation.idempotency_id.as_uuid())
+        .bind(fixture.instance.as_uuid())
+        .fetch_one(&pool)
+        .await
+        .expect("load fresh allocation receipt event"),
+        1
+    );
+    let other_instance = AgentInstanceId::new();
+    sqlx::query(
+        "INSERT INTO agent_instances (id, project_id, family_id, name, state)
+         SELECT $1, project_id, family_id, $3, 'active'
+         FROM agent_instances WHERE id = $2",
+    )
+    .bind(other_instance.as_uuid())
+    .bind(fixture.instance.as_uuid())
+    .bind(format!("mailbox-{other_instance}"))
+    .execute(&pool)
+    .await
+    .expect("second managed instance");
+    assert!(matches!(
+        store.allocate(&fixture.owner, other_instance).await,
+        Err(mailbox_postgres::MailboxPersistenceError::IdempotencyConflict)
+    ));
+    assert!(matches!(
+        store.allocate(&fixture.outsider, fixture.instance).await,
+        Err(mailbox_postgres::MailboxPersistenceError::Unavailable)
+    ));
+    sqlx::query("UPDATE agent_instances SET state = 'removed', removed_at = now() WHERE id = $1")
+        .bind(fixture.instance.as_uuid())
+        .execute(&pool)
+        .await
+        .expect("retire instance");
+    let retired_retry = fixture.owner.clone().with_idempotency_id(RequestId::new());
+    assert!(matches!(
+        store.allocate(&retired_retry, fixture.instance).await,
+        Err(mailbox_postgres::MailboxPersistenceError::Unavailable)
+    ));
+    assert_eq!(
+        sqlx::query_scalar::<_, String>("SELECT state FROM mailboxes WHERE instance_id = $1")
+            .bind(fixture.instance.as_uuid())
+            .fetch_one(&pool)
+            .await
+            .expect("read retired mailbox state"),
+        "active"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 #[serial]
 #[allow(clippy::too_many_lines)]
@@ -408,6 +523,136 @@ async fn acceptance_deduplication_outbox_jetstream_redelivery_and_recovery_are_d
     .collect::<Vec<_>>();
     assert_eq!(runs.len(), 1, "one stateful run crosses the reopened gate");
     assert!(runs[0].requires_state);
+
+    // Finish the preceding gate proof before creating two fresh independent
+    // events. This keeps the concurrency assertion focused on those events.
+    sqlx::query("UPDATE runs SET state = 'cleaned_up', outcome = 'succeeded' WHERE id = $1")
+        .bind(runs[0].run_id.as_uuid())
+        .execute(&pool)
+        .await
+        .expect("finish gate proof run");
+    let mut first_concurrent = event(mailbox_id, fixture.instance, b"first-stateful-proof");
+    first_concurrent.deduplication_key = DeduplicationKey::parse("first-stateful-proof")
+        .expect("first concurrent deduplication key");
+    let first_concurrent = store
+        .accept(
+            fixture.project,
+            &first_concurrent,
+            b"first-stateful-proof",
+            u32::try_from(b"first-stateful-proof".len()).expect("body length"),
+        )
+        .await
+        .expect("accept first independent stateful event");
+    let mut second_concurrent = event(mailbox_id, fixture.instance, b"second-stateful-proof");
+    second_concurrent.deduplication_key = DeduplicationKey::parse("second-stateful-proof")
+        .expect("second concurrent deduplication key");
+    let second_concurrent = store
+        .accept(
+            fixture.project,
+            &second_concurrent,
+            b"second-stateful-proof",
+            u32::try_from(b"second-stateful-proof".len()).expect("body length"),
+        )
+        .await
+        .expect("accept second independent stateful event");
+    let first_dispatch = mailbox_dispatch::MailboxDispatchCommand {
+        operation_id: mailbox_domain::MailboxOperationIdentity::dispatch(
+            mailbox_id,
+            first_concurrent.event_id,
+            1,
+        )
+        .id(),
+        event_id: first_concurrent.event_id,
+    };
+    let second_dispatch = mailbox_dispatch::MailboxDispatchCommand {
+        operation_id: mailbox_domain::MailboxOperationIdentity::dispatch(
+            mailbox_id,
+            second_concurrent.event_id,
+            1,
+        )
+        .id(),
+        event_id: second_concurrent.event_id,
+    };
+    for (accepted, command) in [
+        (first_concurrent.event_id, first_dispatch.clone()),
+        (second_concurrent.event_id, second_dispatch.clone()),
+    ] {
+        let wake = mailbox_dispatch::MailboxDispatchCommand {
+            operation_id: mailbox_domain::MailboxOperationId::from_uuid(accepted.as_uuid()),
+            event_id: accepted,
+        };
+        store
+            .apply_command(MAILBOX_WAKE_SUBJECT, &wake)
+            .await
+            .expect("make independent event eligible");
+        store
+            .apply_command(MAILBOX_DISPATCH_SUBJECT, &command)
+            .await
+            .expect("verify independent dispatch command");
+    }
+    let first_store = store.clone();
+    let second_store = store.clone();
+    let (left, right) = tokio::join!(
+        first_store.claim_dispatch(&first_dispatch),
+        second_store.claim_dispatch(&second_dispatch)
+    );
+    let left_won = matches!(left, Ok(Some(_)));
+    let right_won = matches!(right, Ok(Some(_)));
+    assert_ne!(left_won, right_won, "one claim must defer durably");
+    let winner = if left_won {
+        assert!(right.is_err());
+        left.expect("left stateful claim admitted")
+            .expect("left stateful claim admitted")
+    } else {
+        assert!(left.is_err());
+        right
+            .expect("right stateful claim admitted")
+            .expect("right stateful claim admitted")
+    };
+    let (winner_event, deferred_event) = if left_won {
+        (first_concurrent.event_id, second_concurrent.event_id)
+    } else {
+        (second_concurrent.event_id, first_concurrent.event_id)
+    };
+    sqlx::query("UPDATE runs SET state = 'cleaned_up', outcome = 'succeeded' WHERE id = $1")
+        .bind(winner.run_id.as_uuid())
+        .execute(&pool)
+        .await
+        .expect("finish winning stateful run");
+    let deferred_dispatch = if left_won {
+        second_dispatch
+    } else {
+        first_dispatch
+    };
+    let deferred_attempts: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM mailbox_delivery_attempts WHERE event_id = $1")
+            .bind(deferred_event.as_uuid())
+            .fetch_one(&pool)
+            .await
+            .expect("count deferred attempts before redelivery");
+    assert_eq!(
+        deferred_attempts, 0,
+        "busy dispatch creates no logical attempt"
+    );
+    let resumed = store
+        .claim_dispatch(&deferred_dispatch)
+        .await
+        .expect("claim deferred stateful delivery")
+        .expect("deferred delivery resumes after winner cleanup");
+    assert_ne!(resumed.run_id, winner.run_id);
+    let run_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM mailbox_delivery_attempts
+          WHERE event_id IN ($1, $2)",
+    )
+    .bind(winner_event.as_uuid())
+    .bind(deferred_event.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("count independent durable attempts");
+    assert_eq!(
+        run_count, 2,
+        "each independent event has one logical attempt"
+    );
 }
 
 #[tokio::test]
@@ -773,6 +1018,20 @@ async fn seed_instance(pool: &sqlx::PgPool) -> Fixture {
         .expect("activate revision");
     sqlx::query("INSERT INTO agent_attachments (id, instance_id, project_id, repository_id, ref_selector, trigger_policy) VALUES ($1, $2, $3, $4, 'refs/heads/main', 'manual')")
         .bind(AgentAttachmentId::new().as_uuid()).bind(instance_id.as_uuid()).bind(project_id).bind(repository_id).execute(pool).await.expect("attachment");
+    let receive_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO git_receives (id, repository_id, principal, status, accepted_at) VALUES ($1, $2, 'mailbox-test', 'accepted', now())")
+        .bind(receive_id)
+        .bind(repository_id)
+        .execute(pool)
+        .await
+        .expect("receive");
+    sqlx::query("INSERT INTO git_refs (repository_id, git_ref, commit_sha, updated_by_receive_id) VALUES ($1, 'refs/heads/main', $2, $3)")
+        .bind(repository_id)
+        .bind("a".repeat(40))
+        .bind(receive_id)
+        .execute(pool)
+        .await
+        .expect("target ref");
     Fixture {
         project: project_id,
         instance: instance_id,

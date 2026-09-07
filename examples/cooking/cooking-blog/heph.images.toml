@@ -1,0 +1,10 @@
+version = 1
+
+[[images]]
+key = "cooking-blog-hugo"
+display_name = "Cooking blog Hugo 0.165.0"
+
+[images.build]
+dockerfile = "Dockerfile"
+context = "."
+base = { key = "python-ubuntu" }

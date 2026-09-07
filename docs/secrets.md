@@ -157,10 +157,11 @@ one declared slot, and either:
 
 Wildcards, URL paths, query/body substitutions, raw IP destinations, duplicate
 target headers, arbitrary proxy headers, and ambiguous route/destination
-combinations are rejected. The released VM receives the stable non-secret
-identifier `heph-placeholder:v1:<rule-id>`. It is useful only when presented
-in the exact declared header position through a live runtime credential; it is
-not a bearer credential and cannot be exchanged for plaintext.
+combinations are rejected. For outbound use, the released VM receives the
+stable non-secret identifier `heph-placeholder:v1:<rule-id>`. It is useful only
+when presented in the exact declared header position through a live runtime
+credential; it is not a bearer credential and cannot be exchanged for
+plaintext.
 
 For outbound use, a `BrokerOnly` VM has no general IP network. It sends a
 bounded HTTPS request to the private broker channel. The host validates the
@@ -185,10 +186,12 @@ can act on the credential while the request is authorized.
 
 For inbound gateway use, the gateway edge resolves only an exact active route
 lease. It compares the received header with the host-resolved secret in
-constant time and rewrites a match to the stable placeholder before the request
-enters the handler VM. A non-match is rejected without disclosing which part
-was wrong. The VM therefore owns webhook protocol logic and response status,
-but never receives the webhook secret.
+constant time and rewrites a match to
+`heph-placeholder:v1:<secret-version-id>`, where the version ID is selected by
+the immutable binding for that gateway revision, before the request enters the
+handler VM. A non-match is rejected without disclosing which part was wrong.
+The VM therefore owns webhook protocol logic and response status, but never
+receives the webhook secret.
 
 Brokered HTTPS is distinct from raw delivery. Raw delivery deliberately gives
 plaintext to a guest file and cannot promise non-disclosure after that point;

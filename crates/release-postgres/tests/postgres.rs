@@ -2,13 +2,26 @@
 
 use agent_config::parse;
 use authz_postgres::PostgresMelangeAuthorizer;
+use brokered_egress_domain::{
+    BrokeredSecretRule, BrokeredSecretRuleId, ExactHttpsOrigin, HeaderName, HttpInjectionLocation,
+};
 use capability_domain::{
     CapabilityBindingId, CapabilityOperation, CapabilityResource, CapabilityResourceKind,
     CapabilitySlotKey,
 };
 use event_postgres::ReleaseOutboxPublisher;
 use forge_domain::{GitRef, ProjectId, RepositoryId};
+use futures_util::StreamExt;
 use identity_domain::{AuthenticatedIdentity, OrganizationId, RequestId, UserId};
+use mailbox_dispatch::{
+    MAILBOX_DISPATCH_SUBJECT, MAILBOX_WAKE_SUBJECT, MailboxDispatchCommand, MailboxDispatchStore,
+};
+use mailbox_domain::{
+    BodyReference, BodyReferenceId, ContentMetadata, DeduplicationKey, EnvelopeMethod,
+    EnvelopeRoute, MailboxEnvelope, MailboxEvent, MailboxEventId, MailboxId,
+    MailboxOperationIdentity, ProducerId,
+};
+use mailbox_postgres::PostgresMailboxRepository;
 use release_domain::{
     AgentAttachmentId, AgentInstanceId, AgentInstanceRevisionId, AgentUpdateId, ArtifactKind,
     ArtifactPath, BuildRequestId, ContentHash, InstanceName, NetworkAccess, ParameterName,
@@ -16,26 +29,580 @@ use release_domain::{
     ReleaseVersion, RuntimePolicy, TriggerPolicy,
 };
 use release_postgres::{
-    BeginUpdateHook, CompleteBuild, CreateAttachment, CreateInstanceUpdate, ImportAgent,
-    RecoverInstanceUpdate, ReleaseArtifactInput, ReleaseService, RemoveAttachment, ReviseInstance,
-    ReviseInstanceCapabilities, SetAttachmentEnabled, UpdateDecision, UpdateHookResult,
-    UpdateRecoveryAction, UpdateRecoveryDecision,
+    BeginUpdateHook, BrokeredRuleCopy, CompleteBuild, CreateAttachment, CreateInstanceUpdate,
+    ImportAgent, RecoverInstanceUpdate, ReleaseArtifactInput, ReleaseService, RemoveAttachment,
+    ReviseInstance, ReviseInstanceCapabilities, SetAttachmentEnabled, UpdateDecision,
+    UpdateHookResult, UpdateRecoveryAction, UpdateRecoveryDecision,
 };
 use runtime_types::RunId;
+use secret_application::{
+    BindSecret, CreateSecret, DeclareBrokeredHttpsRule, GrantAndAcceptSecretImport, RotateSecret,
+};
+use secret_domain::{
+    AgentSecretBindingId, DeliveryMode, ExecutionPhase, SecretAlias, SecretGrantId, SecretId,
+    SecretImportId, SecretName, SecretOwner, SecretSlotKey, SecretTarget, SecretUsePolicy,
+    SecretValue, SecretVersionId,
+};
+use secret_postgres::SecretService;
+use secret_store::{EncryptedStore, LocalKeyProvider};
 use serde_json::json;
 use serial_test::serial;
+use sha2::{Digest, Sha256};
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use time::OffsetDateTime;
 use uuid::Uuid;
 
 struct Fixture {
     actor: UserId,
+    organization: OrganizationId,
     first_project: ProjectId,
     first_repository: RepositoryId,
     first_aux_repository: RepositoryId,
     second_project: ProjectId,
     second_repository: RepositoryId,
     build: BuildRequestId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
+struct BrokerRuleSnapshot {
+    id: Uuid,
+    binding_id: Uuid,
+    instance_revision_id: Uuid,
+    secret_version_id: Uuid,
+    destination_origin: String,
+    location_kind: String,
+    header_name: String,
+    header_prefix: Option<String>,
+    normalized_hash: Vec<u8>,
+}
+
+#[tokio::test]
+#[serial]
+#[allow(clippy::too_many_lines)]
+async fn explicit_broker_rule_copies_clone_active_rules_atomically() {
+    let Some(pool) = pool().await else {
+        return;
+    };
+    sqlx::migrate!("../../migrations")
+        .run(&pool)
+        .await
+        .expect("apply application migrations");
+    let fixture = seed_with_config(&pool, &brokered_config()).await;
+    sqlx::query(
+        "INSERT INTO project_secret_roles (project_id, user_id, role)
+         VALUES ($1, $2, 'secret_manager')",
+    )
+    .bind(fixture.first_project.as_uuid())
+    .bind(fixture.actor.as_uuid())
+    .execute(&pool)
+    .await
+    .expect("seed secret manager role");
+    sqlx::query(
+        "INSERT INTO organization_secret_managers (organization_id, user_id)
+         VALUES ($1, $2)",
+    )
+    .bind(fixture.organization.as_uuid())
+    .bind(fixture.actor.as_uuid())
+    .execute(&pool)
+    .await
+    .expect("seed organization secret manager role");
+    let service = ReleaseService::new(pool.clone(), Arc::new(PostgresMelangeAuthorizer));
+    let release_id = ReleaseId::new();
+    let release_agent_id = ReleaseAgentId::new();
+    service
+        .complete_build(CompleteBuild {
+            command_key: key("broker-copy-complete", release_id.as_uuid()),
+            build_request_id: fixture.build,
+            release_id,
+            version: ReleaseVersion::parse("broker-copy-v1").expect("release version"),
+            release_agent_id,
+            artifacts: vec![ReleaseArtifactInput {
+                id: ReleaseArtifactId::new(),
+                path: ArtifactPath::parse("bin/reviewer").expect("artifact path"),
+                kind: ArtifactKind::Executable,
+                mode: 0o555,
+                content_hash: ContentHash::digest(b"broker-copy-artifact"),
+                size_bytes: 20,
+                media_type: String::from("application/octet-stream"),
+                storage_key: Uuid::new_v4(),
+            }],
+        })
+        .await
+        .expect("complete broker-copy release");
+    let actor = identity(fixture.actor);
+    service
+        .publish(
+            &actor,
+            key("broker-copy-publish", release_id.as_uuid()),
+            release_id,
+        )
+        .await
+        .expect("publish broker-copy release");
+    let instance_id = AgentInstanceId::new();
+    let initial_revision = AgentInstanceRevisionId::new();
+    let source_model_rule_id = Uuid::new_v4();
+    let source_relay_rule_id = Uuid::new_v4();
+    service
+        .import_agent(
+            &actor,
+            ImportAgent {
+                command_key: key("broker-copy-import", instance_id.as_uuid()),
+                instance_id,
+                revision_id: initial_revision,
+                project_id: fixture.first_project,
+                release_agent_id,
+                name: InstanceName::parse("broker-copy").expect("instance name"),
+                parameters: broker_copy_parameters(
+                    "warning",
+                    source_model_rule_id,
+                    source_relay_rule_id,
+                ),
+                selected_policy: selected_policy(),
+                platform_policy: platform_policy(),
+                platform_policy_version: String::from("platform/v1"),
+            },
+        )
+        .await
+        .expect("import broker-copy instance");
+    let attachment_id = AgentAttachmentId::new();
+    service
+        .create_attachment(
+            &actor,
+            CreateAttachment {
+                command_key: key("broker-copy-attachment", attachment_id.as_uuid()),
+                attachment_id,
+                instance_id,
+                repository_id: fixture.first_repository,
+                ref_selector: RefSelector::parse("refs/heads/main").expect("attachment ref"),
+                trigger_policy: TriggerPolicy::Manual,
+            },
+        )
+        .await
+        .expect("create broker-copy attachment");
+
+    let secret_service = SecretService::new(
+        pool.clone(),
+        EncryptedStore::new(
+            LocalKeyProvider::new("broker-copy/v1", [("broker-copy/v1", [31_u8; 32])])
+                .expect("secret key"),
+        ),
+        Arc::new(PostgresMelangeAuthorizer),
+    );
+    let mut revision = initial_revision;
+    let mut imports = BTreeMap::new();
+    for (slot, host) in [("model", "api.example.test"), ("relay", "relay.example")] {
+        let secret_id = SecretId::new();
+        let version_id = SecretVersionId::new();
+        secret_service
+            .create(
+                &actor,
+                CreateSecret {
+                    command_key: secret_key("create", secret_id.as_uuid()),
+                    secret_id,
+                    version_id,
+                    owner: SecretOwner::Organization(fixture.organization),
+                    name: SecretName::parse(format!("broker_copy_{slot}")).expect("secret name"),
+                    allowed_delivery_modes: vec![DeliveryMode::Brokered],
+                    value: SecretValue::new(format!("broker-copy-{slot}-value"))
+                        .expect("secret value"),
+                },
+            )
+            .await
+            .expect("create broker-copy secret");
+        let import_id = SecretImportId::new();
+        secret_service
+            .grant_and_accept_import(
+                &actor,
+                GrantAndAcceptSecretImport {
+                    command_key: secret_key("grant", import_id.as_uuid()),
+                    grant_id: SecretGrantId::new(),
+                    secret_id,
+                    target: SecretTarget::Project(fixture.first_project),
+                    policy: SecretUsePolicy {
+                        delivery_modes: vec![DeliveryMode::Brokered],
+                        phases: vec![ExecutionPhase::Normal],
+                        destinations: vec![host.to_owned()],
+                    },
+                    expires_at: None,
+                    import_id,
+                    alias: SecretAlias::parse(slot).expect("secret alias"),
+                },
+            )
+            .await
+            .expect("grant broker-copy secret");
+        let binding_id = AgentSecretBindingId::new();
+        let next_revision = AgentInstanceRevisionId::new();
+        secret_service
+            .bind_secret(
+                &actor,
+                BindSecret {
+                    command_key: secret_key("bind", binding_id.as_uuid()),
+                    binding_id,
+                    instance_id,
+                    expected_revision_id: revision,
+                    new_revision_id: next_revision,
+                    import_id,
+                    slot: SecretSlotKey::parse(slot).expect("slot"),
+                    mode: DeliveryMode::Brokered,
+                    phases: vec![ExecutionPhase::Normal],
+                    attachment_ids: vec![attachment_id.as_uuid()],
+                    destinations: vec![host.to_owned()],
+                },
+            )
+            .await
+            .unwrap_or_else(|error| panic!("bind broker-copy secret {slot}: {error:?}"));
+        revision = next_revision;
+        imports.insert(
+            slot.to_owned(),
+            (secret_id, import_id, version_id, host.to_owned()),
+        );
+    }
+    let mut source_rules = Vec::new();
+    for (slot, (_secret_id, import_id, version_id, host)) in &imports {
+        let binding_id: Uuid = sqlx::query_scalar(
+            "SELECT id FROM agent_secret_bindings
+             WHERE instance_revision_id = $1 AND import_id = $2 AND slot_key = $3",
+        )
+        .bind(revision.as_uuid())
+        .bind(import_id.as_uuid())
+        .bind(slot)
+        .fetch_one(&pool)
+        .await
+        .expect("active source binding");
+        let rule_id = if slot == "model" {
+            source_model_rule_id
+        } else {
+            source_relay_rule_id
+        };
+        secret_service
+            .declare_brokered_https_rule(
+                &actor,
+                DeclareBrokeredHttpsRule {
+                    command_key: secret_key("rule", rule_id),
+                    rule_id,
+                    binding_id: AgentSecretBindingId::from_uuid(binding_id),
+                    destination: format!("https://{host}"),
+                    header: String::from("authorization"),
+                    header_prefix: Some(String::from("Bearer ")),
+                },
+            )
+            .await
+            .expect("declare source rule");
+        source_rules.push((rule_id, version_id.as_uuid()));
+    }
+    source_rules.sort_by_key(|(rule_id, _)| *rule_id);
+    let source_rules_before = sqlx::query_as::<_, BrokerRuleSnapshot>(
+        "SELECT id, binding_id, instance_revision_id, secret_version_id,
+                destination_origin, location_kind, header_name, header_prefix,
+                normalized_hash
+         FROM brokered_secret_rules
+         WHERE instance_revision_id = $1 ORDER BY id",
+    )
+    .bind(revision.as_uuid())
+    .fetch_all(&pool)
+    .await
+    .expect("capture source broker rules before update");
+    assert_eq!(source_rules_before.len(), 2);
+    for (secret_id, _import_id, old_version_id, _) in imports.values() {
+        secret_service
+            .rotate(
+                &actor,
+                RotateSecret {
+                    command_key: secret_key("rotate", secret_id.as_uuid()),
+                    secret_id: *secret_id,
+                    expected_active_version_id: *old_version_id,
+                    new_version_id: SecretVersionId::new(),
+                    value: SecretValue::new("broker-copy-rotated-value")
+                        .expect("rotated secret value"),
+                },
+            )
+            .await
+            .expect("rotate active broker-copy secret");
+    }
+    let active_versions: BTreeMap<Uuid, Uuid> = sqlx::query_as::<_, (Uuid, Option<Uuid>)>(
+        "SELECT rule.id, secret.active_version_id
+         FROM brokered_secret_rules rule
+         JOIN agent_secret_bindings binding ON binding.id = rule.binding_id
+         JOIN secret_imports imported ON imported.id = binding.import_id
+         JOIN secrets secret ON secret.id = imported.secret_id
+         WHERE rule.instance_revision_id = $1",
+    )
+    .bind(revision.as_uuid())
+    .fetch_all(&pool)
+    .await
+    .expect("capture rotated active versions")
+    .into_iter()
+    .filter_map(|(rule_id, version_id)| version_id.map(|version| (rule_id, version)))
+    .collect();
+    assert_eq!(active_versions.len(), 2);
+    assert!(
+        source_rules_before
+            .iter()
+            .all(|rule| active_versions[&rule.id] != rule.secret_version_id)
+    );
+    let candidate_agent_id =
+        seed_matching_update_release(&pool, release_id, release_agent_id).await;
+
+    for (label, copies) in [
+        ("missing", Vec::new()),
+        (
+            "foreign",
+            vec![BrokeredRuleCopy {
+                source_rule_id: Uuid::new_v4(),
+                candidate_rule_id: Uuid::new_v4(),
+            }],
+        ),
+        (
+            "duplicate",
+            vec![
+                BrokeredRuleCopy {
+                    source_rule_id: source_rules[0].0,
+                    candidate_rule_id: Uuid::new_v4(),
+                },
+                BrokeredRuleCopy {
+                    source_rule_id: source_rules[0].0,
+                    candidate_rule_id: Uuid::new_v4(),
+                },
+            ],
+        ),
+    ] {
+        let update_id = AgentUpdateId::new();
+        let candidate_revision = AgentInstanceRevisionId::new();
+        service
+            .create_update(
+                &actor,
+                CreateInstanceUpdate {
+                    command_key: key(&format!("broker-copy-{label}"), update_id.as_uuid()),
+                    update_id,
+                    instance_id,
+                    expected_revision_id: revision,
+                    candidate_revision_id: candidate_revision,
+                    candidate_release_agent_id: candidate_agent_id,
+                    parameters: broker_copy_parameters(
+                        "warning",
+                        source_model_rule_id,
+                        source_relay_rule_id,
+                    ),
+                    brokered_rule_copies: copies,
+                    selected_policy: selected_policy(),
+                    platform_policy: platform_policy(),
+                    platform_policy_version: String::from("platform/v1"),
+                },
+            )
+            .await
+            .expect("invalid mapping remains a durable rejected update");
+        let state: (String, bool) = sqlx::query_as(
+            "SELECT state,
+                    COALESCE(runnable, false)
+             FROM agent_updates
+             JOIN agent_instance_revisions revision
+               ON revision.id = agent_updates.candidate_revision_id
+             WHERE agent_updates.id = $1",
+        )
+        .bind(update_id.as_uuid())
+        .fetch_one(&pool)
+        .await
+        .expect("invalid mapping state");
+        assert_eq!(state, (String::from("rejected"), false));
+    }
+
+    let candidate_rules = source_rules
+        .iter()
+        .map(|(source_rule_id, _)| BrokeredRuleCopy {
+            source_rule_id: *source_rule_id,
+            candidate_rule_id: Uuid::new_v4(),
+        })
+        .collect::<Vec<_>>();
+    let valid_update_id = AgentUpdateId::new();
+    let valid_candidate_revision = AgentInstanceRevisionId::new();
+    let valid_command_key = key("broker-copy-valid", valid_update_id.as_uuid());
+    service
+        .create_update(
+            &actor,
+            CreateInstanceUpdate {
+                command_key: valid_command_key,
+                update_id: valid_update_id,
+                instance_id,
+                expected_revision_id: revision,
+                candidate_revision_id: valid_candidate_revision,
+                candidate_release_agent_id: candidate_agent_id,
+                parameters: broker_copy_parameters(
+                    "warning",
+                    source_model_rule_id,
+                    source_relay_rule_id,
+                ),
+                brokered_rule_copies: candidate_rules.clone(),
+                selected_policy: selected_policy(),
+                platform_policy: platform_policy(),
+                platform_policy_version: String::from("platform/v1"),
+            },
+        )
+        .await
+        .expect("complete explicit broker-rule copy update");
+    let candidate_parameters: (serde_json::Value, Vec<Uuid>) = sqlx::query_as(
+        "SELECT revision.parameters,
+                ARRAY(SELECT binding.id FROM agent_secret_bindings binding
+                      WHERE binding.instance_revision_id = revision.id
+                      ORDER BY binding.slot_key)
+         FROM agent_instance_revisions revision
+         WHERE revision.id = $1",
+    )
+    .bind(valid_candidate_revision.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("candidate parameters and bindings");
+    assert_eq!(
+        candidate_parameters.0,
+        json!({
+            "severity": "warning",
+            "model_rule_id": source_model_rule_id.to_string(),
+            "relay_rule_id": source_relay_rule_id.to_string(),
+        })
+    );
+    assert_eq!(candidate_parameters.1.len(), 2);
+    let stored_rules = sqlx::query_as::<_, BrokerRuleSnapshot>(
+        "SELECT id, binding_id, instance_revision_id, secret_version_id,
+                destination_origin, location_kind, header_name, header_prefix,
+                normalized_hash
+         FROM brokered_secret_rules
+         WHERE instance_revision_id = $1 ORDER BY id",
+    )
+    .bind(valid_candidate_revision.as_uuid())
+    .fetch_all(&pool)
+    .await
+    .expect("candidate broker rules");
+    assert_eq!(stored_rules.len(), 2);
+    let source_bindings: Vec<(Uuid, String)> = sqlx::query_as(
+        "SELECT id, slot_key FROM agent_secret_bindings
+         WHERE instance_revision_id = $1 ORDER BY slot_key",
+    )
+    .bind(revision.as_uuid())
+    .fetch_all(&pool)
+    .await
+    .expect("source bindings");
+    let candidate_bindings: Vec<(Uuid, String)> = sqlx::query_as(
+        "SELECT id, slot_key FROM agent_secret_bindings
+         WHERE instance_revision_id = $1 ORDER BY slot_key",
+    )
+    .bind(valid_candidate_revision.as_uuid())
+    .fetch_all(&pool)
+    .await
+    .expect("candidate bindings");
+    assert_eq!(source_bindings.len(), 2);
+    assert_eq!(candidate_bindings.len(), 2);
+    for source in &source_rules_before {
+        let copy = candidate_rules
+            .iter()
+            .find(|copy| copy.source_rule_id == source.id)
+            .expect("candidate rule mapping");
+        let candidate = stored_rules
+            .iter()
+            .find(|rule| rule.id == copy.candidate_rule_id)
+            .expect("candidate rule");
+        let source_slot = source_bindings
+            .iter()
+            .find(|(id, _)| *id == source.binding_id)
+            .map(|(_, slot)| slot)
+            .expect("source rule slot");
+        let candidate_binding_id = candidate_bindings
+            .iter()
+            .find(|(_, slot)| slot == source_slot)
+            .map(|(id, _)| *id)
+            .expect("candidate rule binding");
+        assert_eq!(candidate.binding_id, candidate_binding_id);
+        assert_eq!(
+            candidate.instance_revision_id,
+            valid_candidate_revision.as_uuid()
+        );
+        assert_eq!(candidate.secret_version_id, active_versions[&source.id]);
+        let destination = ExactHttpsOrigin::parse(&source.destination_origin).expect("origin");
+        let header = HeaderName::parse(&source.header_name).expect("header");
+        let location = match (source.location_kind.as_str(), source.header_prefix.clone()) {
+            ("outbound_header_prefix", Some(prefix)) => {
+                HttpInjectionLocation::OutboundHeaderPrefix { header, prefix }
+            }
+            ("outbound_header_value", None) => {
+                HttpInjectionLocation::OutboundHeaderValue { header }
+            }
+            _ => panic!("invalid source rule location"),
+        };
+        let expected = BrokeredSecretRule {
+            id: BrokeredSecretRuleId::from_uuid(candidate.id),
+            binding_id: candidate.binding_id,
+            instance_revision_id: valid_candidate_revision.as_uuid(),
+            secret_version_id: candidate.secret_version_id,
+            destination: Some(destination),
+            location,
+            gateway_route_id: None,
+        }
+        .normalized()
+        .expect("canonical candidate rule")
+        .normalized_hash();
+        assert_eq!(candidate.normalized_hash, expected.as_slice());
+    }
+    assert!(
+        stored_rules
+            .iter()
+            .all(|rule| candidate_parameters.1.contains(&rule.binding_id))
+    );
+    let source_rules_after = sqlx::query_as::<_, BrokerRuleSnapshot>(
+        "SELECT id, binding_id, instance_revision_id, secret_version_id,
+                destination_origin, location_kind, header_name, header_prefix,
+                normalized_hash
+         FROM brokered_secret_rules
+         WHERE instance_revision_id = $1 ORDER BY id",
+    )
+    .bind(revision.as_uuid())
+    .fetch_all(&pool)
+    .await
+    .expect("source broker rules after update");
+    assert_eq!(source_rules_after, source_rules_before);
+
+    let counts_before_replay: (i64, i64) = sqlx::query_as(
+        "SELECT (SELECT count(*) FROM agent_instance_revisions WHERE instance_id = $1),
+                (SELECT count(*) FROM brokered_secret_rules WHERE instance_revision_id = $2)",
+    )
+    .bind(instance_id.as_uuid())
+    .bind(valid_candidate_revision.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("row counts before replay");
+    let replay = service
+        .create_update(
+            &actor,
+            CreateInstanceUpdate {
+                command_key: valid_command_key,
+                update_id: AgentUpdateId::new(),
+                instance_id,
+                expected_revision_id: revision,
+                candidate_revision_id: AgentInstanceRevisionId::new(),
+                candidate_release_agent_id: candidate_agent_id,
+                parameters: broker_copy_parameters(
+                    "warning",
+                    source_model_rule_id,
+                    source_relay_rule_id,
+                ),
+                brokered_rule_copies: candidate_rules,
+                selected_policy: selected_policy(),
+                platform_policy: platform_policy(),
+                platform_policy_version: String::from("platform/v1"),
+            },
+        )
+        .await
+        .expect("idempotent broker-rule copy replay");
+    assert_eq!(replay, valid_update_id);
+    let counts: (i64, i64) = sqlx::query_as(
+        "SELECT (SELECT count(*) FROM agent_instance_revisions WHERE instance_id = $1),
+                (SELECT count(*) FROM brokered_secret_rules WHERE instance_revision_id = $2)",
+    )
+    .bind(instance_id.as_uuid())
+    .bind(valid_candidate_revision.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("idempotent row counts");
+    assert_eq!(counts, counts_before_replay);
+    assert_eq!(counts.1, 2);
 }
 
 #[tokio::test]
@@ -237,6 +804,9 @@ async fn runtime_git_mode_is_frozen_into_release_and_instance_revision() {
 #[tokio::test]
 #[serial]
 #[allow(clippy::too_many_lines)]
+// The real JetStream pull streams are retained across the gate transition so
+// this single integration test can prove transport redelivery and claim CAS.
+#[allow(clippy::large_stack_frames)]
 async fn publishes_once_and_imports_isolated_instances_with_exact_attachments() {
     let Some(pool) = pool().await else {
         return;
@@ -530,6 +1100,7 @@ async fn publishes_once_and_imports_isolated_instances_with_exact_attachments() 
                     ParameterName::parse("severity").expect("parameter should validate"),
                     ParameterValue::String(String::from("error")),
                 )]),
+                brokered_rule_copies: Vec::new(),
                 selected_policy: selected_policy(),
                 platform_policy: platform_policy(),
                 platform_policy_version: String::from("platform/v2"),
@@ -578,6 +1149,7 @@ async fn publishes_once_and_imports_isolated_instances_with_exact_attachments() 
                     ParameterName::parse("severity").expect("parameter should validate"),
                     ParameterValue::String(String::from("warning")),
                 )]),
+                brokered_rule_copies: Vec::new(),
                 selected_policy: selected_policy(),
                 platform_policy: platform_policy(),
                 platform_policy_version: String::from("platform/v2"),
@@ -666,6 +1238,7 @@ async fn publishes_once_and_imports_isolated_instances_with_exact_attachments() 
                     ParameterName::parse("severity").expect("parameter should validate"),
                     ParameterValue::String(String::from("warning")),
                 )]),
+                brokered_rule_copies: Vec::new(),
                 selected_policy: selected_policy(),
                 platform_policy: platform_policy(),
                 platform_policy_version: String::from("platform/v2"),
@@ -673,6 +1246,169 @@ async fn publishes_once_and_imports_isolated_instances_with_exact_attachments() 
         )
         .await
         .expect("valid stateful candidate should close the gate");
+    // Reproduce the production race through both adapters: the accepted
+    // mailbox dispatch is consumed while the update gate is closed, then the
+    // release service must commit a fresh wake when activation reopens it.
+    let mailbox_store = PostgresMailboxRepository::new(pool.clone());
+    let mailbox_id = MailboxId::new();
+    mailbox_store
+        .ensure_mailbox(fixture.first_project.as_uuid(), mailbox_id, first_instance)
+        .await
+        .expect("create update-race mailbox");
+    let mailbox_body = b"release-update-gate-race";
+    let mailbox_event = gate_race_event(
+        mailbox_id,
+        first_instance,
+        mailbox_body,
+        "release-update-race",
+    );
+    let accepted = mailbox_store
+        .accept(
+            fixture.first_project.as_uuid(),
+            &mailbox_event,
+            mailbox_body,
+            u32::try_from(mailbox_body.len()).expect("bounded body"),
+        )
+        .await
+        .expect("accept update-race mailbox event");
+    let wake = MailboxDispatchCommand {
+        operation_id: mailbox_domain::MailboxOperationId::from_uuid(accepted.event_id.as_uuid()),
+        event_id: accepted.event_id,
+    };
+    mailbox_store
+        .apply_command(MAILBOX_WAKE_SUBJECT, &wake)
+        .await
+        .expect("apply initial update-race wake");
+    let dispatch = MailboxDispatchCommand {
+        operation_id: mailbox_domain::MailboxOperationIdentity::dispatch(
+            mailbox_id,
+            accepted.event_id,
+            1,
+        )
+        .id(),
+        event_id: accepted.event_id,
+    };
+    mailbox_store
+        .apply_command(MAILBOX_DISPATCH_SUBJECT, &dispatch)
+        .await
+        .expect("verify initial update-race dispatch");
+    assert!(
+        mailbox_store
+            .claim_dispatch(&dispatch)
+            .await
+            .expect("closed-gate update-race claim")
+            .is_none(),
+        "the pre-activation dispatch must not create an attempt"
+    );
+    let nats_event_id = if let Ok(nats_url) = std::env::var("HEPHAESTUS_NATS_TEST_URL") {
+        let nats_body = b"release-update-nats-gate-race";
+        let nats_event = gate_race_event(
+            mailbox_id,
+            first_instance,
+            nats_body,
+            "release-update-nats-race",
+        );
+        let accepted = mailbox_store
+            .accept(
+                fixture.first_project.as_uuid(),
+                &nats_event,
+                nats_body,
+                u32::try_from(nats_body.len()).expect("bounded NATS body"),
+            )
+            .await
+            .expect("accept NATS update-race mailbox event");
+        let nats = async_nats::connect(nats_url)
+            .await
+            .expect("connect update-race NATS");
+        let jetstream = async_nats::jetstream::new(nats);
+        let consumer = mailbox_dispatch::ensure_mailbox_jetstream_topology(&jetstream)
+            .await
+            .expect("create update-race NATS topology");
+        let publisher = mailbox_dispatch::MailboxOutboxPublisher::new(
+            jetstream,
+            Arc::new(mailbox_store.clone()),
+        );
+        publisher
+            .publish_pending(100)
+            .await
+            .expect("publish pre-activation update-race commands");
+        let mut messages = consumer
+            .messages()
+            .await
+            .expect("open update-race consumer");
+        let wake_delivery = loop {
+            let delivery = tokio::time::timeout(Duration::from_secs(5), messages.next())
+                .await
+                .expect("receive pre-activation NATS wake")
+                .expect("NATS stream item")
+                .expect("valid NATS message");
+            let command: MailboxDispatchCommand =
+                serde_json::from_slice(&delivery.payload).expect("NATS wake command");
+            if delivery.message.subject.as_str() == MAILBOX_WAKE_SUBJECT
+                && command.event_id == accepted.event_id
+            {
+                break delivery;
+            }
+            delivery
+                .double_ack()
+                .await
+                .expect("ack unrelated NATS command");
+        };
+        mailbox_store
+            .apply_command(
+                MAILBOX_WAKE_SUBJECT,
+                &serde_json::from_slice(&wake_delivery.payload).expect("wake command"),
+            )
+            .await
+            .expect("apply pre-activation NATS wake");
+        wake_delivery
+            .double_ack()
+            .await
+            .expect("ack pre-activation NATS wake");
+        publisher
+            .publish_pending(100)
+            .await
+            .expect("publish pre-activation NATS dispatch");
+        let dispatch_delivery = loop {
+            let delivery = tokio::time::timeout(Duration::from_secs(5), messages.next())
+                .await
+                .expect("receive pre-activation NATS dispatch")
+                .expect("NATS stream item")
+                .expect("valid NATS message");
+            let command: MailboxDispatchCommand =
+                serde_json::from_slice(&delivery.payload).expect("NATS dispatch command");
+            if delivery.message.subject.as_str() == MAILBOX_DISPATCH_SUBJECT
+                && command.event_id == accepted.event_id
+            {
+                break (delivery, command);
+            }
+            delivery
+                .double_ack()
+                .await
+                .expect("ack unrelated NATS command");
+        };
+        mailbox_store
+            .apply_command(MAILBOX_DISPATCH_SUBJECT, &dispatch_delivery.1)
+            .await
+            .expect("apply pre-activation NATS dispatch");
+        assert!(
+            mailbox_store
+                .claim_dispatch(&dispatch_delivery.1)
+                .await
+                .expect("pre-activation NATS claim")
+                .is_none(),
+            "pre-activation NATS dispatch must not create an attempt"
+        );
+        dispatch_delivery
+            .0
+            .double_ack()
+            .await
+            .expect("ack consumed pre-activation NATS dispatch");
+        drop(messages);
+        Some(accepted.event_id)
+    } else {
+        None
+    };
     let concurrent_update = service
         .create_update(
             &actor,
@@ -687,6 +1423,7 @@ async fn publishes_once_and_imports_isolated_instances_with_exact_attachments() 
                     ParameterName::parse("severity").expect("parameter should validate"),
                     ParameterValue::String(String::from("warning")),
                 )]),
+                brokered_rule_copies: Vec::new(),
                 selected_policy: selected_policy(),
                 platform_policy: platform_policy(),
                 platform_policy_version: String::from("platform/v2"),
@@ -830,6 +1567,235 @@ async fn publishes_once_and_imports_isolated_instances_with_exact_attachments() 
         .await
         .expect("reconcile and activate exact committed candidate");
     assert_eq!(activated, UpdateDecision::Activated);
+    let activation_wakes: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM outbox
+         WHERE subject = $1 AND aggregate_id = $2 AND id <> $2",
+    )
+    .bind(MAILBOX_WAKE_SUBJECT)
+    .bind(accepted.event_id.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("count activation mailbox wake");
+    assert_eq!(
+        activation_wakes, 1,
+        "activation must re-wake eligible delivery"
+    );
+    let activation_wake_id: Uuid = sqlx::query_scalar(
+        "SELECT id FROM outbox
+         WHERE subject = $1 AND aggregate_id = $2 AND id <> $2
+         ORDER BY occurred_at DESC, id DESC LIMIT 1",
+    )
+    .bind(MAILBOX_WAKE_SUBJECT)
+    .bind(accepted.event_id.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("load activation mailbox wake");
+    mailbox_store
+        .apply_command(
+            MAILBOX_WAKE_SUBJECT,
+            &MailboxDispatchCommand {
+                operation_id: mailbox_domain::MailboxOperationId::from_uuid(activation_wake_id),
+                event_id: accepted.event_id,
+            },
+        )
+        .await
+        .expect("apply activation mailbox wake");
+    let activation_dispatches: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM outbox
+         WHERE subject = $1 AND aggregate_id = $2",
+    )
+    .bind(MAILBOX_DISPATCH_SUBJECT)
+    .bind(accepted.event_id.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("count activation dispatch commands");
+    assert_eq!(
+        activation_dispatches, 2,
+        "activation must enqueue one fresh dispatch"
+    );
+    sqlx::query(
+        "INSERT INTO git_refs
+         (repository_id, git_ref, commit_sha, updated_by_receive_id)
+         VALUES ($1, 'refs/heads/main', $2, $3)",
+    )
+    .bind(fixture.first_aux_repository.as_uuid())
+    .bind(&deferred_commit)
+    .bind(deferred_receive)
+    .execute(&pool)
+    .await
+    .expect("seed exact update-race target ref");
+    let attempts: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM mailbox_delivery_attempts WHERE event_id = $1")
+            .bind(accepted.event_id.as_uuid())
+            .fetch_one(&pool)
+            .await
+            .expect("count update-race attempts");
+    assert_eq!(
+        attempts, 0,
+        "wake recovery must not create an attempt itself"
+    );
+    let resumed = mailbox_store
+        .claim_dispatch(&dispatch)
+        .await
+        .expect("claim post-activation update-race dispatch")
+        .expect("fresh transport identity claims the candidate once");
+    assert_eq!(
+        resumed.instance_revision_id, update_candidate_revision,
+        "post-activation dispatch must use the active candidate revision"
+    );
+    sqlx::query(
+        "UPDATE runs
+         SET state = 'cleaned_up', outcome = 'succeeded', updated_at = now()
+         WHERE id = $1",
+    )
+    .bind(resumed.run_id.as_uuid())
+    .execute(&pool)
+    .await
+    .expect("finish update-race proof run");
+    assert!(
+        mailbox_store
+            .claim_dispatch(&dispatch)
+            .await
+            .expect("reject duplicate update-race dispatch")
+            .is_none(),
+        "a stale or duplicate transport command must not create another attempt"
+    );
+    if let Some(nats_event_id) = nats_event_id {
+        let nats_url = std::env::var("HEPHAESTUS_NATS_TEST_URL").expect("NATS URL remains set");
+        let nats = async_nats::connect(nats_url)
+            .await
+            .expect("reconnect update-race NATS");
+        let jetstream = async_nats::jetstream::new(nats);
+        let consumer = mailbox_dispatch::ensure_mailbox_jetstream_topology(&jetstream)
+            .await
+            .expect("reopen update-race NATS topology");
+        let publisher = mailbox_dispatch::MailboxOutboxPublisher::new(
+            jetstream,
+            Arc::new(mailbox_store.clone()),
+        );
+        let activation_wake_id: Uuid = sqlx::query_scalar(
+            "SELECT id FROM outbox
+             WHERE subject = $1 AND aggregate_id = $2 AND id <> $2
+             ORDER BY occurred_at DESC, id DESC LIMIT 1",
+        )
+        .bind(MAILBOX_WAKE_SUBJECT)
+        .bind(nats_event_id.as_uuid())
+        .fetch_one(&pool)
+        .await
+        .expect("load NATS activation wake");
+        publisher
+            .publish_pending(100)
+            .await
+            .expect("publish post-activation NATS wake");
+        let wake_published: bool =
+            sqlx::query_scalar("SELECT published_at IS NOT NULL FROM outbox WHERE id = $1")
+                .bind(activation_wake_id)
+                .fetch_one(&pool)
+                .await
+                .expect("inspect published NATS wake");
+        assert!(wake_published, "activation wake must be accepted by NATS");
+        let mut messages = consumer.messages().await.expect("open NATS consumer");
+        let wake_delivery = loop {
+            let delivery = tokio::time::timeout(Duration::from_secs(5), messages.next())
+                .await
+                .expect("receive post-activation NATS wake")
+                .expect("NATS stream item")
+                .expect("valid NATS message");
+            let command: MailboxDispatchCommand =
+                serde_json::from_slice(&delivery.payload).expect("NATS activation wake command");
+            if delivery.message.subject.as_str() == MAILBOX_WAKE_SUBJECT
+                && command.event_id == nats_event_id
+            {
+                break (delivery, command);
+            }
+            delivery
+                .double_ack()
+                .await
+                .expect("ack unrelated NATS command");
+        };
+        mailbox_store
+            .apply_command(MAILBOX_WAKE_SUBJECT, &wake_delivery.1)
+            .await
+            .expect("apply post-activation NATS wake");
+        wake_delivery
+            .0
+            .double_ack()
+            .await
+            .expect("ack post-activation NATS wake");
+        let expected_operation_id =
+            MailboxOperationIdentity::dispatch(mailbox_id, nats_event_id, 1).id();
+        let activation_dispatch_id: Uuid = sqlx::query_scalar(
+            "SELECT id FROM outbox
+             WHERE subject = $1 AND aggregate_id = $2 AND id <> $3
+             ORDER BY occurred_at DESC, id DESC LIMIT 1",
+        )
+        .bind(MAILBOX_DISPATCH_SUBJECT)
+        .bind(nats_event_id.as_uuid())
+        .bind(expected_operation_id.as_uuid())
+        .fetch_one(&pool)
+        .await
+        .expect("load NATS activation dispatch");
+        publisher
+            .publish_pending(100)
+            .await
+            .expect("publish post-activation NATS dispatch");
+        let dispatch_published: bool =
+            sqlx::query_scalar("SELECT published_at IS NOT NULL FROM outbox WHERE id = $1")
+                .bind(activation_dispatch_id)
+                .fetch_one(&pool)
+                .await
+                .expect("inspect published NATS dispatch");
+        assert!(
+            dispatch_published,
+            "activation dispatch must be accepted by NATS"
+        );
+        let dispatch_delivery = loop {
+            let delivery = tokio::time::timeout(Duration::from_secs(5), messages.next())
+                .await
+                .expect("receive post-activation NATS dispatch")
+                .expect("NATS stream item")
+                .expect("valid NATS message");
+            let command: MailboxDispatchCommand = serde_json::from_slice(&delivery.payload)
+                .expect("NATS activation dispatch command");
+            if delivery.message.subject.as_str() == MAILBOX_DISPATCH_SUBJECT
+                && command.event_id == nats_event_id
+            {
+                break (delivery, command);
+            }
+            delivery
+                .double_ack()
+                .await
+                .expect("ack unrelated NATS command");
+        };
+        assert_eq!(dispatch_delivery.1.operation_id, expected_operation_id);
+        mailbox_store
+            .apply_command(MAILBOX_DISPATCH_SUBJECT, &dispatch_delivery.1)
+            .await
+            .expect("apply post-activation NATS dispatch");
+        let nats_run = mailbox_store
+            .claim_dispatch(&dispatch_delivery.1)
+            .await
+            .expect("claim post-activation NATS dispatch")
+            .expect("NATS re-wake claims candidate");
+        assert_eq!(nats_run.instance_revision_id, update_candidate_revision);
+        assert!(
+            mailbox_store
+                .claim_dispatch(&dispatch_delivery.1)
+                .await
+                .expect("duplicate post-activation NATS claim")
+                .is_none()
+        );
+        sqlx::query("UPDATE runs SET state = 'cleaned_up', outcome = 'succeeded' WHERE id = $1")
+            .bind(nats_run.run_id.as_uuid())
+            .execute(&pool)
+            .await
+            .expect("finish post-activation NATS proof run");
+        dispatch_delivery
+            .0
+            .double_ack()
+            .await
+            .expect("ack post-activation NATS dispatch");
+    }
     let active_after_update: (Uuid, String, bool) = sqlx::query_as(
         "SELECT active_revision_id, state, run_gate_open
          FROM agent_instances WHERE id = $1",
@@ -953,6 +1919,7 @@ async fn publishes_once_and_imports_isolated_instances_with_exact_attachments() 
                     ParameterName::parse("severity").expect("parameter should validate"),
                     ParameterValue::String(String::from("error")),
                 )]),
+                brokered_rule_copies: Vec::new(),
                 selected_policy: selected_policy(),
                 platform_policy: platform_policy(),
                 platform_policy_version: String::from("platform/v3"),
@@ -1028,6 +1995,7 @@ async fn publishes_once_and_imports_isolated_instances_with_exact_attachments() 
                     ParameterName::parse("severity").expect("parameter should validate"),
                     ParameterValue::String(String::from("error")),
                 )]),
+                brokered_rule_copies: Vec::new(),
                 selected_policy: selected_policy(),
                 platform_policy: platform_policy(),
                 platform_policy_version: String::from("platform/v3"),
@@ -1170,6 +2138,7 @@ async fn publishes_once_and_imports_isolated_instances_with_exact_attachments() 
                     ParameterName::parse("severity").expect("parameter should validate"),
                     ParameterValue::String(String::from("warning")),
                 )]),
+                brokered_rule_copies: Vec::new(),
                 selected_policy: selected_policy(),
                 platform_policy: platform_policy(),
                 platform_policy_version: String::from("platform/v3"),
@@ -1569,6 +2538,40 @@ fn key(operation: &str, id: Uuid) -> ReleaseCommandKey {
     ReleaseCommandKey::derive(operation, &[id.as_bytes()])
 }
 
+fn gate_race_event(
+    mailbox_id: MailboxId,
+    instance_id: AgentInstanceId,
+    body: &[u8],
+    identity: &str,
+) -> MailboxEvent {
+    MailboxEvent {
+        id: MailboxEventId::new(),
+        mailbox_id,
+        instance_id,
+        producer_id: ProducerId::parse(identity).expect("producer identity"),
+        deduplication_key: DeduplicationKey::parse(identity).expect("deduplication key"),
+        envelope: MailboxEnvelope::new(
+            EnvelopeMethod::parse("POST").expect("method"),
+            EnvelopeRoute::parse(format!("/{identity}")).expect("route"),
+            BTreeMap::new(),
+            ContentMetadata::new(
+                BodyReference::new(
+                    BodyReferenceId::new(),
+                    u32::try_from(body.len()).expect("bounded body"),
+                    Sha256::digest(body).into(),
+                )
+                .expect("body reference"),
+                Some(String::from("application/octet-stream")),
+                None,
+            )
+            .expect("content metadata"),
+            OffsetDateTime::now_utc(),
+            None,
+        )
+        .expect("mailbox envelope"),
+    }
+}
+
 fn identity(user_id: UserId) -> AuthenticatedIdentity {
     AuthenticatedIdentity::new(
         user_id,
@@ -1767,6 +2770,7 @@ async fn seed_with_config(pool: &PgPool, source: &str) -> Fixture {
     .expect("seed build image snapshots");
     Fixture {
         actor,
+        organization,
         first_project,
         first_repository,
         first_aux_repository,
@@ -1948,4 +2952,79 @@ phases = ["normal"]
 destinations = ["api.example.test"]
 "#
     .to_owned()
+}
+
+fn brokered_config() -> String {
+    format!(
+        "{}\n[[parameters]]\nname = \"model_rule_id\"\ntype = \"string\"\nminimum_length = 36\nmaximum_length = 36\nrequired = true\n[[parameters]]\nname = \"relay_rule_id\"\ntype = \"string\"\nminimum_length = 36\nmaximum_length = 36\nrequired = true\n[[secret_slots]]\nkey = \"relay\"\npurpose = \"Second brokered test authority\"\nrequired = true\ndelivery_modes = [\"brokered\"]\nphases = [\"normal\"]\ndestinations = [\"relay.example\"]\n",
+        reusable_config()
+    )
+}
+
+fn broker_copy_parameters(
+    severity: &str,
+    model_rule_id: Uuid,
+    relay_rule_id: Uuid,
+) -> BTreeMap<ParameterName, ParameterValue> {
+    BTreeMap::from([
+        (
+            ParameterName::parse("severity").expect("parameter name"),
+            ParameterValue::String(severity.to_owned()),
+        ),
+        (
+            ParameterName::parse("model_rule_id").expect("parameter name"),
+            ParameterValue::String(model_rule_id.to_string()),
+        ),
+        (
+            ParameterName::parse("relay_rule_id").expect("parameter name"),
+            ParameterValue::String(relay_rule_id.to_string()),
+        ),
+    ])
+}
+
+fn secret_key(operation: &str, id: Uuid) -> secret_domain::SecretCommandKey {
+    secret_domain::SecretCommandKey::derive(operation, &[id.as_bytes()])
+}
+
+async fn seed_matching_update_release(
+    pool: &PgPool,
+    current_release_id: ReleaseId,
+    current_release_agent_id: ReleaseAgentId,
+) -> ReleaseAgentId {
+    let release_id = ReleaseId::new();
+    let release_agent_id = ReleaseAgentId::new();
+    sqlx::query(
+        "INSERT INTO releases
+         (id, repository_id, version, source_commit, source_ref,
+          build_request_id, build_definition_hash, configuration,
+          configuration_hash, manifest_hash, state, published_at)
+         SELECT $1, repository_id, $2, source_commit, source_ref,
+                build_request_id, build_definition_hash, configuration,
+                configuration_hash, manifest_hash, 'published', now()
+         FROM releases WHERE id = $3",
+    )
+    .bind(release_id.as_uuid())
+    .bind(format!("broker-copy-{release_id}"))
+    .bind(current_release_id.as_uuid())
+    .execute(pool)
+    .await
+    .expect("seed matching candidate release");
+    sqlx::query(
+        "INSERT INTO release_agents
+         (id, release_id, family_id, agent_key, display_name,
+          runtime_contract, runtime_contract_hash, parameter_schema,
+          secret_slot_schema, requires_state, update_hook)
+         SELECT $1, $2, family_id, agent_key, display_name,
+                runtime_contract, $3, parameter_schema,
+                secret_slot_schema, requires_state, update_hook
+         FROM release_agents WHERE id = $4",
+    )
+    .bind(release_agent_id.as_uuid())
+    .bind(release_id.as_uuid())
+    .bind([88_u8; 32].as_slice())
+    .bind(current_release_agent_id.as_uuid())
+    .execute(pool)
+    .await
+    .expect("seed matching candidate agent");
+    release_agent_id
 }
