@@ -4,7 +4,8 @@ import {SignJWT, exportJWK, generateKeyPair} from "jose";
 
 const host = "127.0.0.1";
 const port = Number(process.env.HEPHAESTUS_E2E_OIDC_PORT ?? "5556");
-const issuer = `http://${host}:${port}`;
+const issuer = process.env.HEPHAESTUS_E2E_OIDC_ISSUER ?? `http://${host}:${port}`;
+const reviewerSubject = process.env.HEPHAESTUS_E2E_OIDC_REVIEWER_SUBJECT ?? "reviewer";
 const webUrl = process.env.HEPHAESTUS_E2E_WEB_URL ?? "http://127.0.0.1:4000";
 const redirectUri = `${webUrl}/auth/oidc/callback`;
 const clientId = "hephaestus-web";
@@ -62,7 +63,7 @@ const issueBrowserToken = async (authorization, subject, account) => {
   })
     .setProtectedHeader({alg: "RS256", kid: "e2e-browser-key"})
     .setIssuer(issuer)
-    .setSubject(subject)
+    .setSubject(subject === "reviewer" ? reviewerSubject : subject)
     .setAudience(clientId)
     .setIssuedAt(now)
     .setExpirationTime(now + 300)
@@ -213,7 +214,7 @@ const server = http.createServer(async (request, response) => {
     })
       .setProtectedHeader({alg: "HS256"})
       .setIssuer(issuer)
-      .setSubject("reviewer")
+      .setSubject(reviewerSubject)
       .setAudience("hephaestus-git")
       .setIssuedAt(now)
       .setExpirationTime(now + 600)

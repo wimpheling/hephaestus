@@ -20,7 +20,12 @@ require them to assemble everything before receiving value.
 
 - [ ] Complete [MVP-05.1: cooking acceptance](in-progress/mvp-05.1-complete-cooking-acceptance.md),
   including real builds and installation, multi-request operation, updates,
-  recovery, security coverage, real Telegram transport and browser evidence.
+  recovery, retained security and guest-crash coverage, deterministic transport,
+  browser evidence, and reproducible local and CI execution. Real Telegram is
+  excluded. The user split the exhaustive
+  [host-daemon crash matrix](todo/complete-host-daemon-crash-recovery-matrix.md)
+  and [expanded adversarial isolation matrix](todo/complete-adversarial-isolation-e2e-matrix.md)
+  into follow-ups on 2026-09-07; they are not MVP-05 completion blockers.
 - [ ] Preserve the distinction between the verified first-request proof and
   remaining acceptance requirements; record any agreed scope changes explicitly.
 

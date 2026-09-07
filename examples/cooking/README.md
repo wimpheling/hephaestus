@@ -9,8 +9,12 @@ the automated scenario, its acceptance specification, and the run command.
 | [TEST-MATRIX.md](TEST-MATRIX.md) | Required E2E triggers and observable outcomes, including local/CI execution. |
 | [Remaining-work task](../../tasks/in-progress/mvp-05.1-complete-cooking-acceptance.md) | Sequenced implementation and verification needed to finish MVP-05. |
 | [run.sh](run.sh) | Command to run the real-stack automated example. |
+| [CI.md](CI.md) | Dedicated KVM workflow, runner configuration and retained diagnostics. |
 | [tests/scenario.rs](tests/scenario.rs) | Executable scenario: fixture setup, inbound requests, cooking run, Git result and Hugo checks. Start with `exercise`. |
 | [tests/inspection.rs](tests/inspection.rs) | Authenticated provenance queries, denied queries and proposal approval. |
+| [tests/updates.rs](tests/updates.rs) | Draining, migration, rollback, recovery and model-credential rotation assertions. |
+| [tests/blog_artifact.rs](tests/blog_artifact.rs) | Exact-source blog build, immutable publication and authenticated HTML retrieval. |
+| [tests/confinement.rs](tests/confinement.rs) | Raw application-table credential scan with schema coverage checks. |
 | [cooking-gateway/](cooking-gateway/) | Released Rust handler: verification placeholder, two-user policy and normalized mailbox publication. |
 | [cooking-agent/](cooking-agent/) | Released Python agent: SQLite memory, broker calls, recipe output and update hook. |
 | [telegram-relay/](telegram-relay/) | External relay application with deterministic Telegram transport. |
@@ -23,10 +27,11 @@ That test provides daemon setup and selects this scenario when `run.sh` sets
 [Caddy/libkrun launcher](../../scripts/run-gateway-libkrun-e2e.sh) owns the
 temporary infrastructure. These shared platform helpers remain outside examples.
 
-This is a terminal acceptance test, not a persistent browser demo. It sends a
-simulated request from Alice, runs the actual applications, approves the result,
-and deletes its temporary services and data. Model responses and Telegram
-delivery are deterministic; no real Telegram message is sent.
+This terminal acceptance test sends concurrent simulated Alice/Bob requests,
+replays ingress, restarts the supervisor, and submits a later Alice request. It
+runs the actual applications, inspects the results, approves Alice's initial
+proposal, and deletes its temporary services and data. Model and relay responses
+are deterministic; no real Telegram message is sent.
 
 The cooking fixture runs the application-owned gateway and cooking agent in
 separate network-disabled libkrun guests, with Caddy ingress, PostgreSQL
@@ -42,17 +47,49 @@ with SQLite support. Both guests execute immutable imported release artifacts.
 
 ```sh
 # From the Hephaestus repository root:
-HEPHAESTUS_LIBKRUN_UBUNTU_IMAGE='localhost/hephaestus/python-ubuntu@sha256:cf5f70330594d10e4445178f1371ca63fd8e9e4dae54ddd78612796288c26ae9' \
+# Set this to the local digest reference printed by provision-builder-image.sh.
+HEPHAESTUS_LIBKRUN_UBUNTU_IMAGE='localhost/python-ubuntu@sha256:<manifest-digest>' \
+HEPHAESTUS_LIBKRUN_RUST_BUILDER_IMAGE='localhost/rust-ubuntu@sha256:<manifest-digest>' \
   examples/cooking/run.sh
 ```
 
-The image above is the locally provisioned platform Python image. Provision it
-first or supply another exact compatible digest. The wrapper requires the same
+The first image above is the locally provisioned platform Python image and the
+second is the digest-pinned Rust builder image. Provision both first or supply
+other exact compatible digests. The wrapper requires the same
 non-root KVM, delegated cgroup, Podman, Rust musl target and host tools as
 `scripts/run-gateway-libkrun-e2e.sh`. It creates disposable PostgreSQL, NATS,
 Caddy, guest filesystems and application workspaces, and cleans them up on exit.
-An optional `HEPHAESTUS_COOKING_HUGO` absolute executable path builds the approved
-recipe through a separately verified pinned Hugo binary.
+The real build path also requires prepared OCI builder, verifier and base-image
+inputs from the [repository-image workflow](../../docs/repository-image-builds.md).
+Its enabled `repository-images/workflow.env` lives under `HEPHAESTUS_LOCAL_ROOT`
+(default `.local/hephaestus`). Missing reviewed inputs fail preflight. The blog
+image must pass the platform's independent vulnerability policy before its Hugo
+build can run.
+
+To prepare a reviewed Python or Rust builder from the canonical platform
+Dockerfile, run the helper with immutable provenance inputs:
+
+```sh
+examples/cooking/provision-builder-image.sh \
+  --builder python-ubuntu \
+  --source https://forge.example/hephaestus \
+  --revision "$(git rev-parse HEAD)" \
+  --created 2026-09-06T12:00:00Z
+```
+
+It writes an OCI archive, loads it into the local Podman store, and prints its
+exact manifest digest plus a usable local digest reference. A CI job can use
+that reference on the same runner. Another runner can prepare the same reviewed
+builder, load a transferred OCI archive, or use a published image through the
+reviewed platform-image operation. The browser acceptance journey runs by
+default. Set `HEPHAESTUS_COOKING_BROWSER_E2E=0` only when deliberately running
+the non-acceptance build and VM slice. Set `HEPHAESTUS_COOKING_TIMEOUT_SECONDS` to
+change the default 900-second deadline; the deadline includes preflight,
+compilation and guest execution, followed by up to 30 seconds of cleanup grace.
+Set `HEPHAESTUS_COOKING_DIAGNOSTICS_DIR` to an absolute directory to retain
+the execution log and, on failure, host diagnostics. Logs have mode `0600`;
+the wrapper redacts the known fixture sentinels and credential header patterns.
+This redaction does not replace the acceptance suite's secret-confinement checks.
 
 For application-only tests (no VMs, services or credentials):
 
@@ -61,20 +98,39 @@ For application-only tests (no VMs, services or credentials):
 (cd examples/cooking/cooking-agent && python3 -m unittest -v)
 ```
 
-The Hugo test is optional in both paths. Supply `HEPHAESTUS_COOKING_HUGO` to
-`run.sh`, or `COOKING_HUGO_BINARY` to the Python tests, with the absolute path
-of a verified Hugo executable. Successful real-stack output ends with
+The Python unit suite optionally accepts `COOKING_HUGO_BINARY`, the absolute path
+of a verified Hugo executable; the application CI job supplies it. A host Hugo
+check is supporting coverage and does not replace the E2E's isolated image,
+build and artifact assertions. Successful real-stack output ends with
 `daemon golden E2E passed; runtime and cgroup cleanup verified`.
 
+The focused update-admission regression can run without KVM:
+
+```sh
+scripts/test-update-admission-postgres-nats.sh
+```
+
+It owns pinned PostgreSQL/NATS containers and exercises the active-run admission,
+reconciler race, revoked-actor recovery and explicit missing-feature failure.
+The ordinary CI job runs this regression separately from the cooking E2E.
+
 The scenario checks empty `401` authentication failures, a released-policy
-`403` for an unknown identity, and a `200` acknowledgement for Alice. That
-request produces one normalized durable event, a serial stateful cooking run,
-one model call and one relay call through their exact broker rules, a Markdown
-recipe result against the frozen incoming Git commit, and host-side publication
-after an authorized approval RPC. Inspection uses audience-bound authenticated
-RPCs to resolve the mailbox run, result, authorization snapshot, exact HTTPS
-leases/rules/secret versions and disposition; an outsider and a wrong-audience
-caller are denied. The fixture reports only opaque provenance identifiers.
+`403` for an unknown identity, `400` for malformed/oversized input, and `200`
+acknowledgements for Alice and Bob. Five logical recipe requests produce
+five durable events, non-overlapping state leases, and separate model
+and relay calls through exact broker rules. A duplicate Alice update produces
+no second event. A later Alice request after graceful supervisor restart uses
+her persisted SQLite context. Competing Git proposals retain their frozen input
+commit; only the explicitly approved result changes canonical Git. Bob's stale
+approval records a conflict without moving the canonical ref. Malformed model
+output and a lost relay response each produce one failed delivery attempt and
+one successful retry. Each endpoint receives six physical calls, while the
+relay retains five logical ledger entries.
+
+Inspection uses audience-bound authenticated RPCs to resolve each mailbox run,
+result, authorization snapshot, exact HTTPS leases/rules/secret versions and
+disposition. Outsider and wrong-audience callers are denied. The fixture reports
+only opaque provenance identifiers.
 
 The model is a deterministic certificate-verified TLS fixture. The relay call
 executes the actual external `telegram-relay/relay.py` application, including

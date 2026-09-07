@@ -15,6 +15,7 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.AgentInstancePage do
   attr :attachment_form, :any, required: true
   attr :revision_form, :any, required: true
   attr :update_form, :any, required: true
+  attr :brokered_rule_copy_count, :integer, default: 0
   attr :binding_form, :any, required: true
   attr :capability_form, :any, required: true
   attr :organization_index_destination, :string, default: nil
@@ -33,6 +34,7 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.AgentInstancePage do
   attr :create_update_event, :string, required: true, values: ["create-update"]
   attr :recover_update_event, :string, required: true, values: ["recover-update"]
   attr :bind_secret_event, :string, required: true, values: ["bind-secret"]
+  attr :create_mailbox_event, :string, default: nil, values: [nil, "create-mailbox"]
   attr :control_mailbox_event, :string, required: true, values: ["control-mailbox"]
 
   @doc "Renders an agent instance from route-provided presentation data."
@@ -109,6 +111,15 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.AgentInstancePage do
       />
       <.revision_history revisions={@revisions} />
       <.capability_inspection instance={@instance} />
+      <.action
+        :if={@instance["can_manage"] && @instance["state"] != "removed" && @create_mailbox_event}
+        id="create-instance-mailbox"
+        interaction={:event}
+        event={@create_mailbox_event}
+        variant={:secondary}
+      >
+        Get or create mailbox
+      </.action>
       <.mailbox_deliveries
         instance={@instance}
         control_event={@control_mailbox_event}
@@ -125,6 +136,7 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.AgentInstancePage do
         instance={@instance}
         updates={@updates}
         form={@update_form}
+        brokered_rule_copy_count={@brokered_rule_copy_count}
         create_event={@create_update_event}
         recover_event={@recover_update_event}
       />
@@ -746,6 +758,7 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.AgentInstancePage do
   attr :instance, :map, required: true
   attr :updates, :any, required: true
   attr :form, :any, required: true
+  attr :brokered_rule_copy_count, :integer, default: 0
   attr :create_event, :string, required: true, values: ["create-update"]
   attr :recover_event, :string, required: true, values: ["recover-update"]
 
@@ -796,6 +809,52 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.AgentInstancePage do
           required={declaration["required"]}
           autocomplete="off"
         />
+        <.frame id="brokered-rule-copies" variant={:resource_detail}>
+          <.text as="strong">Brokered rule copies</.text>
+          <.text as="small" variant={:muted}>
+            Supply exact source and candidate rule IDs for each brokered rule. Leave unused rows empty; the platform validates ownership and revision compatibility.
+          </.text>
+          <.frame
+            :for={{row, index} <- brokered_rule_copy_rows(@brokered_rule_copy_count)}
+            variant={:command_grid}
+          >
+            <.input
+              type="text"
+              id={"brokered-rule-copy-#{index}-source"}
+              name={"update[brokered_rule_copies][#{index}][source_rule_id]"}
+              label={"#{row["label"]} source rule ID"}
+              value=""
+              autocomplete="off"
+            />
+            <.input
+              type="text"
+              id={"brokered-rule-copy-#{index}-candidate"}
+              name={"update[brokered_rule_copies][#{index}][candidate_rule_id]"}
+              label={"#{row["label"]} candidate rule ID"}
+              value=""
+              autocomplete="off"
+            />
+          </.frame>
+          <.frame variant={:command_row}>
+            <.action
+              interaction={:event}
+              event="add-brokered-rule-copy"
+              variant={:secondary}
+              test_id="add-brokered-rule-copy"
+            >
+              Add rule copy
+            </.action>
+            <.action
+              interaction={:event}
+              event="remove-brokered-rule-copy"
+              variant={:secondary}
+              test_id="remove-brokered-rule-copy"
+              disabled={@brokered_rule_copy_count == 0}
+            >
+              Remove last rule copy
+            </.action>
+          </.frame>
+        </.frame>
         <.input
           field={@form[:vcpus]}
           type="number"
@@ -1059,6 +1118,12 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.AgentInstancePage do
       candidate -> candidate["parameter_schema"]
     end
   end
+
+  defp brokered_rule_copy_rows(count) when count > 0 do
+    Enum.map(1..count, &%{"label" => "Copy #{&1}"}) |> Enum.with_index()
+  end
+
+  defp brokered_rule_copy_rows(_count), do: []
 
   defp candidate_default(instance, declaration) do
     if declaration["sensitive"], do: "", else: active_parameter(instance, declaration)

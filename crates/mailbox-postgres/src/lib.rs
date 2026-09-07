@@ -71,6 +71,123 @@ impl PostgresMailboxRepository {
         Self { pool }
     }
 
+    /// Allocates the one mailbox owned by an agent instance.
+    ///
+    /// Project and instance management authority is checked before the
+    /// worker-only mailbox write. The command ledger makes retries return the
+    /// original mailbox even after another operation changes the instance.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MailboxPersistenceError::Unavailable`] for an inaccessible
+    /// instance and [`MailboxPersistenceError::IdempotencyConflict`] when a
+    /// retry key is reused for another instance.
+    pub async fn allocate(
+        &self,
+        identity: &AuthenticatedIdentity,
+        instance_id: AgentInstanceId,
+    ) -> Result<MailboxId, MailboxPersistenceError> {
+        let key = allocation_command_key(identity);
+        let mut transaction = begin_actor_transaction(&self.pool, identity)
+            .await
+            .map_err(storage)?;
+        sqlx::query("SET LOCAL ROLE hephaestus_app")
+            .execute(&mut *transaction)
+            .await
+            .map_err(storage)?;
+        let project_id: Option<Uuid> = sqlx::query_scalar(
+            "SELECT project_id FROM agent_instances
+             WHERE id = $1
+               AND state <> 'removed'
+               AND check_permission('user', hephaestus_actor_id(), 'can_manage',
+                    'agent_instance', id::text) = 1
+               AND check_permission('user', hephaestus_actor_id(), 'can_manage',
+                    'project', project_id::text) = 1",
+        )
+        .bind(instance_id.as_uuid())
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(storage)?;
+        let project_id = project_id.ok_or(MailboxPersistenceError::Unavailable)?;
+        let inserted = sqlx::query(
+            "INSERT INTO mailbox_allocation_commands
+                 (command_key, operation, project_id, instance_id, actor_id,
+                  mailbox_id, request_id)
+             VALUES ($1, 'create_mailbox', $2, $3, $4, $5, $6)
+             ON CONFLICT (command_key) DO NOTHING",
+        )
+        .bind(key.as_slice())
+        .bind(project_id)
+        .bind(instance_id.as_uuid())
+        .bind(identity.user_id.as_uuid())
+        .bind(Option::<Uuid>::None)
+        .bind(identity.request_id.as_uuid())
+        .execute(&mut *transaction)
+        .await
+        .map_err(storage)?;
+        if inserted.rows_affected() == 0 {
+            let stored: Option<(String, Uuid, Uuid, Uuid, Option<Uuid>)> = sqlx::query_as(
+                "SELECT operation, project_id, instance_id, actor_id, mailbox_id
+                 FROM mailbox_allocation_commands WHERE command_key = $1",
+            )
+            .bind(key.as_slice())
+            .fetch_optional(&mut *transaction)
+            .await
+            .map_err(storage)?;
+            let Some((operation, stored_project, stored_instance, stored_actor, mailbox_id)) =
+                stored
+            else {
+                return Err(MailboxPersistenceError::Unavailable);
+            };
+            if operation != "create_mailbox"
+                || stored_project != project_id
+                || stored_instance != instance_id.as_uuid()
+                || stored_actor != identity.user_id.as_uuid()
+            {
+                return Err(MailboxPersistenceError::IdempotencyConflict);
+            }
+            let mailbox_id = mailbox_id.ok_or(MailboxPersistenceError::Unavailable)?;
+            transaction.commit().await.map_err(storage)?;
+            return Ok(MailboxId::from_uuid(mailbox_id));
+        }
+        sqlx::query("SET LOCAL ROLE hephaestus_worker")
+            .execute(&mut *transaction)
+            .await
+            .map_err(storage)?;
+        // The mailbox trigger emits the instance-scoped product event only
+        // for this user allocation command. Worker bootstrap and recovery
+        // writes must not manufacture mutation receipts.
+        sqlx::query("SET LOCAL hephaestus.mailbox_allocation = 'true'")
+            .execute(&mut *transaction)
+            .await
+            .map_err(storage)?;
+        let mailbox_id: Option<Uuid> = sqlx::query_scalar(
+            "INSERT INTO mailboxes (id, project_id, instance_id, state)
+             VALUES ($1, $2, $3, 'active')
+             ON CONFLICT (instance_id) DO UPDATE SET updated_at = now()
+             WHERE mailboxes.state <> 'removed'
+             RETURNING id",
+        )
+        .bind(Uuid::new_v4())
+        .bind(project_id)
+        .bind(instance_id.as_uuid())
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(storage)?;
+        let mailbox_id = mailbox_id.ok_or(MailboxPersistenceError::Unavailable)?;
+        sqlx::query(
+            "UPDATE mailbox_allocation_commands SET mailbox_id = $2
+             WHERE command_key = $1",
+        )
+        .bind(key.as_slice())
+        .bind(mailbox_id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(storage)?;
+        transaction.commit().await.map_err(storage)?;
+        Ok(MailboxId::from_uuid(mailbox_id))
+    }
+
     /// Ensures the supplied mailbox is owned by exactly one project instance.
     ///
     /// # Errors
@@ -429,10 +546,20 @@ pub enum MailboxPersistenceError {
     /// `PostgreSQL` or serialization failed without exposing request content.
     #[error("mailbox persistence failed: {0}")]
     Provider(String),
+    /// The same retry identity was used for a different mailbox allocation.
+    #[error("mailbox allocation idempotency identity conflicts")]
+    IdempotencyConflict,
 }
 
 fn storage(error: impl std::fmt::Display) -> MailboxPersistenceError {
     MailboxPersistenceError::Provider(error.to_string())
+}
+
+fn allocation_command_key(identity: &AuthenticatedIdentity) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(b"hephaestus-mailbox-allocation-v1\0");
+    digest.update(identity.idempotency_id.as_uuid().as_bytes());
+    digest.finalize().into()
 }
 
 fn validate_payload(
@@ -584,13 +711,13 @@ impl MailboxDispatchStore for PostgresMailboxRepository {
         let committed = sqlx::query_scalar::<_, bool>(
             "SELECT EXISTS (
                 SELECT 1 FROM outbox
-                WHERE id = $1 AND subject = $2
-                  AND payload->>'operation_id' = $1::text
+                WHERE subject = $1
+                  AND payload->>'operation_id' = $2::text
                   AND payload->>'mailbox_event_id' = $3::text
              )",
         )
-        .bind(command.operation_id.as_uuid())
         .bind(subject)
+        .bind(command.operation_id.as_uuid())
         .bind(command.event_id.as_uuid())
         .fetch_one(&mut *transaction)
         .await
@@ -652,31 +779,11 @@ impl MailboxDispatchStore for PostgresMailboxRepository {
             }
         };
         if changed && subject != MAILBOX_CANCEL_SUBJECT {
-            let current_attempt = sqlx::query_scalar::<_, i32>(
-                "SELECT logical_attempt_count FROM mailbox_deliveries WHERE event_id = $1",
-            )
-            .bind(command.event_id.as_uuid())
-            .fetch_one(&mut *transaction)
-            .await
-            .map_err(dispatch_error)?;
-            let next_attempt = current_attempt
-                .checked_add(1)
-                .and_then(|value| u32::try_from(value).ok())
-                .ok_or_else(|| {
-                    MailboxDispatchStoreError("mailbox attempt limit exceeded".to_owned())
-                })?;
-            let operation_id = MailboxOperationIdentity::dispatch(
-                MailboxId::from_uuid(mailbox_id),
-                command.event_id,
-                next_attempt,
-            )
-            .id();
-            enqueue_command(
+            enqueue_next_dispatch(
                 &mut transaction,
-                operation_id.as_uuid(),
-                command.event_id.as_uuid(),
-                MAILBOX_DISPATCH_SUBJECT,
-                "mailbox.dispatch.v1",
+                mailbox_id,
+                command.event_id,
+                command.operation_id.as_uuid(),
             )
             .await?;
         }
@@ -732,6 +839,66 @@ impl MailboxDispatchStore for PostgresMailboxRepository {
             .execute(&mut *transaction)
             .await
             .map_err(dispatch_error)?;
+        // The first target read establishes which instance-scoped advisory
+        // lock to wait on. Re-read the target after that wait so a concurrent
+        // gate/revision change cannot be bypassed by the old statement
+        // snapshot.
+        let target = sqlx::query_as::<_, DispatchTargetRow>(
+            "SELECT event.mailbox_id, event.instance_id, revision.id AS instance_revision_id,
+                    release_agent.release_id, revision.release_agent_id,
+                    attachment.id AS attachment_id, git_ref.git_ref AS target_ref,
+                    git_ref.commit_sha AS target_commit, release_agent.requires_state,
+                    delivery.logical_attempt_count
+             FROM mailbox_deliveries AS delivery
+             JOIN mailbox_events AS event ON event.id = delivery.event_id
+             JOIN mailboxes AS mailbox ON mailbox.id = event.mailbox_id
+             JOIN agent_instances AS instance ON instance.id = event.instance_id
+             JOIN agent_instance_revisions AS revision
+               ON revision.id = instance.active_revision_id AND revision.instance_id = instance.id
+             JOIN release_agents AS release_agent ON release_agent.id = revision.release_agent_id
+             JOIN releases AS release ON release.id = release_agent.release_id
+             JOIN LATERAL (
+                SELECT id, repository_id, ref_selector FROM agent_attachments
+                WHERE instance_id = instance.id AND enabled AND removed_at IS NULL
+                ORDER BY created_at, id LIMIT 1
+             ) AS attachment ON true
+             JOIN git_refs AS git_ref
+               ON git_ref.repository_id = attachment.repository_id
+              AND git_ref.git_ref = attachment.ref_selector
+             WHERE delivery.event_id = $1 AND delivery.disposition = 'eligible'
+               AND mailbox.state = 'active' AND instance.run_gate_open
+               AND instance.state IN ('active', 'update_rejected')
+               AND revision.runnable AND release.state = 'published'
+             FOR UPDATE OF delivery",
+        )
+        .bind(command.event_id.as_uuid())
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(dispatch_error)?;
+        let Some(target) = target else {
+            transaction.commit().await.map_err(dispatch_error)?;
+            return Ok(None);
+        };
+        let instance_busy: bool = sqlx::query_scalar(
+            "SELECT EXISTS (
+                 SELECT 1 FROM runs
+                  WHERE instance_id = $1 AND requires_state AND state <> 'cleaned_up'
+             ) AND $2",
+        )
+        .bind(target.instance_id)
+        .bind(target.requires_state)
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(dispatch_error)?;
+        if instance_busy {
+            // Leave the committed dispatch command and eligible delivery
+            // untouched. The transport handler leaves this error unacknowledged
+            // so JetStream redelivers the same identifier-only command after
+            // its acknowledgement deadline, without creating another attempt.
+            return Err(MailboxDispatchStoreError(
+                "mailbox instance has an active stateful run".to_owned(),
+            ));
+        }
         let attempt_number = target.logical_attempt_count.checked_add(1).ok_or_else(|| {
             MailboxDispatchStoreError("mailbox attempt limit exceeded".to_owned())
         })?;
@@ -1148,21 +1315,98 @@ async fn enqueue_command(
     event_id: Uuid,
     subject: &str,
     event_type: &str,
-) -> Result<(), MailboxDispatchStoreError> {
+) -> Result<bool, MailboxDispatchStoreError> {
+    enqueue_command_with_transport_id(
+        transaction,
+        operation_id,
+        operation_id,
+        event_id,
+        subject,
+        event_type,
+    )
+    .await
+}
+
+async fn enqueue_command_with_transport_id(
+    transaction: &mut Transaction<'_, Postgres>,
+    transport_id: Uuid,
+    operation_id: Uuid,
+    event_id: Uuid,
+    subject: &str,
+    event_type: &str,
+) -> Result<bool, MailboxDispatchStoreError> {
     sqlx::query(
         "INSERT INTO outbox (id, aggregate_type, aggregate_id, subject, event_type, payload, occurred_at)
          VALUES ($1, 'mailbox_event', $2, $3, $4,
-                 jsonb_build_object('operation_id', $1, 'mailbox_event_id', $2), now())
+                 jsonb_build_object('operation_id', $5, 'mailbox_event_id', $2), now())
          ON CONFLICT (id) DO NOTHING",
     )
-    .bind(operation_id)
+    .bind(transport_id)
     .bind(event_id)
     .bind(subject)
     .bind(event_type)
+    .bind(operation_id)
     .execute(&mut **transaction)
     .await
-    .map(|_| ())
+    .map(|result| result.rows_affected() == 1)
     .map_err(dispatch_error)
+}
+
+/// Enqueues the next logical dispatch after a wake made a delivery eligible.
+///
+/// The logical operation remains deterministic for the attempt number.  If a
+/// prior transport message with that operation was already consumed, the
+/// replacement gets a distinct outbox/NATS message ID while carrying the same
+/// operation payload, preserving the claim identity check.
+async fn enqueue_next_dispatch(
+    transaction: &mut Transaction<'_, Postgres>,
+    mailbox_id: Uuid,
+    event_id: MailboxEventId,
+    wake_operation_id: Uuid,
+) -> Result<(), MailboxDispatchStoreError> {
+    let current_attempt = sqlx::query_scalar::<_, i32>(
+        "SELECT logical_attempt_count FROM mailbox_deliveries WHERE event_id = $1",
+    )
+    .bind(event_id.as_uuid())
+    .fetch_one(&mut **transaction)
+    .await
+    .map_err(dispatch_error)?;
+    let next_attempt = current_attempt
+        .checked_add(1)
+        .and_then(|value| u32::try_from(value).ok())
+        .ok_or_else(|| MailboxDispatchStoreError("mailbox attempt limit exceeded".to_owned()))?;
+    let operation_id = MailboxOperationIdentity::dispatch(
+        MailboxId::from_uuid(mailbox_id),
+        event_id,
+        next_attempt,
+    )
+    .id()
+    .as_uuid();
+    enqueue_command_with_transport_id(
+        transaction,
+        deterministic_transport_id(wake_operation_id, operation_id),
+        operation_id,
+        event_id.as_uuid(),
+        MAILBOX_DISPATCH_SUBJECT,
+        "mailbox.dispatch.v1",
+    )
+    .await?;
+    Ok(())
+}
+
+const fn mailbox_transport_namespace() -> Uuid {
+    Uuid::from_u128(0x8a3c_7b2e_5d91_4f60_9c17_2a6e_b4d8_f031)
+}
+
+/// Derives a stable transport identity for one wake and logical dispatch.
+/// The wake operation separates transport retries from later activation
+/// wakes, while the logical operation keeps the claimed attempt deterministic.
+fn deterministic_transport_id(wake_operation_id: Uuid, dispatch_operation_id: Uuid) -> Uuid {
+    let mut name = Vec::with_capacity(64);
+    name.extend_from_slice(b"mailbox-dispatch-transport.v1\0");
+    name.extend_from_slice(wake_operation_id.as_bytes());
+    name.extend_from_slice(dispatch_operation_id.as_bytes());
+    Uuid::new_v5(&mailbox_transport_namespace(), &name)
 }
 
 /// Schedules the deterministic wake-up for the next attempt in the current
@@ -1188,6 +1432,7 @@ async fn schedule_retry(
         "mailbox.retry.v1",
     )
     .await
+    .map(|_| ())
 }
 
 fn dispatch_error(error: impl std::fmt::Display) -> MailboxDispatchStoreError {
@@ -1196,7 +1441,7 @@ fn dispatch_error(error: impl std::fmt::Display) -> MailboxDispatchStoreError {
 
 #[cfg(test)]
 mod tests {
-    use super::{MailboxPersistenceError, validate_payload};
+    use super::{MailboxPersistenceError, deterministic_transport_id, validate_payload};
     use mailbox_domain::{BodyReference, BodyReferenceId, ContentMetadata};
     use sha2::{Digest, Sha256};
     use uuid::Uuid;
@@ -1241,5 +1486,19 @@ mod tests {
             validate_payload(&content, b"body", 4),
             Err(MailboxPersistenceError::UnsupportedContentEncoding)
         ));
+    }
+
+    #[test]
+    fn transport_id_replay_is_stable_and_new_wake_is_distinct() {
+        let wake = Uuid::from_u128(1);
+        let dispatch = Uuid::from_u128(2);
+        assert_eq!(
+            deterministic_transport_id(wake, dispatch),
+            deterministic_transport_id(wake, dispatch)
+        );
+        assert_ne!(
+            deterministic_transport_id(wake, dispatch),
+            deterministic_transport_id(Uuid::from_u128(3), dispatch)
+        );
     }
 }

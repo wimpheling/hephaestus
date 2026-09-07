@@ -2860,6 +2860,10 @@ pub struct RunView<'a> {
     pub patch_preview: ::core::option::Option<&'a str>,
     /// Field 32: `manifest_preview`
     pub manifest_preview: ::core::option::Option<&'a str>,
+    /// Retry is available only when this run has an accepted forge request.
+    ///
+    /// Field 33: `retry_supported`
+    pub retry_supported: bool,
     pub __buffa_unknown_fields: ::buffa::UnknownFieldsView<'a>,
 }
 impl<'a> ::buffa::MessageView<'a> for RunView<'a> {
@@ -3295,6 +3299,13 @@ impl<'a> ::buffa::MessageView<'a> for RunView<'a> {
                 )?;
                 view.manifest_preview = Some(::buffa::types::borrow_str(&mut cur)?);
             }
+            33u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                view.retry_supported = ::buffa::types::decode_bool(&mut cur)?;
+            }
             28u32 => {
                 ::buffa::encoding::check_wire_type(
                     tag,
@@ -3485,6 +3496,7 @@ impl<'a> ::buffa::MessageView<'a> for RunView<'a> {
             },
             patch_preview: self.patch_preview.map(|s| s.to_string()),
             manifest_preview: self.manifest_preview.map(|s| s.to_string()),
+            retry_supported: self.retry_supported,
             __buffa_unknown_fields: self.__buffa_unknown_fields.to_owned()?.into(),
             ..::core::default::Default::default()
         })
@@ -3681,6 +3693,9 @@ impl<'a> ::buffa::ViewEncode<'a> for RunView<'a> {
         if let Some(ref v) = self.manifest_preview {
             size += 2u32 + ::buffa::types::string_encoded_len(v) as u32;
         }
+        if self.retry_supported {
+            size += 2u32 + ::buffa::types::BOOL_ENCODED_LEN as u32;
+        }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
         size
     }
@@ -3803,6 +3818,9 @@ impl<'a> ::buffa::ViewEncode<'a> for RunView<'a> {
         }
         if let Some(ref v) = self.manifest_preview {
             ::buffa::types::put_string_field(32u32, v, buf);
+        }
+        if self.retry_supported {
+            ::buffa::types::put_bool_field(33u32, self.retry_supported, buf);
         }
         self.__buffa_unknown_fields.write_to(buf);
     }
@@ -3966,6 +3984,9 @@ impl<'__a> ::serde::Serialize for RunView<'__a> {
         }
         if let ::core::option::Option::Some(__v) = self.manifest_preview {
             __map.serialize_entry("manifestPreview", __v)?;
+        }
+        if self.retry_supported {
+            __map.serialize_entry("retrySupported", &self.retry_supported)?;
         }
         __map.end()
     }
@@ -4268,6 +4289,13 @@ impl RunOwnedView {
     #[must_use]
     pub fn manifest_preview(&self) -> ::core::option::Option<&'_ str> {
         self.0.reborrow().manifest_preview
+    }
+    /// Retry is available only when this run has an accepted forge request.
+    ///
+    /// Field 33: `retry_supported`
+    #[must_use]
+    pub fn retry_supported(&self) -> bool {
+        self.0.reborrow().retry_supported
     }
 }
 impl ::core::convert::From<::buffa::OwnedView<RunView<'static>>> for RunOwnedView {

@@ -23,6 +23,7 @@ time.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+control-plane-postgres = { path = "../control-plane-postgres" }
 forge-service = { path = "../forge-service" }
 identity-domain = { path = "../identity-domain" }
 serial_test = "3"

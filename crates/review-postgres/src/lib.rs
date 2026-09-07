@@ -484,8 +484,11 @@ async fn retry_run(
     .bind(source_run_id.as_uuid())
     .fetch_optional(&mut **transaction)
     .await
-    .map_err(db_error)?
-    .ok_or(ReviewRepositoryError::MissingRunRequest(source_run_id))?;
+    .map_err(db_error)?;
+    let Some(source) = source else {
+        close_rejected(transaction, command.command_id, "retry_unsupported").await?;
+        return Ok(ControlOutcome::Rejected);
+    };
     if source.repository_id != command.repository_id.as_uuid() {
         return Err(ReviewRepositoryError::DeliveryMismatch);
     }
@@ -692,6 +695,25 @@ async fn close_denied(
              processed_at = now() WHERE id = $1",
     )
     .bind(id.as_uuid())
+    .execute(&mut **transaction)
+    .await
+    .map(|_| ())
+    .map_err(db_error)
+}
+
+async fn close_rejected(
+    transaction: &mut Transaction<'_, Postgres>,
+    id: ControlRequestId,
+    code: &str,
+) -> Result<(), ReviewRepositoryError> {
+    sqlx::query(
+        "UPDATE control_requests
+         SET state = 'failed', diagnostics = jsonb_build_array(
+             jsonb_build_object('code', $2)),
+             processed_at = now() WHERE id = $1",
+    )
+    .bind(id.as_uuid())
+    .bind(code)
     .execute(&mut **transaction)
     .await
     .map(|_| ())

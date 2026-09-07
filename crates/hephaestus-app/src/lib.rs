@@ -5,6 +5,16 @@ mod event_adapter;
 mod event_cursor;
 pub mod rpc;
 
+/// Test-only lifecycle synchronization hooks used by daemon integration tests.
+#[cfg(feature = "test-fixtures")]
+#[doc(hidden)]
+pub mod test_hooks {
+    pub use crate::application::commands::{
+        CreateUpdateAdmissionBarrier, CreateUpdateAdmissionBarrierGuard,
+        install_create_update_admission_barrier,
+    };
+}
+
 use async_trait::async_trait;
 use axum::{
     Router,
@@ -24,7 +34,8 @@ use capability_domain::{
 use control_plane_postgres::launch::PgRunLaunchAuthorizer;
 use control_plane_postgres::{
     ControlPlanePool, connect as connect_control_plane, connect_worker as connect_oci_worker,
-    is_update_hook_run, load_vm_launch_contract, recoverable_update_hook_run_ids,
+    is_update_hook_run, load_vm_launch_contract, pending_update_admissions,
+    recoverable_update_hook_run_ids,
 };
 use event_postgres::{ReleaseOutboxPublisher, ensure_release_jetstream_topology};
 use forge_postgres::PgForgeRepository;
@@ -49,6 +60,7 @@ use git_http::{
     OidcGitAuthenticator, PostgresGitAuthorizer, RuntimeGitHttpAuthenticator,
 };
 use identity_application::IdempotentIdentityResolver;
+use identity_domain::{AuthenticatedIdentity, RequestId, UserId};
 use identity_oidc::OidcVerifier;
 use identity_postgres::PostgresIdentityStore;
 use jsonwebtoken::{Algorithm, DecodingKey};
@@ -63,7 +75,7 @@ use oci_builder_runtime_local::{
     VmOciOperationConfig, VmPublishedOciEngine,
 };
 use oci_builder_worker::{
-    OciImageProductionWorker, OciWorkerError, RegistryPublisherTokenIssuer,
+    MaterializedRoot, OciImageProductionWorker, OciWorkerError, RegistryPublisherTokenIssuer,
     RootfsMaterializationWorker,
 };
 use registry_domain::{PolicyVersion, RegistryNamespace, SupplyChainPolicy};
@@ -91,8 +103,9 @@ use registry_token::{
 };
 use registry_zot::{RegistryPullTokenProvider, ZotClientConfig, ZotClientError, ZotHttpRegistry};
 use release_artifact_store::LocalArtifactStore;
-use release_domain::BuildRequestId;
-use release_postgres::ReleaseService;
+use release_domain::{BuildRequestId, ReleaseCommandKey};
+use release_postgres::{ReleaseService, ReleaseServiceError};
+use release_service::BeginUpdateHook;
 use review_domain::CONTROL_EXECUTE_SUBJECT;
 use review_postgres::{GitRepositoryLocator, PostgresReviewRepository};
 use review_service::{NatsControlHandler, ReviewControlService, ReviewOutboxPublisher};
@@ -123,18 +136,23 @@ use secret_postgres::{GatewayIngressSecretResolver, SecretRuntimeService, Secret
 use secret_runtime::EphemeralSecretConfig;
 use secret_store::{EncryptedStore, LocalKeyProvider};
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 type PgPool = ControlPlanePool;
 use std::{
     collections::BTreeMap,
+    future::Future,
     net::SocketAddr,
     os::unix::fs::PermissionsExt,
     path::PathBuf,
-    sync::{Arc, RwLock},
+    sync::{
+        Arc, RwLock,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 use time::OffsetDateTime;
 use tokio::{
-    sync::{Semaphore, broadcast, oneshot, watch},
+    sync::{Mutex, Semaphore, broadcast, oneshot, watch},
     task::{JoinHandle, JoinSet},
 };
 use tokio_util::sync::CancellationToken;
@@ -151,9 +169,10 @@ use workspace_local::{LocalWorkspaceConfig, LocalWorkspaceManager};
 use workspace_postgres::PgWorkspaceMetadataRepository;
 
 /// Ordered database migration expected by this application version.
-pub const EXPECTED_DATABASE_MIGRATION: i64 = 62;
+pub const EXPECTED_DATABASE_MIGRATION: i64 = 69;
 
 /// OIDC issuer configuration used for bearer-token authentication.
+#[derive(Clone)]
 pub struct OidcConfig {
     /// Trusted issuer URL.
     pub issuer: String,
@@ -200,6 +219,7 @@ pub struct GatewayEdgeConfig {
 }
 
 /// Configured VM backend.
+#[derive(Clone)]
 pub enum VmBackendConfig {
     /// Deterministic development and test provider.
     Fake,
@@ -266,6 +286,7 @@ pub struct OciBuilderWorkerConfig {
 }
 
 /// Complete configuration consumed by the composition root.
+#[derive(Clone)]
 pub struct AppConfig {
     /// Runtime `PostgreSQL` connection string.
     pub database_url: String,
@@ -566,6 +587,7 @@ pub struct HephaestusApp {
     artifact_store: LocalArtifactStore,
     result_artifact_root: PathBuf,
     release_service: Arc<ReleaseService>,
+    update_completion: Arc<UpdateRunCompletion>,
     secret_service: Arc<SecretService<LocalKeyProvider>>,
     rpc_mediator_signing_key: [u8; 32],
     internal_platform_policy: release_domain::RuntimePolicy,
@@ -662,6 +684,7 @@ struct OciBuilderWorkers {
     >,
     materialization: RootfsMaterializationWorker<PgOciImageProductionJobStore, LocalOciRuntime>,
     manifest: PathBuf,
+    manifest_dirty: AtomicBool,
     rootfs_root: PathBuf,
     image_filesystems: Arc<RwLock<BTreeMap<String, RootFilesystem>>>,
     poll_interval: Duration,
@@ -1037,6 +1060,7 @@ impl OciBuilderWorkers {
             preparation,
             materialization,
             manifest: config.root_manifest,
+            manifest_dirty: AtomicBool::new(false),
             rootfs_root: config.rootfs_root,
             image_filesystems,
             poll_interval: config.poll_interval,
@@ -1045,32 +1069,39 @@ impl OciBuilderWorkers {
 
     async fn refresh_image_filesystems(&self) -> Result<(), OciWorkerError> {
         let roots = self.materialization.materialized_roots().await?;
-        {
-            let mut image_filesystems = self
-                .image_filesystems
-                .write()
-                .map_err(|_| OciWorkerError::InvalidConfiguration)?;
-            for root in roots {
-                let canonical =
-                    std::fs::canonicalize(&root.root_path).map_err(OciWorkerError::Filesystem)?;
-                let metadata =
-                    std::fs::symlink_metadata(&canonical).map_err(OciWorkerError::Filesystem)?;
-                if !canonical.starts_with(&self.rootfs_root)
-                    || metadata.file_type().is_symlink()
-                    || !metadata.is_dir()
-                {
-                    return Err(OciWorkerError::UnsafeMaterializationPath);
-                }
-                image_filesystems.insert(
-                    root.image_reference.to_string(),
-                    RootFilesystem::Directory {
-                        host_path: canonical,
-                    },
-                );
-            }
-        }
-        Ok(())
+        refresh_image_filesystem_cache(&roots, &self.rootfs_root, &self.image_filesystems)
     }
+}
+
+fn refresh_image_filesystem_cache(
+    roots: &[MaterializedRoot],
+    rootfs_root: &std::path::Path,
+    image_filesystems: &Arc<RwLock<BTreeMap<String, RootFilesystem>>>,
+) -> Result<(), OciWorkerError> {
+    {
+        let mut image_filesystems = image_filesystems
+            .write()
+            .map_err(|_| OciWorkerError::InvalidConfiguration)?;
+        for root in roots {
+            let canonical =
+                std::fs::canonicalize(&root.root_path).map_err(OciWorkerError::Filesystem)?;
+            let metadata =
+                std::fs::symlink_metadata(&canonical).map_err(OciWorkerError::Filesystem)?;
+            if !canonical.starts_with(rootfs_root)
+                || metadata.file_type().is_symlink()
+                || !metadata.is_dir()
+            {
+                return Err(OciWorkerError::UnsafeMaterializationPath);
+            }
+            image_filesystems.insert(
+                root.image_reference.to_string(),
+                RootFilesystem::Directory {
+                    host_path: canonical,
+                },
+            );
+        }
+    }
+    Ok(())
 }
 
 impl HephaestusApp {
@@ -1326,10 +1357,11 @@ impl HephaestusApp {
         let update_completion = Arc::new(UpdateRunCompletion {
             pool: pool.clone(),
             releases: Arc::clone(&release_service),
+            admission_cursor: Mutex::new(None),
         });
         let mailbox_store: Arc<dyn MailboxDispatchStore> = mailbox_repository.clone();
         let completion = Arc::new(CompositeRunCompletionObserver::new(vec![
-            update_completion,
+            Arc::clone(&update_completion) as Arc<dyn RunCompletionObserver>,
             Arc::new(MailboxRunCompletion::new(Arc::clone(&mailbox_store))),
         ]));
         let orchestrator = Arc::new(
@@ -1405,6 +1437,7 @@ impl HephaestusApp {
             artifact_store,
             result_artifact_root,
             release_service,
+            update_completion,
             secret_service,
             rpc_mediator_signing_key: config.rpc_mediator_signing_key,
             internal_platform_policy,
@@ -1582,10 +1615,28 @@ impl HephaestusApp {
                 .write_manifest(&workers.manifest)
                 .await
                 .map_err(component("OCI builder root manifest"))?;
+            workers
+                .refresh_image_filesystems()
+                .await
+                .map_err(component("OCI builder image cache"))?;
         }
 
         let cancellation = CancellationToken::new();
-        let mut tasks = Vec::with_capacity(8);
+        let mut tasks = Vec::with_capacity(9);
+        let (update_reconcile_ready_tx, update_reconcile_ready_rx) = oneshot::channel();
+        let update_reconcile_cancel = cancellation.clone();
+        let update_reconcile_observer = Arc::clone(&self.update_completion);
+        let update_reconcile_interval = self.outbox_poll_interval;
+        tasks.push(tokio::spawn(async move {
+            update_admission_reconciliation_loop(
+                update_reconcile_observer,
+                update_reconcile_cancel,
+                update_reconcile_interval,
+                update_reconcile_ready_tx,
+            )
+            .await;
+            Ok(())
+        }));
         if let Some(gateway) = &self.gateway_edge {
             let gateway_reconcile_cancel = cancellation.clone();
             let gateway_authority = gateway.authority.clone();
@@ -1816,6 +1867,9 @@ impl HephaestusApp {
             broker_ready_rx
                 .await
                 .map_err(|_| AppError::Readiness(String::from("secret broker task exited")))?;
+            update_reconcile_ready_rx.await.map_err(|_| {
+                AppError::Readiness(String::from("update reconciliation task exited"))
+            })?;
             http_ready_rx
                 .await
                 .map_err(|_| AppError::Readiness(String::from("HTTP task exited")))?;
@@ -2088,21 +2142,47 @@ async fn oci_builder_pass(workers: &OciBuilderWorkers) {
     if let Err(error) = workers.preparation.run_once().await {
         tracing::warn!(%error, "OCI preparation worker pass failed");
     }
-    match workers.materialization.run_once().await {
-        Ok(true) => {
-            if let Err(error) = workers
-                .materialization
-                .write_manifest(&workers.manifest)
-                .await
-            {
-                tracing::warn!(%error, "OCI builder root manifest update failed");
-            } else if let Err(error) = workers.refresh_image_filesystems().await {
-                tracing::warn!(%error, "OCI builder image cache refresh failed");
-            }
+    let materialization_changed = match workers.materialization.run_once().await {
+        Ok(changed) => changed,
+        Err(error) => {
+            tracing::warn!(%error, "OCI rootfs materialization worker pass failed");
+            false
         }
-        Ok(false) => {}
-        Err(error) => tracing::warn!(%error, "OCI rootfs materialization worker pass failed"),
+    };
+    if let Err(error) =
+        write_oci_manifest_if_dirty(&workers.manifest_dirty, materialization_changed, || {
+            workers.materialization.write_manifest(&workers.manifest)
+        })
+        .await
+    {
+        tracing::warn!(%error, "OCI builder root manifest update failed");
     }
+    // Refresh from durable roots on every pass. A successful materialization
+    // followed by a transient manifest or cache error must be retried even
+    // when the next claim pass has no new materialization job.
+    if let Err(error) = workers.refresh_image_filesystems().await {
+        tracing::warn!(%error, "OCI builder image cache refresh failed");
+    }
+}
+
+async fn write_oci_manifest_if_dirty<F, Fut>(
+    dirty: &AtomicBool,
+    materialization_changed: bool,
+    write_manifest: F,
+) -> Result<(), OciWorkerError>
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = Result<(), OciWorkerError>>,
+{
+    if materialization_changed {
+        dirty.store(true, Ordering::Release);
+    }
+    if !dirty.load(Ordering::Acquire) {
+        return Ok(());
+    }
+    write_manifest().await?;
+    dirty.store(false, Ordering::Release);
+    Ok(())
 }
 
 struct OutboxWorker {
@@ -2292,9 +2372,80 @@ async fn build_secret_mount_manager(
 struct UpdateRunCompletion {
     pool: PgPool,
     releases: Arc<ReleaseService>,
+    admission_cursor: Mutex<Option<(OffsetDateTime, Uuid)>>,
 }
 
 impl UpdateRunCompletion {
+    async fn next_pending_admissions(
+        &self,
+    ) -> Result<Vec<control_plane_postgres::PendingUpdateAdmission>, RunCompletionError> {
+        let mut cursor = self.admission_cursor.lock().await;
+        let admissions = pending_update_admissions(&self.pool, *cursor)
+            .await
+            .map_err(completion_error)?;
+        if admissions.is_empty() {
+            *cursor = None;
+            return Ok(Vec::new());
+        }
+        *cursor = admissions
+            .last()
+            .map(|admission| (admission.created_at, admission.update_id));
+        drop(cursor);
+        Ok(admissions)
+    }
+
+    async fn resume_pending_admission(
+        &self,
+        admission: control_plane_postgres::PendingUpdateAdmission,
+    ) -> Result<bool, RunCompletionError> {
+        let identity = AuthenticatedIdentity::new(
+            UserId::from_uuid(admission.actor_id),
+            "hephaestus-update-recovery",
+            "durable-update-recovery",
+            serde_json::json!({}),
+            RequestId::new(),
+        );
+        let generation = admission.generation.to_be_bytes();
+        let hook_run_id =
+            deterministic_update_hook_run_id(admission.update_id, admission.generation);
+        let command_key = ReleaseCommandKey::derive(
+            "begin_update_hook.recovery",
+            &[admission.update_id.as_bytes(), &generation],
+        );
+        let result = self
+            .releases
+            .begin_update_hook(
+                &identity,
+                BeginUpdateHook {
+                    command_key,
+                    update_id: release_domain::AgentUpdateId::from_uuid(admission.update_id),
+                    hook_run_id,
+                },
+            )
+            .await;
+        match result {
+            Ok(()) => {
+                #[cfg(feature = "test-fixtures")]
+                application::commands::notify_reconciler_update_admission(admission.update_id);
+                Ok(true)
+            }
+            Err(error) => {
+                classify_pending_admission_error(admission.update_id, admission.actor_id, error)
+            }
+        }
+    }
+
+    async fn resume_pending_admissions(&self) -> Result<usize, RunCompletionError> {
+        let admissions = self.next_pending_admissions().await?;
+        let mut resumed = 0;
+        for admission in admissions {
+            if self.resume_pending_admission(admission).await? {
+                resumed += 1;
+            }
+        }
+        Ok(resumed)
+    }
+
     async fn apply(&self, run: &Run) -> Result<bool, RunCompletionError> {
         if run.kind != RunKind::Update {
             return Ok(false);
@@ -2313,10 +2464,90 @@ impl UpdateRunCompletion {
     }
 }
 
+fn classify_pending_admission_error(
+    update_id: Uuid,
+    actor_id: Uuid,
+    error: ReleaseServiceError,
+) -> Result<bool, RunCompletionError> {
+    match admission_failure_kind(&error) {
+        AdmissionFailureKind::DrainPending => Ok(log_drain_pending(update_id)),
+        AdmissionFailureKind::AuthorizationDenied => {
+            Ok(log_authorization_denied(update_id, actor_id))
+        }
+        AdmissionFailureKind::InvalidLifecycle => Ok(log_invalid_lifecycle(update_id)),
+        AdmissionFailureKind::GenerationRace => Ok(log_generation_race(update_id)),
+        AdmissionFailureKind::Other => Err(completion_error(error)),
+    }
+}
+
+fn log_drain_pending(update_id: Uuid) -> bool {
+    tracing::debug!(
+        update_id = %update_id,
+        "durable update remains fenced until normal work cleans up"
+    );
+    false
+}
+
+fn log_authorization_denied(update_id: Uuid, actor_id: Uuid) -> bool {
+    tracing::error!(
+        update_id = %update_id,
+        actor_id = %actor_id,
+        "durable update admission authorization was denied; leaving it fenced"
+    );
+    false
+}
+
+fn log_invalid_lifecycle(update_id: Uuid) -> bool {
+    tracing::warn!(
+        update_id = %update_id,
+        "durable update admission reached an inspectable lifecycle boundary"
+    );
+    false
+}
+
+fn log_generation_race(update_id: Uuid) -> bool {
+    // A retry can race the generation snapshot with the previous hook's
+    // cleanup. The row remains draining and the next bounded reconciliation
+    // observes the committed run count and derives the next identity.
+    tracing::debug!(
+        update_id = %update_id,
+        "durable update admission generation raced; deferring"
+    );
+    false
+}
+
+enum AdmissionFailureKind {
+    DrainPending,
+    AuthorizationDenied,
+    InvalidLifecycle,
+    GenerationRace,
+    Other,
+}
+
+const fn admission_failure_kind(error: &ReleaseServiceError) -> AdmissionFailureKind {
+    if matches!(error, ReleaseServiceError::UpdateDrainPending) {
+        return AdmissionFailureKind::DrainPending;
+    }
+    if matches!(error, ReleaseServiceError::AuthorizationDenied) {
+        return AdmissionFailureKind::AuthorizationDenied;
+    }
+    if matches!(error, ReleaseServiceError::InvalidUpdateLifecycle) {
+        return AdmissionFailureKind::InvalidLifecycle;
+    }
+    if matches!(error, ReleaseServiceError::UpdateAdmissionGenerationRace) {
+        return AdmissionFailureKind::GenerationRace;
+    }
+    AdmissionFailureKind::Other
+}
+
 #[async_trait]
 impl RunCompletionObserver for UpdateRunCompletion {
     async fn after_cleanup(&self, run: &Run) -> Result<(), RunCompletionError> {
-        self.apply(run).await.map(|_| ())
+        self.apply(run).await?;
+        if run.kind == RunKind::Normal {
+            self.resume_pending_admissions().await?;
+        }
+        Ok(())
     }
 
     async fn recover(&self) -> Result<usize, RunCompletionError> {
@@ -2331,7 +2562,61 @@ impl RunCompletionObserver for UpdateRunCompletion {
                 .map_err(completion_error)?;
             recovered += 1;
         }
+        recovered += self.resume_pending_admissions().await?;
         Ok(recovered)
+    }
+}
+
+/// Derives a new hook run identity for each durable attempt generation.
+///
+/// The generation is persisted indirectly by the update-run history, so a
+/// recovered retry cannot collide with the run that preceded it.
+fn deterministic_update_hook_run_id(update_id: Uuid, generation: i64) -> RunId {
+    let mut digest = Sha256::new();
+    digest.update(b"hephaestus:update-hook-run-v2\0");
+    digest.update(update_id.as_bytes());
+    digest.update(generation.to_be_bytes());
+    let mut bytes = [0_u8; 16];
+    bytes.copy_from_slice(&digest.finalize()[..16]);
+    bytes[6] = (bytes[6] & 0x0f) | 0x80;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    RunId::from_uuid(Uuid::from_bytes(bytes))
+}
+
+/// Reconciles accepted and retry-scheduled updates after their triggering
+/// normal-run cleanup callback has already fired.
+async fn update_admission_reconciliation_loop(
+    observer: Arc<UpdateRunCompletion>,
+    cancellation: CancellationToken,
+    configured_interval: Duration,
+    ready: oneshot::Sender<()>,
+) {
+    if ready.send(()).is_err() {
+        return;
+    }
+    let interval = configured_interval.max(Duration::from_secs(1));
+    let mut ticker = tokio::time::interval(interval);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tokio::select! {
+            () = cancellation.cancelled() => break,
+            _ = ticker.tick() => {
+                match tokio::time::timeout(
+                    Duration::from_secs(1),
+                    observer.resume_pending_admissions(),
+                )
+                .await
+                {
+                    Ok(Ok(_)) => {}
+                    Ok(Err(error)) => {
+                        tracing::warn!(%error, "update admission reconciliation deferred");
+                    }
+                    Err(_) => {
+                        tracing::warn!("update admission reconciliation timed out");
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -2468,6 +2753,7 @@ const fn build_delivery_requires_redelivery(error: &BuildExecutionError) -> bool
         error,
         BuildExecutionError::Database(_)
             | BuildExecutionError::Release
+            | BuildExecutionError::ImageUnavailable
             | BuildExecutionError::VmCleanup
     )
 }
@@ -3454,10 +3740,13 @@ pub enum AppError {
 #[cfg(test)]
 mod tests {
     use super::{
-        BuildExecutionError, RuntimePolicy, StoredNetworkAccess,
-        build_delivery_requires_redelivery, guest_environment, validate_runtime_policy,
+        BuildExecutionError, MaterializedRoot, OciImageReference, OciWorkerError, RuntimePolicy,
+        StoredNetworkAccess, build_delivery_requires_redelivery, deterministic_update_hook_run_id,
+        guest_environment, refresh_image_filesystem_cache, validate_runtime_policy,
+        write_oci_manifest_if_dirty,
     };
     use run_domain::RunKind;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use uuid::Uuid;
     use vm_trait::{VmError, VmResources};
 
@@ -3469,6 +3758,17 @@ mod tests {
             allow_broker_only: true,
             allow_egress: false,
         }
+    }
+
+    #[test]
+    fn recovered_update_hook_attempts_have_distinct_stable_ids() {
+        let update_id = Uuid::new_v4();
+        let first = deterministic_update_hook_run_id(update_id, 0);
+        let retry = deterministic_update_hook_run_id(update_id, 1);
+        assert_eq!(first, deterministic_update_hook_run_id(update_id, 0));
+        assert_ne!(first, retry);
+        assert_eq!(first.as_uuid().get_version_num(), 8);
+        assert_eq!(retry.as_uuid().get_version_num(), 8);
     }
 
     #[test]
@@ -3495,6 +3795,64 @@ mod tests {
         assert!(build_delivery_requires_redelivery(
             &BuildExecutionError::Release
         ));
+        assert!(build_delivery_requires_redelivery(
+            &BuildExecutionError::ImageUnavailable
+        ));
+    }
+
+    #[tokio::test]
+    async fn failed_manifest_write_is_retried_when_next_pass_has_no_job() {
+        let dirty = AtomicBool::new(false);
+        let first = write_oci_manifest_if_dirty(&dirty, true, || async {
+            Err(OciWorkerError::ImageNotCached)
+        })
+        .await;
+        assert!(first.is_err());
+        assert!(dirty.load(Ordering::Acquire));
+
+        let attempts = AtomicUsize::new(0);
+        write_oci_manifest_if_dirty(&dirty, false, || async {
+            attempts.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        })
+        .await
+        .expect("dirty manifest is retried without another materialization job");
+        assert_eq!(attempts.load(Ordering::Relaxed), 1);
+        assert!(!dirty.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn durable_materialized_root_hydrates_image_cache() {
+        let rootfs = tempfile::tempdir().expect("temporary rootfs");
+        let root = rootfs.path().join("materialized");
+        std::fs::create_dir(&root).expect("materialized root");
+        let reference =
+            OciImageReference::parse(format!("localhost/python-ubuntu@sha256:{}", "a".repeat(64)))
+                .expect("digest-pinned image reference");
+        let image_filesystems =
+            std::sync::Arc::new(std::sync::RwLock::new(std::collections::BTreeMap::new()));
+
+        refresh_image_filesystem_cache(
+            &[MaterializedRoot {
+                image_reference: reference.clone(),
+                root_path: root.clone(),
+            }],
+            rootfs.path(),
+            &image_filesystems,
+        )
+        .expect("durable root refresh");
+
+        let cache = image_filesystems.read().expect("image cache read");
+        let Some(vm_trait::RootFilesystem::Directory { host_path }) =
+            cache.get(&reference.to_string())
+        else {
+            panic!("durable root was not hydrated into image cache");
+        };
+        assert_eq!(
+            host_path,
+            &std::fs::canonicalize(root).expect("canonical root")
+        );
+        drop(cache);
     }
 
     #[test]

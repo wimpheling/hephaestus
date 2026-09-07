@@ -342,6 +342,7 @@ fn proto_run(value: RunView) -> Result<Run, connectrpc::ConnectError> {
         input_commit: value.input_commit,
         git_ref: value.git_ref,
         attempt: u32::try_from(value.attempt).unwrap_or_default(),
+        retry_supported: value.retry_supported,
         result: result.into(),
         events,
         artifacts,

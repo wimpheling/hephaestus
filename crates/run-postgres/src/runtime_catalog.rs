@@ -87,6 +87,9 @@ impl RunRuntimeCatalog for PgRunRepository {
             None => Vec::new(),
         };
         let mailbox_event = self.load_mailbox_event(run.id).await?;
+        if self.is_retry_run(run.id).await? {
+            self.validate_retry_lineage(run.id).await?;
+        }
 
         Ok(RunRuntimeInput {
             parameters: context.parameters,
@@ -123,20 +126,81 @@ impl PgRunRepository {
         run_id: RunId,
     ) -> Result<Option<MailboxRuntimeEvent>, RunRuntimeCatalogError> {
         let row = sqlx::query_as::<_, MailboxRuntimeRow>(
-            "SELECT event.mailbox_id, event.id AS event_id, event.body_id,
+            "WITH RECURSIVE retry_lineage(run_id, depth, visited) AS (
+                 SELECT $1::uuid, 0, ARRAY[$1::uuid]
+                 UNION ALL
+                 SELECT request.retry_of_run_id, lineage.depth + 1,
+                        lineage.visited || request.retry_of_run_id
+                   FROM retry_lineage AS lineage
+                   JOIN run_requests AS request ON request.run_id = lineage.run_id
+                 WHERE request.retry_of_run_id IS NOT NULL
+                    AND lineage.depth < 64
+                    AND NOT request.retry_of_run_id = ANY(lineage.visited)
+             )
+             SELECT event.mailbox_id, event.id AS event_id, event.body_id,
                     event.method, event.route, event.selected_headers,
                     event.content_type, event.trace_context, event.received_at,
                     payload.encoded_body, payload.integrity_hash
-             FROM mailbox_delivery_attempts AS attempt
-             JOIN mailbox_events AS event ON event.id = attempt.event_id
-             JOIN mailbox_payloads AS payload ON payload.id = event.body_id
-             WHERE attempt.run_id = $1",
+               FROM retry_lineage AS lineage
+               JOIN mailbox_delivery_attempts AS attempt
+                 ON attempt.run_id = lineage.run_id
+               JOIN mailbox_events AS event ON event.id = attempt.event_id
+               JOIN mailbox_payloads AS payload ON payload.id = event.body_id
+              ORDER BY lineage.depth ASC
+              LIMIT 1",
         )
         .bind(run_id.as_uuid())
         .fetch_optional(&self.pool)
         .await
         .map_err(storage)?;
         row.map(TryInto::try_into).transpose()
+    }
+
+    async fn is_retry_run(&self, run_id: RunId) -> Result<bool, RunRuntimeCatalogError> {
+        sqlx::query_scalar(
+            "SELECT retry_of_run_id IS NOT NULL
+               FROM run_requests
+              WHERE run_id = $1",
+        )
+        .bind(run_id.as_uuid())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(storage)
+        .map(|value| value.unwrap_or(false))
+    }
+
+    async fn validate_retry_lineage(&self, run_id: RunId) -> Result<(), RunRuntimeCatalogError> {
+        let (terminated, cyclic, exhausted): (bool, bool, bool) = sqlx::query_as(
+            "WITH RECURSIVE retry_lineage(run_id, depth, visited, retry_of_run_id) AS (
+                 SELECT request.run_id, 0, ARRAY[request.run_id], request.retry_of_run_id
+                   FROM run_requests AS request
+                  WHERE request.run_id = $1
+                 UNION ALL
+                 SELECT parent.run_id, lineage.depth + 1,
+                        lineage.visited || parent.run_id, parent.retry_of_run_id
+                   FROM retry_lineage AS lineage
+                   JOIN run_requests AS parent
+                     ON parent.run_id = lineage.retry_of_run_id
+                  WHERE lineage.retry_of_run_id IS NOT NULL
+                    AND lineage.depth < 64
+                    AND NOT parent.run_id = ANY(lineage.visited)
+             )
+             SELECT EXISTS (SELECT 1 FROM retry_lineage WHERE retry_of_run_id IS NULL),
+                    EXISTS (SELECT 1 FROM retry_lineage AS lineage
+                              WHERE lineage.retry_of_run_id = ANY(lineage.visited)),
+                    EXISTS (SELECT 1 FROM retry_lineage
+                              WHERE depth >= 64 AND retry_of_run_id IS NOT NULL)",
+        )
+        .bind(run_id.as_uuid())
+        .fetch_one(&self.pool)
+        .await
+        .map_err(storage)?;
+        if !terminated || cyclic || exhausted {
+            return Err(RunRuntimeCatalogError::InvalidData(
+                "retry run lineage is invalid",
+            ));
+        }
+        Ok(())
     }
 
     async fn load_runtime_artifacts(

@@ -62,6 +62,7 @@ pub mod __buffa {
         reg.register_json_any(super::__REVISE_INSTANCE_REQUEST_JSON_ANY);
         reg.register_json_any(super::__REVISE_INSTANCE_RESPONSE_JSON_ANY);
         reg.register_json_any(super::__CREATE_UPDATE_REQUEST_JSON_ANY);
+        reg.register_json_any(super::__BROKERED_RULE_COPY_JSON_ANY);
         reg.register_json_any(super::__CREATE_UPDATE_RESPONSE_JSON_ANY);
         reg.register_json_any(super::__RECOVER_UPDATE_REQUEST_JSON_ANY);
         reg.register_json_any(super::__RECOVER_UPDATE_RESPONSE_JSON_ANY);
@@ -74,6 +75,8 @@ pub mod __buffa {
         reg.register_json_any(super::__REVISE_CAPABILITIES_RESPONSE_JSON_ANY);
         reg.register_json_any(super::__CONTROL_MAILBOX_REQUEST_JSON_ANY);
         reg.register_json_any(super::__CONTROL_MAILBOX_RESPONSE_JSON_ANY);
+        reg.register_json_any(super::__CREATE_MAILBOX_REQUEST_JSON_ANY);
+        reg.register_json_any(super::__CREATE_MAILBOX_RESPONSE_JSON_ANY);
     }
 }
 #[doc(inline)]
@@ -197,6 +200,10 @@ pub use self::__buffa::view::CreateUpdateRequestView;
 #[doc(inline)]
 pub use self::__buffa::view::CreateUpdateRequestOwnedView;
 #[doc(inline)]
+pub use self::__buffa::view::BrokeredRuleCopyView;
+#[doc(inline)]
+pub use self::__buffa::view::BrokeredRuleCopyOwnedView;
+#[doc(inline)]
 pub use self::__buffa::view::CreateUpdateResponseView;
 #[doc(inline)]
 pub use self::__buffa::view::CreateUpdateResponseOwnedView;
@@ -244,5 +251,13 @@ pub use self::__buffa::view::ControlMailboxRequestOwnedView;
 pub use self::__buffa::view::ControlMailboxResponseView;
 #[doc(inline)]
 pub use self::__buffa::view::ControlMailboxResponseOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::CreateMailboxRequestView;
+#[doc(inline)]
+pub use self::__buffa::view::CreateMailboxRequestOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::CreateMailboxResponseView;
+#[doc(inline)]
+pub use self::__buffa::view::CreateMailboxResponseOwnedView;
 #[doc(inline)]
 pub use self::__buffa::register_types;

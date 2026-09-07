@@ -62,6 +62,24 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.ReleasePageTest do
     assert html =~ "Publish release"
   end
 
+  test "gateway installation is available only for published releases" do
+    for state <- ["draft", "published", "revoked"] do
+      data = assigns()
+
+      document =
+        render_component(
+          &ReleasePage.release/1,
+          data
+          |> Map.put(:release, Map.put(data.release, "state", state))
+          |> Map.put(:install_gateways_event, "install-gateways")
+        )
+        |> LazyHTML.from_fragment()
+
+      assert document |> LazyHTML.query("#install-release-gateways") |> Enum.count() ==
+               if(state == "published", do: 1, else: 0)
+    end
+  end
+
   defp assigns do
     %{
       state: :ready,

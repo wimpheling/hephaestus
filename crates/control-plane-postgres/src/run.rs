@@ -113,6 +113,7 @@ pub struct RunView {
     pub input_commit: String,
     pub git_ref: String,
     pub attempt: i32,
+    pub retry_supported: bool,
     pub result_id: Option<Uuid>,
     pub result_commit: Option<String>,
     pub result_ref: Option<String>,
@@ -256,6 +257,53 @@ pub async fn recoverable_update_hook_run_ids(pool: &PgPool) -> Result<Vec<Uuid>,
     .await
 }
 
+/// Durable update admissions that have not yet created a hook run.
+///
+/// The generation is derived from the update-run history for the instance so
+/// a retry receives a new, deterministic run identity.
+#[derive(Debug, FromRow)]
+pub struct PendingUpdateAdmission {
+    /// Exact update identity.
+    pub update_id: Uuid,
+    /// Actor captured when the update was accepted.
+    pub actor_id: Uuid,
+    /// Monotonic update-hook attempt generation for this instance.
+    pub generation: i64,
+    /// Creation timestamp used with the ID as a stable pagination cursor.
+    pub created_at: OffsetDateTime,
+}
+
+/// Lists accepted draining updates that still need durable hook admission.
+pub async fn pending_update_admissions(
+    pool: &PgPool,
+    after: Option<(OffsetDateTime, Uuid)>,
+) -> Result<Vec<PendingUpdateAdmission>, sqlx::Error> {
+    sqlx::query_as(
+        "SELECT update.id AS update_id,
+                update.actor_id,
+                (SELECT count(*)
+                 FROM runs AS prior_run
+                 WHERE prior_run.instance_id = update.instance_id
+                   AND prior_run.run_kind = 'update')::bigint AS generation
+                , update.created_at
+         FROM agent_updates AS update
+         JOIN agent_instances AS instance ON instance.id = update.instance_id
+         WHERE update.state = 'draining'
+           AND update.hook_run_id IS NULL
+           AND instance.state = 'update_draining'
+           AND NOT instance.run_gate_open
+           AND ($1::timestamptz IS NULL
+                OR update.created_at > $1
+                OR (update.created_at = $1 AND update.id > $2))
+         ORDER BY update.created_at, update.id
+         LIMIT 64",
+    )
+    .bind(after.map(|(created_at, _)| created_at))
+    .bind(after.map(|(_, id)| id))
+    .fetch_all(pool)
+    .await
+}
+
 /// Returns whether an update-kind run is the exact hook run for an update.
 pub async fn is_update_hook_run(pool: &PgPool, run_id: Uuid) -> Result<bool, sqlx::Error> {
     sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM agent_updates WHERE hook_run_id = $1)")
@@ -373,6 +421,8 @@ impl RunApplication {
                     COALESCE(request.commit_sha, delivery.target_commit) AS input_commit,
                     COALESCE(request.git_ref, delivery.target_ref) AS git_ref,
                     COALESCE(request.attempt, delivery.attempt_number) AS attempt,
+                    EXISTS (SELECT 1 FROM run_requests retry_request
+                            WHERE retry_request.run_id = run.id) AS retry_supported,
                     result.id AS result_id, result.result_commit,
                     result.result_ref, result.result_tree, result.message AS result_message,
                     result.artifact_manifest_hash, proposal.id AS proposal_id,
@@ -446,9 +496,44 @@ impl RunApplication {
             return Ok(RequestedControl { id: row.id, state: row.state });
         }
         let id = stable_id(identity, kind);
-        let state = sqlx::query_scalar("INSERT INTO control_requests (id, kind, actor_id, request_id, repository_id, run_id, proposal_id, reason) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING state")
-            .bind(id).bind(kind).bind(identity.user_id.as_uuid()).bind(identity.idempotency_id.as_uuid()).bind(request.repository_id).bind(run_id).bind(proposal_id).bind(request.reason)
-            .fetch_one(&mut *tx).await.map_err(RunError::Persistence)?;
+        let state = sqlx::query_scalar::<_, String>(
+            "INSERT INTO control_requests
+             (id, kind, actor_id, request_id, repository_id, run_id, proposal_id,
+              reason, state, diagnostics, processed_at)
+             SELECT $1, $2, $3, $4, $5, $6, $7, $8,
+                    CASE WHEN $2 = 'retry_run'
+                               AND NOT EXISTS (
+                                   SELECT 1 FROM run_requests
+                                   WHERE run_id = $6
+                               )
+                         THEN 'failed' ELSE 'pending' END,
+                    CASE WHEN $2 = 'retry_run'
+                               AND NOT EXISTS (
+                                   SELECT 1 FROM run_requests
+                                   WHERE run_id = $6
+                               )
+                         THEN jsonb_build_array(
+                                  jsonb_build_object('code', 'retry_unsupported'))
+                         ELSE '[]'::jsonb END,
+                    CASE WHEN $2 = 'retry_run'
+                               AND NOT EXISTS (
+                                   SELECT 1 FROM run_requests
+                                   WHERE run_id = $6
+                               )
+                         THEN now() ELSE NULL END
+             RETURNING state",
+        )
+        .bind(id)
+        .bind(kind)
+        .bind(identity.user_id.as_uuid())
+        .bind(identity.idempotency_id.as_uuid())
+        .bind(request.repository_id)
+        .bind(run_id)
+        .bind(proposal_id)
+        .bind(request.reason)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(RunError::Persistence)?;
         tx.commit().await.map_err(RunError::Persistence)?;
         Ok(RequestedControl { id, state })
     }
@@ -549,6 +634,7 @@ struct RunViewRow {
     input_commit: String,
     git_ref: String,
     attempt: i32,
+    retry_supported: bool,
     result_id: Option<Uuid>,
     result_commit: Option<String>,
     result_ref: Option<String>,
@@ -595,6 +681,7 @@ impl RunViewRow {
             input_commit: self.input_commit,
             git_ref: self.git_ref,
             attempt: self.attempt,
+            retry_supported: self.retry_supported,
             result_id: self.result_id,
             result_commit: self.result_commit,
             result_ref: self.result_ref,

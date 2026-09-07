@@ -32,6 +32,11 @@ pub mod __buffa {
         reg.register_json_any(super::__LIST_PROJECT_GATEWAYS_RESPONSE_JSON_ANY);
         reg.register_json_any(super::__GET_GATEWAY_REQUEST_JSON_ANY);
         reg.register_json_any(super::__GET_GATEWAY_RESPONSE_JSON_ANY);
+        reg.register_json_any(super::__INSTALL_RELEASE_GATEWAYS_REQUEST_JSON_ANY);
+        reg.register_json_any(super::__INSTALL_RELEASE_GATEWAYS_RESPONSE_JSON_ANY);
+        reg.register_json_any(super::__GATEWAY_SECRET_SELECTION_JSON_ANY);
+        reg.register_json_any(super::__CONFIGURE_GATEWAY_REQUEST_JSON_ANY);
+        reg.register_json_any(super::__CONFIGURE_GATEWAY_RESPONSE_JSON_ANY);
         reg.register_json_any(super::__LIST_GATEWAY_INGRESS_REQUEST_JSON_ANY);
         reg.register_json_any(super::__LIST_GATEWAY_INGRESS_RESPONSE_JSON_ANY);
         reg.register_json_any(super::__SET_GATEWAY_LIFECYCLE_REQUEST_JSON_ANY);
@@ -86,6 +91,26 @@ pub use self::__buffa::view::GetGatewayRequestOwnedView;
 pub use self::__buffa::view::GetGatewayResponseView;
 #[doc(inline)]
 pub use self::__buffa::view::GetGatewayResponseOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::InstallReleaseGatewaysRequestView;
+#[doc(inline)]
+pub use self::__buffa::view::InstallReleaseGatewaysRequestOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::InstallReleaseGatewaysResponseView;
+#[doc(inline)]
+pub use self::__buffa::view::InstallReleaseGatewaysResponseOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::GatewaySecretSelectionView;
+#[doc(inline)]
+pub use self::__buffa::view::GatewaySecretSelectionOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::ConfigureGatewayRequestView;
+#[doc(inline)]
+pub use self::__buffa::view::ConfigureGatewayRequestOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::ConfigureGatewayResponseView;
+#[doc(inline)]
+pub use self::__buffa::view::ConfigureGatewayResponseOwnedView;
 #[doc(inline)]
 pub use self::__buffa::view::ListGatewayIngressRequestView;
 #[doc(inline)]

@@ -25,6 +25,28 @@ const secretSentinel = "HEPHAESTUS_BROWSER_SECRET_4d7ccf";
 const fixtureImageKey = "fixture-root";
 let browserJourneyBuild: {repositoryId: string; id: string} | undefined;
 
+// Manual capture excludes request-only credential entry while retaining safe
+// traces for every other journey. Playwright's trace option is worker-scoped.
+test.use({trace: "off"});
+const secretJourneyTitle = "imports, binds, runs, updates, recovers, and never renders secret values";
+let safeTraceStarted = false;
+
+test.beforeEach(async ({context}, testInfo) => {
+  if (testInfo.title !== secretJourneyTitle) {
+    await context.tracing.start({screenshots: true, snapshots: true, sources: false});
+    safeTraceStarted = true;
+  }
+});
+
+test.afterEach(async ({context}, testInfo) => {
+  if (safeTraceStarted) {
+    safeTraceStarted = false;
+    const tracePath = testInfo.outputPath("trace.zip");
+    await context.tracing.stop({path: tracePath});
+    await testInfo.attach("trace", {path: tracePath, contentType: "application/zip"});
+  }
+});
+
 test.describe.serial("release, instance, secret, and live-review product journey", () => {
   test("loads a project repository once and opens it without an unavailable redirect", async ({
     page
@@ -154,6 +176,26 @@ test.describe.serial("release, instance, secret, and live-review product journey
     await expect(page).toHaveURL(/\/projects\/[0-9a-f-]+\/agents\/[0-9a-f-]+$/);
     await waitForLiveView(page);
     await expect(page.getByRole("main")).toContainText("browser-built-agent");
+    const instanceId = page.url().split("/").at(-1)!;
+    const mailboxButton = page.locator("#create-instance-mailbox");
+    await mailboxButton.click();
+    await expect(page.getByRole("alert").filter({hasText: "Mailbox ready:"})).toBeVisible();
+    const client = new pg.Client({connectionString: databaseUrl});
+    await client.connect();
+    try {
+      const first = await client.query("SELECT id FROM mailboxes WHERE instance_id = $1", [instanceId]);
+      expect(first.rows).toHaveLength(1);
+      const mailboxId = first.rows[0].id;
+      await expect(page.getByRole("alert").filter({hasText: "Mailbox ready:"})).toContainText(mailboxId);
+      await page.locator("#flash-info").click();
+      await expect(page.locator("#flash-info")).toBeHidden();
+      await mailboxButton.click();
+      await expect(page.getByRole("alert").filter({hasText: "Mailbox ready:"})).toContainText(mailboxId);
+      const replay = await client.query("SELECT id FROM mailboxes WHERE instance_id = $1", [instanceId]);
+      expect(replay.rows).toEqual(first.rows);
+    } finally {
+      await client.end();
+    }
     await captureJourneyScreenshot(page, "03-imported-agent.png");
   });
 
@@ -403,6 +445,12 @@ test.describe.serial("release, instance, secret, and live-review product journey
 
     await page.goto(`/projects/${fixture.projectId}/agents/${instanceId}`);
     await waitForLiveView(page);
+
+    // Start after leaving the request-only secret form. Tracing snapshots the
+    // current document at start, so starting on that form would retain its
+    // deliberately entered plaintext even without recording its actions.
+    await page.context().tracing.start({screenshots: true, snapshots: true, sources: false});
+    safeTraceStarted = true;
     await bindSlot(page, "raw_token", "org_token", "raw", true);
     await bindSlot(page, "broker_token", "repo_token", "brokered", false);
 

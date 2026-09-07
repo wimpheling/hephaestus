@@ -18,6 +18,7 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.ReleasePage do
   attr :source_destination, :string, default: nil
   attr :draft_version_form, :any, default: nil
   attr :set_draft_version_event, :string, default: nil, values: [nil, "set-draft-version"]
+  attr :install_gateways_event, :string, default: nil, values: [nil, "install-gateways"]
   attr :publish_event, :string, default: nil, values: [nil, "publish-release"]
 
   @doc "Renders release provenance and immutable contents."
@@ -46,6 +47,15 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.ReleasePage do
       >
         <:actions>
           <.tag tone={state_tone(@release["state"])}>{@release["state"]}</.tag>
+          <.action
+            :if={@release["state"] == "published" && @install_gateways_event}
+            id="install-release-gateways"
+            interaction={:event}
+            event={@install_gateways_event}
+            variant={:secondary}
+          >
+            Install declared gateways
+          </.action>
         </:actions>
       </.page_heading>
 

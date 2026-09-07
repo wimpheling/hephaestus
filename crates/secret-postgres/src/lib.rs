@@ -99,6 +99,7 @@ pub struct ImportSummary {
     pub phases: Vec<String>,
     pub destinations: Vec<String>,
     pub expires_at: Option<OffsetDateTime>,
+    pub active_version_id: Option<Uuid>,
 }
 /// Read-only secret query facade.
 pub struct SecretApplication {
@@ -319,6 +320,7 @@ impl SecretApplication {
             "SELECT imported.id, imported.alias, imported.target_kind,
                     imported.target_id, imported.status, imported.secret_id,
                     secret.name AS secret_name, secret.status AS secret_status,
+                    secret.active_version_id,
                     secret.allowed_delivery_modes AS delivery_modes,
                     secret_grant.phases, secret_grant.destinations, secret_grant.expires_at
              FROM secret_imports AS imported
@@ -397,6 +399,7 @@ struct ImportRow {
     secret_id: Uuid,
     secret_name: String,
     secret_status: String,
+    active_version_id: Option<Uuid>,
     delivery_modes: Vec<String>,
     phases: Vec<String>,
     destinations: Vec<String>,
@@ -524,6 +527,7 @@ impl From<ImportRow> for ImportSummary {
             phases: row.phases,
             destinations: row.destinations,
             expires_at: row.expires_at,
+            active_version_id: row.active_version_id,
         }
     }
 }

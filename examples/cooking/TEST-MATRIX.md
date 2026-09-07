@@ -6,6 +6,13 @@ inbound identities and deterministic model and relay endpoints. No Telegram
 account or live provider delivery is required. Application unit and subsystem
 integration tests support these cases but do not replace the joined E2E proof.
 
+On 2026-09-07 the user split the exhaustive
+[host-daemon crash matrix](../../tasks/todo/complete-host-daemon-crash-recovery-matrix.md)
+and [expanded adversarial isolation matrix](../../tasks/todo/complete-adversarial-isolation-e2e-matrix.md)
+into follow-up tasks. They are not MVP-05 blockers. Existing executable crash,
+denial, isolation, rotation/revocation, retirement and confinement assertions
+remain required; demonstrated security defects remain blockers.
+
 | Case | Trigger | Required observable outcome |
 | --- | --- | --- |
 | Build and install | Submit canonical example sources through ordinary forge/build/release operations | Isolated builds, immutable releases and authorized installation retain exact source, build, artifact and policy provenance; no seeded release/build rows substitute for these operations. |
@@ -17,10 +24,10 @@ integration tests support these cases but do not replace the joined E2E proof.
 | Git conflict | Competing proposals and a changed canonical branch head | Frozen input commits retained; explicit conflict and authorized resolution without lost recipes or widened authority. |
 | Compatible update | Request v2 while work is active and ingress continues | Run gate closes, old work drains, exclusive migration lease, stable instance/mailbox/route IDs, deferred work dispatched on v2. |
 | Failed update | Explicit hook rollback or abnormal hook termination | Correct runnable or paused compatibility-unknown state; authorized recovery and retained history. |
-| Denied authority | Adversarial releases attempt undeclared resources and operations | Denial of cross-resource access, direct network/Git, authority changes and Caddy administration, with inspectable outcomes. |
+| Denied authority | Run existing executable invalid-ingress, outsider and adversarial checks | Preserve exact denial and no-unauthorized-effect assertions; expanded isolation coverage and missing positive controls belong to the separate adversarial task. |
 | Rotation and revocation | Rotate fixture credentials or revoke authority during operations | Later operations select appropriate exact versions; bounded in-flight semantics and preserved historical provenance. |
 | Outbound failure | Deterministic rejection, interrupted call or lost response | Bounded failure/retry/uncertain outcome, durable evidence and explicit recovery; no unsupported exactly-once delivery claim. |
-| Crash boundaries | Interrupt ingress commit, dispatch, SQLite commit, broker calls, result import, update, activation and cleanup | Each boundary has an explicit expected retry, conflict, uncertain outcome or operator recovery assertion. |
+| Guest crashes and abnormal updates | Run existing guest-crash, broker-response-loss, rollback and abnormal-update cases | Preserve exact retry, logical-effect and recovery assertions; exhaustive host-daemon interruption coverage belongs to the separate crash task. |
 | Resource retirement | Tombstone/revoke attachment, release, route, grant or secret | New unauthorized work denied; authorized historical inspection retained. |
 | Secret confinement | Scan fixture sentinel values across storage and execution/evidence surfaces | No raw secret exposure in unauthorized database/event views, logs, traces, metrics, guest files/env/arguments, or browser evidence. |
 | Browser journey | Install, bind, operate, approve, inspect, deny, update and recover through management UI | User-visible controls and outcomes agree with durable platform state; redacted browser evidence retained. |
@@ -32,7 +39,15 @@ Each completed case must link executable assertions and verification evidence.
 CI success requires execution of its declared cases; an opt-in test returning
 early is not acceptance evidence.
 
-## Fault assertions to implement
+## Fault boundary inventory and ownership
+
+The inventory below retains the full intended coverage; it is not a claim that
+all rows are MVP-05 blockers or already implemented. Existing executable guest
+and response-loss checks remain in MVP-05. The linked host-daemon task owns
+exhaustive process-interruption coverage for ingress commit, dispatch, result
+import/publication, update completion, activation and cleanup. Shared boundaries
+such as update hooks retain their existing MVP-05 checks while additional host
+interruption cases are deferred explicitly.
 
 Inject faults at observable boundaries using test-controlled barriers or process
 termination. Do not use arbitrary sleeps as proof that a transaction has reached
@@ -54,6 +69,7 @@ before and after recovery.
 | Revision activation | At most one active revision; historical hook decisions persist and deferred events select their revision at dispatch. |
 | Cleanup | Restart reconciles orphaned runtime resources and leases; later work can proceed only after exclusive ownership is restored. |
 
-These are acceptance assertions to verify against the real stack. A discrepancy
+These are assertions to verify against the real stack in their owning task.
+Deferred cases remain unverified until that task records evidence. A discrepancy
 is a test or platform defect to investigate, not a reason to relabel a failed or
 unexecuted case as passing.

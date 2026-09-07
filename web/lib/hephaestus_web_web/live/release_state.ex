@@ -93,6 +93,39 @@ defmodule HephaestusWebWeb.ReleaseState do
      }, [{:set_draft_version, generation, state.data.release_id, version}]}
   end
 
+  def reduce(%__MODULE__{} = state, :install_gateways) do
+    generation = state.stream_generation + 1
+
+    {%{state | status: :submitting, error: nil, stream_generation: generation},
+     [{:install_gateways, generation, state.data.release_id}]}
+  end
+
+  def reduce(
+        %__MODULE__{stream_generation: generation} = state,
+        {:gateways_installed, generation, {:ok, _receipt}}
+      ) do
+    {%{state | status: :ready, error: nil},
+     [
+       {:flash, :info,
+        "Release gateways installed. Configure their credentials and mailbox bindings before enabling ingress."},
+       {:navigate, "/projects/#{state.data.release["project_id"]}/gateways"}
+     ]}
+  end
+
+  def reduce(
+        %__MODULE__{stream_generation: generation} = state,
+        {:gateways_installed, generation, {:error, _reason}}
+      ) do
+    {%{state | status: :ready, error: "Gateway installation failed."},
+     [
+       {:flash, :error,
+        "Gateways could not be installed. Check release declarations and your project permissions."}
+     ]}
+  end
+
+  def reduce(%__MODULE__{} = state, {:gateways_installed, _generation, _result}),
+    do: {state, []}
+
   def reduce(%__MODULE__{} = state, :publish_release) do
     generation = state.stream_generation + 1
 
@@ -168,6 +201,10 @@ defmodule HephaestusWebWeb.ReleaseState do
     {:mutation, generation, Client.set_draft_version(identity, release_id, version)}
   end
 
+  def execute({:install_gateways, generation, release_id}, identity) do
+    {:gateways_installed, generation, Client.install_release_gateways(identity, release_id)}
+  end
+
   def execute({:publish_release, generation, release_id}, identity) do
     {:mutation, generation, Client.publish_release(identity, release_id)}
   end
@@ -192,6 +229,7 @@ defmodule HephaestusWebWeb.ReleaseState do
       draft_version: draft_version,
       set_draft_version_event: "set-draft-version",
       publish_event: "publish-release",
+      install_gateways_event: "install-gateways",
       error: state.error,
       destinations: release_destinations(release)
     }

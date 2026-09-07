@@ -10,9 +10,9 @@ use release_domain::{
     TriggerPolicy,
 };
 use release_postgres::{
-    BeginUpdateHook, CapabilityBindingSelection, CreateAttachment, CreateInstanceUpdate,
-    ImportAgent, RecoverInstanceUpdate, ReleaseService, RemoveAttachment, ReviseInstance,
-    ReviseInstanceCapabilities, SetAttachmentEnabled, UpdateRecoveryAction,
+    BeginUpdateHook, BrokeredRuleCopy, CapabilityBindingSelection, CreateAttachment,
+    CreateInstanceUpdate, ImportAgent, RecoverInstanceUpdate, ReleaseService, RemoveAttachment,
+    ReviseInstance, ReviseInstanceCapabilities, SetAttachmentEnabled, UpdateRecoveryAction,
 };
 use runtime_types::RunId;
 use secret_application::{
@@ -28,9 +28,163 @@ use secret_postgres::SecretService;
 use secret_store::LocalKeyProvider;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+#[cfg(feature = "test-fixtures")]
+use std::sync::{Mutex, OnceLock};
 use std::{collections::BTreeMap, sync::Arc};
 use time::OffsetDateTime;
+#[cfg(feature = "test-fixtures")]
+use tokio::sync::Notify;
 use uuid::Uuid;
+
+/// Test-only synchronization point for the durable update admission race.
+///
+/// The hook is inert unless an integration test explicitly installs it. It
+/// pauses after `CreateUpdate` commits and before the immediate hook attempt,
+/// allowing the durable completion reconciler to win that admission race.
+#[doc(hidden)]
+#[cfg(feature = "test-fixtures")]
+pub struct CreateUpdateAdmissionBarrier {
+    committed: Notify,
+    admitted: Notify,
+    release: Notify,
+    committed_update: Mutex<Option<Uuid>>,
+    admitted_update: Mutex<Option<Uuid>>,
+}
+
+#[cfg(feature = "test-fixtures")]
+impl CreateUpdateAdmissionBarrier {
+    /// Creates an untriggered admission barrier.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            committed: Notify::new(),
+            admitted: Notify::new(),
+            release: Notify::new(),
+            committed_update: Mutex::new(None),
+            admitted_update: Mutex::new(None),
+        }
+    }
+
+    /// Waits until the update transaction has committed.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the test barrier mutex is poisoned.
+    pub async fn wait_committed(&self) -> Uuid {
+        loop {
+            let notification = self.committed.notified();
+            let committed_update = *self
+                .committed_update
+                .lock()
+                .expect("committed update mutex");
+            if let Some(update_id) = committed_update {
+                return update_id;
+            }
+            notification.await;
+        }
+    }
+
+    /// Waits until the durable reconciler admits the hook run.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the test barrier mutex is poisoned.
+    pub async fn wait_admitted(&self, update_id: Uuid) {
+        loop {
+            let notification = self.admitted.notified();
+            let admitted_update = *self.admitted_update.lock().expect("admitted update mutex");
+            if admitted_update == Some(update_id) {
+                return;
+            }
+            notification.await;
+        }
+    }
+
+    /// Releases the immediate application admission attempt.
+    pub fn release(&self) {
+        self.release.notify_one();
+    }
+
+    async fn pause_before_immediate_attempt(&self, update_id: Uuid) {
+        *self
+            .committed_update
+            .lock()
+            .expect("committed update mutex") = Some(update_id);
+        self.committed.notify_one();
+        self.release.notified().await;
+    }
+
+    pub(crate) fn notify_reconciler_admission(&self, update_id: Uuid) {
+        if *self
+            .committed_update
+            .lock()
+            .expect("committed update mutex")
+            == Some(update_id)
+        {
+            *self.admitted_update.lock().expect("admitted update mutex") = Some(update_id);
+            self.admitted.notify_one();
+        }
+    }
+}
+
+#[cfg(feature = "test-fixtures")]
+impl Default for CreateUpdateAdmissionBarrier {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(feature = "test-fixtures")]
+static CREATE_UPDATE_ADMISSION_BARRIER: OnceLock<Mutex<Option<Arc<CreateUpdateAdmissionBarrier>>>> =
+    OnceLock::new();
+
+/// Installs the integration-test admission barrier until the returned guard
+/// is dropped. Only one barrier may be active in a process.
+#[doc(hidden)]
+#[cfg(feature = "test-fixtures")]
+pub fn install_create_update_admission_barrier(
+    barrier: Arc<CreateUpdateAdmissionBarrier>,
+) -> CreateUpdateAdmissionBarrierGuard {
+    let slot = CREATE_UPDATE_ADMISSION_BARRIER.get_or_init(|| Mutex::new(None));
+    let mut current = slot.lock().expect("update admission barrier mutex");
+    assert!(
+        current.is_none(),
+        "an update admission barrier is already active"
+    );
+    *current = Some(barrier);
+    CreateUpdateAdmissionBarrierGuard
+}
+
+/// Removes an installed integration-test admission barrier on scope exit.
+#[doc(hidden)]
+#[cfg(feature = "test-fixtures")]
+pub struct CreateUpdateAdmissionBarrierGuard;
+
+#[cfg(feature = "test-fixtures")]
+impl Drop for CreateUpdateAdmissionBarrierGuard {
+    fn drop(&mut self) {
+        if let Some(slot) = CREATE_UPDATE_ADMISSION_BARRIER.get() {
+            *slot.lock().expect("update admission barrier mutex") = None;
+        }
+    }
+}
+
+#[cfg(feature = "test-fixtures")]
+fn installed_create_update_admission_barrier() -> Option<Arc<CreateUpdateAdmissionBarrier>> {
+    CREATE_UPDATE_ADMISSION_BARRIER
+        .get()
+        .and_then(|slot| slot.lock().ok()?.clone())
+}
+
+/// Signals an installed test barrier when durable reconciliation admits a
+/// pending update hook.
+#[doc(hidden)]
+#[cfg(feature = "test-fixtures")]
+pub fn notify_reconciler_update_admission(update_id: Uuid) {
+    if let Some(barrier) = installed_create_update_admission_barrier() {
+        barrier.notify_reconciler_admission(update_id);
+    }
+}
 
 #[derive(Clone)]
 pub struct InternalCommandState {
@@ -93,6 +247,7 @@ pub enum InternalCommand {
         expected_revision_id: AgentInstanceRevisionId,
         candidate_release_agent_id: ReleaseAgentId,
         parameters: BTreeMap<ParameterName, ParameterValue>,
+        brokered_rule_copies: Vec<BrokeredRuleCopy>,
         selected_policy: RuntimePolicy,
     },
     RecoverUpdate {
@@ -160,6 +315,91 @@ pub enum RecoveryAction {
     Retry,
     Reject,
     Resume,
+}
+
+struct CreateUpdateDispatch {
+    instance_id: AgentInstanceId,
+    expected_revision_id: AgentInstanceRevisionId,
+    candidate_release_agent_id: ReleaseAgentId,
+    parameters: BTreeMap<ParameterName, ParameterValue>,
+    brokered_rule_copies: Vec<BrokeredRuleCopy>,
+    selected_policy: RuntimePolicy,
+}
+
+async fn dispatch_create_update(
+    state: &InternalCommandState,
+    identity: &AuthenticatedIdentity,
+    input: CreateUpdateDispatch,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    let update_id = AgentUpdateId::from_uuid(stable_id(identity, "create_update.update"));
+    let revision_id =
+        AgentInstanceRevisionId::from_uuid(stable_id(identity, "create_update.revision"));
+    state
+        .releases
+        .create_update(
+            identity,
+            CreateInstanceUpdate {
+                command_key: release_key(identity, "create_update", update_id.as_uuid()),
+                update_id,
+                instance_id: input.instance_id,
+                expected_revision_id: input.expected_revision_id,
+                candidate_revision_id: revision_id,
+                candidate_release_agent_id: input.candidate_release_agent_id,
+                parameters: input.parameters,
+                brokered_rule_copies: input.brokered_rule_copies,
+                selected_policy: input.selected_policy,
+                platform_policy: state.platform_policy.clone(),
+                platform_policy_version: state.platform_policy_version.clone(),
+            },
+        )
+        .await?;
+    #[cfg(feature = "test-fixtures")]
+    if let Some(barrier) = installed_create_update_admission_barrier() {
+        barrier
+            .pause_before_immediate_attempt(update_id.as_uuid())
+            .await;
+    }
+    let hook_run_id = RunId::from_uuid(stable_id(identity, "create_update.hook_run"));
+    let admitted_hook_run_id = match state
+        .releases
+        .begin_update_hook(
+            identity,
+            BeginUpdateHook {
+                command_key: release_key(identity, "begin_update_hook", hook_run_id.as_uuid()),
+                update_id,
+                hook_run_id,
+            },
+        )
+        .await
+    {
+        Ok(()) => Some(hook_run_id),
+        // create_update has already durably closed the gate. Keep the
+        // accepted update fenced until the completion observer can
+        // re-authorize and admit its hook after normal cleanup.
+        Err(release_postgres::ReleaseServiceError::UpdateDrainPending) => None,
+        Err(error)
+            if matches!(
+                &error,
+                release_postgres::ReleaseServiceError::InvalidUpdateLifecycle
+            ) =>
+        {
+            let admitted = state
+                .releases
+                .current_update_hook_run(identity, update_id)
+                .await?;
+            if let Some(admitted) = admitted {
+                Some(admitted)
+            } else {
+                return Err(error.into());
+            }
+        }
+        Err(error) => return Err(error.into()),
+    };
+    Ok(json!({
+        "update_id": update_id,
+        "candidate_revision_id": revision_id,
+        "hook_run_id": admitted_hook_run_id,
+    }))
 }
 
 // Keeping the command-to-domain mapping together makes the trusted internal
@@ -357,50 +597,22 @@ pub async fn dispatch(
             expected_revision_id,
             candidate_release_agent_id,
             parameters,
+            brokered_rule_copies,
             selected_policy,
         } => {
-            let update_id = AgentUpdateId::from_uuid(stable_id(identity, "create_update.update"));
-            let revision_id =
-                AgentInstanceRevisionId::from_uuid(stable_id(identity, "create_update.revision"));
-            state
-                .releases
-                .create_update(
-                    identity,
-                    CreateInstanceUpdate {
-                        command_key: release_key(identity, "create_update", update_id.as_uuid()),
-                        update_id,
-                        instance_id,
-                        expected_revision_id,
-                        candidate_revision_id: revision_id,
-                        candidate_release_agent_id,
-                        parameters,
-                        selected_policy,
-                        platform_policy: state.platform_policy.clone(),
-                        platform_policy_version: state.platform_policy_version.clone(),
-                    },
-                )
-                .await?;
-            let hook_run_id = RunId::from_uuid(stable_id(identity, "create_update.hook_run"));
-            state
-                .releases
-                .begin_update_hook(
-                    identity,
-                    BeginUpdateHook {
-                        command_key: release_key(
-                            identity,
-                            "begin_update_hook",
-                            hook_run_id.as_uuid(),
-                        ),
-                        update_id,
-                        hook_run_id,
-                    },
-                )
-                .await?;
-            Ok(json!({
-                "update_id": update_id,
-                "candidate_revision_id": revision_id,
-                "hook_run_id": hook_run_id,
-            }))
+            dispatch_create_update(
+                state,
+                identity,
+                CreateUpdateDispatch {
+                    instance_id,
+                    expected_revision_id,
+                    candidate_release_agent_id,
+                    parameters,
+                    brokered_rule_copies,
+                    selected_policy,
+                },
+            )
+            .await
         }
         InternalCommand::RecoverUpdate { update_id, action } => {
             let action = match action {

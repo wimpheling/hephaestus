@@ -66,6 +66,7 @@ fn instance_summary(row: InstanceRow) -> Result<InstanceSummary, crate::rpc::Rpc
         attachment_count: row.attachment_count,
         run_count: row.run_count,
         last_run_at: row.last_run_at.map(timestamp).into(),
+        mailbox_id: row.mailbox_id.map(opaque).into(),
         ..Default::default()
     })
 }
@@ -184,6 +185,7 @@ mod tests {
             attachment_count: 1,
             run_count: 2,
             last_run_at: Some(last_run_at),
+            mailbox_id: None,
         })
         .expect("realistic instance row should project");
 
@@ -198,6 +200,7 @@ mod tests {
                 .map(|value| (value.seconds, value.nanos)),
             Some((updated_at.unix_timestamp(), 123_456_789))
         );
+        assert!(projected.mailbox_id.as_option().is_none());
         assert_eq!(
             projected.last_run_at.as_option().map(|value| value.seconds),
             Some(last_run_at.unix_timestamp())

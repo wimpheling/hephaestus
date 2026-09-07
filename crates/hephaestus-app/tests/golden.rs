@@ -8,7 +8,8 @@ use forge_domain::{GitRef, OrganizationId, ProjectId};
 use forge_postgres::PgForgeRepository;
 use forge_service::{CreateRepository, GitStorage};
 use hephaestus_app::{
-    AppConfig, GatewayEdgeConfig, HephaestusApp, OidcConfig, RegistryConfig, RunEventKind,
+    AppConfig, GatewayEdgeConfig, HephaestusApp, OciBuilderWorkerConfig, OidcConfig,
+    RegistryConfig, RunEventKind, VmBackendConfig,
 };
 use identity_domain::{AuthenticatedIdentity, RequestId, UserId};
 use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
@@ -17,6 +18,10 @@ use mailbox_domain::{
     EnvelopeRoute, MailboxEnvelope, MailboxEvent, MailboxId, ProducerId,
 };
 use mailbox_postgres::PostgresMailboxRepository;
+use oci_builder_runtime_local::LocalOciRuntimeConfig;
+use registry_domain::{RegistryAuthority, SupplyChainPolicy};
+use registry_publisher::PublisherConfiguration;
+use registry_token::{RegistryTokenIssuer, SigningKey, TokenLifetime};
 use run_runtime_local::LocalRunRuntimeConfig;
 use secret_application::{
     BindSecret, CreateSecret, DeclareBrokeredHttpsRule, GrantAndAcceptSecretImport,
@@ -48,21 +53,234 @@ use tokio::process::Command;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,
+    sync::Notify,
 };
 use tokio_rustls::TlsAcceptor;
 use vm_trait::RootFilesystem;
 use volume_local::LocalVolumeConfig;
 use workspace_local::{LocalWorkspaceConfig, WorkspaceLimits};
 
+fn cooking_base_layout(layouts: &BTreeMap<String, PathBuf>, reference: &str) -> Option<PathBuf> {
+    let (name, digest) = reference.rsplit_once('@')?;
+    let key = name.rsplit('/').next()?;
+    let suffix = format!("/{key}@{digest}");
+    layouts
+        .iter()
+        .find(|(candidate, _)| candidate.ends_with(&suffix))
+        .map(|(_, path)| path.clone())
+}
+
+#[test]
+fn cooking_base_layout_alias_requires_identical_image_digest() {
+    let reviewed = format!(
+        "registry.invalid/platform/python-ubuntu@sha256:{}",
+        "a".repeat(64)
+    );
+    let layouts = BTreeMap::from([(reviewed, PathBuf::from("/reviewed/python"))]);
+    let same = format!("localhost/python-ubuntu@sha256:{}", "a".repeat(64));
+    let different = format!("localhost/python-ubuntu@sha256:{}", "b".repeat(64));
+    assert_eq!(
+        cooking_base_layout(&layouts, &same),
+        Some(PathBuf::from("/reviewed/python"))
+    );
+    assert_eq!(cooking_base_layout(&layouts, &different), None);
+}
+
+fn cooking_oci_worker_config(
+    root: &Path,
+    repository_root: &Path,
+) -> Option<OciBuilderWorkerConfig> {
+    let builder_image = env::var("HEPHAESTUS_TEST_OCI_BUILDER_VM_IMAGE").ok()?;
+    let verifier_image = env::var("HEPHAESTUS_TEST_OCI_VERIFIER_VM_IMAGE").ok()?;
+    let base_manifest = PathBuf::from(env::var("HEPHAESTUS_TEST_OCI_BASE_LAYOUT_MANIFEST").ok()?);
+    let rootfs_root = PathBuf::from(env::var("HEPHAESTUS_TEST_OCI_ROOTFS_ROOT").ok()?);
+    let registry_service = env::var("HEPHAESTUS_TEST_REGISTRY_SERVICE").ok()?;
+    let registry_origin = env::var("HEPHAESTUS_TEST_REGISTRY_ORIGIN").ok()?;
+    let output_root = root.join("repository-images/candidates");
+    let checkout_root = root.join("repository-images/checkouts");
+    let verification_root = root.join("repository-images/verification");
+    let scratch_root = root.join("repository-images/scratch");
+    let credential_root = root.join("repository-images/registry-credentials");
+    for path in [
+        &output_root,
+        &checkout_root,
+        &verification_root,
+        &scratch_root,
+        &credential_root,
+    ] {
+        std::fs::create_dir_all(path).expect("create cooking OCI worker root");
+        std::fs::set_permissions(path, std::os::unix::fs::PermissionsExt::from_mode(0o700))
+            .expect("set cooking OCI worker root mode");
+    }
+    let mut image_layouts: std::collections::BTreeMap<String, PathBuf> = serde_json::from_slice(
+        &std::fs::read(base_manifest).expect("read cooking OCI base manifest"),
+    )
+    .expect("parse cooking OCI base manifest");
+    // The Hugo image uses the reviewed Python base. Registry names may differ
+    // between its local runtime reference and published layout, but the digest
+    // must remain identical. A same-name image with different bytes is not an
+    // alias and must never stand in for the declared build provenance.
+    let python_reference = env::var("HEPHAESTUS_LIBKRUN_UBUNTU_IMAGE")
+        .expect("cooking Python image catalog reference");
+    let layout = cooking_base_layout(&image_layouts, &python_reference)
+        .expect("reviewed Python base layout with the exact cooking image digest");
+    image_layouts.insert(python_reference, layout);
+    let authority =
+        RegistryAuthority::parse(&registry_service).expect("cooking registry authority");
+    let skopeo_binary = env::var_os("HEPHAESTUS_SKOPEO")
+        .map(PathBuf::from)
+        .expect("HEPHAESTUS_SKOPEO must identify the trusted host skopeo binary");
+    let oras_binary = env::var_os("HEPHAESTUS_ORAS")
+        .map(PathBuf::from)
+        .expect("HEPHAESTUS_ORAS must identify the trusted host oras binary");
+    let publisher = PublisherConfiguration::new(
+        authority,
+        &output_root,
+        &verification_root,
+        &credential_root,
+        &skopeo_binary,
+        &oras_binary,
+    )
+    .expect("configure cooking OCI publisher")
+    .with_registry_origin(&registry_origin)
+    .expect("configure cooking OCI registry origin");
+    let config = OciBuilderWorkerConfig {
+        runtime: LocalOciRuntimeConfig {
+            repository_root: repository_root.to_path_buf(),
+            checkout_root,
+            image_layouts,
+            output_root,
+            verified_rootfs_root: Some(verification_root.clone()),
+            git_binary: PathBuf::from("/usr/bin/git"),
+            tar_binary: PathBuf::from("/usr/bin/tar"),
+            buildah_binary: None,
+            trivy_binary: None,
+            umoci_binary: None,
+            buildah_output_prefix: String::from("heph-cooking-builder"),
+        },
+        publisher,
+        publication_policy_version: registry_domain::PolicyVersion::parse("cooking/v1")
+            .expect("cooking OCI policy version"),
+        publication_policy: SupplyChainPolicy::without_signature(),
+        builder_vm_image: builder_catalog_domain::OciImageReference::parse(&builder_image)
+            .expect("cooking builder image reference"),
+        verifier_vm_image: builder_catalog_domain::OciImageReference::parse(&verifier_image)
+            .expect("cooking verifier image reference"),
+        verification_root,
+        scratch_root,
+        mkfs_ext4: PathBuf::from("/usr/sbin/mkfs.ext4"),
+        vm_resources: vm_trait::VmResources {
+            vcpus: 1,
+            // Buildah plus the libkrun VMM needs the worker's 8 GiB cgroup
+            // ceiling for its backing pages; keep the declared guest budget
+            // at the reviewed 2 GiB operation allocation.
+            memory_mib: 2048,
+        },
+        preparation_worker_name: String::from("golden-cooking-oci-preparation"),
+        materialization_worker_name: String::from("golden-cooking-oci-materialization"),
+        rootfs_root,
+        root_manifest: root.join("repository-builder-roots.json"),
+        guest_init: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/x86_64-unknown-linux-musl/release/heph-init"),
+        lease: Duration::from_secs(900),
+        poll_interval: Duration::from_millis(100),
+    };
+    Some(config)
+}
+
+fn golden_registry_config() -> RegistryConfig {
+    let local = env::var("HEPHAESTUS_TEST_REGISTRY_SERVICE")
+        .ok()
+        .zip(env::var("HEPHAESTUS_TEST_REGISTRY_ORIGIN").ok())
+        .zip(env::var("HEPHAESTUS_TEST_REGISTRY_PRIVATE_KEY").ok())
+        .zip(env::var("HEPHAESTUS_TEST_REGISTRY_KEY_ID").ok());
+    let (token_issuer, zot) = if let Some((((service, origin), key_path), key_id)) = local {
+        let authority = RegistryAuthority::parse(&service).expect("local golden registry service");
+        let key = std::fs::read(key_path).expect("local golden registry signing key");
+        let issuer = RegistryTokenIssuer::new(
+            "http://127.0.0.1:0/v1/registry/token"
+                .parse()
+                .expect("local golden registry issuer"),
+            service.parse().expect("local golden registry audience"),
+            SigningKey::rs256_pem(key_id.parse().expect("local golden registry key ID"), &key)
+                .expect("local golden registry signing key material"),
+            TokenLifetime::new(300).expect("local golden registry token lifetime"),
+        );
+        (
+            Arc::new(issuer),
+            registry_zot::ZotClientConfig::new(authority, &origin)
+                .expect("local golden Zot configuration"),
+        )
+    } else {
+        let authority =
+            RegistryAuthority::parse("registry.golden.invalid").expect("registry service");
+        (
+            Arc::new(RegistryTokenIssuer::new(
+                "https://forge.golden.invalid/v1/registry/token"
+                    .parse()
+                    .expect("registry issuer"),
+                "registry.golden.invalid".parse().expect("registry service"),
+                SigningKey::hs256(
+                    "golden-v1".parse().expect("registry key id"),
+                    SIGNING_SECRET,
+                )
+                .expect("registry signing key"),
+                TokenLifetime::new(300).expect("registry token lifetime"),
+            )),
+            registry_zot::ZotClientConfig::new(authority, "http://127.0.0.1:1/")
+                .expect("Zot client configuration"),
+        )
+    };
+    RegistryConfig {
+        token_issuer,
+        notification_callback: registry_notification::CallbackCredential::parse(
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        )
+        .expect("registry notification callback"),
+        zot,
+        reconciliation_lease: Duration::from_secs(30),
+        reconciliation_interval: Duration::from_secs(30),
+    }
+}
+
 #[path = "../../../examples/cooking/tests/scenario.rs"]
 mod cooking;
+#[path = "../../../examples/cooking/tests/adversarial_agent.rs"]
+mod cooking_adversarial_agent;
+#[path = "../../../examples/cooking/tests/authority.rs"]
+mod cooking_authority;
+#[path = "../../../examples/cooking/tests/blog_artifact.rs"]
+mod cooking_blog_artifact;
+#[path = "../../../examples/cooking/tests/builds.rs"]
+mod cooking_builds;
+#[path = "../../../examples/cooking/tests/confinement.rs"]
+mod cooking_confinement;
+#[path = "../../../examples/cooking/tests/conflicts.rs"]
+mod cooking_conflicts;
+#[path = "../../../examples/cooking/tests/guest_crash.rs"]
+mod cooking_guest_crash;
+#[path = "../../../examples/cooking/tests/ingress_loss.rs"]
+mod cooking_ingress_loss;
 #[path = "../../../examples/cooking/tests/inspection.rs"]
 mod cooking_inspection;
+#[path = "../../../examples/cooking/tests/retirement.rs"]
+mod cooking_retirement;
+#[path = "../../../examples/cooking/tests/updates.rs"]
+mod cooking_updates;
+// The integration-test support tree is private to this test crate; its
+// `pub(crate)` child boundaries are required by sibling fixture modules.
+#[allow(clippy::redundant_pub_crate)]
 mod support;
 
 use support::backend_fixture;
 
 const ISSUER: &str = "https://issuer.golden.invalid";
+
+/// Returns the issuer used by this golden run, including the isolated issuer
+/// supplied when the cooking browser attaches to the live daemon.
+pub(crate) fn golden_issuer() -> String {
+    env::var("HEPHAESTUS_COOKING_BROWSER_OIDC_ISSUER").unwrap_or_else(|_| ISSUER.to_owned())
+}
 const AUDIENCE: &str = "hephaestus-git";
 const SIGNING_SECRET: &[u8] = b"golden-test-signing-secret-with-sufficient-entropy";
 const ROOT_IMAGE: &str =
@@ -71,6 +289,16 @@ const BROKERED_E2E_RULE_ID: uuid::Uuid = uuid::uuid!("00000000-0000-0000-0000-00
 const BROKERED_E2E_SENTINEL: &str = "golden-brokered-provider-sentinel-5d1a";
 const GATEWAY_HANDLER: &str =
     "#!/bin/sh\nexec /usr/libexec/hephaestus/integration-check --private-http-brokered-mailbox\n";
+
+async fn restart_application(config: AppConfig) -> hephaestus_app::RunningHephaestus {
+    HephaestusApp::build(config)
+        .await
+        .expect("rebuild production application after restart")
+        .start()
+        .await
+        .expect("restart ready application")
+}
+
 type MailboxTimeoutEvidence = (
     i32,
     uuid::Uuid,
@@ -116,7 +344,7 @@ const GOLDEN_AGENT: &str = r#"#!/bin/sh
 
 #[tokio::test(flavor = "multi_thread")]
 #[serial]
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, clippy::large_stack_frames)]
 async fn bearer_push_starts_run_through_production_bootstrap() {
     drop(
         tracing_subscriber::fmt()
@@ -131,9 +359,17 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
         std::env::var("HEPHAESTUS_POSTGRES_TEST_URL"),
         std::env::var("HEPHAESTUS_NATS_TEST_URL"),
     ) else {
+        assert!(
+            !cooking::enabled()
+                && env::var("HEPHAESTUS_APP_LIBKRUN_E2E").as_deref() != Ok("1")
+                && env::var("HEPHAESTUS_APP_GATEWAY_CADDY_E2E").as_deref() != Ok("1"),
+            "explicit E2E execution requires HEPHAESTUS_POSTGRES_TEST_URL and HEPHAESTUS_NATS_TEST_URL"
+        );
         return;
     };
     let libkrun_e2e = env::var("HEPHAESTUS_APP_LIBKRUN_E2E").as_deref() == Ok("1");
+    let cooking_build_proof = env::var("HEPHAESTUS_APP_COOKING_BUILD_PROOF").as_deref() == Ok("1");
+    let browser_e2e = env::var("HEPHAESTUS_COOKING_BROWSER_E2E").as_deref() == Ok("1");
     let gateway_caddy_e2e = env::var("HEPHAESTUS_APP_GATEWAY_CADDY_E2E").as_deref() == Ok("1");
     assert!(
         !cooking::enabled() || gateway_caddy_e2e,
@@ -162,6 +398,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             .expect("fixture Git storage"),
     );
     let fixture_repository = PgForgeRepository::new(pool.clone(), Arc::clone(&storage));
+    let browser_oidc_issuer = golden_issuer();
     let user_id = UserId::new();
     let organization_id = OrganizationId::new();
     sqlx::query("INSERT INTO users (id, display_name) VALUES ($1, 'Golden User')")
@@ -184,16 +421,32 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
     .execute(&pool)
     .await
     .expect("seed organization owner");
+    let outsider_id = UserId::new();
+    sqlx::query("INSERT INTO users (id, display_name) VALUES ($1, 'Cooking Outsider')")
+        .bind(outsider_id.as_uuid())
+        .execute(&pool)
+        .await
+        .expect("seed cooking outsider");
     sqlx::query(
         "INSERT INTO external_identities
            (user_id, issuer, subject, provider_metadata)
            VALUES ($1, $2, 'golden-subject', '{}')",
     )
     .bind(user_id.as_uuid())
-    .bind(ISSUER)
+    .bind(&browser_oidc_issuer)
     .execute(&pool)
     .await
     .expect("seed external identity");
+    sqlx::query(
+        "INSERT INTO external_identities
+           (user_id, issuer, subject, provider_metadata)
+           VALUES ($1, $2, 'outsider', '{}')",
+    )
+    .bind(outsider_id.as_uuid())
+    .bind(&browser_oidc_issuer)
+    .execute(&pool)
+    .await
+    .expect("seed cooking outsider identity");
     let project = fixture_repository
         .create_project_trusted(organization_id, "golden-project")
         .await
@@ -237,9 +490,11 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
         repository.id.as_uuid(),
         &root.join("release-artifacts"),
         libkrun_e2e,
+        None,
+        "golden-agent",
     )
     .await;
-    let mut brokered_fixture = if libkrun_e2e {
+    let mut brokered_fixture = if libkrun_e2e && !cooking_build_proof {
         Some(if cooking::enabled() {
             cooking::seed_brokered_fixture(
                 &pool,
@@ -265,7 +520,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
     // This mailbox is created before the daemon starts so the released
     // gateway revision can be bound to it immutably.  The guest only sees the
     // symbolic `deliver` slot, never this UUID or the producer identity.
-    let gateway_mailbox = if gateway_caddy_e2e {
+    let gateway_mailbox = if gateway_caddy_e2e && !cooking_build_proof {
         let mailbox_id = MailboxId::new();
         PostgresMailboxRepository::new(pool.clone())
             .ensure_mailbox(
@@ -279,7 +534,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
     } else {
         None
     };
-    let gateway_edge = if gateway_caddy_e2e {
+    let gateway_edge = if gateway_caddy_e2e && !cooking_build_proof {
         let gateway_agent =
             seed_gateway_release_agent(&pool, &seeded_instance, &root.join("release-artifacts"))
                 .await;
@@ -322,7 +577,117 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
         None
     };
 
-    let backend_fixture = backend_fixture(&root).await;
+    let mut backend_fixture = backend_fixture(&root).await;
+    if let VmBackendConfig::Libkrun(provider) = &mut backend_fixture.backend {
+        // The OCI job mounts only the reviewed, operator-owned base layout
+        // cache. Keep that cache an explicit provider allowlist root instead
+        // of broadening the fixture to the entire source workspace.
+        provider.mount_roots.push(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../.local/hephaestus/platform-images"),
+        );
+        // The one-shot OCI builder formats its private scratch disk under the
+        // fixture root; it must be a disk allowlist root as well as a worker
+        // filesystem root.
+        provider
+            .disk_roots
+            .push(root.join("repository-images/scratch"));
+    }
+    let root_image = backend_fixture.root_image.clone();
+    let mut root_images = BTreeMap::from([(
+        String::from(ROOT_IMAGE),
+        RootFilesystem::Directory {
+            host_path: root_image,
+        },
+    )]);
+    if cooking_build_proof {
+        let python_image =
+            env::var("HEPHAESTUS_LIBKRUN_UBUNTU_IMAGE").expect("cooking Python image reference");
+        let rust_image = env::var("HEPHAESTUS_LIBKRUN_RUST_BUILDER_IMAGE")
+            .expect("cooking Rust builder image reference");
+        for (key, reference) in [
+            ("python-ubuntu", &python_image),
+            ("rust-ubuntu", &rust_image),
+        ] {
+            sqlx::query(
+                "INSERT INTO oci_images
+                   (id, key, display_name, image_reference, toolchains, architectures,
+                    availability_state, provenance, platform_policy_version)
+                 VALUES ($1, $2, $3, $4, '[]'::jsonb, ARRAY['x86_64'],
+                         'available', '{}'::jsonb, 'cooking-build-proof/v1')",
+            )
+            .bind(uuid::Uuid::new_v4())
+            .bind(key)
+            .bind(key)
+            .bind(reference)
+            .execute(&pool)
+            .await
+            .expect("seed cooking build-proof image catalog entry");
+        }
+        root_images.insert(
+            python_image,
+            RootFilesystem::Directory {
+                host_path: PathBuf::from(
+                    env::var("HEPHAESTUS_LIBKRUN_ROOTFS").expect("cooking Python root filesystem"),
+                ),
+            },
+        );
+        root_images.insert(
+            rust_image,
+            RootFilesystem::Directory {
+                host_path: PathBuf::from(
+                    env::var("HEPHAESTUS_LIBKRUN_RUST_BUILDER_ROOT")
+                        .expect("cooking Rust builder root filesystem"),
+                ),
+            },
+        );
+    }
+    let cooking_worker = if cooking_build_proof {
+        let worker = cooking_oci_worker_config(&root, &repository_root)
+            .expect("cooking OCI worker environment");
+        root_images.insert(
+            worker.builder_vm_image.to_string(),
+            RootFilesystem::Directory {
+                host_path: PathBuf::from(
+                    env::var("HEPHAESTUS_TEST_OCI_BUILDER_ROOT").expect("cooking OCI builder root"),
+                ),
+            },
+        );
+        root_images.insert(
+            worker.verifier_vm_image.to_string(),
+            RootFilesystem::Directory {
+                host_path: PathBuf::from(
+                    env::var("HEPHAESTUS_TEST_OCI_VERIFIER_ROOT")
+                        .expect("cooking OCI verifier root"),
+                ),
+            },
+        );
+        Some(worker)
+    } else {
+        None
+    };
+    let secret_broker_socket = root.join("secret-broker.sock");
+    let observer = if cooking_build_proof {
+        assert!(
+            libkrun_e2e,
+            "cooking build proof requires the real libkrun backend"
+        );
+        let required_image_roots = cooking_worker
+            .as_ref()
+            .map(|worker| vec![worker.rootfs_root.clone()])
+            .unwrap_or_default();
+        Some(
+            backend_fixture
+                .install_vm_observer(
+                    cooking_confinement::credential_patterns(),
+                    &secret_broker_socket,
+                    &required_image_roots,
+                )
+                .expect("install real-provider VM specification observer"),
+        )
+    } else {
+        None
+    };
     let mut transient_runtime_roots = backend_fixture.transient_runtime_roots;
     transient_runtime_roots.push(root.join("workspaces"));
     let backend = git_backend().await;
@@ -347,49 +712,24 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
         std::os::unix::fs::PermissionsExt::from_mode(0o700),
     )
     .expect("secret mount root mode");
-    let app = HephaestusApp::build(AppConfig {
-        database_url,
+    let mut app_config = AppConfig {
+        database_url: database_url.clone(),
         nats_url: nats_url.clone(),
         http_listen: "127.0.0.1:0".parse().expect("ephemeral listen address"),
         rpc_mediator_signing_key: hephaestus_app::rpc::mediator_signing_key(
-            b"golden-internal-command-token",
+            b"golden-internal-command-token-with-sufficient-entropy",
         ),
         repository_root: repository_root.clone(),
         git_http_backend: backend,
         git_pre_receive_hook,
         git_http_limits: git_http::GitHttpLimits::default(),
         oidc: OidcConfig {
-            issuer: String::from(ISSUER),
+            issuer: browser_oidc_issuer.clone(),
             audience: String::from(AUDIENCE),
             algorithm: Algorithm::HS256,
             decoding_key: jsonwebtoken::DecodingKey::from_secret(SIGNING_SECRET),
         },
-        registry: RegistryConfig {
-            token_issuer: Arc::new(registry_token::RegistryTokenIssuer::new(
-                "https://forge.golden.invalid/v1/registry/token"
-                    .parse()
-                    .expect("registry issuer"),
-                "registry.golden.invalid".parse().expect("registry service"),
-                registry_token::SigningKey::hs256(
-                    "golden-v1".parse().expect("registry key id"),
-                    SIGNING_SECRET,
-                )
-                .expect("registry signing key"),
-                registry_token::TokenLifetime::new(300).expect("registry token lifetime"),
-            )),
-            notification_callback: registry_notification::CallbackCredential::parse(
-                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-            )
-            .expect("registry notification callback"),
-            zot: registry_zot::ZotClientConfig::new(
-                registry_domain::RegistryAuthority::parse("registry.golden.invalid")
-                    .expect("registry authority"),
-                "http://127.0.0.1:1/",
-            )
-            .expect("Zot client configuration"),
-            reconciliation_lease: Duration::from_secs(30),
-            reconciliation_interval: Duration::from_secs(30),
-        },
+        registry: golden_registry_config(),
         gateway_edge: gateway_edge.as_ref().map(|(config, _)| config.clone()),
         volumes: LocalVolumeConfig {
             volume_root: backend_fixture.volume_root,
@@ -420,19 +760,14 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
         },
         secret_keys: LocalKeyProvider::new("golden/v1", [("golden/v1", [17_u8; 32])])
             .expect("secret key"),
-        secret_broker_socket: root.join("secret-broker.sock"),
+        secret_broker_socket,
         secret_broker_adapter: brokered_fixture.as_ref().map_or_else(
             || Arc::new(DenyingBrokerAdapter) as Arc<dyn secret_application::BrokerAdapter>,
             |fixture| fixture.upstream.adapter(),
         ),
         vm_backend: backend_fixture.backend,
-        root_images: BTreeMap::from([(
-            String::from(ROOT_IMAGE),
-            RootFilesystem::Directory {
-                host_path: backend_fixture.root_image,
-            },
-        )]),
-        oci_builder: None,
+        root_images,
+        oci_builder: cooking_worker,
         runtime_policy: hephaestus_app::RuntimePolicy {
             version: String::from("golden/v1"),
             max_vcpus: 2,
@@ -446,79 +781,1514 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
         outbox_batch_size: 20,
         startup_timeout: Duration::from_secs(10),
         shutdown_timeout: Duration::from_secs(10),
-    })
-    .await
-    .expect("build production application");
+    };
+    let app = HephaestusApp::build(app_config.clone())
+        .await
+        .expect("build production application");
     let running = app.start().await.expect("start ready application");
-
     let token = signed_token();
-    let source = root.join("source");
-    tokio::fs::create_dir(&source)
+    if cooking_build_proof {
+        let source_root =
+            PathBuf::from(env::var("HEPHAESTUS_COOKING_SOURCE_ROOT").expect("cooking source root"));
+        let identity = AuthenticatedIdentity::new(
+            user_id,
+            &browser_oidc_issuer,
+            "golden-subject",
+            serde_json::json!({}),
+            RequestId::new(),
+        );
+        let rpc_token = |audience: &str| {
+            let now = OffsetDateTime::now_utc().unix_timestamp();
+            encode(
+                &Header::new(Algorithm::HS256),
+                &serde_json::json!({
+                    "iss": "hephaestus-web-mediator",
+                    "sub": user_id.to_string(),
+                    "aud": audience,
+                    "iat": now,
+                    "nbf": now,
+                    "exp": now + 25,
+                    "jti": uuid::Uuid::new_v4().to_string()
+                }),
+                &EncodingKey::from_secret(&hephaestus_app::rpc::mediator_signing_key(
+                    b"golden-internal-command-token-with-sufficient-entropy",
+                )),
+            )
+            .expect("sign cooking build-proof mediator token")
+        };
+        if env::var("HEPHAESTUS_COOKING_OCI_BASE_IMPORT_DIAGNOSTIC").as_deref() == Ok("1") {
+            let context = cooking_builds::CookingBuildContext {
+                pool: &pool,
+                running: &running,
+                root: &root,
+                source_root: &source_root,
+                project_id: project.id,
+                repositories: &fixture_repository,
+                identity: cooking_builds::CookingIdentity {
+                    actor: &identity,
+                    git_token: &token,
+                    rpc_token: &rpc_token,
+                },
+                timeout: Duration::from_secs(300),
+            };
+            cooking_builds::create_cooking_blog_repository(&context)
+                .await
+                .expect("targeted cooking OCI base-import diagnostic");
+            running
+                .shutdown()
+                .await
+                .expect("targeted OCI diagnostic shutdown");
+            cleanup_streams(&nats_url).await;
+            return;
+        }
+        let retry_fixture =
+            if browser_e2e || env::var("HEPHAESTUS_COOKING_UPDATE_E2E").as_deref() == Ok("1") {
+                let retry_repository = fixture_repository
+                    .create_repository_trusted(&CreateRepository {
+                        project_id: project.id,
+                        name: format!("golden-retry-source-{}", uuid::Uuid::new_v4()),
+                        default_branch: GitRef::parse("refs/heads/main").expect("default ref"),
+                        is_public: false,
+                        agent_runs_enabled: true,
+                    })
+                    .await
+                    .expect("seed browser retry source repository");
+                let retry_instance = seed_reusable_instance(
+                    &pool,
+                    user_id,
+                    project.id.as_uuid(),
+                    retry_repository.id.as_uuid(),
+                    &root.join("release-artifacts"),
+                    libkrun_e2e,
+                    Some(GOLDEN_AGENT.as_bytes()),
+                    "golden-retry-source",
+                )
+                .await;
+                let source = create_forge_source_run(
+                    &pool,
+                    &running,
+                    &root,
+                    retry_repository.id.as_uuid(),
+                    retry_instance.instance,
+                    &token,
+                    libkrun_e2e,
+                    true,
+                    ForgeSourceContent::GoldenAgent,
+                )
+                .await;
+                Some(ForgeRetryFixture {
+                    repository_id: retry_repository.id.as_uuid(),
+                    instance: retry_instance,
+                    source_run_id: source.run_id,
+                })
+            } else {
+                None
+            };
+        let builds = cooking_builds::build_and_publish(cooking_builds::CookingBuildContext {
+            pool: &pool,
+            running: &running,
+            root: &root,
+            source_root: &source_root,
+            project_id: project.id,
+            repositories: &fixture_repository,
+            identity: cooking_builds::CookingIdentity {
+                actor: &identity,
+                git_token: &token,
+                rpc_token: &rpc_token,
+            },
+            timeout: Duration::from_secs(300),
+        })
         .await
-        .expect("source repository");
-    git(&source, &["init", "--initial-branch=main"]).await;
-    git(&source, &["config", "user.name", "Golden Test"]).await;
-    git(&source, &["config", "user.email", "golden@example.invalid"]).await;
-    tokio::fs::write(source.join("agent.toml"), agent_config())
+        .expect("real cooking source build and publish proof");
+        let adversarial_agent_build = cooking_builds::build_and_publish_adversarial_agent(
+            &cooking_builds::CookingBuildContext {
+                pool: &pool,
+                running: &running,
+                root: &root,
+                source_root: &source_root,
+                project_id: project.id,
+                repositories: &fixture_repository,
+                identity: cooking_builds::CookingIdentity {
+                    actor: &identity,
+                    git_token: &token,
+                    rpc_token: &rpc_token,
+                },
+                timeout: Duration::from_secs(300),
+            },
+            &builds.agent,
+        )
         .await
-        .expect("provider-neutral agent.toml");
-    tokio::fs::write(source.join("golden-agent.sh"), GOLDEN_AGENT)
+        .expect("publish adversarial cooking agent destination release");
+        assert_ne!(
+            adversarial_agent_build.release_id, builds.agent.release_id,
+            "the adversarial agent must use a distinct published release"
+        );
+        let adversarial_gateway_build = cooking_builds::build_and_publish_adversarial_gateway(
+            &cooking_builds::CookingBuildContext {
+                pool: &pool,
+                running: &running,
+                root: &root,
+                source_root: &source_root,
+                project_id: project.id,
+                repositories: &fixture_repository,
+                identity: cooking_builds::CookingIdentity {
+                    actor: &identity,
+                    git_token: &token,
+                    rpc_token: &rpc_token,
+                },
+                timeout: Duration::from_secs(300),
+            },
+            &builds.gateway,
+        )
         .await
-        .expect("golden agent executable source");
-    tokio::fs::write(source.join("input.txt"), "accepted\n")
-        .await
-        .expect("input file");
-    if cooking::enabled() {
-        cooking::copy_blog(&source).await;
-    }
-    tokio::fs::create_dir(source.join("reports"))
-        .await
-        .expect("reports directory");
-    tokio::fs::write(source.join("reports/result.txt"), "initial\n")
-        .await
-        .expect("initial report");
-    git(&source, &["add", "."]).await;
-    git(&source, &["commit", "-m", "golden agent"]).await;
-    let input_commit = git_output(&source, &["rev-parse", "HEAD"]).await;
-    let remote = format!("http://{}/{}", running.http_addr(), repository.id);
-    git(&source, &["remote", "add", "origin", &remote]).await;
-    // Keep the fixture closed through startup recovery, then admit the exact
-    // authenticated push that this golden proof is about.
-    sqlx::query("UPDATE agent_instances SET run_gate_open = true WHERE id = $1")
-        .bind(seeded_instance.instance)
-        .execute(&pool)
-        .await
-        .expect("open golden push run gate");
-    authenticated_git(&source, &token, &["push", "origin", "HEAD:refs/heads/main"]).await;
-
-    let run_id: uuid::Uuid =
-        sqlx::query_scalar("SELECT run_id FROM run_requests WHERE repository_id = $1")
-            .bind(repository.id.as_uuid())
-            .fetch_one(&pool)
+        .expect("publish adversarial foreign-slot gateway release");
+        assert_eq!(
+            adversarial_gateway_build.repository_id, builds.gateway.repository_id,
+            "the adversarial release must remain in the canonical release family"
+        );
+        assert_ne!(
+            adversarial_gateway_build.release_id, builds.gateway.release_id,
+            "the adversarial probe must use a distinct published release"
+        );
+        for published in [&builds.gateway, &builds.agent, &adversarial_agent_build] {
+            assert_eq!(published.actor_id, user_id);
+            assert!(!published.repository_id.as_uuid().is_nil());
+            assert!(!published.source_commit.is_empty());
+            assert!(!published.build_request_id.is_nil());
+            assert!(!published.release_id.is_nil());
+            assert!(!published.release_agent_id.is_nil());
+            assert!(!published.version.is_empty());
+            assert!(!published.build_definition_hash.is_empty());
+            assert!(!published.configuration_hash.is_empty());
+            assert!(!published.manifest_hash.is_empty());
+            assert!(published.source_path.is_dir());
+            assert!(published.working_path.is_dir());
+        }
+        let blog_repository =
+            cooking_builds::create_cooking_blog_repository(&cooking_builds::CookingBuildContext {
+                pool: &pool,
+                running: &running,
+                root: &root,
+                source_root: &source_root,
+                project_id: project.id,
+                repositories: &fixture_repository,
+                identity: cooking_builds::CookingIdentity {
+                    actor: &identity,
+                    git_token: &token,
+                    rpc_token: &rpc_token,
+                },
+                timeout: Duration::from_secs(300),
+            })
             .await
-            .expect("durable run request");
-    let run_id = runtime_types::RunId::from_uuid(run_id);
-    let result_wait = running
-        .wait_for_run_event(
-            run_id,
-            RunEventKind::ResultCompleted,
-            Duration::from_secs(if libkrun_e2e { 60 } else { 10 }),
+            .expect("create and push separate cooking blog repository");
+        assert!(!blog_repository.source_commit.is_empty());
+        let cooking_context = cooking_builds::CookingBuildContext {
+            pool: &pool,
+            running: &running,
+            root: &root,
+            source_root: &source_root,
+            project_id: project.id,
+            repositories: &fixture_repository,
+            identity: cooking_builds::CookingIdentity {
+                actor: &identity,
+                git_token: &token,
+                rpc_token: &rpc_token,
+            },
+            timeout: Duration::from_secs(300),
+        };
+        let update_builds = if env::var("HEPHAESTUS_COOKING_UPDATE_E2E").as_deref() == Ok("1") {
+            Some(
+                cooking_builds::build_and_publish_update_variants(
+                    cooking_builds::CookingBuildContext {
+                        pool: &pool,
+                        running: &running,
+                        root: &root,
+                        source_root: &source_root,
+                        project_id: project.id,
+                        repositories: &fixture_repository,
+                        identity: cooking_builds::CookingIdentity {
+                            actor: &identity,
+                            git_token: &token,
+                            rpc_token: &rpc_token,
+                        },
+                        timeout: Duration::from_secs(300),
+                    },
+                    &builds.agent,
+                )
+                .await
+                .expect("publish cooking update-hook variants"),
+            )
+        } else {
+            None
+        };
+        cooking_builds::wait_for_cooking_build_quiescence(
+            &pool,
+            project.id,
+            "golden-cooking-oci-materialization",
+            Duration::from_secs(300),
         )
         .await;
-    if result_wait.is_err() {
-        diagnose_golden_timeout(&pool, repository.id.as_uuid(), run_id).await;
+        let instance = cooking_builds::prepare_cooking_instance(
+            &cooking_context,
+            builds.agent.release_agent_id,
+            blog_repository.repository_id,
+            cooking_builds::cooking_agent_parameters(),
+        )
+        .await
+        .expect("ImportAgent/CreateAttachment/CreateMailbox cooking instance");
+        let actual_instance = SeededInstance {
+            instance: instance.instance_id,
+            revision: instance.revision_id,
+            attachment: instance.attachment_id,
+            release: builds.agent.release_id,
+            release_agent: builds.agent.release_agent_id,
+        };
+        let actual_brokered = cooking::seed_brokered_fixture(
+            &pool,
+            user_id,
+            organization_id,
+            project.id.as_uuid(),
+            &actual_instance,
+        )
+        .await;
+        let cooking_update_rule_ids = update_builds.as_ref().map(|_| {
+            (
+                cooking_updates::BrokeredRuleIds::fresh(),
+                cooking_updates::BrokeredRuleIds::fresh(),
+                cooking_updates::BrokeredRuleIds::fresh(),
+                cooking_updates::BrokeredRuleIds::fresh(),
+            )
+        });
+        if let Some((migration, rollback, abnormal, browser)) = cooking_update_rule_ids {
+            actual_brokered.upstream.register_rule_copies(&[
+                (cooking::MODEL_RULE, migration.model),
+                (cooking::RELAY_RULE, migration.relay),
+                (migration.model, rollback.model),
+                (migration.relay, rollback.relay),
+                (migration.model, abnormal.model),
+                (migration.relay, abnormal.relay),
+                (migration.model, browser.model),
+                (migration.relay, browser.relay),
+            ]);
+        }
+        let cooking_inbound_placeholder =
+            cooking_builds::cooking_inbound_placeholder(actual_brokered.version_id);
+        let installed_gateway = cooking_builds::install_cooking_gateway(
+            &cooking_context,
+            builds.gateway.release_id,
+            builds.gateway.repository_id,
+        )
+        .await
+        .expect("install released cooking gateway");
+        // The browser owns the first configuration when it is enabled. This
+        // keeps its immutable-revision proof independent from the ordinary
+        // RPC configure/replay proof used by the backend-only path.
+        let mut actual_grant_id = None;
+        if browser_e2e {
+            assert_eq!(
+                installed_gateway.revision_id,
+                sqlx::query_scalar::<_, uuid::Uuid>(
+                    "SELECT active_revision_id FROM gateways WHERE id = $1",
+                )
+                .bind(installed_gateway.gateway_id)
+                .fetch_one(&pool)
+                .await
+                .expect("installed cooking gateway active revision"),
+                "browser must start from the installed, unconfigured gateway revision"
+            );
+            let initial_binding_count: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM gateway_mailbox_bindings WHERE gateway_revision_id = $1",
+            )
+            .bind(installed_gateway.revision_id)
+            .fetch_one(&pool)
+            .await
+            .expect("installed cooking gateway initial bindings");
+            assert_eq!(
+                initial_binding_count, 0,
+                "browser must start from a gateway revision without mailbox bindings"
+            );
+        } else {
+            let configured_revision = cooking_builds::configure_cooking_gateway(
+                &cooking_context,
+                installed_gateway,
+                cooking_builds::cooking_gateway_parameters(
+                    &cooking_inbound_placeholder,
+                    1001,
+                    1002,
+                ),
+                actual_brokered.import_id,
+                actual_brokered.version_id,
+                instance.mailbox_id,
+            )
+            .await
+            .expect("ConfigureGateway/CreateMailboxBinding cooking gateway");
+            assert_ne!(
+                configured_revision.revision_id,
+                installed_gateway.revision_id
+            );
+            assert!(!configured_revision.grant_id.is_nil());
+            actual_grant_id = Some(configured_revision.grant_id);
+        }
+        assert_ne!(instance.instance_id, uuid::Uuid::nil());
+        // Provision a real second mailbox through the instance RPC and point
+        // a temporary immutable gateway revision at it. The released source
+        // then asks the host to publish through an undeclared slot; the edge
+        // must reject it before creating a foreign event or run.
+        let foreign_instance = cooking_builds::prepare_cooking_instance_variant(
+            &cooking_context,
+            builds.agent.release_agent_id,
+            blog_repository.repository_id,
+            cooking_builds::cooking_agent_parameters(),
+            "cooking-agent-foreign",
+            "cooking-agent-foreign",
+        )
+        .await
+        .expect("provision adversarial foreign mailbox");
+        assert_ne!(foreign_instance.instance_id, instance.instance_id);
+        assert_ne!(foreign_instance.mailbox_id, instance.mailbox_id);
+        let fixture_path = if browser_e2e {
+            Some(
+                env::var("HEPHAESTUS_COOKING_BROWSER_FIXTURE_OUTPUT")
+                    .expect("cooking browser fixture output path"),
+            )
+        } else {
+            env::var("HEPHAESTUS_COOKING_BROWSER_FIXTURE_OUTPUT").ok()
+        };
+        if let Some(path) = fixture_path {
+            let fixture = serde_json::json!({
+                "organization_id": organization_id,
+                "project_id": project.id,
+                "repository_id": builds.gateway.repository_id,
+                "release_id": builds.gateway.release_id,
+                "release_agent_id": builds.agent.release_agent_id,
+                "instance_id": instance.instance_id,
+                "mailbox_id": instance.mailbox_id,
+                "gateway_id": installed_gateway.gateway_id,
+                "inbound_import_id": actual_brokered.import_id,
+                "inbound_secret_version_id": actual_brokered.version_id,
+                "inbound_selection": format!(
+                    "{}|{}|/cooking/telegram|x-telegram-bot-api-secret-token",
+                    actual_brokered.import_id, actual_brokered.version_id
+                ),
+                "parameters": {
+                    "inbound_placeholder": cooking_inbound_placeholder.clone(),
+                    "alice_provider_id": 1001,
+                    "bob_provider_id": 1002
+                }
+            });
+            tokio::fs::write(
+                &path,
+                serde_json::to_vec_pretty(&fixture).expect("cooking browser fixture JSON"),
+            )
+            .await
+            .expect("write cooking browser fixture JSON");
+            if browser_e2e {
+                let issuer = env::var("HEPHAESTUS_COOKING_BROWSER_OIDC_ISSUER")
+                    .expect("cooking browser OIDC issuer");
+                let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../scripts/run-ui-e2e-external.sh");
+                let status = tokio::process::Command::new(script)
+                    .env("HEPHAESTUS_E2E_COOKING_FIXTURE", &path)
+                    .env("HEPHAESTUS_E2E_EXTERNAL_DATABASE_URL", &database_url)
+                    .env(
+                        "HEPHAESTUS_E2E_EXTERNAL_RPC_ENDPOINT",
+                        running.http_addr().to_string(),
+                    )
+                    .env(
+                        "HEPHAESTUS_E2E_EXTERNAL_RPC_SECRET",
+                        "golden-internal-command-token-with-sufficient-entropy",
+                    )
+                    .env("HEPHAESTUS_E2E_EXTERNAL_OIDC_ISSUER", issuer)
+                    .env("HEPHAESTUS_E2E_COOKING_PHASE", "initial")
+                    .status()
+                    .await
+                    .expect("run cooking browser E2E");
+                assert!(status.success(), "cooking browser E2E failed: {status}");
+                let browser_gateway_id = installed_gateway.gateway_id;
+                let active_revision_id: uuid::Uuid =
+                    sqlx::query_scalar("SELECT active_revision_id FROM gateways WHERE id = $1")
+                        .bind(browser_gateway_id)
+                        .fetch_one(&pool)
+                        .await
+                        .expect("cooking browser active gateway revision");
+                assert_ne!(
+                    active_revision_id, installed_gateway.revision_id,
+                    "browser must create a new gateway revision"
+                );
+                actual_grant_id = Some(
+                    sqlx::query_scalar(
+                        "SELECT binding_grant.id
+                     FROM gateways gateway
+                     JOIN gateway_revisions revision
+                       ON revision.gateway_id = gateway.id
+                      AND revision.id = gateway.active_revision_id
+                     JOIN gateway_mailbox_bindings binding
+                       ON binding.gateway_revision_id = revision.id
+                      AND binding.mailbox_id = $1
+                     JOIN gateway_mailbox_binding_grants binding_grant
+                       ON binding_grant.binding_id = binding.id
+                      AND binding_grant.status = 'active'
+                     WHERE gateway.id = $2
+                     ORDER BY binding_grant.granted_at DESC, binding_grant.id DESC
+                         LIMIT 1",
+                    )
+                    .bind(instance.mailbox_id)
+                    .bind(browser_gateway_id)
+                    .fetch_one(&pool)
+                    .await
+                    .expect("cooking browser active binding grant"),
+                );
+            }
+        }
+        let mut actual_fixture = GatewayGoldenFixture {
+            mailbox_id: MailboxId::from_uuid(instance.mailbox_id),
+            grant_id: actual_grant_id.expect("cooking gateway mailbox grant after setup"),
+        };
+        // Run the adversarial release only after the optional browser phase:
+        // the browser is allowed to install/configure the canonical release,
+        // and must not accidentally make this authority probe a no-op.
+        let adversarial_installed_gateway = cooking_builds::install_cooking_gateway(
+            &cooking_context,
+            adversarial_gateway_build.release_id,
+            adversarial_gateway_build.repository_id,
+        )
+        .await
+        .expect("install adversarial foreign-slot gateway release");
+        let adversarial_configured = cooking_builds::configure_cooking_gateway(
+            &cooking_context,
+            adversarial_installed_gateway,
+            cooking_builds::cooking_gateway_parameters(&cooking_inbound_placeholder, 1001, 1002),
+            actual_brokered.import_id,
+            actual_brokered.version_id,
+            foreign_instance.mailbox_id,
+        )
+        .await
+        .expect("configure adversarial foreign publication slot");
+        let installed_release: uuid::Uuid =
+            sqlx::query_scalar("SELECT release_id FROM gateway_revisions WHERE id = $1")
+                .bind(adversarial_configured.revision_id)
+                .fetch_one(&pool)
+                .await
+                .expect("adversarial revision release provenance");
+        assert_eq!(installed_release, adversarial_gateway_build.release_id);
+        let has_foreign_binding: bool = sqlx::query_scalar(
+            "SELECT EXISTS (
+                 SELECT 1 FROM gateway_mailbox_bindings binding
+                 JOIN gateway_mailbox_binding_grants grant_row
+                   ON grant_row.binding_id = binding.id
+                 WHERE binding.gateway_revision_id = $1
+                   AND binding.slot_key = 'cooking_requests'
+                   AND binding.mailbox_id = $2
+                   AND grant_row.status = 'active'
+             )",
+        )
+        .bind(adversarial_configured.revision_id)
+        .bind(foreign_instance.mailbox_id)
+        .fetch_one(&pool)
+        .await
+        .expect("adversarial foreign mailbox binding");
+        assert!(
+            has_foreign_binding,
+            "foreign mailbox positive control binding"
+        );
+        let adversarial_foreign_mailbox = foreign_instance.mailbox_id;
+        let dispatcher = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("reserve cooking gateway dispatcher listener");
+        let dispatcher_listen = dispatcher
+            .local_addr()
+            .expect("cooking gateway dispatcher listener address");
+        drop(dispatcher);
+        app_config.gateway_edge = Some(GatewayEdgeConfig {
+            caddy_admin_url: env::var("HEPHAESTUS_CADDY_TEST_ADMIN_URL")
+                .expect("joined Caddy admin URL"),
+            caddy_configuration_template: caddy_configuration(
+                &env::var("HEPHAESTUS_CADDY_TEST_ADMIN_URL").expect("joined Caddy admin URL"),
+            ),
+            caddy_server_name: String::from("shared"),
+            dispatcher_listen,
+            public_authority: String::from("gateway.golden.invalid"),
+        });
+        app_config.secret_broker_adapter = actual_brokered.upstream.adapter();
+        // Finish the separate adversarial instance's immutable bindings and
+        // rules before the daemon restart. The later ingress uses the
+        // restarted daemon, but this setup remains tied to the published
+        // release and final pre-restart revision.
+        let canonical_revision_id: uuid::Uuid = sqlx::query_scalar(
+            "SELECT active_revision_id
+               FROM agent_instances
+              WHERE id = $1",
+        )
+        .bind(actual_instance.instance)
+        .fetch_one(&pool)
+        .await
+        .expect("canonical active instance revision");
+        let (adversarial_instance, adversarial_rule_id) =
+            cooking_adversarial_agent::prepare_adversarial_instance(
+                &cooking_context,
+                adversarial_agent_build.release_agent_id,
+                blog_repository.repository_id,
+                canonical_revision_id,
+                "cooking-agent-adversarial",
+                "cooking-agent-adversarial",
+            )
+            .await
+            .expect("prepare adversarial cooking agent bindings and rules");
+        cooking_builds::wait_for_cooking_build_quiescence(
+            &pool,
+            project.id,
+            "golden-cooking-oci-materialization",
+            Duration::from_secs(300),
+        )
+        .await;
+        running
+            .shutdown()
+            .await
+            .expect("build-proof daemon restart shutdown");
+        let running = restart_application(app_config.clone()).await;
+        let adversarial_url = format!(
+            "{}/gateway/cooking/telegram",
+            env::var("HEPHAESTUS_CADDY_TEST_PUBLIC_URL").expect("public Caddy URL")
+        );
+        let adversarial_response = reqwest::Client::new()
+            .post(adversarial_url)
+            .header("x-telegram-bot-api-secret-token", cooking::INBOUND_SENTINEL)
+            .json(&serde_json::json!({
+                "update_id": 39,
+                "message": {"from": {"id": 1001}, "text": "pasta"}
+            }))
+            .send()
+            .await
+            .expect("adversarial foreign publication request");
+        assert_eq!(
+            adversarial_response.status(),
+            reqwest::StatusCode::BAD_GATEWAY,
+            "undeclared gateway publication slot is denied by the host"
+        );
+        adversarial_response
+            .bytes()
+            .await
+            .expect("read adversarial denial response");
+        let denied_publications: Vec<(String, Option<String>, String)> = sqlx::query_as(
+            "SELECT publication.outcome, publication.denial_code, invocation.outcome
+               FROM gateway_mailbox_publications publication
+               JOIN gateway_invocations invocation ON invocation.id = publication.invocation_id
+              WHERE publication.gateway_revision_id = $1
+                AND publication.slot_key = $2
+                AND publication.deduplication_key = 'telegram-update-39'",
+        )
+        .bind(adversarial_configured.revision_id)
+        .bind(cooking_builds::FOREIGN_PUBLICATION_SLOT)
+        .fetch_all(&pool)
+        .await
+        .expect("exact adversarial publication denial");
+        assert_eq!(
+            denied_publications,
+            vec![(
+                String::from("denied"),
+                Some(String::from("authority_unavailable")),
+                String::from("failed"),
+            )],
+            "the guest must reach publication and receive a durable authority denial"
+        );
+        let (foreign_events, foreign_deliveries, foreign_attempts, foreign_runs): (
+            i64,
+            i64,
+            i64,
+            i64,
+        ) = sqlx::query_as(
+            "SELECT
+                (SELECT count(*) FROM mailbox_events WHERE mailbox_id = $1),
+                (SELECT count(*) FROM mailbox_deliveries WHERE mailbox_id = $1),
+                (SELECT count(*) FROM mailbox_delivery_attempts WHERE mailbox_id = $1),
+                (SELECT count(*) FROM runs WHERE instance_id = (
+                    SELECT instance_id FROM mailboxes WHERE id = $1
+                ))",
+        )
+        .bind(adversarial_foreign_mailbox)
+        .fetch_one(&pool)
+        .await
+        .expect("foreign mailbox denial effects");
+        assert_eq!(
+            (
+                foreign_events,
+                foreign_deliveries,
+                foreign_attempts,
+                foreign_runs
+            ),
+            (0, 0, 0, 0),
+            "foreign mailbox must have no event, delivery, attempt, or run after denial"
+        );
+        let restored_context = cooking_builds::CookingBuildContext {
+            pool: &pool,
+            running: &running,
+            root: &root,
+            source_root: &source_root,
+            project_id: project.id,
+            repositories: &fixture_repository,
+            identity: cooking_builds::CookingIdentity {
+                actor: &identity,
+                git_token: &token,
+                rpc_token: &rpc_token,
+            },
+            timeout: Duration::from_secs(300),
+        };
+        let canonical_installed_gateway = cooking_builds::install_cooking_gateway(
+            &restored_context,
+            builds.gateway.release_id,
+            builds.gateway.repository_id,
+        )
+        .await
+        .expect("reinstall canonical gateway after adversarial probe");
+        let restored = cooking_builds::configure_cooking_gateway(
+            &restored_context,
+            canonical_installed_gateway,
+            cooking_builds::cooking_gateway_parameters(&cooking_inbound_placeholder, 1001, 1002),
+            actual_brokered.import_id,
+            actual_brokered.version_id,
+            instance.mailbox_id,
+        )
+        .await
+        .expect("restore canonical gateway after adversarial probe");
+        actual_fixture.grant_id = restored.grant_id;
+        let checkpoint = cooking::exercise_initial(&pool, &actual_fixture).await;
+        cooking::wait_for_checkpoint_runs(&pool, &checkpoint, restored_context.timeout).await;
+        let canonical_run_ids = checkpoint.run_ids();
+        // Recipe 42 above is the canonical positive control. Capture its
+        // durable adapter effects before routing one mailbox-local event to a
+        // separate adversarial instance. Scope both measurements to these
+        // settled run IDs so unrelated canonical activity cannot move the
+        // comparison window.
+        let (baseline_model_calls, baseline_relay_calls): (i64, i64) = sqlx::query_as(
+            "SELECT
+                 count(*) FILTER (WHERE audit.rule_id = $2),
+                 count(*) FILTER (WHERE audit.rule_id = $3)
+               FROM brokered_secret_audit_events AS audit
+               JOIN runs AS run ON run.id = audit.run_id
+              WHERE run.id = ANY($1)
+                AND audit.event_kind = 'substitution_use'",
+        )
+        .bind(canonical_run_ids.to_vec())
+        .bind(cooking::MODEL_RULE)
+        .bind(cooking::RELAY_RULE)
+        .fetch_one(&pool)
+        .await
+        .expect("canonical cooking adapter baseline");
+        let (gateway_id, gateway_revision_id): (uuid::Uuid, uuid::Uuid) = sqlx::query_as(
+            "SELECT gateway.id, gateway.active_revision_id
+               FROM gateways AS gateway
+               JOIN gateway_revisions AS revision
+                 ON revision.gateway_id = gateway.id
+                AND revision.id = gateway.active_revision_id
+               JOIN gateway_mailbox_bindings AS binding
+                 ON binding.gateway_revision_id = revision.id
+               JOIN gateway_mailbox_binding_grants AS grant_row
+                 ON grant_row.binding_id = binding.id
+              WHERE grant_row.id = $1
+                AND grant_row.status = 'active'",
+        )
+        .bind(actual_fixture.grant_id)
+        .fetch_one(&pool)
+        .await
+        .expect("canonical active gateway identity");
+        let adversarial_probe = cooking_adversarial_agent::exercise_adversarial_agent_probe(
+            cooking_adversarial_agent::AdversarialAgentProbeInput {
+                context: &restored_context,
+                gateway: cooking_builds::InstalledCookingGateway {
+                    gateway_id,
+                    revision_id: gateway_revision_id,
+                },
+                adversarial_instance,
+                canonical_run_ids,
+                baseline_model_calls,
+                baseline_relay_calls,
+                adversarial_rule_id,
+                inbound_import_id: actual_brokered.import_id,
+                inbound_version_id: actual_brokered.version_id,
+                inbound_placeholder: &cooking_inbound_placeholder,
+                inbound_wire_credential: cooking::INBOUND_SENTINEL,
+                public_url: &env::var("HEPHAESTUS_CADDY_TEST_PUBLIC_URL")
+                    .expect("joined Caddy public URL"),
+            },
+        )
+        .await
+        .expect("adversarial cooking agent denial probe");
+        assert!(!adversarial_probe.event_id.is_nil());
+        assert!(!adversarial_probe.run_id.is_nil());
+        assert_eq!(adversarial_probe.mismatched_rule_id, adversarial_rule_id);
+        assert_eq!(adversarial_probe.deny_decisions, 1);
+        assert_eq!(adversarial_probe.substitution_uses, 0);
+        let restored_adversarial_gateway = cooking_builds::install_cooking_gateway(
+            &restored_context,
+            builds.gateway.release_id,
+            builds.gateway.repository_id,
+        )
+        .await
+        .expect("reinstall canonical gateway after agent probe");
+        let restored_adversarial = cooking_builds::configure_cooking_gateway(
+            &restored_context,
+            restored_adversarial_gateway,
+            cooking_builds::cooking_gateway_parameters(&cooking_inbound_placeholder, 1001, 1002),
+            actual_brokered.import_id,
+            actual_brokered.version_id,
+            instance.mailbox_id,
+        )
+        .await
+        .expect("restore canonical gateway after agent probe");
+        actual_fixture.grant_id = restored_adversarial.grant_id;
+        // Prepare the transformed guest and its two new rule identities before
+        // the existing supervisor restart. This follows the initial and
+        // adversarial controls, while canonical/crash adapters are joined by
+        // immutable rule UUID and canonical counts remain unchanged.
+        let crash_agent_build =
+            cooking_builds::build_and_publish_guest_crash_agent(&restored_context, &builds.agent)
+                .await
+                .expect("publish deterministic guest crash agent");
+        let crash_instance = cooking_adversarial_agent::prepare_brokered_instance_with_rule_ids(
+            &restored_context,
+            crash_agent_build.release_agent_id,
+            blog_repository.repository_id,
+            canonical_revision_id,
+            "cooking-agent-guest-crash",
+            "cooking-agent-guest-crash",
+            cooking_adversarial_agent::BrokeredRuleIds {
+                model: cooking::CRASH_MODEL_RULE,
+                relay: cooking::CRASH_RELAY_RULE,
+            },
+        )
+        .await
+        .expect("prepare guest crash instance and rule specs");
+        let crash_upstream = cooking::cooking_crash_upstreams(vec![
+            cooking::brokered_rule_for_spec(&crash_instance.model),
+            cooking::brokered_rule_for_spec(&crash_instance.relay),
+        ])
+        .await;
+        let crash_gateway_id: uuid::Uuid =
+            sqlx::query_scalar("SELECT gateway_id FROM gateway_revisions WHERE id = $1")
+                .bind(restored_adversarial.revision_id)
+                .fetch_one(&pool)
+                .await
+                .expect("guest crash gateway identity");
+        let crash_gateway = cooking_builds::configure_cooking_gateway(
+            &restored_context,
+            cooking_builds::InstalledCookingGateway {
+                gateway_id: crash_gateway_id,
+                revision_id: restored_adversarial.revision_id,
+            },
+            cooking_builds::cooking_gateway_parameters(&cooking_inbound_placeholder, 1001, 1002),
+            actual_brokered.import_id,
+            actual_brokered.version_id,
+            crash_instance.instance.mailbox_id,
+        )
+        .await
+        .expect("route cooking gateway to guest crash mailbox");
+        app_config.secret_broker_adapter =
+            actual_brokered.upstream.combined_adapter(&crash_upstream);
+        cooking_builds::wait_for_cooking_build_quiescence(
+            &pool,
+            project.id,
+            "golden-cooking-oci-materialization",
+            Duration::from_secs(300),
+        )
+        .await;
+        running
+            .shutdown()
+            .await
+            .expect("cooking daemon graceful restart shutdown");
+        let restarted = restart_application(app_config).await;
+        let crash_fixture = GatewayGoldenFixture {
+            mailbox_id: mailbox_domain::MailboxId::from_uuid(crash_instance.instance.mailbox_id),
+            grant_id: crash_gateway.grant_id,
+        };
+        cooking_guest_crash::exercise(&pool, &crash_fixture, &crash_instance.instance).await;
+        cooking_guest_crash::wait_for_upstream(crash_upstream).await;
+        let crash_disk: PathBuf = PathBuf::from(
+            sqlx::query_scalar::<_, String>(
+                "SELECT host_path FROM agent_instance_state_volumes
+              WHERE instance_id = $1",
+            )
+            .bind(crash_instance.instance.instance_id)
+            .fetch_one(&pool)
+            .await
+            .expect("load guest crash state volume disk path"),
+        );
+        let restarted_context = cooking_builds::CookingBuildContext {
+            pool: &pool,
+            running: &restarted,
+            root: &root,
+            source_root: &source_root,
+            project_id: project.id,
+            repositories: &fixture_repository,
+            identity: cooking_builds::CookingIdentity {
+                actor: &identity,
+                git_token: &token,
+                rpc_token: &rpc_token,
+            },
+            timeout: Duration::from_secs(300),
+        };
+        let restored_after_crash = cooking_builds::configure_cooking_gateway(
+            &restarted_context,
+            cooking_builds::InstalledCookingGateway {
+                gateway_id: crash_gateway_id,
+                revision_id: crash_gateway.revision_id,
+            },
+            cooking_builds::cooking_gateway_parameters(&cooking_inbound_placeholder, 1001, 1002),
+            actual_brokered.import_id,
+            actual_brokered.version_id,
+            instance.mailbox_id,
+        )
+        .await
+        .expect("restore canonical gateway after guest crash branch");
+        actual_fixture.grant_id = restored_after_crash.grant_id;
+        let resolved_head = cooking::exercise_follow_up(
+            &pool,
+            &restarted,
+            &actual_instance,
+            &actual_fixture,
+            &root,
+            blog_repository.repository_id.as_uuid(),
+            &blog_repository.source_commit,
+            checkpoint,
+            &actual_brokered.upstream,
+        )
+        .await;
+        let blog_artifact = cooking_blog_artifact::build_publish_and_verify(
+            &cooking_builds::CookingBuildContext {
+                pool: &pool,
+                running: &restarted,
+                root: &root,
+                source_root: &source_root,
+                project_id: project.id,
+                repositories: &fixture_repository,
+                identity: cooking_builds::CookingIdentity {
+                    actor: &identity,
+                    git_token: &token,
+                    rpc_token: &rpc_token,
+                },
+                timeout: Duration::from_secs(300),
+            },
+            &blog_repository,
+            &resolved_head,
+            "Family pasta",
+            outsider_id,
+        )
+        .await
+        .expect("build and retrieve published cooking blog artifact");
+        assert_eq!(blog_artifact.source_commit, resolved_head);
+        assert!(!blog_artifact.build_id.is_nil());
+        assert!(!blog_artifact.release_id.is_nil());
+        assert!(!blog_artifact.artifact_id.is_nil());
+        assert_eq!(blog_artifact.sha256.len(), 64);
+        eprintln!(
+            "cooking blog artifact: source_commit={}, build={}, release={}, artifact={}, sha256={}",
+            blog_artifact.source_commit,
+            blog_artifact.build_id,
+            blog_artifact.release_id,
+            blog_artifact.artifact_id,
+            blog_artifact.sha256
+        );
+        let mut update_state_volume_disk: Option<PathBuf> = None;
+        let browser_abnormal_release_agent_id = update_builds
+            .as_ref()
+            .map(|builds| builds.abnormal.release_agent_id);
+        let update_sequence = if let Some(update_builds) = update_builds {
+            let current_revision_id: uuid::Uuid =
+                sqlx::query_scalar("SELECT active_revision_id FROM agent_instances WHERE id = $1")
+                    .bind(actual_instance.instance)
+                    .fetch_one(&pool)
+                    .await
+                    .expect("load configured cooking revision");
+            let sequence = cooking_updates::exercise_barrier_update_sequence(
+                &cooking_updates::CookingUpdateContext {
+                    pool: &pool,
+                    running: &restarted,
+                    instance_id: actual_instance.instance,
+                    gateway: &actual_fixture,
+                    current_revision_id,
+                    owner: user_id.as_uuid(),
+                    rpc_token: &rpc_token,
+                    brokered_rule_ids: cooking_updates::BrokeredRuleIds {
+                        model: cooking::MODEL_RULE,
+                        relay: cooking::RELAY_RULE,
+                    },
+                    timeout: Duration::from_secs(300),
+                },
+                &actual_brokered.upstream,
+                cooking_updates::CookingUpdateCandidates {
+                    migrate_release_agent_id: update_builds.migrate.release_agent_id,
+                    rollback_release_agent_id: update_builds.rollback.release_agent_id,
+                    abnormal_release_agent_id: update_builds.abnormal.release_agent_id,
+                    migrate_rule_ids: cooking_update_rule_ids
+                        .expect("update rule IDs allocated with update builds")
+                        .0,
+                    rollback_rule_ids: cooking_update_rule_ids
+                        .expect("update rule IDs allocated with update builds")
+                        .1,
+                    abnormal_rule_ids: cooking_update_rule_ids
+                        .expect("update rule IDs allocated with update builds")
+                        .2,
+                },
+            )
+            .await;
+            let disk: String = sqlx::query_scalar(
+                "SELECT host_path FROM agent_instance_state_volumes
+                 WHERE instance_id = $1",
+            )
+            .bind(actual_instance.instance)
+            .fetch_one(&pool)
+            .await
+            .expect("load cooking state volume disk path");
+            update_state_volume_disk = Some(PathBuf::from(disk));
+            Some(sequence)
+        } else {
+            None
+        };
+        if update_sequence.is_some() {
+            // The update helper rotates relay while event 47 still holds the
+            // v1 model lease, before CreateUpdate clones candidate rules.
+            // Event 46 remains the completed old-version relay proof.
+            let sequence = update_sequence.as_ref().expect("cooking update sequence");
+            let relay_run_id = sequence.relay_run_id;
+            let relay_rotation = sequence.relay_rotation;
+            let inbound_rotation = cooking::rotate_inbound_credential(
+                &pool,
+                user_id,
+                actual_brokered.import_id,
+                actual_brokered.version_id,
+            )
+            .await;
+            actual_fixture = cooking_authority::configure_rotated_inbound_gateway(
+                &pool,
+                &restarted,
+                &actual_fixture,
+                &rpc_token,
+                actual_brokered.import_id,
+                inbound_rotation.rotated_version_id,
+                instance.mailbox_id,
+            )
+            .await
+            .expect("configure rotated cooking inbound credential");
+            let public =
+                env::var("HEPHAESTUS_CADDY_TEST_PUBLIC_URL").expect("joined Caddy public URL");
+            let url = format!("{public}/gateway/cooking/telegram");
+            let client = reqwest::Client::new();
+            let old = cooking::send_update_with_credential(
+                &client,
+                &url,
+                49,
+                1001,
+                "rotation",
+                cooking::INBOUND_SENTINEL,
+            )
+            .await;
+            assert_eq!(old.status(), reqwest::StatusCode::UNAUTHORIZED);
+            old.bytes().await.expect("old inbound rotation denial");
+            let accepted = cooking::send_update_with_credential(
+                &client,
+                &url,
+                49,
+                1001,
+                "rotation",
+                cooking::INBOUND_ROTATED_SENTINEL,
+            )
+            .await;
+            assert_eq!(accepted.status(), reqwest::StatusCode::OK);
+            accepted
+                .bytes()
+                .await
+                .expect("rotated inbound acknowledgement");
+            let rotated_run = cooking::wait_for_event_run(&pool, &actual_fixture, 49).await;
+            cooking::assert_rotated_brokered_lease(
+                &pool,
+                relay_run_id,
+                rotated_run.event_id,
+                cooking::RELAY_RULE,
+                sequence.migration.relay_rule_id,
+                relay_rotation,
+            )
+            .await;
+            cooking_authority::assert_inbound_lease_history(
+                &pool,
+                &actual_fixture,
+                inbound_rotation.pinned_version_id,
+                inbound_rotation.rotated_version_id,
+            )
+            .await
+            .expect("inbound lease rotation history");
+        }
+        if browser_e2e {
+            let (completed_run_id, result_commit, result_ref, target_ref): (
+                uuid::Uuid,
+                String,
+                String,
+                String,
+            ) = sqlx::query_as(
+                "SELECT run.id, result.result_commit, result.result_ref,
+                        proposal.target_ref
+                   FROM runs run
+                   JOIN run_results result ON result.run_id = run.id
+                   JOIN review_proposals proposal ON proposal.run_id = run.id
+                  WHERE run.instance_id = $1 AND result.state = 'completed'
+                    AND proposal.state = 'approved'
+                    AND result.result_commit IS NOT NULL
+                  ORDER BY result.completed_at DESC, result.id DESC
+                  LIMIT 1",
+            )
+            .bind(actual_instance.instance)
+            .fetch_one(&pool)
+            .await
+            .expect("completed cooking result for browser inspection");
+            // The browser must exercise the approval command against a real
+            // completed proposal.  The fault-recovery requests in the joined
+            // scenario intentionally remain open after their provenance
+            // inspection, so select the newest such proposal instead of
+            // fabricating a pending row for the UI fixture.
+            let (pending_run_id, pending_proposal_id): (uuid::Uuid, uuid::Uuid) = sqlx::query_as(
+                "SELECT run.id, proposal.id
+                       FROM runs run
+                       JOIN review_proposals proposal ON proposal.run_id = run.id
+                      WHERE run.instance_id = $1
+                        AND proposal.state IN ('open', 'approval_requested')
+                        AND EXISTS (
+                            SELECT 1 FROM run_results result
+                             WHERE result.run_id = run.id
+                               AND result.state = 'completed'
+                               AND result.result_commit IS NOT NULL
+                        )
+                      ORDER BY proposal.created_at DESC, proposal.id DESC
+                      LIMIT 1",
+            )
+            .bind(actual_instance.instance)
+            .fetch_one(&pool)
+            .await
+            .expect("open cooking result proposal for browser approval");
+            let proposal_id: uuid::Uuid = sqlx::query_scalar(
+                "SELECT id FROM review_proposals WHERE run_id = $1 ORDER BY id LIMIT 1",
+            )
+            .bind(completed_run_id)
+            .fetch_one(&pool)
+            .await
+            .expect("completed cooking review proposal");
+            let retry_run_ids_before: Vec<uuid::Uuid> = sqlx::query_scalar(
+                "SELECT run_id FROM run_requests WHERE retry_of_run_id = $1 ORDER BY run_id",
+            )
+            .bind(
+                retry_fixture
+                    .as_ref()
+                    .expect("browser retry source run fixture")
+                    .source_run_id,
+            )
+            .fetch_all(&pool)
+            .await
+            .expect("browser retry ancestry before browser actions");
+            let post_path = format!(
+                "{}.post.json",
+                env::var("HEPHAESTUS_COOKING_BROWSER_FIXTURE_OUTPUT")
+                    .expect("cooking browser fixture output path")
+            );
+            let post_fixture = serde_json::json!({
+                "organization_id": organization_id,
+                "project_id": project.id,
+                "repository_id": builds.gateway.repository_id,
+                "release_id": builds.gateway.release_id,
+                "release_agent_id": builds.agent.release_agent_id,
+                "instance_id": instance.instance_id,
+                "mailbox_id": instance.mailbox_id,
+                "gateway_id": sqlx::query_scalar::<_, uuid::Uuid>(
+                    "SELECT binding.gateway_id
+                       FROM gateway_mailbox_bindings binding
+                       JOIN gateway_mailbox_binding_grants grant_row
+                         ON grant_row.binding_id = binding.id
+                      WHERE grant_row.id = $1",
+                )
+                .bind(actual_fixture.grant_id)
+                .fetch_one(&pool)
+                .await
+                .expect("post-operation cooking gateway id"),
+                "completed_run_id": completed_run_id,
+                "result_commit": result_commit,
+                "result_ref": result_ref,
+                "target_ref": target_ref,
+                "proposal_id": proposal_id,
+                "pending_run_id": pending_run_id,
+                "pending_proposal_id": pending_proposal_id,
+                "retry_source_run_id": retry_fixture
+                    .as_ref()
+                    .expect("browser retry source run fixture")
+                    .source_run_id,
+                "migration_update_id": update_sequence.as_ref().map(|s| s.migration.update_id),
+                "abnormal_update_id": update_sequence.as_ref().map(|s| s.abnormal.update_id),
+                "abnormal_candidate_revision_id": update_sequence
+                    .as_ref()
+                    .map(|s| s.abnormal.candidate_revision_id),
+                "abnormal_release_agent_id": browser_abnormal_release_agent_id,
+                "browser_model_rule_id": cooking_update_rule_ids
+                    .map(|(_, _, _, browser)| browser.model),
+                "browser_relay_rule_id": cooking_update_rule_ids
+                    .map(|(_, _, _, browser)| browser.relay),
+                "browser_rule_copies": cooking_update_rule_ids.map(|(migration, _, _, browser)| {
+                    vec![
+                        serde_json::json!({
+                            "source_rule_id": migration.model,
+                            "candidate_rule_id": browser.model,
+                        }),
+                        serde_json::json!({
+                            "source_rule_id": migration.relay,
+                            "candidate_rule_id": browser.relay,
+                        }),
+                    ]
+                }),
+            });
+            tokio::fs::write(
+                &post_path,
+                serde_json::to_vec_pretty(&post_fixture)
+                    .expect("post-operation browser fixture JSON"),
+            )
+            .await
+            .expect("write post-operation browser fixture JSON");
+            let issuer = env::var("HEPHAESTUS_COOKING_BROWSER_OIDC_ISSUER")
+                .expect("cooking browser OIDC issuer");
+            let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../scripts/run-ui-e2e-external.sh");
+            let status = tokio::process::Command::new(script)
+                .env("HEPHAESTUS_E2E_COOKING_FIXTURE", &post_path)
+                .env("HEPHAESTUS_E2E_EXTERNAL_DATABASE_URL", &database_url)
+                .env(
+                    "HEPHAESTUS_E2E_EXTERNAL_RPC_ENDPOINT",
+                    restarted.http_addr().to_string(),
+                )
+                .env(
+                    "HEPHAESTUS_E2E_EXTERNAL_RPC_SECRET",
+                    "golden-internal-command-token-with-sufficient-entropy",
+                )
+                .env("HEPHAESTUS_E2E_EXTERNAL_OIDC_ISSUER", issuer)
+                .env("HEPHAESTUS_E2E_COOKING_PHASE", "post-operation")
+                .status()
+                .await
+                .expect("run cooking post-operation browser E2E");
+            assert!(
+                status.success(),
+                "cooking post-operation browser E2E failed: {status}"
+            );
+            // Retry is a separate run command. Do not tear down the daemon
+            // while its guest is still cleaning up; otherwise the subsequent
+            // NATS and state-volume scans could miss a real active resource.
+            let retry_run_ids_after: Vec<uuid::Uuid> = sqlx::query_scalar(
+                "SELECT run_id FROM run_requests WHERE retry_of_run_id = $1 ORDER BY run_id",
+            )
+            .bind(
+                retry_fixture
+                    .as_ref()
+                    .expect("browser retry source run fixture")
+                    .source_run_id,
+            )
+            .fetch_all(&pool)
+            .await
+            .expect("browser retry ancestry after browser actions");
+            assert_eq!(
+                retry_run_ids_after.len(),
+                retry_run_ids_before.len() + 1,
+                "browser retry creates exactly one request for the selected source run"
+            );
+            assert!(
+                retry_run_ids_before
+                    .iter()
+                    .all(|id| retry_run_ids_after.contains(id))
+            );
+            let new_retry_ids: Vec<_> = retry_run_ids_after
+                .iter()
+                .filter(|id| !retry_run_ids_before.contains(id))
+                .copied()
+                .collect();
+            assert_eq!(new_retry_ids.len(), 1);
+            let retry_run_id = new_retry_ids[0];
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+            loop {
+                let (state, outcome): (String, Option<String>) =
+                    sqlx::query_as("SELECT state, outcome FROM runs WHERE id = $1")
+                        .bind(retry_run_id)
+                        .fetch_one(&pool)
+                        .await
+                        .expect("poll exact browser retry run");
+                if state == "cleaned_up" {
+                    assert_eq!(
+                        outcome.as_deref(),
+                        Some("succeeded"),
+                        "browser retry succeeds for the dedicated forge source"
+                    );
+                    break;
+                }
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "browser retry run did not reach terminal cleanup"
+                );
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            if let Some(sequence) = update_sequence {
+                let abnormal_release_agent_id =
+                    browser_abnormal_release_agent_id.expect("browser abnormal release agent");
+                let state: (String, String, bool) = sqlx::query_as(
+                    "SELECT update_record.state, instance.state, instance.run_gate_open
+                       FROM agent_updates update_record
+                       JOIN agent_instances instance ON instance.id = update_record.instance_id
+                      WHERE update_record.id = $1",
+                )
+                .bind(sequence.abnormal.update_id)
+                .fetch_one(&pool)
+                .await
+                .expect("browser recovery update state");
+                assert_eq!(
+                    state,
+                    (
+                        String::from("rejected"),
+                        String::from("update_rejected"),
+                        true
+                    )
+                );
+                let browser_updates: i64 = sqlx::query_scalar(
+                    "SELECT count(*)
+                       FROM agent_updates update_record
+                       JOIN agent_instance_revisions candidate
+                         ON candidate.id = update_record.candidate_revision_id
+                      WHERE update_record.instance_id = $1
+                        AND candidate.release_agent_id = $2
+                        AND update_record.state = 'rejected'",
+                )
+                .bind(actual_instance.instance)
+                .bind(abnormal_release_agent_id)
+                .fetch_one(&pool)
+                .await
+                .expect("browser-created abnormal update state");
+                assert_eq!(
+                    browser_updates, 2,
+                    "both abnormal updates must be recovered"
+                );
+            }
+        }
+        if update_sequence.is_some() {
+            cooking::exercise_active_relay_revocation(
+                &pool,
+                &actual_fixture,
+                user_id,
+                &actual_brokered.upstream,
+                update_sequence
+                    .as_ref()
+                    .expect("cooking update sequence")
+                    .migration
+                    .relay_rule_id,
+            )
+            .await;
+        }
+        actual_brokered.upstream.assert_substituted_request().await;
+        let inbound_credential = if update_sequence.is_some() {
+            cooking::INBOUND_ROTATED_SENTINEL
+        } else {
+            cooking::INBOUND_SENTINEL
+        };
+        cooking_authority::retire_cooking_gateway_grant(
+            &pool,
+            &restarted,
+            &actual_fixture,
+            &rpc_token,
+            inbound_credential,
+            outsider_id,
+        )
+        .await
+        .expect("retire cooking gateway mailbox grant through RPC");
+        if update_sequence.is_some() {
+            let retained_run_id: uuid::Uuid = sqlx::query_scalar(
+                "SELECT id
+                   FROM runs
+                  WHERE instance_id = $1
+                    AND run_kind = 'normal'
+                    AND state = 'cleaned_up'
+                    AND outcome = 'succeeded'
+                  ORDER BY updated_at DESC, id DESC
+                  LIMIT 1",
+            )
+            .bind(actual_instance.instance)
+            .fetch_one(&pool)
+            .await
+            .expect("completed cooking run retained for retirement proof");
+            let gateway_id: uuid::Uuid = sqlx::query_scalar(
+                "SELECT gateway_id
+                   FROM gateway_mailbox_bindings
+                  WHERE id = (
+                      SELECT binding_id
+                        FROM gateway_mailbox_binding_grants
+                       WHERE id = $1
+                  )",
+            )
+            .bind(actual_fixture.grant_id)
+            .fetch_one(&pool)
+            .await
+            .expect("cooking gateway identity for retirement proof");
+            let outsider_identity = AuthenticatedIdentity::new(
+                outsider_id,
+                browser_oidc_issuer.clone(),
+                "cooking-outsider",
+                serde_json::json!({}),
+                RequestId::new(),
+            );
+            let retirement_public = env::var("HEPHAESTUS_CADDY_TEST_PUBLIC_URL")
+                .expect("joined Caddy public URL for retirement proof");
+            let retry_fixture = retry_fixture
+                .as_ref()
+                .expect("retirement retry forge fixture");
+            cooking_retirement::exercise(&cooking_retirement::RetirementContext {
+                pool: &pool,
+                running: &restarted,
+                token_factory: &rpc_token,
+                owner: &identity,
+                outsider: &outsider_identity,
+                instance: &actual_instance,
+                retained_run_id,
+                retry_instance: &retry_fixture.instance,
+                retry_source_run_id: retry_fixture.source_run_id,
+                retry_repository_id: retry_fixture.repository_id,
+                gateway_id,
+                project_id: project.id.as_uuid(),
+                mailbox_id: instance.mailbox_id,
+                public_url: &retirement_public,
+                valid_inbound_credential: inbound_credential,
+                import_parameters: cooking_builds::cooking_agent_parameters(),
+            })
+            .await
+            .expect("retire cooking attachment, gateway, and release");
+            // Source revocation follows grant retirement so the valid rotated
+            // inbound credential proves the grant fence itself.
+            cooking::revoke_imported_credential(&pool, user_id, actual_brokered.import_id).await;
+        }
+        cooking_confinement::assert_database_has_no_credentials(&pool).await;
+        restarted.shutdown().await.expect("cooking daemon shutdown");
+        let observer = observer.expect("cooking build proof VM observer");
+        support::vm_observer_assertions::assert_cooking_vm_contracts(
+            &pool,
+            &observer,
+            support::vm_observer_assertions::CookingVmContractIds {
+                canonical_mailbox_id: instance.mailbox_id,
+                crash_mailbox_id: crash_instance.instance.mailbox_id,
+                adversarial_run_id: adversarial_probe.run_id,
+                gateway_build_request_id: builds.gateway.build_request_id,
+                agent_build_request_id: builds.agent.build_request_id,
+                crash_agent_build_request_id: crash_agent_build.build_request_id,
+            },
+        )
+        .await;
+        cooking_guest_crash::assert_sqlite_disk(&crash_disk);
+        cooking_confinement::assert_nats_has_no_credentials(&nats_url).await;
+        if let Some(disk) = update_state_volume_disk {
+            cooking_updates::assert_migrated_sqlite_disk(&disk, 9);
+        }
+        cleanup_streams(&nats_url).await;
+        return;
     }
-    result_wait.expect("persisted result completion");
+    let forge_source = create_forge_source_run(
+        &pool,
+        &running,
+        &root,
+        repository.id.as_uuid(),
+        seeded_instance.instance,
+        &token,
+        libkrun_e2e,
+        false,
+        if cooking::enabled() {
+            ForgeSourceContent::CookingBlog
+        } else {
+            ForgeSourceContent::GoldenAgent
+        },
+    )
+    .await;
+    let input_commit = forge_source.input_commit;
+    let run_id = runtime_types::RunId::from_uuid(forge_source.run_id);
 
-    if cooking::enabled() {
-        cooking::exercise(
+    if env::var("HEPHAESTUS_APP_UPDATE_ADMISSION_RACE_E2E").as_deref() == Ok("1") {
+        #[cfg(feature = "test-fixtures")]
+        {
+            let admission_instance = support::rpc::update_admission::UpdateAdmissionInstance {
+                instance_id: seeded_instance.instance,
+                revision_id: seeded_instance.revision,
+                release_id: seeded_instance.release,
+                release_agent_id: seeded_instance.release_agent,
+                attachment_id: seeded_instance.attachment,
+            };
+            let race = support::update_admission::exercise_reconciler_wins_race(
+                &pool,
+                &running,
+                &admission_instance,
+                user_id.as_uuid(),
+            )
+            .await;
+            assert_eq!(race.initial_hook_run_id, race.retried_hook_run_id);
+            assert_eq!(race.retried_hook_run_id, race.owner_recovery_hook_run_id);
+            running
+                .shutdown()
+                .await
+                .expect("app update race regression shutdown");
+            cleanup_streams(&nats_url).await;
+            return;
+        }
+        #[cfg(not(feature = "test-fixtures"))]
+        assert_ne!(
+            env::var("HEPHAESTUS_APP_UPDATE_ADMISSION_RACE_E2E").as_deref(),
+            Ok("1"),
+            "HEPHAESTUS_APP_UPDATE_ADMISSION_RACE_E2E requires --features hephaestus-app/test-fixtures"
+        );
+    }
+
+    if env::var("HEPHAESTUS_APP_UPDATE_ADMISSION_E2E").as_deref() == Ok("1") {
+        let admission_instance = support::rpc::update_admission::UpdateAdmissionInstance {
+            instance_id: seeded_instance.instance,
+            revision_id: seeded_instance.revision,
+            release_id: seeded_instance.release,
+            release_agent_id: seeded_instance.release_agent,
+            attachment_id: seeded_instance.attachment,
+        };
+        let admission = support::update_admission::exercise(
             &pool,
             &running,
+            &admission_instance,
+            user_id.as_uuid(),
+        )
+        .await;
+        assert_ne!(admission.update_id, uuid::Uuid::nil());
+        assert_ne!(admission.initial_hook_run_id, admission.retried_hook_run_id);
+        assert_ne!(
+            admission.retried_hook_run_id,
+            admission.owner_recovery_hook_run_id
+        );
+        running
+            .shutdown()
+            .await
+            .expect("app update regression shutdown");
+        cleanup_streams(&nats_url).await;
+        return;
+    }
+
+    if cooking::enabled() {
+        running
+            .shutdown()
+            .await
+            .expect("cooking daemon startup recovery shutdown");
+        let running = restart_application(app_config.clone()).await;
+        let checkpoint =
+            cooking::exercise_initial(&pool, &gateway_edge.as_ref().expect("cooking gateway").1)
+                .await;
+        running
+            .shutdown()
+            .await
+            .expect("cooking daemon graceful restart shutdown");
+        let restarted = restart_application(app_config).await;
+        let _ = cooking::exercise_follow_up(
+            &pool,
+            &restarted,
             &seeded_instance,
             &gateway_edge.as_ref().expect("cooking gateway").1,
             &root,
             repository.id.as_uuid(),
             &input_commit,
+            checkpoint,
+            &brokered_fixture.as_ref().expect("cooking broker").upstream,
         )
         .await;
         brokered_fixture
@@ -527,7 +2297,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             .upstream
             .assert_substituted_request()
             .await;
-        running.shutdown().await.expect("cooking daemon shutdown");
+        restarted.shutdown().await.expect("cooking daemon shutdown");
         cleanup_streams(&nats_url).await;
         return;
     }
@@ -975,10 +2745,11 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
 
 fn signed_token() -> String {
     let now = OffsetDateTime::now_utc().unix_timestamp();
+    let issuer = golden_issuer();
     encode(
         &Header::new(Algorithm::HS256),
         &serde_json::json!({
-            "iss": ISSUER,
+            "iss": issuer,
             "sub": "golden-subject",
             "aud": AUDIENCE,
             "iat": now,
@@ -1062,7 +2833,150 @@ const fn agent_config() -> &'static str {
   "#
 }
 
-#[allow(clippy::too_many_lines)]
+struct ForgeSourceFixture {
+    input_commit: String,
+    run_id: uuid::Uuid,
+}
+
+#[derive(Clone, Copy)]
+enum ForgeSourceContent {
+    GoldenAgent,
+    CookingBlog,
+}
+
+// Keep the exact Git, request, result, and proposal assertions together so
+// the browser retry fixture cannot accidentally lose one provenance boundary.
+#[allow(
+    clippy::cognitive_complexity,
+    clippy::too_many_arguments,
+    clippy::too_many_lines
+)]
+async fn create_forge_source_run(
+    pool: &sqlx::PgPool,
+    running: &hephaestus_app::RunningHephaestus,
+    root: &Path,
+    repository_id: uuid::Uuid,
+    instance_id: uuid::Uuid,
+    token: &str,
+    libkrun_e2e: bool,
+    require_review_proposal: bool,
+    source_content: ForgeSourceContent,
+) -> ForgeSourceFixture {
+    let source = root.join("source");
+    tokio::fs::create_dir(&source)
+        .await
+        .expect("source repository");
+    git(&source, &["init", "--initial-branch=main"]).await;
+    git(&source, &["config", "user.name", "Golden Test"]).await;
+    git(&source, &["config", "user.email", "golden@example.invalid"]).await;
+    tokio::fs::write(source.join("agent.toml"), agent_config())
+        .await
+        .expect("provider-neutral agent.toml");
+    tokio::fs::write(source.join("golden-agent.sh"), GOLDEN_AGENT)
+        .await
+        .expect("golden agent executable source");
+    tokio::fs::write(source.join("input.txt"), "accepted\n")
+        .await
+        .expect("input file");
+    if matches!(source_content, ForgeSourceContent::CookingBlog) {
+        cooking::copy_blog(&source).await;
+    }
+    tokio::fs::create_dir(source.join("reports"))
+        .await
+        .expect("reports directory");
+    tokio::fs::write(source.join("reports/result.txt"), "initial\n")
+        .await
+        .expect("initial report");
+    git(&source, &["add", "."]).await;
+    git(&source, &["commit", "-m", "golden agent"]).await;
+    if matches!(source_content, ForgeSourceContent::GoldenAgent) {
+        let committed_agent = git_output(&source, &["show", "HEAD:agent.toml"]).await;
+        assert_eq!(
+            committed_agent,
+            agent_config().trim(),
+            "forge retry source must retain the provider-neutral agent manifest"
+        );
+        assert!(
+            !source.join("heph.images.toml").exists(),
+            "forge retry source must not select a repository image"
+        );
+        assert!(
+            committed_agent.contains("image = { key = \"golden-root\" }"),
+            "forge retry source must select the registered golden-root image"
+        );
+    }
+    let input_commit = git_output(&source, &["rev-parse", "HEAD"]).await;
+    let remote = format!("http://{}/{}", running.http_addr(), repository_id);
+    git(&source, &["remote", "add", "origin", &remote]).await;
+    sqlx::query("UPDATE agent_instances SET run_gate_open = true WHERE id = $1")
+        .bind(instance_id)
+        .execute(pool)
+        .await
+        .expect("open golden push run gate");
+    authenticated_git(&source, token, &["push", "origin", "HEAD:refs/heads/main"]).await;
+    let run_id: uuid::Uuid = sqlx::query_scalar(
+        "SELECT request.run_id
+           FROM run_requests request
+          WHERE request.repository_id = $1
+            AND request.instance_id = $2
+            AND request.commit_sha = $3
+            AND request.git_ref = 'refs/heads/main'
+            AND request.retry_of_run_id IS NULL
+            AND request.request_kind = 'instance_normal'
+          ORDER BY request.created_at DESC, request.id DESC
+          LIMIT 1",
+    )
+    .bind(repository_id)
+    .bind(instance_id)
+    .bind(&input_commit)
+    .fetch_one(pool)
+    .await
+    .expect("durable forge run request");
+    let runtime_run_id = runtime_types::RunId::from_uuid(run_id);
+    let result_wait = running
+        .wait_for_run_event(
+            runtime_run_id,
+            RunEventKind::ResultCompleted,
+            Duration::from_secs(if libkrun_e2e { 60 } else { 10 }),
+        )
+        .await;
+    if result_wait.is_err() {
+        diagnose_golden_timeout(pool, repository_id, runtime_run_id).await;
+    }
+    result_wait.expect("persisted forge source result completion");
+    let result_commit: Option<String> = sqlx::query_scalar(
+        "SELECT result_commit FROM run_results
+          WHERE run_id = $1 AND state = 'completed'",
+    )
+    .bind(run_id)
+    .fetch_one(pool)
+    .await
+    .expect("completed forge source result");
+    if require_review_proposal {
+        assert!(
+            result_commit.is_some(),
+            "forge source run must produce a result commit for review retry"
+        );
+        let proposal_state: String = sqlx::query_scalar(
+            "SELECT state FROM review_proposals
+              WHERE run_id = $1",
+        )
+        .bind(run_id)
+        .fetch_one(pool)
+        .await
+        .expect("forge source review proposal");
+        assert!(
+            matches!(proposal_state.as_str(), "open" | "approval_requested"),
+            "forge source proposal remains reviewable"
+        );
+    }
+    ForgeSourceFixture {
+        input_commit,
+        run_id,
+    }
+}
+
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 async fn seed_reusable_instance(
     pool: &sqlx::PgPool,
     actor: UserId,
@@ -1070,6 +2984,8 @@ async fn seed_reusable_instance(
     repository_id: uuid::Uuid,
     artifact_root: &Path,
     brokered_https: bool,
+    artifact_override: Option<&[u8]>,
+    instance_name: &str,
 ) -> SeededInstance {
     let build_id = uuid::Uuid::new_v4();
     let family_id = uuid::Uuid::new_v4();
@@ -1082,8 +2998,8 @@ async fn seed_reusable_instance(
     let artifact_id = uuid::Uuid::new_v4();
     let storage_key = uuid::Uuid::new_v4();
     let cooking_artifact = cooking::agent_artifact();
-    let artifact = cooking_artifact
-        .as_deref()
+    let artifact = artifact_override
+        .or(cooking_artifact.as_deref())
         .unwrap_or(GOLDEN_AGENT.as_bytes());
     let release_configuration = serde_json::to_value(
         agent_config::parse(agent_config().as_bytes())
@@ -1108,7 +3024,9 @@ async fn seed_reusable_instance(
         .expect("artifact mode");
     let artifact_hash: [u8; 32] = Sha256::digest(artifact).into();
 
-    let secret_slot_schema = if cooking::enabled() {
+    let secret_slot_schema = if artifact_override.is_some() {
+        serde_json::json!([])
+    } else if cooking::enabled() {
         cooking::secret_slots()
     } else if brokered_https {
         serde_json::json!([{
@@ -1218,11 +3136,12 @@ async fn seed_reusable_instance(
     sqlx::query(
         "INSERT INTO agent_instances
            (id, project_id, family_id, name, state, run_gate_open, created_by)
-           VALUES ($1, $2, $3, 'golden-agent', 'active', false, $4)",
+           VALUES ($1, $2, $3, $4, 'active', false, $5)",
     )
     .bind(instance_id)
     .bind(project_id)
     .bind(family_id)
+    .bind(instance_name)
     .bind(actor.as_uuid())
     .execute(pool)
     .await
@@ -1306,6 +3225,12 @@ struct SeededInstance {
     attachment: uuid::Uuid,
     release: uuid::Uuid,
     release_agent: uuid::Uuid,
+}
+
+struct ForgeRetryFixture {
+    repository_id: uuid::Uuid,
+    instance: SeededInstance,
+    source_run_id: uuid::Uuid,
 }
 
 /// Exact host-side identity retained by the joined Caddy/libkrun mailbox
@@ -1439,7 +3364,7 @@ async fn seed_gateway_brokered_route(
     .bind([8_u8; 32].as_slice())
     .bind(actor.as_uuid())
     .bind(if cooking::enabled() {
-        serde_json::json!({"inbound_placeholder":format!("heph-placeholder:v1:{version_id}"), "alice_provider_id":1001, "bob_provider_id":1002})
+        serde_json::json!({"inbound_placeholder": cooking_builds::cooking_inbound_placeholder(version_id), "alice_provider_id":1001, "bob_provider_id":1002})
     } else {
         serde_json::json!({})
     })
@@ -1569,7 +3494,7 @@ async fn seed_brokered_https_fixture(
 
     let identity = AuthenticatedIdentity::new(
         actor,
-        ISSUER,
+        golden_issuer(),
         String::from("golden-subject"),
         serde_json::json!({}),
         RequestId::new(),
@@ -1695,11 +3620,119 @@ fn secret_command_key(operation: &str, id: uuid::Uuid) -> SecretCommandKey {
 /// test fixture; the production registry still rejects private pins.
 struct BrokeredTlsUpstream {
     adapter: Arc<dyn secret_application::BrokerAdapter>,
+    cooking_registry: Option<Arc<cooking::CookingAdapters>>,
+    rule_adapters:
+        Arc<std::collections::HashMap<uuid::Uuid, Arc<dyn secret_application::BrokerAdapter>>>,
     observed: Arc<AtomicBool>,
     server: tokio::task::JoinHandle<()>,
+    update_barrier: Option<Arc<CookingUpdateBarrier>>,
+    revocation_barrier: Option<Arc<CookingUpdateBarrier>>,
+}
+
+/// Controlled model response barrier used by the cooking update scenario.
+/// The model request enters before the v1 drain and resumes only after the
+/// test has observed the durable drain state.
+struct CookingUpdateBarrier {
+    entered: AtomicBool,
+    entered_notify: Notify,
+    release: Notify,
+}
+
+impl CookingUpdateBarrier {
+    fn new() -> Self {
+        Self {
+            entered: AtomicBool::new(false),
+            entered_notify: Notify::new(),
+            release: Notify::new(),
+        }
+    }
+
+    async fn wait_entered(&self) {
+        while !self.entered.load(Ordering::Acquire) {
+            self.entered_notify.notified().await;
+        }
+    }
+
+    fn mark_entered(&self) {
+        self.entered.store(true, Ordering::Release);
+        self.entered_notify.notify_one();
+    }
+
+    fn release(&self) {
+        self.release.notify_one();
+    }
+}
+
+#[cfg(test)]
+#[tokio::test]
+async fn cooking_update_barrier_waits_for_release() {
+    let barrier = Arc::new(CookingUpdateBarrier::new());
+    let upstream = Arc::new(BrokeredTlsUpstream {
+        adapter: Arc::new(DenyingBrokerAdapter),
+        rule_adapters: Arc::new(std::collections::HashMap::new()),
+        cooking_registry: None,
+        observed: Arc::new(AtomicBool::new(false)),
+        server: tokio::spawn(async {}),
+        update_barrier: Some(Arc::clone(&barrier)),
+        revocation_barrier: None,
+    });
+    let waiter = Arc::clone(&upstream);
+    let task = tokio::spawn(async move {
+        waiter.wait_update_v1_entered().await;
+    });
+    barrier.mark_entered();
+    tokio::time::timeout(Duration::from_secs(1), task)
+        .await
+        .expect("barrier waiter timeout")
+        .expect("barrier waiter task");
+    upstream.release_update_v1();
+}
+
+#[cfg(test)]
+#[tokio::test]
+async fn cooking_update_barrier_buffers_release_before_waiter_registration() {
+    let barrier = CookingUpdateBarrier::new();
+    barrier.mark_entered();
+    barrier.wait_entered().await;
+    barrier.release();
+    tokio::time::timeout(Duration::from_secs(1), barrier.release.notified())
+        .await
+        .expect("release notification should retain its permit");
 }
 
 impl BrokeredTlsUpstream {
+    async fn wait_update_v1_entered(&self) {
+        if let Some(barrier) = &self.update_barrier {
+            barrier.wait_entered().await;
+        } else {
+            panic!("cooking update barrier is not enabled");
+        }
+    }
+
+    async fn wait_revocation_entered(&self) {
+        if let Some(barrier) = &self.revocation_barrier {
+            barrier.wait_entered().await;
+        } else {
+            panic!("cooking revocation barrier is not enabled");
+        }
+    }
+
+    fn release_revocation(&self) {
+        if let Some(barrier) = &self.revocation_barrier {
+            barrier.release();
+        } else {
+            panic!("cooking revocation barrier is not enabled");
+        }
+    }
+
+    fn release_update_v1(&self) {
+        if let Some(barrier) = &self.update_barrier {
+            barrier.release();
+        } else {
+            panic!("cooking update barrier is not enabled");
+        }
+    }
+
     async fn start(rule: BrokeredSecretRule) -> Self {
         let _already_installed = rustls::crypto::ring::default_provider().install_default();
         let mut ca_parameters = rcgen::CertificateParams::default();
@@ -1769,15 +3802,58 @@ impl BrokeredTlsUpstream {
             ca.pem().as_bytes(),
         )
         .expect("configure locally trusted pinned broker registry");
+        let adapter: Arc<dyn secret_application::BrokerAdapter> = Arc::new(adapter);
         Self {
-            adapter: Arc::new(adapter),
+            adapter: Arc::clone(&adapter),
+            cooking_registry: None,
+            rule_adapters: Arc::new(std::collections::HashMap::from([(
+                BROKERED_E2E_RULE_ID,
+                adapter,
+            )])),
             observed,
             server,
+            update_barrier: None,
+            revocation_barrier: None,
         }
     }
 
     fn adapter(&self) -> Arc<dyn secret_application::BrokerAdapter> {
         Arc::clone(&self.adapter)
+    }
+
+    pub(crate) fn register_rule_copies(&self, copies: &[(uuid::Uuid, uuid::Uuid)]) {
+        self.cooking_registry
+            .as_ref()
+            .expect("cooking TLS registry")
+            .register_rule_copies(copies);
+    }
+
+    /// Combines rule-keyed adapters before a restart so canonical and crash
+    /// instances share one broker boundary without destination guessing.
+    pub(crate) fn combined_adapter(
+        &self,
+        other: &Self,
+    ) -> Arc<dyn secret_application::BrokerAdapter> {
+        let mut adapters = self.cooking_registry.as_ref().map_or_else(
+            || (*self.rule_adapters).clone(),
+            |registry| registry.snapshot(),
+        );
+        adapters.extend(
+            other
+                .cooking_registry
+                .as_ref()
+                .map_or_else(
+                    || (*other.rule_adapters).clone(),
+                    |registry| registry.snapshot(),
+                )
+                .iter()
+                .map(|(id, adapter)| (*id, Arc::clone(adapter))),
+        );
+        Arc::new(cooking::CookingAdapters::new(adapters))
+    }
+
+    pub(crate) async fn wait_complete(self) -> Result<(), tokio::task::JoinError> {
+        self.server.await
     }
 
     async fn assert_substituted_request(self) {
@@ -1964,8 +4040,9 @@ async fn authenticated_git(directory: &Path, token: &str, arguments: &[&str]) {
         .expect("run authenticated Git");
     assert!(
         output.status.success(),
-        "authenticated Git failed: {}",
-        String::from_utf8_lossy(&output.stderr)
+        "authenticated Git failed: {} {}",
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stdout)
     );
 }
 

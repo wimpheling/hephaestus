@@ -2381,6 +2381,16 @@ pub struct Run {
         skip_serializing_if = "::core::option::Option::is_none"
     )]
     pub manifest_preview: ::core::option::Option<::buffa::alloc::string::String>,
+    /// Retry is available only when this run has an accepted forge request.
+    ///
+    /// Field 33: `retry_supported`
+    #[serde(
+        rename = "retrySupported",
+        alias = "retry_supported",
+        with = "::buffa::json_helpers::proto_bool",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_false"
+    )]
+    pub retry_supported: bool,
     #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
@@ -2420,6 +2430,7 @@ impl ::core::fmt::Debug for Run {
             .field("metrics", &self.metrics)
             .field("patch_preview", &self.patch_preview)
             .field("manifest_preview", &self.manifest_preview)
+            .field("retry_supported", &self.retry_supported)
             .finish()
     }
 }
@@ -2669,6 +2680,9 @@ impl ::buffa::Message for Run {
         if let Some(ref v) = self.manifest_preview {
             size += 2u32 + ::buffa::types::string_encoded_len(v) as u32;
         }
+        if self.retry_supported {
+            size += 2u32 + ::buffa::types::BOOL_ENCODED_LEN as u32;
+        }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
         size
     }
@@ -2790,6 +2804,9 @@ impl ::buffa::Message for Run {
         }
         if let Some(ref v) = self.manifest_preview {
             ::buffa::types::put_string_field(32u32, v, buf);
+        }
+        if self.retry_supported {
+            ::buffa::types::put_bool_field(33u32, self.retry_supported, buf);
         }
         self.__buffa_unknown_fields.write_to(buf);
     }
@@ -3102,6 +3119,13 @@ impl ::buffa::Message for Run {
                     buf,
                 )?;
             }
+            33u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.retry_supported = ::buffa::types::decode_bool(buf)?;
+            }
             _ => {
                 self.__buffa_unknown_fields
                     .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
@@ -3142,6 +3166,7 @@ impl ::buffa::Message for Run {
         self.metrics = ::buffa::MessageField::none();
         self.patch_preview = ::core::option::Option::None;
         self.manifest_preview = ::core::option::Option::None;
+        self.retry_supported = false;
         self.__buffa_unknown_fields.clear();
     }
 }

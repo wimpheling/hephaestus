@@ -42,6 +42,7 @@ pub use repository::{
 
 const SOURCE_GUEST_PATH: &str = "/workspace/source";
 const OUTPUT_GUEST_PATH: &str = "/workspace/output";
+const BUILD_GUEST_ENV: &str = "HEPH_BUILD_GUEST";
 const MAX_SOURCE_ENTRIES: usize = 100_000;
 const MAX_SOURCE_BYTES: u64 = 1024 * 1024 * 1024;
 const MAX_BUILD_LOG_BYTES: usize = 4 * 1024 * 1024;
@@ -145,6 +146,7 @@ impl BuildExecutor {
         if let Some(result) = self.resume_finalization(build_request_id).await? {
             return Ok(result);
         }
+        self.ensure_image_available(build_request_id).await?;
         let claimed = self.claim(build_request_id).await?;
         let workspace = self.active_path(build_request_id);
         let input = claimed.input.clone();
@@ -229,6 +231,7 @@ impl BuildExecutor {
         &self,
         build_request_id: BuildRequestId,
     ) -> Result<BuildExecutionResult, BuildExecutionError> {
+        self.ensure_image_available(build_request_id).await?;
         self.repository.reset_for_retry(build_request_id).await?;
         self.execute(build_request_id).await
     }
@@ -244,6 +247,7 @@ impl BuildExecutor {
         &self,
         build_request_id: BuildRequestId,
     ) -> Result<(), BuildExecutionError> {
+        self.ensure_image_available(build_request_id).await?;
         let claimed = self.repository.claim_verification(build_request_id).await?;
         let workspace = self.active_path(build_request_id);
         let materializer = self.config.clone();
@@ -440,6 +444,20 @@ impl BuildExecutor {
         self.repository.claim(id).await.map_err(Into::into)
     }
 
+    async fn ensure_image_available(&self, id: BuildRequestId) -> Result<(), BuildExecutionError> {
+        let image_reference = self.repository.image_reference(id).await?;
+        let image_filesystems = self
+            .config
+            .image_filesystems
+            .read()
+            .map_err(|_| BuildExecutionError::ImageUnavailable)?;
+        if image_filesystems.contains_key(&image_reference) {
+            Ok(())
+        } else {
+            Err(BuildExecutionError::ImageUnavailable)
+        }
+    }
+
     fn vm_spec(
         &self,
         claimed: &ClaimedBuild,
@@ -493,7 +511,10 @@ impl BuildExecutor {
             command: GuestCommand {
                 program: build.command.clone(),
                 args: build.arguments.clone(),
-                env: BTreeMap::new(),
+                // The bootstrap uses this internal marker to apply the
+                // descriptor limit required by compiler workloads. It is
+                // removed before the user command is spawned.
+                env: BTreeMap::from([(String::from(BUILD_GUEST_ENV), String::from("1"))]),
                 working_dir: Some(PathBuf::from(&build.working_directory)),
             },
             runtime_authority: None,

@@ -1,3 +1,4 @@
+import importlib
 import importlib.util
 import json
 import os
@@ -8,6 +9,7 @@ import unittest
 from unittest.mock import patch
 import struct
 import subprocess
+import sys
 import cooking_agent as agent
 
 spec = importlib.util.spec_from_file_location('relay', Path(__file__).resolve().parents[1] / 'telegram-relay/relay.py')
@@ -96,6 +98,25 @@ class Journey(unittest.TestCase):
         self.assertFalse((self.work / 'content/recipes/recipe-42.md').exists())
         self.assertEqual(self.relay.db.execute('SELECT count(*) FROM deliveries').fetchone()[0], 0)
 
+    def test_retry_recovers_recipe_after_state_commit_before_model_call(self):
+        def interrupted_model(slot, _body):
+            self.assertEqual(slot, 'model')
+            raise RuntimeError('simulated model-call interruption')
+
+        with self.assertRaises(RuntimeError):
+            agent.process(self.db, self.event, interrupted_model, self.work)
+        self.assertEqual(
+            self.db.execute(
+                'SELECT disposition FROM processed_updates WHERE update_id=?', (42,)
+            ).fetchone()[0],
+            'pending',
+        )
+        self.assertEqual(self.db.execute('SELECT count(*) FROM recipes').fetchone()[0], 1)
+        agent.process(self.db, self.event, self.call, self.work)
+        self.assertEqual(self.db.execute('SELECT count(*) FROM recipes').fetchone()[0], 1)
+        self.assertEqual(self.db.execute('SELECT count(*) FROM processed_updates').fetchone()[0], 1)
+        self.assertEqual(self.relay.db.execute('SELECT count(*) FROM deliveries').fetchone()[0], 1)
+
     def test_relay_auth_bounds_and_conflict(self):
         request = {'idempotency_key': 'recipe-1', 'user_id': 'bob', 'text': 'hello'}
         raw = agent.encoded(request)
@@ -103,6 +124,72 @@ class Journey(unittest.TestCase):
         self.assertEqual(self.relay.deliver('Bearer local-fixture-credential', b'x' * 8193)[0], 400)
         self.assertEqual(self.relay.deliver('Bearer local-fixture-credential', raw)[0], 200)
         self.assertEqual(self.relay.deliver('Bearer local-fixture-credential', agent.encoded(dict(request, text='different')))[0], 409)
+
+    def test_relay_rejects_malformed_payloads_without_ledger_effect(self):
+        invalid_requests = (
+            {},
+            {'idempotency_key': 'recipe-2', 'user_id': 'mallory', 'text': 'hello'},
+            {'idempotency_key': 'recipe-2', 'user_id': 'alice', 'text': ''},
+            {'idempotency_key': 'recipe-2', 'user_id': 'alice', 'text': 'x' * 2049},
+            {'idempotency_key': 'recipe\n2', 'user_id': 'alice', 'text': 'hello'},
+            {'idempotency_key': 'recipe-2', 'user_id': 'alice', 'text': 'hello', 'extra': True},
+        )
+        for request in invalid_requests:
+            with self.subTest(request=request):
+                status, _ = self.relay.deliver(
+                    'Bearer local-fixture-credential', agent.encoded(request)
+                )
+                self.assertEqual(status, 400)
+        self.assertEqual(self.relay.db.execute('SELECT count(*) FROM deliveries').fetchone()[0], 0)
+
+    def test_relay_replay_and_conflict_survive_database_reopen(self):
+        request = {'idempotency_key': 'recipe-restart', 'user_id': 'alice', 'text': 'soup'}
+        status, original = self.relay.deliver(
+            'Bearer local-fixture-credential', agent.encoded(request)
+        )
+        self.assertEqual(status, 200)
+        self.relay.db.close()
+        reopened = relay_module.Relay(self.root / 'relay.db', b'local-fixture-credential')
+        try:
+            replay_status, replay = reopened.deliver(
+                'Bearer local-fixture-credential', agent.encoded(request)
+            )
+            self.assertEqual(replay_status, 200)
+            self.assertEqual(replay, original)
+            conflict_status, _ = reopened.deliver(
+                'Bearer local-fixture-credential',
+                agent.encoded(dict(request, text='different')),
+            )
+            self.assertEqual(conflict_status, 409)
+            self.assertEqual(
+                reopened.db.execute('SELECT count(*) FROM deliveries').fetchone()[0], 1
+            )
+        finally:
+            reopened.db.close()
+
+    def test_relay_credential_rotation_preserves_history_and_fences_old_key(self):
+        request = {'idempotency_key': 'recipe-rotation', 'user_id': 'bob', 'text': 'stew'}
+        status, original = self.relay.deliver(
+            'Bearer local-fixture-credential', agent.encoded(request)
+        )
+        self.assertEqual(status, 200)
+        self.relay.db.close()
+        rotated = relay_module.Relay(self.root / 'relay.db', b'rotated-fixture-credential')
+        try:
+            old_status, _ = rotated.deliver(
+                'Bearer local-fixture-credential', agent.encoded(request)
+            )
+            self.assertEqual(old_status, 401)
+            replay_status, replay = rotated.deliver(
+                'Bearer rotated-fixture-credential', agent.encoded(request)
+            )
+            self.assertEqual(replay_status, 200)
+            self.assertEqual(replay, original)
+            self.assertEqual(
+                rotated.db.execute('SELECT count(*) FROM deliveries').fetchone()[0], 1
+            )
+        finally:
+            rotated.db.close()
 
     def test_old_replay_does_not_rewind_context(self):
         agent.process(self.db, self.event, self.call, self.work)
@@ -153,6 +240,34 @@ class Journey(unittest.TestCase):
         request = json.loads(bytes(wire['body']))
         self.assertEqual(request['headers'][0]['value'], 'Bearer heph-placeholder:v1:' + rule)
         self.assertEqual(request['path_and_query'], '/v1/recipes')
+
+
+def load_tests(loader, tests, pattern):
+    """Include the sibling guest safety regressions in application discovery."""
+    tests_root = Path(__file__).resolve().parents[1] / 'tests'
+    modules = (
+        ('cooking_guest_crash_regression', tests_root / 'guest_crash_regression.py'),
+        ('cooking_guest_confinement_probe', tests_root / 'guest_confinement_probe.py'),
+    )
+    for module_name, module_path in modules:
+        if module_name == 'cooking_guest_confinement_probe':
+            runtime_path = tests_root / 'guest_confinement.py'
+            runtime_spec = importlib.util.spec_from_file_location(
+                'guest_confinement', runtime_path
+            )
+            if runtime_spec is None or runtime_spec.loader is None:
+                raise ImportError(f'cannot load {runtime_path}')
+            runtime_module = importlib.util.module_from_spec(runtime_spec)
+            sys.modules['guest_confinement'] = runtime_module
+            runtime_spec.loader.exec_module(runtime_module)
+        spec = importlib.util.spec_from_file_location(module_name, module_path)
+        if spec is None or spec.loader is None:
+            raise ImportError(f'cannot load {module_path}')
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        tests.addTests(loader.loadTestsFromModule(module))
+    return tests
 
 
 if __name__ == '__main__':

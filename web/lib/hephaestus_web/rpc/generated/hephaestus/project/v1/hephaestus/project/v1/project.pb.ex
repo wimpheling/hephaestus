@@ -130,6 +130,12 @@ defmodule Hephaestus.Project.V1.InstanceSummary do
     type: Google.Protobuf.Timestamp,
     json_name: "lastRunAt"
   )
+
+  field(:mailbox_id, 18,
+    proto3_optional: true,
+    type: Hephaestus.Common.V1.OpaqueId,
+    json_name: "mailboxId"
+  )
 end
 
 defmodule Hephaestus.Project.V1.ReleaseAgentOption do

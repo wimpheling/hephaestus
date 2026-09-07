@@ -1,0 +1,2 @@
+# Unified-diff context prefixes precede upstream tab indentation.
+examples/cooking/cooking-blog/vendor/hugo-0.165.0-dependencies.patch whitespace=-space-before-tab

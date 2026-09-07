@@ -166,7 +166,7 @@ where
             let expected_artifact_type = artifact_type(kind);
             if remote.document.media_type.as_deref() != Some(OCI_MANIFEST_MEDIA_TYPE)
                 || remote.document.artifact_type.as_deref() != Some(expected_artifact_type)
-                || remote.document.blobs.is_empty()
+                || remote.document.layers.is_empty()
                 || remote
                     .document
                     .subject
@@ -362,7 +362,7 @@ struct RemoteManifest {
     #[serde(default)]
     manifests: Vec<RemoteDescriptor>,
     #[serde(default)]
-    blobs: Vec<RemoteDescriptor>,
+    layers: Vec<RemoteDescriptor>,
 }
 
 #[derive(Deserialize)]
@@ -585,8 +585,9 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn reads_and_validates_an_exact_subject_and_required_referrers() {
+    async fn inspect_graph_with_evidence_field(
+        evidence_field: &str,
+    ) -> Result<ZotInspection, ZotClientError> {
         let authority = RegistryAuthority::parse("registry.test").expect("authority");
         let namespace = RegistryNamespace::for_owner(RegistryOwner::PlatformImage {
             image_key: PlatformImageKey::parse("rust-ubuntu").expect("key"),
@@ -609,7 +610,7 @@ mod tests {
         ] {
             let blob_digest = format!("sha256:{}", kind.repeat(64));
             let body = format!(
-                r#"{{"mediaType":"{OCI_MANIFEST_MEDIA_TYPE}","artifactType":"{artifact}","subject":{{"digest":"{subject_digest}"}},"blobs":[{{"mediaType":"application/octet-stream","digest":"{blob_digest}","size":1}}]}}"#
+                r#"{{"mediaType":"{OCI_MANIFEST_MEDIA_TYPE}","artifactType":"{artifact}","subject":{{"digest":"{subject_digest}"}},"{evidence_field}":[{{"mediaType":"application/octet-stream","digest":"{blob_digest}","size":1}}]}}"#
             )
             .into_bytes();
             let digest = sha256(&body);
@@ -641,7 +642,16 @@ mod tests {
             namespace,
             Sha256Digest::parse(subject_digest).expect("digest"),
         );
-        let result = client.inspect_exact(&reference).await.expect("inspection");
+        let result = client.inspect_exact(&reference).await;
+        server.abort();
+        result
+    }
+
+    #[tokio::test]
+    async fn reads_and_validates_an_exact_subject_and_required_referrers() {
+        let result = inspect_graph_with_evidence_field("layers")
+            .await
+            .expect("inspection");
         let ZotInspection::Present {
             platforms,
             evidence,
@@ -652,7 +662,14 @@ mod tests {
         };
         assert_eq!(platforms.len(), 1);
         assert_eq!(evidence.referrers().len(), 3);
-        server.abort();
+    }
+
+    #[tokio::test]
+    async fn rejects_legacy_blobs_without_oci_layers() {
+        assert!(matches!(
+            inspect_graph_with_evidence_field("blobs").await,
+            Err(ZotClientError::InvalidGraph)
+        ));
     }
 
     #[tokio::test]

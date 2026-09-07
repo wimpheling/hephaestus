@@ -109,6 +109,7 @@ async fn exact_guest_output_becomes_one_immutable_draft() {
         Arc::new(PostgresMelangeAuthorizer),
     ));
     let artifact_store = LocalArtifactStore::new(artifact_root.clone()).expect("artifact store");
+    let image_filesystems = Arc::new(RwLock::new(BTreeMap::new()));
     let executor = BuildExecutor::initialize(
         Arc::new(PgBuildRepository::new(pool.clone())),
         provider,
@@ -118,23 +119,64 @@ async fn exact_guest_output_becomes_one_immutable_draft() {
             workspace_root,
             repository_root,
             git_binary: fs::canonicalize("/usr/bin/git").expect("Git binary"),
-            image_filesystems: Arc::new(RwLock::new(BTreeMap::from([(
-                String::from(
-                    "build@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                ),
-                RootFilesystem::Directory {
-                    host_path: root_image,
-                },
-            )]))),
+            image_filesystems: Arc::clone(&image_filesystems),
             timeout: Duration::from_secs(10),
         },
     )
     .expect("build executor");
+    assert!(matches!(
+        executor.execute(build_id).await,
+        Err(BuildExecutionError::ImageUnavailable)
+    ));
+    assert_eq!(provisions.load(Ordering::SeqCst), 0);
+    let queued_state: (String, Option<String>) = sqlx::query_as(
+        "SELECT request.state, execution.state
+           FROM build_requests AS request
+           LEFT JOIN build_executions AS execution
+             ON execution.build_request_id = request.id
+          WHERE request.id = $1",
+    )
+    .bind(build_id.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("durable request remains queued while image catches up");
+    assert_eq!(queued_state, (String::from("queued"), None));
+    image_filesystems.write().expect("image cache lock").insert(
+        String::from(
+            "build@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ),
+        RootFilesystem::Directory {
+            host_path: root_image,
+        },
+    );
     let first = executor.execute(build_id).await.expect("isolated build");
     let duplicate = executor.execute(build_id).await.expect("idempotent replay");
     assert_eq!(first, duplicate);
     assert_eq!(first.artifact_count, 1);
     assert_eq!(provisions.load(Ordering::SeqCst), 1);
+    image_filesystems
+        .write()
+        .expect("image cache lock")
+        .remove("build@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    assert!(matches!(
+        executor.verify(build_id).await,
+        Err(BuildExecutionError::ImageUnavailable)
+    ));
+    let verification_rows: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM build_verifications WHERE build_request_id = $1")
+            .bind(build_id.as_uuid())
+            .fetch_one(&pool)
+            .await
+            .expect("verification row count");
+    assert_eq!(verification_rows, 0);
+    image_filesystems.write().expect("image cache lock").insert(
+        String::from(
+            "build@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ),
+        RootFilesystem::Directory {
+            host_path: root.join("root-image"),
+        },
+    );
     let state: (String, String, i32, i32) = sqlx::query_as(
         "SELECT request.state, execution.state, execution.exit_code,
                 jsonb_array_length(execution.logs)
@@ -297,6 +339,42 @@ async fn exact_guest_output_becomes_one_immutable_draft() {
             repository_id,
             String::from("hephaestus.product.event.v1"),
         )
+    );
+
+    image_filesystems
+        .write()
+        .expect("image cache lock")
+        .remove("build@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    assert!(matches!(
+        executor.retry(failed_build).await,
+        Err(BuildExecutionError::ImageUnavailable)
+    ));
+    let still_failed: (String, String, String) = sqlx::query_as(
+        "SELECT request.state, execution.state, execution.failure_code
+           FROM build_requests AS request
+           JOIN build_executions AS execution
+             ON execution.build_request_id = request.id
+          WHERE request.id = $1",
+    )
+    .bind(failed_build.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("terminal failure remains durable while image is unavailable");
+    assert_eq!(
+        still_failed,
+        (
+            String::from("failed"),
+            String::from("failed"),
+            String::from("vm_provision"),
+        )
+    );
+    image_filesystems.write().expect("image cache lock").insert(
+        String::from(
+            "build@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ),
+        RootFilesystem::Directory {
+            host_path: root.join("root-image"),
+        },
     );
 
     let denied_build = BuildRequestId::new();
@@ -544,7 +622,10 @@ impl VmProvider for OutputProvider {
             )));
         }
         assert!(spec.disks.is_empty());
-        assert_eq!(spec.command.env.len(), 0);
+        assert_eq!(
+            spec.command.env.get("HEPH_BUILD_GUEST").map(String::as_str),
+            Some("1")
+        );
         let source = spec
             .mounts
             .iter()

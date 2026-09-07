@@ -4,3 +4,5 @@
 /e2e/playwright/node_modules/
 /e2e/playwright/playwright-report/
 /e2e/playwright/test-results/
+/scripts/__pycache__/
+/examples/cooking/**/__pycache__/

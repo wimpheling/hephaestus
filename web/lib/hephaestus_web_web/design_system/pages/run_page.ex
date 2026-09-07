@@ -75,6 +75,7 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.RunPage do
             Cancel
           </.action>
           <.action
+            :if={@run["retry_supported"]}
             interaction={:event}
             event={@control_event}
             event_payload={%{kind: "retry_run"}}

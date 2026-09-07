@@ -41,8 +41,9 @@ below.
 
 ### Application layout and identities
 
-The fixture uses one `cooking` project and four application-owned source
-repositories:
+The fixture uses one `cooking` project and the following application-owned
+source repositories. The Hugo toolchain is published separately so ordinary
+blog content commits do not queue another OCI image build.
 
 | Repository | Released application or content | Responsibility |
 | --- | --- | --- |
@@ -50,6 +51,7 @@ repositories:
 | `cooking-agent` | Stateful cooking agent | Maintains recipe memory, invokes the model and outbound messaging APIs, renders the blog, and owns application retries/idempotency. |
 | `telegram-relay` | External outbound Telegram relay | Authenticates cooking-agent requests and records deterministic delivery outcomes outside Hephaestus guests. |
 | `cooking-blog` | Hugo static cooking blog | Receives controlled result proposals on `refs/heads/main`; its pinned Hugo build produces the HTML release artifact, and it contains no agent credentials or platform control data. |
+| Hugo toolchain | Pinned OCI build image | Contains the reviewed Dockerfile, Hugo inputs and image declaration used by the blog build. |
 
 Exactly two configured family identities, `alice` and `bob`, are authorized.
 Their provider-user IDs are stable fixture values recorded during installation.
@@ -232,6 +234,14 @@ The actionable remaining-work plan is
 This document remains the acceptance specification; the task records sequencing,
 implementation gaps, and the evidence required to close its remaining items.
 
+Scope decision, 2026-09-07: the user moved the exhaustive
+[host-daemon crash matrix](../../tasks/todo/complete-host-daemon-crash-recovery-matrix.md)
+and [expanded adversarial isolation matrix](../../tasks/todo/complete-adversarial-isolation-e2e-matrix.md)
+into separate tasks, outside MVP-05 completion criteria. Existing executable
+guest-crash, denial, isolation, rotation/revocation, retirement and confinement
+checks remain required. Known security defects remain blockers. This is an
+explicit deferral, not a claim of completed coverage.
+
 - [x] **1. Specify the complete acceptance fixture**
   - [x] **Define released application behavior**
     - [x] Specify the gateway request validation, Telegram update parsing,
@@ -291,8 +301,9 @@ implementation gaps, and the evidence required to close its remaining items.
     verification, with exact host-side substitution and no raw guest values.
   - [ ] Create and bind model-API, Telegram-relay, and Telegram-verification
     secrets without exposing values to the binding user or either guest. Bind
-    their exact placeholder, destination, and gateway-route substitution rules;
-    provision the raw Bot API token only in the relay's external secret store.
+    their exact placeholder, destination, and gateway-route substitution rules.
+    The deterministic relay uses its fixture credential and requires no Bot API
+    token or Telegram account.
   - [x] Bind the cooking agent to one exact blog repository/ref and bounded
     HTTPS destination and placeholder-substitution bindings.
   - [ ] Record the exact installation, revision, attachment, route,
@@ -330,13 +341,11 @@ implementation gaps, and the evidence required to close its remaining items.
 - [ ] **5. Prove the authority boundary**
   - [x] Send an event from an unauthorized Telegram identity and verify
     rejection without cooking-agent, repository, HTTPS egress, or state authority.
-  - [ ] Run an adversarial gateway release and prove it cannot inspect cooking
-    state, read the blog repository, publish to another mailbox, broaden its
-    route, inspect another project, or administer Caddy.
-  - [ ] Run adversarial cooking-agent operations and prove they cannot read
-    real credentials, bypass forced proxy egress, use an unbound destination,
-    bind another repository, alter authorization, or write canonical Git
-    directly.
+  - [ ] Preserve and execute existing gateway and cooking-agent adversarial
+    denial checks with exact identities and no unauthorized effects. Complete
+    foreign-resource, direct-network/Git, authority-change and Caddy coverage
+    in the linked adversarial task; its expanded matrix and missing positive
+    controls are explicitly deferred and are not MVP-05 completion blockers.
   - [ ] Rotate the Telegram verification, relay-authentication, and model
     credentials and prove later operations use the new exact versions while
     earlier run provenance remains intact.
@@ -393,8 +402,11 @@ implementation gaps, and the evidence required to close its remaining items.
     isolation, mounts, networking, broker use, restart, and cleanup.
   - [ ] Add a Playwright journey covering project navigation, installation,
     binding, operation, update, denial, recovery, and provenance inspection.
-  - [ ] Inject crashes around ingress commit, dispatch, state commit, broker
-    call, result publication, update hook, revision activation, and cleanup.
+  - [ ] Execute existing guest-crash cases around state persistence, broker
+    calls and proposal-ready state, plus rollback and abnormal-update recovery.
+    Exhaustive host-daemon interruption around ingress commit, dispatch, result
+    publication, update completion, activation and cleanup belongs to the linked
+    crash task and is not an MVP-05 completion requirement.
   - [ ] Scan PostgreSQL, NATS, logs, traces, metrics, filesystems, browser
     payloads, screenshots, VM environment, files, and process arguments for
     model-API, relay-authentication and inbound verification-secret sentinels.
@@ -455,9 +467,11 @@ recorded separately at handoff.
 
 This fixture imports exact application artifacts and seeds release metadata;
 isolated build/publication of all reference releases remains separate work.
-The wider concurrency, revocation, crash, update/recovery and browser matrix
-and reproducible local and CI execution are still required before completing
-MVP-05. Real Telegram integration is excluded from acceptance.
+The retained concurrency, revocation, guest-crash, update/recovery and browser
+matrix and reproducible local and CI execution are still required before
+completing MVP-05. The exhaustive host-daemon crash and expanded adversarial
+matrices are owned by the separate tasks linked above. Real Telegram integration
+is excluded from acceptance.
 
 Record source repository commits, build/release/instance/revision IDs, route
 and mailbox IDs, state-volume and fenced-lease IDs, dispatch order and

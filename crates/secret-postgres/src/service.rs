@@ -2219,17 +2219,35 @@ impl<K: KeyProvider + Send + Sync> SecretRuntimeService<K> {
         adapter: &A,
     ) -> Result<BrokerResponse, SecretServiceError> {
         validate_broker_request(request)?;
-        let session = self
-            .authenticate_session(credential, request.run_id)
-            .await?;
-        let lease = self
+        let session = match self.authenticate_session(credential, request.run_id).await {
+            Ok(session) => session,
+            Err(error @ SecretServiceError::RuntimeAuthenticationDenied) => {
+                // A revocation can close the runtime session before the next
+                // slot call arrives. The exact credential hash still lets us
+                // identify that authenticated session for a value-free audit,
+                // while the original authentication denial remains returned.
+                self.record_pre_adapter_https_denial(credential, request, &error)
+                    .await?;
+                return Err(error);
+            }
+            Err(error) => return Err(error),
+        };
+        let lease = match self
             .authorize_runtime_lease(
                 &session,
                 &request.slot,
                 DeliveryMode::Brokered,
                 Permission::UseBrokered,
             )
-            .await?;
+            .await
+        {
+            Ok(lease) => lease,
+            Err(error) => {
+                self.record_pre_adapter_https_denial(credential, request, &error)
+                    .await?;
+                return Err(error);
+            }
+        };
         let (https_request, rule_id) = self
             .authorize_https_operation(&session, &lease, request)
             .await?;
@@ -2243,19 +2261,31 @@ impl<K: KeyProvider + Send + Sync> SecretRuntimeService<K> {
         )
         .await?;
         let value = self.encrypted_store.resolve(&context, &encrypted)?;
-        let response = adapter
+        let response = match adapter
             .invoke(
                 &value,
                 &request.destination,
                 &request.operation,
                 &request.body,
             )
-            .await;
+            .await
+        {
+            Ok(response) => response,
+            Err(error) => {
+                self.record_https_failure(&session, &lease, https_request, rule_id)
+                    .await?;
+                return Err(SecretServiceError::BrokerAdapter(error));
+            }
+        };
+        if response.body.len() > 65_536 {
+            self.record_https_failure(&session, &lease, https_request, rule_id)
+                .await?;
+            return Err(SecretServiceError::BrokerResponseTooLarge);
+        }
+        self.authorize_brokered_response(&session, &lease, request, https_request, rule_id)
+            .await?;
         if let Some(request_id) = https_request {
-            let succeeded = response.as_ref().is_ok_and(|response| {
-                response.status == secret_application::BrokerStatus::Succeeded
-                    && response.body.len() <= 65_536
-            });
+            let succeeded = response.status == secret_application::BrokerStatus::Succeeded;
             record_https_operation(
                 &self.resolver_pool,
                 &session,
@@ -2264,28 +2294,10 @@ impl<K: KeyProvider + Send + Sync> SecretRuntimeService<K> {
                 rule_id,
                 None,
                 Some(if succeeded { "succeeded" } else { "failed" }),
+                None,
             )
             .await?;
         }
-        let response = response.map_err(SecretServiceError::BrokerAdapter)?;
-        if response.body.len() > 65_536 {
-            return Err(SecretServiceError::BrokerResponseTooLarge);
-        }
-        // A fresh live check prevents a response from being delivered after a
-        // revocation that completed while the upstream operation was active.
-        self.authorize_runtime_lease(
-            &session,
-            &request.slot,
-            DeliveryMode::Brokered,
-            Permission::UseBrokered,
-        )
-        .await
-        // Preserve a live revocation or authorization decision.  Collapsing
-        // it to Persistence would obscure the post-upstream fail-closed
-        // result and make callers retry a request whose authority was gone.
-        ?;
-        self.authorize_brokered_https_snapshot(&session, &lease, request, rule_id)
-            .await?;
         record_runtime_use(
             &self.resolver_pool,
             &session,
@@ -2297,6 +2309,150 @@ impl<K: KeyProvider + Send + Sync> SecretRuntimeService<K> {
         Ok(response)
     }
 
+    async fn record_https_failure(
+        &self,
+        session: &RuntimeSessionRow,
+        lease: &RuntimeLeaseAuthorizationRow,
+        request_id: Option<Uuid>,
+        rule_id: Option<Uuid>,
+    ) -> Result<(), SecretServiceError> {
+        if let Some(request_id) = request_id {
+            record_https_operation(
+                &self.resolver_pool,
+                session,
+                lease,
+                request_id,
+                rule_id,
+                None,
+                Some("failed"),
+                None,
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
+    async fn record_pre_adapter_https_denial(
+        &self,
+        credential: &secret_domain::OpaqueRuntimeCredential,
+        request: &BrokerRequest,
+        error: &SecretServiceError,
+    ) -> Result<(), SecretServiceError> {
+        let reason_code = match error {
+            // Session expiry and retirement are also represented by the
+            // authentication denial; keep the audit reason generic rather
+            // than claiming a specific revocation cause.
+            SecretServiceError::Unavailable | SecretServiceError::RuntimeAuthenticationDenied => {
+                "live_authorization_unavailable"
+            }
+            SecretServiceError::AuthorizationDenied => "live_authorization_denied",
+            _ => return Ok(()),
+        };
+        if request.operation != "https_v1" {
+            return Ok(());
+        }
+        let Some(rule_id) = broker_request_rule_id(request) else {
+            return Ok(());
+        };
+        let origin = format!("https://{}", request.destination);
+        let hash = credential.storage_hash();
+        let Some(context) = sqlx::query_as::<_, BrokeredSecretDenialContextRow>(
+            "SELECT session_id, run_id, instance_id, instance_revision_id,
+                      attachment_id, phase, expires_at, lease_id,
+                      secret_version_id, destinations
+               FROM lookup_brokered_secret_denial_context($1, $2, $3, $4, $5)",
+        )
+        .bind(hash.as_slice())
+        .bind(request.run_id.as_uuid())
+        .bind(request.slot.as_str())
+        .bind(rule_id)
+        .bind(origin)
+        .fetch_optional(&self.authorization_pool)
+        .await
+        .map_err(|_| SecretServiceError::Persistence)?
+        else {
+            // Without the exact retained lease and snapshot, a request rule
+            // UUID is untrusted and must not receive an audit attribution.
+            return Ok(());
+        };
+        let session = RuntimeSessionRow {
+            session_id: context.session_id,
+            run_id: context.run_id,
+            instance_id: context.instance_id,
+            instance_revision_id: context.instance_revision_id,
+            attachment_id: context.attachment_id,
+            phase: context.phase,
+            expires_at: context.expires_at,
+        };
+        let lease = RuntimeLeaseAuthorizationRow {
+            lease_id: context.lease_id,
+            secret_version_id: context.secret_version_id,
+            destinations: context.destinations,
+        };
+        record_https_operation(
+            &self.resolver_pool,
+            &session,
+            &lease,
+            Uuid::new_v4(),
+            Some(rule_id),
+            Some("deny"),
+            None,
+            Some(reason_code),
+        )
+        .await
+    }
+
+    async fn authorize_brokered_response(
+        &self,
+        session: &RuntimeSessionRow,
+        lease: &RuntimeLeaseAuthorizationRow,
+        request: &BrokerRequest,
+        request_id: Option<Uuid>,
+        rule_id: Option<Uuid>,
+    ) -> Result<(), SecretServiceError> {
+        // A fresh live check prevents a response from being delivered after a
+        // revocation that completed while the upstream operation was active.
+        let live_authorization = self
+            .authorize_runtime_lease(
+                session,
+                &request.slot,
+                DeliveryMode::Brokered,
+                Permission::UseBrokered,
+            )
+            .await;
+        if let Err(
+            error @ (SecretServiceError::Unavailable | SecretServiceError::AuthorizationDenied),
+        ) = live_authorization
+        {
+            if let Some(request_id) = request_id {
+                record_https_operation(
+                    &self.resolver_pool,
+                    session,
+                    lease,
+                    request_id,
+                    // This ID was checked against this exact lease snapshot
+                    // before the adapter ran; never use a fresh request value
+                    // to attribute a denial to another lease.
+                    rule_id,
+                    Some("deny"),
+                    None,
+                    Some(if matches!(error, SecretServiceError::Unavailable) {
+                        "live_authorization_unavailable"
+                    } else {
+                        "live_authorization_denied"
+                    }),
+                )
+                .await?;
+            }
+            // Preserve the live rejection so callers cannot retry as though
+            // the upstream operation had merely failed.
+            return Err(error);
+        }
+        live_authorization?;
+        self.authorize_brokered_https_snapshot(session, lease, request, rule_id)
+            .await
+    }
+
     async fn authorize_https_operation(
         &self,
         session: &RuntimeSessionRow,
@@ -2304,14 +2460,7 @@ impl<K: KeyProvider + Send + Sync> SecretRuntimeService<K> {
         request: &BrokerRequest,
     ) -> Result<(Option<Uuid>, Option<Uuid>), SecretServiceError> {
         let https_request = (request.operation == "https_v1").then(Uuid::new_v4);
-        let rule_id = serde_json::from_slice::<serde_json::Value>(&request.body)
-            .ok()
-            .and_then(|value| {
-                value
-                    .get("rule_id")
-                    .and_then(serde_json::Value::as_str)
-                    .and_then(|id| Uuid::parse_str(id).ok())
-            });
+        let rule_id = broker_request_rule_id(request);
         if !lease.destinations.is_empty()
             && !lease
                 .destinations
@@ -2326,6 +2475,7 @@ impl<K: KeyProvider + Send + Sync> SecretRuntimeService<K> {
                     request_id,
                     rule_id,
                     Some("deny"),
+                    None,
                     None,
                 )
                 .await?;
@@ -2347,6 +2497,7 @@ impl<K: KeyProvider + Send + Sync> SecretRuntimeService<K> {
                 } else {
                     "deny"
                 }),
+                None,
                 None,
             )
             .await?;
@@ -2457,7 +2608,8 @@ impl<K: KeyProvider + Send + Sync> SecretRuntimeService<K> {
                  AND binding.status = 'active'
                  AND version.status = 'active'
                  AND secret.status = 'active'
-                 AND secret.active_version_id = snapshot.secret_version_id
+                 -- Rotation changes the version selected for new leases. An
+                 -- already-issued lease remains pinned until expiry or revoke.
                  AND exact_lease.status = 'active' AND exact_lease.expires_at > now()",
         )
         .bind(lease.lease_id)
@@ -2646,6 +2798,20 @@ struct RuntimeSessionRow {
     attachment_id: Option<Uuid>,
     phase: String,
     expires_at: OffsetDateTime,
+}
+
+#[derive(sqlx::FromRow)]
+struct BrokeredSecretDenialContextRow {
+    session_id: Uuid,
+    run_id: Uuid,
+    instance_id: Uuid,
+    instance_revision_id: Uuid,
+    attachment_id: Option<Uuid>,
+    phase: String,
+    expires_at: OffsetDateTime,
+    lease_id: Uuid,
+    secret_version_id: Uuid,
+    destinations: Vec<String>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -3123,6 +3289,7 @@ async fn record_runtime_use(
 
 // The decision commits before the external call, and its outcome commits after.
 // A decision without an outcome honestly represents an interrupted operation.
+#[allow(clippy::too_many_arguments)] // Keep the value-free audit fields explicit at this boundary.
 async fn record_https_operation(
     pool: &PgPool,
     session: &RuntimeSessionRow,
@@ -3131,16 +3298,17 @@ async fn record_https_operation(
     rule_id: Option<Uuid>,
     decision: Option<&str>,
     outcome: Option<&str>,
+    reason_code: Option<&str>,
 ) -> Result<(), SecretServiceError> {
     let inserted = sqlx::query(
         "INSERT INTO brokered_secret_audit_events
          (id, lease_snapshot_id, rule_id, runtime_session_id, run_id,
-          request_id, event_kind, decision, outcome, occurred_at)
+          request_id, event_kind, decision, outcome, reason_code, occurred_at)
          SELECT $1, snapshot.id, snapshot.rule_id, snapshot.runtime_session_id,
-                snapshot.run_id, $2, $3, $4, $5, now()
+                snapshot.run_id, $2, $3, $4, $5, $6, now()
          FROM brokered_secret_lease_snapshots snapshot
-         WHERE snapshot.lease_id = $6 AND snapshot.runtime_session_id = $7
-           AND snapshot.run_id = $8 AND snapshot.rule_id = $9",
+         WHERE snapshot.lease_id = $7 AND snapshot.runtime_session_id = $8
+           AND snapshot.run_id = $9 AND snapshot.rule_id = $10",
     )
     .bind(Uuid::new_v4())
     .bind(request_id)
@@ -3151,6 +3319,7 @@ async fn record_https_operation(
     })
     .bind(decision)
     .bind(outcome)
+    .bind(reason_code)
     .bind(lease.lease_id)
     .bind(session.session_id)
     .bind(session.run_id)
@@ -3232,6 +3401,17 @@ fn validate_broker_request(request: &BrokerRequest) -> Result<(), SecretServiceE
         return Err(SecretServiceError::BrokerRequestDenied);
     }
     Ok(())
+}
+
+fn broker_request_rule_id(request: &BrokerRequest) -> Option<Uuid> {
+    serde_json::from_slice::<serde_json::Value>(&request.body)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("rule_id")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|id| Uuid::parse_str(id).ok())
+        })
 }
 
 async fn audit_resolution(

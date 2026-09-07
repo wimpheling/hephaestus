@@ -58,5 +58,11 @@ pub(super) fn application_error(error: ArtifactError) -> super::super::RpcError 
             tracing::error!(error = %source, "canonical artifact read failed");
             RpcError::Unavailable
         }
+        ArtifactError::Authorization(_source) => {
+            // Evaluator details may include database context; keep them out of
+            // retained RPC logs and expose only the stable transport category.
+            tracing::error!("artifact authorization evaluation failed");
+            RpcError::Unavailable
+        }
     }
 }

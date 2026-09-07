@@ -22,7 +22,10 @@ defmodule HephaestusWeb.RPC.Client do
   }
 
   alias Hephaestus.Gateway.V1.{
+    ConfigureGatewayRequest,
     CreateMailboxBindingRequest,
+    GatewaySecretSelection,
+    InstallReleaseGatewaysRequest,
     GatewayLifecycle,
     GatewayService,
     GetGatewayRequest,
@@ -47,8 +50,10 @@ defmodule HephaestusWeb.RPC.Client do
     AgentInstanceService,
     BindSecretRequest,
     CapabilityBindingSelection,
+    BrokeredRuleCopy,
     ControlMailboxRequest,
     CreateAttachmentRequest,
+    CreateMailboxRequest,
     CreateUpdateRequest,
     GetInstanceRequest,
     ImportAgentRequest,
@@ -462,6 +467,59 @@ defmodule HephaestusWeb.RPC.Client do
           next: gateway_lifecycle(next)
         ],
         &GatewayService.Stub.set_gateway_lifecycle/3
+      )
+
+  @doc "Installs gateway declarations from a published release's exact source."
+  def install_release_gateways(identity, release_id),
+    do:
+      mutation(
+        identity,
+        "/hephaestus.gateway.v1.GatewayService/InstallReleaseGateways",
+        InstallReleaseGatewaysRequest,
+        [release_id: id(release_id)],
+        &GatewayService.Stub.install_release_gateways/3
+      )
+
+  @doc "Creates an immutable gateway runtime revision with typed values and explicit secret selections."
+  def configure_gateway(
+        identity,
+        gateway_id,
+        expected_revision_id,
+        parameters,
+        secret_selections
+      ),
+      do:
+        mutation(
+          identity,
+          "/hephaestus.gateway.v1.GatewayService/ConfigureGateway",
+          ConfigureGatewayRequest,
+          [
+            gateway_id: id(gateway_id),
+            expected_revision_id: id(expected_revision_id),
+            parameters: parameter_values(parameters),
+            secret_selections:
+              Enum.map(secret_selections, fn selection ->
+                %GatewaySecretSelection{
+                  slot_key: Map.fetch!(selection, "slot_key"),
+                  import_id: id(Map.fetch!(selection, "import_id")),
+                  secret_version_id: id(Map.fetch!(selection, "secret_version_id")),
+                  route_path: Map.fetch!(selection, "route_path"),
+                  header_name: Map.fetch!(selection, "header_name")
+                }
+              end)
+          ],
+          &GatewayService.Stub.configure_gateway/3
+        )
+
+  @doc "Allocates or retrieves the stable mailbox for an authorized agent instance."
+  def create_mailbox(identity, instance_id),
+    do:
+      mutation(
+        identity,
+        "/hephaestus.instance.v1.AgentInstanceService/CreateMailbox",
+        CreateMailboxRequest,
+        [instance_id: id(instance_id)],
+        &AgentInstanceService.Stub.create_mailbox/3
       )
 
   @doc "Creates one exact gateway revision mailbox binding and active grant."
@@ -1052,6 +1110,26 @@ defmodule HephaestusWeb.RPC.Client do
         parameters,
         policy
       ) do
+    create_update(
+      identity,
+      instance_id,
+      expected_revision_id,
+      candidate_release_agent_id,
+      parameters,
+      policy,
+      []
+    )
+  end
+
+  def create_update(
+        identity,
+        instance_id,
+        expected_revision_id,
+        candidate_release_agent_id,
+        parameters,
+        policy,
+        brokered_rule_copies
+      ) do
     mutation(
       identity,
       "/hephaestus.instance.v1.AgentInstanceService/CreateUpdate",
@@ -1061,7 +1139,8 @@ defmodule HephaestusWeb.RPC.Client do
         expected_revision_id: id(expected_revision_id),
         candidate_release_agent_id: id(candidate_release_agent_id),
         parameters: parameter_values(parameters),
-        selected_policy: runtime_policy(policy)
+        selected_policy: runtime_policy(policy),
+        brokered_rule_copies: brokered_rule_copy_values(brokered_rule_copies)
       ],
       &AgentInstanceService.Stub.create_update/3
     )
@@ -1457,6 +1536,15 @@ defmodule HephaestusWeb.RPC.Client do
 
       {name, value} when is_binary(value) ->
         %ParameterValue{name: name, value: {:string_value, value}}
+    end)
+  end
+
+  defp brokered_rule_copy_values(copies) do
+    Enum.map(copies, fn copy ->
+      %BrokeredRuleCopy{
+        source_rule_id: id(Map.fetch!(copy, "source_rule_id")),
+        candidate_rule_id: id(Map.fetch!(copy, "candidate_rule_id"))
+      }
     end)
   end
 

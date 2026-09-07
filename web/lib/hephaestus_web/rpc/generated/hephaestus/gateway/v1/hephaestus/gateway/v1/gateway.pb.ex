@@ -59,6 +59,8 @@ defmodule Hephaestus.Gateway.V1.GatewayRevision do
   field(:secret_slots, 5, repeated: true, type: :string, json_name: "secretSlots")
   field(:created_at, 6, type: Google.Protobuf.Timestamp, json_name: "createdAt")
   field(:routes, 7, repeated: true, type: Hephaestus.Gateway.V1.GatewayRoute)
+  field(:release_agent_id, 8, type: Hephaestus.Common.V1.OpaqueId, json_name: "releaseAgentId")
+  field(:mailbox_slots, 9, repeated: true, type: :string, json_name: "mailboxSlots")
 end
 
 defmodule Hephaestus.Gateway.V1.GatewaySummary do
@@ -270,6 +272,81 @@ defmodule Hephaestus.Gateway.V1.GetGatewayResponse do
   field(:page, 3, type: Hephaestus.Common.V1.PageResponse)
 end
 
+defmodule Hephaestus.Gateway.V1.InstallReleaseGatewaysRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.gateway.v1.InstallReleaseGatewaysRequest",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:context, 1, type: Hephaestus.Common.V1.RequestContext)
+  field(:release_id, 2, type: Hephaestus.Common.V1.OpaqueId, json_name: "releaseId")
+end
+
+defmodule Hephaestus.Gateway.V1.InstallReleaseGatewaysResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.gateway.v1.InstallReleaseGatewaysResponse",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:receipt, 1, type: Hephaestus.Common.V1.MutationReceipt)
+end
+
+defmodule Hephaestus.Gateway.V1.GatewaySecretSelection do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.gateway.v1.GatewaySecretSelection",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:slot_key, 1, type: :string, json_name: "slotKey")
+  field(:import_id, 2, type: Hephaestus.Common.V1.OpaqueId, json_name: "importId")
+  field(:secret_version_id, 3, type: Hephaestus.Common.V1.OpaqueId, json_name: "secretVersionId")
+  field(:route_path, 4, type: :string, json_name: "routePath")
+  field(:header_name, 5, type: :string, json_name: "headerName")
+end
+
+defmodule Hephaestus.Gateway.V1.ConfigureGatewayRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.gateway.v1.ConfigureGatewayRequest",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:context, 1, type: Hephaestus.Common.V1.RequestContext)
+  field(:gateway_id, 2, type: Hephaestus.Common.V1.OpaqueId, json_name: "gatewayId")
+
+  field(:expected_revision_id, 3,
+    type: Hephaestus.Common.V1.OpaqueId,
+    json_name: "expectedRevisionId"
+  )
+
+  field(:parameters, 4, repeated: true, type: Hephaestus.Common.V1.ParameterValue)
+
+  field(:secret_selections, 5,
+    repeated: true,
+    type: Hephaestus.Gateway.V1.GatewaySecretSelection,
+    json_name: "secretSelections"
+  )
+end
+
+defmodule Hephaestus.Gateway.V1.ConfigureGatewayResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.gateway.v1.ConfigureGatewayResponse",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:revision_id, 1, type: Hephaestus.Common.V1.OpaqueId, json_name: "revisionId")
+  field(:receipt, 2, type: Hephaestus.Common.V1.MutationReceipt)
+end
+
 defmodule Hephaestus.Gateway.V1.ListGatewayIngressRequest do
   @moduledoc false
 
@@ -445,6 +522,18 @@ defmodule Hephaestus.Gateway.V1.GatewayService.Service do
     :GetGateway,
     Hephaestus.Gateway.V1.GetGatewayRequest,
     Hephaestus.Gateway.V1.GetGatewayResponse
+  )
+
+  rpc(
+    :InstallReleaseGateways,
+    Hephaestus.Gateway.V1.InstallReleaseGatewaysRequest,
+    Hephaestus.Gateway.V1.InstallReleaseGatewaysResponse
+  )
+
+  rpc(
+    :ConfigureGateway,
+    Hephaestus.Gateway.V1.ConfigureGatewayRequest,
+    Hephaestus.Gateway.V1.ConfigureGatewayResponse
   )
 
   rpc(

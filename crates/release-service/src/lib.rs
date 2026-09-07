@@ -209,12 +209,24 @@ pub struct CreateInstanceUpdate {
     pub candidate_release_agent_id: ReleaseAgentId,
     /// Candidate typed parameters.
     pub parameters: BTreeMap<ParameterName, ParameterValue>,
+    /// Explicit source-to-candidate broker rule identities. The release
+    /// service never infers rule references from ordinary parameter strings.
+    pub brokered_rule_copies: Vec<BrokeredRuleCopy>,
     /// Candidate project restriction.
     pub selected_policy: RuntimePolicy,
     /// Current platform ceiling.
     pub platform_policy: RuntimePolicy,
     /// Current platform policy version.
     pub platform_policy_version: String,
+}
+
+/// Explicitly carries one brokered rule authority into an update candidate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BrokeredRuleCopy {
+    /// Rule on the exact current revision.
+    pub source_rule_id: Uuid,
+    /// Caller-selected rule identity used by the candidate parameters.
+    pub candidate_rule_id: Uuid,
 }
 
 /// Agent update-hook terminal result.

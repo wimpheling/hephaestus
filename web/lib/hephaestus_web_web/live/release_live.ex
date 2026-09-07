@@ -51,11 +51,17 @@ defmodule HephaestusWebWeb.ReleaseLive do
     {:noreply, socket |> sync_state(state) |> schedule_effects(effects)}
   end
 
+  def handle_event("install-gateways", _params, socket) do
+    {state, effects} = ReleaseState.reduce(socket.assigns.page_state, :install_gateways)
+    {:noreply, socket |> sync_state(state) |> schedule_effects(effects)}
+  end
+
   def handle_event("publish-release", _params, socket) do
     {state, effects} = ReleaseState.reduce(socket.assigns.page_state, :publish_release)
     {:noreply, socket |> sync_state(state) |> schedule_effects(effects)}
   end
 
+  @impl true
   def handle_info({ref, event}, %{assigns: %{snapshot_task: %Task{ref: ref}}} = socket) do
     Process.demonitor(ref, [:flush])
     {state, effects} = ReleaseState.reduce(socket.assigns.page_state, event)
@@ -112,6 +118,7 @@ defmodule HephaestusWebWeb.ReleaseLive do
         draft_version_form={to_form(@presentation.draft_version, as: :release)}
         set_draft_version_event={@presentation.set_draft_version_event}
         publish_event={@presentation.publish_event}
+        install_gateways_event={@presentation.install_gateways_event}
       />
     </Layouts.app>
     """
@@ -127,6 +134,13 @@ defmodule HephaestusWebWeb.ReleaseLive do
         end)
 
       {:set_draft_version, generation, _release_id, _version} = effect, socket ->
+        identity = socket.assigns.current_identity
+
+        start_async(socket, {:release_effect, generation}, fn ->
+          ReleaseState.execute(effect, identity)
+        end)
+
+      {:install_gateways, generation, _release_id} = effect, socket ->
         identity = socket.assigns.current_identity
 
         start_async(socket, {:release_effect, generation}, fn ->
@@ -152,9 +166,7 @@ defmodule HephaestusWebWeb.ReleaseLive do
         |> push_navigate(to: "/organizations")
 
       {:navigate, destination}, socket ->
-        socket
-        |> put_flash(:error, socket.assigns.page_state.error)
-        |> push_navigate(to: destination)
+        push_navigate(socket, to: destination)
     end)
   end
 

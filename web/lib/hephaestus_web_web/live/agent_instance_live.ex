@@ -8,14 +8,17 @@ defmodule HephaestusWebWeb.AgentInstanceLive do
   @stream_mode :page_scoped
 
   @events [
+    "add-brokered-rule-copy",
     "create-attachment",
     "set-attachment",
     "remove-attachment",
+    "remove-brokered-rule-copy",
     "revise-instance",
     "revise-capabilities",
     "create-update",
     "recover-update",
     "bind-secret",
+    "create-mailbox",
     "control-mailbox"
   ]
 
@@ -35,17 +38,14 @@ defmodule HephaestusWebWeb.AgentInstanceLive do
       |> assign(:page_state, state)
       |> assign(:presentation, AgentInstanceState.present(state))
       |> assign(:effect_task, nil)
+      |> assign(:watch_task, nil)
       |> assign(:snapshot_task, nil)
       |> assign(:cursor, state.cursor)
       |> assign(:stream_generation, state.stream_generation)
+      |> assign(:stream_mode, @stream_mode)
 
     if connected?(socket) do
-      {state, [_effect]} = AgentInstanceState.reduce(state, :load)
-
-      {:ok,
-       socket
-       |> sync_state(state)
-       |> PageStream.start_snapshot(AgentInstanceState)}
+      {:ok, PageStream.start_watch(socket, AgentInstanceState)}
     else
       {:ok, socket}
     end
@@ -68,6 +68,34 @@ defmodule HephaestusWebWeb.AgentInstanceLive do
         %{assigns: %{snapshot_task: %Task{ref: ref}}} = socket
       ),
       do: {:noreply, assign(socket, :snapshot_task, nil)}
+
+  def handle_info(
+        {:page_watch, generation, response},
+        %{assigns: %{page_state: %{stream_generation: generation}}} = socket
+      ) do
+    {socket, effects} = PageStream.reduce_watch(socket, AgentInstanceState, response)
+
+    {:noreply,
+     socket
+     |> sync_state(socket.assigns.page_state)
+     |> schedule_effects(effects)}
+  end
+
+  def handle_info(
+        {:page_watch_ended, generation, result},
+        %{assigns: %{page_state: %{stream_generation: generation}}} = socket
+      ) do
+    {socket, effects} = PageStream.reduce_ended(socket, AgentInstanceState, result)
+
+    {:noreply,
+     socket
+     |> sync_state(socket.assigns.page_state)
+     |> schedule_effects(effects)}
+  end
+
+  def handle_info({kind, _generation, _value}, socket)
+      when kind in [:page_watch, :page_watch_ended],
+      do: {:noreply, socket}
 
   def handle_info({ref, event}, %{assigns: %{effect_task: %Task{ref: ref}}} = socket) do
     Process.demonitor(ref, [:flush])
@@ -110,6 +138,7 @@ defmodule HephaestusWebWeb.AgentInstanceLive do
   @impl true
   def terminate(_reason, socket) do
     cancel_effect(socket)
+    PageStream.cancel(socket.assigns[:watch_task])
     PageStream.cancel(socket.assigns[:snapshot_task])
     :ok
   end
@@ -132,6 +161,7 @@ defmodule HephaestusWebWeb.AgentInstanceLive do
         attachment_form={to_form(@presentation.forms.attachment, as: :attachment)}
         revision_form={to_form(@presentation.forms.revision, as: :revision)}
         update_form={to_form(@presentation.forms.update, as: :update)}
+        brokered_rule_copy_count={@presentation.brokered_rule_copy_count}
         binding_form={to_form(@presentation.forms.binding, as: :binding)}
         capability_form={to_form(@presentation.forms.capabilities, as: :capabilities)}
         organization_index_destination={@presentation.destinations[:organization_index]}
@@ -150,6 +180,7 @@ defmodule HephaestusWebWeb.AgentInstanceLive do
         create_update_event="create-update"
         recover_update_event="recover-update"
         bind_secret_event="bind-secret"
+        create_mailbox_event="create-mailbox"
         control_mailbox_event="control-mailbox"
       />
     </Layouts.app>
@@ -166,6 +197,9 @@ defmodule HephaestusWebWeb.AgentInstanceLive do
 
       :snapshot, socket ->
         PageStream.start_snapshot(socket, AgentInstanceState)
+
+      :replace_watch, socket ->
+        PageStream.start_watch(socket, AgentInstanceState, false)
 
       {:flash, kind, message}, socket ->
         put_flash(socket, kind, message)

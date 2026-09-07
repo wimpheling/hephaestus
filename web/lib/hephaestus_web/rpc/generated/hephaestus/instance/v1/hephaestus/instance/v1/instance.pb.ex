@@ -815,6 +815,24 @@ defmodule Hephaestus.Instance.V1.CreateUpdateRequest do
     type: Hephaestus.Common.V1.RuntimePolicy,
     json_name: "selectedPolicy"
   )
+
+  field(:brokered_rule_copies, 7,
+    repeated: true,
+    type: Hephaestus.Instance.V1.BrokeredRuleCopy,
+    json_name: "brokeredRuleCopies"
+  )
+end
+
+defmodule Hephaestus.Instance.V1.BrokeredRuleCopy do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.instance.v1.BrokeredRuleCopy",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:source_rule_id, 1, type: Hephaestus.Common.V1.OpaqueId, json_name: "sourceRuleId")
+  field(:candidate_rule_id, 2, type: Hephaestus.Common.V1.OpaqueId, json_name: "candidateRuleId")
 end
 
 defmodule Hephaestus.Instance.V1.CreateUpdateResponse do
@@ -1023,6 +1041,30 @@ defmodule Hephaestus.Instance.V1.ControlMailboxResponse do
   field(:receipt, 2, type: Hephaestus.Common.V1.MutationReceipt)
 end
 
+defmodule Hephaestus.Instance.V1.CreateMailboxRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.instance.v1.CreateMailboxRequest",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:context, 1, type: Hephaestus.Common.V1.RequestContext)
+  field(:instance_id, 2, type: Hephaestus.Common.V1.OpaqueId, json_name: "instanceId")
+end
+
+defmodule Hephaestus.Instance.V1.CreateMailboxResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.instance.v1.CreateMailboxResponse",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:mailbox_id, 1, type: Hephaestus.Common.V1.OpaqueId, json_name: "mailboxId")
+  field(:receipt, 2, type: Hephaestus.Common.V1.MutationReceipt)
+end
+
 defmodule Hephaestus.Instance.V1.AgentInstanceService.Service do
   @moduledoc false
 
@@ -1034,6 +1076,12 @@ defmodule Hephaestus.Instance.V1.AgentInstanceService.Service do
     :GetInstance,
     Hephaestus.Instance.V1.GetInstanceRequest,
     Hephaestus.Instance.V1.GetInstanceResponse
+  )
+
+  rpc(
+    :CreateMailbox,
+    Hephaestus.Instance.V1.CreateMailboxRequest,
+    Hephaestus.Instance.V1.CreateMailboxResponse
   )
 
   rpc(

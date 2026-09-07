@@ -1,6 +1,7 @@
 #!/usr/local/bin/python3
 """Released cooking loop. Provider credentials never enter this process."""
 import argparse
+import errno
 import html
 import json
 from pathlib import Path
@@ -190,6 +191,43 @@ def process(db, event, call, work, check=True):
     return identity
 
 
+def assert_guest_boundary():
+    """Check source mount mode, credential/Git paths, and direct network denial."""
+    source = Path('/workspace/repo/hugo.toml')
+    if not source.read_bytes():
+        raise RuntimeError('cooking source mount is unavailable')
+    try:
+        source.open('ab').close()
+    except OSError:
+        pass
+    else:
+        raise RuntimeError('cooking source mount is writable')
+    for path in (
+        '/run/hephaestus-secrets/model',
+        '/run/hephaestus-secrets/telegram_relay',
+        '/workspace/repo/.git/HEAD',
+    ):
+        try:
+            Path(path).read_bytes()
+        except OSError:
+            continue
+        raise RuntimeError('cooking agent accessed an undeclared resource')
+    try:
+        # TEST-NET-2 is reserved for documentation; only a policy-level
+        # network denial is accepted as proof of the broker-only profile.
+        with socket.create_connection(('198.51.100.1', 443), timeout=0.25):
+            pass
+    except OSError as error:
+        if error.errno not in (
+            errno.EACCES,
+            errno.ENETUNREACH,
+            errno.EPERM,
+        ):
+            raise RuntimeError('cooking agent network denial was not authoritative') from error
+        return
+    raise RuntimeError('cooking agent direct network access is enabled')
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--migrate', action='store_true')
@@ -203,6 +241,7 @@ def main():
     context = json.loads((control / 'context.json').read_bytes())
     if context['git_ref'] != 'refs/heads/main' or not context['commit_sha']:
         raise ValueError('exact blog target required')
+    assert_guest_boundary()
     if not (control / 'mailbox-body').exists():
         # An installation probe can validate the release without inventing recipe work.
         print('{"disposition":"installed"}')

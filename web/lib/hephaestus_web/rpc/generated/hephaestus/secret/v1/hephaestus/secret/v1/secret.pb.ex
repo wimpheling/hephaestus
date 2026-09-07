@@ -236,6 +236,7 @@ defmodule Hephaestus.Secret.V1.ImportSummary do
 
   field(:policy, 8, type: Hephaestus.Secret.V1.SecretPolicy)
   field(:expires_at, 9, type: Google.Protobuf.Timestamp, json_name: "expiresAt")
+  field(:active_version_id, 10, type: Hephaestus.Common.V1.OpaqueId, json_name: "activeVersionId")
 end
 
 defmodule Hephaestus.Secret.V1.ListProjectSecretsRequest do

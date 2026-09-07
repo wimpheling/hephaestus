@@ -25,6 +25,9 @@ pub enum ControlOutcome {
     AlreadyCompleted,
     /// Authorization denied the operation and the request was closed.
     Denied,
+    /// The requested operation was unsupported by the source and the request
+    /// was closed without creating a new run.
+    Rejected,
     /// The Git target moved and the proposal was marked conflicted.
     Conflicted,
 }

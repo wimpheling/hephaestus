@@ -3489,6 +3489,12 @@ pub struct ImportSummaryView<'a> {
     pub expires_at: ::buffa::MessageFieldView<
         ::buffa_types::google::protobuf::__buffa::view::TimestampView<'a>,
     >,
+    /// Opaque current version selected by the authorized project import.
+    ///
+    /// Field 10: `active_version_id`
+    pub active_version_id: ::buffa::MessageFieldView<
+        super::super::super::super::common::v1::__buffa::view::OpaqueIdView<'a>,
+    >,
     pub __buffa_unknown_fields: ::buffa::UnknownFieldsView<'a>,
 }
 impl<'a> ::buffa::MessageView<'a> for ImportSummaryView<'a> {
@@ -3655,6 +3661,27 @@ impl<'a> ::buffa::MessageView<'a> for ImportSummaryView<'a> {
                     }
                 }
             }
+            10u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                let __sub_ctx = ctx.descend()?;
+                let sub = ::buffa::types::borrow_bytes(&mut cur)?;
+                match view.active_version_id.as_mut() {
+                    Some(existing) => {
+                        ::buffa::MessageView::merge_into_view(existing, sub, __sub_ctx)?
+                    }
+                    None => {
+                        view.active_version_id = ::buffa::MessageFieldView::set(
+                            <super::super::super::super::common::v1::__buffa::view::OpaqueIdView as ::buffa::MessageView>::decode_view_ctx(
+                                sub,
+                                __sub_ctx,
+                            )?,
+                        );
+                    }
+                }
+            }
             _ => {
                 ::buffa::encoding::skip_field_depth(tag, &mut cur, ctx.depth())?;
                 let span_len = before_tag.len() - cur.len();
@@ -3717,6 +3744,14 @@ impl<'a> ::buffa::MessageView<'a> for ImportSummaryView<'a> {
                 Some(v) => {
                     ::buffa::MessageField::<
                         ::buffa_types::google::protobuf::Timestamp,
+                    >::some(v.to_owned_from_source(__buffa_src)?)
+                }
+                None => ::buffa::MessageField::none(),
+            },
+            active_version_id: match self.active_version_id.as_option() {
+                Some(v) => {
+                    ::buffa::MessageField::<
+                        super::super::super::super::common::v1::OpaqueId,
                     >::some(v.to_owned_from_source(__buffa_src)?)
                 }
                 None => ::buffa::MessageField::none(),
@@ -3790,6 +3825,14 @@ impl<'a> ::buffa::ViewEncode<'a> for ImportSummaryView<'a> {
                 += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
                     + inner_size;
         }
+        if self.active_version_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.active_version_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
         size
     }
@@ -3838,6 +3881,10 @@ impl<'a> ::buffa::ViewEncode<'a> for ImportSummaryView<'a> {
         if self.expires_at.is_set() {
             ::buffa::types::put_len_delimited_header(9u32, __cache.consume_next(), buf);
             self.expires_at.write_to(__cache, buf);
+        }
+        if self.active_version_id.is_set() {
+            ::buffa::types::put_len_delimited_header(10u32, __cache.consume_next(), buf);
+            self.active_version_id.write_to(__cache, buf);
         }
         self.__buffa_unknown_fields.write_to(buf);
     }
@@ -3895,6 +3942,12 @@ impl<'__a> ::serde::Serialize for ImportSummaryView<'__a> {
         {
             if let ::core::option::Option::Some(__v) = self.expires_at.as_option() {
                 __map.serialize_entry("expiresAt", __v)?;
+            }
+        }
+        {
+            if let ::core::option::Option::Some(__v) = self.active_version_id.as_option()
+            {
+                __map.serialize_entry("activeVersionId", __v)?;
             }
         }
         __map.end()
@@ -4046,6 +4099,17 @@ impl ImportSummaryOwnedView {
         ::buffa_types::google::protobuf::__buffa::view::TimestampView<'_>,
     > {
         &self.0.reborrow().expires_at
+    }
+    /// Opaque current version selected by the authorized project import.
+    ///
+    /// Field 10: `active_version_id`
+    #[must_use]
+    pub fn active_version_id(
+        &self,
+    ) -> &::buffa::MessageFieldView<
+        super::super::super::super::common::v1::__buffa::view::OpaqueIdView<'_>,
+    > {
+        &self.0.reborrow().active_version_id
     }
 }
 impl ::core::convert::From<::buffa::OwnedView<ImportSummaryView<'static>>>

@@ -28,7 +28,7 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.RunPageTest do
     end
   end
 
-  test "renders exact provenance, controls, review actions, timeline, and artifacts" do
+  test "renders retry for a forge request-backed run with exact provenance and controls" do
     assert @covered_states == [:loading, :error, :reconnecting, :ready]
 
     html = render_component(&RunPage.run/1, assigns())
@@ -50,12 +50,20 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.RunPageTest do
     assert html =~ ~s(href="/agents/agent-1")
   end
 
+  test "does not render retry for a mailbox originated run" do
+    html = render_component(&RunPage.run/1, put_in(assigns(), [:run, "retry_supported"], false))
+
+    refute html =~ ~s(data-testid="retry-run")
+    assert html =~ ~s(data-testid="cancel-run")
+  end
+
   defp assigns do
     run = %{
       "id" => "run-1234567890",
       "organization_name" => "Acme",
       "repository_name" => "Source",
       "attempt" => 1,
+      "retry_supported" => true,
       "agent_name" => "Cook",
       "state" => "running",
       "outcome" => nil,

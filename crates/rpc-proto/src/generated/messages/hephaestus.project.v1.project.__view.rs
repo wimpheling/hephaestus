@@ -2593,6 +2593,12 @@ pub struct InstanceSummaryView<'a> {
     pub last_run_at: ::buffa::MessageFieldView<
         ::buffa_types::google::protobuf::__buffa::view::TimestampView<'a>,
     >,
+    /// Current non-removed mailbox owned by this instance, when allocated.
+    ///
+    /// Field 18: `mailbox_id`
+    pub mailbox_id: ::buffa::MessageFieldView<
+        super::super::super::super::common::v1::__buffa::view::OpaqueIdView<'a>,
+    >,
     pub __buffa_unknown_fields: ::buffa::UnknownFieldsView<'a>,
 }
 impl<'a> ::buffa::MessageView<'a> for InstanceSummaryView<'a> {
@@ -2818,6 +2824,27 @@ impl<'a> ::buffa::MessageView<'a> for InstanceSummaryView<'a> {
                     }
                 }
             }
+            18u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                let __sub_ctx = ctx.descend()?;
+                let sub = ::buffa::types::borrow_bytes(&mut cur)?;
+                match view.mailbox_id.as_mut() {
+                    Some(existing) => {
+                        ::buffa::MessageView::merge_into_view(existing, sub, __sub_ctx)?
+                    }
+                    None => {
+                        view.mailbox_id = ::buffa::MessageFieldView::set(
+                            <super::super::super::super::common::v1::__buffa::view::OpaqueIdView as ::buffa::MessageView>::decode_view_ctx(
+                                sub,
+                                __sub_ctx,
+                            )?,
+                        );
+                    }
+                }
+            }
             10u32 => {
                 ::buffa::encoding::check_wire_type(
                     tag,
@@ -2914,6 +2941,14 @@ impl<'a> ::buffa::MessageView<'a> for InstanceSummaryView<'a> {
                 Some(v) => {
                     ::buffa::MessageField::<
                         ::buffa_types::google::protobuf::Timestamp,
+                    >::some(v.to_owned_from_source(__buffa_src)?)
+                }
+                None => ::buffa::MessageField::none(),
+            },
+            mailbox_id: match self.mailbox_id.as_option() {
+                Some(v) => {
+                    ::buffa::MessageField::<
+                        super::super::super::super::common::v1::OpaqueId,
                     >::some(v.to_owned_from_source(__buffa_src)?)
                 }
                 None => ::buffa::MessageField::none(),
@@ -3026,6 +3061,14 @@ impl<'a> ::buffa::ViewEncode<'a> for InstanceSummaryView<'a> {
                 += 2u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
                     + inner_size;
         }
+        if self.mailbox_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.mailbox_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 2u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
         size
     }
@@ -3094,6 +3137,10 @@ impl<'a> ::buffa::ViewEncode<'a> for InstanceSummaryView<'a> {
         if self.last_run_at.is_set() {
             ::buffa::types::put_len_delimited_header(17u32, __cache.consume_next(), buf);
             self.last_run_at.write_to(__cache, buf);
+        }
+        if self.mailbox_id.is_set() {
+            ::buffa::types::put_len_delimited_header(18u32, __cache.consume_next(), buf);
+            self.mailbox_id.write_to(__cache, buf);
         }
         self.__buffa_unknown_fields.write_to(buf);
     }
@@ -3189,6 +3236,11 @@ impl<'__a> ::serde::Serialize for InstanceSummaryView<'__a> {
         {
             if let ::core::option::Option::Some(__v) = self.last_run_at.as_option() {
                 __map.serialize_entry("lastRunAt", __v)?;
+            }
+        }
+        {
+            if let ::core::option::Option::Some(__v) = self.mailbox_id.as_option() {
+                __map.serialize_entry("mailboxId", __v)?;
             }
         }
         __map.end()
@@ -3395,6 +3447,17 @@ impl InstanceSummaryOwnedView {
         ::buffa_types::google::protobuf::__buffa::view::TimestampView<'_>,
     > {
         &self.0.reborrow().last_run_at
+    }
+    /// Current non-removed mailbox owned by this instance, when allocated.
+    ///
+    /// Field 18: `mailbox_id`
+    #[must_use]
+    pub fn mailbox_id(
+        &self,
+    ) -> &::buffa::MessageFieldView<
+        super::super::super::super::common::v1::__buffa::view::OpaqueIdView<'_>,
+    > {
+        &self.0.reborrow().mailbox_id
     }
 }
 impl ::core::convert::From<::buffa::OwnedView<InstanceSummaryView<'static>>>

@@ -33,6 +33,7 @@ defmodule HephaestusWebWeb.OrganizationWorkspaceLive do
   @impl true
   def handle_params(_params, _uri, socket), do: {:noreply, socket}
 
+  @impl true
   def handle_info({ref, event}, %{assigns: %{snapshot_task: %Task{ref: ref}}} = socket) do
     Process.demonitor(ref, [:flush])
     {state, effects} = OrganizationWorkspaceState.reduce(socket.assigns.page_state, event)

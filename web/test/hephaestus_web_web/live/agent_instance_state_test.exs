@@ -48,4 +48,34 @@ defmodule HephaestusWebWeb.AgentInstanceStateTest do
     assert effects == [{:flash, :info, "Secret binding activated"}]
     assert waiting.data.watch_required_receipts == [receipt]
   end
+
+  test "accepts optional empty rows and rejects malformed brokered copy IDs" do
+    assert AgentInstanceState.validate_brokered_rule_copies([
+             %{"source_rule_id" => "", "candidate_rule_id" => ""}
+           ]) == {:ok, []}
+
+    assert AgentInstanceState.validate_brokered_rule_copies([
+             %{
+               "source_rule_id" => "00000000-0000-4000-8000-000000000001",
+               "candidate_rule_id" => "not-a-uuid"
+             }
+           ]) == {:error, :invalid_brokered_rule_copies}
+  end
+
+  test "adds and removes bounded generic brokered copy rows" do
+    state = AgentInstanceState.new("instance-1")
+
+    {one, []} =
+      AgentInstanceState.reduce(state, {:interaction, "add-brokered-rule-copy", %{}})
+
+    {two, []} =
+      AgentInstanceState.reduce(one, {:interaction, "add-brokered-rule-copy", %{}})
+
+    assert AgentInstanceState.present(two).brokered_rule_copy_count == 2
+
+    {one_again, []} =
+      AgentInstanceState.reduce(two, {:interaction, "remove-brokered-rule-copy", %{}})
+
+    assert AgentInstanceState.present(one_again).brokered_rule_copy_count == 1
+  end
 end

@@ -1587,6 +1587,15 @@ pub struct InstanceSummary {
         skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
     )]
     pub last_run_at: ::buffa::MessageField<::buffa_types::google::protobuf::Timestamp>,
+    /// Current non-removed mailbox owned by this instance, when allocated.
+    ///
+    /// Field 18: `mailbox_id`
+    #[serde(
+        rename = "mailboxId",
+        alias = "mailbox_id",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub mailbox_id: ::buffa::MessageField<super::super::common::v1::OpaqueId>,
     #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
@@ -1611,6 +1620,7 @@ impl ::core::fmt::Debug for InstanceSummary {
             .field("attachment_count", &self.attachment_count)
             .field("run_count", &self.run_count)
             .field("last_run_at", &self.last_run_at)
+            .field("mailbox_id", &self.mailbox_id)
             .finish()
     }
 }
@@ -1736,6 +1746,14 @@ impl ::buffa::Message for InstanceSummary {
                 += 2u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
                     + inner_size;
         }
+        if self.mailbox_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.mailbox_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 2u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
         size
     }
@@ -1803,6 +1821,10 @@ impl ::buffa::Message for InstanceSummary {
         if self.last_run_at.is_set() {
             ::buffa::types::put_len_delimited_header(17u32, __cache.consume_next(), buf);
             self.last_run_at.write_to(__cache, buf);
+        }
+        if self.mailbox_id.is_set() {
+            ::buffa::types::put_len_delimited_header(18u32, __cache.consume_next(), buf);
+            self.mailbox_id.write_to(__cache, buf);
         }
         self.__buffa_unknown_fields.write_to(buf);
     }
@@ -1962,6 +1984,17 @@ impl ::buffa::Message for InstanceSummary {
                     ctx,
                 )?;
             }
+            18u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.mailbox_id.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
             _ => {
                 self.__buffa_unknown_fields
                     .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
@@ -1987,6 +2020,7 @@ impl ::buffa::Message for InstanceSummary {
         self.attachment_count = 0i64;
         self.run_count = 0i64;
         self.last_run_at = ::buffa::MessageField::none();
+        self.mailbox_id = ::buffa::MessageField::none();
         self.__buffa_unknown_fields.clear();
     }
 }
