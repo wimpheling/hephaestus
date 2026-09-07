@@ -34,7 +34,7 @@ remain required; demonstrated security defects remain blockers.
 | Runner and CI | Execute from a prepared clean checkout locally and in CI | Same documented entry point, explicit prerequisites, bounded execution, isolated resources, verified cleanup and retained diagnostics. Missing required capabilities fail rather than skip. |
 
 Implementation sequencing and recorded verification remain in the
-[remaining-work task](../../tasks/in-progress/mvp-05.1-complete-cooking-acceptance.md).
+[completed acceptance task](../../tasks/done/mvp-05.1-complete-cooking-acceptance.md).
 Each completed case must link executable assertions and verification evidence.
 CI success requires execution of its declared cases; an opt-in test returning
 early is not acceptance evidence.

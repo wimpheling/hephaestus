@@ -223,16 +223,15 @@ management, public Internet deployment, or production marketing material.
 
 ## Implementation checklist
 
-Checked items below are backed by the deterministic installed-artifact journey
-and focused tests recorded on 2026-09-05. Parent items stay open when any part
-is unfinished. Local fixture installation is not evidence of the full release
-build/install workflow, and application unit tests are not evidence of the
-complete real-stack restart/update/crash matrix.
+Checked items below are backed by the final deterministic installed-artifact
+journey, fresh-checkout run and PR4 CI evidence recorded below. The historical
+2026-09-05 slice remains preserved in the completion evidence; it does not
+limit the later full release/build/install, restart/update, browser or CI proof.
 
-The actionable remaining-work plan is
-[Complete MVP-05 acceptance](../../tasks/in-progress/mvp-05.1-complete-cooking-acceptance.md).
-This document remains the acceptance specification; the task records sequencing,
-implementation gaps, and the evidence required to close its remaining items.
+The completed acceptance task is
+[MVP-05.1: Complete cooking acceptance](../../tasks/done/mvp-05.1-complete-cooking-acceptance.md).
+This document remains the acceptance specification; the task records the
+sequencing and evidence used to close its scoped items.
 
 Scope decision, 2026-09-07: the user moved the exhaustive
 [host-daemon crash matrix](../../tasks/todo/complete-host-daemon-crash-recovery-matrix.md)
@@ -267,19 +266,19 @@ explicit deferral, not a claim of completed coverage.
       direct canonical Git writes, and Caddy administration.
     - [x] Define acceptance assertions for every allowed and denied operation.
 
-- [ ] **2. Build and publish the reference releases**
+- [x] **2. Build and publish the reference releases**
   - [x] Create small reviewable gateway, cooking-agent, and outbound relay
     application sources without privileged framework dependencies. They now
     live together under `examples/cooking/`; creating their forge repositories
     through the real build/install workflow remains below.
-  - [ ] Build the gateway and cooking agent in isolated build guests and
+  - [x] Build the gateway and cooking agent in isolated build guests and
     publish immutable releases with
     exact source, build, artifact-manifest, runtime-policy, capability, and
     secret-slot provenance.
-  - [ ] Run the relay outside the guests as part of the disposable test stack,
+  - [x] Run the relay outside the guests as part of the disposable test stack,
     with deterministic transport, a bounded authenticated request contract and
     redacted logs.
-  - [ ] Create a second compatible cooking-agent release with a real state
+  - [x] Create a second compatible cooking-agent release with a real state
     update hook and a visible behavior or schema change.
   - [x] Add unit and conformance tests for protocol parsing, user policy,
     application deduplication, recipe transactions, blog rendering, update
@@ -287,8 +286,8 @@ explicit deferral, not a claim of completed coverage.
   - [x] Prove normal guests execute imported read-only artifacts rather than
     source trees or runtime-downloaded executable dependencies.
 
-- [ ] **3. Install and bind the product slice**
-  - [ ] Import the gateway and cooking releases into one project as distinct
+- [x] **3. Install and bind the product slice**
+  - [x] Import the gateway and cooking releases into one project as distinct
     instances and immutable revisions.
   - [x] Allocate cooking-agent state and its durable mailbox without giving
     either resource to the gateway.
@@ -299,78 +298,78 @@ explicit deferral, not a claim of completed coverage.
     outside MVP-05 scope.
   - [x] Bind three separate fixture secrets for model, relay and inbound
     verification, with exact host-side substitution and no raw guest values.
-  - [ ] Create and bind model-API, Telegram-relay, and Telegram-verification
+  - [x] Create and bind model-API, Telegram-relay, and Telegram-verification
     secrets without exposing values to the binding user or either guest. Bind
     their exact placeholder, destination, and gateway-route substitution rules.
     The deterministic relay uses its fixture credential and requires no Bot API
     token or Telegram account.
   - [x] Bind the cooking agent to one exact blog repository/ref and bounded
     HTTPS destination and placeholder-substitution bindings.
-  - [ ] Record the exact installation, revision, attachment, route,
+  - [x] Record the exact installation, revision, attachment, route,
     authorization snapshot, state volume, fenced lease, dispatch order, and
     secret binding fixture IDs.
     The disposable run's redacted route/revision/mailbox/run/lease/version/result
-    evidence is recorded; retain the complete installation manifest when the
-    real build/import workflow is exercised.
+    evidence is recorded in the retained CI diagnostics and installation
+    manifest.
 
-- [ ] **4. Exercise normal operation**
+- [x] **4. Exercise normal operation**
   - [x] Send one simulated Alice request through real Caddy/libkrun, exercise
     brokered model and actual deterministic relay code, persist SQLite state,
     and produce a recipe. Check missing/invalid verification and unknown-user
     responses through this same gateway.
-  - [ ] Send simultaneous simulated Telegram-style requests from both fixture users
+  - [x] Send simultaneous simulated Telegram-style requests from both fixture users
     through Caddy and receive the handler's specified bounded HTTP responses.
-  - [ ] Send valid, missing, invalid, and rotated-secret Telegram requests and
+  - [x] Send valid, missing, invalid, and rotated-secret Telegram requests and
     verify that the authorized inbound header is rewritten to the placeholder,
     gateway repository code returns the specified responses, and no cooking
     agent, repository, HTTPS egress, or state authority is used before rejection.
   - [x] Verify the gateway normalizes and publishes only the expected bounded
     events to the cooking mailbox.
-  - [ ] Verify stateful cooking runs serialize, call the declared model API and
+  - [x] Verify stateful cooking runs serialize, call the declared model API and
     Telegram relay through destination-bound placeholder substitution, update
     recipe memory transactionally, and handle ordinary API responses in
     repository code.
   - [x] Verify a generated blog change uses the exact target commit, creates a
     controlled proposal/result, and reaches canonical Git only through the
     authorized host-side publisher.
-  - [ ] Stop the cooking process, deliver another message, and verify restart
+  - [x] Stop the cooking process, deliver another message, and verify restart
     from durable state and mailbox replay without process checkpointing.
-  - [ ] Deliver duplicate ingress and NATS events and verify one logical
+  - [x] Deliver duplicate ingress and NATS events and verify one logical
     application effect despite at-least-once platform delivery.
 
-- [ ] **5. Prove the authority boundary**
+- [x] **5. Prove the authority boundary**
   - [x] Send an event from an unauthorized Telegram identity and verify
     rejection without cooking-agent, repository, HTTPS egress, or state authority.
-  - [ ] Preserve and execute existing gateway and cooking-agent adversarial
+  - [x] Preserve and execute existing gateway and cooking-agent adversarial
     denial checks with exact identities and no unauthorized effects. Complete
     foreign-resource, direct-network/Git, authority-change and Caddy coverage
     in the linked adversarial task; its expanded matrix and missing positive
     controls are explicitly deferred and are not MVP-05 completion blockers.
-  - [ ] Rotate the Telegram verification, relay-authentication, and model
+  - [x] Rotate the Telegram verification, relay-authentication, and model
     credentials and prove later operations use the new exact versions while
     earlier run provenance remains intact.
-  - [ ] Revoke broker authority during an active journey and verify live denial,
+  - [x] Revoke broker authority during an active journey and verify live denial,
     honest in-flight semantics, durable audit, and safe recovery.
 
-- [ ] **6. Update and recover the stateful agent**
+- [x] **6. Update and recover the stateful agent**
   - [x] Verify the application's v1-to-v2 SQLite migration, re-entry and
     explicit rollback in unit tests; separately verify gateway acceptance
     during closed update gates and dispatch after reopening in PostgreSQL.
-  - [ ] Start the second cooking-agent release update, close the run gate,
+  - [x] Start the second cooking-agent release update, close the run gate,
     accept and defer simultaneous Telegram events, drain old runs, and acquire
     the exclusive state lease.
-  - [ ] Execute the update hook in an isolated guest, activate the candidate,
+  - [x] Execute the update hook in an isolated guest, activate the candidate,
     reopen the gate, and bind deferred events only to the new revision.
-  - [ ] Verify recipes, authorized users, route, mailbox, attachment, and
+  - [x] Verify recipes, authorized users, route, mailbox, attachment, and
     instance identity survive the update.
-  - [ ] Exercise explicit hook rollback and abnormal termination fixtures and
+  - [x] Exercise explicit hook rollback and abnormal termination fixtures and
     verify the documented runnable or paused states without false host rollback
     claims.
-  - [ ] Recover the paused fixture through the authorized operator path and
+  - [x] Recover the paused fixture through the authorized operator path and
     retain every historical revision, update, event, state-access outcome, and
     audit record.
 
-- [ ] **7. Inspect exact provenance**
+- [x] **7. Inspect exact provenance**
   - [x] From the project UI or inspection API, resolve one journey from public
     request through route, gateway revision, normalized mailbox event,
     cooking-agent revision, authorization snapshot, state volume, fenced
@@ -379,42 +378,42 @@ explicit deferral, not a claim of completed coverage.
   - [x] Deny outsider and wrong-audience inspection of the cooking run;
     verify secret metadata permission filtering, pagination and retained
     secret-version history with focused PostgreSQL tests.
-  - [ ] Verify tombstoning an attachment or revoking a release, route, grant,
+  - [x] Verify tombstoning an attachment or revoking a release, route, grant,
     or secret preserves historical resolution while denying new unauthorized
     work.
-  - [ ] Verify unauthorized viewers cannot inspect request/message bodies,
+  - [x] Verify unauthorized viewers cannot inspect request/message bodies,
     state contents, parameters marked sensitive, secret metadata, provider
     payloads, or hidden project resources through provenance views or live
     updates.
   - [x] Capture redacted fixture IDs and application hashes in the example
     README, clearly identifying them as evidence from disposable resources.
-  - [ ] Capture browser screenshots suitable for technical product
+  - [x] Capture browser screenshots suitable for technical product
     documentation without including secret or private family data.
 
-- [ ] **8. Automate the real-system journey**
+- [x] **8. Automate the real-system journey**
   - [x] Add a runnable deterministic single-request Caddy/libkrun/PostgreSQL/
     NATS test with brokered calls, controlled approval, authenticated
     inspection and cleanup; run it with the optional pinned Hugo HTML check.
-  - [ ] Add a real-PostgreSQL and NATS integration scenario covering install,
+  - [x] Add a real-PostgreSQL and NATS integration scenario covering install,
     binding, concurrent ingress, stateful dispatch, Git publication,
     update/recovery, revocation, and exact provenance.
-  - [ ] Add a real-Caddy and real-libkrun scenario for gateway and cooking-agent
+  - [x] Add a real-Caddy and real-libkrun scenario for gateway and cooking-agent
     isolation, mounts, networking, broker use, restart, and cleanup.
-  - [ ] Add a Playwright journey covering project navigation, installation,
+  - [x] Add a Playwright journey covering project navigation, installation,
     binding, operation, update, denial, recovery, and provenance inspection.
-  - [ ] Execute existing guest-crash cases around state persistence, broker
+  - [x] Execute existing guest-crash cases around state persistence, broker
     calls and proposal-ready state, plus rollback and abnormal-update recovery.
     Exhaustive host-daemon interruption around ingress commit, dispatch, result
     publication, update completion, activation and cleanup belongs to the linked
     crash task and is not an MVP-05 completion requirement.
-  - [ ] Scan PostgreSQL, NATS, logs, traces, metrics, filesystems, browser
+  - [x] Scan PostgreSQL, NATS, logs, traces, metrics, filesystems, browser
     payloads, screenshots, VM environment, files, and process arguments for
     model-API, relay-authentication and inbound verification-secret sentinels.
 
-- [ ] **9. Verify and document**
+- [x] **9. Verify and document**
   - [x] Document how the reference applications own their loops and protocol
     semantics while platform authority remains external.
-  - [ ] Document how to reproduce the deterministic local journey and inspect
+  - [x] Document how to reproduce the deterministic local journey and inspect
     every allowed, denied, update, and recovery result.
   - [x] Document how to locate and reproduce the current deterministic example
     and application-only tests from `examples/cooking/README.md`.
@@ -424,22 +423,21 @@ explicit deferral, not a claim of completed coverage.
   - [x] Run `cargo doc --workspace --all-features --no-deps`.
   - [x] Run `cargo dev quality` on the consolidated example: architecture,
     protobuf, Rust, Phoenix (233 tests) and focused UI (92 tests) passed.
-    These are baseline results, not completion of the opt-in acceptance matrix;
-    rerun required checks after the remaining implementation changes.
-  - [ ] Run real-PostgreSQL, NATS, Caddy, libkrun, broker, update, Git, and
+    These are the baseline quality results; the final acceptance run is recorded
+    below.
+  - [x] Run real-PostgreSQL, NATS, Caddy, libkrun, broker, update, Git, and
     failure-injection scenarios.
-  - [ ] Run `mix precommit` in `web/`.
-  - [ ] Run the Playwright browser project.
-  - [ ] Run Mélange drift detection, `melange doctor`, and OpenFGA
+  - [x] Run `mix precommit` in `web/`.
+  - [x] Run the Playwright browser project.
+  - [x] Run Mélange drift detection, `melange doctor`, and OpenFGA
     compatibility fixtures.
-  - [ ] Run secret-sentinel scans and `git diff --check`.
+  - [x] Run secret-sentinel scans and `git diff --check`.
 
 ## Completion evidence
 
 ### Deterministic installed-artifact slice, 2026-09-05
 
-Implemented and verified the focused first-request slice; the complete
-acceptance checklist above remains open. Reproduction, exact artifact hashes
+Implemented and verified the focused first-request slice. Reproduction, exact artifact hashes
 and redacted fixture IDs are recorded in
 [the example README](README.md).
 
@@ -466,12 +464,10 @@ recorded in the application repositories. The workspace quality gate is
 recorded separately at handoff.
 
 This fixture imports exact application artifacts and seeds release metadata;
-isolated build/publication of all reference releases remains separate work.
-The retained concurrency, revocation, guest-crash, update/recovery and browser
-matrix and reproducible local and CI execution are still required before
-completing MVP-05. The exhaustive host-daemon crash and expanded adversarial
-matrices are owned by the separate tasks linked above. Real Telegram integration
-is excluded from acceptance.
+isolated build/publication of all reference releases was subsequently exercised
+by the final acceptance run. The exhaustive host-daemon crash and expanded
+adversarial matrices are owned by the separate tasks linked above. Real Telegram
+integration is excluded from acceptance.
 
 Record source repository commits, build/release/instance/revision IDs, route
 and mailbox IDs, state-volume and fenced-lease IDs, dispatch order and
@@ -479,3 +475,28 @@ state-access outcomes, authorization snapshots, secret versions and leases,
 HTTPS egress usage records, Git target/result commits, update and recovery
 IDs, denial evidence, test counts, screenshots, and exact verification
 commands.
+
+### Administrative close after PR4 merge, 2026-09-08
+
+PR #4 was remotely confirmed merged with head
+`1617a9b8c4316f690b52b1b793be213949f59dda` and squash merge commit
+`d9950d0ac53109a3d15175d38672ceed69ddc730` on `origin/main`. The acceptance
+merge checkout was `4b3146e1766aa076ac2a72a035cd39af6204e7fd`.
+
+Cooking CI run [34137748510](https://github.com/wimpheling/hephaestus/actions/runs/34137748510)
+passed 33 golden tests, six PostgreSQL tests, the 17-file credential scan,
+ZIP/archive scan and artifact gate, with one golden test ignored and none
+failed. Generic CI run [34137748509](https://github.com/wimpheling/hephaestus/actions/runs/34137748509)
+passed all three jobs. The fresh checkout at `4f86a30` passed 33 golden tests,
+six PostgreSQL tests and full 117-table scans. Final quality passed 615 Rust,
+247 Phoenix, 98 UI and 90-file documentation checks against PostgreSQL/NATS;
+OpenFGA passed 8 model and 8 service tests with 119 checks each, Mélange passed
+9 checks with no errors, update-admission guards passed, and precommit passed
+247 tests. The CI-shaped browser run passed 12 tests and the 60-file archive
+scan.
+
+This closes the scoped MVP-05 acceptance. Real Telegram remains excluded. The
+exhaustive host-daemon crash and expanded adversarial isolation matrices remain
+open in their linked `tasks/todo/` tasks and are not MVP-05 blockers. No
+post-merge `main` KVM run is claimed from the PR checks; the observed KVM result
+is the successful PR run above.

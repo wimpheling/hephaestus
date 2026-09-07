@@ -18,7 +18,7 @@ require them to assemble everything before receiving value.
 
 ## 1. Close the MVP-05 acceptance gaps
 
-- [ ] Complete [MVP-05.1: cooking acceptance](in-progress/mvp-05.1-complete-cooking-acceptance.md),
+- [x] Complete [MVP-05.1: cooking acceptance](done/mvp-05.1-complete-cooking-acceptance.md),
   including real builds and installation, multi-request operation, updates,
   recovery, retained security and guest-crash coverage, deterministic transport,
   browser evidence, and reproducible local and CI execution. Real Telegram is
@@ -26,8 +26,8 @@ require them to assemble everything before receiving value.
   [host-daemon crash matrix](todo/complete-host-daemon-crash-recovery-matrix.md)
   and [expanded adversarial isolation matrix](todo/complete-adversarial-isolation-e2e-matrix.md)
   into follow-ups on 2026-09-07; they are not MVP-05 completion blockers.
-- [ ] Preserve the distinction between the verified first-request proof and
-  remaining acceptance requirements; record any agreed scope changes explicitly.
+- [x] Preserve the distinction between the verified first-request proof and
+  remaining acceptance requirements; record the agreed scope changes explicitly.
 
 Do not introduce broad infrastructure merely to finish the scenario. Its
 existing task remains the source of truth for detailed acceptance and tests.

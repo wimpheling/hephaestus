@@ -15,27 +15,28 @@ code does not execute on the prepared self-hosted machine.
 
 The workflow is exercised from a same-repository pull request. The authoritative
 current result is the [PR #4 checks page](https://github.com/wimpheling/hephaestus/pull/4/checks);
-this page owns the final CI outcome and must be green before acceptance is
-declared. A reproducible setup uses a fresh checkout, the checksum-verified
-official GitHub Actions Linux x64 runner v2.337.0, an ephemeral `heph-kvm`
-registration,
-and the repository variable below. Runner IDs, online state and temporary
+PR #4 is merged and its checks are green. A reproducible setup uses a fresh
+checkout, the checksum-verified official GitHub Actions Linux x64 runner
+v2.337.0, an ephemeral `heph-kvm` registration, and the repository variable
+below. Runner IDs, online state and temporary
 registration directories are operational details, not lasting prerequisites.
 
 The fresh-checkout local run at commit `4f86a30` passed 33 golden tests with no
 failures and one ignored test, plus all six PostgreSQL tests and the retained
-secret scans. One real KVM CI execution completed, uploaded diagnostics and
-exposed a mailbox projection race that is now bounded by a focused correction.
-The generic browser journey passed all 12 tests, while its HTML report's step
-metadata leaked a request-only fixture and therefore failed the archive scanner.
-Native input automation and a CI-shaped local run of those 12 tests, including
-the 60-file archive scan, now pass. A second CI validation is tracked on the PR
-checks page; do not infer a green CI result before that page reports it.
+117-table secret scans. Cooking CI run [34137748510](https://github.com/wimpheling/hephaestus/actions/runs/34137748510)
+passed 33 golden tests, six PostgreSQL tests, the 17-file credential scan,
+ZIP/archive scan and artifact gate. Generic CI run [34137748509](https://github.com/wimpheling/hephaestus/actions/runs/34137748509)
+passed all three jobs. The CI-shaped browser run passed all 12 tests and its
+60-file archive scan.
 
-The latest quality evidence (`quality05`) passed Rust 615 tests, Phoenix 247
-tests, UI 98 tests and rustdoc for 90 files, with the actual PostgreSQL/NATS
-services. The supplementary authorization, update-admission and Phoenix
-precommit checks also passed.
+The final quality evidence in `/tmp/heph-mvp05-quality-final-07.log`
+(`quality07`) passed Rust 615 tests, Phoenix 247 tests, UI 98 tests and
+documentation for 90 files, with the actual PostgreSQL/NATS services. The
+supplementary authorization, update-admission and Phoenix precommit checks
+also passed.
+
+The observed KVM result is the successful PR run above. No post-merge `main`
+KVM job is claimed from PR checks alone.
 
 Configure the repository variable `HEPHAESTUS_COOKING_RUNNER_ENV` with the
 absolute path of an operator-maintained shell environment file outside the

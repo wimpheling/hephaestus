@@ -36,7 +36,7 @@ quality checks, review and evidence reconciliation. Neither deferred task is
 being declared implemented or verified. Historical entries below describe the
 scope and evidence at the time; this decision governs current acceptance.
 
-## Verified baseline
+## Historical verified baseline (initial slice, 2026-09-05)
 
 Commit `c5c7a8b` contains the applications and installed-artifact proof. The
 real-stack test executes one request through Caddy, separate gateway and agent
@@ -50,7 +50,7 @@ builds, ordinary installation, browser operation or
 the entire failure/update matrix. Existing generic subsystem tests are useful
 prerequisites but do not close the cooking-specific acceptance requirements.
 
-## Feature assessment and boundaries
+## Historical feature assessment and boundaries (before closure)
 
 | Area | Current assessment |
 | --- | --- |
@@ -72,95 +72,95 @@ The relay runs externally; the existing short-lived gateway contract suffices.
 The [E2E matrix](../../examples/cooking/TEST-MATRIX.md) records the required
 triggers and observable outcomes. Keep implementation and evidence aligned with it.
 
-- [ ] **0. Establish reproducible execution and CI**
+- [x] **0. Establish reproducible execution and CI**
   - [x] Verify runtime prerequisites and repeatable pinned image preparation.
   - [x] Provide one local/CI entry point with bounded timeouts, isolated resources,
     cleanup and redacted retained diagnostics.
-  - [ ] Run the existing cooking journey on a CI runner with real libkrun/KVM.
-  - [ ] Expand that job with the remaining matrix as implemented; fail on missing
+  - [x] Run the existing cooking journey on a CI runner with real libkrun/KVM.
+  - [x] Expand that job with the remaining matrix as implemented; fail on missing
     required capabilities and report actual executed cases.
 
-- [ ] **1. Exercise real builds and installation**
-  - [ ] Provide repeatable preparation of separate forge source repositories
+- [x] **1. Exercise real builds and installation**
+  - [x] Provide repeatable preparation of separate forge source repositories
     from the example folders, preserving their exact source revisions and
     offline dependencies. Keep example source canonical in this repository.
-  - [ ] Push gateway and agent sources through the existing forge/build path,
+  - [x] Push gateway and agent sources through the existing forge/build path,
     run isolated builds, publish immutable releases, and record source/build/
     artifact/policy hashes. Do not directly insert release/build rows for this proof.
-  - [ ] Import and configure the releases through supported authorized
+  - [x] Import and configure the releases through supported authorized
     operations; bind distinct gateway/agent principals, mailbox, state, route,
     exact blog ref and the three secret uses. Record the operations and IDs.
     Gateway configuration must create an immutable runtime revision with typed
     parameters and exact inbound secret bindings under current authority.
     Retain previous revisions; never write a tenant secret-version placeholder
     into the canonical source declaration or mutate an old revision in place.
-  - [ ] Build the blog with the declared pinned Hugo image and retain the
+  - [x] Build the blog with the declared pinned Hugo image and retain the
     immutable HTML artifact through the existing release/artifact workflow.
     Verify authorized retrieval; the temporary host Hugo check is insufficient
     evidence for that workflow. Do not silently introduce a new hosting service.
-  - [ ] Publish v1 and a compatible v2 candidate with the actual update hook,
+  - [x] Publish v1 and a compatible v2 candidate with the actual update hook,
     plus a deliberate rollback candidate, using ordinary release operations.
 
-- [ ] **2. Extend deterministic multi-request operation**
+- [x] **2. Extend deterministic multi-request operation**
   - [x] Send concurrent Alice/Bob updates through the actual gateway and verify
     both acknowledgements, normalized envelopes and serialized state effects.
-  - [ ] Replay ingress and broker deliveries; inspect SQLite, relay ledger and
+  - [x] Replay ingress and broker deliveries; inspect SQLite, relay ledger and
     Git proposals to distinguish one logical recipe from retried physical calls.
-  - [ ] Stop/restart the agent and then the supervisor, submit later work, and
+  - [x] Stop/restart the agent and then the supervisor, submit later work, and
     prove recovery uses persisted state and delivery records alone.
-  - [ ] Exercise competing recipe proposals and stale branch heads; preserve
+  - [x] Exercise competing recipe proposals and stale branch heads; preserve
     exact input commits and explicit conflicts rather than silently discarding
     another recipe or widening Git authority.
 
-- [ ] **3. Prove upgrade and recovery through the platform**
-  - [ ] Close the v1 run gate during update, accept simultaneous incoming
+- [x] **3. Prove upgrade and recovery through the platform**
+  - [x] Close the v1 run gate during update, accept simultaneous incoming
     events, drain existing work and run the v2 hook under the exclusive lease.
-  - [ ] Verify the migrated recipes/schema, activation, unchanged instance/
+  - [x] Verify the migrated recipes/schema, activation, unchanged instance/
     mailbox/route identities, and deferred work selecting v2 only on dispatch.
-  - [ ] Exercise explicit application rollback and abnormal termination;
+  - [x] Exercise explicit application rollback and abnormal termination;
     verify the expected runnable versus paused compatibility-unknown states.
-  - [ ] Recover through authorized operator/API operations and verify all
+  - [x] Recover through authorized operator/API operations and verify all
     historical runs, revisions, leases, update decisions and results remain
     inspectable. Do not claim host rollback of application-owned state.
 
-- [ ] **4. Verify retained authority and guest-crash coverage**
-  - [ ] Run the existing executable adversarial and denied-authority checks
+- [x] **4. Verify retained authority and guest-crash coverage**
+  - [x] Run the existing executable adversarial and denied-authority checks
     without weakening assertions. The expanded resource-isolation matrix and
     missing positive controls belong to the linked adversarial follow-up.
-  - [ ] Rotate inbound, model and relay credentials and revoke authority
+  - [x] Rotate inbound, model and relay credentials and revoke authority
     during active operations; verify bounded denial, later-version selection
     and historical exact-version inspection without retroactive authority.
-  - [ ] Run the existing guest-crash cases around SQLite persistence, model/
+  - [x] Run the existing guest-crash cases around SQLite persistence, model/
     relay calls and proposal-ready state, plus rollback and abnormal update
     recovery. Retain exact retry and outcome assertions. Exhaustive host-daemon
     interruption around ingress, dispatch, import, activation and cleanup
     belongs to the linked crash-matrix follow-up.
-  - [ ] Tombstone/revoke attachment, release, route, grant and secret resources;
+  - [x] Tombstone/revoke attachment, release, route, grant and secret resources;
     verify retained authorized history and denial of new unauthorized work.
-  - [ ] Scan database/event storage, logs, traces, metrics, guest files/env/
+  - [x] Scan database/event storage, logs, traces, metrics, guest files/env/
     arguments and browser evidence for secret sentinels. Existing log/outbox
     checks cover only part of the required surfaces.
     Use distinct values for inbound, model, relay and rotated versions so
     endpoint assertions can detect a credential selected from the wrong binding.
 
-- [ ] **5. Exercise deterministic outbound failure handling**
-  - [ ] Inject relay failures and lost responses through deterministic transport
+- [x] **5. Exercise deterministic outbound failure handling**
+  - [x] Inject relay failures and lost responses through deterministic transport
     while exercising the real broker and relay application. Assert bounded
     outcomes, durable inspection and the documented retry/recovery behavior.
-  - [ ] Distinguish one logical application effect from retried physical calls;
+  - [x] Distinguish one logical application effect from retried physical calls;
     do not infer exactly-once external delivery from a local idempotency ledger.
 
-- [ ] **6. Browser acceptance and final evidence**
-  - [ ] Extend the existing Playwright management journey for cooking
+- [x] **6. Browser acceptance and final evidence**
+  - [x] Extend the existing Playwright management journey for cooking
     installation/binding, operation, approval, provenance, denial, update and
     recovery. Reuse current pages and APIs; record concrete missing controls
     before implementing any UI extension.
-  - [ ] Capture redacted screenshots, exact source/release/runtime IDs, commands,
+  - [x] Capture redacted screenshots, exact source/release/runtime IDs, commands,
     counts, expected failures and recovery decisions in the example docs.
     The existing Playwright configuration retains traces on failure while the
     journey fills secret inputs. Cover retained trace action/network data in
     the sentinel scan; password masking and DOM assertions alone are insufficient.
-  - [ ] Update SCENARIO.md checkboxes only with matching verification evidence;
+  - [x] Update SCENARIO.md checkboxes only with matching verification evidence;
     document any agreed scope change explicitly instead of dropping assertions.
   - [x] Run Rust formatting, workspace all-target/all-feature Clippy,
     workspace all-feature tests and rustdoc, then `cargo dev quality`.
@@ -177,10 +177,11 @@ Baseline links: [scenario and recorded IDs](../../examples/cooking/README.md),
 [application checks](../../examples/cooking/cooking-agent/VERIFICATION.md),
 [authorized run inspection](../../docs/run-provenance-inspection.md).
 
-Append evidence by workstream as it completes. Keep this task in progress until
-the remaining acceptance requirements are met or explicitly rescoped by the
-user. New generic platform omissions discovered while exercising this task
-belong here when needed for acceptance; unrelated expansion belongs in separate tasks.
+The historical entries below retain the investigation record. The final
+administrative close records the evidence that satisfies the scoped MVP-05
+acceptance and the two explicit follow-up tasks that remain open.
+New generic platform omissions discovered while exercising this task belong
+here when needed for acceptance; unrelated expansion belongs in separate tasks.
 
 ### Deterministic outbound faults and stale approval, 2026-09-06
 
@@ -621,7 +622,7 @@ recovery audit is `/var/tmp/heph-scenario-recovery-20260907T041833/`. The
 deterministic no-real-Telegram scope and `AGENTS.md` methodology remain in
 force.
 
-### Current acceptance status, 2026-09-07
+### Historical acceptance status before PR4 rerun, 2026-09-07
 
 The fresh-checkout local run at commit `4f86a30` (`run03`) passed 33 golden
 tests with no failures and one ignored test, all six PostgreSQL tests, and the
@@ -637,5 +638,44 @@ request-only fixture into the report and failed the archive scanner. Native
 input automation and a CI-shaped local run of those 12 tests with the 60-file
 archive scanner now pass. A second CI validation is tracked on the
 [PR #4 checks page](https://github.com/wimpheling/hephaestus/pull/4/checks),
-which owns the final CI outcome; no green result is claimed before that page
-reports it.
+which owned the final CI outcome at that point; the later PR4 result is
+recorded below.
+
+### Administrative close after PR4 merge, 2026-09-08
+
+PR #4 is remotely confirmed `MERGED` with head
+`1617a9b8c4316f690b52b1b793be213949f59dda` and GitHub squash merge commit
+`d9950d0ac53109a3d15175d38672ceed69ddc730` on `origin/main`. The CI merge
+checkout used for the acceptance run was
+`4b3146e1766aa076ac2a72a035cd39af6204e7fd`, with parents
+`dc96b0be3d0b9d3d8d9dcc5e7aa1bd0c0aa85e73` and the PR head.
+
+Cooking CI run [34137748510](https://github.com/wimpheling/hephaestus/actions/runs/34137748510)
+completed successfully on the PR head: 33 golden tests passed, no tests
+failed, one remained ignored, and six PostgreSQL tests passed. Its retained
+evidence gate passed the 17-file credential scan, ZIP/archive scan and artifact
+checks. Generic CI run [34137748509](https://github.com/wimpheling/hephaestus/actions/runs/34137748509)
+completed successfully for all three jobs: cooking applications, live-review
+browser and Rust/authorization.
+
+The fresh local checkout at `4f86a30f279e5ea33789fdbc156485278eee2453`
+passed 33 golden tests, six PostgreSQL tests and full `117`-table secret scans.
+The final quality log `/tmp/heph-mvp05-quality-final-07.log` records 615 Rust,
+247 Phoenix and 98 UI tests, documentation for 90 files, and actual
+PostgreSQL/NATS services. Supplementary OpenFGA checks passed 8 model and 8
+service tests with 119 checks each; Mélange passed 9 checks with 0 errors;
+update-admission guards passed; and `mix precommit` passed 247 tests. The
+CI-shaped browser run passed 12 tests and its 60-file archive scan.
+
+These results close the scoped MVP-05.1 acceptance, including real builds and
+installation, concurrent/replayed operation, update and recovery, retained
+guest-crash and authority checks, deterministic outbound faults, browser
+evidence, secret confinement and local/CI execution. Real Telegram remains
+excluded. The exhaustive host-daemon crash matrix and expanded adversarial
+isolation matrix remain deliberately open in
+[`tasks/todo/complete-host-daemon-crash-recovery-matrix.md`](../todo/complete-host-daemon-crash-recovery-matrix.md)
+and
+[`tasks/todo/complete-adversarial-isolation-e2e-matrix.md`](../todo/complete-adversarial-isolation-e2e-matrix.md);
+their open checklists are not MVP-05 blockers. No post-merge `main` KVM run is
+claimed from the PR checks; the observed KVM result is the successful PR run
+above.

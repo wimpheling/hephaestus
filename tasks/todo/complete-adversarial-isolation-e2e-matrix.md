@@ -7,7 +7,7 @@ Owner: unassigned
 Complete adversarial gateway and agent isolation coverage against actual
 Hephaestus guests, authority boundaries and reachable fixture services. This
 work was explicitly split from
-[MVP-05 acceptance](../in-progress/mvp-05.1-complete-cooking-acceptance.md)
+[MVP-05 acceptance](../done/mvp-05.1-complete-cooking-acceptance.md)
 by the user on 2026-09-07. It is not a prerequisite for completing MVP-05.
 
 ## Locked decisions
