@@ -885,7 +885,10 @@ async function createOrganizationSecretAndGrant(
   await waitForLiveView(page);
   const create = page.locator("#create-organization-secret");
   await create.locator('input[name="secret[name]"]').fill("organization_token");
-  await create.locator('input[name="secret[value]"]').fill(`${secretSentinel}_org`);
+  await fillRequestOnlySecret(
+    create.locator('input[name="secret[value]"]'),
+    `${secretSentinel}_org`
+  );
   await create.locator('select[name="secret[modes][]"]').selectOption(["raw"]);
   await expect(create.locator('input[name="secret[name]"]')).toHaveValue("organization_token");
   expect(
@@ -946,13 +949,38 @@ async function acceptVisibleGrant(page: import("@playwright/test").Page, alias: 
   await expect(page.getByText("Live secret reference accepted.")).toBeVisible();
 }
 
+// Playwright's HTML reporter records fill arguments even with tracing off.
+// These request-only inputs precede manual tracing; native setter/events keep
+// the real form flow without credential-bearing step titles.
+async function fillRequestOnlySecret(
+  locator: import("@playwright/test").Locator,
+  value: string
+) {
+  await locator.evaluate((element, nextValue) => {
+    const prototype =
+      element instanceof HTMLTextAreaElement
+        ? HTMLTextAreaElement.prototype
+        : element instanceof HTMLInputElement
+          ? HTMLInputElement.prototype
+          : undefined;
+    const setter = prototype && Object.getOwnPropertyDescriptor(prototype, "value")?.set;
+    if (!setter) throw new Error("request-only secret control must be an input or textarea");
+    setter.call(element, nextValue);
+    element.dispatchEvent(new Event("input", {bubbles: true}));
+    element.dispatchEvent(new Event("change", {bubbles: true}));
+  }, value);
+}
+
 async function createProjectSecretGrantAndImport(
   page: import("@playwright/test").Page,
   fixture: Awaited<ReturnType<typeof loadFixture>>
 ) {
   const create = page.locator("#create-project-secret");
   await create.locator('input[name="secret[name]"]').fill("project_token");
-  await create.locator('input[name="secret[value]"]').fill(`${secretSentinel}_project`);
+  await fillRequestOnlySecret(
+    create.locator('input[name="secret[value]"]'),
+    `${secretSentinel}_project`
+  );
   await create.locator('select[name="secret[modes][]"]').selectOption(["brokered"]);
   await create.getByRole("button", {name: "Encrypt and create"}).click();
   await expect(page.getByText("Secret encrypted and stored.")).toBeVisible();

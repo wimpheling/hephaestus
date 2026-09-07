@@ -13,18 +13,29 @@ Phoenix service and Playwright journey against the cooking daemon.
 Automatic pull-request runs are limited to branches in this repository; fork
 code does not execute on the prepared self-hosted machine.
 
-The official GitHub Actions Linux x64 runner v2.337.0 has been checksum-verified
-and prepared in a private directory outside the checkout, but it is not
-registered. The repository runner-profile variable is not configured and this
-branch/workflow has not been pushed, so this remains prepared configuration,
-not evidence of a successful CI run. Runner registration and the first complete
-CI execution remain acceptance requirements.
+The workflow is exercised from a same-repository pull request. The authoritative
+current result is the [PR #4 checks page](https://github.com/wimpheling/hephaestus/pull/4/checks);
+this page owns the final CI outcome and must be green before acceptance is
+declared. A reproducible setup uses a fresh checkout, the checksum-verified
+official GitHub Actions Linux x64 runner v2.337.0, an ephemeral `heph-kvm`
+registration,
+and the repository variable below. Runner IDs, online state and temporary
+registration directories are operational details, not lasting prerequisites.
 
-The latest repository quality evidence is recorded as `quality04`: 61 rules
-plus two migration gates passed, with actual PostgreSQL/NATS services; the
-supplementary authorization, update-admission and Phoenix precommit checks also
-passed. Fresh-checkout execution and the first actual GitHub CI run remain
-pending.
+The fresh-checkout local run at commit `4f86a30` passed 33 golden tests with no
+failures and one ignored test, plus all six PostgreSQL tests and the retained
+secret scans. One real KVM CI execution completed, uploaded diagnostics and
+exposed a mailbox projection race that is now bounded by a focused correction.
+The generic browser journey passed all 12 tests, while its HTML report's step
+metadata leaked a request-only fixture and therefore failed the archive scanner.
+Native input automation and a CI-shaped local run of those 12 tests, including
+the 60-file archive scan, now pass. A second CI validation is tracked on the PR
+checks page; do not infer a green CI result before that page reports it.
+
+The latest quality evidence (`quality05`) passed Rust 615 tests, Phoenix 247
+tests, UI 98 tests and rustdoc for 90 files, with the actual PostgreSQL/NATS
+services. The supplementary authorization, update-admission and Phoenix
+precommit checks also passed.
 
 Configure the repository variable `HEPHAESTUS_COOKING_RUNNER_ENV` with the
 absolute path of an operator-maintained shell environment file outside the

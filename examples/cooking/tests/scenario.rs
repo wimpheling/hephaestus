@@ -1661,7 +1661,48 @@ async fn deliver_request(
     wait_for_event_run(pool, gateway, update_id).await
 }
 
+async fn wait_for_retried_attempt_completion(
+    pool: &sqlx::PgPool,
+    event_id: uuid::Uuid,
+    run_id: uuid::Uuid,
+) {
+    // `wait_for_event_run` observes the run cleanup transaction. The mailbox
+    // completion observer settles its exact attempt in a following transaction,
+    // so this assertion may briefly see the returned successful run's attempt
+    // as leased or running. Wait only for that known attempt to reach completed.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let state: Option<String> = sqlx::query_scalar(
+            "SELECT state FROM mailbox_delivery_attempts
+              WHERE event_id = $1 AND attempt_number = 2 AND run_id = $2",
+        )
+        .bind(event_id)
+        .bind(run_id)
+        .fetch_optional(pool)
+        .await
+        .expect("durable retry attempt projection");
+        match state.as_deref() {
+            Some("completed") => return,
+            Some("leased" | "running") => {}
+            Some(other) => panic!("retry attempt entered unexpected state: {other}"),
+            None => panic!("successful retry attempt identity is absent"),
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "successful retry attempt completion projection timed out"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
+
 async fn assert_retried_delivery(pool: &sqlx::PgPool, successful_run: CookingRun) {
+    wait_for_retried_attempt_completion(
+        pool,
+        successful_run.event_id,
+        successful_run.run_id.as_uuid(),
+    )
+    .await;
+
     let logical_attempts: i32 = sqlx::query_scalar(
         "SELECT logical_attempt_count FROM mailbox_deliveries WHERE event_id = $1",
     )

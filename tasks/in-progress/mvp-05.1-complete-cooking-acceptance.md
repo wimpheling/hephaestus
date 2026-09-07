@@ -14,9 +14,11 @@ MVP-05 tests Hephaestus capabilities using deterministic model and relay
 endpoints and simulated Telegram-style ingress. Real Telegram delivery, accounts,
 Bot API tokens and public Internet deployment are excluded, not deferred
 completion requirements. The suite must be reproducibly runnable locally and in
-CI. The runner implementation is in progress; the planned CI execution uses a
-temporary ephemeral `heph-kvm` runner on the current KVM-capable host. No actual
-GitHub CI execution has completed.
+CI. The workflow uses a temporary ephemeral `heph-kvm` runner on the current
+KVM-capable host. The authoritative current CI outcome is the
+[PR #4 checks page](https://github.com/wimpheling/hephaestus/pull/4/checks);
+runner IDs and online state are operational details rather than acceptance
+prerequisites.
 
 ## Scope decision and main-thread handoff, 2026-09-07
 
@@ -71,8 +73,8 @@ The [E2E matrix](../../examples/cooking/TEST-MATRIX.md) records the required
 triggers and observable outcomes. Keep implementation and evidence aligned with it.
 
 - [ ] **0. Establish reproducible execution and CI**
-  - [ ] Verify runtime prerequisites and repeatable pinned image preparation.
-  - [ ] Provide one local/CI entry point with bounded timeouts, isolated resources,
+  - [x] Verify runtime prerequisites and repeatable pinned image preparation.
+  - [x] Provide one local/CI entry point with bounded timeouts, isolated resources,
     cleanup and redacted retained diagnostics.
   - [ ] Run the existing cooking journey on a CI runner with real libkrun/KVM.
   - [ ] Expand that job with the remaining matrix as implemented; fail on missing
@@ -160,13 +162,13 @@ triggers and observable outcomes. Keep implementation and evidence aligned with 
     the sentinel scan; password masking and DOM assertions alone are insufficient.
   - [ ] Update SCENARIO.md checkboxes only with matching verification evidence;
     document any agreed scope change explicitly instead of dropping assertions.
-  - [ ] Run Rust formatting, workspace all-target/all-feature Clippy,
+  - [x] Run Rust formatting, workspace all-target/all-feature Clippy,
     workspace all-feature tests and rustdoc, then `cargo dev quality`.
-  - [ ] Run the explicit real-stack cooking, fault/update, deterministic relay and browser
+  - [x] Run the explicit real-stack cooking, fault/update, deterministic relay and browser
     scenarios; record optional test gates as executed or skipped, not simply green.
-  - [ ] Run `mix precommit`, Mélange drift/doctor and OpenFGA compatibility
+  - [x] Run `mix precommit`, Mélange drift/doctor and OpenFGA compatibility
     checks required by SCENARIO.md, and the complete sentinel scan.
-  - [ ] Run `git diff --check` for project-authored changes; preserve vendored
+  - [x] Run `git diff --check` for project-authored changes; preserve vendored
     dependency bytes and their Cargo checksums when upstream whitespace differs.
 
 ## Completion evidence
@@ -585,7 +587,7 @@ rejection passed four actual-role PostgreSQL tests, outsider gateway permission
 checks were fixed, and the browser journey plus positive Forge retry passed.
 These targeted results do not replace the failed Full56 result.
 
-### Latest joined-run status, Full59, 2026-09-07
+### Joined-run status, Full59 (historical), 2026-09-07
 
 Full59 completed the joined run with exit status 0: 32 golden tests passed, one
 test remained ignored, and the PostgreSQL slice passed all six tests. The run
@@ -618,3 +620,22 @@ The prior source-recovery incident remains recorded: the private checkpoint is
 recovery audit is `/var/tmp/heph-scenario-recovery-20260907T041833/`. The
 deterministic no-real-Telegram scope and `AGENTS.md` methodology remain in
 force.
+
+### Current acceptance status, 2026-09-07
+
+The fresh-checkout local run at commit `4f86a30` (`run03`) passed 33 golden
+tests with no failures and one ignored test, all six PostgreSQL tests, and the
+retained secret scans. Quality05 passed Rust 615 tests, Phoenix 247 tests, UI
+98 tests and rustdoc for 90 files against actual PostgreSQL/NATS services.
+Supplementary authorization, update-admission and Phoenix precommit checks also
+passed.
+
+One real CI execution ran, uploaded diagnostics and checked them. It exposed a
+mailbox projection race that is now bounded by a focused correction. Its
+generic browser journey passed all 12 tests, but HTML step metadata leaked a
+request-only fixture into the report and failed the archive scanner. Native
+input automation and a CI-shaped local run of those 12 tests with the 60-file
+archive scanner now pass. A second CI validation is tracked on the
+[PR #4 checks page](https://github.com/wimpheling/hephaestus/pull/4/checks),
+which owns the final CI outcome; no green result is claimed before that page
+reports it.
