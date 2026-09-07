@@ -309,6 +309,10 @@ export RUST_LOG="hephaestus_app=debug,git_http=debug,forge_service=debug,run_orc
 daemon_pid="$!"
 wait_for_url "${daemon_url}/healthz" "${fixture_root}/daemon.log"
 
+# Install the locked Phoenix asset dependencies on the host before the
+# isolated Phoenix setup container compiles its mounted asset tree.
+npm ci --prefix "${repo_root}/web/assets"
+
 # The repository may also be mounted by the persistent local server, so keep
 # one shared SELinux label across development containers.
 podman run --rm \

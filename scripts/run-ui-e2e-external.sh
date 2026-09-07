@@ -135,6 +135,10 @@ if missing:
     raise SystemExit("fixture manifest missing IDs: " + ", ".join(missing))
 PY
 
+# The Phoenix container mounts the host asset tree and must receive the
+# locked JavaScript dependencies before compiling its development bundles.
+npm ci --prefix "${repo_root}/web/assets" >/dev/null
+
 podman run --detach \
     --name "${web_container}" \
     --network host \
@@ -150,7 +154,7 @@ podman run --detach \
     --env HEPHAESTUS_BROWSER_OIDC_CLIENT_SECRET="${oidc_client_secret}" \
     --env HEPHAESTUS_BROWSER_OIDC_REDIRECT_URI="${web_url}/auth/oidc/callback" \
     docker.io/hexpm/elixir@sha256:4d96e2b972aafea313822843efc1076b33fa1a2633c4972c6118eb603120d464 \
-    sh -lc 'mix local.hex --force >/dev/null && mix deps.get >/dev/null && mix phx.server' \
+    sh -lc 'mix local.hex --force >/dev/null && mix deps.get >/dev/null && mix assets.setup && mix assets.build && mix phx.server' \
     >"${fixture_root}/web.log" 2>&1
 
 for _attempt in {1..600}; do
