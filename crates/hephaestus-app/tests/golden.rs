@@ -70,6 +70,18 @@ fn cooking_base_layout(layouts: &BTreeMap<String, PathBuf>, reference: &str) -> 
         .map(|(_, path)| path.clone())
 }
 
+fn cooking_base_layout_mount_roots(
+    layouts: &BTreeMap<String, PathBuf>,
+) -> Result<Vec<PathBuf>, (PathBuf, std::io::Error)> {
+    let mut roots = layouts
+        .values()
+        .map(|path| path.canonicalize().map_err(|error| (path.clone(), error)))
+        .collect::<Result<Vec<_>, _>>()?;
+    roots.sort_unstable();
+    roots.dedup();
+    Ok(roots)
+}
+
 #[test]
 fn cooking_base_layout_alias_requires_identical_image_digest() {
     let reviewed = format!(
@@ -84,6 +96,31 @@ fn cooking_base_layout_alias_requires_identical_image_digest() {
         Some(PathBuf::from("/reviewed/python"))
     );
     assert_eq!(cooking_base_layout(&layouts, &different), None);
+}
+
+#[test]
+fn cooking_base_layout_mount_roots_are_canonical_and_exact() {
+    let temporary = tempfile::tempdir().expect("golden temporary root");
+    let python = temporary.path().join("release/python/image");
+    let rust = temporary.path().join("release/rust/image");
+    std::fs::create_dir_all(&python).expect("python layout directory");
+    std::fs::create_dir_all(&rust).expect("rust layout directory");
+    let alias = temporary.path().join("release/python/../python/image");
+    let layouts = BTreeMap::from([
+        (String::from("python-a"), alias),
+        (String::from("python-b"), python.clone()),
+        (String::from("rust"), rust.clone()),
+    ]);
+
+    assert_eq!(
+        cooking_base_layout_mount_roots(&layouts).expect("canonical layout roots"),
+        vec![
+            python.canonicalize().expect("canonical python layout"),
+            rust
+        ]
+    );
+    let missing = BTreeMap::from([(String::from("missing"), temporary.path().join("absent"))]);
+    assert!(cooking_base_layout_mount_roots(&missing).is_err());
 }
 
 fn cooking_oci_worker_config(
@@ -578,21 +615,6 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
     };
 
     let mut backend_fixture = backend_fixture(&root).await;
-    if let VmBackendConfig::Libkrun(provider) = &mut backend_fixture.backend {
-        // The OCI job mounts only the reviewed, operator-owned base layout
-        // cache. Keep that cache an explicit provider allowlist root instead
-        // of broadening the fixture to the entire source workspace.
-        provider.mount_roots.push(
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../../.local/hephaestus/platform-images"),
-        );
-        // The one-shot OCI builder formats its private scratch disk under the
-        // fixture root; it must be a disk allowlist root as well as a worker
-        // filesystem root.
-        provider
-            .disk_roots
-            .push(root.join("repository-images/scratch"));
-    }
     let root_image = backend_fixture.root_image.clone();
     let mut root_images = BTreeMap::from([(
         String::from(ROOT_IMAGE),
@@ -666,6 +688,30 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
     } else {
         None
     };
+    let cooking_layout_mount_roots = cooking_worker
+        .as_ref()
+        .map(|worker| cooking_base_layout_mount_roots(&worker.runtime.image_layouts))
+        .transpose()
+        .unwrap_or_else(|(path, error)| {
+            panic!(
+                "canonicalize configured cooking OCI base layout {}: {error}",
+                path.display()
+            )
+        })
+        .unwrap_or_default();
+    if let VmBackendConfig::Libkrun(provider) = &mut backend_fixture.backend {
+        // The OCI job mounts only the reviewed, operator-owned base layouts
+        // supplied by its workflow manifest. Keep each configured layout an
+        // explicit provider allowlist root instead of guessing a source-tree
+        // cache path or broadening the fixture to the entire local root.
+        provider.mount_roots.extend(cooking_layout_mount_roots);
+        // The one-shot OCI builder formats its private scratch disk under the
+        // fixture root; it must be a disk allowlist root as well as a worker
+        // filesystem root.
+        provider
+            .disk_roots
+            .push(root.join("repository-images/scratch"));
+    }
     let secret_broker_socket = root.join("secret-broker.sock");
     let observer = if cooking_build_proof {
         assert!(
