@@ -45,7 +45,9 @@ impl PasstProcess {
         command
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            // Preserve startup diagnostics when passt exits before its
+            // socket/log can be inspected.
+            .stderr(Stdio::inherit());
 
         drop(reservations);
         let mut child = command.spawn().map_err(WorkerNetworkError::Spawn)?;
