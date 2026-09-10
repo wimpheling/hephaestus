@@ -38,6 +38,26 @@ also passed.
 The observed KVM result is the successful PR run above. No post-merge `main`
 KVM job is claimed from PR checks alone.
 
+## Disposable GCE KVM smoke
+
+The same workflow has a manual `cloud_mode` dispatch on `ubuntu-latest`. The
+`preflight` mode authenticates with the reviewed GitHub OIDC provider and reads
+the `europe-west1` `N2_CPUS` and `INSTANCES` quotas. It reports available quota
+but cannot prove zonal capacity. The `smoke` mode creates one Ubuntu 24.04
+`n2-standard-8` VM in `europe-west1-b` with nested virtualization, a 150 GB
+balanced persistent boot disk, an ephemeral external address, no service
+account or scopes, and a provider-enforced 45-minute `DELETE` lifetime. The
+disk is configured for automatic deletion. The VM receives only the exact
+workflow commit SHA and the checked-in startup script through metadata; no
+credentials or GitHub runner registration token is passed to it.
+
+Run `preflight` first from the `main` workflow, then use `smoke` only after the
+quota output and startup image have been reviewed. The cloud dispatch skips
+the self-hosted Cooking job. Push and pull-request behavior remains unchanged;
+pull-request OIDC is intentionally unavailable because the provider trusts
+only the immutable `main` workflow reference and `push`/`workflow_dispatch`
+events.
+
 Configure the repository variable `HEPHAESTUS_COOKING_RUNNER_ENV` with the
 absolute path of an operator-maintained shell environment file outside the
 checkout. It supplies the reviewed, digest-pinned Python and Rust guest images
