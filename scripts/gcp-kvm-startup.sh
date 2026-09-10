@@ -160,6 +160,7 @@ phase_pass
 
 phase_start cgroup-podman
 run_with_deadline systemd-run --unit="heph-gcp-kvm-preflight-${GITHUB_RUN_ID:-manual}" \
+  --expand-environment=no \
   --service-type=oneshot --wait --pipe --collect --property=Delegate=yes \
   --property=TasksMax=infinity --property=LimitNOFILE=65536 \
   --property=CPUAccounting=yes --property=MemoryAccounting=yes \
@@ -170,16 +171,16 @@ run_with_deadline systemd-run --unit="heph-gcp-kvm-preflight-${GITHUB_RUN_ID:-ma
   /bin/bash -Eeuo pipefail -c '
     candidate="/sys/fs/cgroup$(awk -F: '\''$1 == "0" { print $3 }'\'' /proc/self/cgroup)"
     test -d "$candidate" -a -w "$candidate" -a -w "$candidate/cgroup.subtree_control"
-    manager="$candidate/heph-bootstrap-manager-$$"
+    cgroup_type="$(<"$candidate/cgroup.type")"
+    printf "HEPH_GCP_KVM_CGROUP parent=%s type=%s\n" "$candidate" "$cgroup_type"
+    [[ "$cgroup_type" == domain ]]
+    manager="$candidate/heph-bootstrap-manager"
     mkdir "$manager"
-    cleanup() {
-      local result=0
-      printf "%s\n" "$$" >"$candidate/cgroup.procs" || result=1
-      rmdir "$manager" || result=1
-      return "$result"
-    }
-    trap cleanup EXIT
-    printf "%s\n" "$$" >"$manager/cgroup.procs"
+    # The shell remains in this delegated child until it exits. systemd owns
+    # the transient unit and removes the now-empty child; moving back after
+    # enabling domain controllers violates the cgroup v2 no-internal-process rule.
+    pid="$BASHPID"
+    printf "%s\n" "$pid" >"$manager/cgroup.procs"
     available="$(<"$candidate/cgroup.controllers")"
     for controller in cpu io memory pids; do
       [[ " $available " == *" $controller "* ]]
@@ -244,6 +245,7 @@ smoke_unit="heph-gcp-kvm-smoke-${GITHUB_RUN_ID:-manual}"
 smoke_log_dir="${evidence_root}/integration"
 install -d -m 0700 -o forge -g forge "$smoke_log_dir"
 run_with_deadline systemd-run --unit="$smoke_unit" --service-type=oneshot --wait --pipe --collect \
+  --expand-environment=no \
   --property=Delegate=yes --property=RuntimeMaxSec="$(remaining_seconds)s" \
   --property=TimeoutStopSec=30s --property=TasksMax=infinity --property=LimitNOFILE=65536 \
   --property=CPUAccounting=yes --property=MemoryAccounting=yes --property=TasksAccounting=yes \
@@ -259,16 +261,15 @@ run_with_deadline systemd-run --unit="$smoke_unit" --service-type=oneshot --wait
   /bin/bash -Eeuo pipefail -c '
     candidate="/sys/fs/cgroup$(awk -F: '\''$1 == "0" { print $3 }'\'' /proc/self/cgroup)"
     test -d "$candidate" -a -w "$candidate" -a -w "$candidate/cgroup.subtree_control"
-    manager="$candidate/heph-smoke-manager-$$"
+    cgroup_type="$(<"$candidate/cgroup.type")"
+    printf "HEPH_GCP_KVM_CGROUP parent=%s type=%s\n" "$candidate" "$cgroup_type"
+    [[ "$cgroup_type" == domain ]]
+    manager="$candidate/heph-smoke-manager"
     mkdir "$manager"
-    cleanup() {
-      local result=0
-      printf "%s\n" "$$" >"$candidate/cgroup.procs" || result=1
-      rmdir "$manager" || result=1
-      return "$result"
-    }
-    trap cleanup EXIT
-    printf "%s\n" "$$" >"$manager/cgroup.procs"
+    # Leave the shell in this child until exit; systemd removes the empty
+    # delegated child with the transient unit after the smoke returns.
+    pid="$BASHPID"
+    printf "%s\n" "$pid" >"$manager/cgroup.procs"
     available="$(<"$candidate/cgroup.controllers")"
     for controller in cpu io memory pids; do
       [[ " $available " == *" $controller "* ]]

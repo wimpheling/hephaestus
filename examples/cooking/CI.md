@@ -58,6 +58,14 @@ pull-request OIDC is intentionally unavailable because the provider trusts
 only the immutable `main` workflow reference and `push`/`workflow_dispatch`
 events.
 
+The first live smoke trial was [workflow run 34475684487](https://github.com/wimpheling/hephaestus/actions/runs/34475684487).
+It created the requested VM and reached the host package and account phases,
+then failed in the host cgroup/Podman preflight before any libkrun guest boot.
+The retained serial log recorded `HEPHAESTUS_GCP_KVM_SMOKE: FAIL` in the
+`cgroup-podman` phase. The cleanup step deleted the VM and confirmed it was
+absent. No guest or Cooking E2E pass is claimed. The preceding keyless quota
+preflight passed in [run 34475541692](https://github.com/wimpheling/hephaestus/actions/runs/34475541692).
+
 Configure the repository variable `HEPHAESTUS_COOKING_RUNNER_ENV` with the
 absolute path of an operator-maintained shell environment file outside the
 checkout. It supplies the reviewed, digest-pinned Python and Rust guest images
