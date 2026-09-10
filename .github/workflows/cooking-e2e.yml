@@ -2,6 +2,13 @@ name: Cooking E2E
 
 on:
   workflow_dispatch:
+    inputs:
+      cloud_mode:
+        description: 'Read quota, run the disposable smoke VM, or run Cooking'
+        required: true
+        type: choice
+        options: [preflight, smoke, cooking]
+        default: preflight
   pull_request:
   push:
     branches: [main]
@@ -10,12 +17,49 @@ permissions:
   contents: read
 
 concurrency:
-  group: cooking-kvm-${{ github.repository }}
+  group: ${{ (github.event_name == 'workflow_dispatch' && inputs.cloud_mode != 'cooking') && format('gcp-kvm-smoke-{0}', github.repository) || format('cooking-kvm-{0}', github.repository) }}
   cancel-in-progress: false
 
 jobs:
+  gcp-cloud:
+    if: ${{ github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && inputs.cloud_mode != 'cooking' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - id: auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093
+        with:
+          workload_identity_provider: projects/84572286146/locations/global/workloadIdentityPools/github-actions/providers/github
+          service_account: hephaestus-ci@hephaestus-508000.iam.gserviceaccount.com
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db
+        with:
+          version: '>= 390.0.0'
+      - name: Read quota or run disposable KVM smoke
+        env:
+          GCP_ZONE: europe-west1-b
+          GCP_SMOKE_LOG: ${{ runner.temp }}/gcp-kvm-smoke.log
+        run: bash scripts/gcp-kvm-smoke.sh "${{ inputs.cloud_mode }}"
+      - name: Cleanup disposable KVM VM
+        if: ${{ always() && inputs.cloud_mode == 'smoke' }}
+        env:
+          GCP_ZONE: europe-west1-b
+        run: bash scripts/gcp-kvm-smoke.sh cleanup
+      - name: Retain KVM smoke serial log
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: gcp-kvm-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/gcp-kvm-smoke.log
+          if-no-files-found: warn
+
   cooking:
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    if: ${{ (github.event_name != 'workflow_dispatch' || inputs.cloud_mode == 'cooking') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: [self-hosted, Linux, X64, heph-kvm]
     timeout-minutes: 30
     env:
