@@ -86,6 +86,12 @@ pull-request OIDC is intentionally unavailable because the provider trusts
 only the immutable `main` workflow reference and `push`/`workflow_dispatch`
 events.
 
+The read-only `cache-preflight` mode runs the same regional quota check and
+verifies the designated private Cooking cache object without creating a VM. If
+the object lookup fails, it prints the bounded provider error and up to 30
+visible object names from that bucket to help locate an upload or permission
+mistake.
+
 The same `main` manual dispatch also offers `gcp-cooking`. Before creating a
 paid VM it checks the private, checksum-pinned cache object
 `gs://hephaestus-508000-cooking-cache/cooking/heph-gcp-cooking-cache.tar.zst`

@@ -42,11 +42,27 @@ for metric,need in required.items():
 
 cache_preflight() {
   local object_uri="gs://${CACHE_BUCKET}/${CACHE_OBJECT}"
-  if ! gcloud storage objects describe "$object_uri" \
-      --project="$PROJECT_ID" --billing-project="$PROJECT_ID" >/dev/null 2>&1; then
-    die "required private Cooking cache object is unavailable: $object_uri"
+  local describe_output describe_status list_output list_status
+  if describe_output="$(gcloud storage objects describe "$object_uri" \
+      --project="$PROJECT_ID" --billing-project="$PROJECT_ID" 2>&1)"; then
+    printf 'Private Cooking cache object is present: %s\n' "$object_uri"
+    return 0
   fi
-  printf 'Private Cooking cache object is present: %s\n' "$object_uri"
+  describe_status=$?
+  printf 'Cache object lookup failed (exit=%s) for %s:\n' \
+    "$describe_status" "$object_uri" >&2
+  sed -n '1,20p' <<<"$describe_output" >&2
+  if list_output="$(gcloud storage objects list "gs://${CACHE_BUCKET}" \
+      --project="$PROJECT_ID" --billing-project="$PROJECT_ID" \
+      --format='value(name)' --limit=30 2>&1)"; then
+    printf 'Objects visible in the designated cache bucket (up to 30):\n' >&2
+    sed -n '1,30p' <<<"$list_output" >&2
+  else
+    list_status=$?
+    printf 'Designated cache bucket listing failed (exit=%s):\n' "$list_status" >&2
+    sed -n '1,20p' <<<"$list_output" >&2
+  fi
+  die "required private Cooking cache object is unavailable: $object_uri"
 }
 
 record_serial() {
@@ -228,8 +244,9 @@ smoke() {
 require_commands
 case "${1:-preflight}" in
   preflight) quota_preflight ;;
+  cache-preflight) quota_preflight; cache_preflight ;;
   smoke) quota_preflight; smoke smoke ;;
   gcp-cooking) quota_preflight; cache_preflight; smoke gcp-cooking ;;
   cleanup) cleanup_vm ;;
-  *) die 'usage: scripts/gcp-kvm-smoke.sh [preflight|smoke|gcp-cooking|cleanup]' ;;
+  *) die 'usage: scripts/gcp-kvm-smoke.sh [preflight|cache-preflight|smoke|gcp-cooking|cleanup]' ;;
 esac

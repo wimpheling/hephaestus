@@ -4,10 +4,10 @@ on:
   workflow_dispatch:
     inputs:
       cloud_mode:
-        description: 'Read quota, run the disposable smoke VM, run GCP Cooking, or run legacy Cooking'
+        description: 'Read quota, inspect the Cooking cache, run the disposable smoke VM, run GCP Cooking, or run legacy Cooking'
         required: true
         type: choice
-        options: [preflight, smoke, gcp-cooking, cooking]
+        options: [preflight, cache-preflight, smoke, gcp-cooking, cooking]
         default: preflight
       gcp_zone:
         description: 'GCE zone for the disposable smoke VM'
