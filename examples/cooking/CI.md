@@ -67,6 +67,18 @@ disconnected path during `accept4`. This flag is limited to the ephemeral
 profile; AppArmor documents its path-aliasing risk, so it is not a general
 host policy change.
 
+The same disposable-host bootstrap applies a compatibility patch to the pinned
+libkrun `v1.19.0` DHCP client. GCE gives the VM a `/32` address while its DHCP
+gateway is outside that prefix. `passt` advertises the RFC 3442 classless host
+route, but this libkrun client does not consume that option and its default
+route netlink request is rejected by Linux. The patch adds the gateway's
+link-scoped `/32` route before the default route, preserving the existing
+default-route path for ordinary subnets. It is applied only after verifying
+the immutable libkrun revision
+[`9932c4b59d8f891e60c6aba20d22ebb99ceaa8e2`](https://github.com/libkrun/libkrun/tree/9932c4b59d8f891e60c6aba20d22ebb99ceaa8e2/init)
+and fails closed if the expected source sites are not unique. The relevant
+implementation is [`init/dhcp.c` at libkrun `v1.19.0`](https://github.com/libkrun/libkrun/blob/v1.19.0/init/dhcp.c).
+
 Run `preflight` first from the `main` workflow, then use `smoke` only after the
 quota output and startup image have been reviewed. The cloud dispatch skips
 the self-hosted Cooking job. Push and pull-request behavior remains unchanged;

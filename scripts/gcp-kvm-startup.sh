@@ -11,6 +11,7 @@ readonly forge_uid=10001
 readonly forge_gid=10001
 readonly rust_version='1.88.0'
 readonly libkrun_tag='v1.19.0'
+readonly libkrun_revision_pin='9932c4b59d8f891e60c6aba20d22ebb99ceaa8e2'
 readonly libkrunfw_tag='v5.5.0'
 readonly passt_revision='386b5f5472b89769c025f5d5056348532a823b93'
 readonly passt_source_url='https://passt.top/passt'
@@ -516,7 +517,85 @@ phase_pass
 phase_start libkrun
 run_with_deadline "${forge_env[@]}" git clone --depth 1 --branch "$libkrun_tag" \
   https://github.com/libkrun/libkrun.git "$source_root/libkrun"
+[[ "$("${forge_env[@]}" git -C "$source_root/libkrun" rev-parse HEAD)" == "$libkrun_revision_pin" ]] ||
+  die 'libkrun source revision verification failed'
 libkrun_revision="$("${forge_env[@]}" git -C "$source_root/libkrun" rev-parse HEAD)"
+python3 - "$source_root/libkrun/init/dhcp.c" <<'PY'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+source = path.read_text()
+
+old_signature = '''static int mod_route4(int nl_sock, int iface_index, int cmd, struct in_addr gw)
+'''
+new_signature = '''/* Add a route with an optional directly-connected gateway. */
+static int mod_route4(int nl_sock, int iface_index, int cmd,
+                      struct in_addr dst, unsigned char prefix_len,
+                      struct in_addr gw)
+'''
+old_setup = '''    struct rtmsg *rtm;
+    struct in_addr dst = {.s_addr = INADDR_ANY};
+'''
+new_setup = '''    struct rtmsg *rtm;
+'''
+old_route_fields = '''    rtm->rtm_dst_len = 0;
+    rtm->rtm_src_len = 0;
+    rtm->rtm_tos = 0;
+    rtm->rtm_table = RT_TABLE_MAIN;
+    rtm->rtm_protocol = RTPROT_BOOT;
+    rtm->rtm_scope = RT_SCOPE_UNIVERSE;
+'''
+new_route_fields = '''    rtm->rtm_dst_len = prefix_len;
+    rtm->rtm_src_len = 0;
+    rtm->rtm_tos = 0;
+    rtm->rtm_table = RT_TABLE_MAIN;
+    rtm->rtm_protocol = RTPROT_BOOT;
+    rtm->rtm_scope = gw.s_addr == INADDR_ANY ? RT_SCOPE_LINK : RT_SCOPE_UNIVERSE;
+'''
+old_attributes = '''    add_rtattr(nlh, RTA_OIF, &iface_index, sizeof(iface_index));
+    add_rtattr(nlh, RTA_DST, &dst, sizeof(dst));
+    add_rtattr(nlh, RTA_GATEWAY, &gw, sizeof(gw));
+'''
+new_attributes = '''    add_rtattr(nlh, RTA_OIF, &iface_index, sizeof(iface_index));
+    add_rtattr(nlh, RTA_DST, &dst, sizeof(dst));
+    if (gw.s_addr != INADDR_ANY)
+        add_rtattr(nlh, RTA_GATEWAY, &gw, sizeof(gw));
+'''
+old_call = '''    if (mod_route4(nl_sock, iface_index, RTM_NEWROUTE, router) != 0) {
+        printf("couldn't add the default route provided by the DHCP server\\n");
+        return -1;
+    }
+'''
+new_call = '''    /* GCE presents the host as /32, so its off-subnet DHCP gateway needs
+     * an explicit link-scoped host route before installing the default. */
+    struct in_addr no_gateway = {.s_addr = INADDR_ANY};
+    if (router.s_addr != INADDR_ANY &&
+        (addr.s_addr & netmask.s_addr) != (router.s_addr & netmask.s_addr) &&
+        mod_route4(nl_sock, iface_index, RTM_NEWROUTE, router, 32,
+                   no_gateway) != 0) {
+        printf("couldn't add the DHCP gateway host route\\n");
+        return -1;
+    }
+    if (mod_route4(nl_sock, iface_index, RTM_NEWROUTE, no_gateway, 0,
+                   router) != 0) {
+        printf("couldn't add the default route provided by the DHCP server\\n");
+        return -1;
+    }
+'''
+for old, new in (
+    (old_signature, new_signature),
+    (old_setup, new_setup),
+    (old_route_fields, new_route_fields),
+    (old_attributes, new_attributes),
+    (old_call, new_call),
+):
+    count = source.count(old)
+    if count != 1:
+        raise SystemExit(f'expected pinned libkrun DHCP patch site was not unique: {count}')
+    source = source.replace(old, new)
+path.write_text(source)
+PY
 run_with_deadline "${forge_env[@]}" make --no-print-directory -C "$source_root/libkrun" BLK=1 NET=1 -j8
 run_with_deadline make --no-print-directory -C "$source_root/libkrun" BLK=1 NET=1 PREFIX=/usr/local install
 run_with_deadline ldconfig
