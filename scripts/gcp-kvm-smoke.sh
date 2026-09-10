@@ -47,8 +47,9 @@ cache_preflight() {
       --project="$PROJECT_ID" --billing-project="$PROJECT_ID" 2>&1)"; then
     printf 'Private Cooking cache object is present: %s\n' "$object_uri"
     return 0
+  else
+    describe_status=$?
   fi
-  describe_status=$?
   printf 'Cache object lookup failed (exit=%s) for %s:\n' \
     "$describe_status" "$object_uri" >&2
   sed -n '1,20p' <<<"$describe_output" >&2
