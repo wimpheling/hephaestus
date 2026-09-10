@@ -142,7 +142,23 @@ prepare_guest_root() {
         "${root}/usr/libexec/hephaestus/heph-init"
     install -D -m 0755 \
         "${repo_root}/target/${GUEST_TARGET}/release/heph-integration-check" \
-        "${root}/usr/libexec/hephaestus/integration-check"
+        "${root}/usr/libexec/hephaestus/integration-check.payload"
+    # libkrun's embedded DHCP setup runs before this workload. Keep the
+    # fixture diagnostic immediately before the check so a DNS failure records
+    # the resolver and route that the workload actually sees.
+    install -D -m 0755 /dev/stdin \
+        "${root}/usr/libexec/hephaestus/integration-check" <<'EOF'
+#!/bin/sh
+printf '%s\n' 'guest-network-diagnostics: nameservers'
+sed -n '/^[[:space:]]*nameserver[[:space:]]/p' /etc/resolv.conf 2>/dev/null | head -n 8
+printf '%s\n' 'guest-network-diagnostics: ipv4-routes'
+if [ -r /proc/net/route ]; then
+    sed -n '1,33p' /proc/net/route
+else
+    printf '%s\n' 'unavailable: /proc/net/route'
+fi
+exec "$(dirname "$0")/integration-check.payload" "$@"
+EOF
     grep -qE '(^|:)10001:' "${root}/etc/passwd" &&
         die "integration image already assigns guest UID 10001: ${root}"
     grep -qE '(^|:)10001:' "${root}/etc/group" &&
@@ -373,6 +389,13 @@ redact_diagnostics() {
 
 diagnostics_body() {
     printf 'libkrun integration failed; redacted service diagnostics:\n'
+    if [[ -n "${fixture_root}" && -d "${fixture_root}/runtime" ]]; then
+        printf 'guest passt logs (bounded):\n'
+        while IFS= read -r passt_log; do
+            printf '%s\n' "--- ${passt_log} (last 200 lines) ---"
+            tail -200 -- "${passt_log}" 2>&1 || true
+        done < <(find "${fixture_root}/runtime" -type f -name passt.log -print | sort | head -n 4)
+    fi
     for service in "${postgres_container_name}" "${nats_container_name}" "${zot_container_name}"; do
         [[ -n "${service}" ]] || continue
         if podman container exists "${service}" 2>/dev/null; then
