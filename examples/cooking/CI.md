@@ -95,6 +95,9 @@ mistake.
 The same `main` manual dispatch also offers `gcp-cooking`. Before creating a
 paid VM it checks the private, checksum-pinned cache object
 `gs://hephaestus-508000-cooking-cache/cooking/heph-gcp-cooking-cache.tar.zst`
+The reviewed archive SHA-256 is
+`0ed20efcc1aa019b79405d1eed626b13d4702019e9ceeba2bdde54e45ae29296`; the VM
+rejects any other bytes.
 using the CI service account and an explicit project billing/quota project. A
 missing or unreadable object stops the job before VM creation. When present,
 the VM uses `n2-standard-8` in `europe-west1-b`, the reviewed

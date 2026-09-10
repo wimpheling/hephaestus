@@ -9,7 +9,7 @@ umask 077
 readonly metadata_root='http://metadata.google.internal/computeMetadata/v1'
 readonly gcs_bucket='hephaestus-508000-cooking-cache'
 readonly gcs_object='cooking/heph-gcp-cooking-cache.tar.zst'
-readonly cache_sha256='0ed20efcc1aa0191b79405d1eed626b13d4702019e9ceeba2bdde54e45ae29296'
+readonly cache_sha256='0ed20efcc1aa019b79405d1eed626b13d4702019e9ceeba2bdde54e45ae29296'
 readonly forge_uid=10001
 readonly forge_gid=10001
 readonly work_root='/srv/hephaestus'
@@ -36,6 +36,12 @@ token_json=''
 token_header=''
 
 fail() { printf 'gcp-cooking-run: %s\n' "$*" >&2; return 1; }
+
+validate_sha256() {
+    local name="$1" value="$2"
+    [[ "$value" =~ ^[0-9a-f]{64}$ ]] ||
+        fail "$name must be exactly 64 lowercase hexadecimal characters"
+}
 
 [[ "$(id -u)" -eq 0 ]] || fail 'this helper must be invoked as root'
 [[ "$(id -u forge 2>/dev/null || true)" == "${forge_uid}" ]] ||
@@ -97,6 +103,7 @@ run_with_deadline() {
 }
 
 phase_start host-tools
+validate_sha256 cache_sha256 "$cache_sha256"
 for command in awk bash curl date find git grep install ldconfig podman python3 readlink sha256sum systemd-run tar timeout; do
     require_command "$command"
 done
@@ -215,8 +222,12 @@ run_with_deadline curl --fail --location --silent --show-error --retry 3 --retry
 rm -f -- "$token_json" "$token_header"
 token_json=''
 token_header=''
-[[ "$(sha256sum "$archive_path" | awk '{print $1}')" == "$cache_sha256" ]] ||
+actual_cache_sha256="$(sha256sum "$archive_path" | awk '{print $1}')"
+if [[ "$actual_cache_sha256" != "$cache_sha256" ]]; then
+    printf 'gcp-cooking-run: private Cooking cache checksum mismatch expected=%s actual=%s\n' \
+        "$cache_sha256" "$actual_cache_sha256" >&2
     fail 'private Cooking cache checksum mismatch'
+fi
 phase_pass
 
 phase_start cache-extract

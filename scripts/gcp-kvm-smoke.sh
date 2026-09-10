@@ -11,6 +11,11 @@ readonly MACHINE_TYPE="n2-standard-8"
 readonly DISK_SIZE="150GB"
 readonly CACHE_BUCKET="hephaestus-508000-cooking-cache"
 readonly CACHE_OBJECT="cooking/heph-gcp-cooking-cache.tar.zst"
+# These values come from the reviewed local cache archive uploaded for Cooking.
+# The preflight checks object metadata before any VM is created; the helper still
+# verifies the archive SHA-256 after download.
+readonly CACHE_SIZE_BYTES="1783474345"
+readonly CACHE_MD5_BASE64="di95x0b0Yqqt4RTyVUvb6A=="
 smoke_created=false
 smoke_name=""
 smoke_zone=""
@@ -42,10 +47,43 @@ for metric,need in required.items():
 
 cache_preflight() {
   local object_uri="gs://${CACHE_BUCKET}/${CACHE_OBJECT}"
-  local describe_output describe_status list_output list_status
+  local describe_output describe_status list_output list_status metadata_output
   if describe_output="$(gcloud storage objects describe "$object_uri" \
-      --project="$PROJECT_ID" --billing-project="$PROJECT_ID" 2>&1)"; then
-    printf 'Private Cooking cache object is present: %s\n' "$object_uri"
+      --project="$PROJECT_ID" --billing-project="$PROJECT_ID" \
+      --raw --format='json(name,size,md5Hash,generation)' 2>&1)"; then
+    if ! metadata_output="$(python3 -c '
+import json
+import sys
+
+object_name, expected_size, expected_md5 = sys.argv[1:]
+data = json.load(sys.stdin)
+if not isinstance(data, dict):
+    raise SystemExit("object metadata is not a JSON object")
+required = ("name", "size", "md5Hash", "generation")
+if any(key not in data for key in required):
+    raise SystemExit("object metadata is missing name, size, md5Hash, or generation")
+try:
+    size = int(data["size"])
+    generation = int(data["generation"])
+except (TypeError, ValueError):
+    raise SystemExit("object metadata size or generation is not an integer")
+md5_hash = data["md5Hash"]
+name = data["name"]
+if not isinstance(name, str) or not isinstance(md5_hash, str):
+    raise SystemExit("object metadata name or md5Hash is not a string")
+if name != object_name:
+    raise SystemExit("object metadata name does not match the reviewed object")
+if size != int(expected_size):
+    raise SystemExit(f"cache size mismatch: expected {expected_size}, got {size}")
+if md5_hash != expected_md5:
+    raise SystemExit(f"cache MD5 mismatch: expected {expected_md5}, got {md5_hash}")
+print(f"Private Cooking cache metadata: name={name} size={size} md5Hash={md5_hash} generation={generation}")
+' "$CACHE_OBJECT" "$CACHE_SIZE_BYTES" "$CACHE_MD5_BASE64" <<<"$describe_output")"; then
+      printf 'Cache object metadata validation failed for %s:\n' "$object_uri" >&2
+      sed -n '1,20p' <<<"$metadata_output" >&2
+      die 'private Cooking cache metadata does not match the reviewed local archive'
+    fi
+    printf '%s\n' "$metadata_output"
     return 0
   else
     describe_status=$?
