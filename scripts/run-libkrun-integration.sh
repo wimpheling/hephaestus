@@ -144,11 +144,29 @@ prepare_guest_root() {
         "${repo_root}/target/${GUEST_TARGET}/release/heph-integration-check" \
         "${root}/usr/libexec/hephaestus/integration-check.payload"
     # libkrun's embedded DHCP setup runs before this workload. Keep the
-    # fixture diagnostic immediately before the check so a DNS failure records
-    # the resolver and route that the workload actually sees.
+    # fixture diagnostic immediately before the check so a network failure
+    # records only bounded guest state that the workload actually sees.
     install -D -m 0755 /dev/stdin \
         "${root}/usr/libexec/hephaestus/integration-check" <<'EOF'
 #!/bin/sh
+krun_dhcp='absent'
+if [ -r /proc/cmdline ]; then
+    krun_dhcp="$(awk '{ for (i = 1; i <= NF; i++) { if ($i == "KRUN_DHCP=1") { print "1"; exit } if ($i ~ /^KRUN_DHCP=/) { print "other"; exit } } }' /proc/cmdline)"
+    krun_dhcp="${krun_dhcp:-absent}"
+fi
+printf '%s\n' "guest-network-diagnostics: KRUN_DHCP=${krun_dhcp}"
+printf '%s\n' 'guest-network-diagnostics: interfaces'
+if [ -d /sys/class/net ]; then
+    find /sys/class/net -mindepth 1 -maxdepth 1 -printf '%f\n' | sort | head -n 16
+else
+    printf '%s\n' 'unavailable: /sys/class/net'
+fi
+printf '%s\n' 'guest-network-diagnostics: proc-net-dev'
+if [ -r /proc/net/dev ]; then
+    sed -n '1,33p' /proc/net/dev
+else
+    printf '%s\n' 'unavailable: /proc/net/dev'
+fi
 printf '%s\n' 'guest-network-diagnostics: nameservers'
 sed -n '/^[[:space:]]*nameserver[[:space:]]/p' /etc/resolv.conf 2>/dev/null | head -n 8
 printf '%s\n' 'guest-network-diagnostics: ipv4-routes'
@@ -156,6 +174,18 @@ if [ -r /proc/net/route ]; then
     sed -n '1,33p' /proc/net/route
 else
     printf '%s\n' 'unavailable: /proc/net/route'
+fi
+printf '%s\n' 'guest-network-diagnostics: ipv4-addresses'
+if command -v ip >/dev/null 2>&1; then
+    ip -4 addr show 2>&1 | sed -n '1,80p'
+else
+    printf '%s\n' 'unavailable: ip command'
+fi
+printf '%s\n' 'guest-network-diagnostics: ipv4-route-command'
+if command -v ip >/dev/null 2>&1; then
+    ip -4 route show 2>&1 | sed -n '1,40p'
+else
+    printf '%s\n' 'unavailable: ip command'
 fi
 exec "$(dirname "$0")/integration-check.payload" "$@"
 EOF
