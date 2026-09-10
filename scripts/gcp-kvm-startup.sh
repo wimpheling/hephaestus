@@ -152,10 +152,26 @@ phase_start host-packages
 run_with_deadline apt-get update -qq
 run_with_deadline env DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends \
   bc bison build-essential ca-certificates clang cpio dwarves e2fsprogs flex \
-  fuse-overlayfs git libcap-ng-dev libelf-dev libfdt-dev libglib2.0-dev \
+  fuse-overlayfs git libcap-ng-dev libclang-dev libelf-dev libfdt-dev libglib2.0-dev \
   libncurses-dev libpixman-1-dev libseccomp-dev libslirp-dev libssl-dev \
-  libzstd-dev lld make musl-tools openssl patch patchelf perl podman \
+  libzstd-dev llvm-dev lld make musl-tools openssl patch patchelf perl podman \
   python3 python3-pyelftools rsync rustup slirp4netns passt tar uidmap xz-utils
+require_command llvm-config
+llvm_config_version="$(llvm-config --version)" || die 'llvm-config cannot report its version'
+llvm_prefix="$(llvm-config --prefix)" || die 'llvm-config cannot report its prefix'
+libclang_so="$(find "$llvm_prefix" -maxdepth 3 \( -type f -o -type l \) \
+  -name 'libclang.so*' -print -quit 2>/dev/null)"
+if [[ -z "$libclang_so" ]]; then
+  clang_path="$(readlink -f "$(command -v clang)")"
+  clang_prefix="$(dirname "$(dirname "$clang_path")")"
+  libclang_so="$(find "$clang_prefix" -maxdepth 3 \( -type f -o -type l \) \
+    -name 'libclang.so*' -print -quit 2>/dev/null)"
+fi
+[[ -n "$libclang_so" && -r "$libclang_so" ]] || die 'libclang shared library is unavailable'
+libclang_dir="$(dirname "$libclang_so")"
+forge_env+=("LIBCLANG_PATH=$libclang_dir")
+printf 'HEPH_GCP_KVM_LLVM llvm-config=%s version=%s libclang=%s\n' \
+  "$(command -v llvm-config)" "$llvm_config_version" "$libclang_so"
 phase_pass
 
 phase_start accounts
@@ -296,6 +312,7 @@ run_with_deadline systemd-run --unit="$smoke_unit" --service-type=oneshot --wait
   --working-directory="$checkout_root" --setenv=HOME=/home/forge \
   --setenv=XDG_RUNTIME_DIR=/run/user/10001 --setenv=RUSTUP_HOME=/home/forge/.rustup \
   --setenv=CARGO_HOME=/home/forge/.cargo \
+  --setenv=LIBCLANG_PATH="$libclang_dir" \
   --setenv=PATH=/home/forge/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
   --setenv=HEPH_GCP_SMOKE_SCRIPT="$checkout_root/scripts/run-libkrun-integration.sh" \
   --setenv=HEPH_GCP_SMOKE_IMAGE="$guest_image" \
