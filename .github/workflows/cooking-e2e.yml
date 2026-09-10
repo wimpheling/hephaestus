@@ -4,10 +4,10 @@ on:
   workflow_dispatch:
     inputs:
       cloud_mode:
-        description: 'Read quota, run the disposable smoke VM, or run Cooking'
+        description: 'Read quota, run the disposable smoke VM, run GCP Cooking, or run legacy Cooking'
         required: true
         type: choice
-        options: [preflight, smoke, cooking]
+        options: [preflight, smoke, gcp-cooking, cooking]
         default: preflight
   pull_request:
   push:
@@ -40,13 +40,13 @@ jobs:
       - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db
         with:
           version: '>= 390.0.0'
-      - name: Read quota or run disposable KVM smoke
+      - name: Read quota or run disposable GCE KVM mode
         env:
           GCP_ZONE: europe-west1-b
           GCP_SMOKE_LOG: ${{ runner.temp }}/gcp-kvm-smoke.log
         run: bash scripts/gcp-kvm-smoke.sh "${{ inputs.cloud_mode }}"
       - name: Cleanup disposable KVM VM
-        if: ${{ always() && inputs.cloud_mode == 'smoke' }}
+        if: ${{ always() && (inputs.cloud_mode == 'smoke' || inputs.cloud_mode == 'gcp-cooking') }}
         env:
           GCP_ZONE: europe-west1-b
         run: bash scripts/gcp-kvm-smoke.sh cleanup

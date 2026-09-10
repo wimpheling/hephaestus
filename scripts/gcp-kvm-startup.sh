@@ -20,12 +20,14 @@ readonly temporary_root="${work_root}/tmp"
 # HOME; keep its socket, pid, and log beneath this forge-owned subtree.
 readonly smoke_temporary_root='/tmp/hephaestus-libkrun'
 readonly evidence_root="${work_root}/evidence"
+readonly passt_preflight_path='/run/hephaestus/gcp-passt-preflight.sh'
 readonly guest_image='docker.io/library/ubuntu@sha256:52df9b1ee71626e0088f7d400d5c6b5f7bb916f8f0c82b474289a4ece6cf3faf'
 readonly log_file='/var/log/hephaestus/gcp-kvm-startup.log'
 
 phase='initializing'
 revision='unknown'
 trial_deadline=0
+test_mode='smoke'
 
 die() { printf 'gcp-kvm-startup: %s\n' "$*" >&2; return 1; }
 
@@ -38,10 +40,19 @@ finish() {
   local status=$?
   trap - EXIT
   if ((status == 0)); then
-    printf 'HEPHAESTUS_GCP_KVM_SMOKE: PASS\n'
+    if [[ "$test_mode" == gcp-cooking ]]; then
+      printf 'HEPHAESTUS_GCP_COOKING: PASS\n'
+    else
+      printf 'HEPHAESTUS_GCP_KVM_SMOKE: PASS\n'
+    fi
   else
-    printf 'HEPHAESTUS_GCP_KVM_SMOKE: FAIL phase=%s exit=%s revision=%s\n' \
-      "$phase" "$status" "$revision"
+    if [[ "$test_mode" == gcp-cooking ]]; then
+      printf 'HEPHAESTUS_GCP_COOKING: FAIL phase=%s exit=%s revision=%s\n' \
+        "$phase" "$status" "$revision"
+    else
+      printf 'HEPHAESTUS_GCP_KVM_SMOKE: FAIL phase=%s exit=%s revision=%s\n' \
+        "$phase" "$status" "$revision"
+    fi
   fi
   exit "$status"
 }
@@ -148,8 +159,13 @@ phase_start metadata
 require_command curl
 revision="${HEPHAESTUS_GCP_REVISION:-$(metadata_value github-sha)}"
 [[ "$revision" =~ ^[0-9a-f]{40}$ ]] || die 'github-sha must be an exact lowercase 40-character commit SHA'
+test_mode="$(metadata_value test-mode)"
+case "$test_mode" in
+  smoke|gcp-cooking) ;;
+  *) die 'test-mode must be smoke or gcp-cooking' ;;
+esac
 trial_deadline=$((SECONDS + 2400))
-marker ready
+marker "ready mode=$test_mode"
 
 phase_start host-packages
 run_with_deadline apt-get update -qq
@@ -258,6 +274,16 @@ run_with_deadline systemd-run --unit="heph-gcp-kvm-preflight-${GITHUB_RUN_ID:-ma
   '
 phase_pass
 
+phase_start passt-preflight
+install -d -m 0700 /run/hephaestus
+install -m 0700 /dev/null "$passt_preflight_path"
+metadata_value passt-preflight-script >"$passt_preflight_path"
+[[ -s "$passt_preflight_path" && ! -L "$passt_preflight_path" ]] ||
+  die 'passthrough preflight script is unavailable or symlinked'
+bash -n "$passt_preflight_path" || die 'passthrough preflight script has invalid shell syntax'
+run_with_deadline bash "$passt_preflight_path"
+phase_pass
+
 phase_start rust-toolchain
 run_with_deadline "${forge_env[@]}" rustup toolchain install "$rust_version" --profile minimal --no-self-update
 run_with_deadline "${forge_env[@]}" rustup default "$rust_version"
@@ -301,6 +327,16 @@ run_with_deadline "${forge_env[@]}" git -C "$checkout_root" fetch --depth 1 orig
 run_with_deadline "${forge_env[@]}" git -C "$checkout_root" checkout --detach "$revision"
 [[ "$("${forge_env[@]}" git -C "$checkout_root" rev-parse HEAD)" == "$revision" ]] || die 'checkout SHA mismatch'
 phase_pass
+
+if [[ "$test_mode" == gcp-cooking ]]; then
+  phase_start gcp-cooking
+  cooking_deadline_epoch=$(( $(date +%s) + $(remaining_seconds) ))
+  run_with_deadline env \
+    HEPH_GCP_COOKING_DEADLINE_EPOCH="$cooking_deadline_epoch" \
+    HEPH_GCP_RUN_ID="${GITHUB_RUN_ID:-manual}" \
+    "$checkout_root/scripts/gcp-cooking-run.sh"
+  phase_pass
+else
 
 phase_start real-libkrun-smoke
 smoke_unit="heph-gcp-kvm-smoke-${GITHUB_RUN_ID:-manual}"
@@ -349,5 +385,11 @@ run_with_deadline systemd-run --unit="$smoke_unit" --service-type=oneshot --wait
       "$HEPH_GCP_SMOKE_SCRIPT"
   '
 phase_pass
-printf 'HEPH_GCP_KVM_EVIDENCE revision=%s diagnostics=%s libkrun=%s libkrunfw=%s\n' \
-  "$revision" "$smoke_log_dir" "$libkrun_revision" "$libkrunfw_revision"
+fi
+if [[ "$test_mode" == gcp-cooking ]]; then
+  printf 'HEPH_GCP_COOKING_EVIDENCE revision=%s diagnostics=%s\n' \
+    "$revision" "${evidence_root}/cooking"
+else
+  printf 'HEPH_GCP_KVM_EVIDENCE revision=%s diagnostics=%s libkrun=%s libkrunfw=%s\n' \
+    "$revision" "$smoke_log_dir" "$libkrun_revision" "$libkrunfw_revision"
+fi

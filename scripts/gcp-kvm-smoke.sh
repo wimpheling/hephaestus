@@ -6,8 +6,11 @@ set -Eeuo pipefail
 readonly PROJECT_ID="hephaestus-508000"
 readonly REGION="europe-west1"
 readonly STARTUP_SCRIPT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/gcp-kvm-startup.sh"
+readonly PASST_PREFLIGHT_SCRIPT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/gcp-passt-preflight.sh"
 readonly MACHINE_TYPE="n2-standard-8"
 readonly DISK_SIZE="150GB"
+readonly CACHE_BUCKET="hephaestus-508000-cooking-cache"
+readonly CACHE_OBJECT="cooking/heph-gcp-cooking-cache.tar.zst"
 smoke_created=false
 smoke_name=""
 smoke_zone=""
@@ -35,6 +38,15 @@ for metric,need in required.items():
     if available < need: raise SystemExit(f"{metric} available quota {available:g} is below required {need}")' <<<"$quota_json" ||
     die 'regional quota is insufficient for the disposable smoke VM'
   printf 'Quota preflight passed for %s in %s; capacity is not guaranteed.\n' "$MACHINE_TYPE" "$REGION"
+}
+
+cache_preflight() {
+  local object_uri="gs://${CACHE_BUCKET}/${CACHE_OBJECT}"
+  if ! gcloud storage objects describe "$object_uri" \
+      --project="$PROJECT_ID" --billing-project="$PROJECT_ID" >/dev/null 2>&1; then
+    die "required private Cooking cache object is unavailable: $object_uri"
+  fi
+  printf 'Private Cooking cache object is present: %s\n' "$object_uri"
 }
 
 record_serial() {
@@ -83,7 +95,13 @@ if any(labels.get(k)!=v for k,v in expected.items()): raise SystemExit("ownershi
 }
 
 smoke() {
+  local mode="${1:-smoke}"
+  case "$mode" in
+    smoke|gcp-cooking) ;;
+    *) die "unsupported test mode: $mode" ;;
+  esac
   [[ -f "$STARTUP_SCRIPT" && ! -L "$STARTUP_SCRIPT" ]] || die "startup script is unavailable or symlinked: $STARTUP_SCRIPT"
+  [[ -f "$PASST_PREFLIGHT_SCRIPT" && ! -L "$PASST_PREFLIGHT_SCRIPT" ]] || die "passthrough preflight script is unavailable or symlinked: $PASST_PREFLIGHT_SCRIPT"
   [[ "${GITHUB_SHA:-}" =~ ^[0-9a-f]{40}$ ]] || die 'GITHUB_SHA must be the exact 40-character workflow commit SHA'
   smoke_zone="${GCP_ZONE:-europe-west1-b}"
   smoke_name="heph-kvm-smoke-${GITHUB_RUN_ID:-manual}-${GITHUB_RUN_ATTEMPT:-1}"
@@ -110,6 +128,13 @@ smoke() {
     printf '%s\n' "$inspect" >&2
     die "cannot establish that smoke VM name is absent: $smoke_name"
   fi
+  local identity_args=(--no-service-account --no-scopes)
+  if [[ "$mode" == gcp-cooking ]]; then
+    identity_args=(
+      --service-account="hephaestus-cooking-runtime@${PROJECT_ID}.iam.gserviceaccount.com"
+      --scopes=storage-ro
+    )
+  fi
   gcloud compute instances create "$smoke_name" \
     --project="$PROJECT_ID" --zone="$smoke_zone" --machine-type="$MACHINE_TYPE" \
     --network-interface=network=default,network-tier=PREMIUM \
@@ -117,16 +142,24 @@ smoke() {
     --boot-disk-size="$DISK_SIZE" --boot-disk-type=pd-balanced \
     --boot-disk-auto-delete --enable-nested-virtualization \
     --max-run-duration=45m --instance-termination-action=DELETE \
-    --maintenance-policy=TERMINATE --no-service-account --no-scopes \
+    --maintenance-policy=TERMINATE "${identity_args[@]}" \
     --labels="purpose=hephaestus-kvm-smoke,run_id=${GITHUB_RUN_ID:-manual},run_attempt=${GITHUB_RUN_ATTEMPT:-1},sha=$GITHUB_SHA" \
-    --metadata="github-sha=$GITHUB_SHA" --metadata-from-file="startup-script=$STARTUP_SCRIPT" || {
+    --metadata="test-mode=${mode},github-sha=$GITHUB_SHA" \
+    --metadata-from-file="startup-script=$STARTUP_SCRIPT,passt-preflight-script=$PASST_PREFLIGHT_SCRIPT" || {
       gcloud compute instances describe "$smoke_name" --project="$PROJECT_ID" --zone="$smoke_zone" >/dev/null 2>&1 && smoke_created=true
       die 'instance creation failed'
     }
   smoke_created=true
   local deadline=$((SECONDS + 2400)) serial='' last_serial=''
+  local pass_marker='^HEPHAESTUS_GCP_KVM_SMOKE: PASS$'
+  local fail_marker='^HEPHAESTUS_GCP_KVM_SMOKE: FAIL '
+  if [[ "$mode" == gcp-cooking ]]; then
+    pass_marker='^HEPHAESTUS_GCP_COOKING: PASS$'
+    fail_marker='^HEPHAESTUS_GCP_COOKING: FAIL '
+  fi
   while (( SECONDS < deadline )); do
     if serial="$(gcloud compute instances get-serial-port-output "$smoke_name" --project="$PROJECT_ID" --zone="$smoke_zone" --port=1 2>&1)"; then
+      serial="${serial//$'\r'/}"
       last_serial="$serial"
       record_serial "$serial"
     else
@@ -135,13 +168,18 @@ smoke() {
       sleep 10
       continue
     fi
-    if grep -q 'HEPHAESTUS_GCP_KVM_SMOKE: PASS' <<<"$serial"; then
-      printf 'KVM smoke passed for %s (%s); cleanup is automatic.\n' "$smoke_name" "$GITHUB_SHA"
+    if grep -q "$pass_marker" <<<"$serial"; then
+      printf 'GCE %s passed for %s (%s); cleanup is automatic.\n' "$mode" "$smoke_name" "$GITHUB_SHA"
       return 0
     fi
-    if grep -q 'HEPHAESTUS_GCP_KVM_SMOKE: FAIL' <<<"$serial"; then
+    if grep -q "$fail_marker" <<<"$serial"; then
       printf '%s\n' "$serial" | tail -80 >&2
       die 'startup smoke reported failure'
+    fi
+    if [[ "$mode" == gcp-cooking ]] &&
+        grep -q '^HEPHAESTUS_GCP_KVM_SMOKE: FAIL ' <<<"$serial"; then
+      printf '%s\n' "$serial" | tail -80 >&2
+      die 'common startup reported failure before Cooking helper'
     fi
     sleep 10
   done
@@ -152,7 +190,8 @@ smoke() {
 require_commands
 case "${1:-preflight}" in
   preflight) quota_preflight ;;
-  smoke) quota_preflight; smoke ;;
+  smoke) quota_preflight; smoke smoke ;;
+  gcp-cooking) quota_preflight; cache_preflight; smoke gcp-cooking ;;
   cleanup) cleanup_vm ;;
-  *) die 'usage: scripts/gcp-kvm-smoke.sh [preflight|smoke]' ;;
+  *) die 'usage: scripts/gcp-kvm-smoke.sh [preflight|smoke|gcp-cooking|cleanup]' ;;
 esac

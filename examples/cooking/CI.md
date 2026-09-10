@@ -58,6 +58,26 @@ pull-request OIDC is intentionally unavailable because the provider trusts
 only the immutable `main` workflow reference and `push`/`workflow_dispatch`
 events.
 
+The same `main` manual dispatch also offers `gcp-cooking`. Before creating a
+paid VM it checks the private, checksum-pinned cache object
+`gs://hephaestus-508000-cooking-cache/cooking/heph-gcp-cooking-cache.tar.zst`
+using the CI service account and an explicit project billing/quota project. A
+missing or unreadable object stops the job before VM creation. When present,
+the VM uses `n2-standard-8` in `europe-west1-b`, the reviewed
+`hephaestus-cooking-runtime` service account with the `storage-ro` scope, a
+150 GB balanced boot disk, nested virtualization, and the same 45-minute
+provider-enforced `DELETE` lifetime. The startup script downloads and verifies
+the cache, checks out the exact workflow SHA, and runs the complete Cooking
+path through the checked-out `scripts/gcp-cooking-run.sh` helper. Its deadline
+shares the startup script's original 40-minute budget; it is not reset after
+bootstrap. The smoke mode continues to use no service account and no scopes.
+
+The GCP Cooking path retains the serial console artifact and reports a
+dedicated `HEPHAESTUS_GCP_COOKING` marker. It does not yet export a browser
+diagnostic bundle from the disposable VM; the serial artifact is the retained
+cloud evidence. The existing `cooking` manual mode and automatic push and
+pull-request behavior continue to use the prepared self-hosted runner.
+
 The first live smoke trial was [workflow run 34475684487](https://github.com/wimpheling/hephaestus/actions/runs/34475684487).
 It created the requested VM and reached the host package and account phases,
 then failed in the host cgroup/Podman preflight before any libkrun guest boot.
