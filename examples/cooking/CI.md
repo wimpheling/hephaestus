@@ -58,6 +58,14 @@ builds the immutable upstream [`passt` commit
 [DHCP broadcast fix](https://passt.top/passt/commit/?id=c0fbc7ef2ae2919bf6162b4149d341f448289836). It diverts the packaged generic and
 AVX2 ELF files to root-owned `.distrib` paths and installs both fixed binaries
 at the existing `/usr/bin/passt` paths, preserving the profile attachment.
+The disposable host also overlays the packaged profile with the
+path-qualified `attach_disconnected.path=/tmp/hephaestus-libkrun` flag and
+`audit`, while retaining its rules and the narrow
+`owner /tmp/hephaestus-libkrun/** rw` rule. `passt` binds its control socket
+before pivoting into its sandbox, so AppArmor otherwise sees that socket as a
+disconnected path during `accept4`. This flag is limited to the ephemeral
+profile; AppArmor documents its path-aliasing risk, so it is not a general
+host policy change.
 
 Run `preflight` first from the `main` workflow, then use `smoke` only after the
 quota output and startup image have been reviewed. The cloud dispatch skips

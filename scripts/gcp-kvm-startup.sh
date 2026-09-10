@@ -439,10 +439,10 @@ cat >"$passt_local_profile_path" <<'EOF'
 owner /tmp/hephaestus-libkrun/** rw,
 EOF
 # Parse an overlay even when the packaged profile already has a local include:
-# this adds audit mode for this run while retaining every packaged rule and
-# every existing profile flag, including attach_disconnected.
+# this enables the disconnected-socket diagnostic for the dedicated runtime
+# tree while retaining every packaged rule and every existing profile flag.
 awk '
-  function with_audit(line, match_start, match_length, inside) {
+  function with_required_flags(line, match_start, match_length, inside) {
     if (line !~ /^[[:space:]]*profile[[:space:]]+passt([[:space:]]|$)/)
       return line
     profile_seen = 1
@@ -450,16 +450,20 @@ awk '
     if (match_start) {
       match_length = RLENGTH
       inside = substr(line, match_start + 7, match_length - 8)
+      if (inside !~ /(^|,)[[:space:]]*attach_disconnected([.]path)?([[:space:]]|=|,|$)/)
+        inside = inside ",attach_disconnected.path=/tmp/hephaestus-libkrun"
       if (inside !~ /(^|,)[[:space:]]*audit([[:space:]]|,|$)/)
-        line = substr(line, 1, match_start - 1) "flags=(" inside ",audit)" \
-          substr(line, match_start + match_length)
+        inside = inside ",audit"
+      line = substr(line, 1, match_start - 1) "flags=(" inside ")" \
+        substr(line, match_start + match_length)
     } else {
-      sub(/[[:space:]]*\{[[:space:]]*$/, " flags=(audit) {", line)
+      sub(/[[:space:]]*\{[[:space:]]*$/, \
+          " flags=(attach_disconnected.path=/tmp/hephaestus-libkrun,audit) {", line)
     }
     return line
   }
   {
-    lines[NR] = with_audit($0)
+    lines[NR] = with_required_flags($0)
   }
   /^[[:space:]]*#include( if exists)?[[:space:]]+<local\/usr\.bin\.passt>[[:space:]]*$/ {
     local_include_seen = 1
