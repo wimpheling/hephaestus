@@ -106,13 +106,23 @@ diagnostic bundle from the disposable VM; the serial artifact is the retained
 cloud evidence. The existing `cooking` manual mode and automatic push and
 pull-request behavior continue to use the prepared self-hosted runner.
 
-The first live smoke trial was [workflow run 34475684487](https://github.com/wimpheling/hephaestus/actions/runs/34475684487).
-It created the requested VM and reached the host package and account phases,
-then failed in the host cgroup/Podman preflight before any libkrun guest boot.
-The retained serial log recorded `HEPHAESTUS_GCP_KVM_SMOKE: FAIL` in the
-`cgroup-podman` phase. The cleanup step deleted the VM and confirmed it was
-absent. No guest or Cooking E2E pass is claimed. The preceding keyless quota
-preflight passed in [run 34475541692](https://github.com/wimpheling/hephaestus/actions/runs/34475541692).
+The first successful post-merge live smoke was [workflow run
+34525055454](https://github.com/wimpheling/hephaestus/actions/runs/34525055454)
+at commit `a8ee9bd803dbde6aef95fa75c1d63458004dfd30`. It ran for 14m57s in
+`europe-west1-d` and completed one real libkrun integration test with zero
+failures. That test covered the guest network assertions, the private HTTP
+gateway, and runtime/cgroup cleanup; the serial output reported
+`HEPHAESTUS_GCP_KVM_SMOKE: PASS`. The VM was independently confirmed absent
+after cleanup. The retained [serial artifact](https://github.com/wimpheling/hephaestus/actions/runs/34525055454/artifacts/10171404124)
+is the evidence record.
+
+This verifies the disposable KVM smoke path only. The full `gcp-cooking` path
+has not run successfully in GCP, and the private checksum-pinned Cooking cache
+object has not been confirmed present. Before that paid path, the operator
+must use the private Cloud Shell bootstrap artifact to maintain the reviewed
+project WIF and EUR budget setup, then upload the reviewed cache object at
+`gs://hephaestus-508000-cooking-cache/cooking/heph-gcp-cooking-cache.tar.zst`.
+The workflow checks that object before creating its Cooking VM.
 
 Configure the repository variable `HEPHAESTUS_COOKING_RUNNER_ENV` with the
 absolute path of an operator-maintained shell environment file outside the
