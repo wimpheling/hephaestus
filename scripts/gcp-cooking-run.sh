@@ -350,21 +350,77 @@ print('absolute workflow materialization: PASS')
 PY
 runtime_python_ref="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["runtime_image_references"]["HEPHAESTUS_LIBKRUN_UBUNTU_IMAGE"])' "$bundle_manifest")"
 runtime_rust_ref="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["runtime_image_references"]["HEPHAESTUS_LIBKRUN_RUST_BUILDER_IMAGE"])' "$bundle_manifest")"
-run_with_deadline runuser -u forge -- env HOME=/home/forge XDG_RUNTIME_DIR=/run/user/10001 PATH="$PATH" \
-    bash -Eeuo pipefail -c '
-        cache="$1"; py="$2"; rust="$3"; shift 3
+run_with_deadline systemd-run --unit="heph-gcp-cooking-images-${HEPH_GCP_RUN_ID:-manual}" \
+    --expand-environment=no --service-type=oneshot --wait --pipe --collect \
+    --property=Delegate=yes --property=RuntimeMaxSec="$(remaining_seconds)s" \
+    --property=TasksMax=infinity --property=LimitNOFILE=65536 \
+    --property=CPUAccounting=yes --property=MemoryAccounting=yes \
+    --property=TasksAccounting=yes --property=IOAccounting=yes \
+    --uid="$forge_uid" --gid="$forge_gid" \
+    --working-directory="$checkout_root" --setenv=HOME=/home/forge \
+    --setenv=XDG_RUNTIME_DIR=/run/user/10001 --setenv=PATH="$PATH" \
+    /bin/bash -Eeuo pipefail -c '
+        candidate="/sys/fs/cgroup$(awk -F: '\''$1 == "0" { print $3 }'\'' /proc/self/cgroup)"
+        test -d "$candidate" -a -w "$candidate" -a -w "$candidate/cgroup.subtree_control"
+        [[ "$(<"$candidate/cgroup.type")" == domain ]]
+        manager="$candidate/heph-cooking-images-manager"
+        mkdir "$manager"
+        # Move the shell into a child before enabling domain controllers so the
+        # delegated parent obeys the cgroup-v2 no-internal-process rule.
+        printf "%s\n" "$BASHPID" >"$manager/cgroup.procs"
+        available="$(<"$candidate/cgroup.controllers")"
+        for controller in cpu io memory pids; do [[ " $available " == *" $controller "* ]]; done
+        printf "+cpu +io +memory +pids\n" >"$candidate/cgroup.subtree_control"
+        enabled="$(<"$candidate/cgroup.subtree_control")"
+        for controller in cpu io memory pids; do [[ " $enabled " == *" $controller "* ]]; done
+        printf "HEPH_GCP_COOKING event=workflow-images-delegation status=pass parent=%s\n" "$candidate"
+        cache="$1"; py="$2"; rust="$3"
         import_one() {
-            local source="$1" destination="$2"
-            podman image exists "$destination" ||
+            local label="$1" source="$2" destination="$3" status digest
+            printf "HEPH_GCP_COOKING event=image-step phase=workflow-images command=podman-image-exists image=%s status=start\n" "$label"
+            set +e
+            podman image exists "$destination"
+            status=$?
+            set -e
+            if ((status == 0)); then
+                printf "HEPH_GCP_COOKING event=image-step phase=workflow-images command=podman-image-exists image=%s status=pass result=present\n" "$label"
+            elif ((status == 1)); then
+                printf "HEPH_GCP_COOKING event=image-step phase=workflow-images command=podman-image-exists image=%s status=pass result=absent\n" "$label"
+                printf "HEPH_GCP_COOKING event=image-step phase=workflow-images command=skopeo-copy image=%s status=start\n" "$label"
                 # containers-storage has no multi-image group destination; copy
                 # the accepted manifest and preserve its digest exactly.
-                skopeo copy --preserve-digests "$source" "containers-storage:$destination" >/dev/null
-            [[ "$(skopeo inspect --format "{{.Digest}}" "containers-storage:$destination")" == "${destination##*@}" ]]
+                set +e
+                podman unshare skopeo copy --preserve-digests "$source" "containers-storage:$destination" >/dev/null
+                status=$?
+                set -e
+                if ((status != 0)); then
+                    printf "HEPH_GCP_COOKING event=image-step phase=workflow-images command=skopeo-copy image=%s status=fail exit=%s\n" "$label" "$status"
+                    return "$status"
+                fi
+                printf "HEPH_GCP_COOKING event=image-step phase=workflow-images command=skopeo-copy image=%s status=pass\n" "$label"
+            else
+                printf "HEPH_GCP_COOKING event=image-step phase=workflow-images command=podman-image-exists image=%s status=fail exit=%s\n" "$label" "$status"
+                return "$status"
+            fi
+            printf "HEPH_GCP_COOKING event=image-step phase=workflow-images command=skopeo-inspect image=%s status=start\n" "$label"
+            set +e
+            digest="$(podman unshare skopeo inspect --format "{{.Digest}}" "containers-storage:$destination")"
+            status=$?
+            set -e
+            if ((status != 0)); then
+                printf "HEPH_GCP_COOKING event=image-step phase=workflow-images command=skopeo-inspect image=%s status=fail exit=%s\n" "$label" "$status"
+                return "$status"
+            fi
+            if [[ "$digest" != "${destination##*@}" ]]; then
+                printf "HEPH_GCP_COOKING event=image-step phase=workflow-images command=skopeo-inspect image=%s status=fail reason=digest-mismatch\n" "$label"
+                return 1
+            fi
+            printf "HEPH_GCP_COOKING event=image-step phase=workflow-images command=skopeo-inspect image=%s status=pass digest=%s\n" "$label" "$digest"
         }
-        import_one "oci:$cache/layouts/python-ubuntu/image" "$py"
-        import_one "oci-archive:$cache/guest-images/rust-ubuntu-profile.oci" "$rust"
-        import_one "oci:$cache/layouts/oci-builder-ubuntu/image" "$(awk -F= '\''$1=="builder_vm_image" {print $2}'\'' "$cache/repository-images/workflow.env")"
-        import_one "oci:$cache/layouts/oci-verifier-ubuntu/image" "$(awk -F= '\''$1=="verifier_vm_image" {print $2}'\'' "$cache/repository-images/workflow.env")"
+        import_one python-ubuntu "oci:$cache/layouts/python-ubuntu/image" "$py"
+        import_one rust-ubuntu "oci-archive:$cache/guest-images/rust-ubuntu-profile.oci" "$rust"
+        import_one oci-builder-ubuntu "oci:$cache/layouts/oci-builder-ubuntu/image" "$(awk -F= '\''$1=="builder_vm_image" {print $2}'\'' "$cache/repository-images/workflow.env")"
+        import_one oci-verifier-ubuntu "oci:$cache/layouts/oci-verifier-ubuntu/image" "$(awk -F= '\''$1=="verifier_vm_image" {print $2}'\'' "$cache/repository-images/workflow.env")"
     ' -- "$cache_root" "$runtime_python_ref" "$runtime_rust_ref"
 phase_pass
 
