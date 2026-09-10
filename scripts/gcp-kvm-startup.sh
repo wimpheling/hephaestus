@@ -21,6 +21,9 @@ readonly temporary_root="${work_root}/tmp"
 readonly smoke_temporary_root='/tmp/hephaestus-libkrun'
 readonly evidence_root="${work_root}/evidence"
 readonly passt_preflight_path='/run/hephaestus/gcp-passt-preflight.sh'
+readonly passt_profile_path='/etc/apparmor.d/usr.bin.passt'
+readonly passt_local_profile_path='/etc/apparmor.d/local/usr.bin.passt'
+readonly passt_profile_overlay='/run/hephaestus/usr.bin.passt'
 readonly guest_image='docker.io/library/ubuntu@sha256:52df9b1ee71626e0088f7d400d5c6b5f7bb916f8f0c82b474289a4ece6cf3faf'
 readonly log_file='/var/log/hephaestus/gcp-kvm-startup.log'
 
@@ -170,7 +173,7 @@ marker "ready mode=$test_mode"
 phase_start host-packages
 run_with_deadline apt-get update -qq
 run_with_deadline env DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends \
-  bc bison build-essential ca-certificates clang cpio dwarves e2fsprogs flex \
+  apparmor bc bison build-essential ca-certificates clang cpio dwarves e2fsprogs flex \
   fuse-overlayfs git libcap-ng-dev libclang-dev libelf-dev libfdt-dev libglib2.0-dev \
   libncurses-dev libpixman-1-dev libseccomp-dev libslirp-dev libssl-dev \
   libzstd-dev llvm-dev lld make musl-tools openssl patch patchelf perl podman \
@@ -272,6 +275,35 @@ run_with_deadline systemd-run --unit="heph-gcp-kvm-preflight-${GITHUB_RUN_ID:-ma
       END { exit !(identity && subordinate) }
     '\'' <<<"$gid_map"
   '
+phase_pass
+
+phase_start passt-apparmor
+require_command apparmor_parser
+[[ -f "$passt_profile_path" && ! -L "$passt_profile_path" ]] ||
+  die 'packaged passt AppArmor profile is unavailable or symlinked'
+install -d -m 0755 /etc/apparmor.d/local /run/hephaestus
+cat >"$passt_local_profile_path" <<'EOF'
+# Restrict passt owner read/write access to the dedicated libkrun runtime tree.
+owner /tmp/hephaestus-libkrun/** rw,
+EOF
+if grep -Eq '^[[:space:]]*#include( if exists)?[[:space:]]+<local/usr\.bin\.passt>[[:space:]]*$' \
+    "$passt_profile_path"; then
+  apparmor_parser -r "$passt_profile_path"
+else
+  awk '
+    { lines[NR] = $0 }
+    /^[[:space:]]*}[[:space:]]*$/ { closing = NR }
+    END {
+      if (!closing) exit 1
+      for (line = 1; line <= NR; line++) {
+        if (line == closing) print "#include <local/usr.bin.passt>"
+        print lines[line]
+      }
+    }
+  ' "$passt_profile_path" >"$passt_profile_overlay" ||
+    die 'could not construct the passt AppArmor overlay'
+  apparmor_parser -r -I /etc/apparmor.d "$passt_profile_overlay"
+fi
 phase_pass
 
 phase_start passt-preflight

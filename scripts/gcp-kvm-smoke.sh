@@ -68,25 +68,59 @@ d=json.load(sys.stdin); labels=d.get("labels",{})
 expected={"purpose":"hephaestus-kvm-smoke","run_id":sys.argv[1],"run_attempt":sys.argv[2],"sha":sys.argv[3]}
 if any(labels.get(k)!=v for k,v in expected.items()): raise SystemExit("ownership labels do not match this workflow run")' \
       "${GITHUB_RUN_ID:-manual}" "${GITHUB_RUN_ATTEMPT:-1}" "${GITHUB_SHA:-}" <<<"$data" || { printf 'gcp-kvm-smoke: refusing to delete an unowned VM: %s\n' "$name" >&2; return 1; }
-    gcloud compute instances delete "$name" --project="$PROJECT_ID" --zone="$zone" --quiet || { printf 'gcp-kvm-smoke: failed to delete owned VM: %s\n' "$name" >&2; return 1; }
-    for _attempt in {1..30}; do
-      local gone
-      if gone="$(gcloud compute instances describe "$name" --project="$PROJECT_ID" --zone="$zone" 2>&1)"; then
-        :
-      elif grep -Eqi "instances/${name}[^[:alnum:]_].*was not found" <<<"$gone"; then
-        printf 'Confirmed disposable VM absent: %s\n' "$name"
+    local delete_output delete_status inspect
+    for delete_attempt in {1..3}; do
+      if delete_output="$(gcloud compute instances delete "$name" --project="$PROJECT_ID" --zone="$zone" --quiet 2>&1)"; then
+        delete_status=0
+      else
+        delete_status=$?
+        printf 'gcp-kvm-smoke: delete attempt %s failed for %s: %s\n' \
+          "$delete_attempt" "$name" "$delete_output" >&2
+      fi
+
+      # A failed delete response is inconclusive. Independently inspect the
+      # exact resource before deciding whether cleanup succeeded.
+      if inspect="$(gcloud compute instances describe "$name" --project="$PROJECT_ID" --zone="$zone" 2>&1)"; then
+        if ((delete_status != 0)); then
+          if ((delete_attempt < 3)); then
+            printf 'gcp-kvm-smoke: owned VM still exists after failed delete; retrying cleanup\n' >&2
+            sleep 2
+            continue
+          fi
+          printf 'gcp-kvm-smoke: delete failed and owned VM still exists: %s\n' "$name" >&2
+          return 1
+        fi
+        for _attempt in {1..30}; do
+          if inspect="$(gcloud compute instances describe "$name" --project="$PROJECT_ID" --zone="$zone" 2>&1)"; then
+            sleep 2
+          elif grep -Eqi "instances/${name}[^[:alnum:]_].*was not found" <<<"$inspect"; then
+            printf 'Confirmed disposable VM absent (verified by describe): %s\n' "$name"
+            return 0
+          else
+            printf '%s\n' "$inspect" >&2
+            return 1
+          fi
+        done
+        printf 'gcp-kvm-smoke: VM still exists after delete request: %s\n' "$name" >&2
+        return 1
+      elif grep -Eqi "instances/${name}[^[:alnum:]_].*was not found" <<<"$inspect"; then
+        if ((delete_status == 0)); then
+          printf 'Confirmed disposable VM absent (verified by describe): %s\n' "$name"
+        else
+          printf 'Delete returned an error, but independent describe verified VM absent: %s\n' "$name"
+        fi
         return 0
       else
-        printf '%s\n' "$gone" >&2
+        printf '%s\n' "$inspect" >&2
+        printf 'gcp-kvm-smoke: cannot verify cleanup state for %s\n' "$name" >&2
         return 1
       fi
-      sleep 2
     done
-    printf 'gcp-kvm-smoke: VM still exists after delete request: %s\n' "$name" >&2
+    printf 'gcp-kvm-smoke: cleanup retries exhausted for owned VM: %s\n' "$name" >&2
     return 1
   fi
   if grep -Eqi "instances/${name}[^[:alnum:]_].*was not found" <<<"$data"; then
-    printf 'Disposable VM already absent: %s\n' "$name"
+    printf 'Disposable VM already absent (verified by describe): %s\n' "$name"
     return 0
   fi
   printf '%s\n' "$data" >&2
