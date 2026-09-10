@@ -412,8 +412,10 @@ run_with_deadline ldconfig
 libkrun_so="$(find /usr/local/lib64 -maxdepth 1 -type f -name 'libkrun.so.1*' -print -quit)"
 [[ -n "$libkrun_so" ]] || die 'libkrun install artifact is missing'
 readelf -d "$libkrun_so" | grep -q 'SONAME.*libkrun\.so\.1' || die 'libkrun SONAME is incompatible'
-ldconfig -p | grep -q 'libkrun\.so\.1' || die 'libkrun.so.1 missing from loader cache'
-ldconfig -p | grep -q 'libkrunfw\.so\.5' || die 'libkrunfw.so.5 missing from loader cache'
+# Read the complete cache before matching: with pipefail, grep -q can close
+# early and make ldconfig report SIGPIPE on hosts with a large cache.
+ldconfig -p | grep 'libkrun\.so\.1' >/dev/null || die 'libkrun.so.1 missing from loader cache'
+ldconfig -p | grep 'libkrunfw\.so\.5' >/dev/null || die 'libkrunfw.so.5 missing from loader cache'
 printf 'HEPH_GCP_KVM_LIBS libkrun_tag=%s commit=%s libkrunfw_tag=%s commit=%s features=blk,net\n' \
   "$libkrun_tag" "$libkrun_revision" "$libkrunfw_tag" "$libkrunfw_revision"
 phase_pass
