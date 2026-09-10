@@ -16,6 +16,9 @@ readonly work_root='/srv/hephaestus'
 readonly checkout_root="${work_root}/checkout"
 readonly source_root="${work_root}/src"
 readonly temporary_root="${work_root}/tmp"
+# Noble's packaged passt AppArmor profile permits owner writes below /tmp and
+# HOME; keep its socket, pid, and log beneath this forge-owned subtree.
+readonly smoke_temporary_root='/tmp/hephaestus-libkrun'
 readonly evidence_root="${work_root}/evidence"
 readonly guest_image='docker.io/library/ubuntu@sha256:52df9b1ee71626e0088f7d400d5c6b5f7bb916f8f0c82b474289a4ece6cf3faf'
 readonly log_file='/var/log/hephaestus/gcp-kvm-startup.log'
@@ -200,7 +203,7 @@ for file in /etc/subuid /etc/subgid; do
 done
 ensure_subordinate_range
 install -d -m 0700 -o forge -g forge "$work_root" "$temporary_root" "$evidence_root" \
-  /run/user/10001 /home/forge/.cargo /home/forge/.rustup
+  "$smoke_temporary_root" /run/user/10001 /home/forge/.cargo /home/forge/.rustup
 phase_pass
 
 phase_start cgroup-podman
@@ -316,7 +319,7 @@ run_with_deadline systemd-run --unit="$smoke_unit" --service-type=oneshot --wait
   --setenv=PATH=/home/forge/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
   --setenv=HEPH_GCP_SMOKE_SCRIPT="$checkout_root/scripts/run-libkrun-integration.sh" \
   --setenv=HEPH_GCP_SMOKE_IMAGE="$guest_image" \
-  --setenv=HEPH_GCP_SMOKE_TMP="$temporary_root" \
+  --setenv=HEPH_GCP_SMOKE_TMP="$smoke_temporary_root" \
   --setenv=HEPH_GCP_SMOKE_DIAGNOSTICS="$smoke_log_dir" \
   /bin/bash -Eeuo pipefail -c '
     candidate="/sys/fs/cgroup$(awk -F: '\''$1 == "0" { print $3 }'\'' /proc/self/cgroup)"
