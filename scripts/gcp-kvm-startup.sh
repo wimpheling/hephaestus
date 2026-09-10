@@ -254,6 +254,43 @@ run_with_deadline "${forge_env[@]}" git -C "$passt_source_path" fetch --depth 1 
 run_with_deadline "${forge_env[@]}" git -C "$passt_source_path" checkout --detach "$passt_revision"
 [[ "$("${forge_env[@]}" git -C "$passt_source_path" rev-parse HEAD)" == "$passt_revision" ]] ||
   die 'passt source revision verification failed'
+# Keep this diagnostic deterministic across reruns: the source tree is a
+# dedicated disposable build tree, so remove a prior generated working-tree
+# edit before applying the exact one-site instrumentation below.
+run_with_deadline "${forge_env[@]}" git -C "$passt_source_path" reset --hard "$passt_revision"
+run_with_deadline "${forge_env[@]}" git -C "$passt_source_path" clean -ffd
+python3 - "$passt_source_path/epoll_ctl.c" <<'PY'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+source = path.read_text()
+old_include = '#include <errno.h>\n\n#include "epoll_ctl.h"\n'
+new_include = '#include <errno.h>\n#include <fcntl.h>\n\n#include "epoll_ctl.h"\n'
+old_body = '''\tif (ret == -1) {
+\t\tret = -errno;
+\t\terr("Failed to add fd to epoll: %s", strerror_(-ret));
+\t}
+'''
+new_body = '''\tif (ret == -1) {
+\t\tint epoll_errno = errno;
+\t\tint epollfd_flags = fcntl(epollfd, F_GETFD);
+\t\tint epollfd_errno = epollfd_flags < 0 ? errno : 0;
+\t\tint targetfd_flags = fcntl(ref.fd, F_GETFD);
+\t\tint targetfd_errno = targetfd_flags < 0 ? errno : 0;
+
+\t\tret = -epoll_errno;
+\t\terrno = epoll_errno;
+\t\terr("Failed to add fd to epoll: %s (epollfd=%d fcntl=%d/%d, targetfd=%d fcntl=%d/%d errno=%d)",
+\t\t     strerror_(-ret), epollfd, epollfd_flags, epollfd_errno,
+\t\t     ref.fd, targetfd_flags, targetfd_errno, epoll_errno);
+\t}
+'''
+if source.count(old_include) != 1 or source.count(old_body) != 1:
+    raise SystemExit('expected pinned epoll_ctl.c diagnostic sites were not unique')
+source = source.replace(old_include, new_include).replace(old_body, new_body)
+path.write_text(source)
+PY
 run_logged_forge_command "${temporary_root}/passt-build.log" passt \
   make --no-print-directory -C "$passt_source_path" VERSION="$passt_revision" passt passt.avx2
 for passt_build_binary in passt passt.avx2; do

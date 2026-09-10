@@ -185,12 +185,16 @@ smoke() {
     }
   smoke_created=true
   local deadline=$((SECONDS + 2400)) serial='' last_serial=''
-  local pass_marker='^HEPHAESTUS_GCP_KVM_SMOKE: PASS$'
-  local fail_marker='^HEPHAESTUS_GCP_KVM_SMOKE: FAIL '
+  local pass_marker='HEPHAESTUS_GCP_KVM_SMOKE: PASS'
+  local fail_marker='HEPHAESTUS_GCP_KVM_SMOKE: FAIL .*'
   if [[ "$mode" == gcp-cooking ]]; then
-    pass_marker='^HEPHAESTUS_GCP_COOKING: PASS$'
-    fail_marker='^HEPHAESTUS_GCP_COOKING: FAIL '
+    pass_marker='HEPHAESTUS_GCP_COOKING: PASS'
+    fail_marker='HEPHAESTUS_GCP_COOKING: FAIL .*'
   fi
+  marker_matches() {
+    local body="$1" output="$2"
+    grep -Eq "^${body}$|^\\[[[:space:][:digit:].]+\\] google_metadata_script_runner\\[[[:digit:]]+\\]: startup-script: ${body}$" <<<"$output"
+  }
   while (( SECONDS < deadline )); do
     if serial="$(gcloud compute instances get-serial-port-output "$smoke_name" --project="$PROJECT_ID" --zone="$smoke_zone" --port=1 2>&1)"; then
       serial="${serial//$'\r'/}"
@@ -202,16 +206,16 @@ smoke() {
       sleep 10
       continue
     fi
-    if grep -q "$pass_marker" <<<"$serial"; then
+    if marker_matches "$pass_marker" "$serial"; then
       printf 'GCE %s passed for %s (%s); cleanup is automatic.\n' "$mode" "$smoke_name" "$GITHUB_SHA"
       return 0
     fi
-    if grep -q "$fail_marker" <<<"$serial"; then
+    if marker_matches "$fail_marker" "$serial"; then
       printf '%s\n' "$serial" | tail -80 >&2
       die 'startup smoke reported failure'
     fi
     if [[ "$mode" == gcp-cooking ]] &&
-        grep -q '^HEPHAESTUS_GCP_KVM_SMOKE: FAIL ' <<<"$serial"; then
+        marker_matches 'HEPHAESTUS_GCP_KVM_SMOKE: FAIL .*' "$serial"; then
       printf '%s\n' "$serial" | tail -80 >&2
       die 'common startup reported failure before Cooking helper'
     fi
