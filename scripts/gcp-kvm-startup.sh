@@ -192,8 +192,21 @@ run_with_deadline systemd-run --unit="heph-gcp-kvm-preflight-${GITHUB_RUN_ID:-ma
     done
     [[ "$(podman info --format "{{.Host.Security.Rootless}}")" == true ]]
     [[ -x /usr/bin/passt && -r /dev/kvm && -w /dev/kvm ]]
-    mapped_uid="$(unshare --user --map-user 10001 --map-group 10001 id -u)"
-    [[ "$mapped_uid" == 10001 ]]
+    forge_subuid="$(awk -F: '\''$1 == "forge" { print $2; exit }'\'' /etc/subuid)"
+    forge_subgid="$(awk -F: '\''$1 == "forge" { print $2; exit }'\'' /etc/subgid)"
+    [[ "$forge_subuid" =~ ^[0-9]+$ && "$forge_subgid" =~ ^[0-9]+$ ]]
+    uid_map="$(podman unshare cat /proc/self/uid_map)"
+    gid_map="$(podman unshare cat /proc/self/gid_map)"
+    awk -v uid=10001 -v subuid="$forge_subuid" '\''
+      $1 == 0 && $2 == uid && $3 == 1 { identity = 1 }
+      $1 == 1 && $2 == subuid && $3 >= 65536 { subordinate = 1 }
+      END { exit !(identity && subordinate) }
+    '\'' <<<"$uid_map"
+    awk -v gid=10001 -v subgid="$forge_subgid" '\''
+      $1 == 0 && $2 == gid && $3 == 1 { identity = 1 }
+      $1 == 1 && $2 == subgid && $3 >= 65536 { subordinate = 1 }
+      END { exit !(identity && subordinate) }
+    '\'' <<<"$gid_map"
   '
 phase_pass
 
