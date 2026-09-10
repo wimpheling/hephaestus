@@ -115,7 +115,7 @@ run_logged_forge_command() {
     set -e
     if ((command_status != 0)); then
       first_error="$(grep -i -m1 -E \
-        "fatal error:|error:|no such file or directory|command not found|cannot find|undefined reference|Error [0-9]+" \
+        "fatal error:|error:|no rule to make target|no such file or directory|command not found|cannot find|undefined reference|Error [0-9]+" \
         "$log_path" || true)"
       printf "HEPH_GCP_KVM_BUILD_ERROR phase=%s status=%s log=%s\n" \
         "$label" "$command_status" "$log_path"
@@ -251,8 +251,8 @@ run_with_deadline "${forge_env[@]}" git clone --depth 1 --branch "$libkrunfw_tag
   https://github.com/libkrun/libkrunfw.git "$source_root/libkrunfw"
 libkrunfw_revision="$("${forge_env[@]}" git -C "$source_root/libkrunfw" rev-parse HEAD)"
 run_logged_forge_command "${temporary_root}/libkrunfw-build.log" libkrunfw \
-  make -C "$source_root/libkrunfw" -j8
-run_with_deadline make -C "$source_root/libkrunfw" PREFIX=/usr/local install
+  make --no-print-directory -C "$source_root/libkrunfw" -j8
+run_with_deadline make --no-print-directory -C "$source_root/libkrunfw" PREFIX=/usr/local install
 printf '/usr/local/lib64\n' >/etc/ld.so.conf.d/hephaestus-libkrun.conf
 run_with_deadline ldconfig
 libkrunfw_so="$(find /usr/local/lib64 -maxdepth 1 -type f -name 'libkrunfw.so.5*' -print -quit)"
@@ -264,8 +264,8 @@ phase_start libkrun
 run_with_deadline "${forge_env[@]}" git clone --depth 1 --branch "$libkrun_tag" \
   https://github.com/libkrun/libkrun.git "$source_root/libkrun"
 libkrun_revision="$("${forge_env[@]}" git -C "$source_root/libkrun" rev-parse HEAD)"
-run_with_deadline "${forge_env[@]}" make -C "$source_root/libkrun" BLK=1 NET=1 -j8
-run_with_deadline make -C "$source_root/libkrun" BLK=1 NET=1 PREFIX=/usr/local install
+run_with_deadline "${forge_env[@]}" make --no-print-directory -C "$source_root/libkrun" BLK=1 NET=1 -j8
+run_with_deadline make --no-print-directory -C "$source_root/libkrun" BLK=1 NET=1 PREFIX=/usr/local install
 run_with_deadline ldconfig
 libkrun_so="$(find /usr/local/lib64 -maxdepth 1 -type f -name 'libkrun.so.1*' -print -quit)"
 [[ -n "$libkrun_so" ]] || die 'libkrun install artifact is missing'
