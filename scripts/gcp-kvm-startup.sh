@@ -102,6 +102,35 @@ run_with_deadline() {
   timeout --kill-after=30s "${remaining}s" "$@"
 }
 
+run_logged_forge_command() {
+  local log_path="$1" label="$2" status
+  shift 2
+  if run_with_deadline "${forge_env[@]}" bash -Eeuo pipefail -c '
+    log_path="$1"
+    label="$2"
+    shift 2
+    set +e
+    "$@" 2>&1 | tee "$log_path"
+    command_status="${PIPESTATUS[0]}"
+    set -e
+    if ((command_status != 0)); then
+      first_error="$(grep -i -m1 -E \
+        "fatal error:|error:|no such file or directory|command not found|cannot find|undefined reference|Error [0-9]+" \
+        "$log_path" || true)"
+      printf "HEPH_GCP_KVM_BUILD_ERROR phase=%s status=%s log=%s\n" \
+        "$label" "$command_status" "$log_path"
+      printf "HEPH_GCP_KVM_FIRST_ERROR %s\n" "$first_error"
+    fi
+    exit "$command_status"
+  ' -- "$log_path" "$label" "$@"
+  then
+    return 0
+  else
+    status=$?
+    return "$status"
+  fi
+}
+
 forge_env=(
   runuser -u forge -- env
   HOME=/home/forge
@@ -221,7 +250,8 @@ install -d -m 0700 -o forge -g forge "$source_root"
 run_with_deadline "${forge_env[@]}" git clone --depth 1 --branch "$libkrunfw_tag" \
   https://github.com/libkrun/libkrunfw.git "$source_root/libkrunfw"
 libkrunfw_revision="$("${forge_env[@]}" git -C "$source_root/libkrunfw" rev-parse HEAD)"
-run_with_deadline "${forge_env[@]}" make -C "$source_root/libkrunfw" -j8
+run_logged_forge_command "${temporary_root}/libkrunfw-build.log" libkrunfw \
+  make -C "$source_root/libkrunfw" -j8
 run_with_deadline make -C "$source_root/libkrunfw" PREFIX=/usr/local install
 printf '/usr/local/lib64\n' >/etc/ld.so.conf.d/hephaestus-libkrun.conf
 run_with_deadline ldconfig
