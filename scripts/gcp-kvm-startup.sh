@@ -36,6 +36,30 @@ test_mode='smoke'
 
 die() { printf 'gcp-kvm-startup: %s\n' "$*" >&2; return 1; }
 
+retain_passt_host_audit() {
+  local audit_path="${evidence_root}/integration/passt-host-audit.log"
+  install -d -m 0700 "${evidence_root}/integration" 2>/dev/null || return 0
+  install -m 0600 /dev/null "$audit_path" 2>/dev/null || return 0
+  {
+    printf 'Bounded AppArmor audit lines captured on failure:\n'
+    dmesg --color=never 2>/dev/null |
+      awk '
+        {
+          line = tolower($0)
+          if (line ~ /apparmor/ &&
+              (line ~ /profile="[^"]*passt[^"]*"/ || line ~ /comm="passt"/) &&
+              (line ~ /denied/ || line ~ /audit/))
+            print
+        }
+      ' |
+      tail -n 100 || true
+  } >"$audit_path" 2>&1 || true
+  chmod 0600 "$audit_path" 2>/dev/null || true
+  printf 'HEPH_GCP_PASST_HOST_AUDIT_BEGIN path=%s\n' "$audit_path"
+  sed -n '1,101p' "$audit_path" 2>/dev/null || true
+  printf 'HEPH_GCP_PASST_HOST_AUDIT_END path=%s\n' "$audit_path"
+}
+
 install -d -m 0700 /var/log/hephaestus
 install -m 0600 /dev/null "$log_file"
 [[ -w /dev/ttyS0 ]] || die 'GCE serial console /dev/ttyS0 is unavailable'
@@ -44,6 +68,9 @@ exec > >(tee -a "$log_file" /dev/ttyS0) 2>&1
 finish() {
   local status=$?
   trap - EXIT
+  if ((status != 0)) && [[ "$test_mode" == smoke ]]; then
+    retain_passt_host_audit
+  fi
   if ((status == 0)); then
     if [[ "$test_mode" == gcp-cooking ]]; then
       printf 'HEPHAESTUS_GCP_COOKING: PASS\n'
@@ -290,6 +317,29 @@ if source.count(old_include) != 1 or source.count(old_body) != 1:
     raise SystemExit('expected pinned epoll_ctl.c diagnostic sites were not unique')
 source = source.replace(old_include, new_include).replace(old_body, new_body)
 path.write_text(source)
+
+tap_path = path.with_name('tap.c')
+tap_source = tap_path.read_text()
+old_accept = '''\tc->fd_tap = accept4(c->fd_tap_listen, NULL, NULL, 0);
+
+\tif (!getsockopt(c->fd_tap, SOL_SOCKET, SO_PEERCRED, &ucred, &len))
+'''
+new_accept = '''\tc->fd_tap = accept4(c->fd_tap_listen, NULL, NULL, SOCK_CLOEXEC);
+\tif (c->fd_tap < 0) {
+\t\tstatic bool accept_error_reported;
+\t\tint accept_errno = errno;
+\t\tif (!accept_error_reported) {
+\t\t\terr("Error accepting tap client: %s", strerror_(accept_errno));
+\t\t\taccept_error_reported = true;
+\t\t}
+\t\treturn;
+\t}
+
+\tif (!getsockopt(c->fd_tap, SOL_SOCKET, SO_PEERCRED, &ucred, &len))
+'''
+if tap_source.count(old_accept) != 1:
+    raise SystemExit('expected pinned tap accept site was not unique')
+tap_path.write_text(tap_source.replace(old_accept, new_accept))
 PY
 run_logged_forge_command "${temporary_root}/passt-build.log" passt \
   make --no-print-directory -C "$passt_source_path" VERSION="$passt_revision" passt passt.avx2
