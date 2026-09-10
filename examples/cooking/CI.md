@@ -51,6 +51,14 @@ disk is configured for automatic deletion. The VM receives only the exact
 workflow commit SHA and the checked-in startup script through metadata; no
 credentials or GitHub runner registration token is passed to it.
 
+Ubuntu Noble's packaged `passt` predates the DHCP broadcast behavior required
+by libkrun's minimal DHCP client. Before AppArmor setup and passt preflight, startup
+builds the immutable upstream [`passt` commit
+386b5f5472b89769c025f5d5056348532a823b93](https://passt.top/passt/commit/?id=386b5f5472b89769c025f5d5056348532a823b93), which contains the
+[DHCP broadcast fix](https://passt.top/passt/commit/?id=c0fbc7ef2ae2919bf6162b4149d341f448289836). It diverts the packaged generic and
+AVX2 ELF files to root-owned `.distrib` paths and installs both fixed binaries
+at the existing `/usr/bin/passt` paths, preserving the profile attachment.
+
 Run `preflight` first from the `main` workflow, then use `smoke` only after the
 quota output and startup image have been reviewed. The cloud dispatch skips
 the self-hosted Cooking job. Push and pull-request behavior remains unchanged;

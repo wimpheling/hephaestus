@@ -12,6 +12,8 @@ readonly forge_gid=10001
 readonly rust_version='1.88.0'
 readonly libkrun_tag='v1.19.0'
 readonly libkrunfw_tag='v5.5.0'
+readonly passt_revision='386b5f5472b89769c025f5d5056348532a823b93'
+readonly passt_source_url='https://passt.top/passt'
 readonly work_root='/srv/hephaestus'
 readonly checkout_root="${work_root}/checkout"
 readonly source_root="${work_root}/src"
@@ -223,6 +225,69 @@ done
 ensure_subordinate_range
 install -d -m 0700 -o forge -g forge "$work_root" "$temporary_root" "$evidence_root" \
   "$smoke_temporary_root" /run/user/10001 /home/forge/.cargo /home/forge/.rustup
+phase_pass
+
+phase_start passt-compat
+# Ubuntu Noble's passt predates the DHCP broadcast fix needed by libkrun's
+# minimal DHCP client. Build the reviewed upstream commit before installing
+# the AppArmor profile so the replacement keeps the packaged executable's
+# /usr/bin/passt attachment path. The AVX2 companion must be replaced too:
+# upstream passt dispatches to it from the generic x86_64 binary. Both distro
+# files remain available under their dpkg-divert names for rollback/audit.
+passt_source_path="$source_root/passt"
+install -d -m 0700 -o forge -g forge "$source_root"
+if [[ -e "$passt_source_path" ]]; then
+  [[ ! -L "$passt_source_path" && -d "$passt_source_path/.git" ]] ||
+    die 'passt source path is not an owned git checkout'
+else
+  run_with_deadline "${forge_env[@]}" git init "$passt_source_path"
+  run_with_deadline "${forge_env[@]}" git -C "$passt_source_path" remote add origin "$passt_source_url"
+fi
+[[ "$(stat --format='%u' "$passt_source_path")" == "$forge_uid" ]] ||
+  die 'passt source checkout is not owned by forge'
+if ! "${forge_env[@]}" git -C "$passt_source_path" remote get-url origin >/dev/null 2>&1; then
+  run_with_deadline "${forge_env[@]}" git -C "$passt_source_path" remote add origin "$passt_source_url"
+fi
+[[ "$("${forge_env[@]}" git -C "$passt_source_path" remote get-url origin)" == "$passt_source_url" ]] ||
+  die 'passt source remote is not the official upstream'
+run_with_deadline "${forge_env[@]}" git -C "$passt_source_path" fetch --depth 1 origin "$passt_revision"
+run_with_deadline "${forge_env[@]}" git -C "$passt_source_path" checkout --detach "$passt_revision"
+[[ "$("${forge_env[@]}" git -C "$passt_source_path" rev-parse HEAD)" == "$passt_revision" ]] ||
+  die 'passt source revision verification failed'
+run_logged_forge_command "${temporary_root}/passt-build.log" passt \
+  make --no-print-directory -C "$passt_source_path" VERSION="$passt_revision" passt passt.avx2
+for passt_build_binary in passt passt.avx2; do
+  passt_build_path="$passt_source_path/$passt_build_binary"
+  [[ -f "$passt_build_path" && -x "$passt_build_path" ]] || die "built $passt_build_binary is missing"
+  readelf -h "$passt_build_path" | grep -qE 'Magic:[[:space:]]+7f 45 4c 46' ||
+    die "built $passt_build_binary is not an ELF executable"
+done
+
+ensure_passt_diversion() {
+  local active_path="$1" diverted_path="$2"
+  if dpkg-divert --list "$active_path" | grep -Fq "to $diverted_path"; then
+    [[ -e "$diverted_path" ]] || die "passt diversion target is missing: $diverted_path"
+  else
+    [[ -e "$active_path" ]] || die "packaged passt executable is missing: $active_path"
+    run_with_deadline dpkg-divert --local --rename --add \
+      --divert "$diverted_path" "$active_path"
+  fi
+}
+
+ensure_passt_diversion /usr/bin/passt /usr/bin/passt.distrib
+ensure_passt_diversion /usr/bin/passt.avx2 /usr/bin/passt.avx2.distrib
+install -o root -g root -m 0755 "$passt_source_path/passt" /usr/bin/passt
+install -o root -g root -m 0755 "$passt_source_path/passt.avx2" /usr/bin/passt.avx2
+readelf -h /usr/bin/passt | grep -qE 'Magic:[[:space:]]+7f 45 4c 46' ||
+  die 'installed passt is not an ELF executable'
+readelf -h /usr/bin/passt.avx2 | grep -qE 'Magic:[[:space:]]+7f 45 4c 46' ||
+  die 'installed passt.avx2 is not an ELF executable'
+passt_version_output="$(/usr/bin/passt --version 2>&1)" || die 'installed passt cannot report its version'
+grep -Fq "$passt_revision" <<<"$passt_version_output" ||
+  die 'installed passt version does not match the pinned revision'
+passt_version="${passt_version_output%%$'\n'*}"
+printf 'HEPH_GCP_PASST_COMPAT revision=%s version=%s binary=/usr/bin/passt avx2=/usr/bin/passt.avx2 distro=/usr/bin/passt.distrib,/usr/bin/passt.avx2.distrib\n' \
+  "$passt_revision" "$passt_version"
 phase_pass
 
 phase_start cgroup-podman
