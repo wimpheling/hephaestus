@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Run the exact passt preflight used by the libkrun worker before its kernel
-# smoke.  This intentionally exercises only passt's Unix control socket.
+# smoke.  This intentionally exercises only passt's Unix control socket and
+# one forge-owned accepted stream.
 set -Eeuo pipefail
 umask 077
 
@@ -10,10 +11,12 @@ readonly probe_user='forge'
 readonly probe_uid=10001
 readonly probe_gid=10001
 readonly wait_seconds=5
+readonly accept_wait_seconds=3
 
 probe_fixture_root=''
 probe_dir=''
 probe_pid=''
+client_pid=''
 socket_path=''
 pid_path=''
 log_path=''
@@ -29,6 +32,11 @@ require_command() {
 }
 
 stop_probe() {
+    if [[ -n "$client_pid" ]] && kill -0 "$client_pid" 2>/dev/null; then
+        kill -TERM "$client_pid" 2>/dev/null || true
+        wait "$client_pid" 2>/dev/null || true
+    fi
+    client_pid=''
     if [[ -n "$probe_pid" ]] && kill -0 "$probe_pid" 2>/dev/null; then
         kill -TERM "$probe_pid" 2>/dev/null || true
         for _ in {1..20}; do
@@ -78,6 +86,8 @@ bounded_failure_diagnostics() {
         sed -n '1,80p' "$stdout_path" 2>/dev/null || true
         echo '--- passt stderr (first 120 lines) ---'
         sed -n '1,120p' "$stderr_path" 2>/dev/null || true
+        echo '--- passt log (first 160 lines) ---'
+        sed -n '1,160p' "$log_path" 2>/dev/null || true
         echo '--- runuser launcher AppArmor profile (passthrough child not inferred) ---'
         if [[ -n "$probe_apparmor_profile" ]]; then
             printf '%s\n' "$probe_apparmor_profile"
@@ -126,6 +136,7 @@ require_command grep
 require_command tail
 require_command dpkg-query
 require_command journalctl
+require_command python3
 
 [[ "$(id -u)" == 0 ]] || {
     echo 'gcp-passt-preflight: run as root so the forge-owned runtime boundary is checked exactly' >&2
@@ -174,10 +185,11 @@ stdout_path="$probe_dir/passt.stdout"
 install -o "$probe_uid" -g "$probe_gid" -m 600 /dev/null "$stderr_path"
 install -o "$probe_uid" -g "$probe_gid" -m 600 /dev/null "$stdout_path"
 
-# Keep this invocation aligned with crates/vm-libkrun/src/network.rs.  No
-# forwarded ports means passt cannot expose or connect a test service here.
+# Keep the control-socket arguments aligned with crates/vm-libkrun/src/network.rs.
+# Debug is intentional here so the accepted-connection event is observable;
+# no forwarded ports means passt cannot expose or connect a test service.
 runuser -u "$probe_user" -- env HOME=/home/forge "$passt_binary" \
-    --foreground --one-off --quiet \
+    --foreground --one-off --debug \
     --socket "$socket_path" \
     --pid "$pid_path" \
     --log-file "$log_path" \
@@ -205,10 +217,66 @@ while (( SECONDS < deadline )); do
 done
 
 if [[ "$socket_seen" == true ]]; then
+    # A socket appearing only proves that passt created its listener.  Keep a
+    # real forge client connected briefly so the debug log must show that
+    # accept4() completed; this catches the cloud-only EACCES failure before
+    # the expensive kernel build.
+    set +e
+    runuser -u "$probe_user" -- python3 - "$socket_path" <<'PY' &
+import socket
+import sys
+import time
+
+with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+    client.settimeout(2.0)
+    client.connect(sys.argv[1])
+    time.sleep(1.0)
+PY
+    client_pid=$!
+    set -e
+
+    accepted=false
+    accept_error=false
+    server_alive_while_connected=false
+    deadline=$((SECONDS + accept_wait_seconds))
+    while (( SECONDS < deadline )); do
+        if grep -Fq 'Error accepting tap client:' "$log_path" 2>/dev/null ||
+            grep -Fq 'Error accepting tap client:' "$stderr_path" 2>/dev/null; then
+            accept_error=true
+            break
+        fi
+        if grep -Fq 'accepted connection from PID' "$log_path" 2>/dev/null ||
+            grep -Fq 'accepted connection from PID' "$stderr_path" 2>/dev/null; then
+            accepted=true
+            if kill -0 "$probe_pid" 2>/dev/null; then
+                server_alive_while_connected=true
+            fi
+            break
+        fi
+        if ! kill -0 "$probe_pid" 2>/dev/null; then
+            break
+        fi
+        sleep 0.1
+    done
+
+    set +e
+    wait "$client_pid"
+    client_status=$?
+    set -e
+    client_pid=''
+
+    if [[ "$accept_error" == true || "$accepted" != true ||
+        "$server_alive_while_connected" != true || "$client_status" != 0 ]]; then
+        stop_probe
+        echo "HEPH_GCP_PASST_PREFLIGHT FAIL accept socket=$socket_path accepted=$accepted server_alive_while_connected=$server_alive_while_connected client_status=$client_status" >&2
+        bounded_failure_diagnostics
+        exit 1
+    fi
+
     stop_probe
     wait "$probe_pid" 2>/dev/null || true
     probe_pid=''
-    echo "HEPH_GCP_PASST_PREFLIGHT PASS socket=$socket_path"
+    echo "HEPH_GCP_PASST_PREFLIGHT PASS socket=$socket_path accepted=true"
     exit 0
 fi
 

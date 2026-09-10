@@ -438,24 +438,44 @@ cat >"$passt_local_profile_path" <<'EOF'
 # Restrict passt owner read/write access to the dedicated libkrun runtime tree.
 owner /tmp/hephaestus-libkrun/** rw,
 EOF
-if grep -Eq '^[[:space:]]*#include( if exists)?[[:space:]]+<local/usr\.bin\.passt>[[:space:]]*$' \
-    "$passt_profile_path"; then
-  apparmor_parser -r "$passt_profile_path"
-else
-  awk '
-    { lines[NR] = $0 }
-    /^[[:space:]]*}[[:space:]]*$/ { closing = NR }
-    END {
-      if (!closing) exit 1
-      for (line = 1; line <= NR; line++) {
-        if (line == closing) print "#include <local/usr.bin.passt>"
-        print lines[line]
-      }
+# Parse an overlay even when the packaged profile already has a local include:
+# this adds audit mode for this run while retaining every packaged rule and
+# every existing profile flag, including attach_disconnected.
+awk '
+  function with_audit(line, match_start, match_length, inside) {
+    if (line !~ /^[[:space:]]*profile[[:space:]]+passt([[:space:]]|$)/)
+      return line
+    profile_seen = 1
+    match_start = match(line, /flags=\([^)]*\)/)
+    if (match_start) {
+      match_length = RLENGTH
+      inside = substr(line, match_start + 7, match_length - 8)
+      if (inside !~ /(^|,)[[:space:]]*audit([[:space:]]|,|$)/)
+        line = substr(line, 1, match_start - 1) "flags=(" inside ",audit)" \
+          substr(line, match_start + match_length)
+    } else {
+      sub(/[[:space:]]*\{[[:space:]]*$/, " flags=(audit) {", line)
     }
-  ' "$passt_profile_path" >"$passt_profile_overlay" ||
-    die 'could not construct the passt AppArmor overlay'
-  apparmor_parser -r -I /etc/apparmor.d "$passt_profile_overlay"
-fi
+    return line
+  }
+  {
+    lines[NR] = with_audit($0)
+  }
+  /^[[:space:]]*#include( if exists)?[[:space:]]+<local\/usr\.bin\.passt>[[:space:]]*$/ {
+    local_include_seen = 1
+  }
+  /^[[:space:]]*}[[:space:]]*$/ { closing = NR }
+  END {
+    if (!profile_seen || !closing) exit 1
+    for (line = 1; line <= NR; line++) {
+      if (line == closing && !local_include_seen)
+        print "#include <local/usr.bin.passt>"
+      print lines[line]
+    }
+  }
+' "$passt_profile_path" >"$passt_profile_overlay" ||
+  die 'could not construct the passt AppArmor overlay'
+apparmor_parser -r -I /etc/apparmor.d "$passt_profile_overlay"
 phase_pass
 
 phase_start passt-preflight
