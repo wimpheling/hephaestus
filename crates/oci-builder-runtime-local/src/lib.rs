@@ -69,7 +69,7 @@ pub struct VmOciOperationConfig {
     pub candidate_root: PathBuf,
     /// Private root containing one transient Buildah store per preparation.
     pub scratch_root: PathBuf,
-    /// Absolute administrator-owned `mkfs.ext4` executable.
+    /// Absolute administrator-owned mke2fs-compatible executable.
     pub mkfs_ext4: PathBuf,
     /// Private root containing verifier evidence and exported roots.
     pub verification_root: PathBuf,
@@ -544,7 +544,10 @@ fn prepare_scratch_disk(
     let filesystem_uuid = uuid::Uuid::new_v4();
     let filesystem_uuid_text = filesystem_uuid.to_string();
     let status = ProcessCommand::new(mkfs_ext4)
-        .args(["-q", "-F", "-U", &filesystem_uuid_text])
+        // Ubuntu ships mkfs.ext4 as a symlink to mke2fs. The caller stores
+        // only the canonical executable, so select ext4 explicitly instead of
+        // relying on argv[0] to choose the filesystem type.
+        .args(["-t", "ext4", "-q", "-F", "-U", &filesystem_uuid_text])
         .arg(&path)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -1700,8 +1703,8 @@ mod tests {
         VERIFIER_SYFT_CACHE_ENV, VERIFIER_SYFT_CACHE_PATH, VERIFIER_SYFT_UPDATE_ENV,
         VERIFIER_TRIVY_CACHE_ENV, VERIFIER_TRIVY_CACHE_PATH, builder_vm_spec,
         classify_guest_failure, copy_verified_rootfs, layout_index_descriptor,
-        normalize_layout_to_single_index, prepare_job_checkout, remove_private_directory,
-        verifier_vm_spec, zot_confirmed_output,
+        normalize_layout_to_single_index, prepare_job_checkout, prepare_scratch_disk,
+        remove_private_directory, verifier_vm_spec, zot_confirmed_output,
     };
     use builder_catalog_domain::{OciImageId, OciImageReference};
     use oci_builder_worker::{PreparedSource, SourceCheckoutProvider};
@@ -1712,7 +1715,13 @@ mod tests {
         SupplyChainReferrer, SupplyChainReferrerKind, VerifiedPublication,
     };
     use sha2::{Digest, Sha256};
-    use std::{collections::BTreeMap, fs, os::unix::fs::PermissionsExt, path::PathBuf};
+    use std::{
+        collections::BTreeMap,
+        fs,
+        os::unix::fs::{PermissionsExt, symlink},
+        path::PathBuf,
+        process::Command,
+    };
     use uuid::Uuid;
     use vm_trait::{NetworkMode, RootFilesystem, VmResources};
 
@@ -1770,6 +1779,35 @@ mod tests {
 
         assert_builder_boundary(&builder, &request, &checkout, &base, &candidate, &scratch);
         assert_verifier_boundary(&verifier, &request, &candidate, &verification);
+    }
+
+    #[test]
+    fn canonicalized_formatter_creates_an_ext4_scratch_disk() {
+        let temporary = tempfile::tempdir().expect("temporary scratch root");
+        let target = ["/usr/sbin/mke2fs", "/usr/bin/mke2fs"]
+            .into_iter()
+            .map(PathBuf::from)
+            .find(|path| path.is_file())
+            .expect("mke2fs must be installed");
+        let link = temporary.path().join("mkfs.ext4");
+        symlink(&target, &link).expect("temporary formatter symlink");
+        let canonical = fs::canonicalize(&link).expect("canonical temporary formatter");
+        assert!(
+            !fs::symlink_metadata(&canonical)
+                .expect("canonical formatter metadata")
+                .file_type()
+                .is_symlink()
+        );
+
+        let scratch = prepare_scratch_disk(temporary.path(), &canonical, Uuid::from_u128(5))
+            .expect("format canonicalized scratch disk");
+        let output = Command::new("blkid")
+            .args(["-s", "TYPE", "-o", "value"])
+            .arg(&scratch.path)
+            .output()
+            .expect("inspect scratch filesystem type");
+        assert!(output.status.success());
+        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "ext4");
     }
 
     #[test]
