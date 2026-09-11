@@ -147,10 +147,12 @@ The diagnostics script applies the separate one-day bucket and its creator /
 viewer bindings. It does not modify the cache bucket, budget, VM policy,
 GitHub, or local checkout. Both scripts fail closed on an existing conflicting
 bucket policy. `plan` is local output; `apply` requires the human's Cloud
-Shell browser login. The diagnostics bucket and its IAM bindings are reviewed
-target configuration but have not yet been confirmed as applied; full
-diagnostic evidence remains pending that apply and its post-delete download
-check. Do not run either script with personal local gcloud credentials.
+Shell browser login. The diagnostics bucket apply is now human-verified: the
+one-day bucket exists with the runtime bucket-scoped object creator grant and
+the CI bucket-scoped object viewer grant. The diagnostic evidence path is
+verified by run 34586850977; full Cooking live pipeline validation remains
+pending a successful rerun. Do not run either script with personal local
+gcloud credentials.
 
 ## Dispatch and acceptance gate
 
@@ -161,13 +163,23 @@ Dispatch from the immutable `main` workflow reference. Use this sequence:
    creation.
 3. Run `diagnostic` to exercise intentional test failure, collection, scan,
    private upload, cleanup, post-delete download and checksum verification.
-4. Keep `gcp-cooking` paused until the diagnostic evidence path and current
-   producer review are accepted. Then dispatch it manually for the full
-   build, update, browser and Cooking scenario.
+4. After the diagnostic gate passes, dispatch `gcp-cooking` manually for the
+   full build, update, browser and Cooking scenario.
 
-The current GCP pipeline remains **pending live validation**. A successful
-diagnostic test failure is acceptable only when its diagnostics result passes.
-For `gcp-cooking`, the test result must also contain the dedicated
+The diagnostic gate is proven by [run 34586850977](https://github.com/wimpheling/hephaestus/actions/runs/34586850977)
+at commit `c252f0517c147c86d6560c79c403fe7ce6f6d4a4`: it completed from
+09:58:05Z to 10:01:16Z, independently verified VM absence at 10:01:09Z,
+downloaded the private object, and passed archive/checksum and credential
+scans. The object was
+`cooking/runs/34586850977/1/c252f0517c147c86d6560c79c403fe7ce6f6d4a4.tar.gz`
+(1,251 bytes, SHA-256
+`d71d6008640edc47ae846e764942be28421496d0eb694167ad168c861e342f9e`). The
+safe status artifact is
+`/tmp/heph-diagnostic-34586850977-artifact2/gcp-diagnostics-status.json`.
+
+The full `gcp-cooking` pipeline remains **pending live validation**. A
+successful diagnostic test failure is acceptable only when its diagnostics
+result passes. For `gcp-cooking`, the test result must also contain the dedicated
 `HEPHAESTUS_GCP_COOKING: PASS` marker. A failed test remains failed even when
 diagnostics are collected successfully. Do not weaken expected test counts or
 convert a missing marker into success.
@@ -188,8 +200,9 @@ limits lineage to 8 MiB / 20,000 rows, and writes a 0600 archive. Browser
 summaries use an allowlisted schema. Request/response bodies, headers, cookies,
 storage state, credentials and secret values are excluded from the intended
 bundle. The producer passed its focused local payload-projection and schema
-gate. Live GCP validation remains pending, and a live bundle still requires
-scanner, upload, post-delete download and checksum evidence below.
+gate. The diagnostic live bundle gate passed in run 34586850977; full GCP
+Cooking validation still requires the scanner, upload, post-delete download
+and checksum evidence below.
 
 The workflow's `download-diagnostics` path in
 [`scripts/gcp-kvm-smoke.sh`](../scripts/gcp-kvm-smoke.sh) downloads with the

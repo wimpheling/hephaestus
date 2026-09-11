@@ -2,8 +2,9 @@
 
 The durable GCP configuration, keyless identities, bucket retention, dispatch
 gate and failure triage are in the [GCP Cooking CI runbook](../../docs/gcp-cooking-ci.md).
-Current GCP live validation is **pending**; the historical results below do
-not claim that the current `gcp-cooking` path is green.
+Current `gcp-cooking` live validation is **pending**; the diagnostic evidence
+gate has passed, while the historical results below do not claim that the
+full path is green.
 
 The [Cooking E2E workflow](../../.github/workflows/cooking-e2e.yml) runs the
 same `examples/cooking/run.sh` entry point as local execution. It requires an
@@ -107,8 +108,11 @@ caps the compressed bundle at 64 MiB, and uploads it to the private
 `cooking/runs/{run_id}/{attempt}/{sha}.tar.gz`. The synthetic test failure is
 reported separately from the diagnostics result; the workflow is successful
 only when collection, scans, upload, post-delete download and checksum
-verification all pass. This mode is the next reviewable cloud action while
-full Cooking trials are paused.
+verification all pass. This diagnostic gate is proven by [run
+34586850977](https://github.com/wimpheling/hephaestus/actions/runs/34586850977)
+at commit `c252f0517c147c86d6560c79c403fe7ce6f6d4a4`; it completed in 3m11s,
+verified VM absence, and passed authenticated private download and scanning.
+The full `gcp-cooking` trial remains pending live validation.
 
 The same `main` manual dispatch also offers `gcp-cooking`. Before creating a
 paid VM it checks the private, checksum-pinned cache object

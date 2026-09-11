@@ -32,7 +32,7 @@ MAX_LINE_BYTES = 256 * 1024
 LABEL_RE = re.compile(r"^[a-z][a-z0-9_-]{0,47}$")
 STATUS_RE = re.compile(r"^[a-z][a-z0-9_:-]{0,63}$")
 TIMESTAMP_RE = re.compile(
-    r"^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z| Z| [+-]\d{2}:\d{2})$"
+    r"^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z| Z| [+-]\d{2}:\d{2}(?::\d{2})?)$"
 )
 UUID_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"

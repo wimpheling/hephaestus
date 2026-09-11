@@ -9,6 +9,7 @@ readonly STARTUP_SCRIPT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/
 readonly PASST_PREFLIGHT_SCRIPT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/gcp-passt-preflight.sh"
 readonly DIAGNOSTICS_COLLECTOR_SCRIPT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/collect-cooking-diagnostics.py"
 readonly DIAGNOSTICS_SCANNER_SCRIPT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/check-browser-evidence.py"
+readonly DIAGNOSTICS_TRIAGE_SCRIPT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/summarize-cooking-diagnostics.py"
 readonly MACHINE_TYPE="n2-standard-8"
 readonly DISK_SIZE="150GB"
 readonly CACHE_BUCKET="hephaestus-508000-cooking-cache"
@@ -236,9 +237,41 @@ PY
     diagnostics_download_error='credential-scan-failed'
     return 1
   fi
-  printf '{"schema":1,"object":"gs://%s/%s","cleanup":"verified-absent","upload":"verified-by-download","download":"passed","scan":"passed","archiveBytes":%s,"archiveSha256":"%s","manifest":"%s"}\n' \
-    "$DIAGNOSTICS_BUCKET" "$object" "$archive_bytes" "$digest" "$extract_root/cooking-diagnostics/manifest.json" \
-    >"$status_path"
+  local triage_path="$extract_root/cooking-diagnostics/triage.json"
+  if ! python3 -B "$DIAGNOSTICS_TRIAGE_SCRIPT" "$extract_root/cooking-diagnostics" >"$triage_path"; then
+    diagnostics_download_error='triage-projection-failed'
+    printf '{"schema":1,"object":"gs://%s/%s","cleanup":"verified-absent","upload":"verified-by-download","download":"passed","scan":"passed","triage":"failed","archiveBytes":%s,"archiveSha256":"%s","manifest":"%s"}\n' \
+      "$DIAGNOSTICS_BUCKET" "$object" "$archive_bytes" "$digest" "$extract_root/cooking-diagnostics/manifest.json" >"$status_path"
+    return 1
+  fi
+  if ! python3 - "$status_path" "$triage_path" "$DIAGNOSTICS_BUCKET" "$object" "$archive_bytes" "$digest" "$extract_root/cooking-diagnostics/manifest.json" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+status_path, triage_path, bucket, object_name, archive_bytes, digest, manifest = sys.argv[1:]
+triage = json.loads(Path(triage_path).read_text(encoding="utf-8"))
+if not isinstance(triage, dict) or triage.get("schema") != 1:
+    raise SystemExit("triage projection has an invalid schema")
+status = {
+    "schema": 1,
+    "object": f"gs://{bucket}/{object_name}",
+    "cleanup": "verified-absent",
+    "upload": "verified-by-download",
+    "download": "passed",
+    "scan": "passed",
+    "triage": triage,
+    "archiveBytes": int(archive_bytes),
+    "archiveSha256": digest,
+    "manifest": manifest,
+}
+Path(status_path).write_text(json.dumps(status, separators=(",", ":")) + "\n", encoding="utf-8")
+PY
+  then
+    diagnostics_download_error='triage-status-write-failed'
+    return 1
+  fi
+  printf 'HEPH_GCP_DIAGNOSTICS event=triage status=pass\n'
   printf 'HEPH_GCP_DIAGNOSTICS event=download status=pass bytes=%s sha256=%s manifest=%s\n' \
     "$archive_bytes" "$digest" "$extract_root/cooking-diagnostics/manifest.json"
   printf 'Authenticated download: gcloud storage cp gs://%s/%s ./gcp-diagnostics.tar.gz\n' "$DIAGNOSTICS_BUCKET" "$object"
@@ -355,6 +388,8 @@ smoke() {
       die "diagnostics collector is unavailable or symlinked: $DIAGNOSTICS_COLLECTOR_SCRIPT"
     [[ -f "$DIAGNOSTICS_SCANNER_SCRIPT" && ! -L "$DIAGNOSTICS_SCANNER_SCRIPT" ]] ||
       die "diagnostics scanner is unavailable or symlinked: $DIAGNOSTICS_SCANNER_SCRIPT"
+    [[ -f "$DIAGNOSTICS_TRIAGE_SCRIPT" && ! -L "$DIAGNOSTICS_TRIAGE_SCRIPT" ]] ||
+      die "diagnostics triage projector is unavailable or symlinked: $DIAGNOSTICS_TRIAGE_SCRIPT"
   fi
   [[ "${GITHUB_SHA:-}" =~ ^[0-9a-f]{40}$ ]] || die 'GITHUB_SHA must be the exact 40-character workflow commit SHA'
   smoke_zone="${GCP_ZONE:-europe-west1-b}"

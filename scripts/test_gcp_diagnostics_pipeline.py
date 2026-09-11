@@ -24,6 +24,12 @@ SPEC = importlib.util.spec_from_file_location(
 COLLECTOR = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
 SPEC.loader.exec_module(COLLECTOR)
+TRIAGE_SPEC = importlib.util.spec_from_file_location(
+    "cooking_diagnostics_triage", ROOT / "summarize-cooking-diagnostics.py"
+)
+TRIAGE = importlib.util.module_from_spec(TRIAGE_SPEC)
+assert TRIAGE_SPEC.loader is not None
+TRIAGE_SPEC.loader.exec_module(TRIAGE)
 
 
 class GcpDiagnosticsPipelineTests(unittest.TestCase):
@@ -121,8 +127,14 @@ finish
         source_root.mkdir()
         files = {
             "serial.log": "HEPH_GCP_DIAGNOSTIC: TEST-FAIL expected=true\n",
-            "host-journal.log": "safe host state\n",
-            "runtime-structured.json": 'HEPH_GCP_DIAGNOSTIC test_result=42 diagnostics_result=ready\n',
+            "host-journal.log": "HEPH_GCP_DIAGNOSTICS status=unavailable\n",
+            "runtime-structured.json": (
+                "HEPH_GCP_DIAGNOSTIC test_result=42 diagnostics_result=ready\n"
+                "HEPHAESTUS_RUNTIME denial_stage=session-authentication "
+                "denial_class=authentication_denied "
+                "run_id=00000000-0000-4000-8000-000000000004\n"
+                "HEPHAESTUS_RUNTIME status=truncated\n"
+            ),
             "browser-summary.json": '{"status":"failed","phase":"browser","test":"diagnostic-synthetic","exit_code":42}\n',
             "test-output.log": "expected diagnostic failure\n",
         }
@@ -131,7 +143,8 @@ finish
         lineage = source_root / "lineage.jsonl"
         lineage.write_text(
             '{"attempt_id":"00000000-0000-4000-8000-000000000001",'
-            '"attempt_number":1,"attempt_state":"failed",'
+            '"attempt_number":1,"attempt_run_id":"00000000-0000-4000-8000-000000000004",'
+            '"attempt_state":"failed",'
             '"run_state":"failed","run_outcome":"failed"}\n',
             encoding="utf-8",
         )
@@ -144,6 +157,121 @@ finish
         args += ["--snapshot-jsonl", str(lineage), "--archive", str(archive)]
         self.assertEqual(COLLECTOR.main(args), 0)
         return archive
+
+    def test_triage_projects_denial_and_latest_snapshot_correlation(self):
+        with tempfile.TemporaryDirectory(prefix="heph-gcp-triage-") as directory:
+            root = Path(directory)
+            self._archive(root)
+            triage = TRIAGE.summarize(root / "bundle")
+            self.assertEqual(
+                triage["denial"],
+                {
+                    "denial_stage": "session-authentication",
+                    "denial_class": "authentication_denied",
+                    "run_id": "00000000-0000-4000-8000-000000000004",
+                },
+            )
+            self.assertEqual(len(triage["attempts"]), 1)
+            self.assertEqual(
+                triage["attempts"][0]["attempt_run_id"],
+                triage["denial"]["run_id"],
+            )
+            runtime = root / "bundle" / "sources" / "runtime-structured"
+            runtime.write_text(
+                runtime.read_text(encoding="utf-8")
+                + "HEPHAESTUS_RUNTIME denial_stage=decryption denial_class=other_failure "
+                "run_id=00000000-0000-4000-8000-000000000099\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                TRIAGE.summarize(root / "bundle")["denial"]["run_id"],
+                "00000000-0000-4000-8000-000000000004",
+            )
+            self.assertEqual(triage["sources"]["truncatedCount"], 1)
+            self.assertEqual(triage["sources"]["unavailableCount"], 1)
+
+    def test_triage_caps_latest_attempts_and_rejects_unknown_fields(self):
+        with tempfile.TemporaryDirectory(prefix="heph-gcp-triage-cap-") as directory:
+            root = Path(directory)
+            self._archive(root)
+            lineage = root / "bundle" / "lineage.jsonl"
+            rows = []
+            for number in range(60):
+                rows.append(
+                    json.dumps(
+                        {
+                            "attempt_id": f"00000000-0000-4000-8000-{number:012d}",
+                            "attempt_run_id": f"00000000-0000-4000-8000-{number + 100:012d}",
+                            "attempt_number": number + 1,
+                            "attempt_state": "failed",
+                            "run_state": "failed",
+                            "run_outcome": "failed",
+                            "disposition": "retryable",
+                        }
+                    )
+                )
+            lineage.write_text("\n".join(rows) + "\n", encoding="utf-8")
+            triage = TRIAGE.summarize(root / "bundle")
+            self.assertEqual(len(triage["attempts"]), 50)
+            self.assertLessEqual(
+                len(json.dumps(triage, separators=(",", ":")).encode()), TRIAGE.MAX_TRIAGE_BYTES
+            )
+            duplicate_id = "00000000-0000-4000-8000-000000000201"
+            latest = TRIAGE._latest_attempts([
+                {"attempt_id": duplicate_id, "attempt_number": 1, "attempt_state": "running", "attempt_completed_at": None},
+                {"attempt_id": duplicate_id, "attempt_number": 1, "attempt_state": "failed", "attempt_completed_at": "2026-09-11 10:00:00 +00:00:00"},
+            ])
+            self.assertEqual(latest[0]["attempt_state"], "failed")
+            # The source was already projected by the collector in the normal
+            # path; this direct mutation models a malformed private archive.
+            lineage.write_text(
+                json.dumps({"attempt_id": "00000000-0000-4000-8000-000000000099", "unknown": "value"}) + "\n",
+                encoding="utf-8",
+            )
+            with self.assertRaises(ValueError):
+                TRIAGE.summarize(root / "bundle")
+            lineage.write_text(
+                json.dumps(
+                    {
+                        "attempt_id": "00000000-0000-4000-8000-000000000099",
+                        "event_id": "secret",
+                    }
+                ) + "\n",
+                encoding="utf-8",
+            )
+            with self.assertRaises(ValueError):
+                TRIAGE.summarize(root / "bundle")
+
+    def test_triage_output_has_no_secret_values_or_unknown_fields(self):
+        with tempfile.TemporaryDirectory(prefix="heph-gcp-triage-safe-") as directory:
+            root = Path(directory)
+            self._archive(root)
+            result = TRIAGE.summarize(root / "bundle")
+            encoded = json.dumps(result, sort_keys=True)
+            self.assertNotIn("secret", encoded.lower())
+            self.assertNotIn("token", encoded.lower())
+            self.assertEqual(set(result), TRIAGE.TRIAGE_FIELDS)
+
+    def test_triage_rejects_untyped_denial_classification_or_id(self):
+        with tempfile.TemporaryDirectory(prefix="heph-gcp-triage-denial-") as directory:
+            root = Path(directory)
+            self._archive(root)
+            runtime = root / "bundle" / "sources" / "runtime-structured"
+            runtime.write_text(
+                "HEPHAESTUS_RUNTIME denial_stage=session-authentication "
+                "denial_class=not-a-service-class "
+                "run_id=00000000-0000-4000-8000-000000000004\n",
+                encoding="utf-8",
+            )
+            with self.assertRaises(ValueError):
+                TRIAGE.summarize(root / "bundle")
+            runtime.write_text(
+                "HEPHAESTUS_RUNTIME denial_stage=session-authentication "
+                "denial_class=authentication_denied run_id=not-a-uuid\n",
+                encoding="utf-8",
+            )
+            with self.assertRaises(ValueError):
+                TRIAGE.summarize(root / "bundle")
 
     def _run_download(
         self,
@@ -203,6 +331,11 @@ finish
             self.assertEqual(status["scan"], "passed")
             self.assertEqual(status["upload"], "verified-by-download")
             self.assertEqual(status["cleanup"], "verified-absent")
+            self.assertEqual(status["triage"]["denial"]["denial_class"], "authentication_denied")
+            self.assertEqual(len(status["triage"]["attempts"]), 1)
+            self.assertEqual(status["triage"]["snapshotStatus"], None)
+            self.assertEqual(status["triage"]["sources"]["availableCount"], 6)
+            self.assertEqual(status["triage"]["sources"]["missingCount"], 0)
 
     def test_diagnostic_bundle_staging_requires_no_forge_account(self):
         with tempfile.TemporaryDirectory(prefix="heph-gcp-diagnostic-root-") as directory:
@@ -321,7 +454,7 @@ finish
             serial.write_text("HEPH_GCP_COOKING phase=browser status=failed\n", encoding="utf-8")
             lineage = evidence / "cooking-lineage.jsonl"
             lineage.write_text(
-                '{"sampled_at":"2026-09-11 10:00:00 Z",'
+                '{"sampled_at":"2026-09-11 10:00:00 +00:00:00",'
                 '"mailbox_id":"00000000-0000-4000-8000-000000000001",'
                 '"event_id":"00000000-0000-4000-8000-000000000002",'
                 '"attempt_id":"00000000-0000-4000-8000-000000000003",'
@@ -358,6 +491,9 @@ finish
                 {"serial", "lineage", "lineage-status"},
             )
             self.assertEqual(manifest["collectionErrors"], [])
+            triage = TRIAGE.summarize(output)
+            self.assertEqual(triage["snapshotStatus"]["status"], "query_failed")
+            self.assertEqual(triage["snapshotStatus"]["rows"], 0)
 
     def test_full_missing_lineage_is_an_explicit_collector_error(self):
         with tempfile.TemporaryDirectory(prefix="heph-gcp-missing-lineage-") as directory:
