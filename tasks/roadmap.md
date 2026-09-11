@@ -29,11 +29,21 @@ require them to assemble everything before receiving value.
 - [x] Preserve the distinction between the verified first-request proof and
   remaining acceptance requirements; record the agreed scope changes explicitly.
 
+- [ ] Finish the [current GCP Cooking CI validation follow-up](in-progress/gcp-cooking-ci-validation.md)
+  as an operational follow-up to MVP-05.1. The protected prebuilt default image
+  and disposable smoke path have passed, and the diagnostic collection pipeline
+  is proven. Full Cooking acceptance remains outstanding; this follow-up must
+  not be treated as complete from cleanup evidence alone.
+
 Do not introduce broad infrastructure merely to finish the scenario. Its
 existing task remains the source of truth for detailed acceptance and tests.
 
 ## 2. Audit the existing interactive path
 
+- [ ] Jointly review the MVP-06 plan with the user before starting or resuming
+  implementation. Confirm the intended scope, dependency order and acceptance
+  evidence in [the MVP-06 task](in-progress/mvp-06-git-backed-session-chat-journey.md)
+  before implementation items are taken up.
 - [ ] Trace the complete path from user input through durable acceptance and
   isolated execution to a visible response and reconnectable history.
 - [ ] Classify each transition as already supported, awkward to integrate, or
@@ -108,6 +118,9 @@ interactive-path audit rather than being treated as already implemented.
 - [ ] Put the first distribution in front of a few developers building agents
   for themselves or clients, observing where they need help and using that
   evidence to prioritize subsequent work.
+- [ ] Automate content-versioned GCP runner image candidates with bounded
+  validation and protected promotion; see
+  [the runner-image rebuild plan](todo/automate-gcp-runner-image-rebuilds.md).
 - [ ] Define backup and restoration as a first-class product workstream,
   including the consistent set of code, configuration and persistent state
   needed to recover an installation and the handling of credentials/keys.

@@ -31,10 +31,25 @@ universal prompt, workflow, form, or session protocol.
 
 - [`mvp-01.2-replace-controlled-result-publication-with-runtime-git.md`](../done/mvp-01.2-replace-controlled-result-publication-with-runtime-git.md)
 - [MVP 04: destination-bound HTTPS egress](mvp-04-brokered-model-and-outbound-capabilities.md)
-- [`release-owned-distribution-ui-surfaces.md`](../in-progress/release-owned-distribution-ui-surfaces.md)
+- [`release-owned-distribution-ui-surfaces.md`](../todo/release-owned-distribution-ui-surfaces.md)
   is a blocking dependency. MVP-06 must not introduce its own iframe, static
   serving, managed UI service, browser handoff, or tab mechanism; it consumes
   the completed release-owned distribution surface.
+
+## Plan review gate
+
+MVP-06 implementation is gated on a joint plan review with the user. The review
+must happen before implementation starts or resumes and must confirm the
+intended scope, dependency order, and acceptance evidence. The GCP Cooking
+validation follow-up is tracked separately; its current status must be
+considered during the review rather than assumed to be complete.
+
+- [ ] Review this plan jointly with the user and record the agreed scope and
+  sequence here.
+- [ ] Confirm the release-owned UI dependency is ready, or record the agreed
+  dependency resolution before beginning MVP-06 implementation.
+- [ ] Confirm which current GCP Cooking evidence is relevant to the agreed
+  MVP-06 sequence; do not use cleanup-only evidence as a completion claim.
 
 ## Implementation checklist
 
