@@ -549,6 +549,88 @@ class CookingDiagnosticsTests(unittest.TestCase):
             with self.assertRaises(COLLECTOR.CollectionError):
                 COLLECTOR.collect(root_path / "bundle", [f"runtime-log={source}"], None, None, None)
 
+    def test_projects_typed_evidence_scan_result_and_rejects_raw_fields(self):
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            scan = root_path / "evidence-scan.json"
+            scan.write_text(
+                json.dumps(
+                    {
+                        "schema": 1,
+                        "status": "failed",
+                        "rule": "browser-secret-org",
+                        "file_class": "content",
+                        "path_sha256": "a" * 64,
+                        "checked_files": 12,
+                        "checked_bytes": 4096,
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            output = root_path / "bundle"
+            self.assertEqual(
+                COLLECTOR.collect(output, [f"evidence-scan={scan}"], None, None, None), 0
+            )
+            retained = json.loads((output / "sources/evidence-scan").read_text(encoding="utf-8"))
+            self.assertEqual(retained["rule"], "browser-secret-org")
+            self.assertEqual(retained["checked_files"], 12)
+            self.assertNotIn("path", retained)
+
+            unsafe = root_path / "unsafe-scan.json"
+            unsafe.write_text(
+                json.dumps(
+                    {
+                        "schema": 1,
+                        "status": "failed",
+                        "rule": "fixture-credential",
+                        "file_class": "content",
+                        "path_sha256": "a" * 64,
+                        "checked_files": 1,
+                        "checked_bytes": 2,
+                        "context": "raw credential context",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaises(COLLECTOR.CollectionError):
+                COLLECTOR.collect(root_path / "unsafe-bundle", [f"evidence-scan={unsafe}"], None, None, None)
+
+    def test_projects_explicit_unavailable_evidence_scan_result(self):
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            scan = root_path / "evidence-scan.json"
+            scan.write_text(
+                '{"schema":1,"status":"unavailable","rule":"scanner-unavailable",'
+                '"file_class":"unknown","path_sha256":null,"checked_files":0,"checked_bytes":0}\n',
+                encoding="utf-8",
+            )
+            output = root_path / "bundle"
+            self.assertEqual(
+                COLLECTOR.collect(output, [f"evidence-scan={scan}"], None, None, None), 0
+            )
+            retained = json.loads((output / "sources/evidence-scan").read_text(encoding="utf-8"))
+            self.assertEqual(retained["status"], "unavailable")
+            self.assertEqual(retained["rule"], "scanner-unavailable")
+
+    def test_retains_gate_markers_at_end_of_bounded_large_log(self):
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            source = root_path / "runtime.log"
+            source.write_bytes(
+                b"x" * (15 * 1024 * 1024)
+                + b"\n"
+                + b"HEPH_GCP_COOKING event=workload-result operation=cooking-workload "
+                + b"phase=cooking status=failed exit_code=7\n"
+            )
+            output = root_path / "bundle"
+            self.assertEqual(
+                COLLECTOR.collect(output, [f"runtime-log={source}"], None, None, None), 0
+            )
+            retained = (output / "sources/runtime-log").read_text(encoding="utf-8")
+            self.assertIn("event=workload-result", retained)
+            self.assertIn("exit_code=7", retained)
+
 
 if __name__ == "__main__":
     unittest.main()

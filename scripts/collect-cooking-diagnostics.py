@@ -46,6 +46,7 @@ ALLOWED_LABELS = frozenset(
         "runtime-structured",
         "browser-summary",
         "test-output",
+        "evidence-scan",
         # These labels are used only in collectionErrors for producer files
         # that were absent; they are never accepted as retained raw sources.
         "lineage",
@@ -358,6 +359,46 @@ BROWSER_SOURCE_RE = re.compile(
     r"^e2e/playwright/cooking-tests/cooking-(?:live-review|post-operation)\.spec\.ts$"
 )
 
+EVIDENCE_SCAN_FIELDS = frozenset(
+    {"schema", "status", "rule", "file_class", "path_sha256", "checked_files", "checked_bytes"}
+)
+EVIDENCE_SCAN_STATUSES = frozenset({"passed", "failed", "unavailable", "error"})
+EVIDENCE_SCAN_RULES = frozenset(
+    {
+        "none",
+        "browser-secret-org",
+        "browser-secret-project",
+        "golden-provider-sentinel",
+        "cooking-inbound-sentinel",
+        "cooking-model-sentinel",
+        "cooking-relay-sentinel",
+        "cooking-model-rotated-sentinel",
+        "cooking-inbound-rotated-sentinel",
+        "cooking-relay-rotated-sentinel",
+        "fixture-credential",
+        "archive-nesting-limit",
+        "archive-size-limit",
+        "archive-member-size-limit",
+        "archive-invalid",
+        "evidence-root",
+        "symlink",
+        "file-size-limit",
+        "no-files",
+        "read-error",
+        "scan-error",
+        "scanner-unavailable",
+        "scanner-error",
+        "missing-result",
+        "status-report-unavailable",
+    }
+)
+EVIDENCE_SCAN_FILE_CLASSES = frozenset(
+    {"none", "archive", "content", "structured", "text", "binary", "directory", "filesystem", "metadata", "unknown"}
+)
+EVIDENCE_SCAN_DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
+EVIDENCE_SCAN_MAX_FILES = 1_000_000
+EVIDENCE_SCAN_MAX_BYTES = 2**63 - 1
+
 
 def _load_evidence_module():
     path = Path(__file__).with_name("check-browser-evidence.py")
@@ -520,6 +561,85 @@ def _project_retry_marker(line: str) -> str:
     return "HEPH_COOKING_RETRY " + " ".join(f"{field}={safe[field]}" for field in RETRY_FIELD_ORDER)
 
 
+def _project_evidence_scan_marker(line: str) -> str:
+    """Project the Cooking runner's typed scanner marker without raw fields."""
+
+    tokens = line.split()
+    if not tokens or tokens[0] != "HEPH_GCP_COOKING":
+        raise CollectionError("evidence scan marker is malformed")
+    fields: dict[str, str] = {}
+    for token in tokens[1:]:
+        key, separator, value = token.partition("=")
+        if not separator or key in fields:
+            raise CollectionError("evidence scan marker fields are malformed")
+        fields[key] = value
+    expected = {
+        "event", "operation", "phase", "status", "exit_code", "report_status", "rule",
+        "file_class", "path_sha256", "checked_files", "checked_bytes",
+    }
+    if set(fields) != expected or fields["event"] != "evidence-scan" or fields["operation"] != "evidence-scan":
+        raise CollectionError("evidence scan marker fields are not allowlisted")
+    if fields["phase"] != "evidence" or fields["status"] not in {"passed", "failed"}:
+        raise CollectionError("evidence scan marker outcome is invalid")
+    if fields["report_status"] not in {"passed", "failed", "unavailable", "error"}:
+        raise CollectionError("evidence scan marker report status is invalid")
+    if fields["rule"] not in EVIDENCE_SCAN_RULES:
+        raise CollectionError("evidence scan marker rule is invalid")
+    if fields["file_class"] not in EVIDENCE_SCAN_FILE_CLASSES:
+        raise CollectionError("evidence scan marker file class is invalid")
+    if fields["path_sha256"] != "none" and EVIDENCE_SCAN_DIGEST_RE.fullmatch(fields["path_sha256"]) is None:
+        raise CollectionError("evidence scan marker path digest is invalid")
+    for field, maximum in (("exit_code", 255), ("checked_files", EVIDENCE_SCAN_MAX_FILES), ("checked_bytes", EVIDENCE_SCAN_MAX_BYTES)):
+        value = fields[field]
+        if not value.isascii() or not value.isdecimal() or int(value) > maximum:
+            raise CollectionError(f"evidence scan marker {field} is invalid")
+    report_status = fields["report_status"]
+    rule = fields["rule"]
+    if report_status == "passed" and (rule != "none" or fields["file_class"] != "none" or fields["path_sha256"] != "none"):
+        raise CollectionError("passed evidence scan marker has failure fields")
+    if report_status != "passed" and rule == "none":
+        raise CollectionError("failed evidence scan marker has no failure rule")
+    if report_status in {"unavailable", "error"} and rule not in {"scanner-unavailable", "scanner-error", "missing-result", "status-report-unavailable"}:
+        raise CollectionError("unavailable evidence scan marker has an invalid rule")
+    return (
+        "HEPH_GCP_COOKING event=evidence-scan operation=evidence-scan phase=evidence "
+        f"status={fields['status']} exit_code={int(fields['exit_code'])} "
+        f"report_status={report_status} rule={rule} file_class={fields['file_class']} "
+        f"path_sha256={fields['path_sha256']} checked_files={int(fields['checked_files'])} "
+        f"checked_bytes={int(fields['checked_bytes'])}"
+    )
+
+
+def _project_browser_validation_marker(line: str) -> str:
+    """Project the browser gate marker's fixed result vocabulary."""
+
+    tokens = line.split()
+    if not tokens or tokens[0] != "HEPH_GCP_COOKING":
+        raise CollectionError("browser validation marker is malformed")
+    fields: dict[str, str] = {}
+    for token in tokens[1:]:
+        key, separator, value = token.partition("=")
+        if not separator or key in fields:
+            raise CollectionError("browser validation marker fields are malformed")
+        fields[key] = value
+    expected = {"event", "operation", "phase", "status", "report_state", "reason", "exit_code"}
+    if set(fields) != expected or fields["event"] != "browser-report-validation" or fields["operation"] != "browser-report-validation":
+        raise CollectionError("browser validation marker fields are not allowlisted")
+    if fields["phase"] != "evidence" or fields["status"] not in {"passed", "failed"}:
+        raise CollectionError("browser validation marker outcome is invalid")
+    if fields["report_state"] not in {"complete", "missing", "partial", "malformed", "truncated", "report-error", "unknown"}:
+        raise CollectionError("browser validation marker report state is invalid")
+    if fields["reason"] not in {"complete", "invalid-report", "incomplete-phases", "browser-tests-not-passed", "timeout", "report-validation-failed"}:
+        raise CollectionError("browser validation marker reason is invalid")
+    if not fields["exit_code"].isascii() or not fields["exit_code"].isdecimal() or int(fields["exit_code"]) > 255:
+        raise CollectionError("browser validation marker exit code is invalid")
+    return (
+        "HEPH_GCP_COOKING event=browser-report-validation operation=browser-report-validation "
+        f"phase=evidence status={fields['status']} report_state={fields['report_state']} "
+        f"reason={fields['reason']} exit_code={int(fields['exit_code'])}"
+    )
+
+
 def _project_runtime_fields(line: str) -> tuple[str, list[str]]:
     """Extract approved fields from tracing lifecycle lines.
 
@@ -582,6 +702,17 @@ def _project_text(source: Path, destination: Path) -> tuple[int, str]:
                 projected = readiness
             elif RETRY_MARKER_RE.search(line) is not None:
                 projected = _project_retry_marker(line)
+            elif (
+                line.startswith("HEPH_GCP_COOKING ")
+                and "event=evidence-scan" in line
+                and "report_status=" in line
+            ):
+                projected = _project_evidence_scan_marker(line)
+            elif (
+                line.startswith("HEPH_GCP_COOKING ")
+                and "event=browser-report-validation" in line
+            ):
+                projected = _project_browser_validation_marker(line)
             elif DROP_LINE_RE.search(line):
                 continue
             else:
@@ -747,6 +878,63 @@ def _project_browser_summary(source: Path, destination: Path) -> tuple[int, str]
             raise CollectionError(f"browser summary text is invalid: {field}")
         safe[field] = item
     encoded = (json.dumps(safe, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    destination.write_bytes(encoded)
+    destination.chmod(0o600)
+    return len(encoded), hashlib.sha256(encoded).hexdigest()
+
+
+def _project_evidence_scan(source: Path, destination: Path) -> tuple[int, str]:
+    """Retain the scanner's typed result without paths or scan content."""
+
+    source = _safe_input(source)
+    try:
+        with _open_safe(source) as input_file:
+            raw = input_file.read(MAX_LINE_BYTES + 1)
+        if len(raw) > MAX_LINE_BYTES:
+            raise CollectionError("evidence scan result exceeds its retention limit")
+        EVIDENCE.check_bytes(raw, str(source))
+        _reject_secret_assignments(raw)
+        value = json.loads(raw.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise CollectionError("evidence scan result must be one JSON object") from error
+    if not isinstance(value, dict) or set(value) != EVIDENCE_SCAN_FIELDS:
+        raise CollectionError("evidence scan result contains an unallowlisted field")
+    if value.get("schema") != 1:
+        raise CollectionError("evidence scan result schema is invalid")
+    status = value.get("status")
+    if status not in EVIDENCE_SCAN_STATUSES:
+        raise CollectionError("evidence scan result status is invalid")
+    rule = value.get("rule")
+    if rule not in EVIDENCE_SCAN_RULES:
+        raise CollectionError("evidence scan result rule is invalid")
+    file_class = value.get("file_class")
+    if file_class not in EVIDENCE_SCAN_FILE_CLASSES:
+        raise CollectionError("evidence scan result file class is invalid")
+    path_digest = value.get("path_sha256")
+    if path_digest is not None and (
+        not isinstance(path_digest, str) or EVIDENCE_SCAN_DIGEST_RE.fullmatch(path_digest) is None
+    ):
+        raise CollectionError("evidence scan result path digest is invalid")
+    for field in ("checked_files", "checked_bytes"):
+        count = value.get(field)
+        if type(count) is not int or not 0 <= count <= (EVIDENCE_SCAN_MAX_FILES if field == "checked_files" else EVIDENCE_SCAN_MAX_BYTES):
+            raise CollectionError(f"evidence scan result {field} is invalid")
+    if status == "passed" and (rule != "none" or file_class != "none" or path_digest is not None):
+        raise CollectionError("passed evidence scan result has failure fields")
+    if status != "passed" and rule == "none":
+        raise CollectionError("failed evidence scan result has no failure rule")
+    if status in {"unavailable", "error"} and rule not in {"scanner-unavailable", "scanner-error", "missing-result", "status-report-unavailable"}:
+        raise CollectionError("unavailable evidence scan result has an invalid rule")
+    safe = {
+        "schema": 1,
+        "status": status,
+        "rule": rule,
+        "file_class": file_class,
+        "path_sha256": path_digest,
+        "checked_files": value["checked_files"],
+        "checked_bytes": value["checked_bytes"],
+    }
+    encoded = (json.dumps(safe, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
     destination.write_bytes(encoded)
     destination.chmod(0o600)
     return len(encoded), hashlib.sha256(encoded).hexdigest()
@@ -994,6 +1182,8 @@ def collect(
                 destination = sources_dir / label
                 if label == "browser-summary":
                     size, digest = _project_browser_summary(source_path, destination)
+                elif label == "evidence-scan":
+                    size, digest = _project_evidence_scan(source_path, destination)
                 elif label == "runtime-structured":
                     size, digest = _project_runtime_structured(source_path, destination)
                 else:

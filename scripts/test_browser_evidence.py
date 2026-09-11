@@ -3,6 +3,7 @@
 import base64
 import importlib.util
 import io
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -127,6 +128,116 @@ class BrowserEvidenceTests(unittest.TestCase):
         self.assertNotIn(value, completed.stdout)
         self.assertNotIn(value, completed.stderr)
         self.assertEqual(completed.stdout, prefix + b"[REDACTED]-after")
+
+    def test_cli_writes_typed_status_without_path_or_content(self):
+        with tempfile.TemporaryDirectory(prefix="heph-browser-scan-status-") as root_name:
+            root = Path(root_name)
+            evidence = root / "evidence"
+            evidence.mkdir()
+            (evidence / "unsafe.log").write_bytes(EVIDENCE.VALUES[0] + b"\n")
+            status = root / "scan-status.json"
+            completed = subprocess.run(
+                [sys.executable, str(Path(__file__).with_name("check-browser-evidence.py")),
+                 str(evidence), "--status-output", str(status)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 1)
+            report = json.loads(status.read_text(encoding="utf-8"))
+            self.assertEqual(report["schema"], 1)
+            self.assertEqual(report["status"], "failed")
+            self.assertEqual(report["rule"], "browser-secret-org")
+            self.assertEqual(report["file_class"], "text")
+            self.assertRegex(report["path_sha256"], r"^[0-9a-f]{64}$")
+            self.assertNotIn(EVIDENCE.VALUES[0], status.read_bytes())
+            self.assertNotIn(EVIDENCE.VALUES[0], completed.stderr)
+            self.assertNotIn(str(evidence), status.read_text(encoding="utf-8"))
+
+    def test_cli_writes_pass_status(self):
+        with tempfile.TemporaryDirectory(prefix="heph-browser-scan-status-") as root_name:
+            root = Path(root_name)
+            evidence = root / "evidence"
+            evidence.mkdir()
+            (evidence / "safe.log").write_text("safe\n", encoding="utf-8")
+            status = root / "scan-status.json"
+            completed = subprocess.run(
+                [sys.executable, str(Path(__file__).with_name("check-browser-evidence.py")),
+                 str(evidence), "--status-output", str(status)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            report = json.loads(status.read_text(encoding="utf-8"))
+            self.assertEqual(report, {
+                "schema": 1,
+                "status": "passed",
+                "rule": "none",
+                "file_class": "none",
+                "path_sha256": None,
+                "checked_files": 1,
+                "checked_bytes": 5,
+            })
+
+    def test_cli_status_classifies_malformed_archive(self):
+        with tempfile.TemporaryDirectory(prefix="heph-browser-scan-status-") as root_name:
+            root = Path(root_name)
+            evidence = root / "evidence"
+            evidence.mkdir()
+            (evidence / "report.zip").write_bytes(b"PK\x03\x04not-an-archive")
+            status = root / "scan-status.json"
+            completed = subprocess.run(
+                [sys.executable, str(Path(__file__).with_name("check-browser-evidence.py")),
+                 str(evidence), "--status-output", str(status)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 1)
+            report = json.loads(status.read_text(encoding="utf-8"))
+            self.assertEqual(report["rule"], "archive-invalid")
+            self.assertEqual(report["file_class"], "archive")
+
+    def test_cli_status_classifies_symlink_and_size_limits(self):
+        with tempfile.TemporaryDirectory(prefix="heph-browser-scan-status-") as root_name:
+            root = Path(root_name)
+            evidence = root / "evidence"
+            evidence.mkdir()
+            target = root / "safe.log"
+            target.write_text("safe\n", encoding="utf-8")
+            link = evidence / "link.log"
+            try:
+                link.symlink_to(target)
+            except (OSError, NotImplementedError):
+                self.skipTest("symlinks are unavailable")
+            status = root / "symlink-status.json"
+            completed = subprocess.run(
+                [sys.executable, str(Path(__file__).with_name("check-browser-evidence.py")),
+                 str(evidence), "--status-output", str(status)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 1)
+            self.assertEqual(json.loads(status.read_text(encoding="utf-8"))["rule"], "symlink")
+
+            link.unlink()
+            oversized = evidence / "oversized.bin"
+            with oversized.open("wb") as output:
+                output.truncate(EVIDENCE.MAX_FILE_BYTES + 1)
+            status = root / "size-status.json"
+            completed = subprocess.run(
+                [sys.executable, str(Path(__file__).with_name("check-browser-evidence.py")),
+                 str(evidence), "--status-output", str(status)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 1)
+            report = json.loads(status.read_text(encoding="utf-8"))
+            self.assertEqual(report["rule"], "file-size-limit")
+            self.assertEqual(report["file_class"], "binary")
 
 
 if __name__ == "__main__":

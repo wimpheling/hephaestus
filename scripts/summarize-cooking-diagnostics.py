@@ -34,12 +34,12 @@ LINEAGE_FIELDS = COLLECTOR.SNAPSHOT_FIELDS
 LINEAGE_STATUS_FIELDS = COLLECTOR.SNAPSHOT_STATUS_FIELDS | {"rows"}
 SOURCE_LABELS = {
     "serial", "host-journal", "runtime-log", "runtime-structured",
-    "browser-summary", "test-output", "lineage", "lineage-status",
+    "browser-summary", "test-output", "evidence-scan", "lineage", "lineage-status",
 }
 SAFE_STATUS = COLLECTOR.SNAPSHOT_STATUS_VALUES
 TRIAGE_FIELDS = {
     "schema", "collectionStatus", "rejectedSources", "denial", "attempts", "snapshotStatus", "retry", "sources", "failures",
-    "browserObservations", "browser",
+    "browserObservations", "browser", "evidenceScan", "runtimeResults",
 }
 DENIAL_FIELDS = {"denial_stage", "denial_class", "run_id"}
 DENIAL_STAGES = {
@@ -235,6 +235,20 @@ BROWSER_SUMMARY_LOCATION_KINDS = {"error", "test"}
 BROWSER_SUMMARY_SOURCE_RE = re.compile(
     r"^e2e/playwright/cooking-tests/cooking-(?:live-review|post-operation)\.spec\.ts$"
 )
+RUNTIME_RESULT_EVENTS = {
+    "workload-result": "cooking-workload",
+    "evidence-scan": "evidence-scan",
+    "browser-report-validation": "browser-report-validation",
+}
+RUNTIME_RESULT_STATUSES = {"passed", "failed"}
+RUNTIME_RESULT_PHASES = {"cooking", "evidence"}
+RUNTIME_RESULT_REPORT_STATES = {
+    "complete", "missing", "partial", "malformed", "truncated", "report-error", "unknown",
+}
+RUNTIME_RESULT_REASONS = {
+    "complete", "invalid-report", "incomplete-phases", "browser-tests-not-passed",
+    "timeout", "report-validation-failed",
+}
 
 
 def _unknown_browser_summary(state: str) -> dict[str, Any]:
@@ -370,6 +384,188 @@ def _project_browser_summary(
     safe.setdefault("passed_phases", [])
     safe.setdefault("failure_metadata", [])
     return safe
+
+
+def _unknown_evidence_scan() -> dict[str, Any]:
+    """Describe bundles made before the whole-tree scan result was retained."""
+
+    return {
+        "schema": 1,
+        "status": "unavailable",
+        "rule": "missing-result",
+        "file_class": "none",
+        "path_sha256": None,
+        "checked_files": 0,
+        "checked_bytes": 0,
+    }
+
+
+def _project_evidence_scan(
+    root: Path,
+    source_records: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Project the scanner status while excluding paths and raw diagnostics."""
+
+    records = [record for record in source_records if record.get("label") == "evidence-scan"]
+    if not records:
+        marker_result: dict[str, Any] | None = None
+        for record in source_records:
+            if record.get("label") not in {"serial", "runtime-log", "runtime-structured", "test-output"}:
+                continue
+            path = _safe_path(root, record["path"])
+            for line in path.read_text(encoding="utf-8").splitlines():
+                if not line.startswith("HEPH_GCP_COOKING ") or "event=evidence-scan" not in line:
+                    continue
+                fields = dict(FAILURE_PAIR.findall(line))
+                if "report_status" not in fields:
+                    continue
+                expected = {
+                    "event", "operation", "phase", "status", "exit_code", "report_status", "rule",
+                    "file_class", "path_sha256", "checked_files", "checked_bytes",
+                }
+                if set(fields) != expected or fields["event"] != "evidence-scan" or fields["operation"] != "evidence-scan":
+                    raise ValueError("evidence scan marker fields are invalid")
+                if fields["phase"] != "evidence" or fields["status"] not in {"passed", "failed"}:
+                    raise ValueError("evidence scan marker outcome is invalid")
+                report_status = fields["report_status"]
+                if report_status not in {"passed", "failed", "unavailable", "error"}:
+                    raise ValueError("evidence scan marker report status is invalid")
+                if fields["rule"] not in COLLECTOR.EVIDENCE_SCAN_RULES or fields["file_class"] not in COLLECTOR.EVIDENCE_SCAN_FILE_CLASSES:
+                    raise ValueError("evidence scan marker classification is invalid")
+                if report_status == "passed" and (
+                    fields["rule"] != "none"
+                    or fields["file_class"] != "none"
+                    or fields["path_sha256"] != "none"
+                ):
+                    raise ValueError("passed evidence scan marker has failure fields")
+                if report_status != "passed" and fields["rule"] == "none":
+                    raise ValueError("failed evidence scan marker has no failure rule")
+                if report_status in {"unavailable", "error"} and fields["rule"] not in {
+                    "scanner-unavailable", "scanner-error", "missing-result", "status-report-unavailable"
+                }:
+                    raise ValueError("unavailable evidence scan marker has an invalid rule")
+                digest = fields["path_sha256"]
+                if digest != "none" and COLLECTOR.EVIDENCE_SCAN_DIGEST_RE.fullmatch(digest) is None:
+                    raise ValueError("evidence scan marker path digest is invalid")
+                numbers: dict[str, int] = {}
+                for field, maximum in (
+                    ("exit_code", 255),
+                    ("checked_files", COLLECTOR.EVIDENCE_SCAN_MAX_FILES),
+                    ("checked_bytes", COLLECTOR.EVIDENCE_SCAN_MAX_BYTES),
+                ):
+                    if not fields[field].isascii() or not fields[field].isdecimal() or int(fields[field]) > maximum:
+                        raise ValueError("evidence scan marker count is invalid")
+                    numbers[field] = int(fields[field])
+                marker_result = {
+                    "schema": 1,
+                    "status": report_status,
+                    "rule": fields["rule"],
+                    "file_class": fields["file_class"],
+                    "path_sha256": None if digest == "none" else digest,
+                    "checked_files": numbers["checked_files"],
+                    "checked_bytes": numbers["checked_bytes"],
+                    "outer_status": fields["status"],
+                    "exit_code": numbers["exit_code"],
+                }
+        return marker_result or _unknown_evidence_scan()
+    if len(records) != 1:
+        raise ValueError("evidence scan source is duplicated")
+    try:
+        value = json.loads(_safe_path(root, records[0]["path"]).read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("evidence scan result is not valid JSON") from error
+    if not isinstance(value, dict) or set(value) != COLLECTOR.EVIDENCE_SCAN_FIELDS:
+        raise ValueError("evidence scan result contains an unknown field")
+    if value.get("schema") != 1 or value.get("status") not in COLLECTOR.EVIDENCE_SCAN_STATUSES:
+        raise ValueError("evidence scan result classification is invalid")
+    if value.get("rule") not in COLLECTOR.EVIDENCE_SCAN_RULES:
+        raise ValueError("evidence scan result rule is invalid")
+    if value.get("file_class") not in COLLECTOR.EVIDENCE_SCAN_FILE_CLASSES:
+        raise ValueError("evidence scan result file class is invalid")
+    path_digest = value.get("path_sha256")
+    if path_digest is not None and (
+        not isinstance(path_digest, str)
+        or COLLECTOR.EVIDENCE_SCAN_DIGEST_RE.fullmatch(path_digest) is None
+    ):
+        raise ValueError("evidence scan result path digest is invalid")
+    checked_files = value.get("checked_files")
+    checked_bytes = value.get("checked_bytes")
+    if (
+        type(checked_files) is not int
+        or not 0 <= checked_files <= COLLECTOR.EVIDENCE_SCAN_MAX_FILES
+        or type(checked_bytes) is not int
+        or not 0 <= checked_bytes <= COLLECTOR.EVIDENCE_SCAN_MAX_BYTES
+    ):
+        raise ValueError("evidence scan result counts are invalid")
+    status = value["status"]
+    rule = value["rule"]
+    if status == "passed" and (rule != "none" or value["file_class"] != "none" or path_digest is not None):
+        raise ValueError("passed evidence scan result has failure fields")
+    if status != "passed" and rule == "none":
+        raise ValueError("failed evidence scan result has no failure rule")
+    if status in {"unavailable", "error"} and rule not in {"scanner-unavailable", "scanner-error", "missing-result"}:
+        raise ValueError("unavailable evidence scan result has an invalid rule")
+    return {
+        "schema": 1,
+        "status": status,
+        "rule": rule,
+        "file_class": value["file_class"],
+        # The scanner's path digest is retained as a non-reversible audit
+        # handle; no path or scanner error text enters public triage.
+        "path_sha256": path_digest,
+        "checked_files": checked_files,
+        "checked_bytes": checked_bytes,
+    }
+
+
+def _project_runtime_results(
+    root: Path,
+    source_records: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Keep independent harness outcomes, including successful outcomes."""
+
+    results: list[dict[str, Any]] = []
+    for record in source_records:
+        if record.get("label") not in {"serial", "runtime-log", "runtime-structured", "test-output"}:
+            continue
+        path = _safe_path(root, record["path"])
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if not line.startswith("HEPH_GCP_COOKING "):
+                continue
+            fields = dict(FAILURE_PAIR.findall(line))
+            event = fields.get("event")
+            operation = fields.get("operation")
+            status = fields.get("status")
+            if event not in RUNTIME_RESULT_EVENTS or operation != RUNTIME_RESULT_EVENTS[event]:
+                continue
+            if status not in RUNTIME_RESULT_STATUSES:
+                raise ValueError("runtime result status is invalid")
+            phase = fields.get("phase")
+            if phase not in RUNTIME_RESULT_PHASES:
+                raise ValueError("runtime result phase is invalid")
+            result: dict[str, Any] = {
+                "source": record["label"],
+                "event": event,
+                "operation": operation,
+                "phase": phase,
+                "status": status,
+            }
+            if "exit_code" in fields:
+                if not fields["exit_code"].isdigit() or not 0 <= int(fields["exit_code"]) <= 255:
+                    raise ValueError("runtime result exit code is invalid")
+                result["exit_code"] = int(fields["exit_code"])
+            if event == "browser-report-validation":
+                report_state = fields.get("report_state")
+                reason = fields.get("reason")
+                if report_state not in RUNTIME_RESULT_REPORT_STATES or reason not in RUNTIME_RESULT_REASONS:
+                    raise ValueError("browser validation result is invalid")
+                result["report_state"] = report_state
+                result["reason"] = reason
+            if result not in results:
+                results.append(result)
+            if len(results) >= 12:
+                return results
+    return results
 
 
 def _project_retry(
@@ -779,6 +975,8 @@ def summarize(bundle: Path) -> dict[str, Any]:
         "retry": _project_retry(bundle, records, attempts),
         "browserObservations": _project_browser_observations(bundle, records),
         "browser": _project_browser_summary(bundle, records),
+        "evidenceScan": _project_evidence_scan(bundle, records),
+        "runtimeResults": _project_runtime_results(bundle, records),
         "failures": _project_failures(bundle, records, attempts),
         "sources": {
             "available": sorted(set(available)),

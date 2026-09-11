@@ -599,14 +599,70 @@ if ((status != 0)); then
         2>&1 || true
 fi
 phase_start evidence
+scan_status_report="$evidence_root/evidence-scan-status.json"
+rm -f -- "$scan_status_report"
 set +e
-run_with_deadline python3 -B "$checkout_root/scripts/check-browser-evidence.py" "$evidence_root"
+run_with_deadline python3 -B "$checkout_root/scripts/check-browser-evidence.py" \
+    "$evidence_root" --status-output "$scan_status_report"
 scan_status=$?
 set -e
 evidence_scan_result='passed'
 ((scan_status == 0)) || evidence_scan_result='failed'
-printf 'HEPH_GCP_COOKING event=evidence-scan operation=evidence-scan phase=evidence status=%s exit_code=%s\n' \
-    "$evidence_scan_result" "$scan_status"
+scan_report='report_status=unavailable rule=status-report-unavailable file_class=metadata path_sha256=none checked_files=0 checked_bytes=0'
+if [[ -s "$scan_status_report" ]]; then
+if scan_report_fields="$(python3 -B - "$scan_status_report" <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
+
+value = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+rules = {
+    "none", "browser-secret-org", "browser-secret-project", "golden-provider-sentinel",
+    "cooking-inbound-sentinel", "cooking-model-sentinel", "cooking-relay-sentinel",
+    "cooking-model-rotated-sentinel", "cooking-inbound-rotated-sentinel",
+    "cooking-relay-rotated-sentinel", "archive-nesting-limit", "archive-size-limit",
+    "archive-member-size-limit", "archive-invalid", "file-size-limit", "symlink",
+    "evidence-root", "no-files", "read-error", "scan-error",
+}
+classes = {"none", "archive", "structured", "text", "binary", "directory", "filesystem", "content", "metadata", "unknown"}
+if not isinstance(value, dict) or set(value) != {
+    "schema", "status", "rule", "file_class", "path_sha256", "checked_files", "checked_bytes"
+}:
+    raise SystemExit("scanner status fields are invalid")
+if value["schema"] != 1 or value["status"] not in {"passed", "failed"}:
+    raise SystemExit("scanner status classification is invalid")
+if value["rule"] not in rules or value["file_class"] not in classes:
+    raise SystemExit("scanner status rule is invalid")
+if (value["status"] == "passed") != (value["rule"] == "none"):
+    raise SystemExit("scanner status result does not match its rule")
+path_digest = value["path_sha256"]
+if path_digest is not None and (not isinstance(path_digest, str) or re.fullmatch(r"[0-9a-f]{64}", path_digest) is None):
+    raise SystemExit("scanner status path digest is invalid")
+for field in ("checked_files", "checked_bytes"):
+    if type(value[field]) is not int or value[field] < 0:
+        raise SystemExit("scanner status count is invalid")
+print("report_status=%s rule=%s file_class=%s path_sha256=%s checked_files=%s checked_bytes=%s" % (
+    value["status"], value["rule"], value["file_class"], path_digest or "none",
+    value["checked_files"], value["checked_bytes"],
+))
+PY
+    )"; then
+        scan_report="$scan_report_fields"
+    else
+        if ((scan_status == 0)); then
+            scan_status=1
+            evidence_scan_result='failed'
+        fi
+    fi
+else
+    if ((scan_status == 0)); then
+        scan_status=1
+        evidence_scan_result='failed'
+    fi
+fi
+printf 'HEPH_GCP_COOKING event=evidence-scan operation=evidence-scan phase=evidence status=%s exit_code=%s %s\n' \
+    "$evidence_scan_result" "$scan_status" "$scan_report"
 set +e
 run_with_deadline python3 -B "$checkout_root/scripts/project-playwright-browser-summary.py" \
     "$evidence_root" "$evidence_root/browser-summary.json" --require-complete-journey

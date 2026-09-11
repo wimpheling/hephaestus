@@ -302,7 +302,9 @@ finish
                 "HEPH_GCP_COOKING event=workload-result operation=cooking-workload "
                 "phase=cooking status=failed exit_code=7\n"
                 "HEPH_GCP_COOKING event=evidence-scan operation=evidence-scan "
-                "phase=evidence status=passed exit_code=0\n",
+                "phase=evidence status=passed exit_code=0\n"
+                "HEPH_GCP_COOKING event=browser-report-validation operation=browser-report-validation "
+                "phase=evidence status=failed report_state=partial reason=incomplete-phases exit_code=3\n",
                 encoding="utf-8",
             )
             (root / "bundle" / "sources" / "browser-summary").write_text(
@@ -325,6 +327,37 @@ finish
                 failures,
             )
             self.assertNotIn("browser-journey", json.dumps(failures))
+            self.assertEqual(
+                TRIAGE.summarize(root / "bundle")["runtimeResults"],
+                [
+                    {
+                        "source": "runtime-structured",
+                        "event": "workload-result",
+                        "operation": "cooking-workload",
+                        "phase": "cooking",
+                        "status": "failed",
+                        "exit_code": 7,
+                    },
+                    {
+                        "source": "runtime-structured",
+                        "event": "evidence-scan",
+                        "operation": "evidence-scan",
+                        "phase": "evidence",
+                        "status": "passed",
+                        "exit_code": 0,
+                    },
+                    {
+                        "source": "runtime-structured",
+                        "event": "browser-report-validation",
+                        "operation": "browser-report-validation",
+                        "phase": "evidence",
+                        "status": "failed",
+                        "exit_code": 3,
+                        "report_state": "partial",
+                        "reason": "incomplete-phases",
+                    },
+                ],
+            )
             browser = TRIAGE.summarize(root / "bundle")["browser"]
             self.assertEqual(browser["status"], "not-run")
             self.assertEqual(browser["report_state"], "unknown")
@@ -1130,6 +1163,9 @@ finish
         evidence_marker = "event=evidence-scan operation=evidence-scan"
         self.assertIn(workload_marker, runner)
         self.assertIn(evidence_marker, runner)
+        self.assertIn('scan_status_report="$evidence_root/evidence-scan-status.json"', runner)
+        self.assertIn('--status-output "$scan_status_report"', runner)
+        self.assertIn("path_sha256", runner)
         self.assertIn("project-playwright-browser-summary.py", runner)
         workload_cleanup_guard = runner.index("if ((status != 0)); then", runner.index(workload_marker))
         self.assertLess(runner.index(workload_marker), workload_cleanup_guard)
@@ -1297,6 +1333,96 @@ finish
                 self.assertNotIn("HEPHAESTUS_GCP_COOKING: PASS", result.stdout)
                 self.assertFalse((root / "work" / "tmp" / "diagnostics-curl.conf").exists())
                 self.assertFalse((root / "work" / "tmp" / "diagnostics-token.json").exists())
+
+    def test_triage_preserves_typed_evidence_scan_and_legacy_unavailable_state(self):
+        with tempfile.TemporaryDirectory(prefix="heph-gcp-evidence-scan-") as directory:
+            root = Path(directory)
+            scan = root / "evidence-scan.json"
+            scan.write_text(
+                '{"schema":1,"status":"failed","rule":"archive-invalid",'
+                '"file_class":"archive","path_sha256":"' + "b" * 64 + '",'
+                '"checked_files":7,"checked_bytes":1234}\n',
+                encoding="utf-8",
+            )
+            bundle = root / "bundle"
+            self.assertEqual(
+                COLLECTOR.collect(bundle, [f"evidence-scan={scan}"], None, None, None), 0
+            )
+            triage = TRIAGE.summarize(bundle)
+            self.assertEqual(triage["evidenceScan"]["status"], "failed")
+            self.assertEqual(triage["evidenceScan"]["rule"], "archive-invalid")
+            self.assertEqual(triage["evidenceScan"]["checked_files"], 7)
+            self.assertEqual(triage["evidenceScan"]["path_sha256"], "b" * 64)
+
+            legacy_source = root / "serial.log"
+            legacy_source.write_text("HEPH_GCP_KVM_STARTUP event=ready\n", encoding="utf-8")
+            legacy_bundle = root / "legacy-bundle"
+            self.assertEqual(
+                COLLECTOR.collect(legacy_bundle, [f"serial={legacy_source}"], None, None, None), 0
+            )
+            self.assertEqual(
+                TRIAGE.summarize(legacy_bundle)["evidenceScan"],
+                {
+                    "schema": 1,
+                    "status": "unavailable",
+                    "rule": "missing-result",
+                    "file_class": "none",
+                    "path_sha256": None,
+                    "checked_files": 0,
+                    "checked_bytes": 0,
+                },
+            )
+
+    def test_triage_rejects_unbounded_evidence_scan_fields(self):
+        with tempfile.TemporaryDirectory(prefix="heph-gcp-evidence-scan-invalid-") as directory:
+            root = Path(directory)
+            scan = root / "evidence-scan.json"
+            scan.write_text(
+                '{"schema":1,"status":"passed","rule":"none","file_class":"none",'
+                '"path_sha256":null,"checked_files":0,"checked_bytes":0,"context":"raw"}\n',
+                encoding="utf-8",
+            )
+            with self.assertRaises(COLLECTOR.CollectionError):
+                COLLECTOR.collect(root / "bundle", [f"evidence-scan={scan}"], None, None, None)
+
+    def test_triage_derives_scan_result_from_runtime_log_without_sidecar(self):
+        with tempfile.TemporaryDirectory(prefix="heph-gcp-evidence-marker-") as directory:
+            root = Path(directory)
+            runtime = root / "gcp-cooking-run.log"
+            runtime.write_text(
+                "HEPH_GCP_COOKING event=workload-result operation=cooking-workload "
+                "phase=cooking status=failed exit_code=7\n"
+                "HEPH_GCP_COOKING event=evidence-scan operation=evidence-scan phase=evidence "
+                "status=failed exit_code=1 report_status=failed rule=browser-secret-org "
+                "file_class=content path_sha256=" + "c" * 64 + " checked_files=19 checked_bytes=2048\n"
+                "HEPH_GCP_COOKING event=browser-report-validation operation=browser-report-validation "
+                "phase=evidence status=passed report_state=complete reason=complete exit_code=0\n",
+                encoding="utf-8",
+            )
+            browser = root / "browser-summary.json"
+            browser.write_text(
+                '{"status":"passed","phase":"browser","component":"browser-e2e",'
+                '"result_origin":"playwright-report"}\n',
+                encoding="utf-8",
+            )
+            bundle = root / "bundle"
+            self.assertEqual(
+                COLLECTOR.collect(
+                    bundle,
+                    [f"runtime-log={runtime}", f"browser-summary={browser}"],
+                    None,
+                    None,
+                    None,
+                ),
+                0,
+            )
+            triage = TRIAGE.summarize(bundle)
+            self.assertEqual(triage["evidenceScan"]["status"], "failed")
+            self.assertEqual(triage["evidenceScan"]["rule"], "browser-secret-org")
+            self.assertEqual(triage["evidenceScan"]["outer_status"], "failed")
+            self.assertEqual(triage["evidenceScan"]["exit_code"], 1)
+            self.assertEqual(triage["evidenceScan"]["checked_files"], 19)
+            self.assertEqual(len(triage["runtimeResults"]), 3)
 
 
 if __name__ == "__main__":
