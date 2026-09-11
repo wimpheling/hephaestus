@@ -234,6 +234,14 @@ GENERIC_SECRET_RE = re.compile(
 )
 SAFE_BARE_RE = re.compile(r"^(?:PASS|FAIL|ERROR|WARN|FAILED|READY|TIMEOUT)$", re.IGNORECASE)
 SAFE_STACK_RE = re.compile(r"^at\s+[A-Za-z0-9_.:/-]+:\d+(?::\d+)?$")
+RUST_TEST_NAME_RE = r"[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*"
+RUST_TEST_RESULT_RE = re.compile(
+    rf"^test\s+(?P<test>{RUST_TEST_NAME_RE})\s+\.\.\.\s+(?P<status>ok|FAILED|ignored)$"
+)
+RUST_PANIC_LOCATION_RE = re.compile(
+    r"^thread\s+'[^']{1,128}'\s+panicked at\s+"
+    r"(?P<location>[A-Za-z0-9_./:-]+:\d+(?::\d+)?)(?:$|:.*$)"
+)
 SAFE_ERROR_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _.,:;/'()\[\]-]{0,1023}$")
 STACK_LINE_RE = re.compile(r"^\s*(?:at\s+|File\s+|[A-Za-z0-9_.-]+\.\w+:\d+)")
 ASSERTION_LINE_RE = re.compile(
@@ -321,7 +329,10 @@ def classify_readiness_error(line: str) -> str | None:
 
 
 BROWSER_FIELDS = frozenset(
-    {"status", "suite", "test", "phase", "duration_ms", "exit_code", "error", "stack", "started_at", "finished_at"}
+    {
+        "status", "suite", "test", "phase", "duration_ms", "exit_code", "error", "stack",
+        "started_at", "finished_at", "component", "result_origin",
+    }
 )
 
 
@@ -556,7 +567,16 @@ def _project_text(source: Path, destination: Path) -> tuple[int, str]:
                 stack_match = SAFE_STACK_RE.fullmatch(stripped)
                 assertion_match = ASSERTION_LINE_RE.fullmatch(stripped)
                 error_match = ERROR_LINE_RE.fullmatch(stripped)
-                if stack_match:
+                rust_test = RUST_TEST_RESULT_RE.fullmatch(stripped)
+                panic_location = RUST_PANIC_LOCATION_RE.fullmatch(stripped)
+                if rust_test:
+                    status = {"ok": "passed", "FAILED": "failed", "ignored": "ignored"}[rust_test.group("status")]
+                    projected = f"HEPH_GCP_TEST test={rust_test.group('test')} status={status}"
+                elif panic_location:
+                    # A caught panic is only informational until cargo emits a
+                    # canonical test result; retain its bounded source location.
+                    projected = f"location={panic_location.group('location')}"
+                elif stack_match:
                     # Keep only a canonical source location; never retain the
                     # caller's free-form stack text.
                     projected = f"location={stripped[3:].strip()}"
@@ -605,9 +625,18 @@ def _project_browser_summary(source: Path, destination: Path) -> tuple[int, str]
     for field, item in value.items():
         if item is None and field not in {"error", "stack"}:
             raise CollectionError(f"browser summary field is invalid: {field}")
-        if field in {"status", "phase"}:
-            if not isinstance(item, str) or item not in {"passed", "failed", "timed_out", "browser", "cooking"}:
+        if field == "status":
+            if not isinstance(item, str) or item not in {"passed", "failed", "timed_out", "not-run", "unknown"}:
                 raise CollectionError(f"browser summary status is invalid: {field}")
+        elif field == "phase":
+            if not isinstance(item, str) or item not in {"browser", "cooking"}:
+                raise CollectionError(f"browser summary phase is invalid: {field}")
+        elif field == "component":
+            if item != "browser-e2e":
+                raise CollectionError(f"browser summary component is invalid: {field}")
+        elif field == "result_origin":
+            if item not in {"playwright-report", "no-browser-report"}:
+                raise CollectionError(f"browser summary result origin is invalid: {field}")
         elif field in {"duration_ms", "exit_code"}:
             if type(item) is not int or item < 0:
                 raise CollectionError(f"browser summary number is invalid: {field}")

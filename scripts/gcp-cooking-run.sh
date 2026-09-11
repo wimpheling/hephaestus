@@ -564,6 +564,10 @@ run_with_deadline systemd-run --unit="$cooking_unit" --service-type=oneshot --wa
     ' -- "$checkout_root"
 status=$?
 set -e
+workload_result='passed'
+((status == 0)) || workload_result='failed'
+printf 'HEPH_GCP_COOKING event=workload-result operation=cooking-workload phase=cooking status=%s exit_code=%s\n' \
+    "$workload_result" "$status"
 if ((status != 0)); then
     # The outer deadline can kill systemd-run while the delegated oneshot is
     # still activating.  Stop that unit from this supervisor's cgroup before
@@ -599,17 +603,17 @@ set +e
 run_with_deadline python3 -B "$checkout_root/scripts/check-browser-evidence.py" "$evidence_root"
 scan_status=$?
 set -e
-browser_summary_status='passed'
-((status == 0 && scan_status == 0)) || browser_summary_status='failed'
-python3 - "$evidence_root" "$browser_summary_status" "$status" >"$evidence_root/browser-summary.json" <<'PY'
+evidence_scan_result='passed'
+((scan_status == 0)) || evidence_scan_result='failed'
+printf 'HEPH_GCP_COOKING event=evidence-scan operation=evidence-scan phase=evidence status=%s exit_code=%s\n' \
+    "$evidence_scan_result" "$scan_status"
+python3 - "$evidence_root" >"$evidence_root/browser-summary.json" <<'PY'
 import json
 import re
 import sys
 from pathlib import Path
 
 root = Path(sys.argv[1])
-state = sys.argv[2]
-exit_code = int(sys.argv[3])
 reports = sorted(root.glob("browser.*/playwright.log"))
 passed = failed = skipped = timed_out = 0
 for report in reports:
@@ -621,18 +625,44 @@ for report in reports:
     failed += sum(int(value) for value in re.findall(r"\b(\d+)\s+failed\b", text, re.I))
     skipped += sum(int(value) for value in re.findall(r"\b(\d+)\s+skipped\b", text, re.I))
     timed_out += sum(int(value) for value in re.findall(r"\b(\d+)\s+timed out\b", text, re.I))
-if reports:
+if not reports:
+    state = "not-run"
+    result_origin = "no-browser-report"
+    detail = None
+    exit_code = None
+elif timed_out:
+    state = "timed_out"
+    result_origin = "playwright-report"
     detail = f"assertions passed={passed} failed={failed} skipped={skipped} timed_out={timed_out} reports={len(reports)}"
+    exit_code = 1
+elif failed:
+    state = "failed"
+    result_origin = "playwright-report"
+    detail = f"assertions passed={passed} failed={failed} skipped={skipped} timed_out={timed_out} reports={len(reports)}"
+    exit_code = 1
+elif passed:
+    state = "passed"
+    result_origin = "playwright-report"
+    detail = f"assertions passed={passed} failed={failed} skipped={skipped} timed_out={timed_out} reports={len(reports)}"
+    exit_code = 0
 else:
-    detail = "browser report missing"
-print(json.dumps({
+    state = "unknown"
+    result_origin = "playwright-report"
+    detail = "browser report contained no recognized test result"
+    exit_code = None
+summary = {
     "status": state,
     "suite": "cooking-playwright",
     "test": "browser-journey",
     "phase": "browser",
-    "exit_code": exit_code,
-    "error": None if state == "passed" else detail,
-}, separators=(",", ":")))
+    "component": "browser-e2e",
+    "result_origin": result_origin,
+}
+if exit_code is not None:
+    summary["exit_code"] = exit_code
+if detail is not None:
+    summary["error"] = detail
+print(json.dumps(summary, separators=(",", ":")))
 PY
 chmod 0600 "$evidence_root/browser-summary.json"
 if ((status != 0)); then

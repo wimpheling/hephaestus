@@ -70,13 +70,17 @@ FAILURE_MARKERS = {
     "HEPH_GCP_KVM_SMOKE",
     "HEPH_GCP_RUNNER_IMAGE_READINESS",
     "HEPH_GCP_DIAGNOSTICS",
+    "HEPH_GCP_COOKING",
     "HEPHAESTUS_GCP_COOKING",
 }
 FAILURE_FIELDS = {
     "test", "test_result", "status", "phase", "error_class", "location", "run_id",
     "attempt_run_id", "exit", "exit_code", "exit_signal", "event", "operation", "reason_class", "class", "tool",
+    "component", "result_origin",
 }
-FAILURE_STATUS_VALUES = {"failed", "error", "timeout", "timed-out", "nonzero"}
+FAILURE_STATUS_VALUES = {"failed", "error", "timeout", "timed-out", "timed_out", "nonzero"}
+FAILURE_COMPONENT_VALUES = {"browser-e2e"}
+FAILURE_ORIGIN_VALUES = {"playwright-report", "no-browser-report"}
 FAILURE_VALUE = re.compile(r"^[A-Za-z0-9_.:/+-]{1,192}$")
 FAILURE_PAIR = re.compile(r"(?P<key>[A-Za-z][A-Za-z0-9_-]{0,31})=(?P<value>[A-Za-z0-9_.:/+-]{1,192})")
 FAILURE_ERROR_CLASSES = {
@@ -286,6 +290,10 @@ def _failure_record(
             fields.pop(field)
     if "error_class" in fields and fields["error_class"] not in FAILURE_ERROR_CLASSES:
         fields.pop("error_class")
+    if "component" in fields and fields["component"] not in FAILURE_COMPONENT_VALUES:
+        fields.pop("component")
+    if "result_origin" in fields and fields["result_origin"] not in FAILURE_ORIGIN_VALUES:
+        fields.pop("result_origin")
     for field in ("run_id", "attempt_run_id"):
         if field in fields and (
             not isinstance(fields[field], str) or not COLLECTOR.UUID_RE.fullmatch(fields[field])
@@ -297,10 +305,15 @@ def _failure_record(
         fields.pop("attempt_run_id")
     exit_code = fields.get("exit_code")
     successful_exit = exit_code == 0 or exit_code == "0"
+    def _nonzero(value: Any) -> bool:
+        if isinstance(value, int):
+            return value > 0
+        return isinstance(value, str) and value.isdigit() and int(value) > 0
+
     has_failure_state = any(
         fields.get(field) in FAILURE_STATUS_VALUES for field in ("status", "test_result")
-    ) or "error_class" in fields or "exit_signal" in fields
-    if successful_exit and not has_failure_state:
+    ) or "error_class" in fields or _nonzero(exit_code) or _nonzero(fields.get("exit_signal"))
+    if not has_failure_state:
         return None
     if not any(field in fields for field in ("test", "test_result", "status", "error_class", "exit_code", "exit_signal")):
         return None
@@ -377,6 +390,8 @@ def _project_failures(
                     if field in FAILURE_FIELDS and isinstance(item, (str, int))
                 }
                 fields = _normalize_failure_fields(fields)
+                if label == "browser-summary" and fields.get("status") not in FAILURE_STATUS_VALUES:
+                    continue
                 if not any(
                     field in fields
                     for field in ("test", "test_result", "status", "error_class", "exit_code", "exit_signal")

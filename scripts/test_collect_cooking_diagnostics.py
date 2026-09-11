@@ -111,6 +111,54 @@ class CookingDiagnosticsTests(unittest.TestCase):
             self.assertIn('"test_result":42', retained_runtime)
             self.assertNotIn("UNKNOWN_BODY", retained_runtime)
 
+    def test_projects_strict_rust_test_results_and_keeps_panic_location_informational(self):
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            source = root_path / "test-output.log"
+            source.write_text(
+                "test examples::cooking::tests::scenario::mailbox_retry ... FAILED\n"
+                "thread 'scenario::mailbox_retry' panicked at examples/cooking/tests/scenario.rs:1903:17: secret body\n"
+                "test examples::cooking::tests::scenario::healthy ... ok\n"
+                "test examples::cooking::tests::scenario::ignored_case ... ignored\n"
+                "thread 'caught' panicked at examples/cooking/tests/scenario.rs:42:3\n",
+                encoding="utf-8",
+            )
+            output = root_path / "bundle"
+            self.assertEqual(
+                COLLECTOR.collect(output, [f"test-output={source}"], None, None, None),
+                0,
+            )
+            retained = (output / "sources/test-output").read_text(encoding="utf-8")
+            self.assertIn(
+                "HEPH_GCP_TEST test=examples::cooking::tests::scenario::mailbox_retry status=failed",
+                retained,
+            )
+            self.assertIn(
+                "HEPH_GCP_TEST test=examples::cooking::tests::scenario::healthy status=passed",
+                retained,
+            )
+            self.assertIn(
+                "HEPH_GCP_TEST test=examples::cooking::tests::scenario::ignored_case status=ignored",
+                retained,
+            )
+            self.assertIn("location=examples/cooking/tests/scenario.rs:1903:17", retained)
+            self.assertIn("location=examples/cooking/tests/scenario.rs:42:3", retained)
+            self.assertNotIn("panicked", retained)
+            self.assertNotIn("secret body", retained)
+
+            panic_only = root_path / "panic-only.log"
+            panic_only.write_text(
+                "thread 'caught' panicked at examples/cooking/tests/scenario.rs:7:9: detail\n",
+                encoding="utf-8",
+            )
+            panic_output = root_path / "panic-bundle"
+            self.assertEqual(
+                COLLECTOR.collect(panic_output, [f"test-output={panic_only}"], None, None, None),
+                0,
+            )
+            panic_retained = (panic_output / "sources/test-output").read_text(encoding="utf-8")
+            self.assertEqual(panic_retained, "location=examples/cooking/tests/scenario.rs:7:9\n")
+
     def test_rejects_symlink_and_raw_browser_trace(self):
         with tempfile.TemporaryDirectory() as root:
             root_path = Path(root)
@@ -351,6 +399,36 @@ class CookingDiagnosticsTests(unittest.TestCase):
                 0,
             )
             self.assertNotIn("request", (output / "sources/browser-summary").read_text())
+
+            browser.write_text(
+                json.dumps(
+                    {
+                        "status": "not-run",
+                        "suite": "cooking-playwright",
+                        "test": "browser-journey",
+                        "phase": "browser",
+                        "component": "browser-e2e",
+                        "result_origin": "no-browser-report",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            no_browser_output = root_path / "browser-not-run-bundle"
+            self.assertEqual(
+                COLLECTOR.collect(
+                    no_browser_output,
+                    [f"browser-summary={browser}"],
+                    None,
+                    None,
+                    None,
+                ),
+                0,
+            )
+            retained_no_browser = json.loads(
+                (no_browser_output / "sources/browser-summary").read_text(encoding="utf-8")
+            )
+            self.assertEqual(retained_no_browser["status"], "not-run")
+            self.assertEqual(retained_no_browser["result_origin"], "no-browser-report")
 
     def test_canonicalizes_quoted_ansi_denial_fields(self):
         with tempfile.TemporaryDirectory() as root:

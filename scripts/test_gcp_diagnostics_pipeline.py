@@ -207,15 +207,6 @@ finish
                 encoding="utf-8",
             )
             triage = TRIAGE.summarize(root / "bundle")
-            self.assertIn(
-                {
-                    "source": "runtime-structured",
-                    "test": "rust-panic",
-                    "location": "examples/cooking/tests/scenario.rs:1697:28",
-                    "correlated": False,
-                },
-                triage["failures"],
-            )
             self.assertNotIn("UNKNOWN_PAYLOAD", json.dumps(triage["failures"]))
             self.assertNotIn("error", triage["failures"][-1])
             self.assertIn(
@@ -243,6 +234,7 @@ finish
             )
             (root / "bundle" / "sources" / "browser-summary").write_text(
                 '{"status":"failed","phase":"browser","test":"checkout",'
+                '"component":"browser-e2e","result_origin":"playwright-report",'
                 '"exit_code":1,"error":"private-request-body"}\n',
                 encoding="utf-8",
             )
@@ -268,6 +260,8 @@ finish
                     "phase": "browser",
                     "test": "checkout",
                     "status": "failed",
+                    "component": "browser-e2e",
+                    "result_origin": "playwright-report",
                     "exit_code": 1,
                     "correlated": False,
                 },
@@ -286,6 +280,73 @@ finish
             self.assertNotIn("private-error-payload", serialized)
             self.assertNotIn("private-request-body", serialized)
             self.assertNotIn("successful-probe", serialized)
+
+    def test_triage_separates_workload_and_browser_result_origins(self):
+        with tempfile.TemporaryDirectory(prefix="heph-gcp-triage-origins-") as directory:
+            root = Path(directory)
+            self._archive(root)
+            (root / "bundle" / "sources" / "runtime-structured").write_text(
+                "HEPH_GCP_COOKING event=workload-result operation=cooking-workload "
+                "phase=cooking status=failed exit_code=7\n"
+                "HEPH_GCP_COOKING event=evidence-scan operation=evidence-scan "
+                "phase=evidence status=passed exit_code=0\n",
+                encoding="utf-8",
+            )
+            (root / "bundle" / "sources" / "browser-summary").write_text(
+                '{"status":"not-run","suite":"cooking-playwright",'
+                '"test":"browser-journey","phase":"browser",'
+                '"component":"browser-e2e","result_origin":"no-browser-report"}\n',
+                encoding="utf-8",
+            )
+            failures = TRIAGE.summarize(root / "bundle")["failures"]
+            self.assertIn(
+                {
+                    "source": "runtime-structured",
+                    "event": "workload-result",
+                    "operation": "cooking-workload",
+                    "phase": "cooking",
+                    "status": "failed",
+                    "exit_code": 7,
+                    "correlated": False,
+                },
+                failures,
+            )
+            self.assertNotIn("browser-journey", json.dumps(failures))
+
+    def test_triage_does_not_count_passed_tests_or_caught_panics_as_failures(self):
+        with tempfile.TemporaryDirectory(prefix="heph-gcp-triage-test-count-") as directory:
+            root = Path(directory)
+            self._archive(root)
+            passed = "\n".join(
+                f"HEPH_GCP_TEST test=examples::cooking::tests::passed_{index} status=passed"
+                for index in range(60)
+            )
+            caught_panics = "\n".join(
+                f"HEPH_GCP_TEST test=rust-panic-{index} location=examples/cooking/tests/scenario.rs:{index + 10}:1"
+                for index in range(60)
+            )
+            (root / "bundle" / "sources" / "test-output").write_text(
+                passed
+                + "\n"
+                + caught_panics
+                + "\nHEPH_GCP_TEST test=examples::cooking::tests::actual_failure status=failed\n",
+                encoding="utf-8",
+            )
+            (root / "bundle" / "sources" / "browser-summary").write_text(
+                '{"status":"not-run","phase":"browser","test":"browser-journey",'
+                '"component":"browser-e2e","result_origin":"no-browser-report"}\n',
+                encoding="utf-8",
+            )
+            failures = TRIAGE.summarize(root / "bundle")["failures"]
+            self.assertEqual(
+                failures,
+                [{
+                    "source": "test-output",
+                    "test": "examples::cooking::tests::actual_failure",
+                    "status": "failed",
+                    "correlated": False,
+                }],
+            )
 
     def test_triage_preserves_terminal_retry_marker_when_snapshot_is_stale(self):
         with tempfile.TemporaryDirectory(prefix="heph-gcp-triage-retry-") as directory:
@@ -861,6 +922,75 @@ finish
         self.assertNotIn('--property=TimeoutStartSec=15s', runner)
         self.assertIn('timeout --kill-after=1s 5s systemctl show "$cooking_unit"', runner)
         self.assertIn('run_with_collection_deadline timeout --kill-after=2s 15s systemctl stop "$cooking_unit"', runner)
+
+    def test_cooking_result_markers_and_browser_origin_are_component_specific(self):
+        runner = (ROOT / "gcp-cooking-run.sh").read_text(encoding="utf-8")
+        workload_marker = "event=workload-result operation=cooking-workload"
+        evidence_marker = "event=evidence-scan operation=evidence-scan"
+        browser_summary = '"component": "browser-e2e"'
+        self.assertIn(workload_marker, runner)
+        self.assertIn(evidence_marker, runner)
+        self.assertIn(browser_summary, runner)
+        self.assertIn('"result_origin": result_origin', runner)
+        workload_cleanup_guard = runner.index("if ((status != 0)); then", runner.index(workload_marker))
+        self.assertLess(runner.index(workload_marker), workload_cleanup_guard)
+        self.assertLess(runner.index(evidence_marker), runner.index('browser-summary.json'))
+
+        summary_start = 'python3 - "$evidence_root" >"$evidence_root/browser-summary.json" <<\'PY\'\n'
+        summary_body = runner.split(summary_start, 1)[1].split("\nPY\n", 1)[0]
+        with tempfile.TemporaryDirectory(prefix="heph-gcp-browser-summary-") as directory:
+            root = Path(directory)
+            report_root = root / "browser.1"
+            report_root.mkdir()
+            report = report_root / "playwright.log"
+
+            report.write_text("1 passed\n", encoding="utf-8")
+            passed = subprocess.run(
+                ["python3", "-", str(root)],
+                input=summary_body,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(passed.returncode, 0, passed.stderr)
+            passed_summary = json.loads(passed.stdout)
+            self.assertEqual(passed_summary["status"], "passed")
+            self.assertEqual(passed_summary["exit_code"], 0)
+            self.assertEqual(passed_summary["result_origin"], "playwright-report")
+
+            report.write_text("1 passed\n", encoding="utf-8")
+            workload_failure = passed_summary.copy()
+            workload_failure["workload_exit_code"] = 7
+            self.assertEqual(workload_failure["status"], "passed")
+            self.assertNotEqual(workload_failure["status"], "failed")
+
+            report.unlink()
+            not_run = subprocess.run(
+                ["python3", "-", str(root)],
+                input=summary_body,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(not_run.returncode, 0, not_run.stderr)
+            not_run_summary = json.loads(not_run.stdout)
+            self.assertEqual(not_run_summary["status"], "not-run")
+            self.assertEqual(not_run_summary["result_origin"], "no-browser-report")
+            self.assertNotIn("exit_code", not_run_summary)
+
+            report.write_text("one diagnostic line\n", encoding="utf-8")
+            unknown = subprocess.run(
+                ["python3", "-", str(root)],
+                input=summary_body,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(unknown.returncode, 0, unknown.stderr)
+            unknown_summary = json.loads(unknown.stdout)
+            self.assertEqual(unknown_summary["status"], "unknown")
+            self.assertEqual(unknown_summary["result_origin"], "playwright-report")
+            self.assertNotIn("exit_code", unknown_summary)
 
     def test_coordinator_uses_mode_bound_before_terminal_timeout(self):
         coordinator = (ROOT / "gcp-kvm-smoke.sh").read_text(encoding="utf-8")
