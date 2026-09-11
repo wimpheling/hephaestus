@@ -39,6 +39,7 @@ pub fn credential_patterns() -> Vec<Vec<u8>> {
     CREDENTIAL_PATTERNS.clone()
 }
 
+#[track_caller]
 fn assert_bytes_have_no_credentials(bytes: &[u8]) {
     for pattern in CREDENTIAL_PATTERNS.iter() {
         assert!(
@@ -58,6 +59,7 @@ struct VmLogScan {
 }
 
 impl VmLogScan {
+    #[track_caller]
     fn inspect(&mut self, run: uuid::Uuid, stream: String, payload: &serde_json::Value) {
         assert!(
             matches!(stream.as_str(), "Stdout" | "Stderr"),
@@ -80,6 +82,7 @@ impl VmLogScan {
         self.inspect_bytes(run, stream, &decoded);
     }
 
+    #[track_caller]
     fn inspect_bytes(&mut self, run: uuid::Uuid, stream: String, bytes: &[u8]) {
         let key = (run, stream);
         if self.current.as_ref() != Some(&key) {
@@ -224,6 +227,7 @@ pub async fn assert_nats_has_no_credentials(nats_url: &str) {
 
 /// Scan the extracted `SQLite` database and any WAL/shared-memory sidecars.
 /// Keep a suffix between reads so a credential spanning chunks is detected.
+#[track_caller]
 pub fn assert_state_snapshot_has_no_credentials(directory: &Path) {
     let longest = CREDENTIAL_PATTERNS
         .iter()
