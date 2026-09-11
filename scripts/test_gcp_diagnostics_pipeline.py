@@ -128,7 +128,7 @@ finish
         )
         return result, root
 
-    def _archive(self, root: Path) -> Path:
+    def _archive(self, root: Path, gate_results: Path | None = None) -> Path:
         source_root = root / "sources"
         source_root.mkdir()
         files = {
@@ -160,9 +160,50 @@ finish
         for name in files:
             label = name.removesuffix(".json").removesuffix(".log")
             args += ["--source", f"{label}={source_root / name}"]
+        if gate_results is not None:
+            args += ["--source", f"gate-results={gate_results}"]
         args += ["--snapshot-jsonl", str(lineage), "--archive", str(archive)]
         self.assertEqual(COLLECTOR.main(args), 0)
         return archive
+
+    def test_failed_gate_sidecar_is_triaged_before_acceptance_fails(self):
+        """A valid failed Cooking sidecar retains triage evidence and fails the gate."""
+
+        with tempfile.TemporaryDirectory(prefix="heph-gcp-failed-gate-") as directory:
+            root = Path(directory)
+            sidecar = root / "gate-results.json"
+            helper = ROOT / "cooking-gate-results.py"
+            helper_args = ["--path", str(sidecar), "--script-file", str(helper)]
+            commands = [
+                helper_args + [
+                    "init", "--revision", "a" * 40,
+                    "--script-sha256", hashlib.sha256(helper.read_bytes()).hexdigest(),
+                    "--test-mode", "gcp-cooking",
+                ],
+            ]
+            for gate, state, code, reason in (
+                ("workload", "failed", "7", "workload-failed"),
+                ("evidence-scan", "passed", "0", "none"),
+                ("browser-validation", "passed", "0", "none"),
+            ):
+                commands.extend([
+                    helper_args + ["begin", gate],
+                    helper_args + ["complete", gate, "--state", state, "--exit-code", code, "--reason-class", reason],
+                ])
+            commands.append(helper_args + [
+                "finalize", "--overall-exit-code", "7", "--supervisor-exit-code", "7",
+            ])
+            for command in commands:
+                self.assertEqual(subprocess.run(["python3", str(helper), *command], check=False).returncode, 0)
+            result = self._run_download(root, self._archive(root, sidecar))
+            self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+            status = json.loads((root / "status.json").read_text(encoding="utf-8"))
+            self.assertEqual(status["download"], "passed")
+            self.assertEqual(status["scan"], "passed", status)
+            self.assertEqual(status["triage"]["gateResults"]["overall_exit_code"], 7)
+            self.assertEqual(status["triage"]["gateResults"]["gates"]["workload"]["state"], "failed")
+            self.assertEqual(status["gateAcceptance"], "failed")
+            self.assertEqual(status["error"], "gate-results-acceptance-failed")
 
     def test_triage_projects_denial_and_latest_snapshot_correlation(self):
         with tempfile.TemporaryDirectory(prefix="heph-gcp-triage-") as directory:
@@ -837,6 +878,7 @@ finish
             "GCP_DIAGNOSTICS_DOWNLOAD_TIMEOUT_SECONDS": "1" if hang else "60",
             "GCP_FAKE_CLEANUP": cleanup,
             "GCP_ZONE": zone,
+            "RUNNER_TEMP": str(root),
         }
         if source_identity is not None:
             source_run_id, source_attempt, source_sha = source_identity
@@ -1145,6 +1187,123 @@ finish
         self.assertIn("TEST-FAIL expected=%s", startup)
         self.assertIn("--config \"$diagnostics_header_file\"", startup)
         self.assertNotIn('-H "Authorization: Bearer $token"', startup)
+        self.assertIn(
+            'cooking_gate_results_path="${HEPH_GCP_COOKING_GATE_RESULTS_PATH:-/var/log/hephaestus/cooking-gate-results.json}"',
+            startup,
+        )
+        self.assertIn('--source "gate-results=$gate_results_input"', startup)
+        self.assertIn('--source "evidence-scan=$evidence_scan_input"', startup)
+        self.assertIn('metadata_value cooking-gate-results-helper', startup)
+        coordinator = (ROOT / "gcp-kvm-smoke.sh").read_text(encoding="utf-8")
+        self.assertIn("GCP_DIAGNOSTICS_EXPECT_GATE_SCRIPT_SHA256", coordinator)
+        self.assertIn("finalized gate result helper hash is invalid", coordinator)
+        self.assertIn("gate-results-acceptance-failed", coordinator)
+
+    def test_gate_sidecar_finalizer_preserves_sigkill_and_unfinished_states(self):
+        startup = ROOT / "gcp-kvm-startup.sh"
+        helper = ROOT / "cooking-gate-results.py"
+        with tempfile.TemporaryDirectory(prefix="heph-gcp-gate-finalize-") as directory:
+            root = Path(directory)
+            sidecar = root / "cooking-gate-results.json"
+            command = r'''
+export HEPH_GCP_COOKING_GATE_RESULTS_PATH="$2"
+source "$1"
+trap - EXIT
+test_mode=diagnostic
+revision=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+diagnostics_gate_helper="$3"
+diagnostics_gate_script_sha256="$(sha256sum "$diagnostics_gate_helper" | awk '{print $1}')"
+initialize_cooking_gate_results
+finalize_cooking_gate_results 137
+python3 - "$cooking_gate_results_path" <<'PY'
+import json, sys
+value = json.load(open(sys.argv[1], encoding="utf-8"))
+assert value["finalized"] is True
+assert value["supervisor_exit_code"] == 137
+assert value["overall_exit_code"] == 137
+assert all(gate["state"] == "unknown" and gate["exit_code"] is None
+           for gate in value["gates"].values())
+PY
+python3 - "$cooking_gate_results_path" <<'PY'
+import json, sys
+path = sys.argv[1]
+value = json.load(open(path, encoding="utf-8"))
+value["supervisor_exit_code"] = None
+json.dump(value, open(path, "w", encoding="utf-8"))
+PY
+finalize_cooking_gate_results 99
+python3 - "$cooking_gate_results_path" <<'PY'
+import json, sys
+value = json.load(open(sys.argv[1], encoding="utf-8"))
+assert value["overall_exit_code"] == 137
+assert value["supervisor_exit_code"] == 99
+PY
+'''
+            env = {
+                **os.environ,
+                "HEPH_GCP_STARTUP_LIBRARY": "1",
+                "HEPH_GCP_WORK_ROOT": str(root / "work"),
+            }
+            result = subprocess.run(
+                [
+                    "bash", "-Eeuo", "pipefail", "-c", command, "gate-finalize",
+                    str(startup), str(sidecar), str(helper),
+                ],
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_diagnostic_gate_writer_runs_real_unsafe_scanner_fixture(self):
+        startup = ROOT / "gcp-kvm-startup.sh"
+        helper = ROOT / "cooking-gate-results.py"
+        scanner = ROOT / "check-browser-evidence.py"
+        with tempfile.TemporaryDirectory(prefix="heph-gcp-diagnostic-gates-") as directory:
+            root = Path(directory)
+            sidecar = root / "cooking-gate-results.json"
+            metadata = root / "metadata"
+            metadata.mkdir()
+            shutil.copy2(scanner, metadata / scanner.name)
+            command = r'''
+source "$1"
+trap - EXIT
+test_mode=diagnostic
+revision=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+diagnostics_gate_helper="$3"
+diagnostics_gate_script_sha256="$(sha256sum "$diagnostics_gate_helper" | awk '{print $1}')"
+collection_deadline_epoch=$(( $(date +%s) + 30 ))
+initialize_cooking_gate_results
+complete_diagnostic_gate_results
+finalize_cooking_gate_results 42
+python3 - "$cooking_gate_results_path" <<'PY'
+import json, sys
+value = json.load(open(sys.argv[1], encoding="utf-8"))
+assert value["finalized"] is True
+assert value["overall_exit_code"] == 42
+assert value["supervisor_exit_code"] == 42
+assert value["gates"]["workload"]["reason_class"] == "workload-failed"
+assert value["gates"]["evidence-scan"]["reason_class"] == "evidence-scan-failed"
+assert value["gates"]["browser-validation"]["reason_class"] == "browser-validation-failed"
+PY
+'''
+            env = {
+                **os.environ,
+                "HEPH_GCP_STARTUP_LIBRARY": "1",
+                "HEPH_GCP_WORK_ROOT": str(root / "tmp"),
+                "HEPH_GCP_DIAGNOSTICS_METADATA_ROOT": str(metadata),
+                "HEPH_GCP_COOKING_GATE_RESULTS_PATH": str(sidecar),
+                "HEPH_GCP_EVIDENCE_SCAN_STATUS_PATH": str(root / "evidence-scan-status.json"),
+            }
+            result = subprocess.run(
+                ["bash", "-Eeuo", "pipefail", "-c", command, "diagnostic-gates", str(startup), str(sidecar), str(helper), str(root / "tmp"), str(metadata)],
+                env=env, text=True, capture_output=True, check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            report = json.loads((root / "evidence-scan-status.json").read_text(encoding="utf-8"))
+            self.assertEqual(report["status"], "failed")
+            self.assertEqual(report["rule"], "browser-secret-org")
 
     def test_cooking_failure_diagnostics_do_not_retain_systemd_process_arguments(self):
         runner = (ROOT / "gcp-cooking-run.sh").read_text(encoding="utf-8")

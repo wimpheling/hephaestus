@@ -11,6 +11,8 @@ readonly PASST_PREFLIGHT_SCRIPT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && 
 readonly DIAGNOSTICS_COLLECTOR_SCRIPT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/collect-cooking-diagnostics.py"
 readonly DIAGNOSTICS_SCANNER_SCRIPT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/check-browser-evidence.py"
 readonly DIAGNOSTICS_TRIAGE_SCRIPT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/summarize-cooking-diagnostics.py"
+readonly COOKING_GATE_RESULTS_HELPER_SCRIPT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/cooking-gate-results.py"
+readonly COOKING_RUNTIME_SCRIPT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/gcp-cooking-run.sh"
 readonly MACHINE_TYPE="n2-standard-8"
 readonly DISK_SIZE="150GB"
 readonly CACHE_BUCKET="hephaestus-508000-cooking-cache"
@@ -305,6 +307,15 @@ _download_diagnostics() {
   local destination="${GCP_DIAGNOSTICS_ARCHIVE:-${RUNNER_TEMP:-/tmp}/gcp-diagnostics.tar.gz}"
   local status_path="${GCP_DIAGNOSTICS_STATUS:-${RUNNER_TEMP:-/tmp}/gcp-diagnostics-status.json}"
   local extract_root="${destination}.extract" output digest archive_bytes download_timeout
+  local expected_mode="${GCP_DIAGNOSTICS_EXPECT_MODE:-}"
+  local expected_gate_script_sha256="${GCP_DIAGNOSTICS_EXPECT_GATE_SCRIPT_SHA256:-}"
+  local expectation_file="${RUNNER_TEMP:-/tmp}/gcp-diagnostics-gate-expectation"
+  if [[ -z "$expected_mode" && -f "$expectation_file" && ! -L "$expectation_file" ]]; then
+    read -r expected_mode expected_gate_script_sha256 <"$expectation_file" || {
+      diagnostics_download_error='gate-expectation-invalid'
+      return 1
+    }
+  fi
   download_timeout="${GCP_DIAGNOSTICS_DOWNLOAD_TIMEOUT_SECONDS:-60}"
   [[ "$download_timeout" =~ ^[1-9][0-9]*$ ]] || { diagnostics_download_error='download-timeout-invalid'; return 1; }
   if ! verify_github_source_run; then
@@ -379,6 +390,7 @@ PY
 import hashlib
 import json
 import pathlib
+import re
 import sys
 root = pathlib.Path(sys.argv[1])
 if not root.is_dir() or root.is_symlink(): raise SystemExit("diagnostics root missing")
@@ -397,6 +409,65 @@ PY
     diagnostics_download_error='manifest-validation-failed'
     diagnostics_scan_state='failed'
     return 1
+  fi
+  # Current Cooking/diagnostic workflows opt into a post-delete gate contract
+  # check. Historical bundles remain readable without this requirement, but a
+  # current run cannot be accepted from a generic aggregate result alone.
+  if [[ -n "$expected_mode" || -f "$extract_root/cooking-diagnostics/sources/gate-results" ]]; then
+    if ! python3 - "$extract_root/cooking-diagnostics" "$diagnostics_source_sha" "$expected_mode" "$expected_gate_script_sha256" <<'PYGATE'
+import re
+import json
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+expected_revision = sys.argv[2]
+expected_mode = sys.argv[3]
+expected_script_sha256 = sys.argv[4]
+if expected_script_sha256 and re.fullmatch(r"[0-9a-f]{64}", expected_script_sha256) is None:
+    raise SystemExit("requested gate helper hash anchor is invalid")
+manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+records = {record.get("label"): record for record in manifest.get("sources", [])}
+record = records.get("gate-results")
+if not isinstance(record, dict):
+    raise SystemExit("current run is missing finalized gate results")
+path = root / record.get("path", "")
+if not path.is_file() or path.is_symlink():
+    raise SystemExit("finalized gate result source is unavailable")
+value = json.loads(path.read_text(encoding="utf-8"))
+expected_fields = {"schema", "revision", "script_sha256", "test_mode", "overall_exit_code", "supervisor_exit_code", "finalized", "gates"}
+if set(value) != expected_fields:
+    raise SystemExit("finalized gate result fields are invalid")
+if value["schema"] != 1 or value["revision"] != expected_revision:
+    raise SystemExit("finalized gate result provenance does not match the selected run")
+if value["test_mode"] not in {"gcp-cooking", "diagnostic"}:
+    raise SystemExit("finalized gate result mode is invalid")
+if expected_mode and value["test_mode"] != expected_mode:
+    raise SystemExit("finalized gate result mode does not match the requested mode")
+if not isinstance(value["script_sha256"], str) or len(value["script_sha256"]) != 64:
+    raise SystemExit("finalized gate result helper hash is invalid")
+if expected_script_sha256 and value["script_sha256"] != expected_script_sha256:
+    raise SystemExit("finalized gate result helper hash does not match the requested checkout")
+if value["finalized"] is not True:
+    raise SystemExit("gate results are not finalized")
+gates = value["gates"]
+if not isinstance(gates, dict) or set(gates) != {"workload", "evidence-scan", "browser-validation"}:
+    raise SystemExit("finalized gate result set is incomplete")
+for gate in gates.values():
+    if not isinstance(gate, dict) or set(gate) != {"state", "exit_code", "reason_class"}:
+        raise SystemExit("finalized gate result entry is invalid")
+    if gate["state"] not in {"passed", "failed", "timed-out", "unknown"}:
+        raise SystemExit("finalized gate result state is invalid")
+    if gate["exit_code"] is not None and not isinstance(gate["exit_code"], int):
+        raise SystemExit("finalized gate result exit code is invalid")
+PYGATE
+    then
+      diagnostics_download_error='gate-results-validation-failed'
+      diagnostics_scan_state='failed'
+      printf '{"schema":1,"object":"gs://%s/%s","download":"failed","error":"gate results validation failed"}\n' \
+        "$DIAGNOSTICS_BUCKET" "$object" >"$status_path"
+      return 1
+    fi
   fi
   if [[ ! -f "$DIAGNOSTICS_SCANNER_SCRIPT" ]]; then
     diagnostics_download_error='scanner-unavailable'
@@ -444,6 +515,57 @@ PY
     diagnostics_download_error='triage-status-write-failed'
     diagnostics_triage_state='failed'
     return 1
+  fi
+  if [[ -f "$extract_root/cooking-diagnostics/sources/gate-results" ]]; then
+    local gate_acceptance_status=0
+    python3 - "$status_path" "$extract_root/cooking-diagnostics" "$expected_mode" <<'PYGATE_ACCEPT' || gate_acceptance_status=$?
+import json
+from pathlib import Path
+import sys
+
+status_path, root_name, requested_mode = sys.argv[1:]
+root = Path(root_name)
+status = json.loads(Path(status_path).read_text(encoding="utf-8"))
+value = json.loads((root / "sources" / "gate-results").read_text(encoding="utf-8"))
+mode = value["test_mode"]
+if requested_mode and mode != requested_mode:
+    raise SystemExit("gate result mode acceptance mismatch")
+if mode == "gcp-cooking":
+    accepted = (
+        value["overall_exit_code"] == 0
+        and value["supervisor_exit_code"] == 0
+        and all(gate["state"] == "passed" for gate in value["gates"].values())
+    )
+elif mode == "diagnostic":
+    manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+    evidence = json.loads((root / "sources" / "evidence-scan").read_text(encoding="utf-8"))
+    evidence_gate = value["gates"]["evidence-scan"]
+    accepted = (
+        value["overall_exit_code"] == 42
+        and value["supervisor_exit_code"] == 42
+        and evidence_gate["state"] == "failed"
+        and evidence_gate["exit_code"] == 1
+        and evidence_gate["reason_class"] == "evidence-scan-failed"
+        and evidence.get("status") == "failed"
+        and evidence.get("rule") == "browser-secret-org"
+        and any(
+            item.get("label") == "runtime-log" and item.get("reason") == "credential-scan-rejected"
+            for item in manifest.get("rejectedSources", [])
+            if isinstance(item, dict)
+        )
+    )
+else:
+    raise SystemExit("unknown gate result mode")
+status["gateAcceptance"] = "passed" if accepted else "failed"
+if not accepted:
+    status["error"] = "gate-results-acceptance-failed"
+Path(status_path).write_text(json.dumps(status, separators=(",", ":")) + "\n", encoding="utf-8")
+raise SystemExit(0 if accepted else 1)
+PYGATE_ACCEPT
+    if ((gate_acceptance_status != 0)); then
+      diagnostics_download_error='gate-results-acceptance-failed'
+      return 1
+    fi
   fi
   diagnostics_triage_state='passed'
   printf 'HEPH_GCP_DIAGNOSTICS event=triage status=pass\n'
@@ -497,7 +619,22 @@ download_diagnostics() {
   fi
   set -e
   if ((status != 0)); then
-    write_download_failure_status "$status_path" "$object"
+    # A valid archive may fail the post-download acceptance gate after scan
+    # and triage have already produced useful evidence. Preserve that detailed
+    # status; only synthesize the compact failure record when no detailed
+    # status was safely written.
+    if [[ ! -s "$status_path" ]] || ! python3 - "$status_path" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as stream:
+    value = json.load(stream)
+if not isinstance(value, dict) or not isinstance(value.get("triage"), dict):
+    raise SystemExit(1)
+PY
+    then
+      write_download_failure_status "$status_path" "$object"
+    fi
   fi
   return "$status"
 }
@@ -735,6 +872,8 @@ smoke() {
       die "diagnostics scanner is unavailable or symlinked: $DIAGNOSTICS_SCANNER_SCRIPT"
     [[ -f "$DIAGNOSTICS_TRIAGE_SCRIPT" && ! -L "$DIAGNOSTICS_TRIAGE_SCRIPT" ]] ||
       die "diagnostics triage projector is unavailable or symlinked: $DIAGNOSTICS_TRIAGE_SCRIPT"
+    [[ -f "$COOKING_GATE_RESULTS_HELPER_SCRIPT" && ! -L "$COOKING_GATE_RESULTS_HELPER_SCRIPT" ]] ||
+      die "Cooking gate sidecar helper is unavailable or symlinked: $COOKING_GATE_RESULTS_HELPER_SCRIPT"
   fi
   [[ "${GITHUB_SHA:-}" =~ ^[0-9a-f]{40}$ ]] || die 'GITHUB_SHA must be the exact 40-character workflow commit SHA'
   smoke_zone="${GCP_ZONE:-europe-west1-b}"
@@ -850,14 +989,24 @@ PY
   # Capture the conservative VM-start anchor immediately before the create
   # request.  Startup derives both workload and collection deadlines from it.
   local trial_start_epoch="$(date +%s)"
-  local metadata_values="test-mode=${mode},github-sha=$GITHUB_SHA,trial-start-epoch=${trial_start_epoch},${runner_image_metadata}"
+  local cooking_gate_script_sha256 cooking_runtime_script_sha256 gate_expectation_hash
+  cooking_gate_script_sha256="$(sha256sum "$COOKING_GATE_RESULTS_HELPER_SCRIPT" | awk '{print $1}')"
+  cooking_runtime_script_sha256="$(sha256sum "$COOKING_RUNTIME_SCRIPT" | awk '{print $1}')"
+  if [[ "$mode" == diagnostic || "$mode" == gcp-cooking ]]; then
+    local gate_expectation_file="${RUNNER_TEMP:-/tmp}/gcp-diagnostics-gate-expectation"
+    install -m 0600 /dev/null "$gate_expectation_file"
+    gate_expectation_hash="$cooking_gate_script_sha256"
+    [[ "$mode" == diagnostic ]] || gate_expectation_hash="$cooking_runtime_script_sha256"
+    printf '%s %s\n' "$mode" "$gate_expectation_hash" >"$gate_expectation_file"
+  fi
+  local metadata_values="test-mode=${mode},github-sha=$GITHUB_SHA,trial-start-epoch=${trial_start_epoch},cooking-gate-results-script-sha256=${cooking_gate_script_sha256},${runner_image_metadata}"
   local metadata_value_item
   local metadata_file_values="startup-script=$STARTUP_SCRIPT,passt-preflight-script=$PASST_PREFLIGHT_SCRIPT"
   for metadata_value_item in "${diagnostics_metadata[@]}"; do
     metadata_values+=",${metadata_value_item}"
   done
   if [[ "$mode" == smoke || "$mode" == gcp-cooking || "$mode" == diagnostic ]]; then
-    metadata_file_values+=",diagnostics-collector-script=$DIAGNOSTICS_COLLECTOR_SCRIPT,diagnostics-scanner-script=$DIAGNOSTICS_SCANNER_SCRIPT"
+    metadata_file_values+=",diagnostics-collector-script=$DIAGNOSTICS_COLLECTOR_SCRIPT,diagnostics-scanner-script=$DIAGNOSTICS_SCANNER_SCRIPT,cooking-gate-results-helper=$COOKING_GATE_RESULTS_HELPER_SCRIPT"
   fi
   gcloud compute instances create "$smoke_name" \
     --project="$PROJECT_ID" --zone="$smoke_zone" --machine-type="$machine_type" \

@@ -34,12 +34,12 @@ LINEAGE_FIELDS = COLLECTOR.SNAPSHOT_FIELDS
 LINEAGE_STATUS_FIELDS = COLLECTOR.SNAPSHOT_STATUS_FIELDS | {"rows"}
 SOURCE_LABELS = {
     "serial", "host-journal", "runtime-log", "runtime-structured",
-    "browser-summary", "test-output", "evidence-scan", "lineage", "lineage-status",
+    "browser-summary", "test-output", "evidence-scan", "gate-results", "lineage", "lineage-status",
 }
 SAFE_STATUS = COLLECTOR.SNAPSHOT_STATUS_VALUES
 TRIAGE_FIELDS = {
     "schema", "collectionStatus", "rejectedSources", "denial", "attempts", "snapshotStatus", "retry", "sources", "failures",
-    "browserObservations", "browser", "evidenceScan", "runtimeResults",
+    "browserObservations", "browser", "evidenceScan", "gateResults", "runtimeResults",
 }
 DENIAL_FIELDS = {"denial_stage", "denial_class", "run_id"}
 DENIAL_STAGES = {
@@ -526,6 +526,33 @@ def _project_evidence_scan(
     }
 
 
+def _unknown_gate_results() -> dict[str, Any]:
+    """Represent legacy or missing gate provenance explicitly."""
+
+    return {"schema": 1, "status": "unavailable", "reason": "missing-result"}
+
+
+def _project_gate_results(
+    root: Path,
+    source_records: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Project the finalized supervisor sidecar without raw diagnostics."""
+
+    records = [record for record in source_records if record.get("label") == "gate-results"]
+    if not records:
+        return _unknown_gate_results()
+    if len(records) != 1:
+        raise ValueError("gate results source is duplicated")
+    try:
+        value = json.loads(_safe_path(root, records[0]["path"]).read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("gate results source is not valid JSON") from error
+    try:
+        return COLLECTOR._validate_gate_results(value)
+    except COLLECTOR.CollectionError as error:
+        raise ValueError("gate results source is invalid") from error
+
+
 def _project_runtime_results(
     root: Path,
     source_records: list[dict[str, Any]],
@@ -992,6 +1019,7 @@ def summarize(bundle: Path) -> dict[str, Any]:
         "browserObservations": _project_browser_observations(bundle, records),
         "browser": _project_browser_summary(bundle, records),
         "evidenceScan": _project_evidence_scan(bundle, records),
+        "gateResults": _project_gate_results(bundle, records),
         "runtimeResults": _project_runtime_results(bundle, records),
         "failures": _project_failures(bundle, records, attempts),
         "sources": {

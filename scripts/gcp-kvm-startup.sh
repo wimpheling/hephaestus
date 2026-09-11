@@ -32,6 +32,8 @@ readonly temporary_root="${work_root}/tmp"
 # HOME; keep its socket, pid, and log beneath this forge-owned subtree.
 readonly smoke_temporary_root='/tmp/hephaestus-libkrun'
 readonly evidence_root="${work_root}/evidence"
+readonly cooking_gate_results_path="${HEPH_GCP_COOKING_GATE_RESULTS_PATH:-/var/log/hephaestus/cooking-gate-results.json}"
+readonly evidence_scan_status_path="${HEPH_GCP_EVIDENCE_SCAN_STATUS_PATH:-/var/log/hephaestus/evidence-scan-status.json}"
 readonly passt_preflight_path='/run/hephaestus/gcp-passt-preflight.sh'
 readonly passt_profile_path='/etc/apparmor.d/usr.bin.passt'
 readonly passt_local_profile_path='/etc/apparmor.d/local/usr.bin.passt'
@@ -60,6 +62,9 @@ diagnostic_probe_completed=false
 diagnostic_quarantine_validated=false
 diagnostics_token_json=''
 diagnostics_header_file=''
+diagnostics_gate_helper=''
+diagnostics_gate_script_sha256=''
+diagnostics_gate_initialized=false
 smoke_output_log=''
 runner_image_manifest_sha=''
 runner_image_browser_lock_sha=''
@@ -107,6 +112,27 @@ finish() {
   trap - EXIT
   if ((status != 0)) && [[ "$test_mode" == smoke ]]; then
     retain_passt_host_audit
+  fi
+  if [[ "$test_mode" == diagnostic && "$diagnostics_gate_initialized" == true ]]; then
+    set +e
+    complete_diagnostic_gate_results
+    diagnostic_gate_status=$?
+    set -e
+    if ((diagnostic_gate_status != 0)) && ((status == 42)); then
+      status=1
+    fi
+  fi
+  # Finalize before collection so pending/running gates become explicit
+  # unknown/unfinished records while retaining the child exit status.
+  if [[ "$diagnostics_gate_initialized" == true ||
+    ("$test_mode" == gcp-cooking && -f "$cooking_gate_results_path" && -n "$diagnostics_gate_helper") ]]; then
+    set +e
+    finalize_cooking_gate_results "$status"
+    gate_finalize_status=$?
+    set -e
+    if ((gate_finalize_status != 0)) && ((status == 0)); then
+      status=1
+    fi
   fi
   if [[ "$diagnostics_enabled" == true || "$test_mode" == diagnostic || "$test_mode" == gcp-cooking ]]; then
     set +e
@@ -198,7 +224,124 @@ stage_diagnostics_metadata() {
   install -d -m 0700 "$diagnostics_metadata_root"
   metadata_value diagnostics-collector-script >"$diagnostics_metadata_root/collect-cooking-diagnostics.py"
   metadata_value diagnostics-scanner-script >"$diagnostics_metadata_root/check-browser-evidence.py"
-  chmod 0700 "$diagnostics_metadata_root" "$diagnostics_metadata_root"/*.py
+  # The root-owned sidecar writer is supplied through the same immutable
+  # metadata channel as the collector.  This is needed before checkout so an
+  # early custom-image failure can still be finalized and collected.
+  if metadata_value cooking-gate-results-helper >"$diagnostics_metadata_root/cooking-gate-results.py"; then
+    diagnostics_gate_helper="$diagnostics_metadata_root/cooking-gate-results.py"
+    diagnostics_gate_script_sha256="$(sha256sum "$diagnostics_gate_helper" | awk '{print $1}')"
+    expected_gate_script_sha256="$(metadata_value cooking-gate-results-script-sha256)"
+    [[ "$expected_gate_script_sha256" =~ ^[0-9a-f]{64}$ ]] ||
+      die 'cooking gate helper hash metadata is invalid'
+    [[ "$diagnostics_gate_script_sha256" == "$expected_gate_script_sha256" ]] ||
+      die 'cooking gate helper hash does not match metadata'
+  else
+    rm -f -- "$diagnostics_metadata_root/cooking-gate-results.py"
+  fi
+  chmod 0700 "$diagnostics_metadata_root"/*.py
+  chmod 0700 "$diagnostics_metadata_root"
+}
+
+initialize_cooking_gate_results() {
+  # Full Cooking owns its sidecar lifecycle in gcp-cooking-run.sh.  The
+  # startup supervisor only initializes the no-checkout diagnostic fixture;
+  # for Cooking it finalizes an unfinished child sidecar after reap.
+  [[ "$test_mode" == diagnostic ]] || return 0
+  [[ -n "$diagnostics_gate_helper" && -f "$diagnostics_gate_helper" ]] ||
+    die 'cooking gate helper is unavailable'
+  install -d -m 0700 "$(dirname -- "$cooking_gate_results_path")"
+  if [[ -e "$cooking_gate_results_path" || -L "$cooking_gate_results_path" ]]; then
+    die 'cooking gate sidecar already exists; refusing stale-state reuse'
+  fi
+  run_with_deadline python3 "$diagnostics_gate_helper" \
+    --path "$cooking_gate_results_path" \
+    --script-file "$diagnostics_gate_helper" init \
+    --revision "$revision" --script-sha256 "$diagnostics_gate_script_sha256" \
+    --test-mode "$test_mode"
+  diagnostics_gate_initialized=true
+  export HEPH_GCP_COOKING_GATE_RESULTS_PATH="$cooking_gate_results_path"
+  export HEPH_GCP_COOKING_GATE_RESULTS_HELPER="$diagnostics_gate_helper"
+  export HEPH_GCP_COOKING_GATE_RESULTS_SCRIPT_SHA256="$diagnostics_gate_script_sha256"
+}
+
+finalize_cooking_gate_results() {
+  local status="$1"
+  [[ -n "$diagnostics_gate_helper" && -f "$cooking_gate_results_path" ]] || return 0
+  local sidecar_state sidecar_details sidecar_supervisor
+  sidecar_details="$(python3 - "$cooking_gate_results_path" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as stream:
+    value = json.load(stream)
+print("finalized" if value.get("finalized") is True else "unfinished")
+print(value.get("supervisor_exit_code"))
+PY
+)" || return 1
+  sidecar_state="${sidecar_details%%$'\n'*}"
+  sidecar_supervisor="${sidecar_details#*$'\n'}"
+  if [[ "$sidecar_state" == finalized && "$sidecar_supervisor" != None ]]; then
+    [[ "$sidecar_supervisor" == "$status" ]] || return 1
+    return 0
+  fi
+  run_with_collection_deadline python3 "$diagnostics_gate_helper" \
+    --path "$cooking_gate_results_path" finalize \
+    --overall-exit-code "$status" --supervisor-exit-code "$status"
+}
+
+complete_diagnostic_gate_results() {
+  [[ "$test_mode" == diagnostic ]] || return 0
+  [[ "$diagnostics_gate_initialized" == true ]] || return 0
+  local diagnostic_scan_root="${temporary_root}/diagnostic-scan-fixture"
+  local diagnostic_scan_status
+  [[ -f "${diagnostics_metadata_root}/check-browser-evidence.py" ]] || return 1
+  rm -rf -- "$diagnostic_scan_root"
+  install -d -m 0700 "$diagnostic_scan_root"
+  python3 - "${diagnostics_metadata_root}/check-browser-evidence.py" \
+    "$diagnostic_scan_root/unsafe-fixture.log" <<'PY'
+import importlib.util
+from pathlib import Path
+import sys
+
+spec = importlib.util.spec_from_file_location("diagnostic_scanner", sys.argv[1])
+if spec is None or spec.loader is None:
+    raise SystemExit("diagnostic scanner cannot be loaded")
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+Path(sys.argv[2]).write_bytes(module.VALUES[0] + b"\n")
+PY
+  chmod 0600 "$diagnostic_scan_root/unsafe-fixture.log"
+  install -d -m 0700 "$(dirname -- "$evidence_scan_status_path")"
+  rm -f -- "$evidence_scan_status_path"
+  set +e
+  run_with_collection_deadline python3 "${diagnostics_metadata_root}/check-browser-evidence.py" \
+    "$diagnostic_scan_root" --status-output "$evidence_scan_status_path" >/dev/null 2>&1
+  diagnostic_scan_status=$?
+  set -e
+  ((diagnostic_scan_status != 0)) || return 1
+  python3 - "$evidence_scan_status_path" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as stream:
+    report = json.load(stream)
+if report.get("status") != "failed" or report.get("rule") != "browser-secret-org":
+    raise SystemExit("diagnostic scanner did not report the expected typed fixture rule")
+PY
+  run_with_collection_deadline python3 "$diagnostics_gate_helper" \
+    --path "$cooking_gate_results_path" begin workload
+  run_with_collection_deadline python3 "$diagnostics_gate_helper" \
+    --path "$cooking_gate_results_path" complete workload \
+    --state failed --exit-code 42 --reason-class workload-failed
+  run_with_collection_deadline python3 "$diagnostics_gate_helper" \
+    --path "$cooking_gate_results_path" begin evidence-scan
+  run_with_collection_deadline python3 "$diagnostics_gate_helper" \
+    --path "$cooking_gate_results_path" complete evidence-scan \
+    --state failed --exit-code 1 --reason-class evidence-scan-failed
+  run_with_collection_deadline python3 "$diagnostics_gate_helper" \
+    --path "$cooking_gate_results_path" begin browser-validation
+  run_with_collection_deadline python3 "$diagnostics_gate_helper" \
+    --path "$cooking_gate_results_path" complete browser-validation \
+    --state failed --exit-code 42 --reason-class browser-validation-failed
 }
 
 diagnostics_object() {
@@ -241,6 +384,7 @@ bounded_copy_status() {
 collect_diagnostics() {
   local test_status="$1" collector scanner output_root input_root archive snapshot snapshot_input snapshot_status_path status_json cooking_evidence_root
   local browser_summary_source journal_unit copy_status serial_copy_status
+  local gate_results_source gate_results_input evidence_scan_source evidence_scan_input
   local object token encoded_object upload_status
   object="$(diagnostics_object)" || return 1
   collector="$checkout_root/scripts/collect-cooking-diagnostics.py"
@@ -295,6 +439,24 @@ collect_diagnostics() {
     printf 'HEPH_GCP_DIAGNOSTICS source=host-journal status=missing unit=%s\n' "$journal_unit" >>"$status_json"
   fi
   cooking_evidence_root="${evidence_root}/cooking"
+  gate_results_source="$cooking_gate_results_path"
+  gate_results_input="$input_root/gate-results.json"
+  if [[ -f "$gate_results_source" && ! -L "$gate_results_source" ]]; then
+    copy_status="$(bounded_copy_status "$gate_results_source" gate-results "$gate_results_input")" ||
+      copy_status='HEPH_GCP_DIAGNOSTICS source=gate-results status=unavailable'
+    printf '%s\n' "$copy_status" >>"$status_json"
+  else
+    printf 'HEPH_GCP_DIAGNOSTICS source=gate-results status=missing\n' >>"$status_json"
+  fi
+  evidence_scan_source="$evidence_scan_status_path"
+  evidence_scan_input="$input_root/evidence-scan-status.json"
+  if [[ -f "$evidence_scan_source" && ! -L "$evidence_scan_source" ]]; then
+    copy_status="$(bounded_copy_status "$evidence_scan_source" evidence-scan "$evidence_scan_input")" ||
+      copy_status='HEPH_GCP_DIAGNOSTICS source=evidence-scan status=unavailable'
+    printf '%s\n' "$copy_status" >>"$status_json"
+  else
+    printf 'HEPH_GCP_DIAGNOSTICS source=evidence-scan status=missing\n' >>"$status_json"
+  fi
   snapshot_input="${cooking_evidence_root}/cooking-lineage.jsonl"
   snapshot_status_path="${cooking_evidence_root}/cooking-lineage-status.json"
   if [[ ! -f "$snapshot_input" || -L "$snapshot_input" ]]; then
@@ -309,6 +471,12 @@ collect_diagnostics() {
     --source "host-journal=$input_root/host-journal.log"
     --source "runtime-structured=$status_json"
   )
+  if [[ -f "$gate_results_input" ]]; then
+    collector_args+=(--source "gate-results=$gate_results_input")
+  fi
+  if [[ -f "$evidence_scan_input" ]]; then
+    collector_args+=(--source "evidence-scan=$evidence_scan_input")
+  fi
   local snapshot_args=()
   if [[ "$test_mode" == diagnostic ]]; then
     # Diagnostic mode deliberately supplies synthetic evidence and labels it
@@ -668,6 +836,7 @@ else
   trial_deadline_epoch=$((vm_start_epoch + 2100))
   collection_deadline_epoch=$((vm_start_epoch + 2400))
 fi
+initialize_cooking_gate_results
 marker "ready mode=$test_mode"
 
 runner_image_ready=false

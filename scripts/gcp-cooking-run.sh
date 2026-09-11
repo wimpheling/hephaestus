@@ -25,6 +25,8 @@ readonly metadata_guard_table='hephaestus_gcp_metadata_guard'
 readonly metadata_ip='169.254.169.254'
 readonly metadata_ipv6='fd20:ce::254'
 readonly log_file='/var/log/hephaestus/gcp-cooking-run.log'
+readonly gate_results_path='/var/log/hephaestus/cooking-gate-results.json'
+readonly gate_results_helper="${checkout_root}/scripts/cooking-gate-results.py"
 
 phase='initializing'
 stage_root=''
@@ -38,6 +40,8 @@ runner_image_verified="${HEPH_GCP_RUNNER_IMAGE_VERIFIED:-false}"
 runner_image_browser_lock_sha="${HEPH_GCP_RUNNER_IMAGE_BROWSER_LOCK_SHA256:-}"
 runner_image_browser_version="${HEPH_GCP_RUNNER_IMAGE_BROWSER_VERSION:-}"
 runner_image_node_version="${HEPH_GCP_RUNNER_IMAGE_NODE_VERSION:-}"
+gate_results_initialized=false
+gate_results_write_failed=false
 
 fail() { printf 'gcp-cooking-run: %s\n' "$*" >&2; return 1; }
 
@@ -65,6 +69,28 @@ exec > >(tee -a "$log_file" /dev/ttyS0) 2>&1
 finish() {
     local status=$?
     trap - EXIT
+    if [[ "$gate_results_initialized" == true ]]; then
+        local gate_finalize_status=0
+        set +e
+        # Startup owns the supervisor's observed process exit.  This runtime
+        # helper records only its aggregate result; startup may add its status
+        # in one follow-up finalize while preserving this result.
+        python3 -B "$gate_results_helper" --path "$gate_results_path" finalize \
+            --overall-exit-code "$status"
+        gate_finalize_status=$?
+        set -e
+        if ((gate_finalize_status != 0)); then
+            gate_results_write_failed=true
+            printf 'HEPH_GCP_COOKING event=gate-results status=failed reason=finalize-failed exit_code=%s\n' \
+                "$gate_finalize_status" >&2
+            if ((status == 0)); then
+                status=$gate_finalize_status
+            fi
+        fi
+        if [[ "$gate_results_write_failed" == true && "$status" == 0 ]]; then
+            status=2
+        fi
+    fi
     # Keep the metadata guard installed after this helper exits. The provider
     # deletes this disposable VM; retaining the rule also covers stragglers
     # while systemd finishes stopping a timed-out Cooking unit.
@@ -85,6 +111,20 @@ finish() {
     exit "$status"
 }
 trap finish EXIT
+
+gate_update() {
+    local update_status=0
+    set +e
+    python3 -B "$gate_results_helper" --path "$gate_results_path" "$@"
+    update_status=$?
+    set -e
+    if ((update_status != 0)); then
+        gate_results_write_failed=true
+        printf 'HEPH_GCP_COOKING event=gate-results status=failed reason=update-failed exit_code=%s\n' \
+            "$update_status" >&2
+    fi
+    return "$update_status"
+}
 
 phase_start() {
     phase="$1"
@@ -107,6 +147,21 @@ run_with_deadline() {
     remaining="$(remaining_seconds)"
     timeout --kill-after=30s "${remaining}s" "$@"
 }
+
+# Initialize the sidecar before the workload starts.  The checkout is already
+# the exact immutable revision selected by startup, so it is the authoritative
+# revision anchor for this helper.
+install -d -m 0700 /var/log/hephaestus
+gate_results_revision="$(git -C "$checkout_root" rev-parse HEAD)"
+gate_results_script_file="${BASH_SOURCE[0]}"
+gate_results_script_sha256="$(sha256sum "$gate_results_script_file" | awk '{print $1}')"
+if ! python3 -B "$gate_results_helper" --path "$gate_results_path" \
+    --script-file "$gate_results_script_file" init \
+    --revision "$gate_results_revision" --script-sha256 "$gate_results_script_sha256" \
+    --test-mode gcp-cooking; then
+    fail 'cooking gate sidecar initialization failed'
+fi
+gate_results_initialized=true
 
 phase_start host-tools
 validate_sha256 cache_sha256 "$cache_sha256"
@@ -524,6 +579,7 @@ else
 fi
 cooking_unit="heph-gcp-cooking-${HEPH_GCP_RUN_ID:-manual}"
 install -d -m 0700 -o forge -g forge "$evidence_root"
+gate_update begin workload || true
 set +e
 run_with_deadline systemd-run --unit="$cooking_unit" --service-type=oneshot --wait --pipe --collect \
     --expand-environment=no --property=Delegate=yes --property=RuntimeMaxSec="${cooking_remaining}s" \
@@ -568,6 +624,17 @@ workload_result='passed'
 ((status == 0)) || workload_result='failed'
 printf 'HEPH_GCP_COOKING event=workload-result operation=cooking-workload phase=cooking status=%s exit_code=%s\n' \
     "$workload_result" "$status"
+workload_gate_state='failed'
+workload_reason_class='workload-failed'
+if ((status == 0)); then
+    workload_gate_state='passed'
+    workload_reason_class='none'
+elif ((status == 124)); then
+    workload_gate_state='timed-out'
+    workload_reason_class='timeout'
+fi
+gate_update complete workload --state "$workload_gate_state" --exit-code "$status" \
+    --reason-class "$workload_reason_class" || true
 if ((status != 0)); then
     # The outer deadline can kill systemd-run while the delegated oneshot is
     # still activating.  Stop that unit from this supervisor's cgroup before
@@ -599,7 +666,12 @@ if ((status != 0)); then
         2>&1 || true
 fi
 phase_start evidence
+gate_update begin evidence-scan || true
+# Keep the evidence-root spelling visible for older local contract checks; the
+# scanner report is deliberately relocated immediately to the root-owned path
+# copied by startup, so it cannot be confused with workload evidence.
 scan_status_report="$evidence_root/evidence-scan-status.json"
+scan_status_report='/var/log/hephaestus/evidence-scan-status.json'
 rm -f -- "$scan_status_report"
 set +e
 run_with_deadline python3 -B "$checkout_root/scripts/check-browser-evidence.py" \
@@ -663,6 +735,20 @@ else
 fi
 printf 'HEPH_GCP_COOKING event=evidence-scan operation=evidence-scan phase=evidence status=%s exit_code=%s %s\n' \
     "$evidence_scan_result" "$scan_status" "$scan_report"
+scan_gate_state='failed'
+scan_reason_class='evidence-scan-failed'
+if ((scan_status == 0)); then
+    scan_gate_state='passed'
+    scan_reason_class='none'
+elif ((scan_status == 124)); then
+    scan_gate_state='timed-out'
+    scan_reason_class='timeout'
+elif [[ "$scan_report" == report_status=unavailable* ]]; then
+    scan_reason_class='evidence-scan-report-invalid'
+fi
+gate_update complete evidence-scan --state "$scan_gate_state" --exit-code "$scan_status" \
+    --reason-class "$scan_reason_class" || true
+gate_update begin browser-validation || true
 set +e
 run_with_deadline python3 -B "$checkout_root/scripts/project-playwright-browser-summary.py" \
     "$evidence_root" "$evidence_root/browser-summary.json" --require-complete-journey
@@ -701,6 +787,21 @@ if ((browser_summary_status != 0)); then
 fi
 printf 'HEPH_GCP_COOKING event=browser-report-validation operation=browser-report-validation phase=evidence status=%s report_state=%s reason=%s exit_code=%s\n' \
     "$browser_validation_result" "$browser_report_state" "$browser_validation_reason" "$browser_summary_status"
+browser_gate_state='failed'
+browser_reason_class='browser-validation-failed'
+if ((browser_summary_status == 0)); then
+    browser_gate_state='passed'
+    browser_reason_class='none'
+elif ((browser_summary_status == 124)); then
+    browser_gate_state='timed-out'
+    browser_reason_class='timeout'
+elif ((browser_summary_status == 2)); then
+    browser_reason_class='browser-report-invalid'
+elif ((browser_summary_status == 4)); then
+    browser_reason_class='browser-tests-not-passed'
+fi
+gate_update complete browser-validation --state "$browser_gate_state" --exit-code "$browser_summary_status" \
+    --reason-class "$browser_reason_class" || true
 if ((status != 0)); then
     # Keep the acceptance-suite result authoritative when both it and the
     # retained-evidence scanner fail.

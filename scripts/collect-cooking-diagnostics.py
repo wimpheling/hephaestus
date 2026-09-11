@@ -47,6 +47,7 @@ ALLOWED_LABELS = frozenset(
         "browser-summary",
         "test-output",
         "evidence-scan",
+        "gate-results",
         # These labels are used only in collectionErrors for producer files
         # that were absent; they are never accepted as retained raw sources.
         "lineage",
@@ -398,6 +399,40 @@ EVIDENCE_SCAN_FILE_CLASSES = frozenset(
 EVIDENCE_SCAN_DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 EVIDENCE_SCAN_MAX_FILES = 1_000_000
 EVIDENCE_SCAN_MAX_BYTES = 2**63 - 1
+
+GATE_RESULTS_FIELDS = frozenset(
+    {
+        "schema",
+        "revision",
+        "script_sha256",
+        "test_mode",
+        "overall_exit_code",
+        "supervisor_exit_code",
+        "finalized",
+        "gates",
+    }
+)
+GATE_RESULT_FIELDS = frozenset({"state", "exit_code", "reason_class"})
+GATE_NAMES = ("workload", "evidence-scan", "browser-validation")
+GATE_STATES = frozenset({"passed", "failed", "timed-out", "unknown"})
+GATE_MODES = frozenset({"diagnostic", "gcp-cooking"})
+GATE_REVISION_RE = re.compile(r"^[0-9a-f]{40}$")
+GATE_SCRIPT_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+GATE_REASON_VALUES = frozenset(
+    {
+        "none",
+        "unknown",
+        "unfinished",
+        "workload-failed",
+        "evidence-scan-failed",
+        "evidence-scan-report-invalid",
+        "browser-validation-failed",
+        "browser-report-invalid",
+        "browser-tests-not-passed",
+        "timeout",
+        "supervisor-failed",
+    }
+)
 
 
 def _load_evidence_module():
@@ -972,6 +1007,108 @@ def _project_evidence_scan(source: Path, destination: Path) -> tuple[int, str]:
     return len(encoded), hashlib.sha256(encoded).hexdigest()
 
 
+def _validate_gate_result(name: str, value: Any) -> dict[str, Any]:
+    if name not in GATE_NAMES or not isinstance(value, dict) or set(value) != GATE_RESULT_FIELDS:
+        raise CollectionError("gate result fields are invalid")
+    state = value.get("state")
+    exit_code = value.get("exit_code")
+    reason = value.get("reason_class")
+    if (
+        not isinstance(state, str)
+        or state not in GATE_STATES
+        or not isinstance(reason, str)
+        or reason not in GATE_REASON_VALUES
+    ):
+        raise CollectionError("gate result classification is invalid")
+    if exit_code is not None and (type(exit_code) is not int or not 0 <= exit_code <= 255):
+        raise CollectionError("gate result exit code is invalid")
+    if state == "passed" and (exit_code != 0 or reason != "none"):
+        raise CollectionError("passed gate result is inconsistent")
+    if state == "failed" and (
+        type(exit_code) is not int
+        or exit_code == 0
+        or reason
+        not in {
+            "workload-failed",
+            "evidence-scan-failed",
+            "evidence-scan-report-invalid",
+            "browser-validation-failed",
+            "browser-report-invalid",
+            "browser-tests-not-passed",
+            "supervisor-failed",
+        }
+    ):
+        raise CollectionError("failed gate result is inconsistent")
+    if state == "timed-out" and (exit_code != 124 or reason != "timeout"):
+        raise CollectionError("timed-out gate result is inconsistent")
+    if state == "unknown" and (exit_code is not None or reason not in {"unknown", "unfinished"}):
+        raise CollectionError("unknown gate result is inconsistent")
+    return {"state": state, "exit_code": exit_code, "reason_class": reason}
+
+
+def _validate_gate_results(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) != GATE_RESULTS_FIELDS:
+        raise CollectionError("gate results contain an unallowlisted field")
+    if type(value.get("schema")) is not int or value["schema"] != 1:
+        raise CollectionError("gate results schema is invalid")
+    revision = value.get("revision")
+    script_sha256 = value.get("script_sha256")
+    if not isinstance(revision, str) or GATE_REVISION_RE.fullmatch(revision) is None:
+        raise CollectionError("gate results revision is invalid")
+    if not isinstance(script_sha256, str) or GATE_SCRIPT_SHA256_RE.fullmatch(script_sha256) is None:
+        raise CollectionError("gate results script digest is invalid")
+    test_mode = value.get("test_mode")
+    if not isinstance(test_mode, str) or test_mode not in GATE_MODES:
+        raise CollectionError("gate results test mode is invalid")
+    overall_exit = value.get("overall_exit_code")
+    supervisor_exit = value.get("supervisor_exit_code")
+    for field, exit_code in (("overall_exit_code", overall_exit), ("supervisor_exit_code", supervisor_exit)):
+        if type(exit_code) is not int or not 0 <= exit_code <= 255:
+            raise CollectionError(f"gate results {field} is invalid")
+    if value.get("finalized") is not True:
+        raise CollectionError("gate results are not finalized")
+    gates = value.get("gates")
+    if not isinstance(gates, dict) or set(gates) != set(GATE_NAMES):
+        raise CollectionError("gate results must contain exactly three gates")
+    safe_gates = {name: _validate_gate_result(name, gates[name]) for name in GATE_NAMES}
+    states = [safe_gates[name]["state"] for name in GATE_NAMES]
+    if overall_exit == 0 and states != ["passed", "passed", "passed"]:
+        raise CollectionError("zero exit requires three passed gates")
+    if overall_exit != 0 and all(state == "passed" for state in states):
+        raise CollectionError("nonzero exit requires a non-passed gate")
+    return {
+        "schema": 1,
+        "revision": revision,
+        "script_sha256": script_sha256,
+        "test_mode": test_mode,
+        "overall_exit_code": overall_exit,
+        "supervisor_exit_code": supervisor_exit,
+        "finalized": True,
+        "gates": safe_gates,
+    }
+
+
+def _project_gate_results(source: Path, destination: Path) -> tuple[int, str]:
+    """Retain the finalized supervisor gate contract without raw diagnostics."""
+
+    source = _safe_input(source)
+    try:
+        with _open_safe(source) as input_file:
+            raw = input_file.read(MAX_LINE_BYTES + 1)
+        if len(raw) > MAX_LINE_BYTES:
+            raise CollectionError("gate results exceed their retention limit")
+        EVIDENCE.check_bytes(raw, str(source))
+        _reject_secret_assignments(raw)
+        value = json.loads(raw.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise CollectionError("gate results must be one JSON object") from error
+    safe = _validate_gate_results(value)
+    encoded = (json.dumps(safe, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+    destination.write_bytes(encoded)
+    destination.chmod(0o600)
+    return len(encoded), hashlib.sha256(encoded).hexdigest()
+
+
 def _project_runtime_structured(source: Path, destination: Path) -> tuple[int, str]:
     """Retain only scalar lifecycle fields from startup JSON records."""
 
@@ -1216,6 +1353,8 @@ def collect(
                     size, digest = _project_browser_summary(source_path, destination)
                 elif label == "evidence-scan":
                     size, digest = _project_evidence_scan(source_path, destination)
+                elif label == "gate-results":
+                    size, digest = _project_gate_results(source_path, destination)
                 elif label == "runtime-structured":
                     size, digest = _project_runtime_structured(source_path, destination)
                 else:
