@@ -4,12 +4,20 @@ The durable GCP configuration, keyless identities, bucket retention, dispatch
 gate and failure triage are in the [GCP Cooking CI runbook](../../docs/gcp-cooking-ci.md).
 Current `gcp-cooking` live validation is **pending**; the diagnostic evidence
 gate and live partial-source proof have passed, while the results below do not
-claim that the full path is green. The latest full run
-[34630967578](https://github.com/wimpheling/hephaestus/actions/runs/34630967578)
-at source `23bb3d4` failed at 18:28:19Z after approximately 26m36s. VM
-absence was verified at 18:28:07.989Z, and private diagnostics upload,
-post-delete download and scanning passed; its triage failed on a Rust
-timestamp.
+claim that the full path is green. The latest full run is
+[34638077629](https://github.com/wimpheling/hephaestus/actions/runs/34638077629)
+from source `bd777de2bd4100a43c22201219892c9b50f3273a` in
+`europe-west1-d`, using validated image
+`hephaestus-runner-2a7223a74f7b32403ea8f586502b8a3f`. It ran from `19:18:02Z`
+to `19:45:31Z` and failed in the post-operation browser phase at
+`crates/hephaestus-app/tests/golden.rs:2039`; the initial browser phase passed.
+The workload and browser results failed, while collection completed and the
+credential scan passed. VM absence was verified at `19:45:24.681Z`, followed
+by successful private download and scan at `19:45:27.828Z` (27,796 bytes,
+SHA-256
+`3027116b89450cc0458cc5258c437188bc6600692d9145842230ec9206bfecb0`). The
+exact Playwright assertion is unknown because the raw private browser report
+was not retained locally.
 
 The [Cooking E2E workflow](../../.github/workflows/cooking-e2e.yml) runs the
 same `examples/cooking/run.sh` entry point as local execution. It requires an
@@ -333,7 +341,7 @@ an allowlisted `rejectedSources` classification, and retains an independently
 safe partial private bundle with `collectionStatus: partial`; that diagnostic
 pipeline is proven by the accepted diagnostic runs above.
 
-The latest full attempt [34630967578](https://github.com/wimpheling/hephaestus/actions/runs/34630967578)
+The previous full attempt [34630967578](https://github.com/wimpheling/hephaestus/actions/runs/34630967578)
 at source `23bb3d4` failed at 18:28:19Z after approximately 26m36s. VM
 absence was verified at 18:28:07.989Z, and private diagnostics upload,
 post-delete download and scanning passed. Follow-up no-VM triage
@@ -344,8 +352,8 @@ caught-confinement markers are not proof of a bug. The projection gap affecting
 `test-output` and `browser-summary` was addressed in
 [PR #17](https://github.com/wimpheling/hephaestus/pull/17), merged at
 `4f578ff91b5820af08e953b08cb570ae5789d531`; all three CI checks and the
-quality gate passed. A next cloud trial is pending, with the corrected path now
-ready to produce reliable evidence. Full validation remains open.
+quality gate passed. The latest full attempt is recorded at the top of this
+document; full validation remains open.
 
 The current code also passed a local full Cooking run: 33 golden tests passed
 with 1 ignored, six PostgreSQL tests completed in 1.75s, two browser reports

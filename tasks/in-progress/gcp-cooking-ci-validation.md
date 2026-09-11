@@ -47,8 +47,23 @@ acceptance and does not reopen or expand that completed task.
   `browser-summary` was addressed in
   [PR #17](https://github.com/wimpheling/hephaestus/pull/17), merged at
   `4f578ff91b5820af08e953b08cb570ae5789d531`; all three CI checks and the
-  quality gate passed. A next cloud trial is pending, with the corrected path
-  now ready to produce reliable evidence. Full GCP validation remains open.
+  quality gate passed. That earlier triage left the failure cause unresolved;
+  full GCP validation remains open.
+- [ ] The latest full attempt,
+  [run 34638077629](https://github.com/wimpheling/hephaestus/actions/runs/34638077629),
+  used source `bd777de2bd4100a43c22201219892c9b50f3273a`, the default validated
+  runner image, and `europe-west1-d`. It ran from `19:18:02Z` through
+  `19:45:31Z` (27m29s) and failed in the post-operation browser phase at
+  `crates/hephaestus-app/tests/golden.rs:2039`; the initial browser phase
+  passed. The workload and browser results failed separately, while evidence
+  collection completed and scanning passed. All eight sources were available;
+  there was no typed denial or retry. VM absence was verified at
+  `19:45:24.681Z`, and private post-delete download/scan passed at
+  `19:45:27.828Z` for 27,796 bytes, SHA-256
+  `3027116b89450cc0458cc5258c437188bc6600692d9145842230ec9206bfecb0`.
+  The raw Playwright report was not retained locally, so its exact assertion
+  remains unknown. Keep full GCP validation open pending the MVP-06 evidence
+  gap fix; do not retry the paid path until that gap is closed.
 - [x] The current code passed a local full Cooking run: 33 golden tests passed
   with 1 ignored, six PostgreSQL tests completed in 1.75s, two browser reports
   passed with zero failures, and cleanup, same-stream live scanning, and the

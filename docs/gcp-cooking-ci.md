@@ -5,6 +5,22 @@ This runbook is the durable reference for the disposable GCP modes in
 validation is **pending**. Historical smoke or self-hosted Cooking results do
 not establish that the current GCP Cooking path is green.
 
+The latest full `gcp-cooking` attempt was [run
+34638077629](https://github.com/wimpheling/hephaestus/actions/runs/34638077629)
+from `bd777de2bd4100a43c22201219892c9b50f3273a` in
+`europe-west1-d`, using the validated default runner image
+`hephaestus-runner-2a7223a74f7b32403ea8f586502b8a3f`. The job ran from
+`19:18:02Z` through `19:45:31Z` and failed in the post-operation browser
+phase at `crates/hephaestus-app/tests/golden.rs:2039`; the initial browser
+phase passed. The workload result and browser result were both failed, while
+evidence collection completed and the credential scan passed. All eight
+sources were available, with no typed denial or retry. VM absence was verified
+at `19:45:24.681Z`; post-delete private download and scan passed at
+`19:45:27.828Z` for 27,796 bytes, SHA-256
+`3027116b89450cc0458cc5258c437188bc6600692d9145842230ec9206bfecb0`.
+The exact Playwright assertion is still unavailable because the raw private
+browser report was not retained locally.
+
 ## Configuration
 
 The project is `hephaestus-508000` (project number `84572286146`). Cloud
@@ -360,7 +376,7 @@ bundle upload, verified VM absence, authenticated post-delete download,
 manifest checksums, and a passing credential scan. No current green claim is
 made here until that evidence is available from a live rerun.
 
-The latest full attempt [34630967578](https://github.com/wimpheling/hephaestus/actions/runs/34630967578)
+The previous full attempt [34630967578](https://github.com/wimpheling/hephaestus/actions/runs/34630967578)
 at source `23bb3d4` failed at 18:28:19Z after approximately 26m36s. VM
 absence was independently verified at 18:28:07.989Z, and private diagnostics
 upload, post-delete download and credential scanning passed. The triage step
@@ -372,8 +388,8 @@ expected denial or caught-confinement markers are observations, not proof of a
 bug. The projection gap affecting `test-output` and `browser-summary` was
 addressed in [PR #17](https://github.com/wimpheling/hephaestus/pull/17), merged
 at `4f578ff91b5820af08e953b08cb570ae5789d531`; all three CI checks and the
-quality gate passed. A next cloud trial is pending, with the corrected path
-now ready to produce reliable evidence. Full GCP validation remains open.
+quality gate passed. The later full attempt is recorded at the top of this
+runbook; full GCP validation remains open.
 
 The current code also passed a local full Cooking run using the evidence
 collector: the golden suite completed with 33 passed and 1 ignored, six
