@@ -20,21 +20,50 @@ The private object is
 The evidence-scan result was unexpectedly unavailable/missing and
 `runtimeResults` was empty despite source `869dd20`; the executed script and
 capture path are under investigation. This is failed evidence rather than an
-accepted Cooking pass; full GCP validation remains open and paid runs are
-paused until the cheap diagnostic and the replacement-image validation pass.
+accepted Cooking pass; full GCP validation remains open. The replacement-image
+smoke passed and the new-default full trial is dispatching.
 No denial observation is treated as the root cause. No-VM triage
 [run 34653789352](https://github.com/wimpheling/hephaestus/actions/runs/34653789352)
 preserved the failed-run outcome and verified cleanup, but the historical
 failure remains unrecoverable from the safe evidence.
 
+The cheap stock-image diagnostic [run 34656728282](https://github.com/wimpheling/hephaestus/actions/runs/34656728282)
+at source `fc2e4a7e56ff3d90b0f23ad124b0a3b430871f62` completed from
+23:05:58Z to 23:08:58Z (3m). Its finalized gate sidecar recorded workload
+`failed`/42, evidence-scan `failed`/1 with `browser-secret-org`, and browser
+validation `failed`/42; the expected diagnostic runtime-log quarantine and
+the gate-acceptance policy both passed. The sidecar overall and startup
+supervisor exits were both 42. VM absence was verified before the
+authenticated post-delete download and scan. The private object is
+`cooking/runs/34656728282/1/fc2e4a7e56ff3d90b0f23ad124b0a3b430871f62.tar.gz`
+(1,768 bytes, SHA-256
+`38781dba3569ace67dc72a91b2e1ff71ad98d22ed4aac01bd7c5e297aa2ac7bd`); the
+safe status artifact is
+`/tmp/heph-diag-34656728282-1789168184/gcp-diagnostics-status.json`.
+
 The prefix-marker correction is in source revision `a029192`. The current
 root-owned sidecar implementation is published at
 `345008827434cc5496ab9736751a9c4725b4f454c`; its final local validation
-passed 167 focused tests. A cheap stock-image diagnostic is currently being
-dispatched because the new startup provenance anchor requires a replacement
-image; that image has not yet been built or promoted. The existing
+passed 167 focused tests. The cheap stock-image diagnostic below passed because
+the new startup provenance anchor requires a replacement image. Replacement
+candidate build [run 34657052702](https://github.com/wimpheling/hephaestus/actions/runs/34657052702)
+at source `672dbf5fe9d1e1bf2cffc9d828913eedfcb79268` completed successfully
+with pinned bake and builder VM/disk cleanup. It produced READY image
+`hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d` with manifest
+`f285fc2b8157f8053383fc98bcaec83d80ac8a0ce03e3e3c91de6de8b6f9efc`; it was
+promoted as the current image. Its real KVM smoke [run 34657895009](https://github.com/wimpheling/hephaestus/actions/runs/34657895009)
+at source `672dbf5fe9d1e1bf2cffc9d828913eedfcb79268` passed from 23:23:47Z
+to 23:29:16Z (5m29s), with the PASS marker at 23:28:08Z, VM absence verified
+at 23:29:06Z, and authenticated post-delete download and scan passing for
+1,509 bytes, SHA-256
+`f8b4144861980f93bbc77947a3d7ba2ca2b423e44cfbf23333ecd8ae023e1c55`.
+The private object used the fixed run/attempt/SHA prefix. The former
+`2a7223...` image is now the protected rollback; it requires matching startup
+recipe provenance, so its pointer alone does not make it compatible with the
+new startup anchor. The new-default full trial is dispatching and remains
+pending. The existing
 `hephaestus-runner-2a7223a74f7b32403ea8f586502b8a3f` remains recorded as the
-old default, but will be stale against the new startup anchor once published.
+old build reference.
 
 The structured browser capture pipeline is published at commit `1b49264` and
 has 123 focused tests, including a real intentional Playwright failure with a
@@ -143,20 +172,21 @@ workflow. The `runner_image` input is optional for `diagnostic`, `smoke` and
 variable `vars.GCP_RUNNER_IMAGE`. The `use_stock_image` boolean takes
 precedence over both and clears image selection, so it explicitly chooses the
 stock image. The default candidate variable now points to the confirmed
-`hephaestus-runner-2a7223a74f7b32403ea8f586502b8a3f`; no rollback image variable
-is configured. A custom image in `diagnostic` uses the 150 GB diagnostic disk
+`hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d`; the protected rollback is
+`hephaestus-runner-2a7223a74f7b32403ea8f586502b8a3f` and requires matching
+startup recipe provenance. A custom image in `diagnostic` uses the 150 GB diagnostic disk
 required by the baked image.
 
-The current startup provenance change requires a replacement image build and
-validation. No replacement has yet been built or promoted. Until that work is
-complete, use the explicit stock-image diagnostic for cheap validation; the
-old `2a7223...` image must not be treated as compatible with the new startup
-anchor after it is published.
+The startup provenance change required a replacement image build and
+validation. Candidate `hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d` is
+promoted after its real KVM smoke passed; the new-default full trial remains
+pending. Use the explicit stock-image diagnostic for cheap validation when
+testing startup changes.
 
 ```sh
 gh workflow run cooking-e2e.yml --repo wimpheling/hephaestus --ref main \
   -f cloud_mode=diagnostic -f gcp_zone=europe-west1-d \
-  -f runner_image=hephaestus-runner-2a7223a74f7b32403ea8f586502b8a3f
+  -f runner_image=hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d
 gh workflow run cooking-e2e.yml --repo wimpheling/hephaestus --ref main \
   -f cloud_mode=smoke -f gcp_zone=europe-west1-d \
   -f runner_image=hephaestus-runner-<manifest-prefix>
@@ -215,8 +245,9 @@ at source commit `d08fd2d37bf0cf8207867772cf9bfcbbef11da97` completed with the
 builder VM and source disk deleted. It produced the READY image
 `hephaestus-runner-2a7223a74f7b32403ea8f586502b8a3f`; its full manifest SHA is
 `2a7223a74f7b32403ea8f586502b8a3f6a83dbe521b9882a93bfc87d81e341a0`.
-The image is now confirmed in `vars.GCP_RUNNER_IMAGE`; the rollback variable is
-absent. All three failed image candidates are retired. Retirement runs
+The image was then confirmed in `vars.GCP_RUNNER_IMAGE`; after promotion of
+`f285fc2b...`, it is the protected rollback and requires matching startup
+recipe provenance. All three failed image candidates are retired. Retirement runs
 [34616449063](https://github.com/wimpheling/hephaestus/actions/runs/34616449063),
 [34616844428](https://github.com/wimpheling/hephaestus/actions/runs/34616844428)
 and [34617225580](https://github.com/wimpheling/hephaestus/actions/runs/34617225580)

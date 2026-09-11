@@ -14,10 +14,13 @@ acceptance and does not reopen or expand that completed task.
 
 - [x] The protected prebuilt default runner image was built and validated; the
   default repository variable now points to
-  `hephaestus-runner-2a7223a74f7b32403ea8f586502b8a3f`.
-  A new startup provenance anchor now requires a replacement image; it has not
-  yet been built or promoted. A cheap stock-image diagnostic is dispatching,
-  and the old default is stale against that anchor once it is published.
+  `hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d`; the protected rollback
+  is `hephaestus-runner-2a7223a74f7b32403ea8f586502b8a3f` and requires matching
+  startup recipe provenance. Replacement candidate build [run 34657052702](https://github.com/wimpheling/hephaestus/actions/runs/34657052702)
+  at source `672dbf5fe9d1e1bf2cffc9d828913eedfcb79268` completed successfully
+  with pinned bake and builder VM/disk cleanup. Its real KVM smoke [run 34657895009](https://github.com/wimpheling/hephaestus/actions/runs/34657895009)
+  passed; the new-default full trial is dispatching and remains pending. The
+  cheap stock-image diagnostic below passed.
 - [x] The real KVM smoke and private diagnostics path passed in
   [run 34615599394](https://github.com/wimpheling/hephaestus/actions/runs/34615599394),
   including the expected marker, VM absence, authenticated post-delete
@@ -40,6 +43,17 @@ acceptance and does not reopen or expand that completed task.
   `ffad953ce37b0b2f5546468332479cbf8fcf621f1dae5bf472f0acb57d00e056`; VM
   absence was verified at 20:43:30.842Z and download at 20:43:36.365Z. The
   safe manifest is `/tmp/heph-diagnostic-34645473842.IGA6IN/gcp-diagnostics-status.json`.
+- [x] Cheap stock-image diagnostic [run 34656728282](https://github.com/wimpheling/hephaestus/actions/runs/34656728282)
+  at source `fc2e4a7e56ff3d90b0f23ad124b0a3b430871f62` completed from 23:05:58Z
+  to 23:08:58Z. Finalized gates recorded workload `failed`/42, evidence-scan
+  `failed`/1 with `browser-secret-org`, and browser validation `failed`/42;
+  expected `runtime-log` quarantine and gate acceptance passed; overall and
+  startup supervisor exits were both 42. VM absence was
+  verified before authenticated post-delete download and scan. The private
+  object is `cooking/runs/34656728282/1/fc2e4a7e56ff3d90b0f23ad124b0a3b430871f62.tar.gz`
+  (1,768 bytes, SHA-256
+  `38781dba3569ace67dc72a91b2e1ff71ad98d22ed4aac01bd7c5e297aa2ac7bd`); the
+  safe status artifact is `/tmp/heph-diag-34656728282-1789168184/gcp-diagnostics-status.json`.
 - [ ] Latest full `gcp-cooking` attempt [run 34650838816](https://github.com/wimpheling/hephaestus/actions/runs/34650838816)
   from source `869dd20` used the validated default image, ran from 21:44:46Z
   to 22:12:06Z (27m20s), and returned aggregate workload exit `1`. Both browser
@@ -51,8 +65,8 @@ acceptance and does not reopen or expand that completed task.
   The evidence-scan result was unexpectedly unavailable/missing and
   `runtimeResults` was empty despite source `869dd20`; the executed script and
   capture path are under investigation. Full GCP validation remains open and
-  paid runs are paused until the cheap diagnostic and replacement-image
-  validation pass. No denial observation is treated as the root cause. No-VM
+  replacement-image smoke passed and the new-default full trial is dispatching.
+  No denial observation is treated as the root cause. No-VM
   triage [run 34653789352](https://github.com/wimpheling/hephaestus/actions/runs/34653789352)
   preserved the failed outcome and verified cleanup, but the historical
   failure remains unrecoverable from safe evidence.
@@ -83,17 +97,6 @@ acceptance and does not reopen or expand that completed task.
   browser phases passing. Its historical bundle had unavailable/missing
   `evidenceScan` and empty `runtimeResults`, so it cannot recover the original
   failing gate. The cloud failure cause remains unresolved.
-- [x] Root-owned gate sidecars are implemented at source
-  `345008827434cc5496ab9736751a9c4725b4f454c` and locally validated with 167
-  focused tests. `cooking-gate-results.json` records the checked-out revision,
-  helper SHA-256, mode, runtime aggregate exit, startup-observed exit,
-  finalized state and exactly the workload, evidence-scan and
-  browser-validation gates; unfinished gates become `unknown`/`unfinished`.
-  Startup copies the sidecars before collection, and the safe projection
-  exposes `.triage.gateResults`, `.triage.evidenceScan` and
-  `.triage.runtimeResults`. Acceptance still preserves a failed workload and
-  requires VM absence, authenticated post-delete download, archive validation
-  and credential scanning.
 - [x] Follow-up cheap diagnostic [run 34650524155](https://github.com/wimpheling/hephaestus/actions/runs/34650524155)
   at source `869dd209ae9569fb078ccc8a2e3a1bb41d4c0be6` used the default image
   in `europe-west1-d` and completed from 21:40:58Z to 21:43:26Z with expected
