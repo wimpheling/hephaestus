@@ -39,6 +39,7 @@ SOURCE_LABELS = {
 SAFE_STATUS = COLLECTOR.SNAPSHOT_STATUS_VALUES
 TRIAGE_FIELDS = {
     "schema", "collectionStatus", "rejectedSources", "denial", "attempts", "snapshotStatus", "retry", "sources", "failures",
+    "browserObservations",
 }
 DENIAL_FIELDS = {"denial_stage", "denial_class", "run_id"}
 DENIAL_STAGES = {
@@ -91,6 +92,122 @@ FAILURE_ERROR_CLASSES = {
     "oras-not-runnable", "oras-version-mismatch", "chromium-missing", "chromium-not-runnable",
     "chromium-version-mismatch", "libclang-missing",
 }
+
+# Browser output is retained by the collector only after its own safe-line
+# projection.  Triage applies a second, positive projection here: only these
+# fixed matcher names, timeout class, and repository test locations can leave
+# the private bundle.  In particular, an assertion/location is never joined to
+# a failure from another source (or even inferred to be its cause).
+BROWSER_OBSERVATION_SOURCES = {"runtime-log", "test-output"}
+BROWSER_OBSERVATION_LIMIT = 64
+BROWSER_MATCHERS = frozenset({
+    "toBe", "toEqual", "toStrictEqual", "toContain", "toHaveText", "toHaveURL",
+    "toHaveValue", "toBeVisible", "toBeHidden", "toBeTruthy", "toBeFalsy",
+    "toHaveLength", "toBeDefined", "toBeNull", "toBeUndefined", "toMatch",
+    "toHaveAttribute", "toBeChecked", "toBeDisabled", "toBeEnabled", "toBeEditable",
+    "toBeEmpty", "toBeFocused", "toBeInViewport", "toBeAttached", "toHaveClass",
+    "toHaveCount", "toHaveId", "toHaveRole", "toPass",
+})
+_BROWSER_EXPR = r"(?:received|expected|locator|page|[A-Za-z_][A-Za-z0-9_.-]{0,63})"
+BROWSER_ASSERTION_RE = re.compile(
+    rf"^expect\({_BROWSER_EXPR}\)\.(?P<matcher>[A-Za-z][A-Za-z0-9_]{{1,31}})"
+    rf"\((?:{_BROWSER_EXPR})?\)(?: failed)?$"
+)
+BROWSER_TIMEOUT_RE = re.compile(
+    r"^(?:Test )?timeout(?: of [0-9]{1,7}ms| [0-9]{1,7}ms) exceeded\.?$",
+    re.IGNORECASE,
+)
+BROWSER_WAIT_TIMEOUT_RE = re.compile(
+    rf"^Timed out [0-9]{{1,7}}ms waiting for expect\({_BROWSER_EXPR}\)\."
+    rf"(?P<matcher>[A-Za-z][A-Za-z0-9_]{{1,31}})\(\)$"
+)
+# The browser job runs from e2e/playwright.  Accept its relative paths and
+# the equivalent repository-prefixed or absolute form, then retain only the
+# basename.  The absolute prefix is deliberately component-bounded and must
+# end at the repository's e2e/playwright directory.
+BROWSER_LOCATION_RE = re.compile(
+    r"^(?:(?:/[A-Za-z0-9_.-]+)+/e2e/playwright/(?:tests|cooking-tests)/|"
+    r"(?:e2e/playwright/)?(?:tests|cooking-tests)/|)"
+    r"(?P<file>[A-Za-z0-9_-][A-Za-z0-9_.-]{0,127}\.spec\.ts):"
+    r"(?P<line>[1-9][0-9]{0,5}):(?P<column>[1-9][0-9]{0,5})$"
+)
+
+
+def _browser_observation(source: str, order: int, line: str) -> dict[str, Any] | None:
+    """Return one bounded typed browser observation, never its source text."""
+
+    if len(line) > 1024:
+        return None
+    kind, _, value = line.partition("=")
+    if kind in {"error", "assertion"}:
+        assertion = BROWSER_ASSERTION_RE.fullmatch(value)
+        if assertion is not None:
+            matcher = assertion.group("matcher")
+            if matcher in BROWSER_MATCHERS:
+                return {
+                    "source": source,
+                    "order": order,
+                    "kind": "assertion",
+                    "error_class": "assertion-failure",
+                    "matcher": matcher,
+                }
+        if kind == "error" and BROWSER_TIMEOUT_RE.fullmatch(value) is not None:
+            return {
+                "source": source,
+                "order": order,
+                "kind": "error",
+                "error_class": "timeout",
+            }
+        if kind == "error":
+            timed_out = BROWSER_WAIT_TIMEOUT_RE.fullmatch(value)
+            if timed_out is not None and timed_out.group("matcher") in BROWSER_MATCHERS:
+                return {
+                    "source": source,
+                    "order": order,
+                    "kind": "error",
+                    "error_class": "timeout",
+                    "matcher": timed_out.group("matcher"),
+                }
+        return None
+    if kind == "location":
+        location = BROWSER_LOCATION_RE.fullmatch(value)
+        if location is None:
+            return None
+        return {
+            "source": source,
+            "order": order,
+            "kind": "location",
+            "file": location.group("file"),
+            "line": int(location.group("line")),
+            "column": int(location.group("column")),
+        }
+    return None
+
+
+def _project_browser_observations(
+    root: Path,
+    source_records: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Project safe browser observations independently for each source.
+
+    ``order`` is the 1-based line order within the named source.  Keeping the
+    source and order makes observations auditable without correlating unrelated
+    records or publishing any browser error/assertion text.
+    """
+
+    observations: list[dict[str, Any]] = []
+    for record in source_records:
+        source = record.get("label")
+        if source not in BROWSER_OBSERVATION_SOURCES:
+            continue
+        path = _safe_path(root, record["path"])
+        for order, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            projected = _browser_observation(source, order, line.strip())
+            if projected is not None:
+                observations.append(projected)
+                if len(observations) >= BROWSER_OBSERVATION_LIMIT:
+                    return observations
+    return observations
 
 
 def _project_retry(
@@ -496,6 +613,7 @@ def summarize(bundle: Path) -> dict[str, Any]:
         "attempts": attempts,
         "snapshotStatus": snapshot_status,
         "retry": _project_retry(bundle, records, attempts),
+        "browserObservations": _project_browser_observations(bundle, records),
         "failures": _project_failures(bundle, records, attempts),
         "sources": {
             "available": sorted(set(available)),

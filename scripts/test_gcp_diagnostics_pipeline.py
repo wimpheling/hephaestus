@@ -313,6 +313,98 @@ finish
             )
             self.assertNotIn("browser-journey", json.dumps(failures))
 
+    def test_triage_projects_bounded_browser_observations_from_collector(self):
+        """Collector-normalized browser lines become typed, unassociated facts."""
+
+        with tempfile.TemporaryDirectory(prefix="heph-gcp-browser-observations-") as directory:
+            root = Path(directory)
+            raw = root / "raw"
+            raw.mkdir()
+            (raw / "runtime.log").write_text(
+                "ERROR: expect(locator).toBeVisible() failed\n"
+                "    at /srv/hephaestus/e2e/playwright/cooking-tests/cooking-live-review.spec.ts:203:11\n"
+                "ERROR: expect(received).toBe(expected) body=PRIVATE_BODY\n"
+                "ERROR: /tmp/private.spec.ts:1:2\n",
+                encoding="utf-8",
+            )
+            (raw / "test-output.log").write_text(
+                "AssertionError: expect(locator).toHaveText(expected)\n"
+                "ERROR: Timed out 5000ms waiting for expect(locator).toBeVisible()\n"
+                "ERROR: expect(received).toBe(expected) request body=PRIVATE_BODY\n"
+                "    at /tmp/private.spec.ts:9:4\n",
+                encoding="utf-8",
+            )
+            bundle = root / "bundle"
+            self.assertEqual(
+                COLLECTOR.main([
+                    "--output-dir", str(bundle),
+                    "--source", f"runtime-log={raw / 'runtime.log'}",
+                    "--source", f"test-output={raw / 'test-output.log'}",
+                ]),
+                0,
+            )
+            runtime_projected = (bundle / "sources" / "runtime-log").read_text(encoding="utf-8")
+            test_projected = (bundle / "sources" / "test-output").read_text(encoding="utf-8")
+            self.assertIn("error=expect(locator).toBeVisible() failed", runtime_projected)
+            self.assertIn(
+                "location=/srv/hephaestus/e2e/playwright/cooking-tests/cooking-live-review.spec.ts:203:11",
+                runtime_projected,
+            )
+            self.assertIn("assertion=expect(locator).toHaveText(expected)", test_projected)
+            self.assertIn("error=Timed out 5000ms waiting for expect(locator).toBeVisible()", test_projected)
+            self.assertNotIn("PRIVATE_BODY", runtime_projected + test_projected)
+
+            observations = TRIAGE.summarize(bundle)["browserObservations"]
+            self.assertEqual(
+                observations,
+                [
+                    {
+                        "source": "runtime-log", "order": 1, "kind": "assertion",
+                        "error_class": "assertion-failure", "matcher": "toBeVisible",
+                    },
+                    {
+                        "source": "runtime-log", "order": 2, "kind": "location",
+                        "file": "cooking-live-review.spec.ts", "line": 203, "column": 11,
+                    },
+                    {
+                        "source": "test-output", "order": 1, "kind": "assertion",
+                        "error_class": "assertion-failure", "matcher": "toHaveText",
+                    },
+                    {
+                        "source": "test-output", "order": 2, "kind": "error",
+                        "error_class": "timeout", "matcher": "toBeVisible",
+                    },
+                ],
+            )
+            # A location is informational and remains separate from an error
+            # in another source; no synthetic failure association is emitted.
+            self.assertTrue(all("failure" not in observation for observation in observations))
+
+    def test_triage_caps_browser_observations_and_rejects_malicious_normalized_text(self):
+        with tempfile.TemporaryDirectory(prefix="heph-gcp-browser-observations-cap-") as directory:
+            root = Path(directory)
+            self._archive(root)
+            output = root / "bundle" / "sources" / "test-output"
+            output.write_text(
+                "\n".join(
+                    ["assertion=expect(received).toBe(expected)"] * 70
+                    + [
+                        "error=expect(received).toBe(expected) JSON_BODY=PRIVATE",
+                        "assertion=expected PRIVATE_BODY",
+                        "location=/tmp/private.spec.ts:1:2",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            observations = TRIAGE.summarize(root / "bundle")["browserObservations"]
+            self.assertEqual(len(observations), TRIAGE.BROWSER_OBSERVATION_LIMIT)
+            self.assertEqual(observations[0]["order"], 1)
+            self.assertEqual(observations[-1]["order"], 64)
+            serialized = json.dumps(observations)
+            self.assertNotIn("PRIVATE", serialized)
+            self.assertNotIn("private.spec.ts", serialized)
+
     def test_triage_does_not_count_passed_tests_or_caught_panics_as_failures(self):
         with tempfile.TemporaryDirectory(prefix="heph-gcp-triage-test-count-") as directory:
             root = Path(directory)
