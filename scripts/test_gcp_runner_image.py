@@ -173,6 +173,17 @@ class RunnerImageManifestTests(unittest.TestCase):
             startup.index("phase_start runner-image-runtime"),
             startup.index("phase_start diagnostic-bootstrap"),
         )
+        self.assertLess(
+            startup.index("metadata_value diagnostics-collector-script"),
+            startup.index("runner_image_ready=false"),
+        )
+        self.assertIn("stage_diagnostics_metadata", startup)
+        self.assertLess(
+            startup.index("stage_diagnostics_metadata\n"),
+            startup.index("runner_image_ready=false"),
+        )
+        self.assertIn("llvm_prefix=\"$(llvm-config --prefix)\"", startup)
+        self.assertIn("-name 'libclang.so*'", startup)
         subprocess.run(["bash", "-n", str(SCRIPT.with_name("gcp-kvm-startup.sh"))], check=True)
 
     def test_custom_runtime_tools_run_as_forge_and_fail_on_version_mismatch(self) -> None:
@@ -231,6 +242,122 @@ class RunnerImageManifestTests(unittest.TestCase):
             result = subprocess.run(command, env=test_env, text=True, capture_output=True)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("Chromium executable is missing", result.stderr)
+
+    def test_early_image_failure_can_stage_metadata_collector_before_finish(self) -> None:
+        startup = SCRIPT.with_name("gcp-kvm-startup.sh")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            metadata_root = root / "metadata"
+            collector = root / "collector.py"
+            scanner = root / "scanner.py"
+            collector.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+            scanner.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+            command = r'''
+source "$1"
+test_mode=diagnostic
+trap - EXIT
+collector_path="$3"
+scanner_path="$4"
+metadata_value() {
+  case "$1" in
+    diagnostics-collector-script) cat "$collector_path" ;;
+    diagnostics-scanner-script) cat "$scanner_path" ;;
+    *) return 1 ;;
+  esac
+}
+stage_diagnostics_metadata
+test -s "$diagnostics_metadata_root/collect-cooking-diagnostics.py"
+test -s "$diagnostics_metadata_root/check-browser-evidence.py"
+'''
+            result = subprocess.run(
+                [
+                    "bash", "-Eeuo", "pipefail", "-c", command, "metadata-stage-test",
+                    str(startup), str(metadata_root), str(collector), str(scanner),
+                ],
+                env={
+                    **os.environ,
+                    "HEPH_GCP_STARTUP_LIBRARY": "1",
+                    "HEPH_GCP_DIAGNOSTICS_METADATA_ROOT": str(metadata_root),
+                },
+                text=True,
+                capture_output=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                (metadata_root / "collect-cooking-diagnostics.py").read_text(encoding="utf-8"),
+                collector.read_text(encoding="utf-8"),
+            )
+
+    def test_early_image_failure_finish_collects_with_staged_metadata(self) -> None:
+        startup = SCRIPT.with_name("gcp-kvm-startup.sh")
+        collector_source = SCRIPT.with_name("collect-cooking-diagnostics.py")
+        scanner_source = SCRIPT.with_name("check-browser-evidence.py")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            work = root / "work"
+            metadata_root = root / "metadata"
+            metadata_root.mkdir(parents=True)
+            collector = root / "collector.py"
+            scanner = root / "scanner.py"
+            collector.write_bytes(collector_source.read_bytes())
+            scanner.write_bytes(scanner_source.read_bytes())
+            log_file = root / "startup.log"
+            log_file.write_text("runner image manifest verification failed\n", encoding="utf-8")
+            fake_curl = root / "curl"
+            fake_curl.write_text(
+                "#!/bin/sh\n"
+                "case \"$*\" in\n"
+                "  *instance/service-accounts/default/token*) printf '%s' '{\"access_token\":\"test-token\"}' ;;\n"
+                "  *storage.googleapis.com/upload*) exit 0 ;;\n"
+                "  *) exit 2 ;;\n"
+                "esac\n",
+                encoding="utf-8",
+            )
+            fake_curl.chmod(0o755)
+            command = r'''
+source "$1"
+trap - EXIT
+collector_path="$3"
+scanner_path="$4"
+metadata_value() {
+  case "$1" in
+    diagnostics-collector-script) cat "$collector_path" ;;
+    diagnostics-scanner-script) cat "$scanner_path" ;;
+    diagnostics-object) printf '%s\n' 'cooking/runs/1/1/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.tar.gz' ;;
+    *) return 1 ;;
+  esac
+}
+test_mode=diagnostic
+phase=runner-image-verify
+revision=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+vm_start_epoch=$(date +%s)
+collection_deadline_epoch=$((vm_start_epoch + 60))
+stage_diagnostics_metadata
+set +e
+(exit 17)
+finish
+'''
+            env = {
+                **os.environ,
+                "HEPH_GCP_STARTUP_LIBRARY": "1",
+                "HEPH_GCP_WORK_ROOT": str(work),
+                "HEPH_GCP_LOG_FILE": str(log_file),
+                "HEPH_GCP_DIAGNOSTICS_METADATA_ROOT": str(metadata_root),
+                "PATH": f"{root}:{os.environ['PATH']}",
+            }
+            result = subprocess.run(
+                [
+                    "bash", "-Eeuo", "pipefail", "-c", command, "early-image-failure-test",
+                    str(startup), str(metadata_root), str(collector), str(scanner),
+                ],
+                env=env,
+                text=True,
+                capture_output=True,
+            )
+            self.assertEqual(result.returncode, 17, result.stdout + result.stderr)
+            self.assertIn("event=upload status=pass", result.stdout)
+            self.assertIn("HEPHAESTUS_GCP_DIAGNOSTIC: TEST-FAIL expected=false", result.stdout)
+            self.assertTrue((work / "tmp/cooking-diagnostics.tar.gz").is_file())
 
     def test_cooking_consumes_verified_browser_and_host_tools(self) -> None:
         cooking = SCRIPT.with_name("gcp-cooking-run.sh").read_text(encoding="utf-8")

@@ -179,6 +179,16 @@ metadata_optional_value() {
 
 require_command() { command -v "$1" >/dev/null 2>&1 || die "missing command: $1"; }
 
+stage_diagnostics_metadata() {
+  [[ "$test_mode" == diagnostic || "$test_mode" == gcp-cooking ]] || return 0
+  # Fetch these before image verification so finish() can collect an early
+  # custom-image failure through the metadata-provided private pipeline.
+  install -d -m 0700 "$diagnostics_metadata_root"
+  metadata_value diagnostics-collector-script >"$diagnostics_metadata_root/collect-cooking-diagnostics.py"
+  metadata_value diagnostics-scanner-script >"$diagnostics_metadata_root/check-browser-evidence.py"
+  chmod 0700 "$diagnostics_metadata_root" "$diagnostics_metadata_root"/*.py
+}
+
 diagnostics_object() {
   local object="${HEPH_GCP_DIAGNOSTICS_OBJECT:-$diagnostics_object_metadata}"
   [[ -n "$object" && "$object" != *..* && "$object" =~ ^cooking/runs/[0-9]+/[0-9]+/[0-9a-f]{40}\.tar\.gz$ ]] ||
@@ -593,6 +603,7 @@ vm_start_epoch="$(metadata_value trial-start-epoch)"
 if [[ "$test_mode" == diagnostic || "$test_mode" == gcp-cooking ]]; then
   diagnostics_object_metadata="$(metadata_value diagnostics-object)"
 fi
+stage_diagnostics_metadata
 if [[ "$test_mode" == diagnostic ]]; then
   trial_deadline=$((SECONDS + 180))
   collection_deadline=$((SECONDS + 480))
@@ -658,10 +669,20 @@ PY
     [[ "$runner_image_browser_lock_sha" =~ ^[0-9a-f]{64}$ ]] ||
       die 'runner image browser lock fingerprint is invalid'
     runner_image_browser_version="$(manifest_field browser_version)"
-    # The baked image's loader path is stable, but discover libclang so the
-    # checkout smoke receives the actual Ubuntu LLVM directory.
-    libclang_so="$(ldconfig -p 2>/dev/null | awk '/libclang\.so/{print $NF; exit}' || true)"
-    [[ -n "$libclang_so" ]] || die 'baked runner image has no libclang.so in its loader cache'
+    # Use the same llvm-config/tree lookup as the stock provisioning path.
+    # Ubuntu's SONAME may be libclang-N.so.N, so ldconfig's unversioned
+    # libclang.so pattern is insufficient.
+    llvm_prefix="$(llvm-config --prefix)" || die 'baked runner image has no llvm-config'
+    libclang_so="$(find "$llvm_prefix" -maxdepth 3 \( -type f -o -type l \) \
+      -name 'libclang.so*' -print -quit 2>/dev/null)"
+    if [[ -z "$libclang_so" ]]; then
+      clang_path="$(readlink -f "$(command -v clang)")"
+      clang_prefix="$(dirname "$(dirname "$clang_path")")"
+      libclang_so="$(find "$clang_prefix" -maxdepth 3 \( -type f -o -type l \) \
+        -name 'libclang.so*' -print -quit 2>/dev/null)"
+    fi
+    [[ -n "$libclang_so" && -r "$libclang_so" ]] ||
+      die 'baked runner image has no usable libclang shared library'
     libclang_dir="$(dirname -- "$libclang_so")"
     printf 'HEPH_GCP_RUNNER_IMAGE mode=prebuilt manifest=%s\n' "$runner_image_manifest_path"
   else
@@ -675,13 +696,6 @@ if [[ "$runner_image_ready" == true ]]; then
   phase_start runner-image-runtime
   runner_image_runtime_ready
   phase_pass
-fi
-
-if [[ "$test_mode" == diagnostic || "$test_mode" == gcp-cooking ]]; then
-  install -d -m 0700 "$diagnostics_metadata_root"
-  metadata_value diagnostics-collector-script >"$diagnostics_metadata_root/collect-cooking-diagnostics.py"
-  metadata_value diagnostics-scanner-script >"$diagnostics_metadata_root/check-browser-evidence.py"
-  chmod 0700 "$diagnostics_metadata_root" "$diagnostics_metadata_root"/*.py
 fi
 
 if [[ "$test_mode" == diagnostic ]]; then

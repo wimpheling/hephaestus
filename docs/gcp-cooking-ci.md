@@ -84,7 +84,7 @@ workflow. The `runner_image` input is optional for `diagnostic`, `smoke` and
 ```sh
 gh workflow run cooking-e2e.yml --repo wimpheling/hephaestus --ref main \
   -f cloud_mode=diagnostic -f gcp_zone=europe-west1-d \
-  -f runner_image=hephaestus-runner-<manifest-prefix>
+  -f runner_image=hephaestus-runner-61d34f3bbda2b9cd6c7967249b540595
 gh workflow run cooking-e2e.yml --repo wimpheling/hephaestus --ref main \
   -f cloud_mode=smoke -f gcp_zone=europe-west1-d \
   -f runner_image=hephaestus-runner-<manifest-prefix>
@@ -107,15 +107,16 @@ Failed-candidate deletion and recovery by a fresh workflow cleanup step remain
 planned acceptance checks until their focused tests pass. No image is
 currently claimed as live or approved for `gcp-cooking`.
 
-Recent image-build validation remains pre-release: run
-34597314604 at `eccc140` stopped before VM or disk creation because gcloud
-warning text was mixed into JSON; that was fixed at `ea37126`. Run
-34597940538 at `ea37126` was cancelled after local proof found the copied Node
-tree retained root-only `0700` permissions. The builder VM, disk and cleanup
-step were verified deleted at 12:27:52Z, 12:27:55Z and 12:27:58Z, and no image
-was created. Node permissions are now fixed locally; wrapper early-failure
-and builder-error/readiness checks remain under validation. No image is ready,
-and full `gcp-cooking` remains paused.
+Build run [34601825193](https://github.com/wimpheling/hephaestus/actions/runs/34601825193)
+at commit `15960cdfcfe176e4dc32809b10e7b8eee31b2ada` completed in about
+11 minutes. It produced the READY candidate
+`hephaestus-runner-61d34f3bbda2b9cd6c7967249b540595`; the full manifest SHA is
+`61d34f3bbda2b9cd6c7967249b54059506327db1820aa3a6ae749f500eaf3128`. The
+builder, source disk and final cleanup were verified deleted at 13:09:50Z,
+13:11:09Z and 13:11:17Z. The local log is
+`/tmp/heph-image-build-34601825193.log`. The candidate is not promoted; the
+next check is the custom diagnostic dispatch above, while KVM smoke and full
+`gcp-cooking` remain pending.
 
 ### Keyless identities and bucket access
 

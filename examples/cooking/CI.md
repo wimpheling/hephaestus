@@ -170,8 +170,17 @@ anchors remain compatible, subject to the browser lock and baked
 browser executable/version checks at startup.
 
 The optional `runner_image` input is supported by `diagnostic`, `smoke` and
-`gcp-cooking`; omitting it keeps the stock image default. For example, after
-reviewing the build output:
+`gcp-cooking`; omitting it keeps the stock image default. After reviewing the
+build output, the next custom-image check is diagnostic:
+
+```sh
+gh workflow run cooking-e2e.yml --repo wimpheling/hephaestus --ref main \
+  -f cloud_mode=diagnostic -f gcp_zone=europe-west1-d \
+  -f runner_image=hephaestus-runner-61d34f3bbda2b9cd6c7967249b540595
+```
+
+The candidate may be used for a later full-mode dispatch only after that
+check is accepted:
 
 ```sh
 gh workflow run cooking-e2e.yml --repo wimpheling/hephaestus --ref main \
@@ -185,17 +194,19 @@ that disk, and image creation must complete before the source disk is deleted.
 Failure cleanup must remove and verify every builder disk and any failed image;
 fresh-workflow cleanup and failed-candidate recovery remain planned acceptance
 checks until their focused tests pass. Retain one current image and one
-rollback image; custom image storage is billable. This image mode is planned
-and no live image is claimed.
+rollback image; custom image storage is billable.
 
-Image-build validation is still pre-release. Run 34597314604 at `eccc140`
-stopped before resource creation because gcloud warning text contaminated JSON;
-that was fixed at `ea37126`. Run 34597940538 at `ea37126` was cancelled after
-local proof found root-only permissions in the copied Node tree. Its builder
-VM, disk and cleanup step were verified deleted at 12:27:52Z, 12:27:55Z and
-12:27:58Z, with no image created. Node permissions are fixed locally, while
-early-failure and builder-readiness checks remain under validation. No image is
-ready and full `gcp-cooking` remains paused.
+Build run [34601825193](https://github.com/wimpheling/hephaestus/actions/runs/34601825193)
+at commit `15960cdfcfe176e4dc32809b10e7b8eee31b2ada` completed in about
+11 minutes and produced READY candidate image
+`hephaestus-runner-61d34f3bbda2b9cd6c7967249b540595`. Its full manifest SHA is
+`61d34f3bbda2b9cd6c7967249b54059506327db1820aa3a6ae749f500eaf3128`.
+The builder, source disk and final cleanup were verified deleted at
+13:09:50Z, 13:11:09Z and 13:11:17Z; the local log is
+`/tmp/heph-image-build-34601825193.log`. The candidate is not promoted or
+approved for full `gcp-cooking`; KVM and full Cooking remain pending.
+
+The image mode remains pre-release pending the custom diagnostic result.
 
 The GCP Cooking path reports a dedicated `HEPHAESTUS_GCP_COOKING` marker and
 uses the same private collector/upload/download path. The GitHub workflow

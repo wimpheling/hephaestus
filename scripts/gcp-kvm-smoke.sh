@@ -383,11 +383,104 @@ record_serial() {
   fi
 }
 
+report_serial_failure_context() {
+  local value="$1" context_file context_output context_status
+  context_file="$(mktemp "${TMPDIR:-/tmp}/gcp-kvm-smoke-context.XXXXXX")" || {
+    printf 'Bounded typed serial failure context unavailable (temporary file creation failed)\n' >&2
+    return 0
+  }
+  chmod 600 "$context_file"
+  printf '%s\n' "$value" >"$context_file"
+  set +e
+  context_output="$(python3 - "$context_file" "$(dirname -- "${BASH_SOURCE[0]}")/check-browser-evidence.py" <<'PY'
+import importlib.util
+import pathlib
+import re
+import sys
+
+serial_path, scanner_path = sys.argv[1:]
+spec = importlib.util.spec_from_file_location("serial_evidence", scanner_path)
+if spec is None or spec.loader is None:
+    raise SystemExit("serial evidence scanner is unavailable")
+scanner = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(scanner)
+
+prefix = re.compile(r"^\[[^]]+\] google_metadata_script_runner\[\d+\]:\s*")
+safe_key = re.compile(r"^(?:event|phase|revision|exit|expected|test_result|status|error|stage|terminal|state|result|code)$")
+safe_value = re.compile(r"^[A-Za-z0-9._:/=-]+$")
+safe_head = re.compile(r"^HE(?:PH|PHAESTUS)_[A-Z0-9_-]+:?$")
+interesting_keys = {"event", "phase", "terminal", "error", "stage", "status", "state", "result"}
+interesting_words = {"ERROR", "FAIL", "FAILED", "TERMINAL"}
+
+
+def normalize(raw: str) -> str:
+    line = prefix.sub("", raw.strip())
+    if "startup-script:" in line:
+        line = line.split("startup-script:", 1)[1].lstrip()
+    return line
+
+
+def project(raw: str) -> str | None:
+    line = normalize(raw)
+    if not line.startswith(("HEPH_", "HEPHAESTUS_")):
+        return None
+    encoded = line.encode("utf-8", errors="surrogateescape")
+    if any(pattern in encoded for pattern in scanner.STREAM_PATTERNS):
+        return None
+    head, separator, body = line.partition(" ")
+    if not separator or not safe_head.fullmatch(head):
+        return None
+    output = []
+    interesting = False
+    for token in body.split():
+        if "=" in token:
+            key, value = token.split("=", 1)
+            if not safe_key.fullmatch(key) or not safe_value.fullmatch(value):
+                return None
+            output.append(f"{key}={value}")
+            interesting = interesting or key in interesting_keys
+        else:
+            if not re.fullmatch(r"[A-Za-z0-9_-]+", token):
+                return None
+            output.append(token)
+            interesting = interesting or token.upper() in interesting_words
+    if not interesting or not output:
+        return None
+    return f"{head} {' '.join(output)}"
+
+
+lines = []
+seen = set()
+for raw in pathlib.Path(serial_path).read_text(encoding="utf-8", errors="replace").splitlines():
+    safe_line = project(raw)
+    if safe_line is not None and safe_line not in seen:
+        seen.add(safe_line)
+        lines.append(safe_line)
+    if len(lines) >= 40:
+        break
+if lines:
+    print("Bounded typed serial failure context:")
+    print("\n".join(lines))
+else:
+    print("Bounded typed serial failure context unavailable (no safe HEPH error/phase/terminal records)")
+PY
+)"
+  context_status=$?
+  set -e
+  rm -f -- "$context_file"
+  if ((context_status != 0)); then
+    printf 'Bounded typed serial failure context unavailable (scanner failed)\n' >&2
+  else
+    printf '%s\n' "$context_output" >&2
+  fi
+  return 0
+}
+
 cleanup_vm() {
   local zone="${GCP_ZONE:-europe-west1-b}"
   local name="heph-kvm-smoke-${GITHUB_RUN_ID:-manual}-${GITHUB_RUN_ATTEMPT:-1}"
   [[ "$zone" == "$REGION"-* ]] || die "zone must be in $REGION: $zone"
-  local data
+  local data describe_error=''
   if run_json_gcloud compute instances describe "$name" --project="$PROJECT_ID" --zone="$zone" --format=json; then
     data="$gcloud_json_output"
     report_gcloud_json_stderr
@@ -447,11 +540,12 @@ if any(labels.get(k)!=v for k,v in expected.items()): raise SystemExit("ownershi
     printf 'gcp-kvm-smoke: cleanup retries exhausted for owned VM: %s\n' "$name" >&2
     return 1
   fi
-  if grep -Eqi "instances/${name}[^[:alnum:]_].*was not found" <<<"$data"; then
+  describe_error="$gcloud_json_stderr"
+  if grep -Eqi "instances/${name}[^[:alnum:]_].*was not found" <<<"$describe_error"; then
     printf 'Disposable VM already absent (verified by describe): %s\n' "$name"
     return 0
   fi
-  printf '%s\n' "$data" >&2
+  printf '%s\n' "$describe_error" >&2
   printf 'gcp-kvm-smoke: cannot inspect disposable VM for cleanup: %s\n' "$name" >&2
   return 1
 }
@@ -662,16 +756,16 @@ PY
     fi
     if [[ "$mode" == diagnostic ]] &&
         marker_matches 'HEPHAESTUS_GCP_DIAGNOSTIC: DIAGNOSTICS FAIL .*' "$serial"; then
-      printf '%s\n' "$serial" | tail -80 >&2
+      report_serial_failure_context "$serial"
       die 'diagnostic evidence pipeline failed'
     fi
     if marker_matches "$fail_marker" "$serial"; then
-      printf '%s\n' "$serial" | tail -80 >&2
+      report_serial_failure_context "$serial"
       die 'startup smoke reported failure'
     fi
     if [[ "$mode" == gcp-cooking ]] &&
         marker_matches 'HEPHAESTUS_GCP_KVM_SMOKE: FAIL .*' "$serial"; then
-      printf '%s\n' "$serial" | tail -80 >&2
+      report_serial_failure_context "$serial"
       die 'common startup reported failure before Cooking helper'
     fi
     sleep 10
@@ -679,7 +773,7 @@ PY
   if vm_absent_before_terminal; then
     die "disposable VM disappeared before a terminal marker: $smoke_name"
   fi
-  printf '%s\n' "$last_serial" | tail -80 >&2
+  report_serial_failure_context "$last_serial"
   die "timed out waiting for the startup ${mode} marker before its cleanup reserve"
 }
 
