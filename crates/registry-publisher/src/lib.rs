@@ -634,6 +634,10 @@ where
             "copy".into(),
             "--all".into(),
             "--preserve-digests".into(),
+            // Never make publication depend on an ambient auth.json. The
+            // destination bearer token below is the sole credential allowed
+            // by the controlled publisher boundary.
+            "--dest-no-creds".into(),
             "--dest-registry-token".into(),
             token.as_str().into(),
         ]);
@@ -648,7 +652,7 @@ where
             &CommandSpec::new(self.configuration.skopeo_binary.clone(), arguments)
                 // Skopeo requires the literal bearer token here. It must never
                 // appear in Debug output.
-                .with_sensitive_argument(4),
+                .with_sensitive_argument(5),
         )
         .map(|_| ())
     }
@@ -1947,6 +1951,26 @@ mod tests {
         publisher
             .publish(&intent, &material, issued.token())
             .expect("verified");
+        let copy_disables_ambient_credentials = commands
+            .lock()
+            .expect("commands")
+            .iter()
+            .find(|command| {
+                command
+                    .arguments()
+                    .first()
+                    .is_some_and(|argument| argument == "copy")
+            })
+            .is_some_and(|command| {
+                command
+                    .arguments()
+                    .iter()
+                    .any(|argument| argument == "--dest-no-creds")
+            });
+        assert!(
+            copy_disables_ambient_credentials,
+            "publication must not read ambient Skopeo auth.json"
+        );
         let debug = format!("{:?}", issued.token());
         assert!(!debug.contains(&secret));
         for command in commands.lock().expect("commands").iter() {
