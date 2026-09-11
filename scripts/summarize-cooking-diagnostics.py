@@ -247,8 +247,9 @@ RUNTIME_RESULT_REPORT_STATES = {
 }
 RUNTIME_RESULT_REASONS = {
     "complete", "invalid-report", "incomplete-phases", "browser-tests-not-passed",
-    "timeout", "report-validation-failed",
+    "timeout", "report-validation-failed", "legacy-unavailable",
 }
+LEGACY_RUNTIME_PREFIXES = ("cooking ", "runtime ", "worker ")
 
 
 def _unknown_browser_summary(state: str) -> dict[str, Any]:
@@ -414,9 +415,16 @@ def _project_evidence_scan(
                 continue
             path = _safe_path(root, record["path"])
             for line in path.read_text(encoding="utf-8").splitlines():
-                if not line.startswith("HEPH_GCP_COOKING ") or "event=evidence-scan" not in line:
+                marker_start = line.find("HEPH_GCP_COOKING ")
+                if marker_start >= 0:
+                    marker_line = line[marker_start:]
+                elif line.startswith(LEGACY_RUNTIME_PREFIXES):
+                    marker_line = line
+                else:
                     continue
-                fields = dict(FAILURE_PAIR.findall(line))
+                if "event=evidence-scan" not in marker_line:
+                    continue
+                fields = dict(FAILURE_PAIR.findall(marker_line))
                 if "report_status" not in fields:
                     continue
                 expected = {
@@ -530,9 +538,14 @@ def _project_runtime_results(
             continue
         path = _safe_path(root, record["path"])
         for line in path.read_text(encoding="utf-8").splitlines():
-            if not line.startswith("HEPH_GCP_COOKING "):
+            marker_start = line.find("HEPH_GCP_COOKING ")
+            if marker_start >= 0:
+                marker_line = line[marker_start:]
+            elif line.startswith(LEGACY_RUNTIME_PREFIXES):
+                marker_line = line
+            else:
                 continue
-            fields = dict(FAILURE_PAIR.findall(line))
+            fields = dict(FAILURE_PAIR.findall(marker_line))
             event = fields.get("event")
             operation = fields.get("operation")
             status = fields.get("status")
@@ -557,7 +570,10 @@ def _project_runtime_results(
             if event == "browser-report-validation":
                 report_state = fields.get("report_state")
                 reason = fields.get("reason")
-                if report_state not in RUNTIME_RESULT_REPORT_STATES or reason not in RUNTIME_RESULT_REASONS:
+                if report_state is None and reason is None:
+                    report_state = "unknown"
+                    reason = "legacy-unavailable"
+                elif report_state not in RUNTIME_RESULT_REPORT_STATES or reason not in RUNTIME_RESULT_REASONS:
                     raise ValueError("browser validation result is invalid")
                 result["report_state"] = report_state
                 result["reason"] = reason

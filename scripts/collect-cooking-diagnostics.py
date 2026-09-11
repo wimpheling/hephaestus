@@ -640,6 +640,47 @@ def _project_browser_validation_marker(line: str) -> str:
     )
 
 
+def _project_workload_result_marker(line: str) -> str:
+    """Project the workload gate marker independently of log prefixes."""
+
+    tokens = line.split()
+    if not tokens or tokens[0] != "HEPH_GCP_COOKING":
+        raise CollectionError("workload result marker is malformed")
+    fields: dict[str, str] = {}
+    for token in tokens[1:]:
+        key, separator, value = token.partition("=")
+        if not separator or key in fields:
+            raise CollectionError("workload result marker fields are malformed")
+        fields[key] = value
+    expected = {"event", "operation", "phase", "status", "exit_code"}
+    if set(fields) != expected or fields["event"] != "workload-result" or fields["operation"] != "cooking-workload":
+        raise CollectionError("workload result marker fields are not allowlisted")
+    if fields["phase"] != "cooking" or fields["status"] not in {"passed", "failed"}:
+        raise CollectionError("workload result marker outcome is invalid")
+    if not fields["exit_code"].isascii() or not fields["exit_code"].isdecimal() or int(fields["exit_code"]) > 255:
+        raise CollectionError("workload result marker exit code is invalid")
+    return (
+        "HEPH_GCP_COOKING event=workload-result operation=cooking-workload phase=cooking "
+        f"status={fields['status']} exit_code={int(fields['exit_code'])}"
+    )
+
+
+def _project_gate_marker(line: str) -> str | None:
+    """Normalize a known gate marker even when a formatter prefixes it."""
+
+    marker_start = line.find("HEPH_GCP_COOKING ")
+    if marker_start < 0:
+        return None
+    suffix = line[marker_start:]
+    if "event=workload-result" in suffix:
+        return _project_workload_result_marker(suffix)
+    if "event=evidence-scan" in suffix and "report_status=" in suffix:
+        return _project_evidence_scan_marker(suffix)
+    if "event=browser-report-validation" in suffix:
+        return _project_browser_validation_marker(suffix)
+    return None
+
+
 def _project_runtime_fields(line: str) -> tuple[str, list[str]]:
     """Extract approved fields from tracing lifecycle lines.
 
@@ -702,17 +743,8 @@ def _project_text(source: Path, destination: Path) -> tuple[int, str]:
                 projected = readiness
             elif RETRY_MARKER_RE.search(line) is not None:
                 projected = _project_retry_marker(line)
-            elif (
-                line.startswith("HEPH_GCP_COOKING ")
-                and "event=evidence-scan" in line
-                and "report_status=" in line
-            ):
-                projected = _project_evidence_scan_marker(line)
-            elif (
-                line.startswith("HEPH_GCP_COOKING ")
-                and "event=browser-report-validation" in line
-            ):
-                projected = _project_browser_validation_marker(line)
+            elif (gate_marker := _project_gate_marker(line)) is not None:
+                projected = gate_marker
             elif DROP_LINE_RE.search(line):
                 continue
             else:

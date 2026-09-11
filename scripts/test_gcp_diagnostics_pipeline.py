@@ -1424,6 +1424,22 @@ finish
             self.assertEqual(triage["evidenceScan"]["checked_files"], 19)
             self.assertEqual(len(triage["runtimeResults"]), 3)
 
+    def test_triage_accepts_closed_legacy_gate_prefix_with_unknown_browser_detail(self):
+        with tempfile.TemporaryDirectory(prefix="heph-gcp-legacy-gate-") as directory:
+            root = Path(directory)
+            self._archive(root)
+            (root / "bundle/sources/runtime-structured").write_text(
+                "cooking timestamp=2026-09-11T00:00:00Z "
+                "event=browser-report-validation operation=browser-report-validation "
+                "phase=evidence status=failed exit_code=1\n",
+                encoding="utf-8",
+            )
+            results = TRIAGE.summarize(root / "bundle")["runtimeResults"]
+            self.assertEqual(results[0]["status"], "failed")
+            self.assertEqual(results[0]["exit_code"], 1)
+            self.assertEqual(results[0]["report_state"], "unknown")
+            self.assertEqual(results[0]["reason"], "legacy-unavailable")
+
 
 if __name__ == "__main__":
     unittest.main()

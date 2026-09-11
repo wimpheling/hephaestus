@@ -631,6 +631,32 @@ class CookingDiagnosticsTests(unittest.TestCase):
             self.assertIn("event=workload-result", retained)
             self.assertIn("exit_code=7", retained)
 
+    def test_normalizes_prefixed_gate_markers_before_generic_projection(self):
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            source = root_path / "runtime.log"
+            source.write_text(
+                "INFO cooking status=passed "
+                "HEPH_GCP_COOKING event=workload-result operation=cooking-workload "
+                "phase=cooking status=failed exit_code=7\n"
+                "worker HEPH_GCP_COOKING event=evidence-scan operation=evidence-scan phase=evidence "
+                "status=failed exit_code=1 report_status=failed rule=browser-secret-org "
+                "file_class=content path_sha256=" + "d" * 64 + " checked_files=2 checked_bytes=3\n"
+                "cooking HEPH_GCP_COOKING event=browser-report-validation "
+                "operation=browser-report-validation phase=evidence status=passed "
+                "report_state=complete reason=complete exit_code=0\n",
+                encoding="utf-8",
+            )
+            output = root_path / "bundle"
+            self.assertEqual(
+                COLLECTOR.collect(output, [f"runtime-log={source}"], None, None, None), 0
+            )
+            retained = (output / "sources/runtime-log").read_text(encoding="utf-8")
+            self.assertIn("HEPH_GCP_COOKING event=workload-result", retained)
+            self.assertIn("HEPH_GCP_COOKING event=evidence-scan", retained)
+            self.assertIn("HEPH_GCP_COOKING event=browser-report-validation", retained)
+            self.assertNotIn("INFO cooking status=passed", retained)
+
 
 if __name__ == "__main__":
     unittest.main()
