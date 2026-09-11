@@ -304,7 +304,6 @@ def _failure_record(
     if "attempt_run_id" in fields and fields["attempt_run_id"].lower() not in correlated_run_ids:
         fields.pop("attempt_run_id")
     exit_code = fields.get("exit_code")
-    successful_exit = exit_code == 0 or exit_code == "0"
     def _nonzero(value: Any) -> bool:
         if isinstance(value, int):
             return value > 0
