@@ -848,7 +848,15 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
         .await
         .expect("build production application");
     let running = app.start().await.expect("start ready application");
-    let token = signed_token();
+    // The Cooking proof deliberately spans several production builds before
+    // it creates the separate blog repository. Keep its fixture assertion
+    // valid for the bounded 45-minute host trial while ordinary golden tests
+    // retain the shorter token lifetime.
+    let token = signed_token(if cooking_build_proof {
+        Duration::from_secs(45 * 60)
+    } else {
+        Duration::from_secs(5 * 60)
+    });
     if cooking_build_proof {
         let source_root =
             PathBuf::from(env::var("HEPHAESTUS_COOKING_SOURCE_ROOT").expect("cooking source root"));
@@ -2805,8 +2813,9 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
     cleanup_streams(&nats_url).await;
 }
 
-fn signed_token() -> String {
+fn signed_token(lifetime: Duration) -> String {
     let now = OffsetDateTime::now_utc().unix_timestamp();
+    let lifetime_seconds = i64::try_from(lifetime.as_secs()).expect("bounded token lifetime");
     let issuer = golden_issuer();
     encode(
         &Header::new(Algorithm::HS256),
@@ -2815,7 +2824,7 @@ fn signed_token() -> String {
             "sub": "golden-subject",
             "aud": AUDIENCE,
             "iat": now,
-            "exp": now + 300,
+            "exp": now + lifetime_seconds,
             "email": "golden@example.invalid",
             "email_verified": true
         }),

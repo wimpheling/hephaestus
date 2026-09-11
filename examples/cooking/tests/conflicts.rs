@@ -62,7 +62,7 @@ async fn prepare_resolution_checkout(
 ) -> (PathBuf, String, String) {
     let checkout = root.join("operator-conflict-resolution");
     let remote = format!("http://{}/{repository_id}", running.http_addr());
-    let token = super::signed_token();
+    let token = super::signed_token(std::time::Duration::from_secs(5 * 60));
     super::authenticated_git(
         root,
         &token,
