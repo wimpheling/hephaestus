@@ -9,7 +9,8 @@ use mailbox_dispatch::{
 };
 use mailbox_domain::{
     BodyReference, BodyReferenceId, ContentMetadata, DeduplicationKey, EnvelopeMethod,
-    EnvelopeRoute, MailboxEnvelope, MailboxEvent, MailboxEventId, MailboxId, ProducerId,
+    EnvelopeRoute, MailboxEnvelope, MailboxEvent, MailboxEventId, MailboxId,
+    MailboxOperationIdentity, ProducerId,
 };
 use mailbox_postgres::PostgresMailboxRepository;
 use runtime_types::{
@@ -136,6 +137,238 @@ async fn instance_mailbox_allocation_is_authorized_idempotent_and_receipted() {
             .expect("read retired mailbox state"),
         "active"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial]
+async fn recovery_does_not_classify_a_run_cleaned_during_its_fallback_statement() {
+    let Ok(database_url) = env::var("HEPHAESTUS_POSTGRES_TEST_URL") else {
+        eprintln!(
+            "SKIP mailbox recovery cleanup race integration: HEPHAESTUS_POSTGRES_TEST_URL is unset"
+        );
+        return;
+    };
+    let pool = PgPoolOptions::new()
+        .max_connections(6)
+        .connect(&database_url)
+        .await
+        .expect("connect real PostgreSQL");
+    sqlx::migrate!("../../migrations")
+        .run(&pool)
+        .await
+        .expect("apply mailbox migrations");
+    let fixture = seed_instance(&pool).await;
+    let store = Arc::new(PostgresMailboxRepository::new(pool.clone()));
+    let mailbox_id = MailboxId::new();
+    store
+        .ensure_mailbox(fixture.project, mailbox_id, fixture.instance)
+        .await
+        .expect("create race-test mailbox");
+    let (target_event_id, target_run_id) = seed_running_run(
+        &store,
+        &pool,
+        fixture.project,
+        mailbox_id,
+        fixture.instance,
+        fixture.revision,
+        b"recovery-cleanup-read-committed-target",
+    )
+    .await;
+    let (blocked_event_id, blocked_run_id) = seed_running_run(
+        &store,
+        &pool,
+        fixture.project,
+        mailbox_id,
+        fixture.instance,
+        fixture.revision,
+        b"recovery-cleanup-read-committed-blocker",
+    )
+    .await;
+    sqlx::query("UPDATE runs SET state = 'cleaned_up', outcome = 'succeeded' WHERE id = $1")
+        .bind(blocked_run_id)
+        .execute(&pool)
+        .await
+        .expect("prepare committed cleaned blocker run");
+
+    // Hold the already-cleaned blocker row so recover has taken its initial
+    // READ COMMITTED snapshot (where the target run is still running) and is
+    // waiting at the completed-run reconciliation query. Cleanup can commit
+    // the target independently while that statement is blocked, making the
+    // stale-snapshot ordering deterministic without a production hook.
+    let mut blocker = pool.begin().await.expect("begin delivery lock");
+    sqlx::query("SELECT event_id FROM mailbox_deliveries WHERE event_id = $1 FOR UPDATE")
+        .bind(blocked_event_id.as_uuid())
+        .fetch_one(&mut *blocker)
+        .await
+        .expect("lock cleaned blocker delivery");
+    let recovery = {
+        let store = Arc::clone(&store);
+        tokio::spawn(async move { store.recover().await })
+    };
+    let reached_reconciliation_wait = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let waiting: bool = sqlx::query_scalar(
+                "SELECT EXISTS (
+                     SELECT 1 FROM pg_stat_activity
+                      WHERE datname = current_database() AND pid <> pg_backend_pid()
+                        AND state = 'active'
+                        AND wait_event_type = 'Lock'
+                        AND query LIKE '%FOR UPDATE OF delivery, attempt%'
+                 )",
+            )
+            .fetch_one(&pool)
+            .await
+            .expect("inspect recovery wait");
+            if waiting {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .is_ok();
+    if !reached_reconciliation_wait {
+        drop(blocker);
+        let _ = tokio::time::timeout(Duration::from_secs(5), recovery).await;
+        panic!("recover did not reach the blocked reconciliation query");
+    }
+    sqlx::query("UPDATE runs SET state = 'cleaned_up', outcome = 'succeeded' WHERE id = $1")
+        .bind(target_run_id)
+        .execute(&pool)
+        .await
+        .expect("commit cleanup while recover is blocked");
+    blocker.commit().await.expect("release delivery lock");
+    tokio::time::timeout(Duration::from_secs(5), recovery)
+        .await
+        .expect("recover did not finish after barrier release")
+        .expect("join recovery")
+        .expect("recover race-test transaction");
+
+    let (disposition, attempt_state): (String, String) = sqlx::query_as(
+        "SELECT delivery.disposition, attempt.state
+           FROM mailbox_deliveries AS delivery
+           JOIN mailbox_delivery_attempts AS attempt ON attempt.event_id = delivery.event_id
+          WHERE delivery.event_id = $1",
+    )
+    .bind(target_event_id.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("read race-test state");
+    assert_eq!(disposition, "leased");
+    assert_eq!(attempt_state, "running");
+
+    // The next pass sees the now-committed cleaned target in its first
+    // statement and performs the normal idempotent successful settlement.
+    assert_eq!(
+        store.recover().await.expect("settle cleaned race-test run"),
+        0
+    );
+    let (disposition, attempt_state): (String, String) = sqlx::query_as(
+        "SELECT delivery.disposition, attempt.state
+           FROM mailbox_deliveries AS delivery
+           JOIN mailbox_delivery_attempts AS attempt ON attempt.event_id = delivery.event_id
+          WHERE delivery.event_id = $1",
+    )
+    .bind(target_event_id.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("read settled race-test state");
+    assert_eq!(disposition, "delivered");
+    assert_eq!(attempt_state, "completed");
+}
+
+async fn seed_running_run(
+    store: &PostgresMailboxRepository,
+    pool: &sqlx::PgPool,
+    project_id: Uuid,
+    mailbox_id: MailboxId,
+    instance_id: AgentInstanceId,
+    revision_id: AgentInstanceRevisionId,
+    body: &[u8],
+) -> (MailboxEventId, Uuid) {
+    let mut incoming = event(mailbox_id, instance_id, body);
+    incoming.deduplication_key = DeduplicationKey::parse(format!("race-{}", Uuid::new_v4()))
+        .expect("race-test deduplication key");
+    let accepted = store
+        .accept(
+            project_id,
+            &incoming,
+            body,
+            u32::try_from(body.len()).expect("body length"),
+        )
+        .await
+        .expect("accept race-test event");
+    sqlx::query(
+        "UPDATE mailbox_deliveries SET disposition = 'eligible', next_eligible_at = NULL
+         WHERE event_id = $1",
+    )
+    .bind(accepted.event_id.as_uuid())
+    .execute(pool)
+    .await
+    .expect("make race-test delivery eligible");
+    let command = mailbox_dispatch::MailboxDispatchCommand {
+        operation_id: MailboxOperationIdentity::dispatch(mailbox_id, accepted.event_id, 1).id(),
+        event_id: accepted.event_id,
+    };
+    let run = store
+        .claim_dispatch(&command)
+        .await
+        .expect("claim race-test run")
+        .expect("race-test run exists");
+    attach_run_snapshot(
+        pool,
+        run.run_id.as_uuid(),
+        instance_id,
+        revision_id,
+        "mailbox-recovery-race/v1",
+        7,
+    )
+    .await;
+    sqlx::query(
+        "UPDATE mailbox_delivery_attempts SET state = 'running'
+         WHERE run_id = $1",
+    )
+    .bind(run.run_id.as_uuid())
+    .execute(pool)
+    .await
+    .expect("mark race-test attempt running");
+    (accepted.event_id, run.run_id.as_uuid())
+}
+
+async fn attach_run_snapshot(
+    pool: &sqlx::PgPool,
+    run_id: Uuid,
+    instance_id: AgentInstanceId,
+    revision_id: AgentInstanceRevisionId,
+    model_version: &str,
+    hash_byte: u8,
+) {
+    let snapshot_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO run_authorization_snapshots
+             (id, run_id, instance_id, instance_revision_id,
+              authorization_model_version, normalized_hash)
+         VALUES ($1, $2, $3, $4, $5, $6)",
+    )
+    .bind(snapshot_id)
+    .bind(run_id)
+    .bind(instance_id.as_uuid())
+    .bind(revision_id.as_uuid())
+    .bind(model_version)
+    .bind([hash_byte; 32].as_slice())
+    .execute(pool)
+    .await
+    .expect("persist race-test authorization snapshot");
+    sqlx::query(
+        "UPDATE mailbox_delivery_attempts
+         SET authorization_snapshot_id = $2
+         WHERE run_id = $1",
+    )
+    .bind(run_id)
+    .bind(snapshot_id)
+    .execute(pool)
+    .await
+    .expect("record race-test authorization snapshot");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -526,6 +759,15 @@ async fn acceptance_deduplication_outbox_jetstream_redelivery_and_recovery_are_d
 
     // Finish the preceding gate proof before creating two fresh independent
     // events. This keeps the concurrency assertion focused on those events.
+    attach_run_snapshot(
+        &pool,
+        runs[0].run_id.as_uuid(),
+        fixture.instance,
+        fixture.revision,
+        "mailbox-gate-proof/v1",
+        8,
+    )
+    .await;
     sqlx::query("UPDATE runs SET state = 'cleaned_up', outcome = 'succeeded' WHERE id = $1")
         .bind(runs[0].run_id.as_uuid())
         .execute(&pool)
@@ -614,6 +856,15 @@ async fn acceptance_deduplication_outbox_jetstream_redelivery_and_recovery_are_d
     } else {
         (second_concurrent.event_id, first_concurrent.event_id)
     };
+    attach_run_snapshot(
+        &pool,
+        winner.run_id.as_uuid(),
+        fixture.instance,
+        fixture.revision,
+        "mailbox-winner-proof/v1",
+        9,
+    )
+    .await;
     sqlx::query("UPDATE runs SET state = 'cleaned_up', outcome = 'succeeded' WHERE id = $1")
         .bind(winner.run_id.as_uuid())
         .execute(&pool)

@@ -1224,12 +1224,17 @@ impl MailboxDispatchStore for PostgresMailboxRepository {
             "UPDATE mailbox_deliveries AS delivery SET disposition = 'retryable',
                  next_eligible_at = now(), updated_at = now()
              WHERE delivery.disposition IN ('leased', 'running')
+               -- A separate recovery statement can start before cleanup commits
+               -- and reach this update afterwards under READ COMMITTED.  Any
+               -- matching run is authoritative, including one that became
+               -- cleaned after the first reconciliation statement's snapshot;
+               -- leave it for the next recovery pass instead of marking the
+               -- attempt uncertain.
                AND NOT EXISTS (
                     SELECT 1 FROM mailbox_delivery_attempts AS attempt
                     JOIN runs AS run ON run.id = attempt.run_id
                     WHERE attempt.event_id = delivery.event_id
                       AND attempt.attempt_number = delivery.logical_attempt_count
-                      AND run.state <> 'cleaned_up'
                )
              RETURNING delivery.event_id, delivery.mailbox_id, delivery.logical_attempt_count",
         )
