@@ -42,6 +42,13 @@ fi
 
 child_pid=""
 child_log=""
+write_response() {
+    local response_path="$1" value="$2"
+    local response_tmp="${response_path}.tmp.$$"
+    printf '%s' "${value}" >"${response_tmp}"
+    chmod 600 -- "${response_tmp}"
+    mv -- "${response_tmp}" "${response_path}"
+}
 cleanup() {
     local status="$?"
     trap - EXIT INT TERM
@@ -136,10 +143,7 @@ for key in required:
 PY
     then
         rm -f -- "${request}" "${values_file}"
-        response_tmp="${response}.tmp.$$"
-        printf '1' >"${response_tmp}"
-        chmod 600 -- "${response_tmp}"
-        mv -- "${response_tmp}" "${response}"
+        write_response "${response}" 1
         continue
     fi
 
@@ -151,10 +155,7 @@ PY
 
     remaining=$((deadline_epoch - $(date +%s)))
     if (( remaining < 1 )); then
-        response_tmp="${response}.tmp.$$"
-        printf '124' >"${response_tmp}"
-        chmod 600 -- "${response_tmp}"
-        mv -- "${response_tmp}" "${response}"
+        write_response "${response}" 124
         continue
     fi
     set +e
@@ -174,6 +175,7 @@ PY
         "HEPHAESTUS_E2E_EXTERNAL_OIDC_CLIENT_SECRET=${request_values[oidc_client_secret]}"
         "HEPHAESTUS_E2E_EXTERNAL_WEB_PORT=${request_values[web_port]}"
         "HEPHAESTUS_E2E_COOKING_PHASE=${request_values[phase]}"
+        "HEPHAESTUS_COOKING_BROWSER_DEADLINE_EPOCH=${deadline_epoch}"
     )
     if [[ -n "${PLAYWRIGHT_BROWSERS_PATH:-}" ]]; then
         base_env+=("PLAYWRIGHT_BROWSERS_PATH=${PLAYWRIGHT_BROWSERS_PATH}")
@@ -209,11 +211,42 @@ PY
             # The external harness scans retained evidence during cleanup when
             # available; this second bounded stream scan protects the serial
             # diagnostic on early failures too.
-            diagnostic_lines="$(sed -u -E \
-                -e 's/(authorization:[[:space:]]*Bearer[[:space:]]+)[^[:space:]]+/\1[REDACTED]/Ig' \
-                -e 's/(HEPHAESTUS_[A-Z0-9_]*(SECRET|TOKEN|KEY)[A-Z0-9_]*=)[^[:space:]]+/\1[REDACTED]/g' \
-                "${safe_log}" | grep -Eiv 'authorization|bearer|secret|token|password|cookie' | \
-                tail -80 | tail -c 16384 || true)"
+            retained_scan_status=0
+            for evidence_root in "${diagnostics_real}"/browser.*; do
+                [[ -d "${evidence_root}" && ! -L "${evidence_root}" ]] || continue
+                if ! python3 "${repo_root}/scripts/check-browser-evidence.py" \
+                    "${evidence_root}" >/dev/null 2>&1; then
+                    retained_scan_status=1
+                fi
+            done
+            if (( retained_scan_status != 0 )); then
+                printf '%s\n' 'HEPH_BROWSER_BRIDGE diagnostics-withheld retained-evidence-scan-failed'
+                rm -f -- "${child_log}" "${safe_log}" "${scan_log}"
+                child_log=""
+                write_response "${response}" "${status}"
+                continue
+            fi
+            diagnostic_lines="$(
+                {
+                    sed -u -E \
+                        -e 's/(authorization:[[:space:]]*Bearer[[:space:]]+)[^[:space:]]+/\1[REDACTED]/Ig' \
+                        -e 's/(HEPHAESTUS_[A-Z0-9_]*(SECRET|TOKEN|KEY)[A-Z0-9_]*=)[^[:space:]]+/\1[REDACTED]/g' \
+                        "${safe_log}" | grep -Eiv 'authorization|bearer|secret|token|password|cookie' || true
+                    for evidence_root in "${diagnostics_real}"/browser.*; do
+                        [[ -d "${evidence_root}" && ! -L "${evidence_root}" ]] || continue
+                        for evidence_file in "${evidence_root}/web.log" \
+                            "${evidence_root}/web-service.log" \
+                            "${evidence_root}/playwright.log"; do
+                            [[ -f "${evidence_file}" && ! -L "${evidence_file}" ]] || continue
+                            printf '%s\n' "--- browser $(basename "${evidence_file}") ---"
+                            sed -u -E \
+                                -e 's/(authorization:[[:space:]]*Bearer[[:space:]]+)[^[:space:]]+/\1[REDACTED]/Ig' \
+                                -e 's/(HEPHAESTUS_[A-Z0-9_]*(SECRET|TOKEN|KEY)[A-Z0-9_]*=)[^[:space:]]+/\1[REDACTED]/g' \
+                                "${evidence_file}" | grep -Eiv 'authorization|bearer|secret|token|password|cookie' || true
+                        done
+                    done
+                } | tail -80 | tail -c 16384
+            )"
             if [[ -n "${diagnostic_lines}" ]]; then
                 printf '%s\n' 'HEPH_BROWSER_BRIDGE diagnostics-start'
                 printf '%s\n' "${diagnostic_lines}"
@@ -230,8 +263,5 @@ PY
         rm -f -- "${child_log}"
         child_log=""
     fi
-    response_tmp="${response}.tmp.$$"
-    printf '%s' "${status}" >"${response_tmp}"
-    chmod 600 -- "${response_tmp}"
-    mv -- "${response_tmp}" "${response}"
+    write_response "${response}" "${status}"
 done

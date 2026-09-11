@@ -102,6 +102,14 @@ fi
 evidence_dir="${fixture_root}/playwright-results"
 mkdir -p -- "${evidence_dir}"
 chmod 700 -- "${fixture_root}" "${evidence_dir}"
+readiness_error="${fixture_root}/readiness-curl.log"
+install -m 600 /dev/null "${readiness_error}"
+print_readiness_error() {
+    if [[ -s "${readiness_error}" ]]; then
+        head -c 1024 "${readiness_error}" >&2
+        printf '\n' >&2
+    fi
+}
 
 cleanup() {
     local status="$?"
@@ -157,13 +165,44 @@ podman run --detach \
     sh -lc 'mix local.hex --force >/dev/null && mix deps.get >/dev/null && mix assets.setup && mix assets.build && mix phx.server' \
     >"${fixture_root}/web.log" 2>&1
 
-for _attempt in {1..600}; do
-    if curl --fail --silent "${web_url}/" >/dev/null 2>&1; then
-        break
+readiness_deadline="${HEPHAESTUS_COOKING_BROWSER_DEADLINE_EPOCH:-}"
+if [[ -z "${readiness_deadline}" ]]; then
+    readiness_deadline="$(( $(date +%s) + 60 ))"
+fi
+[[ "${readiness_deadline}" =~ ^[1-9][0-9]*$ ]] || {
+    printf 'browser readiness deadline is invalid\n' >&2
+    exit 1
+}
+while :; do
+    readiness_remaining=$((readiness_deadline - $(date +%s)))
+    if (( readiness_remaining < 1 )); then
+        printf 'browser web readiness deadline elapsed port=%s\n' "${web_port}" >&2
+        print_readiness_error
+        exit 124
     fi
-    sleep 0.1
+    readiness_timeout=$((readiness_remaining < 2 ? readiness_remaining : 2))
+    if curl --fail --silent --connect-timeout "${readiness_timeout}" \
+        --max-time "${readiness_timeout}" "${web_url}/" >/dev/null 2>"${readiness_error}"; then
+        break
+    else
+        web_curl_status="$?"
+    fi
+    if (( $(date +%s) >= readiness_deadline )); then
+        printf 'browser web readiness deadline elapsed port=%s status=%s\n' \
+            "${web_port}" "${web_curl_status}" >&2
+        print_readiness_error
+        exit 124
+    fi
+    web_container_state="$(podman inspect --format '{{.State.Status}} {{.State.ExitCode}}' \
+        "${web_container}" 2>/dev/null || true)"
+    if [[ "${web_container_state}" != running* ]]; then
+        printf 'browser web container stopped state=%s status=%s\n' \
+            "${web_container_state:-unavailable}" "${web_curl_status}" >&2
+        print_readiness_error
+        exit 1
+    fi
+    sleep 1
 done
-curl --fail --silent "${web_url}/" >/dev/null
 
 cd "${repo_root}/e2e/playwright"
 npm ci >/dev/null
