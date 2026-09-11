@@ -94,13 +94,15 @@ mistake.
 
 The same `main` manual dispatch also offers `gcp-cooking`. Before creating a
 paid VM it checks the private, checksum-pinned cache object
-`gs://hephaestus-508000-cooking-cache/cooking/heph-gcp-cooking-cache.tar.zst`
+`gs://hephaestus-508000-cooking-cache/cooking/heph-gcp-cooking-cache.tar.zst`.
 The reviewed archive SHA-256 is
 `0ed20efcc1aa019b79405d1eed626b13d4702019e9ceeba2bdde54e45ae29296`; the VM
-rejects any other bytes.
-using the CI service account and an explicit project billing/quota project. A
+rejects any other bytes. The object is now uploaded and has been read
+successfully by the CI service account, and the full run verified that
+reviewed SHA-256, using the explicit project billing/quota project. A
 missing or unreadable object stops the job before VM creation. When present,
-the VM uses `n2-standard-8` in `europe-west1-b`, the reviewed
+the VM uses `n2-standard-8` in the selected `europe-west1` zone (default
+`europe-west1-b`), the reviewed
 `hephaestus-cooking-runtime` service account with the `storage-ro` scope, a
 150 GB balanced boot disk, nested virtualization, and the same 45-minute
 provider-enforced `DELETE` lifetime. The startup script downloads and verifies
@@ -125,13 +127,16 @@ gateway, and runtime/cgroup cleanup; the serial output reported
 after cleanup. The retained [serial artifact](https://github.com/wimpheling/hephaestus/actions/runs/34525055454/artifacts/10171404124)
 is the evidence record.
 
-This verifies the disposable KVM smoke path only. The full `gcp-cooking` path
-has not run successfully in GCP, and the private checksum-pinned Cooking cache
-object has not been confirmed present. Before that paid path, the operator
-must use the private Cloud Shell bootstrap artifact to maintain the reviewed
-project WIF and EUR budget setup, then upload the reviewed cache object at
-`gs://hephaestus-508000-cooking-cache/cooking/heph-gcp-cooking-cache.tar.zst`.
-The workflow checks that object before creating its Cooking VM.
+This verifies the disposable KVM smoke path only. The cache gate is now
+verified: the private checksum-pinned object is uploaded and readable by CI.
+The latest full `gcp-cooking` attempt was [workflow run
+34553598335](https://github.com/wimpheling/hephaestus/actions/runs/34553598335)
+at commit `da8fa906`. It reached the Cooking test suite with 32 tests passed,
+1 failed and 1 ignored, then failed because Skopeo could not access its
+`auth.json` (`Permission denied`). The VM absence was verified during cleanup
+on 2026-09-11 at 02:41:35Z/02:41:37Z; the retained [serial artifact](https://github.com/wimpheling/hephaestus/actions/runs/34553598335/artifacts/10182422984)
+is the evidence record. The full GCP Cooking path therefore remains pending a
+successful rerun after the Skopeo permission issue is corrected.
 
 Configure the repository variable `HEPHAESTUS_COOKING_RUNNER_ENV` with the
 absolute path of an operator-maintained shell environment file outside the
