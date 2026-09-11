@@ -5,6 +5,23 @@ gate and failure triage are in the [GCP Cooking CI runbook](../../docs/gcp-cooki
 Current `gcp-cooking` live validation is **pending**; the diagnostic evidence
 gate and live partial-source proof have passed, while the results below do not
 claim that the full path is green. The latest full run is
+[34658390612](https://github.com/wimpheling/hephaestus/actions/runs/34658390612)
+from source `672dbf5` using promoted image
+`hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d`. It ran from 23:31:40Z
+to 23:34:30Z (2m50s), reached `gcp-cooking` exit `128` before workload and
+gate sidecar initialization, and verified VM absence at 23:34:20Z. Collection/
+upload and private download completed, but post-delete gate validation failed
+because the gate source was missing; triage did not run and no credential-scan
+pass is claimed. The fixed run/attempt/SHA object prefix exists, but size and
+checksum await no-VM retriage. Runtime git-ownership initialization and
+missing-gate retention are under investigation; full validation remains open.
+A no-VM retriage [run 34658990343](https://github.com/wimpheling/hephaestus/actions/runs/34658990343)
+verified VM absence and passed private download and scan for 1,497 bytes,
+SHA-256 `c95b17367b547b4881aa3b7a84d800715aeae855778a53016a039238bd3cba14`.
+The partial bundle retained six safe sources and recorded missing gate and
+scanner results as expected for the early failure; its fallback
+browser-summary exit `128` does not establish a browser execution cause.
+A preceding full run is
 [34650838816](https://github.com/wimpheling/hephaestus/actions/runs/34650838816)
 from source `869dd20`, using validated image
 `hephaestus-runner-2a7223a74f7b32403ea8f586502b8a3f`. It ran from `21:44:46Z`
@@ -20,7 +37,8 @@ The evidence-scan result was unexpectedly unavailable/missing and
 `runtimeResults` was empty despite source `869dd20`; the executed script and
 capture path are under investigation. This is failed evidence rather than an
 accepted Cooking pass; full GCP validation remains open. The replacement-image
-smoke passed and the new-default full trial is dispatching. No
+smoke passed; the subsequent new-default full attempt failed early as recorded
+above. No
 denial observation is treated as the root cause. No-VM triage
 [run 34653789352](https://github.com/wimpheling/hephaestus/actions/runs/34653789352)
 preserved the failed-run outcome and verified cleanup, but the historical
@@ -40,10 +58,20 @@ object is
 safe status artifact is
 `/tmp/heph-diag-34656728282-1789168184/gcp-diagnostics-status.json`.
 
+The latest cheap diagnostic [run 34659146500](https://github.com/wimpheling/hephaestus/actions/runs/34659146500)
+at source `0c77eef0d9c0f17123881c3ad9786333da5f74af` used the promoted default
+image and completed from 23:43:58Z to 23:48:02Z (4m04). Its finalized gates
+recorded workload `failed`/42, evidence-scan `failed`/1 with the typed
+`browser-secret-org` rule, and browser validation `failed`/42; overall and
+startup supervisor exits were both 42. Expected runtime-log quarantine and
+gate acceptance passed. VM absence was verified at 23:47:55Z before private
+post-delete download and scan, which passed for 1,808 bytes, SHA-256
+`cb8eeca6e50155821ac9b48f52e8ed3c223324eebc5e1f245711fa7eecb5b470` under the
+fixed run/attempt/SHA prefix. The new-default full trial remains pending.
+
 The prefix-marker correction is in source revision `a029192`. The root-owned
-sidecar implementation is published at
-`345008827434cc5496ab9736751a9c4725b4f454c`; its final local validation
-passed 167 focused tests. The cheap stock-image diagnostic below passed because
+sidecar implementation is published at `0c77eef`; its final local validation
+passed 169 focused tests. The cheap stock-image diagnostic below passed because
 the new startup provenance anchor requires a replacement image. Replacement
 candidate build [run 34657052702](https://github.com/wimpheling/hephaestus/actions/runs/34657052702)
 at source `672dbf5fe9d1e1bf2cffc9d828913eedfcb79268` completed successfully
@@ -55,8 +83,8 @@ at source `672dbf5fe9d1e1bf2cffc9d828913eedfcb79268` passed from 23:23:47Z to
 post-delete download/scan passing for 1,509 bytes, SHA-256
 `f8b4144861980f93bbc77947a3d7ba2ca2b423e44cfbf23333ecd8ae023e1c55`. The
 former `2a7223...` image is protected rollback and requires matching startup
-recipe provenance. The new-default full trial is dispatching and remains
-pending.
+recipe provenance. The new-default full attempt failed early as recorded
+above.
 
 The structured browser capture pipeline is published at commit `1b49264` and
 has 123 focused tests, including a real intentional Playwright failure with a
@@ -455,7 +483,7 @@ explicit sidecar copy, VM absence, authenticated post-delete download, archive
 validation and credential scan; diagnostics success never converts a failed
 Cooking workload into a pass. Raw sidecars and reports remain private, and
 the safe artifact follows one-day retention. The current whole-suite plus
-sidecar regression validation passed 167 focused tests.
+sidecar regression validation passed 169 focused tests.
 
 If the Cooking oneshot fails, its helper records bounded `systemctl show`
 properties. It does not emit `systemctl status` process trees, whose command

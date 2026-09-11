@@ -19,7 +19,7 @@ acceptance and does not reopen or expand that completed task.
   startup recipe provenance. Replacement candidate build [run 34657052702](https://github.com/wimpheling/hephaestus/actions/runs/34657052702)
   at source `672dbf5fe9d1e1bf2cffc9d828913eedfcb79268` completed successfully
   with pinned bake and builder VM/disk cleanup. Its real KVM smoke [run 34657895009](https://github.com/wimpheling/hephaestus/actions/runs/34657895009)
-  passed; the new-default full trial is dispatching and remains pending. The
+  passed; the new-default full attempt failed early as recorded below. The
   cheap stock-image diagnostic below passed.
 - [x] The real KVM smoke and private diagnostics path passed in
   [run 34615599394](https://github.com/wimpheling/hephaestus/actions/runs/34615599394),
@@ -54,7 +54,23 @@ acceptance and does not reopen or expand that completed task.
   (1,768 bytes, SHA-256
   `38781dba3569ace67dc72a91b2e1ff71ad98d22ed4aac01bd7c5e297aa2ac7bd`); the
   safe status artifact is `/tmp/heph-diag-34656728282-1789168184/gcp-diagnostics-status.json`.
-- [ ] Latest full `gcp-cooking` attempt [run 34650838816](https://github.com/wimpheling/hephaestus/actions/runs/34650838816)
+- [ ] Latest full `gcp-cooking` attempt [run 34658390612](https://github.com/wimpheling/hephaestus/actions/runs/34658390612)
+  from source `672dbf5` used promoted image
+  `hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d`. It ran from 23:31:40Z
+  to 23:34:30Z (2m50s), reached `gcp-cooking` exit `128` before workload and
+  gate sidecar initialization, and verified VM absence at 23:34:20Z.
+  Collection/upload and private download completed, but post-delete gate
+  validation failed because the gate source was missing; triage did not run and
+  no credential-scan pass is claimed. The fixed run/attempt/SHA object prefix
+  exists. No-VM retriage [run 34658990343](https://github.com/wimpheling/hephaestus/actions/runs/34658990343)
+  verified VM absence and passed private download and scan for 1,497 bytes,
+  SHA-256 `c95b17367b547b4881aa3b7a84d800715aeae855778a53016a039238bd3cba14`.
+  The partial bundle retained six safe sources and recorded missing gate and
+  scanner results as expected; fallback browser-summary exit `128` does not
+  establish a browser execution cause. Root fix `0c77eef` corrected the
+  git-ownership lookup and preserves missing-gate triage retention. Full GCP
+  validation remains open.
+- [ ] Prior full `gcp-cooking` attempt [run 34650838816](https://github.com/wimpheling/hephaestus/actions/runs/34650838816)
   from source `869dd20` used the validated default image, ran from 21:44:46Z
   to 22:12:06Z (27m20s), and returned aggregate workload exit `1`. Both browser
   phases passed 2/2 with complete reports. Collection completed, and
@@ -65,8 +81,9 @@ acceptance and does not reopen or expand that completed task.
   The evidence-scan result was unexpectedly unavailable/missing and
   `runtimeResults` was empty despite source `869dd20`; the executed script and
   capture path are under investigation. Full GCP validation remains open and
-  replacement-image smoke passed and the new-default full trial is dispatching.
-  No denial observation is treated as the root cause. No-VM
+  replacement-image smoke passed, but the new-default full attempt failed
+  early as recorded above. No denial observation is treated as the root cause.
+  No-VM
   triage [run 34653789352](https://github.com/wimpheling/hephaestus/actions/runs/34653789352)
   preserved the failed outcome and verified cleanup, but the historical
   failure remains unrecoverable from safe evidence.
@@ -77,7 +94,7 @@ acceptance and does not reopen or expand that completed task.
   and `/var/log/hephaestus/evidence-scan-status.json`; they preserve the
   runtime aggregate and startup-observed exits, exact three-gate state and
   reason metadata, and explicit `unknown`/`unfinished` gates. The published
-  implementation `345008827434cc5496ab9736751a9c4725b4f454c` passed 167
+  implementation `0c77eef` passed 169
   focused tests. Startup copies the sidecars before collection, and the safe
   projection exposes `.triage.gateResults`, `.triage.evidenceScan` and
   `.triage.runtimeResults`; one-day retention and post-delete authenticated

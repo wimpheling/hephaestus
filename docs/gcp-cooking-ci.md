@@ -6,6 +6,27 @@ validation is **pending**. Historical smoke or self-hosted Cooking results do
 not establish that the current GCP Cooking path is green.
 
 The latest full `gcp-cooking` attempt was [run
+34658390612](https://github.com/wimpheling/hephaestus/actions/runs/34658390612)
+from source `672dbf5` using the promoted image
+`hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d`. It ran from 23:31:40Z
+to 23:34:30Z (2m50s), reached `gcp-cooking` exit `128` before the Cooking
+workload and gate sidecar initialized, and verified VM absence at 23:34:20Z.
+Collection/upload and private download completed, but post-delete gate
+validation failed because the gate source was missing; triage did not run and
+no credential-scan pass is claimed. The object has the fixed run/attempt/SHA
+prefix, but its size and checksum await no-VM retriage. Runtime git-ownership
+initialization and missing-gate retention are under investigation; full GCP
+validation remains open.
+
+No-VM retriage [run 34658990343](https://github.com/wimpheling/hephaestus/actions/runs/34658990343)
+for this attempt verified VM absence and passed private download and scan for
+1,497 bytes, SHA-256
+`c95b17367b547b4881aa3b7a84d800715aeae855778a53016a039238bd3cba14`. The
+partial bundle retained six safe sources and recorded missing gate and scanner
+results as expected for the early failure; its fallback browser-summary exit
+`128` does not establish a browser execution cause.
+
+A preceding full `gcp-cooking` attempt was [run
 34650838816](https://github.com/wimpheling/hephaestus/actions/runs/34650838816)
 from source `869dd20`, using the validated default runner image
 `hephaestus-runner-2a7223a74f7b32403ea8f586502b8a3f`. It ran from `21:44:46Z`
@@ -21,7 +42,8 @@ The evidence-scan result was unexpectedly unavailable/missing and
 `runtimeResults` was empty despite source `869dd20`; the executed script and
 capture path are under investigation. This is failed evidence rather than an
 accepted Cooking pass; full GCP validation remains open. The replacement-image
-smoke passed and the new-default full trial is dispatching.
+smoke passed; the subsequent new-default full attempt failed early as recorded
+above.
 No denial observation is treated as the root cause. No-VM triage
 [run 34653789352](https://github.com/wimpheling/hephaestus/actions/runs/34653789352)
 preserved the failed-run outcome and verified cleanup, but the historical
@@ -42,9 +64,8 @@ safe status artifact is
 `/tmp/heph-diag-34656728282-1789168184/gcp-diagnostics-status.json`.
 
 The prefix-marker correction is in source revision `a029192`. The current
-root-owned sidecar implementation is published at
-`345008827434cc5496ab9736751a9c4725b4f454c`; its final local validation
-passed 167 focused tests. The cheap stock-image diagnostic below passed because
+root-owned sidecar implementation is published at `0c77eef`; its final local
+validation passed 169 focused tests. The cheap stock-image diagnostic below passed because
 the new startup provenance anchor requires a replacement image. Replacement
 candidate build [run 34657052702](https://github.com/wimpheling/hephaestus/actions/runs/34657052702)
 at source `672dbf5fe9d1e1bf2cffc9d828913eedfcb79268` completed successfully
@@ -60,8 +81,8 @@ at 23:29:06Z, and authenticated post-delete download and scan passing for
 The private object used the fixed run/attempt/SHA prefix. The former
 `2a7223...` image is now the protected rollback; it requires matching startup
 recipe provenance, so its pointer alone does not make it compatible with the
-new startup anchor. The new-default full trial is dispatching and remains
-pending. The existing
+new startup anchor. The new-default full attempt failed early as recorded
+above. The existing
 `hephaestus-runner-2a7223a74f7b32403ea8f586502b8a3f` remains recorded as the
 old build reference.
 
@@ -499,7 +520,7 @@ download, archive validation and credential scanning. The safe status artifact
 and diagnostics object follow the one-day diagnostics retention policy; raw
 sidecar contents and reports are never published.
 
-The final local sidecar validation passed 167 focused tests. A gate-sidecar
+The final local sidecar validation passed 169 focused tests. A gate-sidecar
 result cannot turn a failed Cooking workload into a pass. The prefix-marker
 correction is in source revision `a029192`; its no-VM historical triage is
 recorded above.
