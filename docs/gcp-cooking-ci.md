@@ -6,24 +6,35 @@ validation is **pending**. Historical smoke or self-hosted Cooking results do
 not establish that the current GCP Cooking path is green.
 
 The latest full `gcp-cooking` attempt was [run
-34645906708](https://github.com/wimpheling/hephaestus/actions/runs/34645906708)
-from source `5a8fa3e85737fbf2ba14171d0461cbd898ddd1a4`, using the validated
-default runner image `hephaestus-runner-2a7223a74f7b32403ea8f586502b8a3f`.
-The workload evidence exited `1` at `21:08:41Z`. Both browser phases completed
-with 2/2 reports passing and `report_state: complete`. Collection retained 11
-mailbox delivery-attempt snapshot rows: 8 succeeded, 2 failed and 1 remained
-running. It observed
-`authentication_denied` / `session-authentication`; those are observations
-only and do not establish the failure cause. VM absence was verified at
-`21:09:38.216Z`; authenticated post-delete download and scan passed at
-`21:09:44.123Z` for 29,306 bytes, SHA-256
-`645adf2b777331964c437d250ed2525227f95eb21ad312d7e1ed7ce4b0e72a89`.
+34650838816](https://github.com/wimpheling/hephaestus/actions/runs/34650838816)
+from source `869dd20`, using the validated default runner image
+`hephaestus-runner-2a7223a74f7b32403ea8f586502b8a3f`. It ran from `21:44:46Z`
+through `22:12:06Z` (27m20s) and returned aggregate workload exit `1`.
+Both browser phases completed with 2/2 reports passing and
+`report_state: complete`. Collection completed, and authenticated post-delete
+download and scan passed for 29,163 bytes, SHA-256
+`a247a151c5cbd4129ebb61d5eef2e5fbc8c8c900472630b5c0b4bf9944bf130f`.
+The VM was created at `21:45:20Z` and absence was verified at `22:11:57Z`.
 The private object is
-`cooking/runs/34645906708/1/5a8fa3e85737fbf2ba14171d0461cbd898ddd1a4.tar.gz`.
-The safe status artifact is
-`/tmp/heph-full-34645906708.1y1w8j/gcp-diagnostics-status.json`.
-This is failed evidence rather than an accepted Cooking pass; full GCP
-validation remains open pending focused evidence-gate investigation.
+`cooking/runs/34650838816/1/869dd209ae9569fb078ccc8a2e3a1bb41d4c0be6.tar.gz`.
+The evidence-scan result was unexpectedly unavailable/missing and
+`runtimeResults` was empty despite source `869dd20`; the executed script and
+capture path are under investigation. This is failed evidence rather than an
+accepted Cooking pass; full GCP validation remains open and paid runs are
+paused until the cheap diagnostic and the replacement-image validation pass.
+No denial observation is treated as the root cause. No-VM triage
+[run 34653789352](https://github.com/wimpheling/hephaestus/actions/runs/34653789352)
+preserved the failed-run outcome and verified cleanup, but the historical
+failure remains unrecoverable from the safe evidence.
+
+The prefix-marker correction is in source revision `a029192`. The current
+root-owned sidecar implementation is published at
+`345008827434cc5496ab9736751a9c4725b4f454c`; its final local validation
+passed 167 focused tests. A cheap stock-image diagnostic is currently being
+dispatched because the new startup provenance anchor requires a replacement
+image; that image has not yet been built or promoted. The existing
+`hephaestus-runner-2a7223a74f7b32403ea8f586502b8a3f` remains recorded as the
+old default, but will be stale against the new startup anchor once published.
 
 The structured browser capture pipeline is published at commit `1b49264` and
 has 123 focused tests, including a real intentional Playwright failure with a
@@ -135,6 +146,12 @@ stock image. The default candidate variable now points to the confirmed
 `hephaestus-runner-2a7223a74f7b32403ea8f586502b8a3f`; no rollback image variable
 is configured. A custom image in `diagnostic` uses the 150 GB diagnostic disk
 required by the baked image.
+
+The current startup provenance change requires a replacement image build and
+validation. No replacement has yet been built or promoted. Until that work is
+complete, use the explicit stock-image diagnostic for cheap validation; the
+old `2a7223...` image must not be treated as compatible with the new startup
+anchor after it is published.
 
 ```sh
 gh workflow run cooking-e2e.yml --repo wimpheling/hephaestus --ref main \
@@ -425,6 +442,36 @@ safe lineage/status partial bundle. The retained files are scanned again before
 archive creation; a fixture-bearing source is never redacted into the bundle.
 The live partial-source behavior is proven by run 34593541194. The historical
 attempt establishes neither a denial cause nor snapshot evidence.
+
+### Root-owned gate sidecars
+
+For `diagnostic` and `gcp-cooking`, startup and the Cooking helper use the
+root-owned sidecars `/var/log/hephaestus/cooking-gate-results.json` and
+`/var/log/hephaestus/evidence-scan-status.json`. The gate sidecar records the
+checked-out `revision`, the gate-helper `script_sha256`, `test_mode`, the
+runtime `overall_exit_code`, the startup-observed `supervisor_exit_code`,
+`finalized`, and exactly these gates: `workload`, `evidence-scan` and
+`browser-validation`. Each gate has only a closed `state`, `exit_code` and
+`reason_class` vocabulary. The runtime aggregate and startup-observed exit
+codes may differ, such as when startup reaches its outer timeout; preserve
+both values when triaging. Finalization converts unfinished gates to
+`state: unknown` with `reason_class: unfinished`.
+
+Startup copies the finalized sidecars into the diagnostics input before the
+collector runs. The collector rejects extra fields, raw payloads or secrets,
+invalid provenance, and invalid gate transitions. The summarizer exposes the
+safe projections as `.triage.gateResults`, `.triage.evidenceScan` and
+`.triage.runtimeResults`; legacy or missing gate sidecars are explicitly
+`unavailable` rather than inferred from log text. The private bundle remains
+canonical and is accepted only after VM absence, authenticated post-delete
+download, archive validation and credential scanning. The safe status artifact
+and diagnostics object follow the one-day diagnostics retention policy; raw
+sidecar contents and reports are never published.
+
+The final local sidecar validation passed 167 focused tests. A gate-sidecar
+result cannot turn a failed Cooking workload into a pass. The prefix-marker
+correction is in source revision `a029192`; its no-VM historical triage is
+recorded above.
 
 The full acceptance evidence must show the exact checked-out SHA, selected
 zone, cache object metadata and checksum, build and installation, update
