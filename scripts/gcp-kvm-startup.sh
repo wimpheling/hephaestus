@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Root startup script for one disposable nested-KVM integration-smoke VM.
-# The VM has no service account or scopes.  It fetches only this public repo at
-# the exact github-sha metadata value, and reports its result on serial output.
+# Root startup script for one disposable GCE integration VM.
+# Smoke mode has no service account; diagnostic and Cooking modes use only the
+# reviewed runtime identity for their private cache/evidence object operations.
+# The VM fetches only this public repo at the exact SHA metadata value.
 set -Eeuo pipefail
 umask 077
 
@@ -15,7 +16,7 @@ readonly libkrun_revision_pin='9932c4b59d8f891e60c6aba20d22ebb99ceaa8e2'
 readonly libkrunfw_tag='v5.5.0'
 readonly passt_revision='386b5f5472b89769c025f5d5056348532a823b93'
 readonly passt_source_url='https://passt.top/passt'
-readonly work_root='/srv/hephaestus'
+readonly work_root="${HEPH_GCP_WORK_ROOT:-/srv/hephaestus}"
 readonly checkout_root="${work_root}/checkout"
 readonly source_root="${work_root}/src"
 readonly temporary_root="${work_root}/tmp"
@@ -28,12 +29,26 @@ readonly passt_profile_path='/etc/apparmor.d/usr.bin.passt'
 readonly passt_local_profile_path='/etc/apparmor.d/local/usr.bin.passt'
 readonly passt_profile_overlay='/run/hephaestus/usr.bin.passt'
 readonly guest_image='docker.io/library/ubuntu@sha256:52df9b1ee71626e0088f7d400d5c6b5f7bb916f8f0c82b474289a4ece6cf3faf'
-readonly log_file='/var/log/hephaestus/gcp-kvm-startup.log'
+readonly log_file="${HEPH_GCP_LOG_FILE:-/var/log/hephaestus/gcp-kvm-startup.log}"
+readonly diagnostics_bucket='hephaestus-508000-cooking-diagnostics'
+readonly diagnostics_max_archive_bytes=67108864
+readonly diagnostics_metadata_root="${HEPH_GCP_DIAGNOSTICS_METADATA_ROOT:-/run/hephaestus/diagnostics}"
 
 phase='initializing'
 revision='unknown'
 trial_deadline=0
+collection_deadline=0
+vm_start_epoch=0
+trial_deadline_epoch=0
+collection_deadline_epoch=0
 test_mode='smoke'
+diagnostics_collection_status=0
+diagnostics_uploaded=false
+diagnostics_object_metadata=''
+diagnostic_timeout_log=''
+diagnostic_probe_completed=false
+diagnostics_token_json=''
+diagnostics_header_file=''
 
 die() { printf 'gcp-kvm-startup: %s\n' "$*" >&2; return 1; }
 
@@ -61,16 +76,47 @@ retain_passt_host_audit() {
   printf 'HEPH_GCP_PASST_HOST_AUDIT_END path=%s\n' "$audit_path"
 }
 
-install -d -m 0700 /var/log/hephaestus
-install -m 0600 /dev/null "$log_file"
-[[ -w /dev/ttyS0 ]] || die 'GCE serial console /dev/ttyS0 is unavailable'
-exec > >(tee -a "$log_file" /dev/ttyS0) 2>&1
+if [[ "${HEPH_GCP_STARTUP_LIBRARY:-0}" != 1 ]]; then
+  install -d -m 0700 "$(dirname -- "$log_file")"
+  install -m 0600 /dev/null "$log_file"
+  [[ -w /dev/ttyS0 ]] || die 'GCE serial console /dev/ttyS0 is unavailable'
+  # The caller writes this immediately before the Compute create request. It is
+  # conservative for startup delays and is the single deadline anchor.
+  exec > >(tee -a "$log_file" /dev/ttyS0) 2>&1
+fi
 
 finish() {
   local status=$?
   trap - EXIT
   if ((status != 0)) && [[ "$test_mode" == smoke ]]; then
     retain_passt_host_audit
+  fi
+  if [[ "$test_mode" == gcp-cooking || "$test_mode" == diagnostic ]]; then
+    set +e
+    collect_diagnostics "${status}"
+    diagnostics_collection_status=$?
+    set -e
+    if ((diagnostics_collection_status != 0)) && ((status == 0)); then
+      status=1
+    fi
+  fi
+  [[ -z "$diagnostics_token_json" ]] || rm -f -- "$diagnostics_token_json"
+  [[ -z "$diagnostics_header_file" ]] || rm -f -- "$diagnostics_header_file"
+  if [[ "$test_mode" == diagnostic ]]; then
+    local expected_fixture=false
+    if ((diagnostics_collection_status == 0)) &&
+        [[ "$diagnostic_probe_completed" == true ]] &&
+        ((status == 42)) && [[ "$phase" == diagnostic-synthetic ]]; then
+      expected_fixture=true
+    fi
+    printf 'HEPHAESTUS_GCP_DIAGNOSTIC: TEST-FAIL expected=%s phase=%s exit=%s\n' \
+      "$expected_fixture" "$phase" "$status"
+    if [[ "$expected_fixture" == true ]]; then
+      printf 'HEPHAESTUS_GCP_DIAGNOSTIC: DIAGNOSTICS PASS test_result=expected-failure\n'
+    else
+      printf 'HEPHAESTUS_GCP_DIAGNOSTIC: DIAGNOSTICS FAIL test_result=expected-failure\n'
+    fi
+    exit "$status"
   fi
   if ((status == 0)); then
     if [[ "$test_mode" == gcp-cooking ]]; then
@@ -105,6 +151,212 @@ metadata_value() {
 
 require_command() { command -v "$1" >/dev/null 2>&1 || die "missing command: $1"; }
 
+diagnostics_object() {
+  local object="${HEPH_GCP_DIAGNOSTICS_OBJECT:-$diagnostics_object_metadata}"
+  [[ -n "$object" && "$object" != *..* && "$object" =~ ^cooking/runs/[0-9]+/[0-9]+/[0-9a-f]{40}\.tar\.gz$ ]] ||
+    die 'diagnostics object metadata is missing or unsafe'
+  printf '%s\n' "$object"
+}
+
+bounded_copy() {
+  local source="$1" destination="$2"
+  [[ -f "$source" && ! -L "$source" ]] || return 1
+  # The collector's per-source budget is 16 MiB. Keep the newest bounded tail
+  # so a large serial log cannot consume the bundle budget.
+  tail -c 8388608 -- "$source" >"$destination"
+  chmod 0600 "$destination"
+}
+
+bounded_copy_status() {
+  local source="$1" label="$2" destination="$3" bytes retained
+  if [[ ! -f "$source" || -L "$source" ]]; then
+    printf 'HEPH_GCP_DIAGNOSTICS source=%s status=missing\n' "$label"
+    return 1
+  fi
+  bytes="$(stat -c '%s' -- "$source")" || return 1
+  if bounded_copy "$source" "$destination"; then
+    retained="$(stat -c '%s' -- "$destination")" || return 1
+    if ((bytes > retained)); then
+      printf 'HEPH_GCP_DIAGNOSTICS source=%s status=truncated original_bytes=%s retained_bytes=%s\n' \
+        "$label" "$bytes" "$retained"
+    else
+      printf 'HEPH_GCP_DIAGNOSTICS source=%s status=retained bytes=%s\n' "$label" "$retained"
+    fi
+    return 0
+  fi
+  printf 'HEPH_GCP_DIAGNOSTICS source=%s status=unavailable\n' "$label"
+  return 1
+}
+
+collect_diagnostics() {
+  local test_status="$1" collector scanner output_root input_root archive snapshot snapshot_input snapshot_status_path status_json cooking_evidence_root
+  local browser_summary_source journal_unit copy_status serial_copy_status
+  local object token encoded_object upload_status
+  object="$(diagnostics_object)" || return 1
+  collector="$checkout_root/scripts/collect-cooking-diagnostics.py"
+  scanner="$checkout_root/scripts/check-browser-evidence.py"
+  if [[ ! -f "$collector" || -L "$collector" ]]; then
+    collector="$diagnostics_metadata_root/collect-cooking-diagnostics.py"
+    scanner="$diagnostics_metadata_root/check-browser-evidence.py"
+  fi
+  [[ -f "$collector" && ! -L "$collector" && -f "$scanner" && ! -L "$scanner" ]] || {
+    printf 'HEPH_GCP_DIAGNOSTICS event=collection status=fail reason=collector-unavailable\n'
+    return 1
+  }
+  output_root="${evidence_root}/cooking-diagnostics"
+  input_root="${temporary_root}/diagnostics-input"
+  archive="${temporary_root}/cooking-diagnostics.tar.gz"
+  status_json="${input_root}/runtime-structured.json"
+  rm -rf -- "$output_root" "$input_root" "$archive"
+  # Collection also runs in diagnostic mode, whose image intentionally has no
+  # forge account.  Root owns this staging area; the collector only reads it.
+  install -d -m 0700 "$input_root" "$evidence_root"
+  printf 'HEPH_GCP_DIAGNOSTICS event=collection status=start object=%s\n' "$object"
+  printf 'HEPH_GCP_DIAGNOSTICS test_result=%s diagnostics_result=collection_pending phase=%s revision=%s\n' \
+    "$test_status" "$phase" "$revision" >"$status_json"
+  if serial_copy_status="$(bounded_copy_status "$log_file" serial "$input_root/serial.log")"; then
+    printf '%s\n' "$serial_copy_status" >>"$status_json"
+  else
+    printf 'HEPH_GCP_DIAGNOSTICS source=serial status=missing\n' >>"$status_json"
+    printf 'HEPH_GCP_DIAGNOSTICS source=serial status=missing\n' >"$input_root/serial.log"
+  fi
+  journal_unit="heph-gcp-cooking-${HEPH_GCP_RUN_ID:-manual}"
+  if command -v journalctl >/dev/null 2>&1; then
+    if ! journalctl --no-pager --quiet --output=short-iso --unit="$journal_unit" --lines=200 \
+      >"$input_root/host-journal.log" 2>"$input_root/host-journal.err"; then
+      printf 'HEPH_GCP_DIAGNOSTICS source=host-journal status=unavailable unit=%s\n' "$journal_unit" \
+        >"$input_root/host-journal.log"
+      printf 'HEPH_GCP_DIAGNOSTICS source=host-journal status=unavailable unit=%s\n' "$journal_unit" >>"$status_json"
+    else
+      printf 'HEPH_GCP_DIAGNOSTICS source=host-journal status=retained bytes=%s unit=%s\n' \
+        "$(stat -c '%s' -- "$input_root/host-journal.log")" "$journal_unit" >>"$status_json"
+    fi
+    rm -f -- "$input_root/host-journal.err"
+  else
+    printf 'HEPH_GCP_DIAGNOSTICS source=host-journal status=missing unit=%s\n' "$journal_unit" \
+      >"$input_root/host-journal.log"
+    printf 'HEPH_GCP_DIAGNOSTICS source=host-journal status=missing unit=%s\n' "$journal_unit" >>"$status_json"
+  fi
+  cooking_evidence_root="${evidence_root}/cooking"
+  snapshot_input="${cooking_evidence_root}/cooking-lineage.jsonl"
+  snapshot_status_path="${cooking_evidence_root}/cooking-lineage-status.json"
+  if [[ ! -f "$snapshot_input" || -L "$snapshot_input" ]]; then
+    printf 'HEPH_GCP_DIAGNOSTICS source=cooking-lineage status=missing path=%s\n' "$snapshot_input" >>"$status_json"
+  fi
+  if [[ ! -f "$snapshot_status_path" || -L "$snapshot_status_path" ]]; then
+    printf 'HEPH_GCP_DIAGNOSTICS source=cooking-lineage-status status=missing path=%s\n' "$snapshot_status_path" >>"$status_json"
+  fi
+  local collector_args=(
+    --output-dir "$output_root"
+    --source "serial=$input_root/serial.log"
+    --source "host-journal=$input_root/host-journal.log"
+    --source "runtime-structured=$status_json"
+  )
+  local snapshot_args=()
+  if [[ "$test_mode" == diagnostic ]]; then
+    # Diagnostic mode deliberately supplies synthetic evidence and labels it
+    # as such.  Full Cooking mode must use only the producer's real files.
+    snapshot="${input_root}/diagnostic-lineage.jsonl"
+    printf '{"attempt_id":"00000000-0000-4000-8000-000000000001","attempt_number":1,"attempt_state":"failed","run_state":"failed","run_outcome":"failed"}\n' >"$snapshot"
+    snapshot_args+=(--snapshot-jsonl "$snapshot")
+  elif [[ -n "$snapshot_input" && -f "$snapshot_input" && ! -L "$snapshot_input" ]]; then
+    snapshot_args+=(--snapshot-jsonl "$snapshot_input")
+  else
+    # The collector records a missing optional source in manifest.json.  Do
+    # not manufacture an ID or state row when the producer did not emit one.
+    snapshot_args+=(--missing-source "lineage=$snapshot_input")
+  fi
+  if [[ "$test_mode" == diagnostic ]]; then
+    :
+  elif [[ -f "$snapshot_status_path" && ! -L "$snapshot_status_path" ]]; then
+    snapshot_args+=(--snapshot-status "$snapshot_status_path")
+  else
+    # This also gives the manifest an explicit missing record for the status
+    # sidecar while preserving a real runtime log when one exists.
+    snapshot_args+=(--missing-source "lineage-status=$snapshot_status_path")
+  fi
+  if [[ "$test_mode" == diagnostic ]]; then
+    printf '{"status":"failed","phase":"browser","test":"diagnostic-synthetic","exit_code":42}\n' \
+      >"$input_root/browser-summary.json"
+    if [[ -n "$diagnostic_timeout_log" && -f "$diagnostic_timeout_log" && ! -L "$diagnostic_timeout_log" ]]; then
+      bounded_copy "$diagnostic_timeout_log" "$input_root/test-output.log"
+    else
+      printf 'HEPH_GCP_DIAGNOSTIC test result: %s expected failure is intentional\n' \
+        "$test_status" >"$input_root/test-output.log"
+    fi
+    collector_args+=(
+      --source "browser-summary=$input_root/browser-summary.json"
+      --source "test-output=$input_root/test-output.log"
+    )
+  else
+    if [[ -f /var/log/hephaestus/gcp-cooking-run.log && ! -L /var/log/hephaestus/gcp-cooking-run.log ]]; then
+      copy_status="$(bounded_copy_status /var/log/hephaestus/gcp-cooking-run.log runtime-log "$input_root/runtime-log")" || copy_status='HEPH_GCP_DIAGNOSTICS source=runtime-log status=unavailable'
+      printf '%s\n' "$copy_status" >>"$status_json"
+      [[ -f "$input_root/runtime-log" ]] && collector_args+=(--source "runtime-log=$input_root/runtime-log")
+      copy_status="$(bounded_copy_status /var/log/hephaestus/gcp-cooking-run.log test-output "$input_root/test-output.log")" || copy_status='HEPH_GCP_DIAGNOSTICS source=test-output status=unavailable'
+      printf '%s\n' "$copy_status" >>"$status_json"
+      [[ -f "$input_root/test-output.log" ]] && collector_args+=(--source "test-output=$input_root/test-output.log")
+    fi
+    # Browser request/response logs are intentionally excluded. The runner or
+    # the typed collector may provide one allowlisted structured summary.
+    browser_summary_source="${HEPH_GCP_BROWSER_SUMMARY:-${cooking_evidence_root}/browser-summary.json}"
+    if [[ -f "$browser_summary_source" && ! -L "$browser_summary_source" ]]; then
+      cp -- "$browser_summary_source" "$input_root/browser-summary.json" || true
+    fi
+    if [[ ! -s "$input_root/browser-summary.json" ]]; then
+      printf '{"status":"failed","suite":"cooking-playwright","test":"browser-report","phase":"browser","exit_code":%s,"error":"browser summary missing"}\n' \
+        "$test_status" >"$input_root/browser-summary.json"
+    fi
+    collector_args+=(--source "browser-summary=$input_root/browser-summary.json")
+  fi
+  chmod 0600 "$input_root"/*
+  local collector_status=0
+  run_with_collection_deadline python3 "$collector" "${collector_args[@]}" \
+    "${snapshot_args[@]}" --archive "$archive" || collector_status=$?
+  ((collector_status == 0)) || {
+    printf 'HEPH_GCP_DIAGNOSTICS event=collection status=fail exit=%s\n' "$collector_status"
+    return "$collector_status"
+  }
+  printf 'HEPH_GCP_DIAGNOSTICS event=collection status=pass\n'
+  run_with_collection_deadline python3 "$scanner" "$output_root" || {
+    printf 'HEPH_GCP_DIAGNOSTICS event=scan status=fail\n'
+    return 1
+  }
+  [[ -f "$archive" && ! -L "$archive" ]] || {
+    printf 'HEPH_GCP_DIAGNOSTICS event=scan status=fail reason=archive-missing\n'
+    return 1
+  }
+  [[ "$(stat -c '%s' "$archive")" -le "$diagnostics_max_archive_bytes" ]] || {
+    printf 'HEPH_GCP_DIAGNOSTICS event=scan status=fail reason=archive-too-large\n'
+    return 1
+  }
+  printf 'HEPH_GCP_DIAGNOSTICS event=scan status=pass bytes=%s\n' "$(stat -c '%s' "$archive")"
+  diagnostics_token_json="${temporary_root}/diagnostics-token.json"
+  diagnostics_header_file="${temporary_root}/diagnostics-curl.conf"
+  run_with_collection_deadline curl --fail --silent --show-error -H 'Metadata-Flavor: Google' \
+    "$metadata_root/instance/service-accounts/default/token" >"$diagnostics_token_json"
+  chmod 0600 "$diagnostics_token_json"
+  token="$(python3 -c 'import json,sys; value=json.load(open(sys.argv[1])).get("access_token"); raise SystemExit("missing access token") if not isinstance(value,str) or not value else print(value)' "$diagnostics_token_json")"
+  # Keep the bearer token out of the curl process argument list and remove it
+  # in finish(), including token parse and upload failure paths.
+  printf 'header = "Authorization: Bearer %s"\n' "$token" >"$diagnostics_header_file"
+  chmod 0600 "$diagnostics_header_file"
+  encoded_object="$(python3 -c 'from urllib.parse import quote; import sys; print(quote(sys.argv[1], safe=""))' "$object")"
+  upload_status=0
+  run_with_collection_deadline curl --fail --silent --show-error --retry 2 --retry-all-errors \
+    --config "$diagnostics_header_file" -H 'Content-Type: application/gzip' \
+    --data-binary "@$archive" \
+    "https://storage.googleapis.com/upload/storage/v1/b/${diagnostics_bucket}/o?uploadType=media&name=${encoded_object}&ifGenerationMatch=0" \
+    >/dev/null || upload_status=$?
+  if ((upload_status != 0)); then
+    printf 'HEPH_GCP_DIAGNOSTICS event=upload status=fail exit=%s object=%s\n' "$upload_status" "$object"
+    return "$upload_status"
+  fi
+  diagnostics_uploaded=true
+  printf 'HEPH_GCP_DIAGNOSTICS event=upload status=pass object=gs://%s/%s bytes=%s\n' \
+    "$diagnostics_bucket" "$object" "$(stat -c '%s' "$archive")"
+}
+
 range_is_free() {
   local start="$1" end file
   end=$((start + 65536))
@@ -138,14 +390,36 @@ ensure_subordinate_range() {
 }
 
 remaining_seconds() {
-  local remaining=$((trial_deadline - SECONDS))
-  ((remaining > 0)) || die 'internal 40-minute deadline elapsed'
+  local remaining
+  if ((trial_deadline_epoch > 0)); then
+    remaining=$((trial_deadline_epoch - $(date +%s)))
+  else
+    remaining=$((trial_deadline - SECONDS))
+  fi
+  ((remaining > 0)) || die 'internal test deadline elapsed'
   printf '%s\n' "$remaining"
 }
 
 run_with_deadline() {
   local remaining
   remaining="$(remaining_seconds)"
+  timeout --kill-after=30s "${remaining}s" "$@"
+}
+
+collection_remaining_seconds() {
+  local remaining
+  if ((collection_deadline_epoch > 0)); then
+    remaining=$((collection_deadline_epoch - $(date +%s)))
+  else
+    remaining=$((collection_deadline - SECONDS))
+  fi
+  ((remaining > 0)) || die 'diagnostics collection reserve elapsed'
+  printf '%s\n' "$remaining"
+}
+
+run_with_collection_deadline() {
+  local remaining
+  remaining="$(collection_remaining_seconds)"
   timeout --kill-after=30s "${remaining}s" "$@"
 }
 
@@ -188,17 +462,74 @@ forge_env=(
   GIT_TERMINAL_PROMPT=0
 )
 
+if [[ "${HEPH_GCP_STARTUP_LIBRARY:-0}" == 1 ]]; then
+  return 0
+fi
+
 phase_start metadata
 require_command curl
-revision="${HEPHAESTUS_GCP_REVISION:-$(metadata_value github-sha)}"
+  revision="${HEPHAESTUS_GCP_REVISION:-$(metadata_value github-sha)}"
 [[ "$revision" =~ ^[0-9a-f]{40}$ ]] || die 'github-sha must be an exact lowercase 40-character commit SHA'
 test_mode="$(metadata_value test-mode)"
 case "$test_mode" in
-  smoke|gcp-cooking) ;;
-  *) die 'test-mode must be smoke or gcp-cooking' ;;
+  smoke|gcp-cooking|diagnostic) ;;
+  *) die 'test-mode must be smoke, diagnostic, or gcp-cooking' ;;
 esac
-trial_deadline=$((SECONDS + 2400))
+vm_start_epoch="$(metadata_value trial-start-epoch)"
+[[ "$vm_start_epoch" =~ ^[0-9]+$ ]] || die 'trial-start-epoch metadata must be an epoch integer'
+if [[ "$test_mode" == diagnostic || "$test_mode" == gcp-cooking ]]; then
+  diagnostics_object_metadata="$(metadata_value diagnostics-object)"
+fi
+if [[ "$test_mode" == diagnostic ]]; then
+  trial_deadline=$((SECONDS + 180))
+  collection_deadline=$((SECONDS + 480))
+  trial_deadline_epoch=$((vm_start_epoch + 180))
+  collection_deadline_epoch=$((vm_start_epoch + 480))
+else
+  # Reserve five minutes inside the provider's 45-minute lifetime for
+  # collection, scans, upload, and shutdown evidence.
+  trial_deadline=$((SECONDS + 2100))
+  collection_deadline=$((SECONDS + 2400))
+  trial_deadline_epoch=$((vm_start_epoch + 2100))
+  collection_deadline_epoch=$((vm_start_epoch + 2400))
+fi
 marker "ready mode=$test_mode"
+
+if [[ "$test_mode" == diagnostic || "$test_mode" == gcp-cooking ]]; then
+  install -d -m 0700 "$diagnostics_metadata_root"
+  metadata_value diagnostics-collector-script >"$diagnostics_metadata_root/collect-cooking-diagnostics.py"
+  metadata_value diagnostics-scanner-script >"$diagnostics_metadata_root/check-browser-evidence.py"
+  chmod 0700 "$diagnostics_metadata_root" "$diagnostics_metadata_root"/*.py
+fi
+
+if [[ "$test_mode" == diagnostic ]]; then
+  phase_start diagnostic-bootstrap
+  run_with_deadline apt-get update -qq
+  run_with_deadline env DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends \
+    ca-certificates curl git python3 tar gzip
+  require_command git
+  install -d -m 0700 "$work_root" "$temporary_root" "$evidence_root"
+  run_with_deadline git clone --filter=blob:none --no-checkout "$repository_url" "$checkout_root"
+  run_with_deadline git -C "$checkout_root" fetch --depth 1 origin "$revision"
+  run_with_deadline git -C "$checkout_root" checkout --detach "$revision"
+  [[ "$(git -C "$checkout_root" rev-parse HEAD)" == "$revision" ]] || die 'diagnostic checkout SHA mismatch'
+  phase_pass
+  phase_start diagnostic-synthetic
+  printf 'HEPH_GCP_DIAGNOSTIC synthetic browser report; no request, response, cookie, trace, or credential data\n' >&2
+  diagnostic_timeout_log="${temporary_root}/diagnostic-timeout.log"
+  set +e
+  timeout --kill-after=1s 3s bash -Eeuo pipefail -c 'sleep 30' >"$diagnostic_timeout_log" 2>&1
+  diagnostic_timeout_status=$?
+  set -e
+  ((diagnostic_timeout_status == 124)) || die "diagnostic timeout probe returned ${diagnostic_timeout_status}"
+  diagnostic_probe_completed=true
+  printf 'HEPH_GCP_DIAGNOSTIC timeout-probe status=124 limit=3s\n' >>"$diagnostic_timeout_log"
+  chmod 0600 "$diagnostic_timeout_log"
+  phase_pass
+  # The test result is intentionally unsuccessful; finish() turns collection
+  # and upload into the authoritative CI result and retains both dimensions.
+  exit 42
+fi
 
 phase_start host-packages
 run_with_deadline apt-get update -qq

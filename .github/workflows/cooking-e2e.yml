@@ -4,10 +4,10 @@ on:
   workflow_dispatch:
     inputs:
       cloud_mode:
-        description: 'Read quota, inspect the Cooking cache, run the disposable smoke VM, run GCP Cooking, or run legacy Cooking'
+        description: 'Read quota, inspect the Cooking cache, run the diagnostic VM, run the disposable smoke VM, run GCP Cooking, or run legacy Cooking'
         required: true
         type: choice
-        options: [preflight, cache-preflight, smoke, gcp-cooking, cooking]
+        options: [preflight, cache-preflight, diagnostic, smoke, gcp-cooking, cooking]
         default: preflight
       gcp_zone:
         description: 'GCE zone for the disposable smoke VM'
@@ -50,19 +50,28 @@ jobs:
         env:
           GCP_ZONE: ${{ inputs.gcp_zone || 'europe-west1-b' }}
           GCP_SMOKE_LOG: ${{ runner.temp }}/gcp-kvm-smoke.log
+          GCP_DIAGNOSTICS_STATUS: ${{ runner.temp }}/gcp-diagnostics-status.json
         run: bash scripts/gcp-kvm-smoke.sh "${{ inputs.cloud_mode }}"
       - name: Cleanup disposable KVM VM
-        if: ${{ always() && (inputs.cloud_mode == 'smoke' || inputs.cloud_mode == 'gcp-cooking') }}
+        if: ${{ always() && (inputs.cloud_mode == 'diagnostic' || inputs.cloud_mode == 'smoke' || inputs.cloud_mode == 'gcp-cooking') }}
         env:
           GCP_ZONE: ${{ inputs.gcp_zone || 'europe-west1-b' }}
         run: bash scripts/gcp-kvm-smoke.sh cleanup
-      - name: Retain KVM smoke serial log
-        if: ${{ always() }}
+      - name: Download and scan private diagnostics after VM deletion
+        if: ${{ always() && (inputs.cloud_mode == 'diagnostic' || inputs.cloud_mode == 'gcp-cooking') }}
+        env:
+          GCP_ZONE: ${{ inputs.gcp_zone || 'europe-west1-b' }}
+          GCP_DIAGNOSTICS_ARCHIVE: ${{ runner.temp }}/gcp-diagnostics.tar.gz
+          GCP_DIAGNOSTICS_STATUS: ${{ runner.temp }}/gcp-diagnostics-status.json
+        run: bash scripts/gcp-kvm-smoke.sh download-diagnostics
+      - name: Retain safe diagnostics manifest
+        if: ${{ always() && (inputs.cloud_mode == 'diagnostic' || inputs.cloud_mode == 'gcp-cooking') }}
         uses: actions/upload-artifact@v4
         with:
-          name: gcp-kvm-smoke-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/gcp-kvm-smoke.log
-          if-no-files-found: warn
+          name: gcp-diagnostics-manifest-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/gcp-diagnostics-status.json
+          if-no-files-found: error
+          retention-days: 1
 
   cooking:
     if: ${{ (github.event_name != 'workflow_dispatch' || inputs.cloud_mode == 'cooking') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}

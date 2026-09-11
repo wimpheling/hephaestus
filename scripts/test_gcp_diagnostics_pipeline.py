@@ -1,0 +1,454 @@
+"""Focused regression tests for the private GCP diagnostics download gate."""
+
+from __future__ import annotations
+
+import importlib.util
+import hashlib
+import io
+import json
+import os
+from pathlib import Path
+import pwd
+import stat
+import subprocess
+import tempfile
+import tarfile
+import unittest
+import shutil
+
+
+ROOT = Path(__file__).parent
+SPEC = importlib.util.spec_from_file_location(
+    "cooking_diagnostics", ROOT / "collect-cooking-diagnostics.py"
+)
+COLLECTOR = importlib.util.module_from_spec(SPEC)
+assert SPEC.loader is not None
+SPEC.loader.exec_module(COLLECTOR)
+
+
+class GcpDiagnosticsPipelineTests(unittest.TestCase):
+    def _run_real_finish(
+        self,
+        mode: str,
+        upload: str = "ok",
+        scanner: str = "ok",
+        workload: str = "success",
+    ) -> tuple[subprocess.CompletedProcess[str], Path]:
+        root = Path(tempfile.mkdtemp(prefix="heph-gcp-finish-"))
+        work = root / "work"
+        checkout_scripts = work / "checkout" / "scripts"
+        checkout_scripts.mkdir(parents=True)
+        shutil.copy2(ROOT / "collect-cooking-diagnostics.py", checkout_scripts / "collect-cooking-diagnostics.py")
+        shutil.copy2(ROOT / "check-browser-evidence.py", checkout_scripts / "check-browser-evidence.py")
+        if scanner == "reject":
+            shutil.copy2(ROOT / "check-browser-evidence.py", checkout_scripts / "check-browser-evidence-real.py")
+            (checkout_scripts / "check-browser-evidence.py").write_text(
+                "#!/usr/bin/env python3\n"
+                "import importlib.util\n"
+                "spec=importlib.util.spec_from_file_location('real', __file__.replace('check-browser-evidence.py', 'check-browser-evidence-real.py'))\n"
+                "real=importlib.util.module_from_spec(spec); spec.loader.exec_module(real)\n"
+                "main=real.main\n"
+                "if __name__ == '__main__': raise SystemExit(7)\n",
+                encoding="utf-8",
+            )
+        evidence = work / "evidence" / "cooking"
+        evidence.mkdir(parents=True, mode=0o700)
+        (evidence / "cooking-lineage.jsonl").write_text("", encoding="utf-8")
+        (evidence / "cooking-lineage-status.json").write_text(
+            '{"schema":1,"status":"ok","sampled_at":"2026-09-11 10:00:00 Z",'
+            '"mailbox_id":"00000000-0000-4000-8000-000000000001","event_id":null,"rows":0}\n',
+            encoding="utf-8",
+        )
+        (evidence / "browser-summary.json").write_text(
+            '{"status":"passed","suite":"cooking-playwright","test":"browser-journey",'
+            '"phase":"browser","exit_code":0}\n', encoding="utf-8"
+        )
+        log_file = root / "startup.log"
+        log_file.write_text("HEPH_GCP_KVM_STARTUP event=phase-pass phase=running revision=" + "a" * 40 + "\n", encoding="utf-8")
+        fake_bin = root / "bin"
+        fake_bin.mkdir()
+        (fake_bin / "curl").write_text(
+            "#!/usr/bin/env bash\nset -Eeuo pipefail\n"
+            "case \"$*\" in\n"
+            "  *instance/service-accounts/default/token*) printf '{\"access_token\":\"test-token\"}';;\n"
+            f"  *storage.googleapis.com/upload*) case \"${{HEPH_FAKE_UPLOAD:-ok}}\" in 403) exit 22;; hang) sleep 10;; esac;;\n"
+            "  *) exit 2;;\n"
+            "esac\n",
+            encoding="utf-8",
+        )
+        (fake_bin / "curl").chmod(0o700)
+        command = r'''
+source "$1"
+test_mode="$2"
+phase=running
+revision=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+diagnostics_object_metadata='cooking/runs/1/1/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.tar.gz'
+vm_start_epoch=$(date +%s)
+collection_deadline_epoch=$((vm_start_epoch + ${HEPH_FAKE_DEADLINE:-30}))
+if [[ "$test_mode" == diagnostic ]]; then
+  phase=diagnostic-synthetic
+  diagnostic_probe_completed=true
+  set +e
+  (exit 42)
+else
+  set +e
+  case "${HEPH_FINISH_RESULT:-success}" in
+    failure) (exit 7) ;;
+    timeout) timeout --kill-after=1s 1s bash -c 'sleep 30' ;;
+    *) true ;;
+  esac
+fi
+finish
+'''
+        env = os.environ | {
+            "HEPH_GCP_STARTUP_LIBRARY": "1",
+            "HEPH_GCP_WORK_ROOT": str(work),
+            "HEPH_GCP_LOG_FILE": str(log_file),
+            "HEPH_GCP_DIAGNOSTICS_METADATA_ROOT": str(root / "metadata"),
+            "HEPH_FAKE_UPLOAD": upload,
+            "HEPH_FAKE_DEADLINE": "2" if upload == "hang" else "30",
+            "HEPH_FINISH_RESULT": workload,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        }
+        result = subprocess.run(
+            ["bash", "-Eeuo", "pipefail", "-c", command, "finish-test", str(ROOT / "gcp-kvm-startup.sh"), mode],
+            env=env, text=True, capture_output=True, check=False,
+        )
+        return result, root
+
+    def _archive(self, root: Path) -> Path:
+        source_root = root / "sources"
+        source_root.mkdir()
+        files = {
+            "serial.log": "HEPH_GCP_DIAGNOSTIC: TEST-FAIL expected=true\n",
+            "host-journal.log": "safe host state\n",
+            "runtime-structured.json": 'HEPH_GCP_DIAGNOSTIC test_result=42 diagnostics_result=ready\n',
+            "browser-summary.json": '{"status":"failed","phase":"browser","test":"diagnostic-synthetic","exit_code":42}\n',
+            "test-output.log": "expected diagnostic failure\n",
+        }
+        for name, content in files.items():
+            (source_root / name).write_text(content, encoding="utf-8")
+        lineage = source_root / "lineage.jsonl"
+        lineage.write_text(
+            '{"attempt_id":"00000000-0000-4000-8000-000000000001",'
+            '"attempt_number":1,"attempt_state":"failed",'
+            '"run_state":"failed","run_outcome":"failed"}\n',
+            encoding="utf-8",
+        )
+        output = root / "bundle"
+        archive = root / "bundle.tar.gz"
+        args = ["--output-dir", str(output)]
+        for name in files:
+            label = name.removesuffix(".json").removesuffix(".log")
+            args += ["--source", f"{label}={source_root / name}"]
+        args += ["--snapshot-jsonl", str(lineage), "--archive", str(archive)]
+        self.assertEqual(COLLECTOR.main(args), 0)
+        return archive
+
+    def _run_download(
+        self,
+        root: Path,
+        archive: Path,
+        exit_code: int = 0,
+        hang: bool = False,
+        cleanup: str = "absent",
+        zone: str = "europe-west1-b",
+    ):
+        fake_bin = root / "bin"
+        fake_bin.mkdir()
+        fake_gcloud = fake_bin / "gcloud"
+        fake_gcloud.write_text(
+            "#!/usr/bin/env bash\n"
+            "set -Eeuo pipefail\n"
+            "if [[ \"${1:-} ${2:-} ${3:-}\" == \"compute instances describe\" ]]; then\n"
+            f"  if [[ \"${{GCP_FAKE_CLEANUP:-absent}}\" == \"present\" ]]; then echo '{{}}'; exit 0; fi\n"
+            f"  if [[ \"${{GCP_FAKE_CLEANUP:-absent}}\" == \"permission\" ]]; then echo 'PERMISSION_DENIED: instances.get' >&2; exit 1; fi\n"
+            "  echo \"The resource 'projects/hephaestus-508000/zones/europe-west1-b/instances/heph-kvm-smoke-${GITHUB_RUN_ID:-34599999999}-${GITHUB_RUN_ATTEMPT:-1}' was not found\" >&2\n"
+            "  exit 1\n"
+            "fi\n"
+            f"if [[ \"${{1:-}} ${{2:-}}\" == \"storage cp\" ]]; then\n"
+            f"  {'sleep 5' if hang else f'if (( {exit_code} == 0 )); then cp {archive} \"$4\"; fi'}\n"
+            f"  exit {exit_code}\n"
+            "fi\n"
+            "exit 2\n",
+            encoding="utf-8",
+        )
+        fake_gcloud.chmod(fake_gcloud.stat().st_mode | stat.S_IXUSR)
+        env = os.environ | {
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "GITHUB_RUN_ID": "34599999999",
+            "GITHUB_RUN_ATTEMPT": "1",
+            "GITHUB_SHA": "a" * 40,
+            "GCP_DIAGNOSTICS_ARCHIVE": str(root / "download.tar.gz"),
+            "GCP_DIAGNOSTICS_STATUS": str(root / "status.json"),
+            "GCP_DIAGNOSTICS_DOWNLOAD_TIMEOUT_SECONDS": "1" if hang else "60",
+            "GCP_FAKE_CLEANUP": cleanup,
+            "GCP_ZONE": zone,
+        }
+        return subprocess.run(
+            ["bash", str(ROOT / "gcp-kvm-smoke.sh"), "download-diagnostics"],
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+    def test_download_rechecks_manifest_and_scan(self):
+        with tempfile.TemporaryDirectory(prefix="heph-gcp-diagnostics-") as directory:
+            root = Path(directory)
+            result = self._run_download(root, self._archive(root))
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            status = json.loads((root / "status.json").read_text(encoding="utf-8"))
+            self.assertEqual(status["download"], "passed")
+            self.assertEqual(status["scan"], "passed")
+            self.assertEqual(status["upload"], "verified-by-download")
+            self.assertEqual(status["cleanup"], "verified-absent")
+
+    def test_diagnostic_bundle_staging_requires_no_forge_account(self):
+        with tempfile.TemporaryDirectory(prefix="heph-gcp-diagnostic-root-") as directory:
+            archive = self._archive(Path(directory))
+            self.assertTrue(archive.is_file())
+            self.assertEqual(pwd.getpwuid(archive.stat().st_uid).pw_uid, os.getuid())
+
+    def test_download_refuses_present_vm_before_fetch(self):
+        with tempfile.TemporaryDirectory(prefix="heph-gcp-present-vm-") as directory:
+            root = Path(directory)
+            result = self._run_download(root, self._archive(root), cleanup="present")
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(json.loads((root / "status.json").read_text())["error"], "cleanup-unverified")
+            self.assertNotIn("storage cp", result.stderr)
+
+    def test_download_refuses_inconclusive_cleanup_permission_error(self):
+        with tempfile.TemporaryDirectory(prefix="heph-gcp-cleanup-permission-") as directory:
+            root = Path(directory)
+            result = self._run_download(root, self._archive(root), cleanup="permission")
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(json.loads((root / "status.json").read_text())["error"], "cleanup-unverified")
+
+    def test_download_rejects_zone_outside_reviewed_region(self):
+        with tempfile.TemporaryDirectory(prefix="heph-gcp-wrong-zone-") as directory:
+            root = Path(directory)
+            result = self._run_download(root, self._archive(root), zone="us-central1-a")
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(json.loads((root / "status.json").read_text())["error"], "cleanup-unverified")
+
+    def test_download_failure_is_recorded_and_fails_closed(self):
+        with tempfile.TemporaryDirectory(prefix="heph-gcp-diagnostics-") as directory:
+            root = Path(directory)
+            result = self._run_download(root, self._archive(root), exit_code=23)
+            self.assertNotEqual(result.returncode, 0)
+            status = json.loads((root / "status.json").read_text(encoding="utf-8"))
+            self.assertEqual(status["download"], "failed")
+
+    def test_malformed_archive_is_recorded_and_fails_closed(self):
+        with tempfile.TemporaryDirectory(prefix="heph-gcp-diagnostics-") as directory:
+            root = Path(directory)
+            malformed = root / "malformed.tar.gz"
+            malformed.write_bytes(b"not a gzip archive")
+            result = self._run_download(root, malformed)
+            self.assertNotEqual(result.returncode, 0)
+            status = json.loads((root / "status.json").read_text(encoding="utf-8"))
+            self.assertEqual(status["error"], "archive-format-invalid")
+
+    def test_manifest_source_checksum_mismatch_is_recorded(self):
+        with tempfile.TemporaryDirectory(prefix="heph-gcp-diagnostics-") as directory:
+            root = Path(directory)
+            archive = self._archive(root)
+            broken = root / "broken.tar.gz"
+            with tarfile.open(archive, "r:gz") as source, tarfile.open(broken, "w:gz") as target:
+                for member in source.getmembers():
+                    data = source.extractfile(member).read() if member.isfile() else None
+                    if member.name.endswith("/sources/serial"):
+                        data = b"HEPH_GCP_DIAGNOSTIC tampered\n"
+                    if data is None:
+                        target.addfile(member)
+                    else:
+                        member.size = len(data)
+                        target.addfile(member, io.BytesIO(data))
+            result = self._run_download(root, broken)
+            self.assertNotEqual(result.returncode, 0)
+            status = json.loads((root / "status.json").read_text(encoding="utf-8"))
+            self.assertEqual(status["error"], "manifest-validation-failed")
+
+    def test_hanging_provider_download_is_bounded(self):
+        with tempfile.TemporaryDirectory(prefix="heph-gcp-diagnostics-") as directory:
+            root = Path(directory)
+            result = self._run_download(root, self._archive(root), hang=True)
+            self.assertNotEqual(result.returncode, 0)
+            status = json.loads((root / "status.json").read_text(encoding="utf-8"))
+            self.assertEqual(status["error"], "provider-download-failed")
+
+    def test_download_credential_scan_failure_is_recorded(self):
+        with tempfile.TemporaryDirectory(prefix="heph-gcp-diagnostics-") as directory:
+            root = Path(directory)
+            archive = self._archive(root)
+            broken = root / "credential.tar.gz"
+            with tarfile.open(archive, "r:gz") as source:
+                members = source.getmembers()
+                payloads = {
+                    member.name: source.extractfile(member).read()
+                    for member in members
+                    if member.isfile()
+                }
+            serial_name = "cooking-diagnostics/sources/serial"
+            payloads[serial_name] = COLLECTOR.EVIDENCE.VALUES[0] + b"\n"
+            manifest_name = "cooking-diagnostics/manifest.json"
+            manifest = json.loads(payloads[manifest_name])
+            for record in manifest["sources"]:
+                if record["path"] == "sources/serial":
+                    record["bytes"] = len(payloads[serial_name])
+                    record["sha256"] = hashlib.sha256(payloads[serial_name]).hexdigest()
+            payloads[manifest_name] = (json.dumps(manifest, sort_keys=True, indent=2) + "\n").encode()
+            with tarfile.open(broken, "w:gz") as target:
+                for member in members:
+                    if not member.isfile():
+                        continue
+                    data = payloads[member.name]
+                    member.size = len(data)
+                    target.addfile(member, io.BytesIO(data))
+            result = self._run_download(root, broken)
+            self.assertNotEqual(result.returncode, 0)
+            status = json.loads((root / "status.json").read_text(encoding="utf-8"))
+            self.assertEqual(status["error"], "credential-scan-failed")
+
+    def test_full_cooking_producer_paths_and_lineage_status_are_retained(self):
+        """Exercise the real producer filenames and status sidecar contract."""
+        with tempfile.TemporaryDirectory(prefix="heph-gcp-full-paths-") as directory:
+            root = Path(directory)
+            evidence = root / "evidence" / "cooking"
+            evidence.mkdir(mode=0o700, parents=True)
+            serial = evidence / "serial.log"
+            serial.write_text("HEPH_GCP_COOKING phase=browser status=failed\n", encoding="utf-8")
+            lineage = evidence / "cooking-lineage.jsonl"
+            lineage.write_text(
+                '{"sampled_at":"2026-09-11 10:00:00 Z",'
+                '"mailbox_id":"00000000-0000-4000-8000-000000000001",'
+                '"event_id":"00000000-0000-4000-8000-000000000002",'
+                '"attempt_id":"00000000-0000-4000-8000-000000000003",'
+                '"attempt_number":1,"attempt_run_id":"00000000-0000-4000-8000-000000000004",'
+                '"attempt_state":"failed","attempt_created_at":"2026-09-11 09:59:00 Z",'
+                '"attempt_completed_at":"2026-09-11 10:00:00 Z","run_state":"failed",'
+                '"run_outcome":"failed","run_created_at":"2026-09-11 09:58:00 Z",'
+                '"run_updated_at":"2026-09-11 10:00:00 Z","disposition":"retryable"}\n',
+                encoding="utf-8",
+            )
+            lineage_status = evidence / "cooking-lineage-status.json"
+            lineage_status.write_text(
+                '{"schema":1,"status":"query_failed","sampled_at":"2026-09-11 10:00:00 Z",'
+                '"mailbox_id":"00000000-0000-4000-8000-000000000001",'
+                '"event_id":null,"rows":0}\n',
+                encoding="utf-8",
+            )
+            output = root / "bundle"
+            archive = root / "bundle.tar.gz"
+            self.assertEqual(
+                COLLECTOR.main([
+                    "--output-dir", str(output),
+                    "--source", f"serial={serial}",
+                    "--snapshot-jsonl", str(lineage),
+                    "--snapshot-status", str(lineage_status),
+                    "--archive", str(archive),
+                ]),
+                0,
+            )
+            manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["credentialScan"], "passed")
+            self.assertEqual(
+                {record["label"] for record in manifest["sources"]},
+                {"serial", "lineage", "lineage-status"},
+            )
+            self.assertEqual(manifest["collectionErrors"], [])
+
+    def test_full_missing_lineage_is_an_explicit_collector_error(self):
+        with tempfile.TemporaryDirectory(prefix="heph-gcp-missing-lineage-") as directory:
+            root = Path(directory)
+            source = root / "serial.log"
+            source.write_text("HEPH_GCP_COOKING phase=cleanup status=failed\n", encoding="utf-8")
+            missing = root / "evidence" / "cooking-lineage.jsonl"
+            output = root / "bundle"
+            self.assertEqual(
+                COLLECTOR.main([
+                    "--output-dir", str(output),
+                    "--source", f"serial={source}",
+                    "--missing-source", f"lineage={missing}",
+                ]),
+                0,
+            )
+            manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+            self.assertIn(
+                {"label": "lineage", "status": "missing"},
+                manifest["collectionErrors"],
+            )
+
+    def test_startup_uses_real_paths_and_diagnostic_root_staging(self):
+        startup = (ROOT / "gcp-kvm-startup.sh").read_text(encoding="utf-8")
+        self.assertIn('snapshot_input="${cooking_evidence_root}/cooking-lineage.jsonl"', startup)
+        self.assertIn('snapshot_status_path="${cooking_evidence_root}/cooking-lineage-status.json"', startup)
+        self.assertIn("--snapshot-status \"$snapshot_status_path\"", startup)
+        self.assertNotIn('install -d -m 0700 -o forge -g forge "$input_root"', startup)
+        self.assertIn("diagnostic_probe_completed=true", startup)
+        self.assertIn("local expected_fixture=false", startup)
+        self.assertIn("TEST-FAIL expected=%s", startup)
+        self.assertIn("--config \"$diagnostics_header_file\"", startup)
+        self.assertNotIn('-H "Authorization: Bearer $token"', startup)
+
+    def test_coordinator_uses_mode_bound_before_terminal_timeout(self):
+        coordinator = (ROOT / "gcp-kvm-smoke.sh").read_text(encoding="utf-8")
+        self.assertIn("poll_deadline_epoch=$((trial_start_epoch + 540))", coordinator)
+        self.assertIn("poll_deadline_epoch=$((trial_start_epoch + 2400))", coordinator)
+        self.assertIn("disposable VM disappeared before a terminal marker", coordinator)
+        self.assertNotIn("local deadline=$((SECONDS + 2400))", coordinator)
+
+    def test_real_finish_collects_and_uploads_successful_workload(self):
+        result, root = self._run_real_finish("gcp-cooking")
+        self.addCleanup(shutil.rmtree, root, True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("HEPHAESTUS_GCP_COOKING: PASS", result.stdout)
+        self.assertIn("event=upload status=pass", result.stdout)
+
+    def test_real_finish_preserves_workload_failure_status(self):
+        result, root = self._run_real_finish("gcp-cooking", workload="failure")
+        self.addCleanup(shutil.rmtree, root, True)
+        self.assertEqual(result.returncode, 7, result.stdout + result.stderr)
+        self.assertIn("HEPHAESTUS_GCP_COOKING: FAIL", result.stdout)
+        self.assertIn("exit=7", result.stdout)
+
+    def test_real_finish_preserves_timeout_status_and_runs_collection(self):
+        result, root = self._run_real_finish("gcp-cooking", workload="timeout")
+        self.addCleanup(shutil.rmtree, root, True)
+        self.assertEqual(result.returncode, 124, result.stdout + result.stderr)
+        self.assertIn("event=upload status=pass", result.stdout)
+        self.assertIn("HEPHAESTUS_GCP_COOKING: FAIL", result.stdout)
+        self.assertIn("exit=124", result.stdout)
+        self.assertNotIn("HEPHAESTUS_GCP_COOKING: PASS", result.stdout)
+        self.assertFalse((root / "work" / "tmp" / "diagnostics-curl.conf").exists())
+
+    def test_workload_failure_and_upload_failure_preserve_original_status(self):
+        result, root = self._run_real_finish("gcp-cooking", upload="403", workload="failure")
+        self.addCleanup(shutil.rmtree, root, True)
+        self.assertEqual(result.returncode, 7, result.stdout + result.stderr)
+        self.assertIn("event=upload status=fail", result.stdout)
+        self.assertIn("exit=7", result.stdout)
+        self.assertNotIn("HEPHAESTUS_GCP_COOKING: PASS", result.stdout)
+
+    def test_real_finish_diagnostic_expected_failure_is_distinct(self):
+        result, root = self._run_real_finish("diagnostic")
+        self.addCleanup(shutil.rmtree, root, True)
+        self.assertEqual(result.returncode, 42, result.stdout + result.stderr)
+        self.assertIn("TEST-FAIL expected=true", result.stdout)
+        self.assertIn("DIAGNOSTICS PASS", result.stdout)
+
+    def test_real_finish_upload_and_scanner_failures_are_explicit_and_clean_headers(self):
+        for upload, scanner in (("403", "ok"), ("hang", "ok"), ("ok", "reject")):
+            with self.subTest(upload=upload, scanner=scanner):
+                result, root = self._run_real_finish("gcp-cooking", upload=upload, scanner=scanner)
+                self.addCleanup(shutil.rmtree, root, True)
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("HEPHAESTUS_GCP_COOKING: FAIL", result.stdout)
+                self.assertNotIn("HEPHAESTUS_GCP_COOKING: PASS", result.stdout)
+                self.assertFalse((root / "work" / "tmp" / "diagnostics-curl.conf").exists())
+                self.assertFalse((root / "work" / "tmp" / "diagnostics-token.json").exists())
+
+
+if __name__ == "__main__":
+    unittest.main()
