@@ -157,10 +157,10 @@ shares the startup script's 35-minute test budget and leaves five minutes for
 collection/upload; it is not reset after bootstrap. Cooking runs as a systemd
 oneshot with the remaining absolute deadline and a bounded stop timeout, so
 activation and teardown cannot consume the collection reserve. This remains
-pending live full-path proof. The smoke mode continues to use no service
-account and no scopes.
+pending live full-path proof. Smoke uses the same runtime service account and
+`storage-rw` scope for its private diagnostics and cache access.
 
-The planned `image-build` mode stays in this same workflow, so the existing
+The implemented `image-build` mode stays in this same workflow, so the existing
 exact WIF workflow restriction needs no change. Dispatch it with:
 
 ```sh
@@ -180,15 +180,17 @@ browser executable/version checks at startup.
 The optional `runner_image` input is supported by `diagnostic`, `smoke` and
 `gcp-cooking`. When it is empty, those modes use the optional repository
 variable `vars.GCP_RUNNER_IMAGE`; `use_stock_image=true` takes precedence over
-both and explicitly selects the stock image. The default candidate variable is
-not yet configured, and custom image selection remains pending live candidate
-validation. After reviewing the build output, the next custom-image check is
-diagnostic:
+both and explicitly selects the stock image. The default candidate variable
+now points to the confirmed
+`hephaestus-runner-2a7223a74f7b32403ea8f586502b8a3f`; no rollback image
+variable is configured. For a selected image or a future replacement, use the
+diagnostic command below as the first validation step; the current default
+candidate has already passed the custom diagnostic and smoke checks:
 
 ```sh
 gh workflow run cooking-e2e.yml --repo wimpheling/hephaestus --ref main \
   -f cloud_mode=diagnostic -f gcp_zone=europe-west1-d \
-  -f runner_image=hephaestus-runner-925f650c449e8679825f522d8cef52de
+  -f runner_image=hephaestus-runner-2a7223a74f7b32403ea8f586502b8a3f
 ```
 
 To force the stock image, even when an explicit image or repository default is
@@ -241,8 +243,32 @@ archive scan. The object was
 `cooking/runs/34609688851/1/d458f5a618e27ea7558c45ac7bca31e0e285ae1c.tar.gz`
 with SHA-256
 `ed2c9de4d5317a59eb0e5cc486449ad0be643ed08feb86adb62536801bda3136`.
-The candidate is not promoted; real KVM smoke dispatch remains pending, and
-the default image variable is still not configured.
+The candidate's custom diagnostic proof remains valid. A newer image is now
+the confirmed default below; no rollback image variable is configured.
+
+Build run [34613716791](https://github.com/wimpheling/hephaestus/actions/runs/34613716791)
+at source commit `d08fd2d37bf0cf8207867772cf9bfcbbef11da97` completed with the
+builder VM and source disk deleted. It produced READY image
+`hephaestus-runner-2a7223a74f7b32403ea8f586502b8a3f`; its full manifest SHA is
+`2a7223a74f7b32403ea8f586502b8a3f6a83dbe521b9882a93bfc87d81e341a0`.
+The image is now confirmed in `vars.GCP_RUNNER_IMAGE`; the rollback variable is
+absent. All three failed image candidates are retired. Retirement runs
+[34616449063](https://github.com/wimpheling/hephaestus/actions/runs/34616449063),
+[34616844428](https://github.com/wimpheling/hephaestus/actions/runs/34616844428)
+and [34617225580](https://github.com/wimpheling/hephaestus/actions/runs/34617225580)
+verified absence; the latest candidate was deleted at 15:37:53Z and verified
+absent at 15:37:54Z. The protected default image is unchanged.
+
+Real KVM smoke and private-artifact proof [run 34615599394](https://github.com/wimpheling/hephaestus/actions/runs/34615599394)
+passed from 15:21:05Z to 15:26:29Z (5m24), with the smoke marker at 15:25:20Z.
+VM absence was verified at 15:26:18Z, and the authenticated post-delete
+download and scan passed. The private object was
+`cooking/runs/34615599394/1/d08fd2d37bf0cf8207867772cf9bfcbbef11da97.tar.gz`
+with SHA-256
+`b77d658e52a1fcb4463aa8881416c8dcc3b5507f64b5457a915d31b676ba3f59`.
+This proves the smoke path; one full `gcp-cooking` trial remains pending.
+The earlier stock-image smoke run 34525055454 (14m57) is retained only as an
+observational comparison.
 
 The GCP Cooking path reports a dedicated `HEPHAESTUS_GCP_COOKING` marker and
 uses the same private collector/upload/download path. The GitHub workflow

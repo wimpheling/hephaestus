@@ -20,7 +20,7 @@ settings are:
 | `diagnostic` | Ubuntu 24.04 `e2-small`, 20 GB `pd-balanced` | no nested KVM; auto-delete disk; 10-minute provider `DELETE` lifetime | runtime service account, `storage-rw` scope |
 | `smoke` | Ubuntu 24.04 `n2-standard-8`, 150 GB `pd-balanced` | nested KVM; auto-delete disk; 45-minute provider `DELETE` lifetime | runtime service account, `storage-rw` scope for private diagnostics/cache |
 | `gcp-cooking` | Ubuntu 24.04 `n2-standard-8`, 150 GB `pd-balanced` | nested KVM; auto-delete disk; 45-minute provider `DELETE` lifetime | runtime service account, `storage-rw` scope |
-| `image-build` (planned) | disposable SA-less `n2-standard-8` builder | versioned source disk; image capture after stop; explicit cleanup | no service account and no scopes |
+| `image-build` | disposable SA-less `n2-standard-8` builder | versioned source disk; image capture after stop; explicit cleanup | no service account and no scopes |
 | `cooking` | prepared self-hosted `heph-kvm` runner | 30-minute job; local fixture timeout is 1,500 seconds | runner environment, outside GCP |
 
 Quota output proves quota arithmetic, not zonal capacity. The cloud control
@@ -56,9 +56,9 @@ This deadline behavior remains pending live full-path proof. See
 [`scripts/gcp-kvm-startup.sh`](../scripts/gcp-kvm-startup.sh) and
 [`scripts/gcp-cooking-run.sh`](../scripts/gcp-cooking-run.sh).
 
-### Planned prebuilt image mode
+### Prebuilt image mode
 
-`image-build` is planned as a manual mode in the existing
+`image-build` is an implemented manual mode in the existing
 [`cooking-e2e.yml`](../.github/workflows/cooking-e2e.yml). Keeping it in this
 workflow preserves the current exact WIF provider and `workflow_dispatch`
 condition; no WIF change or additional IAM grant is planned. The existing CI
@@ -89,14 +89,15 @@ workflow. The `runner_image` input is optional for `diagnostic`, `smoke` and
 `gcp-cooking`; when it is empty, those modes use the optional repository
 variable `vars.GCP_RUNNER_IMAGE`. The `use_stock_image` boolean takes
 precedence over both and clears image selection, so it explicitly chooses the
-stock image. The default candidate variable is not yet configured, and custom
-image selection remains pending live candidate validation. A custom image in
-`diagnostic` uses the 150 GB diagnostic disk required by the baked image.
+stock image. The default candidate variable now points to the confirmed
+`hephaestus-runner-2a7223a74f7b32403ea8f586502b8a3f`; no rollback image variable
+is configured. A custom image in `diagnostic` uses the 150 GB diagnostic disk
+required by the baked image.
 
 ```sh
 gh workflow run cooking-e2e.yml --repo wimpheling/hephaestus --ref main \
   -f cloud_mode=diagnostic -f gcp_zone=europe-west1-d \
-  -f runner_image=hephaestus-runner-925f650c449e8679825f522d8cef52de
+  -f runner_image=hephaestus-runner-2a7223a74f7b32403ea8f586502b8a3f
 gh workflow run cooking-e2e.yml --repo wimpheling/hephaestus --ref main \
   -f cloud_mode=smoke -f gcp_zone=europe-west1-d \
   -f runner_image=hephaestus-runner-<manifest-prefix>
@@ -147,10 +148,32 @@ archive scan. The object was
 `cooking/runs/34609688851/1/d458f5a618e27ea7558c45ac7bca31e0e285ae1c.tar.gz`
 with SHA-256
 `ed2c9de4d5317a59eb0e5cc486449ad0be643ed08feb86adb62536801bda3136`.
-The candidate's custom diagnostic proof remains valid, but a startup-hash
-change means a fresh image build is pending before promotion. Real KVM smoke
-dispatch remains pending, and the default image variable is still not
-configured.
+The candidate's custom diagnostic proof remains valid. A newer image is now
+the confirmed default below; no rollback image variable is configured.
+
+Build run [34613716791](https://github.com/wimpheling/hephaestus/actions/runs/34613716791)
+at source commit `d08fd2d37bf0cf8207867772cf9bfcbbef11da97` completed with the
+builder VM and source disk deleted. It produced the READY image
+`hephaestus-runner-2a7223a74f7b32403ea8f586502b8a3f`; its full manifest SHA is
+`2a7223a74f7b32403ea8f586502b8a3f6a83dbe521b9882a93bfc87d81e341a0`.
+The image is now confirmed in `vars.GCP_RUNNER_IMAGE`; the rollback variable is
+absent. All three failed image candidates are retired. Retirement runs
+[34616449063](https://github.com/wimpheling/hephaestus/actions/runs/34616449063),
+[34616844428](https://github.com/wimpheling/hephaestus/actions/runs/34616844428)
+and [34617225580](https://github.com/wimpheling/hephaestus/actions/runs/34617225580)
+verified absence; the latest candidate was deleted at 15:37:53Z and verified
+absent at 15:37:54Z. The protected default image is unchanged.
+
+Real KVM smoke and private-artifact proof [run 34615599394](https://github.com/wimpheling/hephaestus/actions/runs/34615599394)
+passed from 15:21:05Z to 15:26:29Z (5m24), with the smoke marker at 15:25:20Z.
+VM absence was verified at 15:26:18Z, and the authenticated post-delete
+download and scan passed. The private object was
+`cooking/runs/34615599394/1/d08fd2d37bf0cf8207867772cf9bfcbbef11da97.tar.gz`
+with SHA-256
+`b77d658e52a1fcb4463aa8881416c8dcc3b5507f64b5457a915d31b676ba3f59`.
+This proves the smoke path; one full `gcp-cooking` trial remains pending.
+The earlier stock-image smoke run 34525055454 (14m57) is retained only as an
+observational comparison.
 
 ### Keyless identities and bucket access
 
