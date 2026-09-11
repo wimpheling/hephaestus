@@ -21,6 +21,28 @@ at `19:45:24.681Z`; post-delete private download and scan passed at
 The exact Playwright assertion is still unavailable because the raw private
 browser report was not retained locally.
 
+The structured browser capture pipeline is published at commit `1b49264` and
+has 123 focused tests, including a real intentional Playwright failure with a
+typed source file, line and column. Raw Playwright JSON stays private on the
+VM and is excluded from the diagnostics bundle. The safe `.triage.browser`
+projection contains typed counts, `report_state`, `observed_phases`,
+`passed_phases` and capped `failure_metadata`; the GCP evidence gate requires
+complete passing reports for both the initial and post-operation phases.
+
+No-VM recovery [run 34641960369](https://github.com/wimpheling/hephaestus/actions/runs/34641960369)
+recovered the post-operation `spec.ts:97` path. The deterministic
+time-of-check/time-of-use correction merged in [PR #18](https://github.com/wimpheling/hephaestus/pull/18)
+at `eef193d2ab4e2e63aefd4d827c069e93c8a1ee09`, with all three CI checks green;
+the combined local validation then passed from `20:28:24.199615Z` through
+`20:33:55.363600Z` (5m31.164s): 33 golden tests passed, 1 was ignored and 0
+failed; PostgreSQL 6 passed; both browser phases passed with zero failures and
+both `initial` and `post-operation` phases observed and passed. Cleanup and the
+runtime/cgroup marker passed, as did the whole-tree credential scan across 32
+files including the archive. The collector produced complete schema 1 with six
+sources and no rejections, and the summarizer reported no failure or retry.
+Private evidence is retained at `/tmp/heph-local-cooking-eef193d.PSyYRA`.
+This proves the local path only; full GCP validation remains open.
+
 ## Configuration
 
 The project is `hephaestus-508000` (project number `84572286146`). Cloud
@@ -385,11 +407,11 @@ Cooking pass. Follow-up no-VM triage
 [34633918356](https://github.com/wimpheling/hephaestus/actions/runs/34633918356)
 at `f278dd6` passed all eight sources. The current failure cause is unknown:
 expected denial or caught-confinement markers are observations, not proof of a
-bug. The projection gap affecting `test-output` and `browser-summary` was
-addressed in [PR #17](https://github.com/wimpheling/hephaestus/pull/17), merged
-at `4f578ff91b5820af08e953b08cb570ae5789d531`; all three CI checks and the
-quality gate passed. The later full attempt is recorded at the top of this
-runbook; full GCP validation remains open.
+bug. Later configuration and browser-capture changes addressed the
+`test-output` and `browser-summary` projection gap. PR #17
+([track-caller correction](https://github.com/wimpheling/hephaestus/pull/17))
+was separate. The later full attempt is recorded at the top of this runbook;
+full GCP validation remains open.
 
 The current code also passed a local full Cooking run using the evidence
 collector: the golden suite completed with 33 passed and 1 ignored, six
@@ -425,6 +447,11 @@ diagnostic live bundle gate passed in run 34586850977, and the live
 partial-source path passed in run 34593541194. Full GCP Cooking validation
 still requires the scanner, upload, post-delete download and checksum
 evidence below from a successful full run.
+
+The published browser capture writes one private Playwright JSON report per
+phase, then projects only the typed `.triage.browser` fields before collection.
+Missing, malformed, partial or nonpassing phase reports fail evidence
+validation without turning an unknown report into a fabricated browser cause.
 
 On a failed Cooking unit, the helper uses `systemctl show` with an allowlisted
 property set. It does not dump `systemctl status` process trees, because those

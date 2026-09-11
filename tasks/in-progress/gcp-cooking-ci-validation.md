@@ -43,12 +43,11 @@ acceptance and does not reopen or expand that completed task.
   [34633918356](https://github.com/wimpheling/hephaestus/actions/runs/34633918356)
   at `f278dd6` passed all eight sources. The exact cause remains unknown:
   expected denial and caught-confinement markers are observations, not proof
-  of a bug. The projection gap affecting `test-output` and
-  `browser-summary` was addressed in
-  [PR #17](https://github.com/wimpheling/hephaestus/pull/17), merged at
-  `4f578ff91b5820af08e953b08cb570ae5789d531`; all three CI checks and the
-  quality gate passed. That earlier triage left the failure cause unresolved;
-  full GCP validation remains open.
+  of a bug. Later configuration and browser-capture changes addressed the
+  `test-output` and `browser-summary` projection gap. PR #17
+  ([track-caller correction](https://github.com/wimpheling/hephaestus/pull/17))
+  was separate. That earlier triage left the failure cause unresolved; full
+  GCP validation remains open.
 - [ ] The latest full attempt,
   [run 34638077629](https://github.com/wimpheling/hephaestus/actions/runs/34638077629),
   used source `bd777de2bd4100a43c22201219892c9b50f3273a`, the default validated
@@ -62,8 +61,9 @@ acceptance and does not reopen or expand that completed task.
   `19:45:27.828Z` for 27,796 bytes, SHA-256
   `3027116b89450cc0458cc5258c437188bc6600692d9145842230ec9206bfecb0`.
   The raw Playwright report was not retained locally, so its exact assertion
-  remains unknown. Keep full GCP validation open pending the MVP-06 evidence
-  gap fix; do not retry the paid path until that gap is closed.
+  remains unknown. Keep full GCP validation open pending current GCP
+  diagnostics validation; do not retry the paid path until that validation is
+  complete.
 - [x] The current code passed a local full Cooking run: 33 golden tests passed
   with 1 ignored, six PostgreSQL tests completed in 1.75s, two browser reports
   passed with zero failures, and cleanup, same-stream live scanning, and the
@@ -79,6 +79,25 @@ acceptance and does not reopen or expand that completed task.
   four track-caller attributes were merged in
   [PR #17](https://github.com/wimpheling/hephaestus/pull/17), with all three CI
   checks and the quality gate passed. Cloud validation remains open.
+- [x] The structured browser capture pipeline was published in commit
+  `1b49264` with 123 focused tests and a real intentional Playwright failure
+  proving typed source location. Raw reports remain VM-private and excluded
+  from the bundle; `.triage.browser` retains only typed counts, report state,
+  observed/passed phases and capped failure metadata. A successful GCP evidence
+  gate now requires complete passing reports for both known browser phases.
+- [x] No-VM recovery [run 34641960369](https://github.com/wimpheling/hephaestus/actions/runs/34641960369)
+  recovered the post-operation `spec.ts:97` path. The deterministic test
+  time-of-check/time-of-use correction merged in [PR #18](https://github.com/wimpheling/hephaestus/pull/18)
+  at `eef193d2ab4e2e63aefd4d827c069e93c8a1ee09`, with all three CI checks
+  green. No assertion, backend count or timeout was weakened. The combined
+  local validation passed from `20:28:24.199615Z` through `20:33:55.363600Z`
+  (5m31.164s): 33 golden passed, 1 ignored, 0 failed; PostgreSQL 6 passed;
+  both browser phases passed with `initial` and `post-operation` observed and
+  passed; cleanup and runtime/cgroup markers passed; the whole-tree
+  credential scan covered 32 files including the archive; collector schema 1
+  was complete with six sources and no rejections; and the summarizer reported
+  no failure or retry. Private evidence is at
+  `/tmp/heph-local-cooking-eef193d.PSyYRA`. Full GCP validation remains open.
 - [x] No-VM historical triage was validated in [run 34626172381](https://github.com/wimpheling/hephaestus/actions/runs/34626172381)
   for run `34618088312`, attempt `1`, and the exact source SHA. It verified
   project-wide VM absence, downloaded and scanned the private object, and
@@ -115,9 +134,10 @@ acceptance and does not reopen or expand that completed task.
 
 - [x] Record the passing default-image and real KVM smoke evidence with links
   and retained artifact/checksum details.
-- [ ] Diagnose the exact failure from run 34618088312 using the private
-  diagnostics and workflow evidence, preserving the failed status and
-  identifying the smallest corrective change.
+- [x] Review the retained safe evidence for run 34618088312. It contains no
+  typed failure or denial from which the historical exact cause can be
+  recovered; any further diagnosis must use new evidence and must preserve the
+  failed status.
 - [x] Record the accepted diagnostic fixture/quarantine evidence and the
   deliberate failure, startup/runtime evidence, collection and upload, verified
   VM absence, authenticated post-delete download, checksum and credential scan

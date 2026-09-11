@@ -19,6 +19,27 @@ SHA-256
 exact Playwright assertion is unknown because the raw private browser report
 was not retained locally.
 
+The structured browser capture pipeline is published at commit `1b49264` and
+has 123 focused tests, including a real intentional Playwright failure with a
+typed source file, line and column. Raw Playwright JSON remains VM-private and
+is excluded from the diagnostics bundle. The safe `.triage.browser` projection
+contains typed counts, `report_state`, `observed_phases`, `passed_phases` and
+capped `failure_metadata`; the GCP evidence gate requires both known browser
+phases to pass. Full live validation remains pending.
+No-VM recovery [run 34641960369](https://github.com/wimpheling/hephaestus/actions/runs/34641960369)
+recovered the post-operation `spec.ts:97` path. The deterministic
+time-of-check/time-of-use correction merged in [PR #18](https://github.com/wimpheling/hephaestus/pull/18)
+at `eef193d2ab4e2e63aefd4d827c069e93c8a1ee09`, with all three CI checks green;
+the combined local validation then passed from `20:28:24.199615Z` through
+`20:33:55.363600Z` (5m31.164s): 33 golden tests passed, 1 was ignored and 0
+failed; PostgreSQL 6 passed; both browser phases passed with zero failures and
+both `initial` and `post-operation` phases observed and passed. Cleanup and the
+runtime/cgroup marker passed, as did the whole-tree credential scan across 32
+files including the archive. The collector produced complete schema 1 with six
+sources and no rejections, and the summarizer reported no failure or retry.
+Private evidence is retained at `/tmp/heph-local-cooking-eef193d.PSyYRA`.
+This proves the local path only; full live GCP validation remains pending.
+
 The [Cooking E2E workflow](../../.github/workflows/cooking-e2e.yml) runs the
 same `examples/cooking/run.sh` entry point as local execution. It requires an
 x86_64 Linux runner labelled `self-hosted`, `Linux`, `X64`, and `heph-kvm`.
@@ -348,12 +369,11 @@ post-delete download and scanning passed. Follow-up no-VM triage
 [34633918356](https://github.com/wimpheling/hephaestus/actions/runs/34633918356)
 at `f278dd6` passed all eight sources, but the triage failure was a Rust
 timestamp issue. The current cause is unknown; expected denial or
-caught-confinement markers are not proof of a bug. The projection gap affecting
-`test-output` and `browser-summary` was addressed in
-[PR #17](https://github.com/wimpheling/hephaestus/pull/17), merged at
-`4f578ff91b5820af08e953b08cb570ae5789d531`; all three CI checks and the
-quality gate passed. The latest full attempt is recorded at the top of this
-document; full validation remains open.
+caught-confinement markers are not proof of a bug. Later configuration and
+browser-capture changes addressed the `test-output` and `browser-summary`
+projection gap. PR #17 ([track-caller correction](https://github.com/wimpheling/hephaestus/pull/17))
+was separate. The latest full attempt is recorded at the top of this document;
+full validation remains open.
 
 The current code also passed a local full Cooking run: 33 golden tests passed
 with 1 ignored, six PostgreSQL tests completed in 1.75s, two browser reports
