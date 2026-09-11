@@ -67,6 +67,23 @@ safe status artifact is retained for one day. It records the actual systemd
 unit log and bounded journal fields; it does not fabricate Cooking lineage
 records. The image builder remains SA-less.
 
+For a retained historical bundle, the same workflow offers a no-VM
+`diagnostics-triage` mode. Pass the exact source run, attempt and `main` SHA:
+
+```sh
+gh workflow run cooking-e2e.yml --repo wimpheling/hephaestus --ref main \
+  -f cloud_mode=diagnostics-triage -f gcp_zone=europe-west1-d \
+  -f diagnostics_run_id=34618088312 -f diagnostics_attempt=1 \
+  -f diagnostics_sha=1645642605925fa6835291df4a792d3b1123387a
+```
+
+The job validates the per-attempt GitHub API record, verifies the exact
+disposable VM name is absent project-wide, then reads the fixed private object
+and retains only the one-day safe status artifact. Validation run
+[34626172381](https://github.com/wimpheling/hephaestus/actions/runs/34626172381)
+passed collection and scanning; it showed the failed first retry and running
+second attempt, with no safe typed failure explaining the cause.
+
 Ubuntu Noble's packaged `passt` predates the DHCP broadcast behavior required
 by libkrun's minimal DHCP client. Before AppArmor setup and passt preflight, startup
 builds the immutable upstream [`passt` commit

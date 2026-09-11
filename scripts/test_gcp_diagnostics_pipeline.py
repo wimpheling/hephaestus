@@ -232,6 +232,74 @@ finish
             )
             self.assertNotIn("successful-smoke", json.dumps(triage["failures"]))
 
+    def test_triage_preserves_terminal_retry_marker_when_snapshot_is_stale(self):
+        with tempfile.TemporaryDirectory(prefix="heph-gcp-triage-retry-") as directory:
+            root = Path(directory)
+            self._archive(root)
+            runtime = root / "bundle" / "sources" / "runtime-structured"
+            runtime.write_text(
+                runtime.read_text(encoding="utf-8")
+                + "HEPH_COOKING_RETRY event=terminal classification=retry-terminal-failed "
+                + "lookup_status=ok event_id=00000000-0000-4000-8000-000000000010 "
+                + "attempt_id=00000000-0000-4000-8000-000000000011 attempt_number=2 "
+                + "run_id=00000000-0000-4000-8000-000000000012 attempt_state=failed "
+                + "run_state=failed run_outcome=failed exit_code=7 exit_signal=none\n",
+                encoding="utf-8",
+            )
+            retry = TRIAGE.summarize(root / "bundle")["retry"]
+            self.assertEqual(retry["classification"], "retry-terminal-failed")
+            self.assertEqual(retry["lookup_status"], "ok")
+            self.assertEqual(retry["attempt_number"], 2)
+            self.assertEqual(retry["exit_code"], 7)
+            self.assertIsNone(retry["exit_signal"])
+            self.assertEqual(retry["run_state"], "failed")
+            self.assertEqual(retry["run_outcome"], "failed")
+            self.assertEqual(
+                retry["correlated"],
+                {"event_id": False, "attempt_id": False, "run_id": False, "same_snapshot_row": False},
+            )
+
+    def test_triage_matches_retry_ids_only_when_they_share_snapshot_row(self):
+        with tempfile.TemporaryDirectory(prefix="heph-gcp-triage-retry-correlation-") as directory:
+            root = Path(directory)
+            self._archive(root)
+            event_id = "00000000-0000-4000-8000-000000000010"
+            attempt_id = "00000000-0000-4000-8000-000000000011"
+            run_id = "00000000-0000-4000-8000-000000000012"
+            (root / "bundle" / "lineage.jsonl").write_text(
+                json.dumps(
+                    {
+                        "event_id": event_id,
+                        "attempt_id": attempt_id,
+                        "attempt_run_id": run_id,
+                        "attempt_number": 2,
+                        "attempt_state": "failed",
+                        "run_state": "failed",
+                        "run_outcome": "failed",
+                        "exit_code": 7,
+                        "exit_signal": None,
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            runtime = root / "bundle" / "sources" / "runtime-structured"
+            runtime.write_text(
+                runtime.read_text(encoding="utf-8")
+                + "HEPH_COOKING_RETRY event=terminal classification=retry-terminal-failed "
+                + f"lookup_status=ok event_id={event_id} attempt_id={attempt_id} "
+                + f"attempt_number=2 run_id={run_id} attempt_state=failed run_state=failed "
+                + "run_outcome=failed exit_code=7 exit_signal=none\n",
+                encoding="utf-8",
+            )
+            triage = TRIAGE.summarize(root / "bundle")
+            self.assertEqual(triage["attempts"][0]["exit_code"], 7)
+            self.assertIsNone(triage["attempts"][0]["exit_signal"])
+            self.assertEqual(
+                triage["retry"]["correlated"],
+                {"event_id": True, "attempt_id": True, "run_id": True, "same_snapshot_row": True},
+            )
+
     def test_triage_caps_latest_attempts_and_rejects_unknown_fields(self):
         with tempfile.TemporaryDirectory(prefix="heph-gcp-triage-cap-") as directory:
             root = Path(directory)
