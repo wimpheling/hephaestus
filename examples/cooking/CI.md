@@ -5,19 +5,24 @@ gate and failure triage are in the [GCP Cooking CI runbook](../../docs/gcp-cooki
 Current `gcp-cooking` live validation is **pending**; the diagnostic evidence
 gate and live partial-source proof have passed, while the results below do not
 claim that the full path is green. The latest full run is
-[34638077629](https://github.com/wimpheling/hephaestus/actions/runs/34638077629)
-from source `bd777de2bd4100a43c22201219892c9b50f3273a` in
-`europe-west1-d`, using validated image
-`hephaestus-runner-2a7223a74f7b32403ea8f586502b8a3f`. It ran from `19:18:02Z`
-to `19:45:31Z` and failed in the post-operation browser phase at
-`crates/hephaestus-app/tests/golden.rs:2039`; the initial browser phase passed.
-The workload and browser results failed, while collection completed and the
-credential scan passed. VM absence was verified at `19:45:24.681Z`, followed
-by successful private download and scan at `19:45:27.828Z` (27,796 bytes,
-SHA-256
-`3027116b89450cc0458cc5258c437188bc6600692d9145842230ec9206bfecb0`). The
-exact Playwright assertion is unknown because the raw private browser report
-was not retained locally.
+[34645906708](https://github.com/wimpheling/hephaestus/actions/runs/34645906708)
+from source `5a8fa3e85737fbf2ba14171d0461cbd898ddd1a4`, using validated image
+`hephaestus-runner-2a7223a74f7b32403ea8f586502b8a3f`. Its workload evidence
+exited `1` at `21:08:41Z`; both browser phases completed with 2/2 reports
+passing and `report_state: complete`. Collection retained 11 mailbox
+delivery-attempt snapshot rows: 8 succeeded, 2 failed and 1 remained running.
+It observed
+`authentication_denied` / `session-authentication`; those are observations
+only and do not establish the failure cause. VM absence was verified at
+`21:09:38.216Z`, followed by successful authenticated post-delete download
+and scan at `21:09:44.123Z` (29,306 bytes, SHA-256
+`645adf2b777331964c437d250ed2525227f95eb21ad312d7e1ed7ce4b0e72a89`). The
+private object is
+`cooking/runs/34645906708/1/5a8fa3e85737fbf2ba14171d0461cbd898ddd1a4.tar.gz`.
+The safe status artifact is
+`/tmp/heph-full-34645906708.1y1w8j/gcp-diagnostics-status.json`.
+This is failed evidence rather than an accepted Cooking pass; focused
+evidence-gate investigation remains pending.
 
 The structured browser capture pipeline is published at commit `1b49264` and
 has 123 focused tests, including a real intentional Playwright failure with a
@@ -26,6 +31,22 @@ is excluded from the diagnostics bundle. The safe `.triage.browser` projection
 contains typed counts, `report_state`, `observed_phases`, `passed_phases` and
 capped `failure_metadata`; the GCP evidence gate requires both known browser
 phases to pass. Full live validation remains pending.
+
+The evidence-gate projection fix is published at `869dd20`. Its typed
+`.triage.evidenceScan` records the specific rule, file class, path digest and
+bounded counts, while `runtimeResults` retains all three runtime outcomes. The
+existing runtime log still carries its report; no image or startup change is
+part of this fix. Local proof in `/tmp/heph-evidence-gate-proof2.a1z3gT`
+retained 9,030,549 bytes of source and the exact 8,388,608-byte tail, including
+all three outcomes. It rejected an unsafe `browser-secret-org` scanner case
+without retaining the raw fixture or path, represented a missing report as
+unavailable, and preserved timeout exit `124`. The fix has 86 focused tests,
+including a 79-test independent subset. No-VM historical triage for failed full
+run `34645906708` completed in [run 34650213803](https://github.com/wimpheling/hephaestus/actions/runs/34650213803): VM absence,
+download and scan passed for the same 29,306-byte object, with all eight
+sources and both browser phases passing. The historical bundle had
+unavailable/missing `evidenceScan` and empty `runtimeResults`, so it cannot
+recover the original failing gate. The cloud failure cause remains unresolved.
 No-VM recovery [run 34641960369](https://github.com/wimpheling/hephaestus/actions/runs/34641960369)
 recovered the post-operation `spec.ts:97` path. The deterministic
 time-of-check/time-of-use correction merged in [PR #18](https://github.com/wimpheling/hephaestus/pull/18)
@@ -197,6 +218,34 @@ passed. Its object is
 `5b4f25d8e32533f25a5f88217483b3c8ce84649fdacf6f18aa895f0f328717f5`). The
 full `gcp-cooking` trial remains pending live validation.
 
+The latest default-image diagnostic [run 34645473842](https://github.com/wimpheling/hephaestus/actions/runs/34645473842)
+at source `5a8fa3e85737fbf2ba14171d0461cbd898ddd1a4` completed from
+20:40:39Z to 20:43:42Z (3m03). It used the default image
+`hephaestus-runner-2a7223a74f7b32403ea8f586502b8a3f`, exited with the expected
+fixture code 42, quarantined the intended `runtime-log` credential source,
+and passed collection, scan, upload and authenticated post-delete download.
+VM absence was verified at 20:43:30.842Z; the post-delete download passed at
+20:43:36.365Z. The private object is
+`cooking/runs/34645473842/1/5a8fa3e85737fbf2ba14171d0461cbd898ddd1a4.tar.gz`
+(1,337 bytes, SHA-256
+`ffad953ce37b0b2f5546468332479cbf8fcf621f1dae5bf472f0acb57d00e056`). The
+safe status artifact is
+`/tmp/heph-diagnostic-34645473842.IGA6IN/gcp-diagnostics-status.json`.
+
+The follow-up cheap diagnostic [run 34650524155](https://github.com/wimpheling/hephaestus/actions/runs/34650524155)
+at source `869dd209ae9569fb078ccc8a2e3a1bb41d4c0be6` used the default image
+in `europe-west1-d` and completed from 21:40:58Z to 21:43:26Z. It exited with
+the expected fixture code 42, quarantined the intended `runtime-log` as
+`credential-scan-rejected`, and passed VM cleanup, private upload, authenticated
+post-delete download and scan. The VM was deleted at 21:43:26Z. The private
+object was 1,339 bytes with SHA-256
+`866bfa6c9e1fee02526ef2b69458e69182db6f7e590c3c2cf21189054c213654` under the
+fixed key
+`cooking/runs/34650524155/1/869dd209ae9569fb078ccc8a2e3a1bb41d4c0be6.tar.gz`.
+The new typed scanner path is proven locally; this cloud fixture run has an
+expected unavailable/missing `evidenceScan` result. The full trial at source
+`869dd20` remains pending.
+
 The same `main` manual dispatch also offers `gcp-cooking`. Before creating a
 paid VM it checks the private, checksum-pinned cache object
 `gs://hephaestus-508000-cooking-cache/cooking/heph-gcp-cooking-cache.tar.zst`.
@@ -217,8 +266,9 @@ path through the checked-out `scripts/gcp-cooking-run.sh` helper. Its deadline
 shares the startup script's 35-minute test budget and leaves five minutes for
 collection/upload; it is not reset after bootstrap. Cooking runs as a systemd
 oneshot with the remaining absolute deadline and a bounded stop timeout, so
-activation and teardown cannot consume the collection reserve. This remains
-pending live full-path proof. Smoke uses the same runtime service account and
+activation and teardown cannot consume the collection reserve. The latest full
+trial failed as recorded above; full live-path validation remains open pending
+focused evidence-gate investigation. Smoke uses the same runtime service account and
 `storage-rw` scope for its private diagnostics and cache access.
 
 The implemented `image-build` mode stays in this same workflow, so the existing
@@ -327,7 +377,9 @@ download and scan passed. The private object was
 `cooking/runs/34615599394/1/d08fd2d37bf0cf8207867772cf9bfcbbef11da97.tar.gz`
 with SHA-256
 `b77d658e52a1fcb4463aa8881416c8dcc3b5507f64b5457a915d31b676ba3f59`.
-This proves the smoke path; one full `gcp-cooking` trial remains pending.
+This proves the smoke path; the latest full `gcp-cooking` trial is the failed
+run recorded at the top of this document. Full validation remains open pending
+focused evidence-gate investigation.
 The earlier stock-image smoke run 34525055454 (14m57) is retained only as an
 observational comparison.
 

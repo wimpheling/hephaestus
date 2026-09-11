@@ -30,7 +30,7 @@ universal prompt, workflow, form, or session protocol.
 ## Dependencies
 
 - [`mvp-01.2-replace-controlled-result-publication-with-runtime-git.md`](../done/mvp-01.2-replace-controlled-result-publication-with-runtime-git.md)
-- [MVP 04: destination-bound HTTPS egress](mvp-04-brokered-model-and-outbound-capabilities.md)
+- [MVP 04: destination-bound HTTPS egress](../done/mvp-04-brokered-model-and-outbound-capabilities.md)
 - [`release-owned-distribution-ui-surfaces.md`](../todo/release-owned-distribution-ui-surfaces.md)
   is a blocking dependency. MVP-06 must not introduce its own iframe, static
   serving, managed UI service, browser handoff, or tab mechanism; it consumes

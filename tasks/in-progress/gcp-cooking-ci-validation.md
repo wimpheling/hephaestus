@@ -27,6 +27,59 @@ acceptance and does not reopen or expand that completed task.
   the runbook records their deliberate fixture, quarantine, cleanup, private
   download and scan evidence. A new focused diagnostic is needed only if the
   corrective change touches collection behavior.
+- [x] The latest default-image diagnostic [run 34645473842](https://github.com/wimpheling/hephaestus/actions/runs/34645473842)
+  at source `5a8fa3e85737fbf2ba14171d0461cbd898ddd1a4` completed from 20:40:39Z
+  to 20:43:42Z (3m03) with expected fixture exit 42. It quarantined the
+  intended `runtime-log` credential source and passed collection, scan, upload,
+  VM-absence verification and authenticated post-delete download. The object
+  `cooking/runs/34645473842/1/5a8fa3e85737fbf2ba14171d0461cbd898ddd1a4.tar.gz`
+  is 1,337 bytes with SHA-256
+  `ffad953ce37b0b2f5546468332479cbf8fcf621f1dae5bf472f0acb57d00e056`; VM
+  absence was verified at 20:43:30.842Z and download at 20:43:36.365Z. The
+  safe manifest is `/tmp/heph-diagnostic-34645473842.IGA6IN/gcp-diagnostics-status.json`.
+- [ ] Latest full `gcp-cooking` attempt [run 34645906708](https://github.com/wimpheling/hephaestus/actions/runs/34645906708)
+  from source `5a8fa3e85737fbf2ba14171d0461cbd898ddd1a4` used the validated
+  default image and failed with workload evidence exit `1` at 21:08:41Z.
+  Both browser phases passed 2/2 with complete reports. Collection retained 11
+  mailbox delivery-attempt snapshot rows (8 succeeded, 2 failed, 1 running);
+  observed
+  `authentication_denied` / `session-authentication` is evidence only and does
+  not establish the cause. VM absence was verified at 21:09:38.216Z and the
+  authenticated post-delete download/scan passed at 21:09:44.123Z. The object
+  `cooking/runs/34645906708/1/5a8fa3e85737fbf2ba14171d0461cbd898ddd1a4.tar.gz`
+  is 29,306 bytes with SHA-256
+  `645adf2b777331964c437d250ed2525227f95eb21ad312d7e1ed7ce4b0e72a89`.
+  The safe status artifact is
+  `/tmp/heph-full-34645906708.1y1w8j/gcp-diagnostics-status.json`.
+  Full GCP validation remains open pending focused evidence-gate investigation;
+  do not start another paid retry yet.
+- [x] Evidence-gate projection fix `869dd20` adds typed `.triage.evidenceScan`
+  rule, file-class, path-digest and bounded-count fields, while `runtimeResults`
+  retains all three runtime outcomes. The existing runtime log carries its
+  report and no image or startup change is involved. Local proof at
+  `/tmp/heph-evidence-gate-proof2.a1z3gT` retained 9,030,549 bytes of source
+  and the exact 8,388,608-byte tail, including all outcomes; the unsafe
+  `browser-secret-org` scanner case was rejected without retaining its raw
+  fixture or path, missing report was unavailable, and timeout exit `124` was
+  preserved. The fix has 86 focused tests, including a 79-test independent
+  subset. No-VM historical triage [run 34650213803](https://github.com/wimpheling/hephaestus/actions/runs/34650213803)
+  completed for failed full run `34645906708`: VM absence, download and scan
+  passed for the same 29,306-byte object, with all eight sources and both
+  browser phases passing. Its historical bundle had unavailable/missing
+  `evidenceScan` and empty `runtimeResults`, so it cannot recover the original
+  failing gate. The cloud failure cause remains unresolved.
+- [x] Follow-up cheap diagnostic [run 34650524155](https://github.com/wimpheling/hephaestus/actions/runs/34650524155)
+  at source `869dd209ae9569fb078ccc8a2e3a1bb41d4c0be6` used the default image
+  in `europe-west1-d` and completed from 21:40:58Z to 21:43:26Z with expected
+  fixture exit 42. It quarantined `runtime-log` as
+  `credential-scan-rejected`, passed cleanup, upload, authenticated post-delete
+  download and scan, and deleted the VM at 21:43:26Z. The fixed object key is
+  `cooking/runs/34650524155/1/869dd209ae9569fb078ccc8a2e3a1bb41d4c0be6.tar.gz`
+  (1,339 bytes, SHA-256
+  `866bfa6c9e1fee02526ef2b69458e69182db6f7e590c3c2cf21189054c213654`). The
+  cloud fixture's `evidenceScan` result was expected unavailable/missing; the
+  typed scanner path is proven only by local proof. The full trial at source
+  `869dd20` remains pending.
 - [ ] A full `gcp-cooking` pass has not yet been accepted. The full attempt in
   [run 34618088312](https://github.com/wimpheling/hephaestus/actions/runs/34618088312)
   failed after 24m39s after all eight diagnostic sources completed and five
@@ -48,7 +101,7 @@ acceptance and does not reopen or expand that completed task.
   ([track-caller correction](https://github.com/wimpheling/hephaestus/pull/17))
   was separate. That earlier triage left the failure cause unresolved; full
   GCP validation remains open.
-- [ ] The latest full attempt,
+- [ ] A prior full attempt,
   [run 34638077629](https://github.com/wimpheling/hephaestus/actions/runs/34638077629),
   used source `bd777de2bd4100a43c22201219892c9b50f3273a`, the default validated
   runner image, and `europe-west1-d`. It ran from `19:18:02Z` through
@@ -141,7 +194,7 @@ acceptance and does not reopen or expand that completed task.
 - [x] Record the accepted diagnostic fixture/quarantine evidence and the
   deliberate failure, startup/runtime evidence, collection and upload, verified
   VM absence, authenticated post-delete download, checksum and credential scan
-  from runs 34593541194 and 34609688851.
+  from runs 34593541194, 34609688851 and 34645473842.
 - [ ] Run one full `gcp-cooking` attempt after diagnosis and record build/update,
   browser, golden, scanner, marker, cleanup and private-artifact evidence.
 - [ ] Update the durable runbook and Cooking CI status with the accepted run
