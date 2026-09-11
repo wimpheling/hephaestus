@@ -384,7 +384,7 @@ smoke() {
   fi
   local identity_args=(--no-service-account --no-scopes)
   local machine_type="$MACHINE_TYPE" disk_size="$DISK_SIZE" nested_args=(--enable-nested-virtualization) \
-    max_run_duration='45m'
+    max_run_duration='45m' maintenance_args=(--maintenance-policy=TERMINATE)
   local diagnostics_metadata=( )
   if [[ "$mode" == gcp-cooking || "$mode" == diagnostic ]]; then
     identity_args=(
@@ -401,6 +401,7 @@ smoke() {
     disk_size="$DIAGNOSTIC_DISK_SIZE"
     nested_args=()
     max_run_duration='10m'
+    maintenance_args=(--maintenance-policy=MIGRATE)
   fi
   # Capture the conservative VM-start anchor immediately before the create
   # request.  Startup derives both workload and collection deadlines from it.
@@ -421,7 +422,7 @@ smoke() {
     --boot-disk-size="$disk_size" --boot-disk-type=pd-balanced \
     --boot-disk-auto-delete "${nested_args[@]}" \
     --max-run-duration="$max_run_duration" --instance-termination-action=DELETE \
-    --maintenance-policy=TERMINATE "${identity_args[@]}" \
+    "${maintenance_args[@]}" "${identity_args[@]}" \
     --labels="purpose=hephaestus-kvm-smoke,run_id=${GITHUB_RUN_ID:-manual},run_attempt=${GITHUB_RUN_ATTEMPT:-1},sha=$GITHUB_SHA" \
     --metadata="$metadata_values" \
     --metadata-from-file="$metadata_file_values" || {

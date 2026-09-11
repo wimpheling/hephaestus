@@ -399,6 +399,59 @@ finish
         self.assertIn("disposable VM disappeared before a terminal marker", coordinator)
         self.assertNotIn("local deadline=$((SECONDS + 2400))", coordinator)
 
+    def test_diagnostic_create_uses_e2_compatible_maintenance_policy(self):
+        with tempfile.TemporaryDirectory(prefix="heph-gcp-create-argv-") as directory:
+            root = Path(directory)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            state = root / "created"
+            args_file = root / "create.args"
+            fake_bin.joinpath("gcloud").write_text(
+                "#!/usr/bin/env bash\nset -Eeuo pipefail\n"
+                "if [[ \"$1 $2 $3\" == \"compute regions describe\" ]]; then\n"
+                "  printf '{\"quotas\":[{\"metric\":\"INSTANCES\",\"limit\":24,\"usage\":0}]}\\n'; exit 0\n"
+                "fi\n"
+                "if [[ \"$1 $2 $3\" == \"compute instances create\" ]]; then\n"
+                "  printf '%q ' \"$@\" >\"$GCP_FAKE_ARGS\"; touch \"$GCP_FAKE_STATE\"; exit 0\n"
+                "fi\n"
+                "if [[ \"$1 $2 $3\" == \"compute instances get-serial-port-output\" ]]; then\n"
+                "  printf '%s\\n' 'HEPHAESTUS_GCP_DIAGNOSTIC: TEST-FAIL expected=true phase=diagnostic-synthetic exit=42'\n"
+                "  printf '%s\\n' 'HEPHAESTUS_GCP_DIAGNOSTIC: DIAGNOSTICS PASS test_result=expected-failure'\n"
+                "  exit 0\n"
+                "fi\n"
+                "if [[ \"$1 $2 $3\" == \"compute instances describe\" ]]; then\n"
+                "  if [[ -f \"$GCP_FAKE_STATE\" ]]; then\n"
+                "    printf '{\"labels\":{\"purpose\":\"hephaestus-kvm-smoke\",\"run_id\":\"%s\",\"run_attempt\":\"1\",\"sha\":\"%s\"}}\\n' \"$GITHUB_RUN_ID\" \"$GITHUB_SHA\"; exit 0\n"
+                "  fi\n"
+                "  printf \"The resource 'instances/heph-kvm-smoke-%s-1' was not found\\n\" \"$GITHUB_RUN_ID\" >&2; exit 1\n"
+                "fi\n"
+                "if [[ \"$1 $2 $3\" == \"compute instances delete\" ]]; then rm -f \"$GCP_FAKE_STATE\"; exit 0; fi\n"
+                "exit 2\n",
+                encoding="utf-8",
+            )
+            fake_bin.joinpath("gcloud").chmod(0o700)
+            env = os.environ | {
+                "PATH": f"{fake_bin}:{os.environ['PATH']}",
+                "GCP_FAKE_STATE": str(state),
+                "GCP_FAKE_ARGS": str(args_file),
+                "GITHUB_RUN_ID": "34600000001",
+                "GITHUB_RUN_ATTEMPT": "1",
+                "GITHUB_SHA": "b" * 40,
+                "GCP_ZONE": "europe-west1-d",
+            }
+            result = subprocess.run(
+                ["bash", str(ROOT / "gcp-kvm-smoke.sh"), "diagnostic"],
+                env=env, text=True, capture_output=True, check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            create_args = args_file.read_text(encoding="utf-8")
+            self.assertIn("--machine-type=e2-small", create_args)
+            self.assertIn("--maintenance-policy=MIGRATE", create_args)
+            self.assertIn("--max-run-duration=10m", create_args)
+            self.assertIn("--boot-disk-size=20GB", create_args)
+            self.assertNotIn("--maintenance-policy=TERMINATE", create_args)
+            self.assertNotIn("--enable-nested-virtualization", create_args)
+
     def test_real_finish_collects_and_uploads_successful_workload(self):
         result, root = self._run_real_finish("gcp-cooking")
         self.addCleanup(shutil.rmtree, root, True)
