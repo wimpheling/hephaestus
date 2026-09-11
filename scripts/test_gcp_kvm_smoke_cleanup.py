@@ -62,6 +62,10 @@ class GcpKvmSmokeCleanupTests(unittest.TestCase):
             [
                 "HEPH_GCP_KVM_STARTUP event=phase-start phase=diagnostic-bootstrap revision=" + "a" * 40,
                 "gcp-kvm-startup: custom runner image Node executable cannot run as forge",
+                "thread 'cooking::smoke' panicked at crates/foo/src/lib.rs:42:7: Permission denied",
+                "error: Permission denied",
+                "test cooking::smoke ... FAILED",
+                "/opt/hephaestus/scripts/gcp-kvm-startup.sh: line 417: DIAGNOSTICS_OBJECT: unbound variable",
                 f"fixture token={secret}",
                 *[f"ordinary boot line {index}" for index in range(100)],
             "HEPHAESTUS_GCP_DIAGNOSTIC: DIAGNOSTICS FAIL test_result=failed",
@@ -115,8 +119,85 @@ class GcpKvmSmokeCleanupTests(unittest.TestCase):
         )
         self.assertIn("HEPHAESTUS_GCP_DIAGNOSTIC: DIAGNOSTICS FAIL test_result=failed", result.stderr)
         self.assertIn("HEPH_GCP_KVM_STARTUP event=phase-start phase=diagnostic-bootstrap", result.stderr)
+        self.assertIn("HEPH_GCP_TEST test=rust-panic location=crates/foo/src/lib.rs:42:7", result.stderr)
+        self.assertIn("HEPH_GCP_RUNTIME error=permission-denied errno=EACCES", result.stderr)
+        self.assertIn("HEPH_GCP_TEST test=cooking::smoke status=failed", result.stderr)
+        self.assertIn(
+            "HEPH_GCP_SHELL error=unbound-variable source=gcp-kvm-startup.sh line=417 variable=DIAGNOSTICS_OBJECT",
+            result.stderr,
+        )
         self.assertNotIn(secret, result.stdout + result.stderr)
         self.assertNotIn("ordinary boot line 99", result.stderr)
+
+    def test_smoke_create_attaches_private_diagnostics_identity_and_metadata(self) -> None:
+        run_id = "34599999997"
+        name = f"heph-kvm-smoke-{run_id}-1"
+        serial = "HEPHAESTUS_GCP_KVM_SMOKE: FAIL phase=real-libkrun-smoke exit=1 revision=" + "a" * 40
+        with tempfile.TemporaryDirectory(prefix="heph-gcp-smoke-metadata-") as raw:
+            root = Path(raw)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            args_log = root / "gcloud-args.log"
+            fake_gcloud = fake_bin / "gcloud"
+            fake_gcloud.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -eu\n"
+                "printf '%s\\n' \"$*\" >>\"${GCP_ARGS_LOG}\"\n"
+                "case \" $* \" in\n"
+                "  *' compute regions describe '*) printf '%s\\n' '{\"quotas\":[{\"metric\":\"INSTANCES\",\"limit\":\"2\",\"usage\":\"0\"},{\"metric\":\"N2_CPUS\",\"limit\":\"8\",\"usage\":\"0\"}]}' ;;\n"
+                "  *' instances describe '*) printf \"The resource 'projects/hephaestus-508000/zones/europe-west1-d/instances/"
+                f"{name}' was not found\\n\" >&2; exit 1 ;;\n"
+                "  *' instances create '*) exit 0 ;;\n"
+                "  *' get-serial-port-output '*) printf '%s\\n' \"${GCP_FAKE_SERIAL}\" ;;\n"
+                "  *) exit 2 ;;\n"
+                "esac\n",
+                encoding="utf-8",
+            )
+            fake_gcloud.chmod(0o700)
+            environment = os.environ.copy()
+            environment.update(
+                {
+                    "PATH": f"{fake_bin}:{environment['PATH']}",
+                    "GCP_ARGS_LOG": str(args_log),
+                    "GITHUB_RUN_ID": run_id,
+                    "GITHUB_RUN_ATTEMPT": "1",
+                    "GITHUB_SHA": "a" * 40,
+                    "GCP_ZONE": "europe-west1-d",
+                    "GCP_FAKE_SERIAL": serial,
+                }
+            )
+            result = subprocess.run(
+                [str(SMOKE), "smoke"],
+                cwd=ROOT.parent,
+                env=environment,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            create_args = args_log.read_text(encoding="utf-8")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "--service-account=hephaestus-cooking-runtime@hephaestus-508000.iam.gserviceaccount.com",
+            create_args,
+        )
+        self.assertIn("--scopes=storage-rw", create_args)
+        self.assertIn("diagnostics-bucket=hephaestus-508000-cooking-diagnostics", create_args)
+        self.assertIn(
+            f"diagnostics-object=cooking/runs/{run_id}/1/{'a' * 40}.tar.gz",
+            create_args,
+        )
+        self.assertIn("diagnostics-collector-script=", create_args)
+        self.assertIn("diagnostics-scanner-script=", create_args)
+
+    def test_workflow_downloads_and_retains_smoke_diagnostics_after_cleanup(self) -> None:
+        workflow = (ROOT.parent / ".github" / "workflows" / "cooking-e2e.yml").read_text(encoding="utf-8")
+        self.assertGreaterEqual(workflow.count("inputs.cloud_mode == 'smoke'"), 3)
+        self.assertIn("GCP_DIAGNOSTICS_ARCHIVE: ${{ runner.temp }}/gcp-diagnostics.tar.gz", workflow)
+        self.assertIn("GCP_DIAGNOSTICS_STATUS: ${{ runner.temp }}/gcp-diagnostics-status.json", workflow)
+        self.assertIn("name: Download and scan private diagnostics after VM deletion", workflow)
+        self.assertIn("name: Retain safe diagnostics manifest", workflow)
 
 
 if __name__ == "__main__":

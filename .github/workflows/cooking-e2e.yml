@@ -95,14 +95,14 @@ jobs:
           GCP_ZONE: ${{ inputs.gcp_zone || 'europe-west1-b' }}
         run: bash scripts/gcp-kvm-smoke.sh cleanup
       - name: Download and scan private diagnostics after VM deletion
-        if: ${{ always() && (inputs.cloud_mode == 'diagnostic' || inputs.cloud_mode == 'gcp-cooking') }}
+        if: ${{ always() && (inputs.cloud_mode == 'diagnostic' || inputs.cloud_mode == 'smoke' || inputs.cloud_mode == 'gcp-cooking') }}
         env:
           GCP_ZONE: ${{ inputs.gcp_zone || 'europe-west1-b' }}
           GCP_DIAGNOSTICS_ARCHIVE: ${{ runner.temp }}/gcp-diagnostics.tar.gz
           GCP_DIAGNOSTICS_STATUS: ${{ runner.temp }}/gcp-diagnostics-status.json
         run: bash scripts/gcp-kvm-smoke.sh download-diagnostics
       - name: Retain safe diagnostics manifest
-        if: ${{ always() && (inputs.cloud_mode == 'diagnostic' || inputs.cloud_mode == 'gcp-cooking') }}
+        if: ${{ always() && (inputs.cloud_mode == 'diagnostic' || inputs.cloud_mode == 'smoke' || inputs.cloud_mode == 'gcp-cooking') }}
         uses: actions/upload-artifact@v4
         with:
           name: gcp-diagnostics-manifest-${{ github.run_id }}-${{ github.run_attempt }}

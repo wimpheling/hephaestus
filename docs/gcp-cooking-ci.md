@@ -18,7 +18,7 @@ settings are:
 | `preflight` | none | reads regional `INSTANCES`; also `N2_CPUS` for a full run | GitHub OIDC CI identity |
 | `cache-preflight` | none | verifies cache name, size, MD5 and generation | GitHub OIDC CI identity |
 | `diagnostic` | Ubuntu 24.04 `e2-small`, 20 GB `pd-balanced` | no nested KVM; auto-delete disk; 10-minute provider `DELETE` lifetime | runtime service account, `storage-rw` scope |
-| `smoke` | Ubuntu 24.04 `n2-standard-8`, 150 GB `pd-balanced` | nested KVM; auto-delete disk; 45-minute provider `DELETE` lifetime | no service account and no scopes |
+| `smoke` | Ubuntu 24.04 `n2-standard-8`, 150 GB `pd-balanced` | nested KVM; auto-delete disk; 45-minute provider `DELETE` lifetime | runtime service account, `storage-rw` scope for private diagnostics/cache |
 | `gcp-cooking` | Ubuntu 24.04 `n2-standard-8`, 150 GB `pd-balanced` | nested KVM; auto-delete disk; 45-minute provider `DELETE` lifetime | runtime service account, `storage-rw` scope |
 | `image-build` (planned) | disposable SA-less `n2-standard-8` builder | versioned source disk; image capture after stop; explicit cleanup | no service account and no scopes |
 | `cooking` | prepared self-hosted `heph-kvm` runner | 30-minute job; local fixture timeout is 1,500 seconds | runner environment, outside GCP |
@@ -29,6 +29,14 @@ each VM with the workflow run, attempt and SHA, checks ownership before
 cleanup, and independently describes the exact VM after a delete response.
 The provider lifetime is a backstop; cleanup must still run in the workflow
 and report verified absence.
+
+Smoke and `gcp-cooking` use the existing runtime service account only for the
+private cache and diagnostics bucket permissions inherited from its bucket
+roles. Both paths collect and upload private diagnostics, verify VM deletion,
+download and scan the bundle afterward, and retain only the one-day safe
+status artifact. The image builder remains SA-less. Diagnostics capture the
+actual systemd unit log and bounded journal fields; they do not fabricate
+Cooking lineage records.
 
 The project keeps the existing EUR 10 monthly project-scoped budget with
 50%, 80% and 100% actual-spend alert thresholds. Budget notifications are
@@ -88,7 +96,7 @@ image selection remains pending live candidate validation. A custom image in
 ```sh
 gh workflow run cooking-e2e.yml --repo wimpheling/hephaestus --ref main \
   -f cloud_mode=diagnostic -f gcp_zone=europe-west1-d \
-  -f runner_image=hephaestus-runner-61d34f3bbda2b9cd6c7967249b540595
+  -f runner_image=hephaestus-runner-925f650c449e8679825f522d8cef52de
 gh workflow run cooking-e2e.yml --repo wimpheling/hephaestus --ref main \
   -f cloud_mode=smoke -f gcp_zone=europe-west1-d \
   -f runner_image=hephaestus-runner-<manifest-prefix>
@@ -123,16 +131,26 @@ Failed-candidate deletion and recovery by a fresh workflow cleanup step remain
 planned acceptance checks until their focused tests pass. No image is
 currently claimed as live or approved for `gcp-cooking`.
 
-Build run [34601825193](https://github.com/wimpheling/hephaestus/actions/runs/34601825193)
-at commit `15960cdfcfe176e4dc32809b10e7b8eee31b2ada` completed in about
-11 minutes. It produced the READY candidate
-`hephaestus-runner-61d34f3bbda2b9cd6c7967249b540595`; the full manifest SHA is
-`61d34f3bbda2b9cd6c7967249b54059506327db1820aa3a6ae749f500eaf3128`. The
-builder, source disk and final cleanup were verified deleted at 13:09:50Z,
-13:11:09Z and 13:11:17Z. The local log is
-`/tmp/heph-image-build-34601825193.log`. The candidate is not promoted; the
-next check is the custom diagnostic dispatch above, while KVM smoke and full
-`gcp-cooking` remain pending.
+Build run [34608196400](https://github.com/wimpheling/hephaestus/actions/runs/34608196400)
+at source commit `aa38a0211d8d86264c337b88e1f0081252f3b9fa` completed and
+verified builder VM and source-disk deletion at 14:20:20Z. It produced the
+READY candidate `hephaestus-runner-925f650c449e8679825f522d8cef52de`; the
+full manifest SHA is
+`925f650c449e8679825f522d8cef52dee0f0b9495c00d21dd19ff337a863ae5b`.
+
+Custom-image diagnostic [run 34609688851](https://github.com/wimpheling/hephaestus/actions/runs/34609688851)
+at commit `d458f5a618e27ea7558c45ac7bca31e0e285ae1c` passed from 14:22:03Z to
+14:26:07Z (4m04). It passed image/readiness checks before the expected fixture
+failure, classified the partial `runtime-log` as credential-scan-rejected,
+verified VM absence before the private post-delete download, and passed the
+archive scan. The object was
+`cooking/runs/34609688851/1/d458f5a618e27ea7558c45ac7bca31e0e285ae1c.tar.gz`
+with SHA-256
+`ed2c9de4d5317a59eb0e5cc486449ad0be643ed08feb86adb62536801bda3136`.
+The candidate's custom diagnostic proof remains valid, but a startup-hash
+change means a fresh image build is pending before promotion. Real KVM smoke
+dispatch remains pending, and the default image variable is still not
+configured.
 
 ### Keyless identities and bucket access
 
@@ -171,9 +189,9 @@ The runtime identity is
 `hephaestus-cooking-runtime@hephaestus-508000.iam.gserviceaccount.com`.
 It has bucket-scoped `roles/storage.objectViewer` on the cache bucket and
 bucket-scoped `roles/storage.objectCreator` on the diagnostics bucket. The
-runtime VM receives the `storage-rw` Compute access scope because it must read
-the private cache and upload one unique diagnostics object. Smoke receives no
-identity or scope.
+diagnostic, smoke and GCP Cooking VMs receive the `storage-rw` Compute access
+scope because they read the private cache where needed and upload one unique
+diagnostics object. The scope is used only with those bucket-scoped roles.
 
 | Bucket | Configuration | Runtime grant | CI grant |
 | --- | --- | --- | --- |
@@ -280,6 +298,14 @@ passed. The object was
 `5b4f25d8e32533f25a5f88217483b3c8ce84649fdacf6f18aa895f0f328717f5`). The
 safe status artifact is
 `/tmp/heph-diagnostic-34593541194-artifact-2/gcp-diagnostics-status.json`.
+
+The latest custom-image smoke [run 34610546780](https://github.com/wimpheling/hephaestus/actions/runs/34610546780)
+failed after 5m31s at `real-libkrun-smoke`; all prebuilt installers were
+skipped, and VM absence was verified. Its final report exposed cold-only
+revision variables. Source review found and fixed a deterministic prebuilt
+instrumentation defect related to those variables, but the live stderr does
+not establish that defect as this run's cause. No rerun has passed, so real
+KVM smoke remains pending.
 
 The full `gcp-cooking` pipeline remains **pending live validation**. A
 successful diagnostic test failure is acceptable only when its diagnostics

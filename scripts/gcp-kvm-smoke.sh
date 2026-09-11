@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Read the regional quota or create one disposable nested-KVM smoke VM.
-# This script never attaches a service account and never accepts credentials.
+# Smoke and Cooking modes use only the reviewed runtime identity for private
+# diagnostics; preflight and image operations remain credential-free.
 set -Eeuo pipefail
 
 readonly PROJECT_ID="hephaestus-508000"
@@ -411,11 +412,26 @@ collector = importlib.util.module_from_spec(collector_spec)
 collector_spec.loader.exec_module(collector)
 
 prefix = re.compile(r"^\[[^]]+\] google_metadata_script_runner\[\d+\]:\s*")
-safe_key = re.compile(r"^(?:event|phase|revision|exit|expected|test_result|status|error|stage|terminal|state|result|code)$")
+safe_key = re.compile(r"^(?:event|phase|revision|exit|expected|test_result|status|error|stage|terminal|state|result|code|test|location|errno)$")
 safe_value = re.compile(r"^[A-Za-z0-9._:/=-]+$")
 safe_head = re.compile(r"^HE(?:PH|PHAESTUS)_[A-Z0-9_-]+:?$")
 interesting_keys = {"event", "phase", "terminal", "error", "stage", "status", "state", "result"}
 interesting_words = {"ERROR", "FAIL", "FAILED", "TERMINAL"}
+rust_panic = re.compile(r"^thread '[^']{1,96}' panicked at (?P<location>[A-Za-z0-9_./:-]+:\d+(?::\d+)?)(?:$|:)")
+rust_test_failure = re.compile(r"^test (?P<test>[A-Za-z0-9_./:-]+) \.\.\. FAILED$")
+unbound_variable = re.compile(
+    r"^(?:[A-Za-z0-9._/-]+/)?(?P<source>[A-Za-z0-9._-]+): line (?P<line>[0-9]+): "
+    r"(?:(?P<variable>[A-Za-z_][A-Za-z0-9_]*): )?unbound variable$"
+)
+errno_markers = (
+    ("Permission denied", "EACCES", "permission-denied"),
+    ("Operation not permitted", "EPERM", "operation-not-permitted"),
+    ("No such file or directory", "ENOENT", "not-found"),
+    ("Invalid argument", "EINVAL", "invalid-argument"),
+    ("Connection refused", "ECONNREFUSED", "connection-refused"),
+    ("Connection reset by peer", "ECONNRESET", "connection-reset"),
+    ("Address already in use", "EADDRINUSE", "address-in-use"),
+)
 
 
 def normalize(raw: str) -> str:
@@ -430,10 +446,30 @@ def project(raw: str) -> str | None:
     readiness = collector.classify_readiness_error(line)
     if readiness is not None:
         return readiness
-    if not line.startswith(("HEPH_", "HEPHAESTUS_")):
-        return None
     encoded = line.encode("utf-8", errors="surrogateescape")
     if any(pattern in encoded for pattern in scanner.STREAM_PATTERNS):
+        return None
+    panic = rust_panic.match(line)
+    if panic is not None:
+        return f"HEPH_GCP_TEST test=rust-panic location={panic.group('location')}"
+    test_failure = rust_test_failure.fullmatch(line)
+    if test_failure is not None:
+        return f"HEPH_GCP_TEST test={test_failure.group('test')} status=failed"
+    unbound = unbound_variable.fullmatch(line)
+    if unbound is not None:
+        fields = [
+            "HEPH_GCP_SHELL",
+            "error=unbound-variable",
+            f"source={unbound.group('source')}",
+            f"line={unbound.group('line')}",
+        ]
+        if unbound.group("variable") is not None:
+            fields.append(f"variable={unbound.group('variable')}")
+        return " ".join(fields)
+    for phrase, errno, error_class in errno_markers:
+        if phrase in line:
+            return f"HEPH_GCP_RUNTIME error={error_class} errno={errno}"
+    if not line.startswith(("HEPH_", "HEPHAESTUS_")):
         return None
     head, separator, body = line.partition(" ")
     if not separator or not safe_head.fullmatch(head):
@@ -566,7 +602,7 @@ smoke() {
   esac
   [[ -f "$STARTUP_SCRIPT" && ! -L "$STARTUP_SCRIPT" ]] || die "startup script is unavailable or symlinked: $STARTUP_SCRIPT"
   [[ -f "$PASST_PREFLIGHT_SCRIPT" && ! -L "$PASST_PREFLIGHT_SCRIPT" ]] || die "passthrough preflight script is unavailable or symlinked: $PASST_PREFLIGHT_SCRIPT"
-  if [[ "$mode" == gcp-cooking || "$mode" == diagnostic ]]; then
+  if [[ "$mode" == smoke || "$mode" == gcp-cooking || "$mode" == diagnostic ]]; then
     [[ -f "$DIAGNOSTICS_COLLECTOR_SCRIPT" && ! -L "$DIAGNOSTICS_COLLECTOR_SCRIPT" ]] ||
       die "diagnostics collector is unavailable or symlinked: $DIAGNOSTICS_COLLECTOR_SCRIPT"
     [[ -f "$DIAGNOSTICS_SCANNER_SCRIPT" && ! -L "$DIAGNOSTICS_SCANNER_SCRIPT" ]] ||
@@ -665,7 +701,7 @@ PY
   local machine_type="$MACHINE_TYPE" disk_size="$DISK_SIZE" nested_args=(--enable-nested-virtualization) \
     max_run_duration='45m' maintenance_args=(--maintenance-policy=TERMINATE)
   local diagnostics_metadata=( )
-  if [[ "$mode" == gcp-cooking || "$mode" == diagnostic ]]; then
+  if [[ "$mode" == smoke || "$mode" == gcp-cooking || "$mode" == diagnostic ]]; then
     identity_args=(
       --service-account="hephaestus-cooking-runtime@${PROJECT_ID}.iam.gserviceaccount.com"
       --scopes=storage-rw
@@ -694,7 +730,7 @@ PY
   for metadata_value_item in "${diagnostics_metadata[@]}"; do
     metadata_values+=",${metadata_value_item}"
   done
-  if [[ "$mode" == gcp-cooking || "$mode" == diagnostic ]]; then
+  if [[ "$mode" == smoke || "$mode" == gcp-cooking || "$mode" == diagnostic ]]; then
     metadata_file_values+=",diagnostics-collector-script=$DIAGNOSTICS_COLLECTOR_SCRIPT,diagnostics-scanner-script=$DIAGNOSTICS_SCANNER_SCRIPT"
   fi
   gcloud compute instances create "$smoke_name" \

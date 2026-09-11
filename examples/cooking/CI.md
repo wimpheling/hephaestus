@@ -53,11 +53,19 @@ The same workflow has a manual `cloud_mode` dispatch on `ubuntu-latest`. The
 the `europe-west1` `N2_CPUS` and `INSTANCES` quotas. It reports available quota
 but cannot prove zonal capacity. The `smoke` mode creates one Ubuntu 24.04
 `n2-standard-8` VM in `europe-west1-b` with nested virtualization, a 150 GB
-balanced persistent boot disk, an ephemeral external address, no service
-account or scopes, and a provider-enforced 45-minute `DELETE` lifetime. The
-disk is configured for automatic deletion. The VM receives only the exact
-workflow commit SHA and the checked-in startup script through metadata; no
-credentials or GitHub runner registration token is passed to it.
+balanced persistent boot disk, an ephemeral external address, the existing
+runtime service account with `storage-rw` scope, and a provider-enforced
+45-minute `DELETE` lifetime. That identity is used only for the private cache
+and diagnostics bucket permissions inherited from its bucket roles. The disk
+is configured for automatic deletion. The VM receives only the exact workflow
+commit SHA and the checked-in startup script through metadata; no credentials
+or GitHub runner registration token is passed to it.
+
+Smoke always collects and uploads private diagnostics, verifies VM absence,
+then performs the authenticated post-delete download and credential scan. The
+safe status artifact is retained for one day. It records the actual systemd
+unit log and bounded journal fields; it does not fabricate Cooking lineage
+records. The image builder remains SA-less.
 
 Ubuntu Noble's packaged `passt` predates the DHCP broadcast behavior required
 by libkrun's minimal DHCP client. Before AppArmor setup and passt preflight, startup
@@ -180,7 +188,7 @@ diagnostic:
 ```sh
 gh workflow run cooking-e2e.yml --repo wimpheling/hephaestus --ref main \
   -f cloud_mode=diagnostic -f gcp_zone=europe-west1-d \
-  -f runner_image=hephaestus-runner-61d34f3bbda2b9cd6c7967249b540595
+  -f runner_image=hephaestus-runner-925f650c449e8679825f522d8cef52de
 ```
 
 To force the stock image, even when an explicit image or repository default is
@@ -217,17 +225,24 @@ fresh-workflow cleanup and failed-candidate recovery remain planned acceptance
 checks until their focused tests pass. Retain one current image and one
 rollback image; custom image storage is billable.
 
-Build run [34601825193](https://github.com/wimpheling/hephaestus/actions/runs/34601825193)
-at commit `15960cdfcfe176e4dc32809b10e7b8eee31b2ada` completed in about
-11 minutes and produced READY candidate image
-`hephaestus-runner-61d34f3bbda2b9cd6c7967249b540595`. Its full manifest SHA is
-`61d34f3bbda2b9cd6c7967249b54059506327db1820aa3a6ae749f500eaf3128`.
-The builder, source disk and final cleanup were verified deleted at
-13:09:50Z, 13:11:09Z and 13:11:17Z; the local log is
-`/tmp/heph-image-build-34601825193.log`. The candidate is not promoted or
-approved for full `gcp-cooking`; KVM and full Cooking remain pending.
+Build run [34608196400](https://github.com/wimpheling/hephaestus/actions/runs/34608196400)
+at source commit `aa38a0211d8d86264c337b88e1f0081252f3b9fa` completed and
+verified builder VM and source-disk deletion at 14:20:20Z. It produced READY
+candidate image `hephaestus-runner-925f650c449e8679825f522d8cef52de`. Its full
+manifest SHA is
+`925f650c449e8679825f522d8cef52dee0f0b9495c00d21dd19ff337a863ae5b`.
 
-The image mode remains pre-release pending the custom diagnostic result.
+Custom-image diagnostic [run 34609688851](https://github.com/wimpheling/hephaestus/actions/runs/34609688851)
+at commit `d458f5a618e27ea7558c45ac7bca31e0e285ae1c` passed from 14:22:03Z to
+14:26:07Z (4m04). It passed image/readiness checks before the expected fixture
+failure, classified the partial `runtime-log` as credential-scan-rejected,
+verified VM absence before the private post-delete download, and passed the
+archive scan. The object was
+`cooking/runs/34609688851/1/d458f5a618e27ea7558c45ac7bca31e0e285ae1c.tar.gz`
+with SHA-256
+`ed2c9de4d5317a59eb0e5cc486449ad0be643ed08feb86adb62536801bda3136`.
+The candidate is not promoted; real KVM smoke dispatch remains pending, and
+the default image variable is still not configured.
 
 The GCP Cooking path reports a dedicated `HEPHAESTUS_GCP_COOKING` marker and
 uses the same private collector/upload/download path. The GitHub workflow
@@ -271,6 +286,13 @@ gateway, and runtime/cgroup cleanup; the serial output reported
 `HEPHAESTUS_GCP_KVM_SMOKE: PASS`. The VM was independently confirmed absent
 after cleanup. The retained [serial artifact](https://github.com/wimpheling/hephaestus/actions/runs/34525055454/artifacts/10171404124)
 is the evidence record.
+
+The latest custom-image smoke [run 34610546780](https://github.com/wimpheling/hephaestus/actions/runs/34610546780)
+failed after 5m31s at `real-libkrun-smoke`; all prebuilt installers were
+skipped, and VM absence was verified. Its final report exposed cold-only
+revision variables. Source review found and fixed a deterministic prebuilt
+instrumentation defect related to those variables, but the live stderr does
+not establish that defect as this run's cause. No rerun has passed yet.
 
 This verifies the disposable KVM smoke path only. The cache gate is now
 verified: the private checksum-pinned object is uploaded and readable by CI.

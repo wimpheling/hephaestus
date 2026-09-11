@@ -7,6 +7,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import tarfile
 import unittest
 from pathlib import Path
 
@@ -371,6 +372,84 @@ finish
             self.assertIn("HEPHAESTUS_GCP_DIAGNOSTIC: DIAGNOSTICS FAIL test_result=failed", result.stdout)
             self.assertTrue((work / "tmp/cooking-diagnostics.tar.gz").is_file())
 
+    def test_smoke_finish_collects_unit_output_without_cooking_lineage(self) -> None:
+        startup = SCRIPT.with_name("gcp-kvm-startup.sh")
+        collector_source = SCRIPT.with_name("collect-cooking-diagnostics.py")
+        scanner_source = SCRIPT.with_name("check-browser-evidence.py")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            work = root / "work"
+            metadata_root = root / "metadata"
+            metadata_root.mkdir(parents=True)
+            (metadata_root / "collect-cooking-diagnostics.py").write_bytes(collector_source.read_bytes())
+            (metadata_root / "check-browser-evidence.py").write_bytes(scanner_source.read_bytes())
+            log_file = root / "startup.log"
+            log_file.write_text("HEPH_GCP_KVM_STARTUP event=phase-start phase=real-libkrun-smoke revision=" + "a" * 40 + "\n", encoding="utf-8")
+            smoke_log = work / "evidence/integration/smoke-unit.log"
+            smoke_log.parent.mkdir(parents=True)
+            smoke_log.write_text(
+                "HEPH_GCP_KVM_BUILD_ERROR phase=real-libkrun-smoke status=1 log=/tmp/smoke.log\n"
+                "HEPH_GCP_KVM_FIRST_ERROR error_class=guest-start-failed\n",
+                encoding="utf-8",
+            )
+            fake_curl = root / "curl"
+            fake_curl.write_text(
+                "#!/bin/sh\n"
+                "case \"$*\" in\n"
+                "  *instance/service-accounts/default/token*) printf '%s' '{\"access_token\":\"test-token\"}' ;;\n"
+                "  *storage.googleapis.com/upload*) exit 0 ;;\n"
+                "  *) exit 2 ;;\n"
+                "esac\n",
+                encoding="utf-8",
+            )
+            fake_curl.chmod(0o755)
+            command = r'''
+source "$1"
+trap - EXIT
+test_mode=smoke
+phase=real-libkrun-smoke
+revision=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+diagnostics_enabled=true
+diagnostics_object_metadata='cooking/runs/1/1/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.tar.gz'
+diagnostics_journal_unit=heph-gcp-kvm-smoke-test
+smoke_output_log="$2"
+vm_start_epoch=$(date +%s)
+collection_deadline_epoch=$((vm_start_epoch + 60))
+set +e
+(exit 7)
+finish
+'''
+            env = {
+                **os.environ,
+                "HEPH_GCP_STARTUP_LIBRARY": "1",
+                "HEPH_GCP_WORK_ROOT": str(work),
+                "HEPH_GCP_LOG_FILE": str(log_file),
+                "HEPH_GCP_DIAGNOSTICS_METADATA_ROOT": str(metadata_root),
+                "PATH": f"{root}:{os.environ['PATH']}",
+            }
+            result = subprocess.run(
+                [
+                    "bash", "-Eeuo", "pipefail", "-c", command, "smoke-finish-test",
+                    str(startup), str(smoke_log),
+                ],
+                env=env,
+                text=True,
+                capture_output=True,
+            )
+            self.assertEqual(result.returncode, 7, result.stdout + result.stderr)
+            self.assertIn("event=upload status=pass", result.stdout)
+            self.assertIn(
+                "HEPHAESTUS_GCP_KVM_SMOKE: FAIL phase=real-libkrun-smoke exit=7 revision=",
+                result.stdout,
+            )
+            archive = work / "tmp/cooking-diagnostics.tar.gz"
+            self.assertTrue(archive.is_file())
+            with tarfile.open(archive, "r:gz") as bundle:
+                names = bundle.getnames()
+            self.assertIn("cooking-diagnostics/sources/runtime-log", names)
+            self.assertIn("cooking-diagnostics/sources/host-journal", names)
+            self.assertNotIn("cooking-diagnostics/sources/lineage", names)
+
     def test_cooking_consumes_verified_browser_and_host_tools(self) -> None:
         cooking = SCRIPT.with_name("gcp-cooking-run.sh").read_text(encoding="utf-8")
         self.assertIn('runner_image_verified="${HEPH_GCP_RUNNER_IMAGE_VERIFIED:-false}"', cooking)
@@ -378,6 +457,35 @@ finish
         self.assertIn("verified runner image Chromium executable is missing", cooking)
         self.assertIn("npx playwright install-deps chromium", cooking)
         self.assertIn("if [[ \"$runner_image_verified\" == true ]]; then", cooking)
+
+    def test_smoke_timeout_capture_and_prebuilt_evidence_contract(self) -> None:
+        startup = SCRIPT.with_name("gcp-kvm-startup.sh")
+        source = startup.read_text(encoding="utf-8")
+        self.assertIn('diagnostics_journal_unit="$smoke_unit"', source)
+        self.assertIn('--property=TimeoutStartSec="${smoke_remaining}s"', source)
+        self.assertIn('--property=TimeoutStopSec=15s', source)
+        self.assertIn('pipeline_status=("${PIPESTATUS[@]}")', source)
+        self.assertIn('stop_smoke_unit || true', source)
+        with tempfile.TemporaryDirectory():
+            command = r'''
+source "$1"
+trap - EXIT
+runner_image_ready=true
+revision=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+smoke_log_dir=/tmp/heph-smoke
+runner_image_libkrun_revision=9932c4b59d8f891e60c6aba20d22ebb99ceaa8e2
+runner_image_libkrunfw_tag=v5.5.0
+emit_kvm_evidence
+'''
+            result = subprocess.run(
+                ["bash", "-Eeuo", "pipefail", "-c", command, "prebuilt-evidence-test", str(startup)],
+                env={**os.environ, "HEPH_GCP_STARTUP_LIBRARY": "1"},
+                text=True,
+                capture_output=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("libkrun_revision=9932c4b59d8f891e60c6aba20d22ebb99ceaa8e2", result.stdout)
+            self.assertIn("libkrunfw_tag=v5.5.0", result.stdout)
 
     def test_manifest_writer_generates_verifiable_fingerprint(self) -> None:
         environment = {

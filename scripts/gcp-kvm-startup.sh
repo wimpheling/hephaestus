@@ -52,15 +52,20 @@ collection_deadline_epoch=0
 test_mode='smoke'
 diagnostics_collection_status=0
 diagnostics_uploaded=false
+diagnostics_enabled=false
 diagnostics_object_metadata=''
+diagnostics_journal_unit=''
 diagnostic_timeout_log=''
 diagnostic_probe_completed=false
 diagnostic_quarantine_validated=false
 diagnostics_token_json=''
 diagnostics_header_file=''
+smoke_output_log=''
 runner_image_manifest_sha=''
 runner_image_browser_lock_sha=''
 runner_image_browser_version=''
+runner_image_libkrun_revision=''
+runner_image_libkrunfw_tag=''
 
 die() { printf 'gcp-kvm-startup: %s\n' "$*" >&2; return 1; }
 
@@ -103,7 +108,7 @@ finish() {
   if ((status != 0)) && [[ "$test_mode" == smoke ]]; then
     retain_passt_host_audit
   fi
-  if [[ "$test_mode" == gcp-cooking || "$test_mode" == diagnostic ]]; then
+  if [[ "$diagnostics_enabled" == true || "$test_mode" == diagnostic || "$test_mode" == gcp-cooking ]]; then
     set +e
     collect_diagnostics "${status}"
     diagnostics_collection_status=$?
@@ -187,7 +192,7 @@ metadata_optional_value() {
 require_command() { command -v "$1" >/dev/null 2>&1 || die "missing command: $1"; }
 
 stage_diagnostics_metadata() {
-  [[ "$test_mode" == diagnostic || "$test_mode" == gcp-cooking ]] || return 0
+  [[ "$diagnostics_enabled" == true || "$test_mode" == diagnostic || "$test_mode" == gcp-cooking ]] || return 0
   # Fetch these before image verification so finish() can collect an early
   # custom-image failure through the metadata-provided private pipeline.
   install -d -m 0700 "$diagnostics_metadata_root"
@@ -265,7 +270,14 @@ collect_diagnostics() {
     printf 'HEPH_GCP_DIAGNOSTICS source=serial status=missing\n' >>"$status_json"
     printf 'HEPH_GCP_DIAGNOSTICS source=serial status=missing\n' >"$input_root/serial.log"
   fi
-  journal_unit="heph-gcp-cooking-${HEPH_GCP_RUN_ID:-manual}"
+  journal_unit="${diagnostics_journal_unit:-}"
+  if [[ -z "$journal_unit" ]]; then
+    if [[ "$test_mode" == smoke ]]; then
+      journal_unit="heph-gcp-kvm-smoke-${HEPH_GCP_RUN_ID:-manual}"
+    else
+      journal_unit="heph-gcp-cooking-${HEPH_GCP_RUN_ID:-manual}"
+    fi
+  fi
   if command -v journalctl >/dev/null 2>&1; then
     if ! journalctl --no-pager --quiet --output=short-iso --unit="$journal_unit" --lines=200 \
       >"$input_root/host-journal.log" 2>"$input_root/host-journal.err"; then
@@ -352,7 +364,13 @@ PY
       --source "test-output=$input_root/test-output.log"
     )
   else
-    if [[ -f /var/log/hephaestus/gcp-cooking-run.log && ! -L /var/log/hephaestus/gcp-cooking-run.log ]]; then
+    if [[ "$test_mode" == smoke && -n "${smoke_output_log:-}" &&
+      -f "$smoke_output_log" && ! -L "$smoke_output_log" ]]; then
+      copy_status="$(bounded_copy_status "$smoke_output_log" runtime-log "$input_root/runtime-log")" ||
+        copy_status='HEPH_GCP_DIAGNOSTICS source=runtime-log status=unavailable'
+      printf '%s\n' "$copy_status" >>"$status_json"
+      [[ -f "$input_root/runtime-log" ]] && collector_args+=(--source "runtime-log=$input_root/runtime-log")
+    elif [[ -f /var/log/hephaestus/gcp-cooking-run.log && ! -L /var/log/hephaestus/gcp-cooking-run.log ]]; then
       copy_status="$(bounded_copy_status /var/log/hephaestus/gcp-cooking-run.log runtime-log "$input_root/runtime-log")" || copy_status='HEPH_GCP_DIAGNOSTICS source=runtime-log status=unavailable'
       printf '%s\n' "$copy_status" >>"$status_json"
       [[ -f "$input_root/runtime-log" ]] && collector_args+=(--source "runtime-log=$input_root/runtime-log")
@@ -595,6 +613,16 @@ runner_image_runtime_ready() {
     "$oras_actual" "$browser_output"
 }
 
+emit_kvm_evidence() {
+  if [[ "$runner_image_ready" == true ]]; then
+    printf 'HEPH_GCP_KVM_EVIDENCE revision=%s diagnostics=%s libkrun_revision=%s libkrunfw_tag=%s\n' \
+      "$revision" "$smoke_log_dir" "$runner_image_libkrun_revision" "$runner_image_libkrunfw_tag"
+  else
+    printf 'HEPH_GCP_KVM_EVIDENCE revision=%s diagnostics=%s libkrun_revision=%s libkrunfw_revision=%s\n' \
+      "$revision" "$smoke_log_dir" "$libkrun_revision" "$libkrunfw_revision"
+  fi
+}
+
 if [[ "${HEPH_GCP_STARTUP_LIBRARY:-0}" == 1 ]]; then
   if [[ "${HEPH_GCP_RUNNER_IMAGE_RUNTIME_TEST:-0}" == 1 ]]; then
     trial_deadline=$((SECONDS + 30))
@@ -618,6 +646,13 @@ vm_start_epoch="$(metadata_value trial-start-epoch)"
 [[ "$vm_start_epoch" =~ ^[0-9]+$ ]] || die 'trial-start-epoch metadata must be an epoch integer'
 if [[ "$test_mode" == diagnostic || "$test_mode" == gcp-cooking ]]; then
   diagnostics_object_metadata="$(metadata_value diagnostics-object)"
+  diagnostics_enabled=true
+else
+  diagnostics_object_metadata="$(metadata_optional_value diagnostics-object)"
+  if [[ -n "$diagnostics_object_metadata" ]]; then
+    diagnostics_journal_unit="$(metadata_optional_value diagnostics-journal-unit)"
+    diagnostics_enabled=true
+  fi
 fi
 stage_diagnostics_metadata
 if [[ "$test_mode" == diagnostic ]]; then
@@ -667,6 +702,21 @@ if not isinstance(item, str) or not item:
 print(item)
 PY
     }
+    manifest_pin() {
+      python3 - "$runner_image_manifest_path" "$1" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+document = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+pins = document.get("pins")
+field = sys.argv[2]
+item = pins.get(field) if isinstance(pins, dict) else None
+if not isinstance(item, str) or not item:
+    raise SystemExit(f"runner image manifest pin is missing: {field}")
+print(item)
+PY
+    }
     runner_image_manifest_sha="$(manifest_field manifest_sha256)"
     expected_manifest_sha="$(metadata_optional_value runner-image-manifest-sha256)"
     [[ "$expected_manifest_sha" =~ ^[0-9a-f]{64}$ ]] ||
@@ -685,6 +735,8 @@ PY
     [[ "$runner_image_browser_lock_sha" =~ ^[0-9a-f]{64}$ ]] ||
       die 'runner image browser lock fingerprint is invalid'
     runner_image_browser_version="$(manifest_field browser_version)"
+    runner_image_libkrun_revision="$(manifest_pin libkrun_revision)"
+    runner_image_libkrunfw_tag="$(manifest_pin libkrunfw_tag)"
     # Use the same llvm-config/tree lookup as the stock provisioning path.
     # Ubuntu's SONAME may be libclang-N.so.N, so ldconfig's unversioned
     # libclang.so pattern is insufficient.
@@ -1205,12 +1257,17 @@ else
 
 phase_start real-libkrun-smoke
 smoke_unit="heph-gcp-kvm-smoke-${GITHUB_RUN_ID:-manual}"
+diagnostics_journal_unit="$smoke_unit"
 smoke_log_dir="${evidence_root}/integration"
 install -d -m 0700 -o forge -g forge "$smoke_log_dir"
+smoke_output_log="${smoke_log_dir}/smoke-unit.log"
+smoke_remaining="$(remaining_seconds)"
+set +e
 run_with_deadline systemd-run --unit="$smoke_unit" --service-type=oneshot --wait --pipe --collect \
   --expand-environment=no \
-  --property=Delegate=yes --property=RuntimeMaxSec="$(remaining_seconds)s" \
-  --property=TimeoutStopSec=30s --property=TasksMax=infinity --property=LimitNOFILE=65536 \
+  --property=Delegate=yes --property=RuntimeMaxSec="${smoke_remaining}s" \
+  --property=TimeoutStartSec="${smoke_remaining}s" --property=TimeoutStopSec=15s \
+  --property=TasksMax=infinity --property=LimitNOFILE=65536 \
   --property=CPUAccounting=yes --property=MemoryAccounting=yes --property=TasksAccounting=yes \
   --property=IOAccounting=yes --uid="$forge_uid" --gid="$forge_gid" \
   --working-directory="$checkout_root" --setenv=HOME=/home/forge \
@@ -1248,13 +1305,47 @@ run_with_deadline systemd-run --unit="$smoke_unit" --service-type=oneshot --wait
       HEPHAESTUS_LIBKRUN_TMP_ROOT="$HEPH_GCP_SMOKE_TMP" \
       HEPHAESTUS_LIBKRUN_DIAGNOSTICS_DIR="$HEPH_GCP_SMOKE_DIAGNOSTICS" \
       "$HEPH_GCP_SMOKE_SCRIPT"
-  '
+  ' 2>&1 | tee "$smoke_output_log"
+pipeline_status=("${PIPESTATUS[@]}")
+set -e
+smoke_status="${pipeline_status[0]}"
+tee_status="${pipeline_status[1]}"
+if ((tee_status != 0)); then
+  printf 'HEPH_GCP_KVM_SMOKE output_capture=fail exit=%s path=%s\n' "$tee_status" "$smoke_output_log"
+  if ((smoke_status == 0)); then
+    smoke_status=1
+  fi
+fi
+stop_smoke_unit() {
+  local stop_status=0 kill_status=0
+  command -v systemctl >/dev/null 2>&1 || {
+    printf 'HEPH_GCP_KVM_SMOKE cleanup=fail reason=systemctl-missing\n'
+    return 1
+  }
+  if systemctl is-active --quiet "$smoke_unit"; then
+    timeout --kill-after=5s 15s systemctl stop "$smoke_unit" || stop_status=$?
+    if ((stop_status != 0)) || systemctl is-active --quiet "$smoke_unit"; then
+      timeout --kill-after=2s 5s systemctl kill --kill-who=all "$smoke_unit" || kill_status=$?
+      timeout --kill-after=5s 15s systemctl stop "$smoke_unit" || true
+    fi
+  fi
+  if systemctl is-active --quiet "$smoke_unit"; then
+    printf 'HEPH_GCP_KVM_SMOKE cleanup=fail stop=%s kill=%s\n' "$stop_status" "$kill_status"
+    return 1
+  fi
+  printf 'HEPH_GCP_KVM_SMOKE cleanup=pass stop=%s kill=%s\n' "$stop_status" "$kill_status"
+}
+if ((smoke_status != 0)); then
+  # systemd normally reaps a oneshot before --wait returns.  Explicitly stop
+  # and, if needed, kill the unit so failed clients cannot outlive collection.
+  stop_smoke_unit || true
+fi
+((smoke_status == 0)) || exit "$smoke_status"
 phase_pass
 fi
 if [[ "$test_mode" == gcp-cooking ]]; then
   printf 'HEPH_GCP_COOKING_EVIDENCE revision=%s diagnostics=%s\n' \
     "$revision" "${evidence_root}/cooking"
 else
-  printf 'HEPH_GCP_KVM_EVIDENCE revision=%s diagnostics=%s libkrun=%s libkrunfw=%s\n' \
-    "$revision" "$smoke_log_dir" "$libkrun_revision" "$libkrunfw_revision"
+  emit_kvm_evidence
 fi
