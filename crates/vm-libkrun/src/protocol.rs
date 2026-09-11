@@ -45,6 +45,10 @@ pub const GATEWAY_HANDLER_CONTRACT_V1: &str = "http.v1";
 pub const GUEST_VSOCK_PORT: u32 = 19_000;
 /// Dedicated guest-to-host secret broker port.
 pub const SECRET_BROKER_VSOCK_PORT: u32 = 19_001;
+/// Private provider-worker socket used to supervise one VM worker.
+pub(crate) const SUPERVISOR_SOCKET_NAME: &str = "supervisor.sock";
+/// Private worker socket passed to libkrun for guest control.
+pub(crate) const GUEST_CONTROL_SOCKET_NAME: &str = "guest.sock";
 /// Guest-private file populated from the authenticated runtime-authority
 /// bootstrap payload before the workload starts.
 pub const GUEST_RUNTIME_AUTHORITY_PATH: &str = "/run/hephaestus-authority/session.json";

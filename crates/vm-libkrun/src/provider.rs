@@ -2,6 +2,7 @@ use crate::{
     cgroup::Cgroup,
     config::LibkrunConfig,
     framing::{read_async, write_async},
+    protocol::SUPERVISOR_SOCKET_NAME,
     validation::{
         PROVIDER_NAME, PreparedForward, PreparedSpec, prepare_spec, validate_config, validate_id,
     },
@@ -1009,7 +1010,7 @@ impl WorkerClient {
         runtime_dir: &Path,
         cgroup: &Cgroup,
     ) -> Result<Arc<Self>, VmError> {
-        let socket_path = runtime_dir.join("supervisor.sock");
+        let socket_path = runtime_dir.join(SUPERVISOR_SOCKET_NAME);
         let listener = UnixListener::bind(&socket_path)
             .map_err(|error| provider_error("worker-listener", error))?;
         let mut command = Command::new(&config.worker_binary);

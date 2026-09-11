@@ -3,11 +3,11 @@ use crate::{
     framing::{read_sync, write_sync},
     network::{PasstProcess, WorkerNetworkError},
     protocol::{
-        GATEWAY_HANDLER_CONTRACT_LABEL, GATEWAY_HANDLER_CONTRACT_V1, GuestCommandMessage,
-        GuestLogStream, GuestMessage, GuestMount, GuestStateVolume, HostMessage,
-        MAX_LOG_CHUNK_SIZE, MAX_METRIC_LABELS, MAX_METRIC_TEXT_SIZE, MAX_PRIVATE_HTTP_BODY_BYTES,
-        MAX_PRIVATE_HTTP_HEADERS, MAX_RESULT_MESSAGE_SIZE, PROTOCOL_VERSION,
-        RUNTIME_AUTHORITY_PATH_ENV, RuntimeAuthorityMessage,
+        GATEWAY_HANDLER_CONTRACT_LABEL, GATEWAY_HANDLER_CONTRACT_V1, GUEST_CONTROL_SOCKET_NAME,
+        GuestCommandMessage, GuestLogStream, GuestMessage, GuestMount, GuestStateVolume,
+        HostMessage, MAX_LOG_CHUNK_SIZE, MAX_METRIC_LABELS, MAX_METRIC_TEXT_SIZE,
+        MAX_PRIVATE_HTTP_BODY_BYTES, MAX_PRIVATE_HTTP_HEADERS, MAX_RESULT_MESSAGE_SIZE,
+        PROTOCOL_VERSION, RUNTIME_AUTHORITY_PATH_ENV, RuntimeAuthorityMessage,
     },
     validation::{PreparedForward, PreparedSpec},
 };
@@ -254,7 +254,7 @@ impl WorkerRuntime {
         // libkrun and libkrunfw are available before provision succeeds.
         drop(Context::load(&config.libkrun_library)?);
 
-        let control_path = runtime_dir.join("guest-control.sock");
+        let control_path = runtime_dir.join(GUEST_CONTROL_SOCKET_NAME);
         let _stale_socket = fs::remove_file(&control_path);
         let control_listener = UnixListener::bind(&control_path)?;
         Ok(Self {
@@ -275,7 +275,7 @@ impl WorkerRuntime {
         let passt = PasstProcess::start(&self.config, &self.spec.network, &self.runtime_dir)
             .map_err(WireError::from)?;
         let passt_socket = passt.as_ref().map(|_| self.runtime_dir.join("passt.sock"));
-        let control_path = self.runtime_dir.join("guest-control.sock");
+        let control_path = self.runtime_dir.join(GUEST_CONTROL_SOCKET_NAME);
         let context = Context::load(&self.config.libkrun_library).map_err(WireError::from)?;
         if let Err(error) = context.configure(
             &self.spec,
@@ -784,7 +784,46 @@ mod tests {
         GuestLogStream, GuestMessage, MAX_LOG_CHUNK_SIZE, MAX_METRIC_LABELS, MAX_METRIC_TEXT_SIZE,
         PROTOCOL_VERSION, validate_authority_sequence, validate_guest_message,
     };
-    use std::collections::BTreeMap;
+    use crate::protocol::{GUEST_CONTROL_SOCKET_NAME, SUPERVISOR_SOCKET_NAME};
+    use std::{collections::BTreeMap, os::unix::net::UnixListener, path::Path};
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn internal_socket_names_fit_long_oci_vm_paths() {
+        // Keep the boundary fixture independent of a caller-provided TMPDIR:
+        // a long temporary-root prefix would hide the realistic runtime path.
+        let temporary = tempfile::tempdir_in("/tmp").expect("socket regression temporary root");
+        // Match the 40-byte runtime prefix used by the GCE runner. The
+        // `oci-builder-<uuid>` and `oci-verifier-<uuid>` IDs then reproduce
+        // the path length that made guest-control.sock exceed AF_UNIX's limit.
+        let prefix_target = 40_usize;
+        let temp_len = temporary.path().as_os_str().len();
+        let padding_len = prefix_target
+            .checked_sub(temp_len + 18)
+            .expect("temporary path must leave room for the realistic prefix");
+        let runtime_prefix = temporary
+            .path()
+            .join("x".repeat(padding_len))
+            .join(Path::new("h.EZsm0X/runtime"));
+        assert_eq!(runtime_prefix.as_os_str().len(), prefix_target);
+
+        for vm_id in [
+            "oci-builder-13d83d0a-de07-4686-96d7-458e6a15682a",
+            "oci-verifier-13d83d0a-de07-4686-96d7-458e6a15682a",
+        ] {
+            let runtime_dir = runtime_prefix.join(vm_id);
+            std::fs::create_dir_all(&runtime_dir).expect("VM runtime directory");
+            let legacy = runtime_dir.join("guest-control.sock");
+            assert!(legacy.as_os_str().len() >= 108);
+            assert!(UnixListener::bind(&legacy).is_err());
+
+            let supervisor = UnixListener::bind(runtime_dir.join(SUPERVISOR_SOCKET_NAME))
+                .expect("supervisor socket fits");
+            let guest = UnixListener::bind(runtime_dir.join(GUEST_CONTROL_SOCKET_NAME))
+                .expect("guest control socket fits");
+            drop((supervisor, guest));
+        }
+    }
 
     #[test]
     fn exit_with_code_and_signal_is_rejected() {
