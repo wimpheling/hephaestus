@@ -190,6 +190,48 @@ finish
             self.assertEqual(triage["sources"]["truncatedCount"], 1)
             self.assertEqual(triage["sources"]["unavailableCount"], 1)
 
+    def test_triage_projects_only_typed_failure_fields(self):
+        with tempfile.TemporaryDirectory(prefix="heph-gcp-triage-failure-") as directory:
+            root = Path(directory)
+            self._archive(root)
+            runtime = root / "bundle" / "sources" / "runtime-structured"
+            runtime.write_text(
+                "HEPH_GCP_TEST test=rust-panic location=examples/cooking/tests/scenario.rs:1697:28\n"
+                "HEPH_GCP_RUNTIME error_class=guest-start-failed status=failed "
+                "run_id=00000000-0000-4000-8000-000000000004\n"
+                "HEPH_GCP_KVM_BUILD_ERROR phase=real-libkrun-smoke status=1 log=/tmp/private.log\n"
+                "HEPH_GCP_RUNNER_IMAGE_READINESS tool=rust class=rust-not-runnable phase=runner-image-runtime\n"
+                '{"status":"failed","phase":"structured-smoke","exit_code":1,"exit_signal":null,"run_id":7}\n'
+                '{"phase":"successful-smoke","exit_code":0}\n'
+                '{"test_result":"failed","phase":"evidence","error":"UNKNOWN_PAYLOAD"}\n',
+                encoding="utf-8",
+            )
+            triage = TRIAGE.summarize(root / "bundle")
+            self.assertIn(
+                {
+                    "source": "runtime-structured",
+                    "test": "rust-panic",
+                    "location": "examples/cooking/tests/scenario.rs:1697:28",
+                    "correlated": False,
+                },
+                triage["failures"],
+            )
+            self.assertNotIn("UNKNOWN_PAYLOAD", json.dumps(triage["failures"]))
+            self.assertNotIn("error", triage["failures"][-1])
+            self.assertIn(
+                {"source": "runtime-structured", "exit_code": 1, "phase": "real-libkrun-smoke", "correlated": False},
+                triage["failures"],
+            )
+            self.assertIn(
+                {"source": "runtime-structured", "error_class": "rust-not-runnable", "phase": "runner-image-runtime", "test": "rust", "correlated": False},
+                triage["failures"],
+            )
+            self.assertIn(
+                {"source": "runtime-structured", "exit_code": 1, "phase": "structured-smoke", "status": "failed", "correlated": False},
+                triage["failures"],
+            )
+            self.assertNotIn("successful-smoke", json.dumps(triage["failures"]))
+
     def test_triage_caps_latest_attempts_and_rejects_unknown_fields(self):
         with tempfile.TemporaryDirectory(prefix="heph-gcp-triage-cap-") as directory:
             root = Path(directory)
@@ -284,6 +326,9 @@ finish
         cleanup: str = "absent",
         zone: str = "europe-west1-b",
         triage_failure: bool = False,
+        source_identity: tuple[str, str, str] | None = None,
+        source_api_sha: str | None = None,
+        require_source: bool = False,
     ):
         fake_bin = root / "bin"
         fake_bin.mkdir()
@@ -303,10 +348,17 @@ finish
         fake_gcloud.write_text(
             "#!/usr/bin/env bash\n"
             "set -Eeuo pipefail\n"
+            "target_run=\"${GCP_DIAGNOSTICS_SOURCE_RUN_ID:-${GITHUB_RUN_ID:-34599999999}}\"\n"
+            "target_attempt=\"${GCP_DIAGNOSTICS_SOURCE_ATTEMPT:-${GITHUB_RUN_ATTEMPT:-1}}\"\n"
+            "if [[ \"${1:-} ${2:-} ${3:-}\" == \"compute instances list\" ]]; then\n"
+            f"  if [[ \"${{GCP_FAKE_CLEANUP:-absent}}\" == \"present\" ]]; then printf '[{{\"name\":\"heph-kvm-smoke-%s-%s\"}}]\\n' \"$target_run\" \"$target_attempt\"; else printf '[]\\n'; fi\n"
+            f"  if [[ \"${{GCP_FAKE_CLEANUP:-absent}}\" == \"permission\" ]]; then echo 'PERMISSION_DENIED: instances.list' >&2; exit 1; fi\n"
+            "  exit 0\n"
+            "fi\n"
             "if [[ \"${1:-} ${2:-} ${3:-}\" == \"compute instances describe\" ]]; then\n"
             f"  if [[ \"${{GCP_FAKE_CLEANUP:-absent}}\" == \"present\" ]]; then echo '{{}}'; exit 0; fi\n"
             f"  if [[ \"${{GCP_FAKE_CLEANUP:-absent}}\" == \"permission\" ]]; then echo 'PERMISSION_DENIED: instances.get' >&2; exit 1; fi\n"
-            "  echo \"The resource 'projects/hephaestus-508000/zones/europe-west1-b/instances/heph-kvm-smoke-${GITHUB_RUN_ID:-34599999999}-${GITHUB_RUN_ATTEMPT:-1}' was not found\" >&2\n"
+            "  echo \"The resource 'projects/hephaestus-508000/zones/europe-west1-b/instances/heph-kvm-smoke-${target_run}-${target_attempt}' was not found\" >&2\n"
             "  exit 1\n"
             "fi\n"
             f"if [[ \"${{1:-}} ${{2:-}}\" == \"storage cp\" ]]; then\n"
@@ -317,6 +369,19 @@ finish
             encoding="utf-8",
         )
         fake_gcloud.chmod(fake_gcloud.stat().st_mode | stat.S_IXUSR)
+        if source_identity is not None:
+            source_run_id, source_attempt, source_sha = source_identity
+            fake_curl = fake_bin / "curl"
+            api_sha = source_sha if source_api_sha is None else source_api_sha
+            fake_curl.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -Eeuo pipefail\n"
+                "printf '%s\\n' \"$*\" > \"${GCP_FAKE_CURL_ARGS:?}\"\n"
+                "printf '{\"head_sha\":\"%s\",\"path\":\".github/workflows/cooking-e2e.yml\",\"head_branch\":\"main\",\"run_attempt\":%s}\n' "
+                f"'{api_sha}' '{source_attempt}'\n",
+                encoding="utf-8",
+            )
+            fake_curl.chmod(0o700)
         env = os.environ | {
             "PATH": f"{fake_bin}:{os.environ['PATH']}",
             "GITHUB_RUN_ID": "34599999999",
@@ -328,6 +393,20 @@ finish
             "GCP_FAKE_CLEANUP": cleanup,
             "GCP_ZONE": zone,
         }
+        if source_identity is not None:
+            source_run_id, source_attempt, source_sha = source_identity
+            env.update(
+                {
+                    "GCP_DIAGNOSTICS_SOURCE_RUN_ID": source_run_id,
+                    "GCP_DIAGNOSTICS_SOURCE_ATTEMPT": source_attempt,
+                    "GCP_DIAGNOSTICS_SOURCE_SHA": source_sha,
+                    "GH_TOKEN": "github-token-fixture",
+                    "GITHUB_REPOSITORY": "wimpheling/hephaestus",
+                    "GCP_FAKE_CURL_ARGS": str(root / "curl-args.txt"),
+                }
+            )
+        if require_source:
+            env["GCP_DIAGNOSTICS_REQUIRE_SOURCE"] = "true"
         return subprocess.run(
             ["bash", str(ROOT / "gcp-kvm-smoke.sh"), "download-diagnostics"],
             env=env,
@@ -351,6 +430,58 @@ finish
             self.assertEqual(status["triage"]["snapshotStatus"], None)
             self.assertEqual(status["triage"]["sources"]["availableCount"], 6)
             self.assertEqual(status["triage"]["sources"]["missingCount"], 0)
+
+    def test_historical_download_verifies_github_run_identity_without_vm(self):
+        source = ("34618088312", "1", "b" * 40)
+        with tempfile.TemporaryDirectory(prefix="heph-gcp-historical-diagnostics-") as directory:
+            root = Path(directory)
+            result = self._run_download(root, self._archive(root), source_identity=source)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            status = json.loads((root / "status.json").read_text(encoding="utf-8"))
+            self.assertEqual(
+                status["object"],
+                "gs://hephaestus-508000-cooking-diagnostics/cooking/runs/34618088312/1/" + "b" * 40 + ".tar.gz",
+            )
+            self.assertEqual(status["cleanup"], "verified-absent")
+            self.assertEqual(status["scan"], "passed")
+            self.assertIn(
+                "/actions/runs/34618088312/attempts/1",
+                (root / "curl-args.txt").read_text(encoding="utf-8"),
+            )
+
+    def test_historical_download_rejects_present_vm_project_wide(self):
+        source = ("34618088312", "1", "b" * 40)
+        with tempfile.TemporaryDirectory(prefix="heph-gcp-historical-present-") as directory:
+            root = Path(directory)
+            result = self._run_download(root, self._archive(root), source_identity=source, cleanup="present")
+            self.assertNotEqual(result.returncode, 0)
+            status = json.loads((root / "status.json").read_text(encoding="utf-8"))
+            self.assertEqual(status["error"], "cleanup-unverified")
+            self.assertFalse((root / "download.tar.gz").exists())
+
+    def test_historical_download_rejects_github_sha_mismatch_before_fetch(self):
+        source = ("34618088312", "1", "b" * 40)
+        with tempfile.TemporaryDirectory(prefix="heph-gcp-historical-mismatch-") as directory:
+            root = Path(directory)
+            result = self._run_download(
+                root,
+                self._archive(root),
+                source_identity=source,
+                source_api_sha="c" * 40,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            status = json.loads((root / "status.json").read_text(encoding="utf-8"))
+            self.assertEqual(status["error"], "source-run-identity-mismatch")
+            self.assertFalse((root / "download.tar.gz").exists())
+
+    def test_historical_download_requires_all_source_inputs(self):
+        with tempfile.TemporaryDirectory(prefix="heph-gcp-historical-incomplete-") as directory:
+            root = Path(directory)
+            result = self._run_download(root, self._archive(root), require_source=True)
+            self.assertNotEqual(result.returncode, 0)
+            status = json.loads((root / "status.json").read_text(encoding="utf-8"))
+            self.assertEqual(status["error"], "source-identity-incomplete")
+            self.assertFalse((root / "download.tar.gz").exists())
 
     def test_diagnostic_bundle_staging_requires_no_forge_account(self):
         with tempfile.TemporaryDirectory(prefix="heph-gcp-diagnostic-root-") as directory:

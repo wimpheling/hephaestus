@@ -359,7 +359,7 @@ class RunnerImageBuildTests(unittest.TestCase):
 
     def test_workflow_keeps_image_build_manual_and_cleanup_separate(self):
         workflow = (ROOT.parent / ".github" / "workflows" / "cooking-e2e.yml").read_text(encoding="utf-8")
-        self.assertIn("options: [preflight, image-build, image-retire, cache-preflight, diagnostic, smoke, gcp-cooking, cooking]", workflow)
+        self.assertIn("options: [preflight, image-build, image-retire, cache-preflight, diagnostics-triage, diagnostic, smoke, gcp-cooking, cooking]", workflow)
         self.assertIn("inputs.cloud_mode == 'image-build'", workflow)
         self.assertIn("gcp-runner-image-build.sh build", workflow)
         self.assertIn("gcp-runner-image-build.sh cleanup", workflow)

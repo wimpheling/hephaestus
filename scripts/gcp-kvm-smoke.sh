@@ -34,6 +34,11 @@ diagnostics_upload_state='unknown'
 diagnostics_download_state='failed'
 diagnostics_scan_state='not-run'
 diagnostics_triage_state='not-run'
+diagnostics_source_mode=false
+diagnostics_source_run_id=''
+diagnostics_source_attempt=''
+diagnostics_source_sha=''
+diagnostics_source_zone=''
 gcloud_json_output=''
 gcloud_json_stderr=''
 
@@ -155,17 +160,132 @@ print(f"Private Cooking cache metadata: name={name} size={size} md5Hash={md5_has
   die "required private Cooking cache object is unavailable: $object_uri"
 }
 
+configure_diagnostics_source() {
+  local historical="${1:-false}" explicit=false name value
+  if [[ "$historical" == true ]]; then
+    for name in GCP_DIAGNOSTICS_SOURCE_RUN_ID GCP_DIAGNOSTICS_SOURCE_ATTEMPT \
+      GCP_DIAGNOSTICS_SOURCE_SHA GCP_DIAGNOSTICS_SOURCE_ZONE; do
+      value="${!name:-}"
+      [[ -z "$value" ]] || explicit=true
+    done
+  fi
+  if [[ "$historical" == true && ("$explicit" == true || "${GCP_DIAGNOSTICS_REQUIRE_SOURCE:-false}" == true) ]]; then
+    [[ -n "${GCP_DIAGNOSTICS_SOURCE_RUN_ID:-}" &&
+      -n "${GCP_DIAGNOSTICS_SOURCE_ATTEMPT:-}" &&
+      -n "${GCP_DIAGNOSTICS_SOURCE_SHA:-}" ]] || {
+      diagnostics_download_error='source-identity-incomplete'
+      return 1
+    }
+    diagnostics_source_mode=true
+    diagnostics_source_run_id="$GCP_DIAGNOSTICS_SOURCE_RUN_ID"
+    diagnostics_source_attempt="$GCP_DIAGNOSTICS_SOURCE_ATTEMPT"
+    diagnostics_source_sha="$GCP_DIAGNOSTICS_SOURCE_SHA"
+    diagnostics_source_zone="${GCP_DIAGNOSTICS_SOURCE_ZONE:-${GCP_ZONE:-}}"
+  else
+    diagnostics_source_run_id="${GITHUB_RUN_ID:-}"
+    diagnostics_source_attempt="${GITHUB_RUN_ATTEMPT:-}"
+    diagnostics_source_sha="${GITHUB_SHA:-}"
+    diagnostics_source_zone="${GCP_ZONE:-}"
+  fi
+  [[ "$diagnostics_source_run_id" =~ ^[0-9]+$ &&
+    "$diagnostics_source_attempt" =~ ^[0-9]+$ &&
+    "$diagnostics_source_sha" =~ ^[0-9a-f]{40}$ ]] || {
+    diagnostics_download_error='source-identity-invalid'
+    return 1
+  }
+  if [[ "$diagnostics_source_mode" == true && "$diagnostics_source_zone" != "$REGION"-* ]]; then
+    diagnostics_download_error='source-zone-invalid'
+    return 1
+  fi
+}
+
 diagnostics_object_for_run() {
-  [[ "${GITHUB_RUN_ID:-}" =~ ^[0-9]+$ ]] || die 'GITHUB_RUN_ID is required for private diagnostics'
-  [[ "${GITHUB_RUN_ATTEMPT:-}" =~ ^[0-9]+$ ]] || die 'GITHUB_RUN_ATTEMPT is required for private diagnostics'
-  [[ "${GITHUB_SHA:-}" =~ ^[0-9a-f]{40}$ ]] || die 'GITHUB_SHA is required for private diagnostics'
-  printf '%s/%s/%s/%s.tar.gz\n' "$DIAGNOSTICS_OBJECT_PREFIX" "$GITHUB_RUN_ID" \
-    "$GITHUB_RUN_ATTEMPT" "$GITHUB_SHA"
+  configure_diagnostics_source || return 1
+  printf '%s/%s/%s/%s.tar.gz\n' "$DIAGNOSTICS_OBJECT_PREFIX" \
+    "$diagnostics_source_run_id" "$diagnostics_source_attempt" "$diagnostics_source_sha"
+}
+
+verify_github_source_run() {
+  [[ "$diagnostics_source_mode" == true ]] || return 0
+  local token="${GH_TOKEN:-${GITHUB_TOKEN:-}}" repository="${GITHUB_REPOSITORY:-}"
+  local auth_file api_output
+  [[ -n "$token" ]] || {
+    diagnostics_download_error='source-run-auth-missing'
+    return 1
+  }
+  [[ "$repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || {
+    diagnostics_download_error='source-repository-invalid'
+    return 1
+  }
+  auth_file="$(mktemp "${TMPDIR:-/tmp}/gcp-diagnostics-gh-auth.XXXXXX")" || {
+    diagnostics_download_error='source-run-auth-file-failed'
+    return 1
+  }
+  chmod 0600 "$auth_file"
+  printf 'header = "Authorization: Bearer %s"\n' "$token" >"$auth_file"
+  if ! api_output="$(curl --fail --silent --show-error --connect-timeout 5 --max-time 20 \
+      --max-filesize 1048576 \
+      --config "$auth_file" -H 'Accept: application/vnd.github+json' \
+      "https://api.github.com/repos/${repository}/actions/runs/${diagnostics_source_run_id}/attempts/${diagnostics_source_attempt}" \
+      2>/dev/null)"; then
+    rm -f -- "$auth_file"
+    diagnostics_download_error='source-run-lookup-failed'
+    return 1
+  fi
+  rm -f -- "$auth_file"
+  if ! python3 - "$api_output" "$diagnostics_source_sha" "$diagnostics_source_attempt" <<'PY'
+import json
+import sys
+
+value = json.loads(sys.argv[1])
+expected_sha, expected_attempt = sys.argv[2:]
+if not isinstance(value, dict):
+    raise SystemExit("source run response is not an object")
+if value.get("head_sha") != expected_sha:
+    raise SystemExit("source run SHA does not match")
+if value.get("path") != ".github/workflows/cooking-e2e.yml":
+    raise SystemExit("source run workflow does not match")
+if value.get("head_branch") != "main":
+    raise SystemExit("source run branch does not match")
+if str(value.get("run_attempt")) != expected_attempt:
+    raise SystemExit("source run attempt does not match")
+PY
+  then
+    diagnostics_download_error='source-run-identity-mismatch'
+    return 1
+  fi
 }
 
 verify_disposable_vm_absent() {
-  local zone="${GCP_ZONE:-europe-west1-b}" name="heph-kvm-smoke-${GITHUB_RUN_ID:-manual}-${GITHUB_RUN_ATTEMPT:-1}" describe_output
+  local zone="$diagnostics_source_zone" name="heph-kvm-smoke-${diagnostics_source_run_id}-${diagnostics_source_attempt}" describe_output
   diagnostics_cleanup_state='unverified'
+  if [[ "$diagnostics_source_mode" == true ]]; then
+    if ! run_json_gcloud compute instances list --project="$PROJECT_ID" \
+        --filter="name=${name}" --format='json(name)'; then
+      report_gcloud_json_stderr
+      return 1
+    fi
+    local list_state
+    if ! list_state="$(python3 -c '
+import json
+import sys
+
+target = sys.argv[1]
+value = json.load(sys.stdin)
+if not isinstance(value, list):
+    raise SystemExit("instance list response is not an array")
+print("present" if any(isinstance(row, dict) and row.get("name") == target for row in value) else "absent")
+' "$name" <<<"$gcloud_json_output")"; then
+      return 1
+    fi
+    if [[ "$list_state" == present ]]; then
+      printf 'cleanup verification found historical disposable VM still present: %s\n' "$name" >&2
+      return 1
+    fi
+    diagnostics_cleanup_state='verified-absent'
+    printf 'cleanup verified historical VM absent project-wide: %s\n' "$name"
+    return 0
+  fi
   [[ "$zone" == "$REGION"-* ]] || { printf 'cleanup zone is outside %s: %s\n' "$REGION" "$zone" >&2; return 1; }
   if describe_output="$(gcloud compute instances describe "$name" --project="$PROJECT_ID" --zone="$zone" 2>&1)"; then
     printf 'cleanup verification found disposable VM still present: %s\n' "$name" >&2
@@ -181,11 +301,15 @@ verify_disposable_vm_absent() {
 }
 
 _download_diagnostics() {
-  local object="$(diagnostics_object_for_run)" destination="${GCP_DIAGNOSTICS_ARCHIVE:-${RUNNER_TEMP:-/tmp}/gcp-diagnostics.tar.gz}"
+  local object="${DIAGNOSTICS_OBJECT_PREFIX}/${diagnostics_source_run_id}/${diagnostics_source_attempt}/${diagnostics_source_sha}.tar.gz"
+  local destination="${GCP_DIAGNOSTICS_ARCHIVE:-${RUNNER_TEMP:-/tmp}/gcp-diagnostics.tar.gz}"
   local status_path="${GCP_DIAGNOSTICS_STATUS:-${RUNNER_TEMP:-/tmp}/gcp-diagnostics-status.json}"
   local extract_root="${destination}.extract" output digest archive_bytes download_timeout
   download_timeout="${GCP_DIAGNOSTICS_DOWNLOAD_TIMEOUT_SECONDS:-60}"
   [[ "$download_timeout" =~ ^[1-9][0-9]*$ ]] || { diagnostics_download_error='download-timeout-invalid'; return 1; }
+  if ! verify_github_source_run; then
+    return 1
+  fi
   if ! verify_disposable_vm_absent; then
     diagnostics_download_error='cleanup-unverified'
     return 1
@@ -356,9 +480,6 @@ PY
 download_diagnostics() {
   local status_path="${GCP_DIAGNOSTICS_STATUS:-${RUNNER_TEMP:-/tmp}/gcp-diagnostics-status.json}"
   local status object='private-diagnostics'
-  if [[ "${GITHUB_RUN_ID:-}" =~ ^[0-9]+$ && "${GITHUB_RUN_ATTEMPT:-}" =~ ^[0-9]+$ && "${GITHUB_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
-    object="gs://${DIAGNOSTICS_BUCKET}/${DIAGNOSTICS_OBJECT_PREFIX}/${GITHUB_RUN_ID}/${GITHUB_RUN_ATTEMPT}/${GITHUB_SHA}.tar.gz"
-  fi
   mkdir -p -- "$(dirname -- "$status_path")"
   diagnostics_download_error='download-failed'
   diagnostics_cleanup_state='unverified'
@@ -367,8 +488,13 @@ download_diagnostics() {
   diagnostics_scan_state='not-run'
   diagnostics_triage_state='not-run'
   set +e
-  _download_diagnostics
-  status=$?
+  if configure_diagnostics_source true; then
+    object="gs://${DIAGNOSTICS_BUCKET}/${DIAGNOSTICS_OBJECT_PREFIX}/${diagnostics_source_run_id}/${diagnostics_source_attempt}/${diagnostics_source_sha}.tar.gz"
+    _download_diagnostics
+    status=$?
+  else
+    status=1
+  fi
   set -e
   if ((status != 0)); then
     write_download_failure_status "$status_path" "$object"

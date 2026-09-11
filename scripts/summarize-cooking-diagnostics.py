@@ -38,7 +38,7 @@ SOURCE_LABELS = {
 }
 SAFE_STATUS = COLLECTOR.SNAPSHOT_STATUS_VALUES
 TRIAGE_FIELDS = {
-    "schema", "collectionStatus", "rejectedSources", "denial", "attempts", "snapshotStatus", "sources",
+    "schema", "collectionStatus", "rejectedSources", "denial", "attempts", "snapshotStatus", "sources", "failures",
 }
 DENIAL_FIELDS = {"denial_stage", "denial_class", "run_id"}
 DENIAL_STAGES = {
@@ -57,6 +57,31 @@ ATTEMPT_FIELDS = {
     "event_id", "attempt_id", "attempt_number", "attempt_run_id", "attempt_state", "attempt_created_at",
     "attempt_completed_at", "run_state", "run_outcome", "run_created_at", "run_updated_at",
     "disposition", "next_eligible_at", "terminal_at", "sampled_at",
+}
+FAILURE_SOURCE_LABELS = {"serial", "host-journal", "runtime-log", "runtime-structured"}
+FAILURE_MARKERS = {
+    "HEPH_GCP_TEST",
+    "HEPH_GCP_RUNTIME",
+    "HEPH_GCP_KVM_BUILD_ERROR",
+    "HEPH_GCP_KVM_FIRST_ERROR",
+    "HEPH_GCP_KVM_SMOKE",
+    "HEPH_GCP_RUNNER_IMAGE_READINESS",
+    "HEPHAESTUS_GCP_COOKING",
+}
+FAILURE_FIELDS = {
+    "test", "test_result", "status", "phase", "error_class", "location", "run_id",
+    "attempt_run_id", "exit_code", "exit_signal", "event", "operation", "reason_class", "class", "tool",
+}
+FAILURE_STATUS_VALUES = {"failed", "error", "timeout", "timed-out", "nonzero"}
+FAILURE_VALUE = re.compile(r"^[A-Za-z0-9_.:/+-]{1,192}$")
+FAILURE_PAIR = re.compile(r"(?P<key>[A-Za-z][A-Za-z0-9_-]{0,31})=(?P<value>[A-Za-z0-9_.:/+-]{1,192})")
+FAILURE_ERROR_CLASSES = {
+    "permission-denied", "operation-not-permitted", "invalid-argument", "not-found",
+    "connection-refused", "connection-reset", "guest-start-failed", "guest-exit",
+    "worker-start-failed", "timeout", "unknown",
+    "node-not-runnable", "node-version-mismatch", "rust-not-runnable", "rust-version-mismatch",
+    "oras-not-runnable", "oras-version-mismatch", "chromium-missing", "chromium-not-runnable",
+    "chromium-version-mismatch", "libclang-missing",
 }
 
 
@@ -163,6 +188,125 @@ def _project_denial(
     return candidates[-1]
 
 
+def _failure_record(
+    source_label: str,
+    fields: dict[str, Any],
+    correlated_run_ids: set[str],
+) -> dict[str, Any] | None:
+    if not fields:
+        return None
+    for field in ("status", "test_result"):
+        if field in fields and fields[field] not in FAILURE_STATUS_VALUES:
+            fields.pop(field)
+    if "error_class" in fields and fields["error_class"] not in FAILURE_ERROR_CLASSES:
+        fields.pop("error_class")
+    for field in ("run_id", "attempt_run_id"):
+        if field in fields and (
+            not isinstance(fields[field], str) or not COLLECTOR.UUID_RE.fullmatch(fields[field])
+        ):
+            fields.pop(field)
+    if "run_id" in fields and fields["run_id"].lower() not in correlated_run_ids:
+        fields.pop("run_id")
+    if "attempt_run_id" in fields and fields["attempt_run_id"].lower() not in correlated_run_ids:
+        fields.pop("attempt_run_id")
+    exit_code = fields.get("exit_code")
+    successful_exit = exit_code == 0 or exit_code == "0"
+    has_failure_state = any(
+        fields.get(field) in FAILURE_STATUS_VALUES for field in ("status", "test_result")
+    ) or "error_class" in fields or "exit_signal" in fields
+    if successful_exit and not has_failure_state:
+        return None
+    if not any(field in fields for field in ("test", "test_result", "status", "error_class", "exit_code", "exit_signal")):
+        return None
+    result: dict[str, Any] = {"source": source_label}
+    for field in sorted(fields):
+        value = fields[field]
+        if field in {"exit_code", "exit_signal"}:
+            limit = 255 if field == "exit_code" else 64
+            if isinstance(value, int):
+                if not 0 <= value <= limit:
+                    continue
+            elif isinstance(value, str) and value.isdigit() and int(value) <= limit:
+                value = int(value)
+            else:
+                continue
+        result[field] = value
+    result["correlated"] = bool(
+        result.get("run_id") in correlated_run_ids
+        or result.get("attempt_run_id") in correlated_run_ids
+    )
+    return result
+
+
+def _project_failures(
+    root: Path,
+    source_records: list[dict[str, Any]],
+    attempts: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    correlated_run_ids = {
+        value.lower()
+        for row in attempts
+        for field in ("attempt_run_id", "run_id")
+        if (value := row.get(field))
+    }
+    failures: list[dict[str, Any]] = []
+    for record in source_records:
+        label = record.get("label")
+        if label not in FAILURE_SOURCE_LABELS:
+            continue
+        path = _safe_path(root, record["path"])
+        for line in path.read_text(encoding="utf-8").splitlines():
+            fields: dict[str, Any] = {}
+            stripped = line.strip()
+            if stripped.startswith("{"):
+                try:
+                    value = json.loads(stripped)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(value, dict):
+                    continue
+                fields = {
+                    field: item
+                    for field, item in value.items()
+                    if field in FAILURE_FIELDS and isinstance(item, (str, int))
+                }
+                if fields.get("test_result") not in FAILURE_STATUS_VALUES and fields.get("status") not in FAILURE_STATUS_VALUES:
+                    continue
+            else:
+                marker = stripped.split(maxsplit=1)[0].rstrip(":") if stripped else ""
+                if marker not in FAILURE_MARKERS:
+                    continue
+                fields = {
+                    match.group("key"): match.group("value")
+                    for match in FAILURE_PAIR.finditer(stripped)
+                    if match.group("key") in FAILURE_FIELDS
+                }
+                if "class" in fields:
+                    fields["error_class"] = fields.pop("class")
+                if "tool" in fields:
+                    fields["test"] = fields.pop("tool")
+                if fields.get("status", "").isdigit():
+                    fields["exit_code"] = fields.pop("status")
+                if "error=" in stripped and "error_class" not in fields:
+                    error_value = dict(FAILURE_PAIR.findall(stripped)).get("error")
+                    if error_value in FAILURE_ERROR_CLASSES:
+                        fields["error_class"] = error_value
+                if not any(field in fields for field in ("test", "status", "error_class", "exit_code", "exit_signal")):
+                    continue
+            fields = {
+                field: value
+                for field, value in fields.items()
+                if field in FAILURE_FIELDS
+                and (isinstance(value, int) or (isinstance(value, str) and FAILURE_VALUE.fullmatch(value)))
+            }
+            projected = _failure_record(label, fields, correlated_run_ids)
+            if projected is not None and projected not in failures:
+                failures.append(projected)
+            if len(failures) >= 50:
+                return failures
+    return failures
+
+
 def summarize(bundle: Path) -> dict[str, Any]:
     manifest_path = _safe_path(bundle, "manifest.json")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -224,6 +368,7 @@ def summarize(bundle: Path) -> dict[str, Any]:
         "denial": _project_denial(bundle, records, attempts),
         "attempts": attempts,
         "snapshotStatus": snapshot_status,
+        "failures": _project_failures(bundle, records, attempts),
         "sources": {
             "available": sorted(set(available)),
             "missing": sorted(set(missing)),

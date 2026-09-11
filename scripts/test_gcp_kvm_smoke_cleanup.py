@@ -199,6 +199,16 @@ class GcpKvmSmokeCleanupTests(unittest.TestCase):
         self.assertIn("name: Download and scan private diagnostics after VM deletion", workflow)
         self.assertIn("name: Retain safe diagnostics manifest", workflow)
 
+    def test_workflow_exposes_no_vm_historical_diagnostics_triage(self) -> None:
+        workflow = (ROOT.parent / ".github" / "workflows" / "cooking-e2e.yml").read_text(encoding="utf-8")
+        self.assertIn("diagnostics-triage", workflow)
+        self.assertIn("GCP_DIAGNOSTICS_SOURCE_RUN_ID", workflow)
+        self.assertIn("GCP_DIAGNOSTICS_SOURCE_ATTEMPT", workflow)
+        self.assertIn("GCP_DIAGNOSTICS_SOURCE_SHA", workflow)
+        self.assertIn("GCP_DIAGNOSTICS_REQUIRE_SOURCE: 'true'", workflow)
+        self.assertIn("Download and triage selected private diagnostics without a VM", workflow)
+        self.assertIn("GH_TOKEN: ${{ github.token }}", workflow)
+
 
 if __name__ == "__main__":
     unittest.main()

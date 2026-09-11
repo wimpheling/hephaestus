@@ -4,10 +4,10 @@ on:
   workflow_dispatch:
     inputs:
       cloud_mode:
-        description: 'Read quota, build or use the immutable runner image, inspect the Cooking cache, run the diagnostic VM, run the disposable smoke VM, run GCP Cooking, or run legacy Cooking'
+        description: 'Read quota, build or use the immutable runner image, inspect the Cooking cache, triage a retained private diagnostics bundle, run the diagnostic VM, run the disposable smoke VM, run GCP Cooking, or run legacy Cooking'
         required: true
         type: choice
-        options: [preflight, image-build, image-retire, cache-preflight, diagnostic, smoke, gcp-cooking, cooking]
+        options: [preflight, image-build, image-retire, cache-preflight, diagnostics-triage, diagnostic, smoke, gcp-cooking, cooking]
         default: preflight
       runner_image:
         description: 'Explicit immutable runner image name for diagnostic, smoke, GCP Cooking, or image retirement'
@@ -25,6 +25,21 @@ on:
         type: choice
         options: [europe-west1-b, europe-west1-c, europe-west1-d]
         default: europe-west1-b
+      diagnostics_run_id:
+        description: 'Historical GitHub Actions run ID for diagnostics-triage'
+        required: false
+        type: string
+        default: ''
+      diagnostics_attempt:
+        description: 'Historical GitHub Actions run attempt for diagnostics-triage'
+        required: false
+        type: string
+        default: ''
+      diagnostics_sha:
+        description: 'Exact 40-character main commit SHA for diagnostics-triage'
+        required: false
+        type: string
+        default: ''
   pull_request:
   push:
     branches: [main]
@@ -43,6 +58,7 @@ jobs:
     timeout-minutes: 50
     permissions:
       contents: read
+      actions: read
       id-token: write
     steps:
       - uses: actions/checkout@v4
@@ -70,7 +86,7 @@ jobs:
           GCP_PROTECTED_ROLLBACK_IMAGE: ${{ vars.GCP_RUNNER_ROLLBACK_IMAGE }}
         run: bash scripts/gcp-runner-image-retire.sh retire "$GCP_RETIRE_IMAGE"
       - name: Read quota or run disposable GCE KVM mode
-        if: ${{ inputs.cloud_mode != 'image-build' && inputs.cloud_mode != 'image-retire' }}
+        if: ${{ inputs.cloud_mode != 'image-build' && inputs.cloud_mode != 'image-retire' && inputs.cloud_mode != 'diagnostics-triage' }}
         env:
           GCP_ZONE: ${{ inputs.gcp_zone || 'europe-west1-b' }}
           GCP_RUNNER_IMAGE: ${{ inputs.runner_image || vars.GCP_RUNNER_IMAGE }}
@@ -83,6 +99,19 @@ jobs:
             unset GCP_RUNNER_IMAGE
           fi
           bash scripts/gcp-kvm-smoke.sh "${{ inputs.cloud_mode }}"
+      - name: Download and triage selected private diagnostics without a VM
+        if: ${{ inputs.cloud_mode == 'diagnostics-triage' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GCP_ZONE: ${{ inputs.gcp_zone || 'europe-west1-b' }}
+          GCP_DIAGNOSTICS_SOURCE_RUN_ID: ${{ inputs.diagnostics_run_id }}
+          GCP_DIAGNOSTICS_SOURCE_ATTEMPT: ${{ inputs.diagnostics_attempt }}
+          GCP_DIAGNOSTICS_SOURCE_SHA: ${{ inputs.diagnostics_sha }}
+          GCP_DIAGNOSTICS_REQUIRE_SOURCE: 'true'
+          GCP_DIAGNOSTICS_ARCHIVE: ${{ runner.temp }}/gcp-diagnostics.tar.gz
+          GCP_DIAGNOSTICS_STATUS: ${{ runner.temp }}/gcp-diagnostics-status.json
+        run: bash scripts/gcp-kvm-smoke.sh download-diagnostics
       - name: Cleanup immutable runner image build resources
         if: ${{ always() && inputs.cloud_mode == 'image-build' }}
         env:
@@ -102,10 +131,10 @@ jobs:
           GCP_DIAGNOSTICS_STATUS: ${{ runner.temp }}/gcp-diagnostics-status.json
         run: bash scripts/gcp-kvm-smoke.sh download-diagnostics
       - name: Retain safe diagnostics manifest
-        if: ${{ always() && (inputs.cloud_mode == 'diagnostic' || inputs.cloud_mode == 'smoke' || inputs.cloud_mode == 'gcp-cooking') }}
+        if: ${{ always() && (inputs.cloud_mode == 'diagnostic' || inputs.cloud_mode == 'smoke' || inputs.cloud_mode == 'gcp-cooking' || inputs.cloud_mode == 'diagnostics-triage') }}
         uses: actions/upload-artifact@v4
         with:
-          name: gcp-diagnostics-manifest-${{ github.run_id }}-${{ github.run_attempt }}
+          name: gcp-diagnostics-manifest-${{ inputs.diagnostics_run_id || github.run_id }}-${{ inputs.diagnostics_attempt || github.run_attempt }}
           path: ${{ runner.temp }}/gcp-diagnostics-status.json
           if-no-files-found: error
           retention-days: 1
