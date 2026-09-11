@@ -7,13 +7,18 @@ on:
         description: 'Read quota, build or use the immutable runner image, inspect the Cooking cache, run the diagnostic VM, run the disposable smoke VM, run GCP Cooking, or run legacy Cooking'
         required: true
         type: choice
-        options: [preflight, image-build, cache-preflight, diagnostic, smoke, gcp-cooking, cooking]
+        options: [preflight, image-build, image-retire, cache-preflight, diagnostic, smoke, gcp-cooking, cooking]
         default: preflight
       runner_image:
-        description: 'Optional validated immutable runner image name for smoke or GCP Cooking'
+        description: 'Explicit immutable runner image name for diagnostic, smoke, GCP Cooking, or image retirement'
         required: false
         type: string
         default: ''
+      use_stock_image:
+        description: 'Force the stock Ubuntu image for diagnostic, smoke, or GCP Cooking (takes precedence over runner_image and the repository default)'
+        required: false
+        type: boolean
+        default: false
       gcp_zone:
         description: 'GCE zone for the disposable smoke VM'
         required: true
@@ -57,14 +62,27 @@ jobs:
           GCP_ZONE: ${{ inputs.gcp_zone || 'europe-west1-d' }}
           GCP_RUNNER_IMAGE_STATE: ${{ runner.temp }}/gcp-runner-image-build-state
         run: bash scripts/gcp-runner-image-build.sh build
+      - name: Retire one validated immutable runner image
+        if: ${{ inputs.cloud_mode == 'image-retire' }}
+        env:
+          GCP_RETIRE_IMAGE: ${{ inputs.runner_image }}
+          GCP_PROTECTED_CURRENT_IMAGE: ${{ vars.GCP_RUNNER_IMAGE }}
+          GCP_PROTECTED_ROLLBACK_IMAGE: ${{ vars.GCP_RUNNER_ROLLBACK_IMAGE }}
+        run: bash scripts/gcp-runner-image-retire.sh retire "$GCP_RETIRE_IMAGE"
       - name: Read quota or run disposable GCE KVM mode
-        if: ${{ inputs.cloud_mode != 'image-build' }}
+        if: ${{ inputs.cloud_mode != 'image-build' && inputs.cloud_mode != 'image-retire' }}
         env:
           GCP_ZONE: ${{ inputs.gcp_zone || 'europe-west1-b' }}
-          GCP_RUNNER_IMAGE: ${{ inputs.runner_image }}
+          GCP_RUNNER_IMAGE: ${{ inputs.runner_image || vars.GCP_RUNNER_IMAGE }}
+          GCP_USE_STOCK_IMAGE: ${{ inputs.use_stock_image }}
           GCP_SMOKE_LOG: ${{ runner.temp }}/gcp-kvm-smoke.log
           GCP_DIAGNOSTICS_STATUS: ${{ runner.temp }}/gcp-diagnostics-status.json
-        run: bash scripts/gcp-kvm-smoke.sh "${{ inputs.cloud_mode }}"
+        run: |
+          set -Eeuo pipefail
+          if [[ "$GCP_USE_STOCK_IMAGE" == true ]]; then
+            unset GCP_RUNNER_IMAGE
+          fi
+          bash scripts/gcp-kvm-smoke.sh "${{ inputs.cloud_mode }}"
       - name: Cleanup immutable runner image build resources
         if: ${{ always() && inputs.cloud_mode == 'image-build' }}
         env:

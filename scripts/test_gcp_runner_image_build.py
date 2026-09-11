@@ -359,11 +359,12 @@ class RunnerImageBuildTests(unittest.TestCase):
 
     def test_workflow_keeps_image_build_manual_and_cleanup_separate(self):
         workflow = (ROOT.parent / ".github" / "workflows" / "cooking-e2e.yml").read_text(encoding="utf-8")
-        self.assertIn("options: [preflight, image-build, cache-preflight, diagnostic, smoke, gcp-cooking, cooking]", workflow)
+        self.assertIn("options: [preflight, image-build, image-retire, cache-preflight, diagnostic, smoke, gcp-cooking, cooking]", workflow)
         self.assertIn("inputs.cloud_mode == 'image-build'", workflow)
         self.assertIn("gcp-runner-image-build.sh build", workflow)
         self.assertIn("gcp-runner-image-build.sh cleanup", workflow)
-        self.assertIn("GCP_RUNNER_IMAGE: ${{ inputs.runner_image }}", workflow)
+        self.assertIn("GCP_RUNNER_IMAGE: ${{ inputs.runner_image || vars.GCP_RUNNER_IMAGE }}", workflow)
+        self.assertIn("GCP_USE_STOCK_IMAGE: ${{ inputs.use_stock_image }}", workflow)
 
     def test_generated_builder_wrapper_has_fail_closed_exit_marker(self):
         builder = (ROOT / "gcp-runner-image-build.sh").read_text(encoding="utf-8")

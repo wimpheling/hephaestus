@@ -78,7 +78,11 @@ startup.
 
 After a build is human-reviewed, pass that name to a later mode in the same
 workflow. The `runner_image` input is optional for `diagnostic`, `smoke` and
-`gcp-cooking`; omit it to use the stock image path. A custom image in
+`gcp-cooking`; when it is empty, those modes use the optional repository
+variable `vars.GCP_RUNNER_IMAGE`. The `use_stock_image` boolean takes
+precedence over both and clears image selection, so it explicitly chooses the
+stock image. The default candidate variable is not yet configured, and custom
+image selection remains pending live candidate validation. A custom image in
 `diagnostic` uses the 150 GB diagnostic disk required by the baked image.
 
 ```sh
@@ -91,6 +95,18 @@ gh workflow run cooking-e2e.yml --repo wimpheling/hephaestus --ref main \
 gh workflow run cooking-e2e.yml --repo wimpheling/hephaestus --ref main \
   -f cloud_mode=gcp-cooking -f gcp_zone=europe-west1-d \
   -f runner_image=hephaestus-runner-<manifest-prefix>
+gh workflow run cooking-e2e.yml --repo wimpheling/hephaestus --ref main \
+  -f cloud_mode=diagnostic -f gcp_zone=europe-west1-d \
+  -f use_stock_image=true
+```
+
+Retirement also requires an explicit `runner_image`; it refuses the images
+held in `vars.GCP_RUNNER_IMAGE` and `vars.GCP_RUNNER_ROLLBACK_IMAGE`, and then
+verifies the selected candidate's absence:
+
+```sh
+gh workflow run cooking-e2e.yml --repo wimpheling/hephaestus --ref main \
+  -f cloud_mode=image-retire -f runner_image=hephaestus-runner-<manifest-prefix>
 ```
 
 The builder will bake the reviewed Rust, libkrun/libkrunfw, passt/AppArmor,

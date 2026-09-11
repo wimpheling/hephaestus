@@ -170,13 +170,26 @@ anchors remain compatible, subject to the browser lock and baked
 browser executable/version checks at startup.
 
 The optional `runner_image` input is supported by `diagnostic`, `smoke` and
-`gcp-cooking`; omitting it keeps the stock image default. After reviewing the
-build output, the next custom-image check is diagnostic:
+`gcp-cooking`. When it is empty, those modes use the optional repository
+variable `vars.GCP_RUNNER_IMAGE`; `use_stock_image=true` takes precedence over
+both and explicitly selects the stock image. The default candidate variable is
+not yet configured, and custom image selection remains pending live candidate
+validation. After reviewing the build output, the next custom-image check is
+diagnostic:
 
 ```sh
 gh workflow run cooking-e2e.yml --repo wimpheling/hephaestus --ref main \
   -f cloud_mode=diagnostic -f gcp_zone=europe-west1-d \
   -f runner_image=hephaestus-runner-61d34f3bbda2b9cd6c7967249b540595
+```
+
+To force the stock image, even when an explicit image or repository default is
+present:
+
+```sh
+gh workflow run cooking-e2e.yml --repo wimpheling/hephaestus --ref main \
+  -f cloud_mode=diagnostic -f gcp_zone=europe-west1-d \
+  -f use_stock_image=true
 ```
 
 The candidate may be used for a later full-mode dispatch only after that
@@ -186,6 +199,14 @@ check is accepted:
 gh workflow run cooking-e2e.yml --repo wimpheling/hephaestus --ref main \
   -f cloud_mode=gcp-cooking -f gcp_zone=europe-west1-d \
   -f runner_image=hephaestus-runner-<manifest-prefix>
+```
+
+Retirement requires an explicit candidate image and refuses the configured
+current and rollback images before verifying the candidate's absence:
+
+```sh
+gh workflow run cooking-e2e.yml --repo wimpheling/hephaestus --ref main \
+  -f cloud_mode=image-retire -f runner_image=hephaestus-runner-<manifest-prefix>
 ```
 
 A custom diagnostic image uses a 150 GB disk. The source disk must have
