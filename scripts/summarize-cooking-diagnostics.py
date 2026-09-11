@@ -38,7 +38,7 @@ SOURCE_LABELS = {
 }
 SAFE_STATUS = COLLECTOR.SNAPSHOT_STATUS_VALUES
 TRIAGE_FIELDS = {
-    "schema", "collectionStatus", "rejectedSources", "denial", "attempts", "snapshotStatus", "sources", "failures",
+    "schema", "collectionStatus", "rejectedSources", "denial", "attempts", "snapshotStatus", "retry", "sources", "failures",
 }
 DENIAL_FIELDS = {"denial_stage", "denial_class", "run_id"}
 DENIAL_STAGES = {
@@ -56,7 +56,7 @@ REJECTION_REASONS = {
 ATTEMPT_FIELDS = {
     "event_id", "attempt_id", "attempt_number", "attempt_run_id", "attempt_state", "attempt_created_at",
     "attempt_completed_at", "run_state", "run_outcome", "run_created_at", "run_updated_at",
-    "disposition", "next_eligible_at", "terminal_at", "sampled_at",
+    "disposition", "next_eligible_at", "terminal_at", "sampled_at", "exit_code", "exit_signal",
 }
 FAILURE_SOURCE_LABELS = {"serial", "host-journal", "runtime-log", "runtime-structured"}
 FAILURE_MARKERS = {
@@ -83,6 +83,72 @@ FAILURE_ERROR_CLASSES = {
     "oras-not-runnable", "oras-version-mismatch", "chromium-missing", "chromium-not-runnable",
     "chromium-version-mismatch", "libclang-missing",
 }
+
+
+def _project_retry(
+    root: Path,
+    source_records: list[dict[str, Any]],
+    attempts: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Project the terminal retry observation independently of the snapshot.
+
+    The marker is written after the database completion lookup, so it remains
+    useful when the periodic lineage snapshot predates that lookup. Correlation
+    flags expose that distinction without discarding the marker.
+    """
+
+    marker_fields: dict[str, str] | None = None
+    for record in source_records:
+        if record.get("label") not in {"serial", "runtime-log", "runtime-structured"}:
+            continue
+        path = _safe_path(root, record["path"])
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if not line.startswith("HEPH_COOKING_RETRY"):
+                continue
+            try:
+                canonical = COLLECTOR._project_retry_marker(line)
+            except (AttributeError, COLLECTOR.CollectionError) as error:
+                raise ValueError("retry marker is invalid") from error
+            tokens = canonical.split()
+            parsed = dict(token.split("=", 1) for token in tokens[1:])
+            if set(parsed) != set(COLLECTOR.RETRY_FIELD_ORDER):
+                raise ValueError("retry marker fields are invalid")
+            marker_fields = parsed
+    if marker_fields is None:
+        return None
+
+    typed: dict[str, Any] = {}
+    for field in COLLECTOR.RETRY_FIELD_ORDER:
+        value = marker_fields[field]
+        if field == "attempt_number" and value != "unknown":
+            typed[field] = int(value)
+        elif field in {"exit_code", "exit_signal"} and value.isdecimal():
+            typed[field] = int(value)
+        elif field in {"exit_code", "exit_signal"} and value == "none":
+            typed[field] = None
+        else:
+            typed[field] = value
+
+    snapshot_event_ids = {row.get("event_id") for row in attempts if row.get("event_id")}
+    snapshot_attempt_ids = {row.get("attempt_id") for row in attempts if row.get("attempt_id")}
+    snapshot_run_ids = {
+        row.get("attempt_run_id") for row in attempts if row.get("attempt_run_id")
+    }
+    same_snapshot_row = any(
+        row.get("event_id") == typed["event_id"]
+        and typed["attempt_id"] != "unknown"
+        and row.get("attempt_id") == typed["attempt_id"]
+        and row.get("attempt_run_id") == typed["run_id"]
+        for row in attempts
+    )
+    correlation = {
+        "event_id": typed["event_id"] in snapshot_event_ids,
+        "attempt_id": typed["attempt_id"] != "unknown" and typed["attempt_id"] in snapshot_attempt_ids,
+        "run_id": typed["run_id"] in snapshot_run_ids,
+        "same_snapshot_row": same_snapshot_row,
+    }
+    typed["correlated"] = correlation
+    return typed
 
 
 def _safe_path(root: Path, relative: str) -> Path:
@@ -368,6 +434,7 @@ def summarize(bundle: Path) -> dict[str, Any]:
         "denial": _project_denial(bundle, records, attempts),
         "attempts": attempts,
         "snapshotStatus": snapshot_status,
+        "retry": _project_retry(bundle, records, attempts),
         "failures": _project_failures(bundle, records, attempts),
         "sources": {
             "available": sorted(set(available)),

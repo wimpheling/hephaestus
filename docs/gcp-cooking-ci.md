@@ -425,6 +425,30 @@ and checksums, and accept it only after the post-delete authenticated download,
 archive validation and credential scan pass. The small status artifact is a
 safe triage projection, not a replacement for that bundle.
 
+For a retained historical bundle, use the workflow's `diagnostics-triage`
+mode. Supply all three source identity fields; the job validates the selected
+per-attempt GitHub Actions API record against the exact workflow path, `main`
+branch and SHA, then checks the exact disposable VM name project-wide before
+reading the fixed private object prefix. It creates no VM and retains only the
+one-day safe status artifact:
+
+```sh
+gh workflow run cooking-e2e.yml --repo wimpheling/hephaestus --ref main \
+  -f cloud_mode=diagnostics-triage -f gcp_zone=europe-west1-d \
+  -f diagnostics_run_id=34618088312 -f diagnostics_attempt=1 \
+  -f diagnostics_sha=1645642605925fa6835291df4a792d3b1123387a
+```
+
+The first live no-VM validation was [run 34626172381](https://github.com/wimpheling/hephaestus/actions/runs/34626172381),
+which completed successfully for that source identity. Its safe status
+confirmed VM absence, archive download and scanning, and complete collection;
+the retry projection retained the failed first attempt and running second
+attempt but had no typed failure or denial, so the underlying retry cause
+remains unresolved. Inspect `.triage.retry`, `.triage.attempts` and
+`.triage.snapshotStatus`; a terminal `HEPH_COOKING_RETRY` marker is retained
+even when the periodic lineage snapshot is stale, with per-ID correlation
+flags showing which IDs were present in that snapshot.
+
 To inspect the safe status artifact, open the completed GitHub run's **Summary**
 tab, download `gcp-diagnostics-manifest-{run_id}-{run_attempt}`, and inspect it
 with `jq`, for example:

@@ -29,6 +29,7 @@ MAX_TOTAL_BYTES = 128 * 1024 * 1024
 MAX_SNAPSHOT_BYTES = 8 * 1024 * 1024
 MAX_SNAPSHOT_ROWS = 20_000
 MAX_LINE_BYTES = 256 * 1024
+EXIT_LIMITS = {"exit_code": 255, "exit_signal": 64}
 LABEL_RE = re.compile(r"^[a-z][a-z0-9_-]{0,47}$")
 STATUS_RE = re.compile(r"^[a-z][a-z0-9_:-]{0,63}$")
 TIMESTAMP_RE = re.compile(
@@ -73,6 +74,8 @@ SNAPSHOT_FIELDS = frozenset(
         "disposition",
         "next_eligible_at",
         "terminal_at",
+        "exit_code",
+        "exit_signal",
     }
 )
 SNAPSHOT_STATUS_FIELDS = frozenset(
@@ -95,8 +98,16 @@ STATUS_FIELDS = frozenset(
     }
 )
 NULLABLE_FIELDS = frozenset(
-    {"attempt_completed_at", "run_outcome", "next_eligible_at", "terminal_at"}
+    {
+        "attempt_completed_at",
+        "run_outcome",
+        "next_eligible_at",
+        "terminal_at",
+        "exit_code",
+        "exit_signal",
+    }
 )
+EXIT_FIELDS = frozenset({"exit_code", "exit_signal"})
 STATUS_VALUES = {
     "attempt_state": frozenset({"leased", "running", "completed", "failed", "uncertain"}),
     "run_state": frozenset(
@@ -119,6 +130,54 @@ STATUS_VALUES = {
     ),
 }
 SNAPSHOT_STATUS_VALUES = frozenset({"ok", "query_timeout", "query_failed", "write_failed"})
+RETRY_MARKER_RE = re.compile(r"HEPH_COOKING_RETRY")
+RETRY_FIELD_ORDER = (
+    "event",
+    "classification",
+    "lookup_status",
+    "event_id",
+    "attempt_id",
+    "attempt_number",
+    "run_id",
+    "attempt_state",
+    "run_state",
+    "run_outcome",
+    "exit_code",
+    "exit_signal",
+)
+RETRY_ENUMS = {
+    "event": frozenset({"terminal"}),
+    "classification": frozenset(
+        {
+            "retry-terminal-failed",
+            "retry-terminal-uncertain",
+            "retry-terminal-unresolved",
+            "retry-completion-timeout",
+        }
+    ),
+    "lookup_status": frozenset({"ok", "missing", "query-failed", "query-timeout"}),
+    "attempt_state": frozenset({"leased", "running", "completed", "failed", "uncertain", "unknown"}),
+    "run_state": frozenset(
+        {
+            "queued",
+            "leasing_volume",
+            "provisioning",
+            "starting",
+            "running",
+            "succeeded",
+            "failed",
+            "cancelled",
+            "cleaning_up",
+            "cleaned_up",
+            "unknown",
+        }
+    ),
+    "run_outcome": frozenset({"none", "succeeded", "failed", "cancelled", "unknown"}),
+}
+RETRY_UUID_FIELDS = frozenset({"event_id", "run_id"})
+RETRY_OPTIONAL_UUID_FIELDS = frozenset({"attempt_id"})
+RETRY_INTEGER_FIELDS = frozenset({"attempt_number"})
+RETRY_EXIT_FIELDS = frozenset({"exit_code", "exit_signal"})
 DROP_LINE_RE = re.compile(
     r"(?i)(?:authorization\s*[:=]|bearer\s+|x-telegram-bot-api-secret-token\s*[:=]|"
     r"(?:request|response|http)[_-]?(?:body|headers?)\s*[:=]|"
@@ -350,6 +409,10 @@ def _safe_scalar(field: str, value: Any) -> Any:
         if type(value) is not int or not 1 <= value <= 100:
             raise CollectionError("snapshot attempt number is invalid")
         return value
+    if field in EXIT_FIELDS:
+        if type(value) is not int or not 0 <= value <= EXIT_LIMITS[field]:
+            raise CollectionError(f"snapshot {field} is invalid")
+        return value
     if field in STATUS_FIELDS:
         if not isinstance(value, str) or not STATUS_RE.fullmatch(value):
             raise CollectionError(f"snapshot status is invalid: {field}")
@@ -359,6 +422,68 @@ def _safe_scalar(field: str, value: Any) -> Any:
     if not isinstance(value, str) or not TIMESTAMP_RE.fullmatch(value) or "\x00" in value:
         raise CollectionError(f"snapshot timestamp is invalid: {field}")
     return value
+
+
+def _project_retry_marker(line: str) -> str:
+    """Project the scenario's terminal retry marker into typed fields only."""
+
+    match = RETRY_MARKER_RE.search(line)
+    if match is None:
+        raise CollectionError("retry marker is missing")
+    prefix = line[: match.start()].rstrip()
+    if prefix and (prefix[-1].isalnum() or prefix[-1] in "_=-\"'([{"):
+        raise CollectionError("retry marker is quoted or embedded in a payload")
+    tokens = line[match.start() :].split()
+    if not tokens or tokens[0] != "HEPH_COOKING_RETRY":
+        raise CollectionError("retry marker is malformed")
+    fields: dict[str, str] = {}
+    for token in tokens[1:]:
+        key, separator, value = token.partition("=")
+        if not separator or not key or not value or key in fields:
+            raise CollectionError("retry marker fields are malformed")
+        fields[key] = value
+    if set(fields) != set(RETRY_FIELD_ORDER):
+        raise CollectionError("retry marker fields are not allowlisted")
+
+    safe: dict[str, str] = {}
+    for field in RETRY_FIELD_ORDER:
+        value = fields[field]
+        if field in RETRY_ENUMS:
+            if value not in RETRY_ENUMS[field]:
+                raise CollectionError(f"retry marker enum is invalid: {field}")
+            safe[field] = value
+        elif field in RETRY_UUID_FIELDS:
+            if not UUID_RE.fullmatch(value):
+                raise CollectionError(f"retry marker identifier is invalid: {field}")
+            safe[field] = value.lower()
+        elif field in RETRY_OPTIONAL_UUID_FIELDS:
+            if value == "unknown":
+                safe[field] = value
+            elif UUID_RE.fullmatch(value):
+                safe[field] = value.lower()
+            else:
+                raise CollectionError(f"retry marker identifier is invalid: {field}")
+        elif field in RETRY_INTEGER_FIELDS:
+            if value == "unknown":
+                safe[field] = value
+            elif value.isascii() and value.isdecimal() and 1 <= int(value) <= 100:
+                safe[field] = str(int(value))
+            else:
+                raise CollectionError(f"retry marker integer is invalid: {field}")
+        elif field in RETRY_EXIT_FIELDS:
+            if value in {"none", "unknown"}:
+                safe[field] = value
+            elif (
+                value.isascii()
+                and value.isdecimal()
+                and 0 <= int(value) <= EXIT_LIMITS[field]
+            ):
+                safe[field] = str(int(value))
+            else:
+                raise CollectionError(f"retry marker exit value is invalid: {field}")
+        else:  # pragma: no cover - RETRY_FIELD_ORDER is closed above.
+            raise CollectionError(f"retry marker field is not implemented: {field}")
+    return "HEPH_COOKING_RETRY " + " ".join(f"{field}={safe[field]}" for field in RETRY_FIELD_ORDER)
 
 
 def _project_runtime_fields(line: str) -> tuple[str, list[str]]:
@@ -421,6 +546,8 @@ def _project_text(source: Path, destination: Path) -> tuple[int, str]:
             readiness = classify_readiness_error(line)
             if readiness is not None:
                 projected = readiness
+            elif RETRY_MARKER_RE.search(line) is not None:
+                projected = _project_retry_marker(line)
             elif DROP_LINE_RE.search(line):
                 continue
             else:

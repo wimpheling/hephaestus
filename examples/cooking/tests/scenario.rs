@@ -22,6 +22,7 @@ use secret_postgres::SecretService;
 use secret_store::{EncryptedStore, LocalKeyProvider};
 use std::{
     env, fs,
+    io::Write as _,
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
@@ -1673,6 +1674,7 @@ async fn deliver_request(
 
 async fn wait_for_retried_attempt_completion(
     pool: &sqlx::PgPool,
+    mailbox_id: uuid::Uuid,
     event_id: uuid::Uuid,
     run_id: uuid::Uuid,
 ) {
@@ -1694,20 +1696,216 @@ async fn wait_for_retried_attempt_completion(
         match state.as_deref() {
             Some("completed") => return,
             Some("leased" | "running") => {}
-            Some(other) => panic!("retry attempt entered unexpected state: {other}"),
-            None => panic!("successful retry attempt identity is absent"),
+            Some(other) => {
+                write_retry_failure_evidence(pool, mailbox_id, event_id, run_id, Some(other)).await;
+                panic!("retry attempt entered unexpected state: {other}");
+            }
+            None => {
+                write_retry_failure_evidence(pool, mailbox_id, event_id, run_id, None).await;
+                panic!("successful retry attempt identity is absent");
+            }
+        }
+        let within_deadline = tokio::time::Instant::now() < deadline;
+        if !within_deadline {
+            write_retry_failure_evidence(pool, mailbox_id, event_id, run_id, Some("timeout")).await;
         }
         assert!(
-            tokio::time::Instant::now() < deadline,
+            within_deadline,
             "successful retry attempt completion projection timed out"
         );
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
 }
 
-async fn assert_retried_delivery(pool: &sqlx::PgPool, successful_run: CookingRun) {
+async fn write_retry_failure_evidence(
+    pool: &sqlx::PgPool,
+    mailbox_id: uuid::Uuid,
+    event_id: uuid::Uuid,
+    run_id: uuid::Uuid,
+    observed_state: Option<&str>,
+) {
+    // Flush the exact mailbox lineage before the panic is propagated.  The
+    // periodic snapshot can predate the retry's terminal transition, so this
+    // final, event-scoped sample captures the latest state before the panic.
+    write_cooking_lineage_snapshot(pool, mailbox_id, Some(event_id)).await;
+
+    let lookup = tokio::time::timeout(
+        Duration::from_secs(2),
+        sqlx::query_as::<_, RetryAttemptRow>(
+            "SELECT attempt.id, attempt.attempt_number, attempt.state,
+                    run.state, run.outcome, run.exit_code, run.exit_signal
+               FROM mailbox_delivery_attempts attempt
+               JOIN runs run ON run.id = attempt.run_id
+              WHERE attempt.event_id = $1 AND attempt.run_id = $2
+              ORDER BY attempt.attempt_number DESC LIMIT 1",
+        )
+        .bind(event_id)
+        .bind(run_id)
+        .fetch_optional(pool),
+    )
+    .await;
+    let evidence = match lookup {
+        Ok(Ok(Some(row))) => RetryAttemptEvidence::from_row(&row, observed_state, "ok"),
+        Ok(Ok(None)) => RetryAttemptEvidence::missing(observed_state),
+        Ok(Err(_)) => RetryAttemptEvidence::unavailable(observed_state, "query-failed"),
+        Err(_) => RetryAttemptEvidence::unavailable(observed_state, "query-timeout"),
+    };
+    let attempt_id = evidence
+        .attempt_id
+        .map_or_else(|| String::from("unknown"), |value| value.to_string());
+    let attempt_number = evidence
+        .attempt_number
+        .map_or_else(|| String::from("unknown"), |value| value.to_string());
+    let exit_code = evidence
+        .exit_code
+        .map_or_else(|| String::from("none"), |value| value.to_string());
+    let exit_signal = evidence
+        .exit_signal
+        .map_or_else(|| String::from("none"), |value| value.to_string());
+    let classification = match observed_state {
+        Some("timeout") => "retry-completion-timeout",
+        _ => match evidence.attempt_state {
+            "failed" => "retry-terminal-failed",
+            "uncertain" => "retry-terminal-uncertain",
+            _ => "retry-terminal-unresolved",
+        },
+    };
+    let marker = format!(
+        concat!(
+            "HEPH_COOKING_RETRY event=terminal classification={classification} ",
+            "lookup_status={lookup_status} event_id={event_id} attempt_id={attempt_id} ",
+            "attempt_number={attempt_number} run_id={run_id} attempt_state={attempt_state} ",
+            "run_state={run_state} run_outcome={run_outcome} exit_code={exit_code} ",
+            "exit_signal={exit_signal}"
+        ),
+        classification = classification,
+        lookup_status = evidence.lookup_status,
+        event_id = event_id,
+        attempt_id = attempt_id,
+        attempt_number = attempt_number,
+        run_id = run_id,
+        attempt_state = evidence.attempt_state,
+        run_state = evidence.run_state,
+        run_outcome = evidence.run_outcome,
+        exit_code = exit_code,
+        exit_signal = exit_signal,
+    );
+    let mut stderr = std::io::stderr();
+    let _ = writeln!(stderr, "{marker}");
+    let _ = stderr.flush();
+}
+
+type RetryAttemptRow = (
+    uuid::Uuid,
+    i32,
+    String,
+    String,
+    Option<String>,
+    Option<i32>,
+    Option<i32>,
+);
+
+struct RetryAttemptEvidence {
+    attempt_id: Option<uuid::Uuid>,
+    attempt_number: Option<i32>,
+    attempt_state: &'static str,
+    run_state: &'static str,
+    run_outcome: &'static str,
+    exit_code: Option<i32>,
+    exit_signal: Option<i32>,
+    lookup_status: &'static str,
+}
+
+impl RetryAttemptEvidence {
+    fn from_row(
+        row: &RetryAttemptRow,
+        observed_state: Option<&str>,
+        lookup_status: &'static str,
+    ) -> Self {
+        Self {
+            attempt_id: Some(row.0),
+            attempt_number: Some(row.1),
+            attempt_state: safe_retry_attempt_state(Some(row.2.as_str()), observed_state),
+            run_state: safe_retry_run_state(Some(row.3.as_str())),
+            run_outcome: safe_retry_run_outcome(row.4.as_deref()),
+            exit_code: row.5,
+            exit_signal: row.6,
+            lookup_status,
+        }
+    }
+
+    fn missing(observed_state: Option<&str>) -> Self {
+        Self {
+            attempt_id: None,
+            attempt_number: None,
+            attempt_state: safe_retry_attempt_state(None, observed_state),
+            run_state: "unknown",
+            run_outcome: "none",
+            exit_code: None,
+            exit_signal: None,
+            lookup_status: "missing",
+        }
+    }
+
+    fn unavailable(observed_state: Option<&str>, lookup_status: &'static str) -> Self {
+        Self {
+            attempt_id: None,
+            attempt_number: None,
+            attempt_state: safe_retry_attempt_state(None, observed_state),
+            run_state: "unknown",
+            run_outcome: "none",
+            exit_code: None,
+            exit_signal: None,
+            lookup_status,
+        }
+    }
+}
+
+fn safe_retry_attempt_state(row_state: Option<&str>, observed_state: Option<&str>) -> &'static str {
+    match row_state.or(observed_state) {
+        Some("leased") => "leased",
+        Some("running") => "running",
+        Some("completed") => "completed",
+        Some("failed") => "failed",
+        Some("uncertain") => "uncertain",
+        _ => "unknown",
+    }
+}
+
+fn safe_retry_run_state(value: Option<&str>) -> &'static str {
+    match value {
+        Some("queued") => "queued",
+        Some("leasing_volume") => "leasing_volume",
+        Some("provisioning") => "provisioning",
+        Some("starting") => "starting",
+        Some("running") => "running",
+        Some("succeeded") => "succeeded",
+        Some("failed") => "failed",
+        Some("cancelled") => "cancelled",
+        Some("cleaning_up") => "cleaning_up",
+        Some("cleaned_up") => "cleaned_up",
+        _ => "unknown",
+    }
+}
+
+fn safe_retry_run_outcome(value: Option<&str>) -> &'static str {
+    match value {
+        None => "none",
+        Some("succeeded") => "succeeded",
+        Some("failed") => "failed",
+        Some("cancelled") => "cancelled",
+        _ => "unknown",
+    }
+}
+
+async fn assert_retried_delivery(
+    pool: &sqlx::PgPool,
+    mailbox_id: uuid::Uuid,
+    successful_run: CookingRun,
+) {
     wait_for_retried_attempt_completion(
         pool,
+        mailbox_id,
         successful_run.event_id,
         successful_run.run_id.as_uuid(),
     )
@@ -2090,7 +2288,7 @@ pub async fn exercise_follow_up(
         "pancakes",
     )
     .await;
-    assert_retried_delivery(pool, model_fault).await;
+    assert_retried_delivery(pool, gateway.mailbox_id.as_uuid(), model_fault).await;
     super::cooking_inspection::inspect_with_https_uses(
         pool,
         running,
@@ -2110,7 +2308,7 @@ pub async fn exercise_follow_up(
         "waffles",
     )
     .await;
-    assert_retried_delivery(pool, relay_fault).await;
+    assert_retried_delivery(pool, gateway.mailbox_id.as_uuid(), relay_fault).await;
     super::cooking_inspection::inspect_with_https_uses(
         pool,
         running,
@@ -2176,12 +2374,60 @@ type CookingLineageRow = (
     Option<time::OffsetDateTime>,
     String,
     Option<String>,
+    Option<i32>,
+    Option<i32>,
     String,
     Option<time::OffsetDateTime>,
     Option<time::OffsetDateTime>,
     time::OffsetDateTime,
     time::OffsetDateTime,
 );
+
+fn cooking_lineage_row_json(
+    row: CookingLineageRow,
+    mailbox_id: uuid::Uuid,
+    sampled_at: &str,
+) -> String {
+    let (
+        event_id,
+        attempt_id,
+        attempt_number,
+        attempt_run_id,
+        attempt_state,
+        attempt_created_at,
+        attempt_completed_at,
+        run_state,
+        run_outcome,
+        run_exit_code,
+        run_exit_signal,
+        disposition,
+        next_eligible_at,
+        terminal_at,
+        run_created_at,
+        run_updated_at,
+    ) = row;
+    serde_json::json!({
+        "sampled_at": sampled_at,
+        "mailbox_id": mailbox_id,
+        "event_id": event_id,
+        "attempt_id": attempt_id,
+        "attempt_number": attempt_number,
+        "attempt_run_id": attempt_run_id,
+        "attempt_state": attempt_state,
+        "attempt_created_at": attempt_created_at.to_string(),
+        "attempt_completed_at": attempt_completed_at.map(|value| value.to_string()),
+        "run_state": run_state,
+        "run_outcome": run_outcome,
+        "exit_code": run_exit_code,
+        "exit_signal": run_exit_signal,
+        "disposition": disposition,
+        "next_eligible_at": next_eligible_at.map(|value| value.to_string()),
+        "terminal_at": terminal_at.map(|value| value.to_string()),
+        "run_created_at": run_created_at.to_string(),
+        "run_updated_at": run_updated_at.to_string(),
+    })
+    .to_string()
+}
 
 /// Periodically exports only current Cooking delivery/run lifecycle metadata.
 /// The file is atomically replaced so a killed test leaves the last complete
@@ -2202,7 +2448,8 @@ async fn write_cooking_lineage_snapshot(
     let rows = sqlx::query_as::<_, CookingLineageRow>(
         "SELECT event.id, attempt.id, attempt.attempt_number, attempt.run_id,
                 attempt.state, attempt.created_at, attempt.completed_at,
-                run.state, run.outcome, delivery.disposition,
+                run.state, run.outcome, run.exit_code, run.exit_signal,
+                delivery.disposition,
                 delivery.next_eligible_at, delivery.terminal_at,
                 run.created_at, run.updated_at
            FROM mailbox_events event
@@ -2231,44 +2478,7 @@ async fn write_cooking_lineage_snapshot(
     let sampled_at = time::OffsetDateTime::now_utc().to_string();
     let lines = rows
         .into_iter()
-        .map(
-            |(
-                event_id,
-                attempt_id,
-                attempt_number,
-                attempt_run_id,
-                attempt_state,
-                attempt_created_at,
-                attempt_completed_at,
-                run_state,
-                run_outcome,
-                disposition,
-                next_eligible_at,
-                terminal_at,
-                run_created_at,
-                run_updated_at,
-            )| {
-                serde_json::json!({
-                    "sampled_at": sampled_at.clone(),
-                    "mailbox_id": mailbox_id,
-                    "event_id": event_id,
-                    "attempt_id": attempt_id,
-                    "attempt_number": attempt_number,
-                    "attempt_run_id": attempt_run_id,
-                    "attempt_state": attempt_state,
-                    "attempt_created_at": attempt_created_at.to_string(),
-                    "attempt_completed_at": attempt_completed_at.map(|value| value.to_string()),
-                    "run_state": run_state,
-                    "run_outcome": run_outcome,
-                    "disposition": disposition,
-                    "next_eligible_at": next_eligible_at.map(|value| value.to_string()),
-                    "terminal_at": terminal_at.map(|value| value.to_string()),
-                    "run_created_at": run_created_at.to_string(),
-                    "run_updated_at": run_updated_at.to_string(),
-                })
-                .to_string()
-            },
-        )
+        .map(|row| cooking_lineage_row_json(row, mailbox_id, &sampled_at))
         .collect::<Vec<_>>();
     let contents = if lines.is_empty() {
         String::new()
