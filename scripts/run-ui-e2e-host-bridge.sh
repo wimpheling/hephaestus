@@ -41,6 +41,7 @@ fi
 }
 
 child_pid=""
+child_log=""
 cleanup() {
     local status="$?"
     trap - EXIT INT TERM
@@ -52,6 +53,9 @@ cleanup() {
         done
         kill -KILL -- "-${child_pid}" >/dev/null 2>&1 || true
         wait "${child_pid}" 2>/dev/null || true
+    fi
+    if [[ -n "${child_log}" ]]; then
+        rm -f -- "${child_log}" "${child_log}.safe" "${child_log}.scan" 2>/dev/null || true
     fi
     rm -f -- "${bridge_real}"/request.*.json "${bridge_real}"/request.*.json.pending \
         "${bridge_real}"/response.* "${bridge_real}"/values.* \
@@ -174,13 +178,55 @@ PY
     if [[ -n "${diagnostics_real}" ]]; then
         base_env+=("HEPHAESTUS_COOKING_DIAGNOSTICS_DIR=${diagnostics_real}")
     fi
-    setsid timeout --kill-after=30s "${remaining}s" env -i "${base_env[@]}" \
-        "${external_script}" >/dev/null 2>&1 &
+    if [[ -n "${diagnostics_real}" ]]; then
+        child_log="$(mktemp "${TMPDIR:-/tmp}/heph-browser-bridge.XXXXXX.log")"
+        chmod 600 -- "${child_log}"
+        setsid timeout --kill-after=30s "${remaining}s" env -i "${base_env[@]}" \
+            "${external_script}" >"${child_log}" 2>&1 &
+    else
+        setsid timeout --kill-after=30s "${remaining}s" env -i "${base_env[@]}" \
+            "${external_script}" >/dev/null 2>&1 &
+    fi
     child_pid="$!"
     wait "${child_pid}"
     status="$?"
     child_pid=""
     set -e
+    if (( status != 0 )) && [[ -n "${child_log}" ]]; then
+        safe_log="${child_log}.safe"
+        scan_log="${child_log}.scan"
+        set +e
+        python3 "${repo_root}/scripts/check-browser-evidence.py" --stream \
+            <"${child_log}" >"${safe_log}" 2>"${scan_log}"
+        scan_status="$?"
+        set -e
+        printf 'HEPH_BROWSER_BRIDGE event=external-failure status=%s diagnostics-scan=%s\n' \
+            "${status}" "${scan_status}"
+        if (( scan_status == 0 )); then
+            # The external harness scans retained evidence during cleanup when
+            # available; this second bounded stream scan protects the serial
+            # diagnostic on early failures too.
+            diagnostic_lines="$(sed -u -E \
+                -e 's/(authorization:[[:space:]]*Bearer[[:space:]]+)[^[:space:]]+/\1[REDACTED]/Ig' \
+                -e 's/(HEPHAESTUS_[A-Z0-9_]*(SECRET|TOKEN|KEY)[A-Z0-9_]*=)[^[:space:]]+/\1[REDACTED]/g' \
+                "${safe_log}" | grep -Eiv 'authorization|bearer|secret|token|password|cookie' | \
+                tail -80 | tail -c 16384 || true)"
+            if [[ -n "${diagnostic_lines}" ]]; then
+                printf '%s\n' 'HEPH_BROWSER_BRIDGE diagnostics-start'
+                printf '%s\n' "${diagnostic_lines}"
+                printf '%s\n' 'HEPH_BROWSER_BRIDGE diagnostics-end'
+            else
+                printf '%s\n' 'HEPH_BROWSER_BRIDGE diagnostics-empty'
+            fi
+        else
+            printf '%s\n' 'HEPH_BROWSER_BRIDGE diagnostics-withheld credential-scan-failed'
+        fi
+        rm -f -- "${child_log}" "${safe_log}" "${scan_log}"
+        child_log=""
+    elif [[ -n "${child_log}" ]]; then
+        rm -f -- "${child_log}"
+        child_log=""
+    fi
     response_tmp="${response}.tmp.$$"
     printf '%s' "${status}" >"${response_tmp}"
     chmod 600 -- "${response_tmp}"
