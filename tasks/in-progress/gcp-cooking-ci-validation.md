@@ -34,6 +34,25 @@ acceptance and does not reopen or expand that completed task.
   diagnostics download/scan succeeded. The exact failure cause remains under
   investigation; this is useful operational evidence but does not make the
   Cooking run pass.
+- [x] No-VM historical triage was validated in [run 34626172381](https://github.com/wimpheling/hephaestus/actions/runs/34626172381)
+  for run `34618088312`, attempt `1`, and the exact source SHA. It verified
+  project-wide VM absence, downloaded and scanned the private object, and
+  retained eight safe sources. The projection preserved the failed first
+  retry and running second attempt, but contained no typed failure or denial;
+  the cause is therefore irrecoverable from that retained safe bundle.
+- [x] PR #15 ([commit 31e1d01](https://github.com/wimpheling/hephaestus/commit/31e1d0178bf05dba72a12f168845074f05761fb3))
+  preserves the typed `HEPH_COOKING_RETRY` terminal marker independently of
+  a stale periodic snapshot, including lookup status, IDs, states, outcome and
+  exit fields. Its repository checks passed in [run 34627468291](https://github.com/wimpheling/hephaestus/actions/runs/34627468291).
+- [x] A separate local PostgreSQL integration reproduced the
+  `READ COMMITTED` mailbox-recovery race: the pre-fix path classified a run as
+  retryable, while the fixed path kept it leased and the next recovery pass
+  settled it delivered/completed. All six PostgreSQL tests and the quality gate
+  passed; the correction merged in [PR #16](https://github.com/wimpheling/hephaestus/pull/16)
+  at commit `1cad9ba56a4d780bc94b2a0f65fab4c646b84075`. Its three CI checks and
+  final quality gate passed (PostgreSQL 17, NATS 6, Phoenix 247 and UI 98
+  checks). This local race
+  is not claimed as the cause of the GCP failure.
 
 ## Locked controls
 

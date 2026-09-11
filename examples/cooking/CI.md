@@ -84,6 +84,17 @@ and retains only the one-day safe status artifact. Validation run
 passed collection and scanning; it showed the failed first retry and running
 second attempt, with no safe typed failure explaining the cause.
 
+PR #15 ([commit 31e1d01](https://github.com/wimpheling/hephaestus/commit/31e1d0178bf05dba72a12f168845074f05761fb3))
+adds the typed terminal retry marker used by this projection; its checks
+passed in [run 34627468291](https://github.com/wimpheling/hephaestus/actions/runs/34627468291).
+A separate local PostgreSQL integration reproduced a `READ COMMITTED`
+mailbox-recovery race and validated the correction from retryable to leased,
+then delivered/completed on the next pass. All six PostgreSQL tests and the
+quality gate passed; the correction merged in [PR #16](https://github.com/wimpheling/hephaestus/pull/16)
+at commit `1cad9ba56a4d780bc94b2a0f65fab4c646b84075`, with all three CI checks
+green and final quality passing (PostgreSQL 17, NATS 6, Phoenix 247 and UI 98
+checks). This does not identify the GCP failure cause.
+
 Ubuntu Noble's packaged `passt` predates the DHCP broadcast behavior required
 by libkrun's minimal DHCP client. Before AppArmor setup and passt preflight, startup
 builds the immutable upstream [`passt` commit
