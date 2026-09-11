@@ -78,6 +78,10 @@ cp -- "${script_dir}/run-ui-e2e-host-bridge.sh" "${fake_scripts}/run-ui-e2e-host
 cp -- "${script_dir}/check-browser-evidence.py" "${fake_scripts}/check-browser-evidence.py"
 cat >"${fake_scripts}/run-ui-e2e-external.sh" <<'SH'
 #!/usr/bin/env bash
+[[ "${PLAYWRIGHT_BROWSERS_PATH:-}" == "/tmp/heph-playwright-browsers" ]] || {
+    printf '%s\n' 'browser path was not forwarded'
+    exit 9
+}
 printf '%s\n' 'safe browser failure diagnostic'
 printf '%s\n' 'Authorization: Bearer definitely-secret'
 printf '%s\n' 'password=definitely-password'
@@ -90,6 +94,7 @@ chmod 600 -- "${diagnostics_bridge}/fixture.json"
 diagnostics_deadline="$(( $(date +%s) + 30 ))"
 diagnostics_host_log="${diagnostics_root}/host.log"
 diagnostics_client_log="${diagnostics_root}/client.log"
+PLAYWRIGHT_BROWSERS_PATH=/tmp/heph-playwright-browsers \
 "${fake_scripts}/run-ui-e2e-host-bridge.sh" \
     "${diagnostics_bridge}" "${diagnostics_dir}" "${diagnostics_deadline}" \
     >"${diagnostics_host_log}" 2>&1 &

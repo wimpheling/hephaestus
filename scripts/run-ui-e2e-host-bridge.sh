@@ -175,6 +175,9 @@ PY
         "HEPHAESTUS_E2E_EXTERNAL_WEB_PORT=${request_values[web_port]}"
         "HEPHAESTUS_E2E_COOKING_PHASE=${request_values[phase]}"
     )
+    if [[ -n "${PLAYWRIGHT_BROWSERS_PATH:-}" ]]; then
+        base_env+=("PLAYWRIGHT_BROWSERS_PATH=${PLAYWRIGHT_BROWSERS_PATH}")
+    fi
     if [[ -n "${diagnostics_real}" ]]; then
         base_env+=("HEPHAESTUS_COOKING_DIAGNOSTICS_DIR=${diagnostics_real}")
     fi
