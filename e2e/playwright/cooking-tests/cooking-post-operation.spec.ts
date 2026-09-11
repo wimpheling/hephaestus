@@ -1,5 +1,6 @@
 import {expect, test} from "@playwright/test";
 import {readFileSync} from "node:fs";
+import {waitForNewUpdateId} from "../tests/helpers/wait-for-new-update-id.js";
 
 type CookingPostFixture = {
   project_id: string;
@@ -85,16 +86,7 @@ test("cooking post-operation controls, provenance, recovery, and denial", async 
   }
   await updateForm.getByRole("button", {name: "Start reviewed update"}).click();
   await expect(page.getByRole("alert")).toContainText("Candidate update created and reviewed.");
-  await expect.poll(async () => {
-    const ids = await page.locator("#instance-updates article").evaluateAll(articles =>
-      articles.map(article => article.id)
-    );
-    return ids.find(id => !existingUpdateIds.has(id)) ?? "";
-  }, {timeout: 60_000}).toMatch(/.+/);
-  const browserUpdateId = (await page.locator("#instance-updates article").evaluateAll(articles =>
-    articles.map(article => article.id)
-  )).find(id => !existingUpdateIds.has(id));
-  if (!browserUpdateId) throw new Error("browser-created update has no stable DOM id");
+  const browserUpdateId = await waitForNewUpdateId(page, existingUpdateIds);
   const browserUpdate = page.locator(`#${browserUpdateId}`);
   await expect(browserUpdate).toBeVisible({timeout: 60_000});
   await expect(browserUpdate).toContainText("compatibility_unknown", {timeout: 60_000});
