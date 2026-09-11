@@ -28,6 +28,11 @@ smoke_name=""
 smoke_zone=""
 smoke_log="${GCP_SMOKE_LOG:-}"
 diagnostics_download_error='download-failed'
+diagnostics_cleanup_state='unverified'
+diagnostics_upload_state='unknown'
+diagnostics_download_state='failed'
+diagnostics_scan_state='not-run'
+diagnostics_triage_state='not-run'
 
 die() { printf 'gcp-kvm-smoke: %s\n' "$*" >&2; exit 1; }
 
@@ -128,12 +133,14 @@ diagnostics_object_for_run() {
 
 verify_disposable_vm_absent() {
   local zone="${GCP_ZONE:-europe-west1-b}" name="heph-kvm-smoke-${GITHUB_RUN_ID:-manual}-${GITHUB_RUN_ATTEMPT:-1}" describe_output
+  diagnostics_cleanup_state='unverified'
   [[ "$zone" == "$REGION"-* ]] || { printf 'cleanup zone is outside %s: %s\n' "$REGION" "$zone" >&2; return 1; }
   if describe_output="$(gcloud compute instances describe "$name" --project="$PROJECT_ID" --zone="$zone" 2>&1)"; then
     printf 'cleanup verification found disposable VM still present: %s\n' "$name" >&2
     return 1
   fi
   if grep -Eqi "instances/${name}[^[:alnum:]_].*was not found" <<<"$describe_output"; then
+    diagnostics_cleanup_state='verified-absent'
     printf 'cleanup verified VM absent: %s (%s)\n' "$name" "$zone"
     return 0
   fi
@@ -169,6 +176,8 @@ _download_diagnostics() {
       "$DIAGNOSTICS_BUCKET" "$object" >"$status_path"
     return 1
   }
+  diagnostics_upload_state='verified-by-download'
+  diagnostics_download_state='passed'
   archive_bytes="$(stat -c '%s' "$destination")"
   ((archive_bytes <= 67108864)) || {
     diagnostics_download_error='archive-too-large'
@@ -179,6 +188,7 @@ _download_diagnostics() {
   digest="$(sha256sum "$destination" | awk '{print $1}')"
   tar -tzf "$destination" >/dev/null || {
     diagnostics_download_error='archive-format-invalid'
+    diagnostics_scan_state='failed'
     printf '{"schema":1,"object":"gs://%s/%s","download":"failed","error":"archive scan failed"}\n' \
       "$DIAGNOSTICS_BUCKET" "$object" >"$status_path"
     return 1
@@ -201,10 +211,12 @@ with tarfile.open(archive, mode="r:gz") as target:
 PY
   then
     diagnostics_download_error='archive-path-invalid'
+    diagnostics_scan_state='failed'
     return 1
   fi
   if ! tar -xzf "$destination" -C "$extract_root" --no-same-owner --no-same-permissions; then
     diagnostics_download_error='archive-extraction-failed'
+    diagnostics_scan_state='failed'
     return 1
   fi
   if ! python3 - "$extract_root/cooking-diagnostics" <<'PY'
@@ -227,19 +239,24 @@ for path in root.rglob("*"):
 PY
   then
     diagnostics_download_error='manifest-validation-failed'
+    diagnostics_scan_state='failed'
     return 1
   fi
   if [[ ! -f "$DIAGNOSTICS_SCANNER_SCRIPT" ]]; then
     diagnostics_download_error='scanner-unavailable'
+    diagnostics_scan_state='failed'
     return 1
   fi
   if ! python3 -B "$DIAGNOSTICS_SCANNER_SCRIPT" "$extract_root/cooking-diagnostics" >/dev/null; then
     diagnostics_download_error='credential-scan-failed'
+    diagnostics_scan_state='failed'
     return 1
   fi
   local triage_path="$extract_root/cooking-diagnostics/triage.json"
   if ! python3 -B "$DIAGNOSTICS_TRIAGE_SCRIPT" "$extract_root/cooking-diagnostics" >"$triage_path"; then
     diagnostics_download_error='triage-projection-failed'
+    diagnostics_scan_state='passed'
+    diagnostics_triage_state='failed'
     printf '{"schema":1,"object":"gs://%s/%s","cleanup":"verified-absent","upload":"verified-by-download","download":"passed","scan":"passed","triage":"failed","archiveBytes":%s,"archiveSha256":"%s","manifest":"%s"}\n' \
       "$DIAGNOSTICS_BUCKET" "$object" "$archive_bytes" "$digest" "$extract_root/cooking-diagnostics/manifest.json" >"$status_path"
     return 1
@@ -269,12 +286,39 @@ Path(status_path).write_text(json.dumps(status, separators=(",", ":")) + "\n", e
 PY
   then
     diagnostics_download_error='triage-status-write-failed'
+    diagnostics_triage_state='failed'
     return 1
   fi
+  diagnostics_triage_state='passed'
   printf 'HEPH_GCP_DIAGNOSTICS event=triage status=pass\n'
+  diagnostics_scan_state='passed'
   printf 'HEPH_GCP_DIAGNOSTICS event=download status=pass bytes=%s sha256=%s manifest=%s\n' \
     "$archive_bytes" "$digest" "$extract_root/cooking-diagnostics/manifest.json"
   printf 'Authenticated download: gcloud storage cp gs://%s/%s ./gcp-diagnostics.tar.gz\n' "$DIAGNOSTICS_BUCKET" "$object"
+}
+
+write_download_failure_status() {
+  local status_path="$1" object="$2"
+  python3 - "$status_path" "$object" "$diagnostics_cleanup_state" \
+    "$diagnostics_upload_state" "$diagnostics_download_state" "$diagnostics_scan_state" "$diagnostics_triage_state" \
+    "$diagnostics_download_error" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+path, obj, cleanup, upload, download, scan, triage, error = sys.argv[1:]
+status = {
+    "schema": 1,
+    "object": obj,
+    "cleanup": cleanup,
+    "upload": upload,
+    "download": download,
+    "scan": scan,
+    "triage": triage,
+    "error": error,
+}
+Path(path).write_text(json.dumps(status, separators=(",", ":")) + "\n", encoding="utf-8")
+PY
 }
 
 download_diagnostics() {
@@ -285,13 +329,17 @@ download_diagnostics() {
   fi
   mkdir -p -- "$(dirname -- "$status_path")"
   diagnostics_download_error='download-failed'
+  diagnostics_cleanup_state='unverified'
+  diagnostics_upload_state='unknown'
+  diagnostics_download_state='failed'
+  diagnostics_scan_state='not-run'
+  diagnostics_triage_state='not-run'
   set +e
   _download_diagnostics
   status=$?
   set -e
   if ((status != 0)); then
-    printf '{"schema":1,"object":"%s","cleanup":"unverified","download":"failed","scan":"not-run","error":"%s"}\n' \
-      "$object" "$diagnostics_download_error" >"$status_path"
+    write_download_failure_status "$status_path" "$object"
   fi
   return "$status"
 }

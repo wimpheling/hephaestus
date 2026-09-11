@@ -484,7 +484,7 @@ install -d -m 0700 -o forge -g forge "$evidence_root"
 set +e
 run_with_deadline systemd-run --unit="$cooking_unit" --service-type=oneshot --wait --pipe --collect \
     --expand-environment=no --property=Delegate=yes --property=RuntimeMaxSec="${cooking_remaining}s" \
-    --property=TimeoutStopSec=30s --property=TasksMax=infinity \
+    --property=TimeoutStartSec="${cooking_remaining}s" --property=TimeoutStopSec=15s --property=TasksMax=infinity \
     --property=LimitNOFILE=65536 --uid="$forge_uid" --gid="$forge_gid" \
     --working-directory="$checkout_root" --setenv=HOME=/home/forge \
     --setenv=XDG_RUNTIME_DIR=/run/user/10001 --setenv=RUSTUP_HOME=/home/forge/.rustup \
@@ -522,8 +522,34 @@ run_with_deadline systemd-run --unit="$cooking_unit" --service-type=oneshot --wa
 status=$?
 set -e
 if ((status != 0)); then
+    # The outer deadline can kill systemd-run while the delegated oneshot is
+    # still activating.  Stop that unit from this supervisor's cgroup before
+    # collecting evidence; otherwise the workload can consume the collection
+    # reserve and keep fixture-bearing processes alive.
+    set +e
+    run_with_collection_deadline timeout --kill-after=2s 15s systemctl stop "$cooking_unit" --no-pager >/dev/null 2>&1
+    stop_status=$?
+    set -e
+    active_state="$(timeout --kill-after=1s 5s systemctl show "$cooking_unit" --no-pager --property=ActiveState --value 2>/dev/null || true)"
+    if [[ "$active_state" == active || "$active_state" == activating || "$active_state" == deactivating ]]; then
+        printf 'Cooking systemd unit remained %s after stop (stop_exit=%s); issuing bounded kill\n' \
+            "$active_state" "$stop_status" >&2
+        set +e
+        run_with_collection_deadline timeout --kill-after=2s 15s systemctl kill "$cooking_unit" --kill-who=all --signal=KILL >/dev/null 2>&1
+        run_with_collection_deadline timeout --kill-after=2s 15s systemctl stop "$cooking_unit" --no-pager >/dev/null 2>&1
+        set -e
+        active_state="$(timeout --kill-after=1s 5s systemctl show "$cooking_unit" --no-pager --property=ActiveState --value 2>/dev/null || true)"
+    fi
+    if [[ "$active_state" == active || "$active_state" == activating || "$active_state" == deactivating ]]; then
+        printf 'Cooking systemd unit did not stop before evidence collection: state=%s\n' "$active_state" >&2
+    fi
     printf 'Cooking systemd unit failed with status=%s unit=%s\n' "$status" "$cooking_unit" >&2
-    systemctl status "$cooking_unit" --no-pager 2>&1 | tail -80 || true
+    # `systemctl status` includes the process tree and command arguments.  The
+    # cooking environment can contain fixture credentials, so retain only the
+    # allowlisted unit state fields needed to classify the failure.
+    timeout --kill-after=1s 5s systemctl show "$cooking_unit" --no-pager \
+        --property=ActiveState,SubState,Result,ExecMainCode,ExecMainStatus,MainPID \
+        2>&1 || true
 fi
 phase_start evidence
 set +e

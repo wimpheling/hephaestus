@@ -47,6 +47,7 @@ diagnostics_uploaded=false
 diagnostics_object_metadata=''
 diagnostic_timeout_log=''
 diagnostic_probe_completed=false
+diagnostic_quarantine_validated=false
 diagnostics_token_json=''
 diagnostics_header_file=''
 
@@ -106,6 +107,7 @@ finish() {
     local expected_fixture=false
     if ((diagnostics_collection_status == 0)) &&
         [[ "$diagnostic_probe_completed" == true ]] &&
+        [[ "$diagnostic_quarantine_validated" == true ]] &&
         ((status == 42)) && [[ "$phase" == diagnostic-synthetic ]]; then
       expected_fixture=true
     fi
@@ -278,6 +280,24 @@ collect_diagnostics() {
   if [[ "$test_mode" == diagnostic ]]; then
     printf '{"status":"failed","phase":"browser","test":"diagnostic-synthetic","exit_code":42}\n' \
       >"$input_root/browser-summary.json"
+    # Load one known fixture value from the checked-out scanner into an
+    # isolated input file.  It is never sent to serial output or an argument,
+    # and the producer must quarantine it by content rather than filename.
+    diagnostic_unsafe_source="$input_root/diagnostic-input.log"
+    python3 - "$scanner" "$diagnostic_unsafe_source" <<'PY'
+import importlib.util
+from pathlib import Path
+import sys
+
+spec = importlib.util.spec_from_file_location("diagnostic_scanner", sys.argv[1])
+if spec is None or spec.loader is None:
+    raise SystemExit("diagnostic scanner cannot be loaded")
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+Path(sys.argv[2]).write_bytes(module.VALUES[0] + b"\n")
+PY
+    chmod 0600 "$diagnostic_unsafe_source"
+    collector_args+=(--source "runtime-log=$diagnostic_unsafe_source")
     if [[ -n "$diagnostic_timeout_log" && -f "$diagnostic_timeout_log" && ! -L "$diagnostic_timeout_log" ]]; then
       bounded_copy "$diagnostic_timeout_log" "$input_root/test-output.log"
     else
@@ -317,6 +337,26 @@ collect_diagnostics() {
     printf 'HEPH_GCP_DIAGNOSTICS event=collection status=fail exit=%s\n' "$collector_status"
     return "$collector_status"
   }
+  if [[ "$test_mode" == diagnostic ]]; then
+    if ! python3 - "$output_root/manifest.json" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+manifest = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+expected = [{"label": "runtime-log", "reason": "credential-scan-rejected", "status": "rejected"}]
+if manifest.get("collectionStatus") != "partial":
+    raise SystemExit("diagnostic quarantine did not produce a partial collection")
+if manifest.get("rejectedSources") != expected:
+    raise SystemExit("diagnostic quarantine record does not match the expected source policy rejection")
+PY
+    then
+      printf 'HEPH_GCP_DIAGNOSTICS event=collection status=fail reason=quarantine-contract\n'
+      return 1
+    fi
+    diagnostic_quarantine_validated=true
+    printf 'HEPH_GCP_DIAGNOSTICS event=collection status=partial rejected=runtime-log reason=credential-scan-rejected\n'
+  fi
   printf 'HEPH_GCP_DIAGNOSTICS event=collection status=pass\n'
   run_with_collection_deadline python3 "$scanner" "$output_root" || {
     printf 'HEPH_GCP_DIAGNOSTICS event=scan status=fail\n'

@@ -542,7 +542,11 @@ def _canonical_snapshot_status(source: Path, destination: Path) -> tuple[int, st
     if source.stat(follow_symlinks=False).st_size > MAX_LINE_BYTES:
         raise CollectionError("lineage status exceeds its retention limit")
     try:
-        value = json.loads(source.read_text(encoding="utf-8"))
+        with _open_safe(source) as input_file:
+            raw = input_file.read(MAX_LINE_BYTES + 1)
+        if len(raw) > MAX_LINE_BYTES:
+            raise CollectionError("lineage status exceeds its retention limit")
+        value = json.loads(raw.decode("utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
         raise CollectionError("lineage status must be one JSON object") from error
     if not isinstance(value, dict) or set(value) - SNAPSHOT_STATUS_FIELDS:
@@ -575,11 +579,32 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _manifest(records: list[dict[str, Any]], errors: list[dict[str, str]]) -> dict[str, Any]:
+def _source_rejection_reason(error: Exception) -> str:
+    """Map source failures to non-sensitive, stable manifest classifications."""
+
+    message = str(error).lower()
+    if "fixture credential" in message:
+        return "credential-scan-rejected"
+    if "unredacted secret assignment" in message:
+        return "secret-assignment-rejected"
+    if "symlink" in message or "unsafe" in message or "forbidden" in message:
+        return "source-policy-rejected"
+    if "exceeds" in message or "budget" in message or "limit" in message:
+        return "source-limit-rejected"
+    return "source-validation-rejected"
+
+
+def _manifest(
+    records: list[dict[str, Any]],
+    errors: list[dict[str, str]],
+    rejected: list[dict[str, str]],
+) -> dict[str, Any]:
     return {
         "schema": 1,
         "sources": records,
         "collectionErrors": errors,
+        "collectionStatus": "partial" if errors or rejected else "complete",
+        "rejectedSources": rejected,
         "omitted": [
             "browser request/response bodies and headers",
             "cookies, storage state, screenshots, traces, HAR files",
@@ -658,6 +683,7 @@ def collect(
     staging.mkdir(mode=0o700, parents=False)
     records: list[dict[str, Any]] = []
     errors: list[dict[str, str]] = []
+    rejected: list[dict[str, str]] = []
     seen_labels: set[str] = set()
     total = 0
     try:
@@ -667,28 +693,42 @@ def collect(
             candidate_label, separator, candidate_path = raw.partition("=")
             if candidate_label in seen_labels:
                 raise CollectionError(f"source label is duplicated: {candidate_label}")
+            if not separator or candidate_label not in ALLOWED_LABELS:
+                raise CollectionError("source label is not allowlisted")
             if separator and candidate_label in ALLOWED_LABELS:
                 seen_labels.add(candidate_label)
-            if separator and candidate_path.startswith("/") and _has_symlink_ancestor(
-                Path(candidate_path)
-            ):
-                raise CollectionError("source path has an unsafe symlink ancestor")
-            if (
-                separator
-                and candidate_label in ALLOWED_LABELS
-                and candidate_path.startswith("/")
-                and not Path(candidate_path).exists()
-            ):
-                errors.append({"label": candidate_label, "status": "missing"})
+            try:
+                if separator and candidate_path.startswith("/") and _has_symlink_ancestor(
+                    Path(candidate_path)
+                ):
+                    raise CollectionError("source path has an unsafe symlink ancestor")
+                if (
+                    separator
+                    and candidate_label in ALLOWED_LABELS
+                    and candidate_path.startswith("/")
+                    and not Path(candidate_path).exists()
+                ):
+                    errors.append({"label": candidate_label, "status": "missing"})
+                    continue
+                label, source_path = _parse_source(raw)
+                destination = sources_dir / label
+                if label == "browser-summary":
+                    size, digest = _project_browser_summary(source_path, destination)
+                elif label == "runtime-structured":
+                    size, digest = _project_runtime_structured(source_path, destination)
+                else:
+                    size, digest = _project_text(source_path, destination)
+            except (CollectionError, OSError, ValueError) as error:
+                destination = sources_dir / candidate_label
+                destination.unlink(missing_ok=True)
+                rejected.append(
+                    {
+                        "label": candidate_label,
+                        "reason": _source_rejection_reason(error),
+                        "status": "rejected",
+                    }
+                )
                 continue
-            label, source_path = _parse_source(raw)
-            destination = sources_dir / label
-            if label == "browser-summary":
-                size, digest = _project_browser_summary(source_path, destination)
-            elif label == "runtime-structured":
-                size, digest = _project_runtime_structured(source_path, destination)
-            else:
-                size, digest = _project_text(source_path, destination)
             total += size
             if total > MAX_TOTAL_BYTES:
                 raise CollectionError("combined evidence exceeds retention limit")
@@ -732,7 +772,7 @@ def collect(
             )
         if not records:
             raise CollectionError("at least one evidence source is required")
-        value = _manifest(records, errors)
+        value = _manifest(records, errors, rejected)
         _write_manifest(staging, value)
         EVIDENCE.main([str(staging)])
         value["credentialScan"] = "passed"

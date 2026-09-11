@@ -4,7 +4,9 @@ The durable GCP configuration, keyless identities, bucket retention, dispatch
 gate and failure triage are in the [GCP Cooking CI runbook](../../docs/gcp-cooking-ci.md).
 Current `gcp-cooking` live validation is **pending**; the diagnostic evidence
 gate has passed, while the historical results below do not claim that the
-full path is green.
+full path is green. The latest full run
+[34588821244](https://github.com/wimpheling/hephaestus/actions/runs/34588821244)
+at commit `18fff14` timed out with exit `124`; full runs are re-paused.
 
 The [Cooking E2E workflow](../../.github/workflows/cooking-e2e.yml) runs the
 same `examples/cooking/run.sh` entry point as local execution. It requires an
@@ -112,7 +114,11 @@ verification all pass. This diagnostic gate is proven by [run
 34586850977](https://github.com/wimpheling/hephaestus/actions/runs/34586850977)
 at commit `c252f0517c147c86d6560c79c403fe7ce6f6d4a4`; it completed in 3m11s,
 verified VM absence, and passed authenticated private download and scanning.
-The full `gcp-cooking` trial remains pending live validation.
+An isolated diagnostic source containing known fixture content is quarantined
+by the current collector; safe lineage/status evidence can still form a
+private partial bundle with an explicit `rejectedSources` classification. That
+partial path remains pending live proof. The full `gcp-cooking` trial remains
+pending live validation.
 
 The same `main` manual dispatch also offers `gcp-cooking`. Before creating a
 paid VM it checks the private, checksum-pinned cache object
@@ -132,8 +138,11 @@ provider-enforced `DELETE` lifetime. The startup script downloads and verifies
 the cache, checks out the exact workflow SHA, and runs the complete Cooking
 path through the checked-out `scripts/gcp-cooking-run.sh` helper. Its deadline
 shares the startup script's 35-minute test budget and leaves five minutes for
-collection/upload; it is not reset after bootstrap. The smoke mode continues
-to use no service account and no scopes.
+collection/upload; it is not reset after bootstrap. Cooking runs as a systemd
+oneshot with the remaining absolute deadline and a bounded stop timeout, so
+activation and teardown cannot consume the collection reserve. This remains
+pending live full-path proof. The smoke mode continues to use no service
+account and no scopes.
 
 The GCP Cooking path reports a dedicated `HEPHAESTUS_GCP_COOKING` marker and
 uses the same private collector/upload/download path. The GitHub workflow
@@ -146,7 +155,27 @@ gcloud storage cp gs://hephaestus-508000-cooking-diagnostics/cooking/runs/RUN_ID
 
 The bucket lifecycle is one day. The existing `cooking` manual mode and
 automatic push and pull-request behavior continue to use the prepared
-self-hosted runner.
+self-hosted runner. The GitHub diagnostics status artifact includes bounded
+triage fields; use the runbook's [`summarize-cooking-diagnostics.py`](../../scripts/summarize-cooking-diagnostics.py)
+instructions to correlate a first denial with the latest validated attempt
+rows. The private bundle remains canonical and requires authenticated
+post-delete download, archive validation and credential scanning.
+
+If the Cooking oneshot fails, its helper records bounded `systemctl show`
+properties. It does not emit `systemctl status` process trees, whose command
+arguments can contain fixture values. This source-level safety change is
+reviewed; no new full-run root cause is claimed from it.
+
+The latest full attempt timed out after its raw serial exposed a fixture
+credential. At that historical commit the complete diagnostics bundle failed
+closed. VM absence was proved at 11:00:45Z/11:00:47Z, but the later download
+failure overwrote the status manifest's verified cleanup state with
+`cleanup: unverified`; that status-writing fix is pending. The current
+collector omits the unsafe source, records an allowlisted `rejectedSources`
+classification, and retains an independently safe partial private bundle with
+`collectionStatus: partial`. Its local regression passes; a cheap diagnostic
+live run is still required before treating this behavior as proven. No denial
+cause or snapshot evidence is claimed from this attempt.
 
 The first successful post-merge live smoke was [workflow run
 34525055454](https://github.com/wimpheling/hephaestus/actions/runs/34525055454)
@@ -160,14 +189,15 @@ is the evidence record.
 
 This verifies the disposable KVM smoke path only. The cache gate is now
 verified: the private checksum-pinned object is uploaded and readable by CI.
-The latest full `gcp-cooking` attempt was [workflow run
+An earlier full `gcp-cooking` attempt was [workflow run
 34553598335](https://github.com/wimpheling/hephaestus/actions/runs/34553598335)
 at commit `da8fa906`. It reached the Cooking test suite with 32 tests passed,
 1 failed and 1 ignored, then failed because Skopeo could not access its
 `auth.json` (`Permission denied`). The VM absence was verified during cleanup
 on 2026-09-11 at 02:41:35Z/02:41:37Z; the retained [serial artifact](https://github.com/wimpheling/hephaestus/actions/runs/34553598335/artifacts/10182422984)
-is the evidence record. The full GCP Cooking path therefore remains pending a
-successful rerun after the Skopeo permission issue is corrected.
+is the evidence record. That historical run left the full GCP Cooking path
+pending after the Skopeo permission issue; the newer timeout and bundle
+quarantine status are recorded above.
 
 Configure the repository variable `HEPHAESTUS_COOKING_RUNNER_ENV` with the
 absolute path of an operator-maintained shell environment file outside the
@@ -204,9 +234,11 @@ Each execution retains diagnostics in a run-specific directory under
 a 30-minute limit. Runs are serialized and a new commit does not cancel an
 active guest execution. A failed execution remains failed even if diagnostic
 collection succeeds. Diagnostics are uploaded only after the fixture-credential
-scanner succeeds, with seven-day retention. The scanner checks retained files
-and ZIP contents; this artifact gate does not replace the scenario's checks of
-raw storage and guest execution surfaces.
+scanner succeeds; if an individual raw source is rejected, the safe partial
+bundle records `collectionStatus: partial` and its `rejectedSources` reason
+without retaining that source. The scanner checks retained files and ZIP
+contents; this artifact gate does not replace the scenario's checks of raw
+storage and guest execution surfaces.
 
 The local entry point also scans the observed execution stream before display
 redaction. A fixture credential in raw, base64 or hexadecimal form makes the

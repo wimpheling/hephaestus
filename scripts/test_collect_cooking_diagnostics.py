@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 SPEC = importlib.util.spec_from_file_location(
@@ -194,6 +195,102 @@ class CookingDiagnosticsTests(unittest.TestCase):
                 manifest["collectionErrors"],
                 [{"label": "runtime-log", "status": "missing"}],
             )
+
+    def test_quarantines_unsafe_source_and_keeps_safe_partial_bundle(self):
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            unsafe = root_path / "serial.log"
+            unsafe.write_bytes(COLLECTOR.EVIDENCE.VALUES[0] + b"\n")
+            snapshot = root_path / "lineage.jsonl"
+            snapshot.write_text(
+                json.dumps(
+                    {
+                        "event_id": "00000000-0000-0000-0000-000000000001",
+                        "attempt_id": "00000000-0000-0000-0000-000000000002",
+                        "attempt_run_id": "00000000-0000-0000-0000-000000000003",
+                        "attempt_number": 1,
+                        "attempt_state": "failed",
+                        "run_state": "failed",
+                        "run_outcome": "failed",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            snapshot_status = root_path / "lineage-status.json"
+            snapshot_status.write_text(
+                '{"schema":1,"status":"ok","rows":1}\n', encoding="utf-8"
+            )
+            output = root_path / "bundle"
+            archive = root_path / "bundle.tar.gz"
+            self.assertEqual(
+                COLLECTOR.collect(
+                    output,
+                    [f"serial={unsafe}"],
+                    snapshot,
+                    snapshot_status,
+                    archive,
+                ),
+                0,
+            )
+            manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["collectionStatus"], "partial")
+            self.assertEqual(
+                manifest["rejectedSources"],
+                [{"label": "serial", "reason": "credential-scan-rejected", "status": "rejected"}],
+            )
+            self.assertFalse((output / "sources/serial").exists())
+            self.assertTrue((output / "lineage.jsonl").is_file())
+            self.assertTrue((output / "lineage-status.json").is_file())
+            self.assertTrue(archive.is_file())
+            self.assertNotIn(COLLECTOR.EVIDENCE.VALUES[0], archive.read_bytes())
+
+    def test_quarantines_symlink_ancestor_and_keeps_safe_partial_bundle(self):
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            safe = root_path / "safe.log"
+            safe.write_text("HEPH_GCP_KVM_STARTUP event=ready\n", encoding="utf-8")
+            target = root_path / "target"
+            target.mkdir()
+            unsafe = target / "runtime.log"
+            unsafe.write_text("HEPH_GCP_KVM_STARTUP event=unsafe\n", encoding="utf-8")
+            linked = root_path / "linked"
+            linked.symlink_to(target, target_is_directory=True)
+            output = root_path / "bundle"
+
+            self.assertEqual(
+                COLLECTOR.collect(
+                    output,
+                    [f"serial={safe}", f"runtime-log={linked / unsafe.name}"],
+                    None,
+                    None,
+                    None,
+                ),
+                0,
+            )
+            manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["collectionStatus"], "partial")
+            self.assertEqual(
+                manifest["rejectedSources"],
+                [{"label": "runtime-log", "reason": "source-policy-rejected", "status": "rejected"}],
+            )
+            self.assertTrue((output / "sources/serial").is_file())
+            self.assertFalse((output / "sources/runtime-log").exists())
+
+    def test_snapshot_status_reads_through_safe_bounded_open(self):
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            source = root_path / "lineage-status.json"
+            source.write_text('{"schema":1,"status":"ok","rows":0}\n', encoding="utf-8")
+            destination = root_path / "retained-status.json"
+
+            with patch.object(Path, "read_text", side_effect=AssertionError("unsafe text read")):
+                size, digest = COLLECTOR._canonical_snapshot_status(source, destination)
+
+            retained = destination.read_bytes()
+            self.assertEqual(size, len(retained))
+            self.assertEqual(digest, COLLECTOR.hashlib.sha256(retained).hexdigest())
+            self.assertEqual(json.loads(retained), {"schema": 1, "status": "ok", "rows": 0})
 
     def test_rejects_duplicate_labels_and_projects_browser_summary(self):
         with tempfile.TemporaryDirectory() as root:

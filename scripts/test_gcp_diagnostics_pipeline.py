@@ -251,6 +251,8 @@ finish
             self.assertNotIn("secret", encoded.lower())
             self.assertNotIn("token", encoded.lower())
             self.assertEqual(set(result), TRIAGE.TRIAGE_FIELDS)
+            self.assertEqual(result["collectionStatus"], "complete")
+            self.assertEqual(result["rejectedSources"], [])
 
     def test_triage_rejects_untyped_denial_classification_or_id(self):
         with tempfile.TemporaryDirectory(prefix="heph-gcp-triage-denial-") as directory:
@@ -281,9 +283,22 @@ finish
         hang: bool = False,
         cleanup: str = "absent",
         zone: str = "europe-west1-b",
+        triage_failure: bool = False,
     ):
         fake_bin = root / "bin"
         fake_bin.mkdir()
+        if triage_failure:
+            real_python = shutil.which("python3")
+            self.assertIsNotNone(real_python)
+            fake_bin.joinpath("python3").write_text(
+                "#!/usr/bin/env bash\n"
+                "case \"$*\" in\n"
+                "  *summarize-cooking-diagnostics.py*) exit 19 ;;\n"
+                f"  *) exec {real_python} \"$@\" ;;\n"
+                "esac\n",
+                encoding="utf-8",
+            )
+            fake_bin.joinpath("python3").chmod(0o700)
         fake_gcloud = fake_bin / "gcloud"
         fake_gcloud.write_text(
             "#!/usr/bin/env bash\n"
@@ -372,6 +387,33 @@ finish
             self.assertNotEqual(result.returncode, 0)
             status = json.loads((root / "status.json").read_text(encoding="utf-8"))
             self.assertEqual(status["download"], "failed")
+            self.assertEqual(status["cleanup"], "verified-absent")
+            self.assertEqual(status["upload"], "unknown")
+            self.assertEqual(status["scan"], "not-run")
+
+    def test_download_failure_preserves_verified_cleanup_and_scan_failure(self):
+        with tempfile.TemporaryDirectory(prefix="heph-gcp-diagnostics-") as directory:
+            root = Path(directory)
+            malformed = root / "malformed.tar.gz"
+            malformed.write_bytes(b"not a gzip archive")
+            result = self._run_download(root, malformed)
+            self.assertNotEqual(result.returncode, 0)
+            status = json.loads((root / "status.json").read_text(encoding="utf-8"))
+            self.assertEqual(status["cleanup"], "verified-absent")
+            self.assertEqual(status["upload"], "verified-by-download")
+            self.assertEqual(status["scan"], "failed")
+
+    def test_triage_failure_preserves_download_and_scan_success(self):
+        with tempfile.TemporaryDirectory(prefix="heph-gcp-diagnostics-") as directory:
+            root = Path(directory)
+            result = self._run_download(root, self._archive(root), triage_failure=True)
+            self.assertNotEqual(result.returncode, 0)
+            status = json.loads((root / "status.json").read_text(encoding="utf-8"))
+            self.assertEqual(status["cleanup"], "verified-absent")
+            self.assertEqual(status["upload"], "verified-by-download")
+            self.assertEqual(status["download"], "passed")
+            self.assertEqual(status["scan"], "passed")
+            self.assertEqual(status["triage"], "failed")
 
     def test_malformed_archive_is_recorded_and_fails_closed(self):
         with tempfile.TemporaryDirectory(prefix="heph-gcp-diagnostics-") as directory:
@@ -528,6 +570,17 @@ finish
         self.assertIn("--config \"$diagnostics_header_file\"", startup)
         self.assertNotIn('-H "Authorization: Bearer $token"', startup)
 
+    def test_cooking_failure_diagnostics_do_not_retain_systemd_process_arguments(self):
+        runner = (ROOT / "gcp-cooking-run.sh").read_text(encoding="utf-8")
+        self.assertIn("systemctl show \"$cooking_unit\"", runner)
+        self.assertIn("--property=ActiveState,SubState,Result,ExecMainCode,ExecMainStatus,MainPID", runner)
+        self.assertNotIn('systemctl status "$cooking_unit"', runner)
+        self.assertIn('systemctl kill "$cooking_unit" --kill-who=all --signal=KILL', runner)
+        self.assertIn('--property=TimeoutStartSec="${cooking_remaining}s" --property=TimeoutStopSec=15s', runner)
+        self.assertNotIn('--property=TimeoutStartSec=15s', runner)
+        self.assertIn('timeout --kill-after=1s 5s systemctl show "$cooking_unit"', runner)
+        self.assertIn('run_with_collection_deadline timeout --kill-after=2s 15s systemctl stop "$cooking_unit"', runner)
+
     def test_coordinator_uses_mode_bound_before_terminal_timeout(self):
         coordinator = (ROOT / "gcp-kvm-smoke.sh").read_text(encoding="utf-8")
         self.assertIn("poll_deadline_epoch=$((trial_start_epoch + 540))", coordinator)
@@ -626,6 +679,24 @@ finish
         self.assertEqual(result.returncode, 42, result.stdout + result.stderr)
         self.assertIn("TEST-FAIL expected=true", result.stdout)
         self.assertIn("DIAGNOSTICS PASS", result.stdout)
+        with tarfile.open(root / "work" / "tmp" / "cooking-diagnostics.tar.gz", "r:gz") as archive:
+            archive_members = archive.getmembers()
+            manifest_member = archive.extractfile("cooking-diagnostics/manifest.json")
+            self.assertIsNotNone(manifest_member)
+            manifest = json.load(manifest_member)
+        self.assertEqual(manifest["collectionStatus"], "partial")
+        self.assertEqual(
+            manifest["rejectedSources"],
+            [{"label": "runtime-log", "reason": "credential-scan-rejected", "status": "rejected"}],
+        )
+        self.assertFalse(any("credential" in member.name for member in archive_members))
+        with tempfile.TemporaryDirectory(prefix="heph-gcp-diagnostic-triage-") as extracted:
+            extracted_root = Path(extracted)
+            with tarfile.open(root / "work" / "tmp" / "cooking-diagnostics.tar.gz", "r:gz") as bundle:
+                bundle.extractall(extracted_root)
+            triage = TRIAGE.summarize(extracted_root / "cooking-diagnostics")
+        self.assertEqual(triage["collectionStatus"], "partial")
+        self.assertEqual(triage["rejectedSources"], manifest["rejectedSources"])
 
     def test_real_finish_upload_and_scanner_failures_are_explicit_and_clean_headers(self):
         for upload, scanner in (("403", "ok"), ("hang", "ok"), ("ok", "reject")):

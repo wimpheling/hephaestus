@@ -37,7 +37,9 @@ SOURCE_LABELS = {
     "browser-summary", "test-output", "lineage", "lineage-status",
 }
 SAFE_STATUS = COLLECTOR.SNAPSHOT_STATUS_VALUES
-TRIAGE_FIELDS = {"schema", "denial", "attempts", "snapshotStatus", "sources"}
+TRIAGE_FIELDS = {
+    "schema", "collectionStatus", "rejectedSources", "denial", "attempts", "snapshotStatus", "sources",
+}
 DENIAL_FIELDS = {"denial_stage", "denial_class", "run_id"}
 DENIAL_STAGES = {
     "session-authentication", "lease-authorization", "request-authorization",
@@ -46,6 +48,10 @@ DENIAL_STAGES = {
 DENIAL_CLASSES = {
     "authentication_denied", "authority_unavailable", "authorization_denied",
     "request_denied", "persistence_failure", "secret_resolution_failure", "other_failure",
+}
+REJECTION_REASONS = {
+    "credential-scan-rejected", "secret-assignment-rejected", "source-policy-rejected",
+    "source-limit-rejected", "source-validation-rejected",
 }
 ATTEMPT_FIELDS = {
     "event_id", "attempt_id", "attempt_number", "attempt_run_id", "attempt_state", "attempt_created_at",
@@ -164,8 +170,25 @@ def summarize(bundle: Path) -> dict[str, Any]:
         raise ValueError("triage requires a passed credential scan")
     records = manifest.get("sources")
     errors = manifest.get("collectionErrors")
+    collection_status = manifest.get("collectionStatus")
+    rejected_sources = manifest.get("rejectedSources")
+    if collection_status not in {"complete", "partial"} or not isinstance(rejected_sources, list):
+        raise ValueError("manifest collection status is invalid")
     if not isinstance(records, list) or not isinstance(errors, list):
         raise ValueError("manifest source metadata is invalid")
+    for rejected in rejected_sources:
+        if (
+            not isinstance(rejected, dict)
+            or set(rejected) != {"label", "reason", "status"}
+            or rejected.get("label") not in SOURCE_LABELS
+            or rejected.get("reason") not in REJECTION_REASONS
+            or rejected.get("status") != "rejected"
+        ):
+            raise ValueError("manifest rejected source metadata is invalid")
+    if collection_status == "complete" and (errors or rejected_sources):
+        raise ValueError("complete collection contains partial source metadata")
+    if collection_status == "partial" and not (errors or rejected_sources):
+        raise ValueError("partial collection has no source error metadata")
     available: list[str] = []
     truncated = 0
     unavailable = 0
@@ -196,6 +219,8 @@ def summarize(bundle: Path) -> dict[str, Any]:
     snapshot_status = _load_snapshot_status(_safe_path(bundle, status_record["path"])) if status_record else None
     result: dict[str, Any] = {
         "schema": 1,
+        "collectionStatus": collection_status,
+        "rejectedSources": rejected_sources,
         "denial": _project_denial(bundle, records, attempts),
         "attempts": attempts,
         "snapshotStatus": snapshot_status,

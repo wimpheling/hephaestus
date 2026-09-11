@@ -40,8 +40,12 @@ The full startup budget is 2,100 seconds for bootstrap and Cooking, followed
 by a five-minute collection/upload reserve through 2,400 seconds. Diagnostic
 startup uses a three-minute trial and an eight-minute collection deadline.
 The helper receives the remaining absolute deadline, so bootstrap cannot
-reset the Cooking clock. See [`scripts/gcp-kvm-startup.sh`](../scripts/gcp-kvm-startup.sh)
-and [`scripts/gcp-cooking-run.sh`](../scripts/gcp-cooking-run.sh).
+reset the Cooking clock. The Cooking command runs as a systemd oneshot with
+that remaining deadline as its runtime limit and a bounded stop timeout; this
+prevents activation or teardown from extending into the collection reserve.
+This deadline behavior remains pending live full-path proof. See
+[`scripts/gcp-kvm-startup.sh`](../scripts/gcp-kvm-startup.sh) and
+[`scripts/gcp-cooking-run.sh`](../scripts/gcp-cooking-run.sh).
 
 ### Keyless identities and bucket access
 
@@ -184,6 +188,23 @@ result passes. For `gcp-cooking`, the test result must also contain the dedicate
 diagnostics are collected successfully. Do not weaken expected test counts or
 convert a missing marker into success.
 
+The latest full attempt [34588821244](https://github.com/wimpheling/hephaestus/actions/runs/34588821244)
+at commit `18fff14` timed out with exit `124`. Its raw serial contained a
+fixture credential, so the collector at that historical commit failed closed
+for the whole bundle.
+VM absence was nevertheless proved at 11:00:45Z/11:00:47Z. The resulting
+status manifest is not authoritative for cleanup: a later download failure
+overwrote its previously verified cleanup state as `cleanup: unverified`; that
+status-writing defect is being fixed. Full runs are re-paused.
+
+The current collector quarantines an unsafe individual source, records its
+allowlisted `rejectedSources` classification, and can retain an independently
+safe lineage/status partial bundle. The retained files are scanned again before
+archive creation; a fixture-bearing source is never redacted into the bundle.
+The local partial-bundle regression passes, but this behavior still requires a
+cheap diagnostic live proof. The historical attempt establishes neither a
+denial cause nor snapshot evidence.
+
 The full acceptance evidence must show the exact checked-out SHA, selected
 zone, cache object metadata and checksum, build and installation, update
 admission, browser journey and golden assertions, scanner success, private
@@ -200,9 +221,18 @@ limits lineage to 8 MiB / 20,000 rows, and writes a 0600 archive. Browser
 summaries use an allowlisted schema. Request/response bodies, headers, cookies,
 storage state, credentials and secret values are excluded from the intended
 bundle. The producer passed its focused local payload-projection and schema
-gate. The diagnostic live bundle gate passed in run 34586850977; full GCP
-Cooking validation still requires the scanner, upload, post-delete download
-and checksum evidence below.
+gate. A rejected raw source is omitted and represented only by a stable
+`rejectedSources` label/reason/status entry; `collectionStatus: partial` makes
+the result explicit while the final scanner still gates archive creation. The
+diagnostic live bundle gate passed in run 34586850977; full GCP Cooking
+validation still requires the scanner, upload, post-delete download and
+checksum evidence below, plus a live proof of the partial-source path.
+
+On a failed Cooking unit, the helper uses `systemctl show` with an allowlisted
+property set. It does not dump `systemctl status` process trees, because those
+trees can expose browser or fixture values from child command arguments. The
+source-level replacement is reviewed; no new full-run root cause is claimed
+from it.
 
 The workflow's `download-diagnostics` path in
 [`scripts/gcp-kvm-smoke.sh`](../scripts/gcp-kvm-smoke.sh) downloads with the
@@ -231,11 +261,36 @@ validation, safe extraction, manifest checksum verification and credential
 scan before reporting a pass. The extracted tree is the inspection surface;
 the private archive remains the retained evidence.
 
-The small GitHub artifact is a status manifest. It separates `test` outcome
-from `diagnostics` outcome and classifies provider download, archive format,
-manifest checksum, scanner, and cleanup failures. The private bundle carries
-the retained source manifest and checksums; it is not replaced by the small
-artifact. Refresh the one-day diagnostics bucket and seven-day cache lifecycle
+The small GitHub artifact is a diagnostics status manifest. It records
+provider download, archive format, manifest checksum, scanner, and cleanup
+outcomes; the workflow result and serial markers carry the Cooking test
+outcome. After the authenticated
+post-delete download and credential scan, [`summarize-cooking-diagnostics.py`](../scripts/summarize-cooking-diagnostics.py)
+adds a bounded `triage` projection: a correlated `denial` with only the exact
+allowed stage/class enums and UUID `run_id`, the latest 50 validated attempt
+rows, validated `snapshotStatus`, and source counts (`available`, `missing`,
+`availableCount`, `missingCount`, `unavailableCount`, `truncatedCount`). The
+projection is capped at 64 KiB and carries no log excerpts or request data.
+The private bundle remains the canonical evidence: retain its source manifest
+and checksums, and accept it only after the post-delete authenticated download,
+archive validation and credential scan pass. The small status artifact is a
+safe triage projection, not a replacement for that bundle.
+
+To inspect the safe status artifact, open the completed GitHub run's **Summary**
+tab, download `gcp-diagnostics-manifest-{run_id}-{run_attempt}`, and inspect it
+with `jq`, for example:
+
+```sh
+jq '{cleanup,download,scan,triage}' gcp-diagnostics-status.json
+```
+
+Start first-denial correlation with `.triage.denial.run_id`, then compare it
+with `.triage.attempts[].attempt_run_id`, attempt state and disposition. For a
+downloaded and validated private bundle, the same projection can be generated
+locally with `python3 -B scripts/summarize-cooking-diagnostics.py /path/to/cooking-diagnostics`;
+the helper rejects an unpassed credential scan
+and projects a denial only when its UUID correlates with a retained attempt
+run. Refresh the one-day diagnostics bucket and seven-day cache lifecycle
 configuration if retention policy changes.
 
 Typed broker denials contain static `denial_stage` and `denial_class` fields,
