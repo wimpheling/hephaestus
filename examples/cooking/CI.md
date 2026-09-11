@@ -3,10 +3,13 @@
 The durable GCP configuration, keyless identities, bucket retention, dispatch
 gate and failure triage are in the [GCP Cooking CI runbook](../../docs/gcp-cooking-ci.md).
 Current `gcp-cooking` live validation is **pending**; the diagnostic evidence
-gate and live partial-source proof have passed, while the historical results
-below do not claim that the full path is green. The latest full run
-[34588821244](https://github.com/wimpheling/hephaestus/actions/runs/34588821244)
-at commit `18fff14` timed out with exit `124`; full runs are re-paused.
+gate and live partial-source proof have passed, while the results below do not
+claim that the full path is green. The latest full run
+[34630967578](https://github.com/wimpheling/hephaestus/actions/runs/34630967578)
+at source `23bb3d4` failed at 18:28:19Z after approximately 26m36s. VM
+absence was verified at 18:28:07.989Z, and private diagnostics upload,
+post-delete download and scanning passed; its triage failed on a Rust
+timestamp.
 
 The [Cooking E2E workflow](../../.github/workflows/cooking-e2e.yml) runs the
 same `examples/cooking/run.sh` entry point as local execution. It requires an
@@ -92,8 +95,9 @@ mailbox-recovery race and validated the correction from retryable to leased,
 then delivered/completed on the next pass. All six PostgreSQL tests and the
 quality gate passed; the correction merged in [PR #16](https://github.com/wimpheling/hephaestus/pull/16)
 at commit `1cad9ba56a4d780bc94b2a0f65fab4c646b84075`, with all three CI checks
-green and final quality passing (PostgreSQL 17, NATS 6, Phoenix 247 and UI 98
-checks). This does not identify the GCP failure cause.
+green and final quality passing: six integration tests against PostgreSQL 17
+and NATS 2.11, 247 Phoenix tests and 98 UI tests. This does not identify the
+GCP failure cause.
 
 Ubuntu Noble's packaged `passt` predates the DHCP broadcast behavior required
 by libkrun's minimal DHCP client. Before AppArmor setup and passt preflight, startup
@@ -320,16 +324,44 @@ properties. It does not emit `systemctl status` process trees, whose command
 arguments can contain fixture values. This source-level safety change is
 reviewed; no new full-run root cause is claimed from it.
 
-The latest full attempt timed out after its raw serial exposed a fixture
+An earlier full attempt timed out after its raw serial exposed a fixture
 credential. At that historical commit the complete diagnostics bundle failed
 closed. VM absence was proved at 11:00:45Z/11:00:47Z, but the later download
 failure overwrote the status manifest's verified cleanup state with
-`cleanup: unverified`; that status-writing fix is pending. The current
-collector omits the unsafe source, records an allowlisted `rejectedSources`
-classification, and retains an independently safe partial private bundle with
-`collectionStatus: partial`. Its local regression passes; a cheap diagnostic
-live run is still required before treating this behavior as proven. No denial
-cause or snapshot evidence is claimed from this attempt.
+`cleanup: unverified`. The current collector omits the unsafe source, records
+an allowlisted `rejectedSources` classification, and retains an independently
+safe partial private bundle with `collectionStatus: partial`; that diagnostic
+pipeline is proven by the accepted diagnostic runs above.
+
+The latest full attempt [34630967578](https://github.com/wimpheling/hephaestus/actions/runs/34630967578)
+at source `23bb3d4` failed at 18:28:19Z after approximately 26m36s. VM
+absence was verified at 18:28:07.989Z, and private diagnostics upload,
+post-delete download and scanning passed. Follow-up no-VM triage
+[34633918356](https://github.com/wimpheling/hephaestus/actions/runs/34633918356)
+at `f278dd6` passed all eight sources, but the triage failure was a Rust
+timestamp issue. The current cause is unknown; expected denial or
+caught-confinement markers are not proof of a bug. The projection gap affecting
+`test-output` and `browser-summary` was addressed in
+[PR #17](https://github.com/wimpheling/hephaestus/pull/17), merged at
+`4f578ff91b5820af08e953b08cb570ae5789d531`; all three CI checks and the
+quality gate passed. A next cloud trial is pending, with the corrected path now
+ready to produce reliable evidence. Full validation remains open.
+
+The current code also passed a local full Cooking run: 33 golden tests passed
+with 1 ignored, six PostgreSQL tests completed in 1.75s, two browser reports
+passed with zero failures, and cleanup, same-stream live scanning, and the
+whole-tree `check-browser-evidence` scan passed. Logs are retained under
+`/tmp/heph-local-cooking-20260911`; the cloud failure was not reproduced
+locally.
+
+No-VM triage [run 34635329822](https://github.com/wimpheling/hephaestus/actions/runs/34635329822)
+confirms aggregate workload exit `1`. An older `browser-summary` derived the
+same exit value, but that does not establish a browser cause. Configuration
+revision `a107bcc` now has distinct workload/evidence-scan markers, browser
+report origin, and strict Rust test-result projection without false panics;
+82 focused tests cover the changes. The four track-caller attributes are
+merged in [PR #17](https://github.com/wimpheling/hephaestus/pull/17); this does
+not claim that cloud validation is complete.
 
 The first successful post-merge live smoke was [workflow run
 34525055454](https://github.com/wimpheling/hephaestus/actions/runs/34525055454)

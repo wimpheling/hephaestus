@@ -34,6 +34,36 @@ acceptance and does not reopen or expand that completed task.
   diagnostics download/scan succeeded. The exact failure cause remains under
   investigation; this is useful operational evidence but does not make the
   Cooking run pass.
+- [ ] The later full attempt in
+  [run 34630967578](https://github.com/wimpheling/hephaestus/actions/runs/34630967578)
+  at source `23bb3d4` failed at 18:28:19Z after approximately 26m36s. VM
+  absence was verified at 18:28:07.989Z, and private diagnostics upload,
+  post-delete download and scanning passed. Its triage failed on a Rust
+  timestamp; follow-up no-VM triage
+  [34633918356](https://github.com/wimpheling/hephaestus/actions/runs/34633918356)
+  at `f278dd6` passed all eight sources. The exact cause remains unknown:
+  expected denial and caught-confinement markers are observations, not proof
+  of a bug. The projection gap affecting `test-output` and
+  `browser-summary` was addressed in
+  [PR #17](https://github.com/wimpheling/hephaestus/pull/17), merged at
+  `4f578ff91b5820af08e953b08cb570ae5789d531`; all three CI checks and the
+  quality gate passed. A next cloud trial is pending, with the corrected path
+  now ready to produce reliable evidence. Full GCP validation remains open.
+- [x] The current code passed a local full Cooking run: 33 golden tests passed
+  with 1 ignored, six PostgreSQL tests completed in 1.75s, two browser reports
+  passed with zero failures, and cleanup, same-stream live scanning, and the
+  whole-tree `check-browser-evidence` scan passed. Logs are under
+  `/tmp/heph-local-cooking-20260911`; the cloud failure was not reproduced
+  locally.
+- [x] No-VM triage [run 34635329822](https://github.com/wimpheling/hephaestus/actions/runs/34635329822)
+  confirmed aggregate workload exit `1`. An older `browser-summary` derived
+  the same exit value, but that does not establish a browser cause.
+- [x] Configuration revision `a107bcc` now has distinct workload and
+  evidence-scan markers, browser-report origin, and strict Rust test-result
+  projection without false panics; 82 focused tests cover the changes. The
+  four track-caller attributes were merged in
+  [PR #17](https://github.com/wimpheling/hephaestus/pull/17), with all three CI
+  checks and the quality gate passed. Cloud validation remains open.
 - [x] No-VM historical triage was validated in [run 34626172381](https://github.com/wimpheling/hephaestus/actions/runs/34626172381)
   for run `34618088312`, attempt `1`, and the exact source SHA. It verified
   project-wide VM absence, downloaded and scanned the private object, and
@@ -50,8 +80,8 @@ acceptance and does not reopen or expand that completed task.
   settled it delivered/completed. All six PostgreSQL tests and the quality gate
   passed; the correction merged in [PR #16](https://github.com/wimpheling/hephaestus/pull/16)
   at commit `1cad9ba56a4d780bc94b2a0f65fab4c646b84075`. Its three CI checks and
-  final quality gate passed (PostgreSQL 17, NATS 6, Phoenix 247 and UI 98
-  checks). This local race
+  final quality gate passed: six integration tests against PostgreSQL 17 and
+  NATS 2.11, 247 Phoenix tests and 98 UI tests. This local race
   is not claimed as the cause of the GCP failure.
 
 ## Locked controls

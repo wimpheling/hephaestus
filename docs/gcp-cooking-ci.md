@@ -337,14 +337,14 @@ result passes. For `gcp-cooking`, the test result must also contain the dedicate
 diagnostics are collected successfully. Do not weaken expected test counts or
 convert a missing marker into success.
 
-The latest full attempt [34588821244](https://github.com/wimpheling/hephaestus/actions/runs/34588821244)
+An earlier full attempt [34588821244](https://github.com/wimpheling/hephaestus/actions/runs/34588821244)
 at commit `18fff14` timed out with exit `124`. Its raw serial contained a
 fixture credential, so the collector at that historical commit failed closed
-for the whole bundle.
-VM absence was nevertheless proved at 11:00:45Z/11:00:47Z. The resulting
-status manifest is not authoritative for cleanup: a later download failure
-overwrote its previously verified cleanup state as `cleanup: unverified`; that
-status-writing defect is being fixed. Full runs are re-paused.
+for the whole bundle. VM absence was nevertheless proved at
+11:00:45Z/11:00:47Z. The resulting status manifest is not authoritative for
+cleanup: a later download failure overwrote its previously verified cleanup
+state as `cleanup: unverified`; that status-writing defect is retained as
+historical evidence.
 
 The current collector quarantines an unsafe individual source, records its
 allowlisted `rejectedSources` classification, and can retain an independently
@@ -359,6 +359,39 @@ admission, browser journey and golden assertions, scanner success, private
 bundle upload, verified VM absence, authenticated post-delete download,
 manifest checksums, and a passing credential scan. No current green claim is
 made here until that evidence is available from a live rerun.
+
+The latest full attempt [34630967578](https://github.com/wimpheling/hephaestus/actions/runs/34630967578)
+at source `23bb3d4` failed at 18:28:19Z after approximately 26m36s. VM
+absence was independently verified at 18:28:07.989Z, and private diagnostics
+upload, post-delete download and credential scanning passed. The triage step
+failed on a Rust timestamp, so this remains failed evidence rather than a
+Cooking pass. Follow-up no-VM triage
+[34633918356](https://github.com/wimpheling/hephaestus/actions/runs/34633918356)
+at `f278dd6` passed all eight sources. The current failure cause is unknown:
+expected denial or caught-confinement markers are observations, not proof of a
+bug. The projection gap affecting `test-output` and `browser-summary` was
+addressed in [PR #17](https://github.com/wimpheling/hephaestus/pull/17), merged
+at `4f578ff91b5820af08e953b08cb570ae5789d531`; all three CI checks and the
+quality gate passed. A next cloud trial is pending, with the corrected path
+now ready to produce reliable evidence. Full GCP validation remains open.
+
+The current code also passed a local full Cooking run using the evidence
+collector: the golden suite completed with 33 passed and 1 ignored, six
+PostgreSQL tests completed in 1.75s, two browser reports passed with zero
+failures, and cleanup, same-stream live scanning, and the whole-tree
+`check-browser-evidence` scan all passed. The retained local logs are under
+`/tmp/heph-local-cooking-20260911`. This validates the local path only; it did
+not reproduce the cloud failure.
+
+No-VM triage [run 34635329822](https://github.com/wimpheling/hephaestus/actions/runs/34635329822)
+confirms aggregate workload exit `1`. An older `browser-summary` derived the
+same exit value, but that does not establish a browser cause. Main
+configuration revision `a107bcc` now uses distinct workload and evidence-scan
+markers, records browser-report origin, and strictly projects Rust test
+results without false panics; 82 focused tests cover the changes. The four
+track-caller attributes are merged in
+[PR #17](https://github.com/wimpheling/hephaestus/pull/17), with no claim that
+the cloud validation is complete.
 
 ## Diagnostics and safe inspection
 
@@ -458,9 +491,9 @@ while the fixed path kept it leased and the next recovery pass settled it as
 delivered/completed. All six PostgreSQL tests and the repository quality gate
 passed for that correction, which merged in [PR #16](https://github.com/wimpheling/hephaestus/pull/16)
 at commit `1cad9ba56a4d780bc94b2a0f65fab4c646b84075`. Its three CI checks and
-final quality gate passed (PostgreSQL 17, NATS 6, Phoenix 247 and UI 98
-checks). This local race does not establish the cause of the unexplained GCP
-failure.
+final quality gate passed: six integration tests against PostgreSQL 17 and
+NATS 2.11, 247 Phoenix tests and 98 UI tests. This local race does not
+establish the cause of the unexplained GCP failure.
 
 To inspect the safe status artifact, open the completed GitHub run's **Summary**
 tab, download `gcp-diagnostics-manifest-{run_id}-{run_attempt}`, and inspect it
