@@ -30,9 +30,51 @@ normalize_node_tree_permissions() {
   find -P "$node_root" -type f ! -perm /111 -exec chmod 0444 {} +
 }
 
+generalize_runner_image() {
+  local root_prefix="${1:-}" system_root machine_id
+  local cloud_root var_log ssh_root
+  system_root="${root_prefix:-/}"
+  machine_id="${root_prefix}/etc/machine-id"
+  cloud_root="${root_prefix}/var/lib/cloud"
+  var_log="${root_prefix}/var/log"
+  ssh_root="${root_prefix}/etc/ssh"
+
+  # cloud-init clean resets seed/instance state for the next boot.  The bake
+  # process remains alive: systemctl --root only enables next-boot units and
+  # never stops the guest-agent or the startup script currently running.
+  command cloud-init clean --logs --seed
+  if [[ -d "$ssh_root" ]]; then
+    find -P "$ssh_root" -maxdepth 1 -type f -name 'ssh_host_*' -delete
+  fi
+  if [[ -L "$machine_id" ]]; then
+    rm -f -- "$machine_id"
+  fi
+  if [[ -e "$machine_id" ]]; then
+    truncate -s 0 -- "$machine_id"
+  else
+    install -m 0444 /dev/null "$machine_id"
+  fi
+  rm -f -- "${root_prefix}/var/lib/dbus/machine-id" \
+    "${root_prefix}/etc/google_instance_id" \
+    "${root_prefix}/var/lib/google/instance_id"
+  for stale_dir in instances instance sem data seed; do
+    rm -rf -- "${cloud_root}/${stale_dir}"
+  done
+  if [[ -d "$var_log" ]]; then
+    find -P "$var_log" -maxdepth 1 -type f \( \
+      -name 'cloud-init.log' -o -name 'cloud-init-output.log' -o -name 'cloud-init*.log.*' \
+    \) -delete
+  fi
+  systemctl --root="$system_root" enable google-guest-agent.service google-startup-scripts.service
+}
+
 # A side-effect-free functional check used by the local image-bake tests.
 if [[ "${HEPH_GCP_IMAGE_PERMISSION_TEST:-0}" == 1 ]]; then
   normalize_node_tree_permissions "${1:?missing Node installation root}"
+  exit 0
+fi
+if [[ "${HEPH_GCP_IMAGE_GENERALIZE_TEST:-0}" == 1 ]]; then
+  generalize_runner_image "${1:?missing image root}"
   exit 0
 fi
 
@@ -49,7 +91,6 @@ install -m 0755 "$script_dir/gcp-runner-image-verify.py" /usr/local/libexec/heph
 install -m 0755 "$script_dir/gcp-runner-image-manifest.py" /usr/local/libexec/hephaestus/gcp-runner-image-manifest.py
 install -m 0755 "$script_dir/gcp-kvm-startup.sh" /usr/local/libexec/hephaestus/gcp-kvm-startup.sh
 install -m 0755 "$script_dir/gcp-runner-image-bake.sh" /usr/local/libexec/hephaestus/gcp-runner-image-bake.sh
-install -m 0644 /dev/null /etc/hephaestus/runner-image-required
 
 # Reuse the exact package/source build phases in the GCE startup script. Bake
 # mode exits after libkrun and before checkout or test state is created.
@@ -129,6 +170,7 @@ python3 "$script_dir/gcp-runner-image-manifest.py" \
   --recipe-sha256 "$recipe_sha" --startup-sha256 "$startup_sha" \
   --bake-sha256 "$bake_sha" --verifier-sha256 "$verifier_sha" \
   --manifest-generator-sha256 "$manifest_generator_sha"
+install -m 0644 /dev/null /etc/hephaestus/runner-image-required
 python3 /usr/local/libexec/hephaestus/gcp-runner-image-verify.py /usr/share/hephaestus/runner-image-manifest.json \
   --rust-version "$HEPH_IMAGE_RUST_VERSION" --libkrun-tag "$HEPH_IMAGE_LIBKRUN_TAG" \
   --libkrun-revision "$HEPH_IMAGE_LIBKRUN_REVISION" --libkrunfw-tag "$HEPH_IMAGE_LIBKRUNFW_TAG" \
@@ -144,5 +186,6 @@ rm -rf -- /var/lib/apt/lists/* /root/.cache /home/forge/.cache/npm \
   /home/forge/.npm /home/forge/.cargo/registry /home/forge/.cargo/git
 rm -rf -- /var/log/hephaestus/* /tmp/hephaestus-libkrun/*
 find /home/forge -maxdepth 2 -type f -name '.bash_history' -delete
+generalize_runner_image
 printf '%s\n' 'HEPH_GCP_RUNNER_IMAGE bake=pass'
 printf 'HEPH_GCP_RUNNER_IMAGE: READY fingerprint=%s\n' "$fingerprint"

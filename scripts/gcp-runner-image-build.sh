@@ -380,6 +380,7 @@ prefix = re.compile(r"^\[[^]]+\] google_metadata_script_runner\[\d+\]: ")
 safe = []
 safe_tail = []
 normalized = []
+terminal = None
 for raw in text.splitlines():
     line = prefix.sub("", raw.strip())
     if "startup-script:" in line:
@@ -395,10 +396,12 @@ for raw in text.splitlines():
         continue
     ready = re.fullmatch(r"HEPH_GCP_RUNNER_IMAGE: READY fingerprint=([0-9a-f]{64})", line)
     if ready:
+        terminal = f"ready fingerprint={ready.group(1)}"
         safe.append(f"HEPH_GCP_IMAGE_BUILD terminal=ready fingerprint={ready.group(1)}")
         continue
     failed = re.fullmatch(r"HEPH_GCP_RUNNER_IMAGE: FAIL exit=([0-9]+)", line)
     if failed:
+        terminal = f"fail exit={failed.group(1)}"
         safe.append(f"HEPH_GCP_IMAGE_BUILD terminal=fail exit={failed.group(1)}")
         continue
     baked = re.fullmatch(r"HEPH_GCP_RUNNER_IMAGE bake=pass", line)
@@ -439,10 +442,30 @@ for line in safe:
     if line not in existing:
         print(line)
         existing.add(line)
+if terminal is not None:
+    print(f"__CONTROL__ terminal={terminal}")
 ' "$serial_log" "$serial_tail_log" "$script_dir/check-browser-evidence.py" <<<"$value")"; then
     return 1
   fi
   printf '%s\n' "$summary"
+}
+
+handle_serial_summary() {
+  local summary="$1" ready_fingerprint public_summary
+  public_summary="$(sed '/^__CONTROL__/d' <<<"$summary")"
+  [[ -z "$public_summary" ]] || printf '%s\n' "$public_summary"
+  if ready_fingerprint="$(sed -n 's/^__CONTROL__ terminal=ready fingerprint=\([0-9a-f]\{64\}\)$/\1/p' <<<"$summary")"; then
+    if [[ -n "$ready_fingerprint" ]]; then
+      fingerprint="$ready_fingerprint"
+      derive_image_name
+      printf 'Runner image provisioning reported READY for fingerprint %s\n' "$fingerprint"
+      return 0
+    fi
+  fi
+  if grep -Eq '^__CONTROL__ terminal=fail exit=[0-9]+$' <<<"$summary"; then
+    return 1
+  fi
+  return 2
 }
 
 create_startup_bundle() {
@@ -493,23 +516,16 @@ PY
 }
 
 wait_serial_ready() {
-  local deadline="$1" serial='' summary=''
+  local deadline="$1" serial='' summary='' summary_status
   while (( $(date +%s) < deadline )); do
     if serial="$(gcloud compute instances get-serial-port-output "$builder_name" --project="$PROJECT_ID" --zone="$zone" --port=1 2>&1)"; then
       if ! summary="$(record_serial "$serial")"; then return 1; fi
-      [[ -z "$summary" ]] || printf '%s\n' "$summary"
-      if [[ "$serial" =~ HEPH_GCP_RUNNER_IMAGE:[[:space:]]READY[[:space:]]fingerprint=([0-9a-f]{64}) ]]; then
-        fingerprint="${BASH_REMATCH[1]}"
-        derive_image_name
-        printf 'Runner image provisioning reported READY for fingerprint %s\n' "$fingerprint"
-        return 0
-      fi
-      if grep -Eq '(^|startup-script: )HEPH_GCP_RUNNER_IMAGE: FAIL exit=[0-9]+$|(^|startup-script: )HEPH_GCP_KVM_SMOKE: FAIL([[:space:]]|$)' <<<"$serial"; then
-        return 1
-      fi
+      if handle_serial_summary "$summary"; then return 0; else summary_status=$?; fi
+      ((summary_status == 1)) && return 1
     else
       if ! summary="$(record_serial "$serial")"; then return 1; fi
-      [[ -z "$summary" ]] || printf '%s\n' "$summary"
+      if handle_serial_summary "$summary"; then return 0; else summary_status=$?; fi
+      ((summary_status == 1)) && return 1
     fi
     sleep 10
   done
@@ -638,6 +654,11 @@ trap 'on_signal 2' INT
 trap 'on_signal 15' TERM
 case "${1:-build}" in
   build) build_image ;;
-  cleanup) cleanup ;;
+  cleanup)
+    cleanup_status=0
+    cleanup || cleanup_status=$?
+    report_serial_diagnostics
+    exit "$cleanup_status"
+    ;;
   *) die 'usage: scripts/gcp-runner-image-build.sh [build|cleanup]' ;;
 esac

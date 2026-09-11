@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 import subprocess
 import tempfile
+import time
 import unittest
 
 try:
@@ -148,6 +149,37 @@ class RunnerImageSerialTests(unittest.TestCase):
             self.assertEqual(tail.read_text(encoding="utf-8"), "")
             self.assertNotIn(fixture, serial_log.read_text(encoding="utf-8"))
             self.assertIn("serial_diagnostics=rejected reason=credential-scan", serial_log.read_text(encoding="utf-8"))
+
+    def test_gce_prefix_and_crlf_failure_returns_without_poll_timeout(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="heph-runner-image-serial-prefix-") as raw:
+            started = time.monotonic()
+            result, serial_log = self._run(
+                Path(raw),
+                f"[1700000000.1] google_metadata_script_runner[321]: startup-script: "
+                f"HEPH_GCP_KVM_STARTUP event=phase-start phase=accounts revision={REVISION}\r\n"
+                "[1700000000.2] google_metadata_script_runner[321]: startup-script: "
+                "HEPH_GCP_RUNNER_IMAGE: FAIL exit=17\r\n",
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertLess(time.monotonic() - started, 2)
+            self.assertIn("terminal=fail exit=17", serial_log.read_text(encoding="utf-8"))
+
+    def test_cleanup_does_not_truncate_persisted_serial_tail(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="heph-runner-image-serial-cleanup-") as raw:
+            root = Path(raw)
+            setup = image_build_tests.RunnerImageBuildTests()
+            environment = setup._setup(root) | {
+                "GCP_RUNNER_IMAGE_SERIAL_LOG": str(root / "serial.log"),
+            }
+            serial_log = Path(environment["GCP_RUNNER_IMAGE_SERIAL_LOG"])
+            serial_tail = Path(f"{serial_log}.tail")
+            serial_log.write_text("HEPH_GCP_IMAGE_BUILD phase=accounts revision=" + REVISION + "\n", encoding="utf-8")
+            serial_tail.write_text("make: *** [target] Error 2\n", encoding="utf-8")
+            result = subprocess.run([str(BUILD), "cleanup"], env=environment,
+                                    text=True, capture_output=True, check=False)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(serial_tail.read_text(encoding="utf-8"), "make: *** [target] Error 2\n")
+            self.assertIn("make: *** [target] Error 2", result.stderr)
 
 
 if __name__ == "__main__":

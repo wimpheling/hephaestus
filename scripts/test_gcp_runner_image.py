@@ -300,6 +300,85 @@ class RunnerImageManifestTests(unittest.TestCase):
             self.assertEqual((destination / "share/LICENSE").stat().st_mode & 0o777, 0o444)
             self.assertTrue(os.access(destination / "bin/node", os.X_OK))
 
+    def test_bake_generalizes_identity_and_preserves_nextboot_services(self) -> None:
+        bake = Path(__file__).with_name("gcp-runner-image-bake.sh")
+        bake_text = bake.read_text(encoding="utf-8")
+        startup_call = bake_text.index('bash "$script_dir/gcp-kvm-startup.sh"')
+        marker_install = bake_text.index('install -m 0644 /dev/null /etc/hephaestus/runner-image-required')
+        self.assertGreater(marker_install, startup_call)
+        self.assertLess(
+            bake_text.rindex("generalize_runner_image"),
+            bake_text.index("HEPH_GCP_RUNNER_IMAGE: READY"),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for relative in (
+                "etc/ssh",
+                "var/lib/cloud/instances/i-1",
+                "var/lib/cloud/instance",
+                "var/lib/cloud/sem",
+                "var/lib/cloud/data",
+                "var/lib/cloud/seed",
+                "var/lib/dbus",
+                "var/lib/google",
+                "var/log",
+            ):
+                (root / relative).mkdir(parents=True, exist_ok=True)
+            for relative in (
+                "etc/ssh/ssh_host_ed25519_key",
+                "etc/ssh/ssh_host_ed25519_key.pub",
+                "etc/google_instance_id",
+                "var/lib/dbus/machine-id",
+                "var/lib/google/instance_id",
+                "var/log/cloud-init.log",
+                "var/log/cloud-init-output.log",
+            ):
+                target = root / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text("sensitive identity state\n", encoding="utf-8")
+            machine_id = root / "etc/machine-id"
+            machine_id.parent.mkdir(parents=True, exist_ok=True)
+            machine_id.write_text("0123456789abcdef\n", encoding="utf-8")
+            cloud_init = root / "cloud-init"
+            cloud_init.write_text(
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" >\"$HEPH_IMAGE_TEST_CLOUD_INIT_LOG\"\n",
+                encoding="utf-8",
+            )
+            cloud_init.chmod(0o755)
+            systemctl = root / "systemctl"
+            systemctl.write_text(
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" >>\"$HEPH_IMAGE_TEST_SYSTEMCTL_LOG\"\n",
+                encoding="utf-8",
+            )
+            systemctl.chmod(0o755)
+            test_env = {
+                **os.environ,
+                "HEPH_GCP_IMAGE_GENERALIZE_TEST": "1",
+                "HEPH_IMAGE_TEST_CLOUD_INIT_LOG": str(root / "cloud-init.args"),
+                "HEPH_IMAGE_TEST_SYSTEMCTL_LOG": str(root / "systemctl.args"),
+                "PATH": f"{root}:/usr/local/bin:/usr/bin:/bin",
+            }
+            result = subprocess.run(
+                ["bash", str(bake), str(root)], env=test_env, text=True, capture_output=True
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            for relative in (
+                "etc/ssh/ssh_host_ed25519_key",
+                "etc/ssh/ssh_host_ed25519_key.pub",
+                "etc/google_instance_id",
+                "var/lib/dbus/machine-id",
+                "var/lib/google/instance_id",
+                "var/log/cloud-init.log",
+                "var/log/cloud-init-output.log",
+            ):
+                self.assertFalse((root / relative).exists(), relative)
+            self.assertEqual(machine_id.read_text(encoding="utf-8"), "")
+            self.assertFalse((root / "var/lib/cloud/instances").exists())
+            self.assertEqual((root / "cloud-init.args").read_text(encoding="utf-8"), "clean --logs --seed\n")
+            enabled = (root / "systemctl.args").read_text(encoding="utf-8")
+            self.assertIn("--root=" + str(root) + " enable google-guest-agent.service google-startup-scripts.service", enabled)
+            self.assertNotRegex(enabled, r"\b(start|stop|disable)\b")
+
 
 if __name__ == "__main__":
     unittest.main()
