@@ -107,6 +107,16 @@ Failed-candidate deletion and recovery by a fresh workflow cleanup step remain
 planned acceptance checks until their focused tests pass. No image is
 currently claimed as live or approved for `gcp-cooking`.
 
+Recent image-build validation remains pre-release: run
+34597314604 at `eccc140` stopped before VM or disk creation because gcloud
+warning text was mixed into JSON; that was fixed at `ea37126`. Run
+34597940538 at `ea37126` was cancelled after local proof found the copied Node
+tree retained root-only `0700` permissions. The builder VM, disk and cleanup
+step were verified deleted at 12:27:52Z, 12:27:55Z and 12:27:58Z, and no image
+was created. Node permissions are now fixed locally; wrapper early-failure
+and builder-error/readiness checks remain under validation. No image is ready,
+and full `gcp-cooking` remains paused.
+
 ### Keyless identities and bucket access
 
 GitHub authenticates through this workload identity provider:

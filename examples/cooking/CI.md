@@ -188,6 +188,15 @@ checks until their focused tests pass. Retain one current image and one
 rollback image; custom image storage is billable. This image mode is planned
 and no live image is claimed.
 
+Image-build validation is still pre-release. Run 34597314604 at `eccc140`
+stopped before resource creation because gcloud warning text contaminated JSON;
+that was fixed at `ea37126`. Run 34597940538 at `ea37126` was cancelled after
+local proof found root-only permissions in the copied Node tree. Its builder
+VM, disk and cleanup step were verified deleted at 12:27:52Z, 12:27:55Z and
+12:27:58Z, with no image created. Node permissions are fixed locally, while
+early-failure and builder-readiness checks remain under validation. No image is
+ready and full `gcp-cooking` remains paused.
+
 The GCP Cooking path reports a dedicated `HEPHAESTUS_GCP_COOKING` marker and
 uses the same private collector/upload/download path. The GitHub workflow
 retains only a small, non-sensitive status manifest; the bundle remains in

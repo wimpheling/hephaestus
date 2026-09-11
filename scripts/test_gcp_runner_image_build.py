@@ -79,7 +79,7 @@ PYJSON
     ;;
   "compute instances get-serial-port-output")
     if [[ "${GCP_FAKE_SERIAL:-ready}" == fail ]]; then
-      printf 'HEPH_GCP_RUNNER_IMAGE: FAIL\n'
+      printf 'HEPH_GCP_RUNNER_IMAGE: FAIL exit=17\n'
     else
       printf 'HEPH_GCP_RUNNER_IMAGE: READY fingerprint=%s\n' "$GCP_FAKE_FINGERPRINT"
     fi
@@ -233,6 +233,7 @@ class RunnerImageBuildTests(unittest.TestCase):
             self.assertFalse((state / "disk").exists())
             self.assertIn("delete-instance", (state / "ops").read_text(encoding="utf-8"))
             self.assertIn("delete-disk", (state / "ops").read_text(encoding="utf-8"))
+            self.assertIn("HEPH_GCP_IMAGE_BUILD terminal=fail exit=17", result.stderr)
 
     def test_signal_cleanup_is_label_guarded_and_does_not_delete_unrelated_image(self):
         with tempfile.TemporaryDirectory(prefix="heph-runner-image-signal-") as directory:
@@ -363,6 +364,11 @@ class RunnerImageBuildTests(unittest.TestCase):
         self.assertIn("gcp-runner-image-build.sh build", workflow)
         self.assertIn("gcp-runner-image-build.sh cleanup", workflow)
         self.assertIn("GCP_RUNNER_IMAGE: ${{ inputs.runner_image }}", workflow)
+
+    def test_generated_builder_wrapper_has_fail_closed_exit_marker(self):
+        builder = (ROOT / "gcp-runner-image-build.sh").read_text(encoding="utf-8")
+        self.assertIn('handle.write(\'finish() {\\n\')', builder)
+        self.assertIn('HEPH_GCP_RUNNER_IMAGE: FAIL exit=%s', builder)
 
 
 if __name__ == "__main__":

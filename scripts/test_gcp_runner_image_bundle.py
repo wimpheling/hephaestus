@@ -47,7 +47,7 @@ case "$1 $2 $3" in
     done
     ;;
   "compute instances get-serial-port-output")
-    printf 'HEPH_GCP_RUNNER_IMAGE: FAIL\n'
+    printf 'HEPH_GCP_RUNNER_IMAGE: FAIL exit=17\n'
     ;;
   "compute instances describe")
     if [[ -f "$state/vm" ]]; then

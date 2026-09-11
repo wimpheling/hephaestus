@@ -30,6 +30,8 @@ startup_bundle=''
 recovery_status=''
 gcloud_json_output=''
 gcloud_json_stderr=''
+serial_log=''
+serial_tail_log=''
 
 die() { printf 'gcp-runner-image-build: %s\n' "$*" >&2; exit 1; }
 
@@ -288,7 +290,13 @@ cleanup() {
 cleanup_on_exit() {
   local original_status="$?" cleanup_status=0
   trap - EXIT
+  if ((original_status != 0)); then
+    report_serial_diagnostics
+  fi
   cleanup || cleanup_status=$?
+  if ((original_status == 0 && cleanup_status != 0)); then
+    report_serial_diagnostics
+  fi
   if ((original_status != 0)); then
     exit "$original_status"
   fi
@@ -298,9 +306,143 @@ cleanup_on_exit() {
 on_signal() {
   local signal="$1" cleanup_status=0
   trap - EXIT INT TERM
+  report_serial_diagnostics
   cleanup || cleanup_status=$?
   ((cleanup_status == 0)) || exit "$cleanup_status"
   exit "$((128 + signal))"
+}
+
+report_serial_diagnostics() {
+  if [[ -f "$serial_log" && ! -L "$serial_log" ]]; then
+    printf 'Bounded runner serial phase diagnostics: %s\n' "$serial_log" >&2
+    tail -80 "$serial_log" >&2 || true
+  else
+    printf 'Bounded runner serial phase diagnostics unavailable\n' >&2
+  fi
+  if [[ -f "$serial_tail_log" && ! -L "$serial_tail_log" ]]; then
+    printf 'Bounded runner serial error tail: %s\n' "$serial_tail_log" >&2
+    tail -80 "$serial_tail_log" >&2 || true
+  else
+    printf 'Bounded runner serial error tail unavailable\n' >&2
+  fi
+}
+
+prepare_diagnostics_file() {
+  local path="$1" parent
+  parent="$(dirname -- "$path")"
+  if [[ -e "$parent" || -L "$parent" ]]; then
+    [[ -d "$parent" && ! -L "$parent" ]] || die "serial diagnostics parent is not a directory: $parent"
+  else
+    install -d -m 0700 -- "$parent"
+  fi
+  [[ ! -L "$path" && ( ! -e "$path" || -f "$path" ) ]] ||
+    die "serial diagnostics path is not a regular file: $path"
+  : >"$path"
+  chmod 0600 "$path"
+}
+
+prepare_serial_logs() {
+  prepare_diagnostics_file "$serial_log"
+  prepare_diagnostics_file "$serial_tail_log"
+}
+
+record_serial() {
+  local value="$1" summary
+  if ! summary="$(python3 -c '
+import pathlib
+import re
+import sys
+import importlib.util
+
+phase_path = pathlib.Path(sys.argv[1])
+tail_path = pathlib.Path(sys.argv[2])
+evidence_path = pathlib.Path(sys.argv[3])
+text = sys.stdin.read()
+credential = re.compile(r"(?i)(?:authorization\s*:\s*bearer|bearer\s+[A-Za-z0-9._-]{16,}|(?:\x22|\x27)?[A-Za-z0-9_-]*(?:password|passwd|secret|token|credential|api[_ -]?key|private[_ -]?key)[A-Za-z0-9_-]*(?:\x22|\x27)?\s*[:=]|BEGIN [A-Z ]*PRIVATE KEY)")
+generic_credential = re.compile(
+    r"(?i)(?:-----BEGIN [A-Z ]*PRIVATE KEY-----|"
+    r"fixture[-_ ](?:secret|credential|token|password)(?:[-_ ][A-Za-z0-9]+)*)"
+)
+
+spec = importlib.util.spec_from_file_location("serial_evidence", evidence_path)
+if spec is None or spec.loader is None:
+    raise SystemExit("serial evidence scanner is unavailable")
+evidence = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(evidence)
+
+phases = {
+    "initializing", "metadata", "diagnostic-bootstrap", "diagnostic-synthetic",
+    "host-packages", "accounts", "passt-compat", "cgroup-podman", "passt-apparmor",
+    "passt-preflight", "rust-toolchain", "libkrunfw", "libkrun", "image-bake-ready",
+    "checkout", "gcp-cooking", "real-libkrun-smoke",
+}
+prefix = re.compile(r"^\[[^]]+\] google_metadata_script_runner\[\d+\]: ")
+safe = []
+safe_tail = []
+normalized = []
+for raw in text.splitlines():
+    line = prefix.sub("", raw.strip())
+    if "startup-script:" in line:
+        line = line.split("startup-script:", 1)[1].lstrip()
+    normalized.append(line)
+    phase = re.fullmatch(r"HEPH_GCP_KVM_STARTUP event=phase-start phase=([a-z0-9-]+) revision=([0-9a-f]{40})", line)
+    if phase and phase.group(1) in phases:
+        safe.append(f"HEPH_GCP_IMAGE_BUILD phase={phase.group(1)} revision={phase.group(2)}")
+        continue
+    image_phase = re.fullmatch(r"HEPH_GCP_RUNNER_IMAGE phase=([a-z0-9-]+) status=(prebuilt|deferred-to-boot)", line)
+    if image_phase and image_phase.group(1) in phases:
+        safe.append(f"HEPH_GCP_IMAGE_BUILD phase={image_phase.group(1)} status={image_phase.group(2)}")
+        continue
+    ready = re.fullmatch(r"HEPH_GCP_RUNNER_IMAGE: READY fingerprint=([0-9a-f]{64})", line)
+    if ready:
+        safe.append(f"HEPH_GCP_IMAGE_BUILD terminal=ready fingerprint={ready.group(1)}")
+        continue
+    failed = re.fullmatch(r"HEPH_GCP_RUNNER_IMAGE: FAIL exit=([0-9]+)", line)
+    if failed:
+        safe.append(f"HEPH_GCP_IMAGE_BUILD terminal=fail exit={failed.group(1)}")
+        continue
+    baked = re.fullmatch(r"HEPH_GCP_RUNNER_IMAGE bake=pass", line)
+    if baked:
+        safe.append("HEPH_GCP_IMAGE_BUILD bake=pass")
+
+normalized_text = "\n".join(normalized)
+normalized_bytes = normalized_text.encode("utf-8", errors="surrogateescape")
+rejected = bool(
+    any(pattern in normalized_bytes for pattern in evidence.STREAM_PATTERNS)
+    or credential.search(normalized_text)
+    or generic_credential.search(normalized_text)
+)
+if not rejected:
+    safe_tail = normalized
+
+old = phase_path.read_text(encoding="utf-8").splitlines() if phase_path.exists() else []
+existing = set(old)
+combined = []
+for line in old + safe:
+    if line not in combined:
+        combined.append(line)
+phase_path.write_text("\n".join(combined[-80:]) + ("\n" if combined else ""), encoding="utf-8")
+old_tail = tail_path.read_text(encoding="utf-8").splitlines() if tail_path.exists() else []
+tail = [] if rejected else (old_tail + safe_tail)[-80:]
+tail_text = "\n".join(tail) + ("\n" if tail else "")
+tail_bytes = tail_text.encode("utf-8")
+if len(tail_bytes) > 64 * 1024:
+    tail_text = tail_bytes[-(64 * 1024):].decode("utf-8", errors="ignore")
+tail_path.write_text(tail_text, encoding="utf-8")
+if rejected:
+    print("serial diagnostics rejected by credential scanner", file=sys.stderr)
+    # A hit invalidates the complete raw tail for this poll. Typed markers
+    # above remain safe because they are parsed into fixed schemas.
+    with phase_path.open("a", encoding="utf-8") as handle:
+        handle.write("HEPH_GCP_IMAGE_BUILD serial_diagnostics=rejected reason=credential-scan\n")
+for line in safe:
+    if line not in existing:
+        print(line)
+        existing.add(line)
+' "$serial_log" "$serial_tail_log" "$script_dir/check-browser-evidence.py" <<<"$value")"; then
+    return 1
+  fi
+  printf '%s\n' "$summary"
 }
 
 create_startup_bundle() {
@@ -330,7 +472,14 @@ path = pathlib.Path(out)
 with path.open("w", encoding="ascii") as handle:
     handle.write("#!/usr/bin/env bash\nset -Eeuo pipefail\n")
     handle.write('bundle_dir="$(mktemp -d /run/hephaestus-image-bake.XXXXXX)"\n')
-    handle.write("trap 'rm -rf -- \"$bundle_dir\"' EXIT\n")
+    handle.write('finish() {\n')
+    handle.write('  status=$?\n')
+    handle.write('  trap - EXIT\n')
+    handle.write('  rm -rf -- "$bundle_dir" || true\n')
+    handle.write('  if ((status != 0)); then printf "HEPH_GCP_RUNNER_IMAGE: FAIL exit=%s\\n" "$status"; fi\n')
+    handle.write('  exit "$status"\n')
+    handle.write('}\n')
+    handle.write('trap finish EXIT\n')
     handle.write("base64 -d >\"$bundle_dir/payload.tgz\" <<'HEPH_GCP_RUNNER_IMAGE_BUNDLE'\n")
     for start in range(0, len(payload), 120):
         handle.write(payload[start:start + 120] + "\n")
@@ -344,23 +493,26 @@ PY
 }
 
 wait_serial_ready() {
-  local deadline="$1" serial=''
+  local deadline="$1" serial='' summary=''
   while (( $(date +%s) < deadline )); do
     if serial="$(gcloud compute instances get-serial-port-output "$builder_name" --project="$PROJECT_ID" --zone="$zone" --port=1 2>&1)"; then
+      if ! summary="$(record_serial "$serial")"; then return 1; fi
+      [[ -z "$summary" ]] || printf '%s\n' "$summary"
       if [[ "$serial" =~ HEPH_GCP_RUNNER_IMAGE:[[:space:]]READY[[:space:]]fingerprint=([0-9a-f]{64}) ]]; then
         fingerprint="${BASH_REMATCH[1]}"
         derive_image_name
         printf 'Runner image provisioning reported READY for fingerprint %s\n' "$fingerprint"
         return 0
       fi
-      if grep -Fq 'HEPH_GCP_RUNNER_IMAGE: FAIL' <<<"$serial"; then
-        printf '%s\n' "$serial" | tail -80 >&2
+      if grep -Eq '(^|startup-script: )HEPH_GCP_RUNNER_IMAGE: FAIL exit=[0-9]+$|(^|startup-script: )HEPH_GCP_KVM_SMOKE: FAIL([[:space:]]|$)' <<<"$serial"; then
         return 1
       fi
+    else
+      if ! summary="$(record_serial "$serial")"; then return 1; fi
+      [[ -z "$summary" ]] || printf '%s\n' "$summary"
     fi
     sleep 10
   done
-  printf '%s\n' "$serial" | tail -80 >&2
   return 1
 }
 
@@ -475,6 +627,11 @@ build_image() {
 require_commands
 validate_zone
 load_contract
+serial_log="${GCP_RUNNER_IMAGE_SERIAL_LOG:-${RUNNER_TEMP:-/tmp}/gcp-runner-image-serial-${GITHUB_RUN_ID:-manual}-${GITHUB_RUN_ATTEMPT:-1}.log}"
+serial_tail_log="${GCP_RUNNER_IMAGE_SERIAL_TAIL_LOG:-${serial_log}.tail}"
+if [[ "${1:-build}" == build ]]; then
+  prepare_serial_logs
+fi
 load_recovery_state
 trap cleanup_on_exit EXIT
 trap 'on_signal 2' INT

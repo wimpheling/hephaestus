@@ -528,7 +528,54 @@ forge_env=(
   GIT_TERMINAL_PROMPT=0
 )
 
+runner_image_runtime_ready() {
+  local root_prefix="${1:-}" image_browser_root="${2:-$work_root/playwright-browsers}"
+  local expected_node="${HEPH_IMAGE_NODE_VERSION:-v24.16.0}"
+  local expected_oras="${HEPH_IMAGE_ORAS_VERSION:-1.3.3}"
+  local node_output rust_output oras_output oras_actual browser_executable browser_output
+  local -a runtime_env=(
+    runuser -u forge -- env
+    HOME="${root_prefix}/home/forge"
+    XDG_RUNTIME_DIR=/run/user/10001
+    RUSTUP_HOME="${root_prefix}/home/forge/.rustup"
+    CARGO_HOME="${root_prefix}/home/forge/.cargo"
+    PATH="${root_prefix}/home/forge/.cargo/bin:${root_prefix}/opt/hephaestus/node-${expected_node}/bin:${root_prefix}/usr/local/bin:/usr/bin:/bin"
+  )
+
+  node_output="$(run_with_deadline "${runtime_env[@]}" "${root_prefix}/usr/local/bin/node" --version)" ||
+    die 'custom runner image Node executable cannot run as forge'
+  [[ "$node_output" == "$expected_node" ]] ||
+    die 'custom runner image Node executable version does not match its pin'
+
+  rust_output="$(run_with_deadline "${runtime_env[@]}" "${root_prefix}/home/forge/.cargo/bin/rustc" --version)" ||
+    die 'custom runner image Rust executable cannot run as forge'
+  [[ "$(awk '$1 == "rustc" { print $2; exit }' <<<"$rust_output")" == "${rust_version}" ]] ||
+    die 'custom runner image Rust executable version does not match its pin'
+
+  oras_output="$(run_with_deadline "${runtime_env[@]}" "${root_prefix}/usr/local/bin/oras" version)" ||
+    die 'custom runner image ORAS executable cannot run as forge'
+  oras_actual="$(awk '$1 == "Version:" { print $2; exit }' <<<"$oras_output")"
+  [[ "$oras_actual" == "$expected_oras" ]] ||
+    die 'custom runner image ORAS executable version does not match its pin'
+
+  browser_executable="$(find -P "$image_browser_root" -type f \( -name chrome-headless-shell -o -name chrome \) -perm -0100 -print -quit 2>/dev/null)"
+  [[ -n "$browser_executable" ]] || die 'custom runner image Chromium executable is missing'
+  browser_output="$(run_with_deadline "${runtime_env[@]}" "$browser_executable" --version)" ||
+    die 'custom runner image Chromium executable cannot run as forge'
+  [[ -n "${runner_image_browser_version:-}" && "$browser_output" == "$runner_image_browser_version" ]] ||
+    die 'custom runner image Chromium executable version does not match its manifest'
+  printf 'HEPH_GCP_RUNNER_IMAGE runtime=pass node=%s rust=%s oras=%s chromium=%s\n' \
+    "$node_output" "$(awk '$1 == "rustc" { print $2; exit }' <<<"$rust_output")" \
+    "$oras_actual" "$browser_output"
+}
+
 if [[ "${HEPH_GCP_STARTUP_LIBRARY:-0}" == 1 ]]; then
+  if [[ "${HEPH_GCP_RUNNER_IMAGE_RUNTIME_TEST:-0}" == 1 ]]; then
+    trial_deadline=$((SECONDS + 30))
+    runner_image_browser_version="${HEPH_GCP_RUNNER_IMAGE_TEST_BROWSER_VERSION:-Chromium 1.2.3}"
+    runner_image_runtime_ready "${HEPH_GCP_RUNNER_IMAGE_TEST_ROOT:?}" \
+      "${HEPH_GCP_RUNNER_IMAGE_TEST_BROWSER_ROOT:?}"
+  fi
   return 0
 fi
 
@@ -622,6 +669,12 @@ PY
   fi
 elif [[ -f /etc/hephaestus/runner-image-required ]]; then
   die 'stock runner image was requested but a baked-image marker is present'
+fi
+
+if [[ "$runner_image_ready" == true ]]; then
+  phase_start runner-image-runtime
+  runner_image_runtime_ready
+  phase_pass
 fi
 
 if [[ "$test_mode" == diagnostic || "$test_mode" == gcp-cooking ]]; then

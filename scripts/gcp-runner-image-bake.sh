@@ -13,6 +13,29 @@ export HEPH_IMAGE_RUST_VERSION HEPH_IMAGE_LIBKRUN_TAG HEPH_IMAGE_LIBKRUN_REVISIO
 export HEPH_IMAGE_LIBKRUNFW_TAG HEPH_IMAGE_PASST_REVISION HEPH_IMAGE_NODE_VERSION
 export HEPH_IMAGE_NODE_SHA256 HEPH_IMAGE_PLAYWRIGHT_VERSION HEPH_IMAGE_ORAS_VERSION
 export HEPH_IMAGE_ORAS_SHA256
+
+normalize_node_tree_permissions() {
+  local node_root="$1"
+  [[ -d "$node_root" && ! -L "$node_root" ]] || {
+    printf '%s\n' 'Node installation root is not a real directory' >&2
+    return 1
+  }
+
+  # The download staging directory is private (0700), and cp -a preserves
+  # that mode.  The baked runtime is public read/execute software: make every
+  # directory traversable and every file readable, while retaining execute
+  # permission only for files that were executable in the archive.
+  find -P "$node_root" -type d -exec chmod 0555 {} +
+  find -P "$node_root" -type f -perm /111 -exec chmod 0555 {} +
+  find -P "$node_root" -type f ! -perm /111 -exec chmod 0444 {} +
+}
+
+# A side-effect-free functional check used by the local image-bake tests.
+if [[ "${HEPH_GCP_IMAGE_PERMISSION_TEST:-0}" == 1 ]]; then
+  normalize_node_tree_permissions "${1:?missing Node installation root}"
+  exit 0
+fi
+
 repo_sha="${HEPH_GCP_IMAGE_BAKE_REPO_SHA:-}"
 [[ "$repo_sha" =~ ^[0-9a-f]{40}$ ]] || {
   printf '%s\n' 'HEPH_GCP_RUNNER_IMAGE bake requires HEPH_GCP_IMAGE_BAKE_REPO_SHA' >&2
@@ -62,6 +85,7 @@ install -d -m 0700 "$stage"
 tar -xJf "$archive" -C "$stage" --strip-components=1
 install -d -m 0755 /opt/hephaestus
 cp -a --no-preserve=ownership "$stage" "/opt/hephaestus/node-${node_version}"
+normalize_node_tree_permissions "/opt/hephaestus/node-${node_version}"
 ln -sfn "/opt/hephaestus/node-${node_version}/bin/node" /usr/local/bin/node
 ln -sfn "/opt/hephaestus/node-${node_version}/bin/npm" /usr/local/bin/npm
 ln -sfn "/opt/hephaestus/node-${node_version}/bin/npx" /usr/local/bin/npx
