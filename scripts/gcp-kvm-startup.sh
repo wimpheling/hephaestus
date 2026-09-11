@@ -115,19 +115,26 @@ finish() {
   [[ -z "$diagnostics_token_json" ]] || rm -f -- "$diagnostics_token_json"
   [[ -z "$diagnostics_header_file" ]] || rm -f -- "$diagnostics_header_file"
   if [[ "$test_mode" == diagnostic ]]; then
-    local expected_fixture=false
+    local expected_fixture=false diagnostic_result
     if ((diagnostics_collection_status == 0)) &&
         [[ "$diagnostic_probe_completed" == true ]] &&
         [[ "$diagnostic_quarantine_validated" == true ]] &&
         ((status == 42)) && [[ "$phase" == diagnostic-synthetic ]]; then
       expected_fixture=true
     fi
+    if [[ "$expected_fixture" == true ]]; then
+      diagnostic_result=expected-failure
+    elif ((status == 124)); then
+      diagnostic_result=timed-out
+    else
+      diagnostic_result=failed
+    fi
     printf 'HEPHAESTUS_GCP_DIAGNOSTIC: TEST-FAIL expected=%s phase=%s exit=%s\n' \
       "$expected_fixture" "$phase" "$status"
     if [[ "$expected_fixture" == true ]]; then
       printf 'HEPHAESTUS_GCP_DIAGNOSTIC: DIAGNOSTICS PASS test_result=expected-failure\n'
     else
-      printf 'HEPHAESTUS_GCP_DIAGNOSTIC: DIAGNOSTICS FAIL test_result=expected-failure\n'
+      printf 'HEPHAESTUS_GCP_DIAGNOSTIC: DIAGNOSTICS FAIL test_result=%s\n' "$diagnostic_result"
     fi
     exit "$status"
   fi
@@ -549,20 +556,29 @@ runner_image_runtime_ready() {
     XDG_RUNTIME_DIR=/run/user/10001
     RUSTUP_HOME="${root_prefix}/home/forge/.rustup"
     CARGO_HOME="${root_prefix}/home/forge/.cargo"
-    PATH="${root_prefix}/home/forge/.cargo/bin:${root_prefix}/opt/hephaestus/node-${expected_node}/bin:${root_prefix}/usr/local/bin:/usr/bin:/bin"
+    RUSTUP_TOOLCHAIN="$rust_version"
+    PATH="${root_prefix}/home/forge/.cargo/bin:${root_prefix}/opt/hephaestus/node-${expected_node}/bin:${root_prefix}/usr/local/bin:${root_prefix}/usr/bin:${root_prefix}/bin:/usr/bin:/bin"
   )
 
-  node_output="$(run_with_deadline "${runtime_env[@]}" "${root_prefix}/usr/local/bin/node" --version)" ||
+  run_runner_image_tool() {
+    # Metadata startup scripts inherit a private working directory.  Run
+    # rustup-backed probes from forge's neutral HOME and pin the toolchain so
+    # an incidental rust-toolchain file cannot change the image contract.
+    run_with_deadline "${runtime_env[@]}" bash -Eeuo pipefail -c \
+      'cd "$HOME" && exec "$@"' -- "$@"
+  }
+
+  node_output="$(run_runner_image_tool "${root_prefix}/usr/local/bin/node" --version)" ||
     die 'custom runner image Node executable cannot run as forge'
   [[ "$node_output" == "$expected_node" ]] ||
     die 'custom runner image Node executable version does not match its pin'
 
-  rust_output="$(run_with_deadline "${runtime_env[@]}" "${root_prefix}/home/forge/.cargo/bin/rustc" --version)" ||
+  rust_output="$(run_runner_image_tool rustc --version)" ||
     die 'custom runner image Rust executable cannot run as forge'
   [[ "$(awk '$1 == "rustc" { print $2; exit }' <<<"$rust_output")" == "${rust_version}" ]] ||
     die 'custom runner image Rust executable version does not match its pin'
 
-  oras_output="$(run_with_deadline "${runtime_env[@]}" "${root_prefix}/usr/local/bin/oras" version)" ||
+  oras_output="$(run_runner_image_tool "${root_prefix}/usr/local/bin/oras" version)" ||
     die 'custom runner image ORAS executable cannot run as forge'
   oras_actual="$(awk '$1 == "Version:" { print $2; exit }' <<<"$oras_output")"
   [[ "$oras_actual" == "$expected_oras" ]] ||
@@ -570,7 +586,7 @@ runner_image_runtime_ready() {
 
   browser_executable="$(find -P "$image_browser_root" -type f \( -name chrome-headless-shell -o -name chrome \) -perm -0100 -print -quit 2>/dev/null)"
   [[ -n "$browser_executable" ]] || die 'custom runner image Chromium executable is missing'
-  browser_output="$(run_with_deadline "${runtime_env[@]}" "$browser_executable" --version)" ||
+  browser_output="$(run_runner_image_tool "$browser_executable" --version)" ||
     die 'custom runner image Chromium executable cannot run as forge'
   [[ -n "${runner_image_browser_version:-}" && "$browser_output" == "$runner_image_browser_version" ]] ||
     die 'custom runner image Chromium executable version does not match its manifest'

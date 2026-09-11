@@ -184,6 +184,8 @@ class RunnerImageManifestTests(unittest.TestCase):
         )
         self.assertIn("llvm_prefix=\"$(llvm-config --prefix)\"", startup)
         self.assertIn("-name 'libclang.so*'", startup)
+        self.assertIn('RUSTUP_TOOLCHAIN="$rust_version"', startup)
+        self.assertIn("cd \"$HOME\" && exec \"$@\"", startup)
         subprocess.run(["bash", "-n", str(SCRIPT.with_name("gcp-kvm-startup.sh"))], check=True)
 
     def test_custom_runtime_tools_run_as_forge_and_fail_on_version_mismatch(self) -> None:
@@ -192,6 +194,10 @@ class RunnerImageManifestTests(unittest.TestCase):
             root = Path(directory)
             browser_root = root / "srv/hephaestus/playwright-browsers"
             browser_root.mkdir(parents=True)
+            (root / "home/forge").mkdir(parents=True)
+            (root / "home/forge/rust-toolchain.toml").write_text(
+                '[toolchain]\nchannel = "definitely-wrong"\n', encoding="utf-8"
+            )
             browser = browser_root / "chrome-headless-shell"
             browser.write_text(
                 "#!/bin/sh\n"
@@ -205,7 +211,12 @@ class RunnerImageManifestTests(unittest.TestCase):
             for relative, body in {
                 "usr/local/bin/node": "#!/bin/sh\nprintf '%s\\n' 'v24.16.0'\n",
                 "usr/local/bin/oras": "#!/bin/sh\nprintf '%s\\n' 'Version: 1.3.3'\n",
-                "home/forge/.cargo/bin/rustc": "#!/bin/sh\nprintf '%s\\n' 'rustc 1.88.0 (baked)'\n",
+                "usr/bin/rustc": (
+                    "#!/bin/sh\n"
+                    "[ \"${RUSTUP_TOOLCHAIN:-}\" = 1.88.0 ] || exit 8\n"
+                    "[ \"$PWD\" = \"$HOME\" ] || exit 9\n"
+                    "printf '%s\\n' 'rustc 1.88.0 (distro shim)'\n"
+                ),
             }.items():
                 tool = root / relative
                 tool.parent.mkdir(parents=True, exist_ok=True)
@@ -357,6 +368,7 @@ finish
             self.assertEqual(result.returncode, 17, result.stdout + result.stderr)
             self.assertIn("event=upload status=pass", result.stdout)
             self.assertIn("HEPHAESTUS_GCP_DIAGNOSTIC: TEST-FAIL expected=false", result.stdout)
+            self.assertIn("HEPHAESTUS_GCP_DIAGNOSTIC: DIAGNOSTICS FAIL test_result=failed", result.stdout)
             self.assertTrue((work / "tmp/cooking-diagnostics.tar.gz").is_file())
 
     def test_cooking_consumes_verified_browser_and_host_tools(self) -> None:

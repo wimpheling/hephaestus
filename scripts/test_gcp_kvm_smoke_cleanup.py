@@ -64,7 +64,7 @@ class GcpKvmSmokeCleanupTests(unittest.TestCase):
                 "gcp-kvm-startup: custom runner image Node executable cannot run as forge",
                 f"fixture token={secret}",
                 *[f"ordinary boot line {index}" for index in range(100)],
-                "HEPHAESTUS_GCP_DIAGNOSTIC: DIAGNOSTICS FAIL test_result=expected-failure",
+            "HEPHAESTUS_GCP_DIAGNOSTIC: DIAGNOSTICS FAIL test_result=failed",
             ]
         )
         with tempfile.TemporaryDirectory(prefix="heph-gcp-serial-context-") as raw:
@@ -113,7 +113,7 @@ class GcpKvmSmokeCleanupTests(unittest.TestCase):
             "HEPH_GCP_RUNNER_IMAGE_READINESS tool=node class=node-not-runnable phase=runner-image-runtime",
             result.stderr,
         )
-        self.assertIn("HEPHAESTUS_GCP_DIAGNOSTIC: DIAGNOSTICS FAIL test_result=expected-failure", result.stderr)
+        self.assertIn("HEPHAESTUS_GCP_DIAGNOSTIC: DIAGNOSTICS FAIL test_result=failed", result.stderr)
         self.assertIn("HEPH_GCP_KVM_STARTUP event=phase-start phase=diagnostic-bootstrap", result.stderr)
         self.assertNotIn(secret, result.stdout + result.stderr)
         self.assertNotIn("ordinary boot line 99", result.stderr)
