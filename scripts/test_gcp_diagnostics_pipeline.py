@@ -205,6 +205,25 @@ finish
             self.assertEqual(status["gateAcceptance"], "failed")
             self.assertEqual(status["error"], "gate-results-acceptance-failed")
 
+    def test_missing_current_gate_sidecar_preserves_safe_triage(self):
+        """A current archive missing its sidecar fails after safe triage."""
+
+        with tempfile.TemporaryDirectory(prefix="heph-gcp-missing-gate-") as directory:
+            root = Path(directory)
+            runtime_hash = hashlib.sha256((ROOT / "gcp-cooking-run.sh").read_bytes()).hexdigest()
+            (root / "gcp-diagnostics-gate-expectation").write_text(
+                f"gcp-cooking {runtime_hash}\n", encoding="utf-8"
+            )
+            result = self._run_download(root, self._archive(root))
+            self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+            status = json.loads((root / "status.json").read_text(encoding="utf-8"))
+            self.assertEqual(status["download"], "passed")
+            self.assertEqual(status["scan"], "passed")
+            self.assertEqual(status["triage"]["collectionStatus"], "complete")
+            self.assertEqual(status["gateValidation"], "failed")
+            self.assertEqual(status["gateAcceptance"], "failed")
+            self.assertEqual(status["error"], "gate-results-acceptance-failed")
+
     def test_triage_projects_denial_and_latest_snapshot_correlation(self):
         with tempfile.TemporaryDirectory(prefix="heph-gcp-triage-") as directory:
             root = Path(directory)

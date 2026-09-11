@@ -136,6 +136,66 @@ class CookingGateResultsTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0)
             self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["script_sha256"], runner_hash)
 
+    def test_runtime_revision_lookup_allows_only_exact_forge_checkout(self) -> None:
+        runner = RUNNER.read_text(encoding="utf-8")
+        self.assertIn(
+            'git -c "safe.directory=$checkout_root" -C "$checkout_root" rev-parse HEAD',
+            runner,
+        )
+        with tempfile.TemporaryDirectory(prefix="heph-gate-ownership-") as directory:
+            checkout = Path(directory) / "checkout"
+            checkout.mkdir(mode=0o700)
+            subprocess.run(["git", "-C", str(checkout), "init", "-q"], check=True)
+            subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(checkout),
+                    "-c",
+                    "user.email=hephaestus@example.invalid",
+                    "-c",
+                    "user.name=Hephaestus",
+                    "commit",
+                    "--allow-empty",
+                    "-qm",
+                    "fixture",
+                ],
+                check=True,
+            )
+            expected = subprocess.run(
+                ["git", "-C", str(checkout), "rev-parse", "HEAD"],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            different_owner_env = {**os.environ, "GIT_TEST_ASSUME_DIFFERENT_OWNER": "1"}
+            unsafe = subprocess.run(
+                ["git", "-C", str(checkout), "rev-parse", "HEAD"],
+                check=False,
+                capture_output=True,
+                text=True,
+                env=different_owner_env,
+            )
+            self.assertEqual(unsafe.returncode, 128)
+            self.assertIn("dubious ownership", unsafe.stderr)
+            result = subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    f"safe.directory={checkout}",
+                    "-C",
+                    str(checkout),
+                    "rev-parse",
+                    "HEAD",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env=different_owner_env,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), expected)
+
     def test_runner_segment_emits_workload_marker_for_exit_paths(self) -> None:
         runner_lines = RUNNER.read_text(encoding="utf-8").splitlines()
         self.assertIn("scan_status_report='/var/log/hephaestus/evidence-scan-status.json'", RUNNER.read_text(encoding="utf-8"))

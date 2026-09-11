@@ -152,7 +152,10 @@ run_with_deadline() {
 # the exact immutable revision selected by startup, so it is the authoritative
 # revision anchor for this helper.
 install -d -m 0700 /var/log/hephaestus
-gate_results_revision="$(git -C "$checkout_root" rev-parse HEAD)"
+# Startup checks the checkout out as forge, while this root-owned supervisor
+# runs the Cooking helper.  Trust only this exact immutable checkout path for
+# the revision lookup; a global safe.directory entry would be too broad.
+gate_results_revision="$(git -c "safe.directory=$checkout_root" -C "$checkout_root" rev-parse HEAD)"
 gate_results_script_file="${BASH_SOURCE[0]}"
 gate_results_script_sha256="$(sha256sum "$gate_results_script_file" | awk '{print $1}')"
 if ! python3 -B "$gate_results_helper" --path "$gate_results_path" \

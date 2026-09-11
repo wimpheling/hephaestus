@@ -410,11 +410,13 @@ PY
     diagnostics_scan_state='failed'
     return 1
   fi
-  # Current Cooking/diagnostic workflows opt into a post-delete gate contract
-  # check. Historical bundles remain readable without this requirement, but a
-  # current run cannot be accepted from a generic aggregate result alone.
+  # Current Cooking/diagnostic workflows opt into a post-delete gate contract.
+  # Structural gate failures are recorded and evaluated after the safe archive
+  # scan/triage, so a missing or stale sidecar cannot erase useful evidence.
+  local gate_validation_status=0 gate_validation='not-applicable'
   if [[ -n "$expected_mode" || -f "$extract_root/cooking-diagnostics/sources/gate-results" ]]; then
-    if ! python3 - "$extract_root/cooking-diagnostics" "$diagnostics_source_sha" "$expected_mode" "$expected_gate_script_sha256" <<'PYGATE'
+    gate_validation='passed'
+    python3 - "$extract_root/cooking-diagnostics" "$diagnostics_source_sha" "$expected_mode" "$expected_gate_script_sha256" <<'PYGATE' || gate_validation_status=$?
 import re
 import json
 import pathlib
@@ -461,12 +463,8 @@ for gate in gates.values():
     if gate["exit_code"] is not None and not isinstance(gate["exit_code"], int):
         raise SystemExit("finalized gate result exit code is invalid")
 PYGATE
-    then
-      diagnostics_download_error='gate-results-validation-failed'
-      diagnostics_scan_state='failed'
-      printf '{"schema":1,"object":"gs://%s/%s","download":"failed","error":"gate results validation failed"}\n' \
-        "$DIAGNOSTICS_BUCKET" "$object" >"$status_path"
-      return 1
+    if ((gate_validation_status != 0)); then
+      gate_validation='failed'
     fi
   fi
   if [[ ! -f "$DIAGNOSTICS_SCANNER_SCRIPT" ]]; then
@@ -516,46 +514,50 @@ PY
     diagnostics_triage_state='failed'
     return 1
   fi
-  if [[ -f "$extract_root/cooking-diagnostics/sources/gate-results" ]]; then
+  if [[ "$gate_validation" != not-applicable || -f "$extract_root/cooking-diagnostics/sources/gate-results" ]]; then
     local gate_acceptance_status=0
-    python3 - "$status_path" "$extract_root/cooking-diagnostics" "$expected_mode" <<'PYGATE_ACCEPT' || gate_acceptance_status=$?
+    python3 - "$status_path" "$extract_root/cooking-diagnostics" "$expected_mode" "$gate_validation" <<'PYGATE_ACCEPT' || gate_acceptance_status=$?
 import json
 from pathlib import Path
 import sys
 
-status_path, root_name, requested_mode = sys.argv[1:]
+status_path, root_name, requested_mode, gate_validation = sys.argv[1:]
 root = Path(root_name)
 status = json.loads(Path(status_path).read_text(encoding="utf-8"))
-value = json.loads((root / "sources" / "gate-results").read_text(encoding="utf-8"))
-mode = value["test_mode"]
-if requested_mode and mode != requested_mode:
-    raise SystemExit("gate result mode acceptance mismatch")
-if mode == "gcp-cooking":
-    accepted = (
-        value["overall_exit_code"] == 0
-        and value["supervisor_exit_code"] == 0
-        and all(gate["state"] == "passed" for gate in value["gates"].values())
-    )
-elif mode == "diagnostic":
-    manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
-    evidence = json.loads((root / "sources" / "evidence-scan").read_text(encoding="utf-8"))
-    evidence_gate = value["gates"]["evidence-scan"]
-    accepted = (
-        value["overall_exit_code"] == 42
-        and value["supervisor_exit_code"] == 42
-        and evidence_gate["state"] == "failed"
-        and evidence_gate["exit_code"] == 1
-        and evidence_gate["reason_class"] == "evidence-scan-failed"
-        and evidence.get("status") == "failed"
-        and evidence.get("rule") == "browser-secret-org"
-        and any(
-            item.get("label") == "runtime-log" and item.get("reason") == "credential-scan-rejected"
-            for item in manifest.get("rejectedSources", [])
-            if isinstance(item, dict)
+gate_path = root / "sources" / "gate-results"
+accepted = False
+if gate_validation == "passed" and gate_path.is_file():
+    value = json.loads(gate_path.read_text(encoding="utf-8"))
+    mode = value["test_mode"]
+    if requested_mode and mode != requested_mode:
+        raise SystemExit("gate result mode acceptance mismatch")
+    if mode == "gcp-cooking":
+        accepted = (
+            value["overall_exit_code"] == 0
+            and value["supervisor_exit_code"] == 0
+            and all(gate["state"] == "passed" for gate in value["gates"].values())
         )
-    )
-else:
-    raise SystemExit("unknown gate result mode")
+    elif mode == "diagnostic":
+        manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+        evidence = json.loads((root / "sources" / "evidence-scan").read_text(encoding="utf-8"))
+        evidence_gate = value["gates"]["evidence-scan"]
+        accepted = (
+            value["overall_exit_code"] == 42
+            and value["supervisor_exit_code"] == 42
+            and evidence_gate["state"] == "failed"
+            and evidence_gate["exit_code"] == 1
+            and evidence_gate["reason_class"] == "evidence-scan-failed"
+            and evidence.get("status") == "failed"
+            and evidence.get("rule") == "browser-secret-org"
+            and any(
+                item.get("label") == "runtime-log" and item.get("reason") == "credential-scan-rejected"
+                for item in manifest.get("rejectedSources", [])
+                if isinstance(item, dict)
+            )
+        )
+    else:
+        raise SystemExit("unknown gate result mode")
+status["gateValidation"] = gate_validation
 status["gateAcceptance"] = "passed" if accepted else "failed"
 if not accepted:
     status["error"] = "gate-results-acceptance-failed"
