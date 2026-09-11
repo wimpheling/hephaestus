@@ -58,6 +58,64 @@ pub struct GatewayIngressSecretResolver<K> {
     encrypted_store: EncryptedStore<K>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PreAdapterDenialClass {
+    AuthenticationDenied,
+    AuthorityUnavailable,
+    AuthorizationDenied,
+    RequestDenied,
+    PersistenceFailure,
+    SecretResolutionFailure,
+    OtherFailure,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PreAdapterDenialStage {
+    SessionAuthentication,
+    LeaseAuthorization,
+    RequestAuthorization,
+    VersionLoading,
+    Decryption,
+}
+
+impl PreAdapterDenialStage {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::SessionAuthentication => "session-authentication",
+            Self::LeaseAuthorization => "lease-authorization",
+            Self::RequestAuthorization => "request-authorization",
+            Self::VersionLoading => "version-loading",
+            Self::Decryption => "decryption",
+        }
+    }
+}
+
+impl PreAdapterDenialClass {
+    const fn from_error(error: &SecretServiceError) -> Self {
+        match error {
+            SecretServiceError::RuntimeAuthenticationDenied => Self::AuthenticationDenied,
+            SecretServiceError::Unavailable => Self::AuthorityUnavailable,
+            SecretServiceError::AuthorizationDenied => Self::AuthorizationDenied,
+            SecretServiceError::BrokerRequestDenied => Self::RequestDenied,
+            SecretServiceError::Persistence => Self::PersistenceFailure,
+            SecretServiceError::Encryption(_) => Self::SecretResolutionFailure,
+            _ => Self::OtherFailure,
+        }
+    }
+
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::AuthenticationDenied => "authentication_denied",
+            Self::AuthorityUnavailable => "authority_unavailable",
+            Self::AuthorizationDenied => "authorization_denied",
+            Self::RequestDenied => "request_denied",
+            Self::PersistenceFailure => "persistence_failure",
+            Self::SecretResolutionFailure => "secret_resolution_failure",
+            Self::OtherFailure => "other_failure",
+        }
+    }
+}
+
 impl<K: KeyProvider + Send + Sync> GatewayIngressSecretResolver<K> {
     /// Creates the resolver over the narrow worker pool and host KMS provider.
     #[must_use]
@@ -2212,6 +2270,7 @@ impl<K: KeyProvider + Send + Sync> SecretRuntimeService<K> {
               operation = request.operation.as_str()
           )
       )]
+    #[allow(clippy::too_many_lines)] // Keep fail-closed broker phases together for audit review.
     pub async fn use_brokered<A: BrokerAdapter + ?Sized>(
         &self,
         credential: &secret_domain::OpaqueRuntimeCredential,
@@ -2226,11 +2285,23 @@ impl<K: KeyProvider + Send + Sync> SecretRuntimeService<K> {
                 // slot call arrives. The exact credential hash still lets us
                 // identify that authenticated session for a value-free audit,
                 // while the original authentication denial remains returned.
-                self.record_pre_adapter_https_denial(credential, request, &error)
-                    .await?;
+                self.record_pre_adapter_https_denial(
+                    credential,
+                    request,
+                    &error,
+                    PreAdapterDenialStage::SessionAuthentication,
+                )
+                .await?;
                 return Err(error);
             }
-            Err(error) => return Err(error),
+            Err(error) => {
+                Self::log_pre_adapter_https_denial(
+                    request,
+                    &error,
+                    PreAdapterDenialStage::SessionAuthentication,
+                );
+                return Err(error);
+            }
         };
         let lease = match self
             .authorize_runtime_lease(
@@ -2243,14 +2314,26 @@ impl<K: KeyProvider + Send + Sync> SecretRuntimeService<K> {
         {
             Ok(lease) => lease,
             Err(error) => {
-                self.record_pre_adapter_https_denial(credential, request, &error)
-                    .await?;
+                self.record_pre_adapter_https_denial(
+                    credential,
+                    request,
+                    &error,
+                    PreAdapterDenialStage::LeaseAuthorization,
+                )
+                .await?;
                 return Err(error);
             }
         };
         let (https_request, rule_id) = self
             .authorize_https_operation(&session, &lease, request)
-            .await?;
+            .await
+            .inspect_err(|error| {
+                Self::log_pre_adapter_https_denial(
+                    request,
+                    error,
+                    PreAdapterDenialStage::RequestAuthorization,
+                );
+            })?;
         let (context, encrypted) = load_runtime_version(
             &self.resolver_pool,
             &session,
@@ -2259,8 +2342,26 @@ impl<K: KeyProvider + Send + Sync> SecretRuntimeService<K> {
             false,
             "broker_call_started",
         )
-        .await?;
-        let value = self.encrypted_store.resolve(&context, &encrypted)?;
+        .await
+        .inspect_err(|error| {
+            Self::log_pre_adapter_https_denial(
+                request,
+                error,
+                PreAdapterDenialStage::VersionLoading,
+            );
+        })?;
+        let value = self
+            .encrypted_store
+            .resolve(&context, &encrypted)
+            .map_err(|error| {
+                let service_error = SecretServiceError::Encryption(error);
+                Self::log_pre_adapter_https_denial(
+                    request,
+                    &service_error,
+                    PreAdapterDenialStage::Decryption,
+                );
+                service_error
+            })?;
         let response = match adapter
             .invoke(
                 &value,
@@ -2337,7 +2438,9 @@ impl<K: KeyProvider + Send + Sync> SecretRuntimeService<K> {
         credential: &secret_domain::OpaqueRuntimeCredential,
         request: &BrokerRequest,
         error: &SecretServiceError,
+        stage: PreAdapterDenialStage,
     ) -> Result<(), SecretServiceError> {
+        Self::log_pre_adapter_https_denial(request, error, stage);
         let reason_code = match error {
             // Session expiry and retirement are also represented by the
             // authentication denial; keep the audit reason generic rather
@@ -2400,6 +2503,25 @@ impl<K: KeyProvider + Send + Sync> SecretRuntimeService<K> {
             Some(reason_code),
         )
         .await
+    }
+
+    /// Emits only a bounded, allowlisted classification for a denial that
+    /// occurred before the upstream adapter was invoked. Error values can
+    /// contain provider details, request data, or persistence diagnostics and
+    /// therefore must never be attached to this log record.
+    fn log_pre_adapter_https_denial(
+        request: &BrokerRequest,
+        error: &SecretServiceError,
+        stage: PreAdapterDenialStage,
+    ) {
+        let denial_class = PreAdapterDenialClass::from_error(error);
+        tracing::warn!(
+            run_id = %request.run_id,
+            slot = request.slot.as_str(),
+            denial_stage = stage.as_str(),
+            denial_class = denial_class.as_str(),
+            "broker HTTPS request denied before upstream adapter"
+        );
     }
 
     async fn authorize_brokered_response(
@@ -3835,5 +3957,63 @@ impl<K: KeyProvider + Send + Sync> SecretRuntimeResolver for SecretRuntimeServic
         adapter: &dyn BrokerAdapter,
     ) -> Result<BrokerResponse, SecretServiceError> {
         self.use_brokered(credential, request, adapter).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PreAdapterDenialClass, PreAdapterDenialStage, SecretServiceError};
+    use secret_store::SecretStoreError;
+
+    #[test]
+    fn pre_adapter_denial_classes_are_distinct_and_payload_free() {
+        let cases = [
+            (
+                SecretServiceError::RuntimeAuthenticationDenied,
+                "authentication_denied",
+            ),
+            (SecretServiceError::Unavailable, "authority_unavailable"),
+            (
+                SecretServiceError::AuthorizationDenied,
+                "authorization_denied",
+            ),
+            (SecretServiceError::BrokerRequestDenied, "request_denied"),
+            (SecretServiceError::Persistence, "persistence_failure"),
+            (
+                SecretServiceError::Encryption(SecretStoreError::Authentication),
+                "secret_resolution_failure",
+            ),
+            (SecretServiceError::InvalidLifecycle, "other_failure"),
+        ];
+        let mut classes = std::collections::BTreeSet::new();
+        for (error, expected) in cases {
+            let class = PreAdapterDenialClass::from_error(&error);
+            assert_eq!(class.as_str(), expected);
+            assert!(classes.insert(class.as_str()));
+            assert!(!class.as_str().contains("sentinel"));
+            assert!(!class.as_str().contains("password"));
+        }
+    }
+
+    #[test]
+    fn pre_adapter_denial_stages_are_static_and_distinct() {
+        let stages = [
+            PreAdapterDenialStage::SessionAuthentication,
+            PreAdapterDenialStage::LeaseAuthorization,
+            PreAdapterDenialStage::RequestAuthorization,
+            PreAdapterDenialStage::VersionLoading,
+            PreAdapterDenialStage::Decryption,
+        ];
+        let values = stages.map(PreAdapterDenialStage::as_str);
+        assert_eq!(
+            values,
+            [
+                "session-authentication",
+                "lease-authorization",
+                "request-authorization",
+                "version-loading",
+                "decryption",
+            ]
+        );
     }
 }

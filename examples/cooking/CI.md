@@ -1,5 +1,10 @@
 # Cooking E2E runner
 
+The durable GCP configuration, keyless identities, bucket retention, dispatch
+gate and failure triage are in the [GCP Cooking CI runbook](../../docs/gcp-cooking-ci.md).
+Current GCP live validation is **pending**; the historical results below do
+not claim that the current `gcp-cooking` path is green.
+
 The [Cooking E2E workflow](../../.github/workflows/cooking-e2e.yml) runs the
 same `examples/cooking/run.sh` entry point as local execution. It requires an
 x86_64 Linux runner labelled `self-hosted`, `Linux`, `X64`, and `heph-kvm`.
@@ -92,6 +97,19 @@ the object lookup fails, it prints the bounded provider error and up to 30
 visible object names from that bucket to help locate an upload or permission
 mistake.
 
+The `diagnostic` mode is a cheap, deliberate-failure check of the cloud
+evidence path. It uses one `e2-small` VM with a 20 GB auto-deleting disk, no
+nested KVM, no cache and no Cooking build. Startup checks out the exact SHA,
+writes synthetic serial, runtime-state, lineage and browser-summary records,
+and invokes the allowlisted collector. The collector scans every retained file,
+caps the compressed bundle at 64 MiB, and uploads it to the private
+`hephaestus-508000-cooking-diagnostics` bucket under
+`cooking/runs/{run_id}/{attempt}/{sha}.tar.gz`. The synthetic test failure is
+reported separately from the diagnostics result; the workflow is successful
+only when collection, scans, upload, post-delete download and checksum
+verification all pass. This mode is the next reviewable cloud action while
+full Cooking trials are paused.
+
 The same `main` manual dispatch also offers `gcp-cooking`. Before creating a
 paid VM it checks the private, checksum-pinned cache object
 `gs://hephaestus-508000-cooking-cache/cooking/heph-gcp-cooking-cache.tar.zst`.
@@ -103,19 +121,28 @@ reviewed SHA-256, using the explicit project billing/quota project. A
 missing or unreadable object stops the job before VM creation. When present,
 the VM uses `n2-standard-8` in the selected `europe-west1` zone (default
 `europe-west1-b`), the reviewed
-`hephaestus-cooking-runtime` service account with the `storage-ro` scope, a
+`hephaestus-cooking-runtime` service account with the minimum `storage-rw`
+scope needed for the private evidence upload (and cache read), a
 150 GB balanced boot disk, nested virtualization, and the same 45-minute
 provider-enforced `DELETE` lifetime. The startup script downloads and verifies
 the cache, checks out the exact workflow SHA, and runs the complete Cooking
 path through the checked-out `scripts/gcp-cooking-run.sh` helper. Its deadline
-shares the startup script's original 40-minute budget; it is not reset after
-bootstrap. The smoke mode continues to use no service account and no scopes.
+shares the startup script's 35-minute test budget and leaves five minutes for
+collection/upload; it is not reset after bootstrap. The smoke mode continues
+to use no service account and no scopes.
 
-The GCP Cooking path retains the serial console artifact and reports a
-dedicated `HEPHAESTUS_GCP_COOKING` marker. It does not yet export a browser
-diagnostic bundle from the disposable VM; the serial artifact is the retained
-cloud evidence. The existing `cooking` manual mode and automatic push and
-pull-request behavior continue to use the prepared self-hosted runner.
+The GCP Cooking path reports a dedicated `HEPHAESTUS_GCP_COOKING` marker and
+uses the same private collector/upload/download path. The GitHub workflow
+retains only a small, non-sensitive status manifest; the bundle remains in
+GCS and can be downloaded with an authenticated command printed by the job:
+
+```sh
+gcloud storage cp gs://hephaestus-508000-cooking-diagnostics/cooking/runs/RUN_ID/ATTEMPT/FULL_SHA.tar.gz ./gcp-diagnostics.tar.gz
+```
+
+The bucket lifecycle is one day. The existing `cooking` manual mode and
+automatic push and pull-request behavior continue to use the prepared
+self-hosted runner.
 
 The first successful post-merge live smoke was [workflow run
 34525055454](https://github.com/wimpheling/hephaestus/actions/runs/34525055454)

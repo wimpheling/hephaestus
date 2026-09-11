@@ -530,6 +530,42 @@ set +e
 run_with_deadline python3 -B "$checkout_root/scripts/check-browser-evidence.py" "$evidence_root"
 scan_status=$?
 set -e
+browser_summary_status='passed'
+((status == 0 && scan_status == 0)) || browser_summary_status='failed'
+python3 - "$evidence_root" "$browser_summary_status" "$status" >"$evidence_root/browser-summary.json" <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+state = sys.argv[2]
+exit_code = int(sys.argv[3])
+reports = sorted(root.glob("browser.*/playwright.log"))
+passed = failed = skipped = timed_out = 0
+for report in reports:
+    try:
+        text = report.read_text(encoding="utf-8", errors="replace")[-262144:]
+    except OSError:
+        continue
+    passed += sum(int(value) for value in re.findall(r"\b(\d+)\s+passed\b", text, re.I))
+    failed += sum(int(value) for value in re.findall(r"\b(\d+)\s+failed\b", text, re.I))
+    skipped += sum(int(value) for value in re.findall(r"\b(\d+)\s+skipped\b", text, re.I))
+    timed_out += sum(int(value) for value in re.findall(r"\b(\d+)\s+timed out\b", text, re.I))
+if reports:
+    detail = f"assertions passed={passed} failed={failed} skipped={skipped} timed_out={timed_out} reports={len(reports)}"
+else:
+    detail = "browser report missing"
+print(json.dumps({
+    "status": state,
+    "suite": "cooking-playwright",
+    "test": "browser-journey",
+    "phase": "browser",
+    "exit_code": exit_code,
+    "error": None if state == "passed" else detail,
+}, separators=(",", ":")))
+PY
+chmod 0600 "$evidence_root/browser-summary.json"
 if ((status != 0)); then
     # Keep the acceptance-suite result authoritative when both it and the
     # retained-evidence scanner fail.

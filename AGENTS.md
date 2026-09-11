@@ -51,3 +51,6 @@ declared PostgreSQL adapters, convert generated RPC types at the transport
 boundary, publish product events only through committed outboxes, and mark
 request-only plaintext with the protobuf sensitive-field option. The linked
 architecture rule index is the source of truth for diagnostics and exceptions.
+
+The durable configuration and debugging procedure for the disposable GCP
+Cooking CI modes is [`docs/gcp-cooking-ci.md`](docs/gcp-cooking-ci.md).
