@@ -409,6 +409,19 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
     };
     let libkrun_e2e = env::var("HEPHAESTUS_APP_LIBKRUN_E2E").as_deref() == Ok("1");
     let cooking_build_proof = env::var("HEPHAESTUS_APP_COOKING_BUILD_PROOF").as_deref() == Ok("1");
+    // Ordinary golden tests keep their short timeout. The real Cooking proof
+    // uses the production build limit, with a small margin for the observer's
+    // final state poll and cleanup.
+    let build_timeout = if cooking_build_proof {
+        Duration::from_secs(15 * 60)
+    } else {
+        Duration::from_secs(30)
+    };
+    let cooking_wait_timeout = if cooking_build_proof {
+        build_timeout + Duration::from_secs(30)
+    } else {
+        Duration::from_secs(300)
+    };
     let browser_e2e = env::var("HEPHAESTUS_COOKING_BROWSER_E2E").as_deref() == Ok("1");
     let gateway_caddy_e2e = env::var("HEPHAESTUS_APP_GATEWAY_CADDY_E2E").as_deref() == Ok("1");
     assert!(
@@ -802,7 +815,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
         runtime_authority_handoff_key: [0x39; 32],
         runtime_authority_session_ttl: Duration::from_secs(3_600),
         build_workspace_root: root.join("isolated-builds"),
-        build_timeout: Duration::from_secs(30),
+        build_timeout,
         secret_mounts: EphemeralSecretConfig {
             root: secret_mount_root,
             require_memory_filesystem: false,
@@ -878,7 +891,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
                     git_token: &token,
                     rpc_token: &rpc_token,
                 },
-                timeout: Duration::from_secs(300),
+                timeout: cooking_wait_timeout,
             };
             cooking_builds::create_cooking_blog_repository(&context)
                 .await
@@ -945,7 +958,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
                 git_token: &token,
                 rpc_token: &rpc_token,
             },
-            timeout: Duration::from_secs(300),
+            timeout: cooking_wait_timeout,
         })
         .await
         .expect("real cooking source build and publish proof");
@@ -962,7 +975,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
                     git_token: &token,
                     rpc_token: &rpc_token,
                 },
-                timeout: Duration::from_secs(300),
+                timeout: cooking_wait_timeout,
             },
             &builds.agent,
         )
@@ -985,7 +998,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
                     git_token: &token,
                     rpc_token: &rpc_token,
                 },
-                timeout: Duration::from_secs(300),
+                timeout: cooking_wait_timeout,
             },
             &builds.gateway,
         )
@@ -1026,7 +1039,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
                     git_token: &token,
                     rpc_token: &rpc_token,
                 },
-                timeout: Duration::from_secs(300),
+                timeout: cooking_wait_timeout,
             })
             .await
             .expect("create and push separate cooking blog repository");
@@ -1043,7 +1056,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
                 git_token: &token,
                 rpc_token: &rpc_token,
             },
-            timeout: Duration::from_secs(300),
+            timeout: cooking_wait_timeout,
         };
         let update_builds = if env::var("HEPHAESTUS_COOKING_UPDATE_E2E").as_deref() == Ok("1") {
             Some(
@@ -1060,7 +1073,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
                             git_token: &token,
                             rpc_token: &rpc_token,
                         },
-                        timeout: Duration::from_secs(300),
+                        timeout: cooking_wait_timeout,
                     },
                     &builds.agent,
                 )
@@ -1074,7 +1087,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             &pool,
             project.id,
             "golden-cooking-oci-materialization",
-            Duration::from_secs(300),
+            cooking_wait_timeout,
         )
         .await;
         let instance = cooking_builds::prepare_cooking_instance(
@@ -1387,7 +1400,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             &pool,
             project.id,
             "golden-cooking-oci-materialization",
-            Duration::from_secs(300),
+            cooking_wait_timeout,
         )
         .await;
         running
@@ -1480,7 +1493,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
                 git_token: &token,
                 rpc_token: &rpc_token,
             },
-            timeout: Duration::from_secs(300),
+            timeout: cooking_wait_timeout,
         };
         let canonical_installed_gateway = cooking_builds::install_cooking_gateway(
             &restored_context,
@@ -1637,7 +1650,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             &pool,
             project.id,
             "golden-cooking-oci-materialization",
-            Duration::from_secs(300),
+            cooking_wait_timeout,
         )
         .await;
         running
@@ -1673,7 +1686,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
                 git_token: &token,
                 rpc_token: &rpc_token,
             },
-            timeout: Duration::from_secs(300),
+            timeout: cooking_wait_timeout,
         };
         let restored_after_crash = cooking_builds::configure_cooking_gateway(
             &restarted_context,
@@ -1714,7 +1727,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
                     git_token: &token,
                     rpc_token: &rpc_token,
                 },
-                timeout: Duration::from_secs(300),
+                timeout: cooking_wait_timeout,
             },
             &blog_repository,
             &resolved_head,
@@ -1760,7 +1773,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
                         model: cooking::MODEL_RULE,
                         relay: cooking::RELAY_RULE,
                     },
-                    timeout: Duration::from_secs(300),
+                    timeout: cooking_wait_timeout,
                 },
                 &actual_brokered.upstream,
                 cooking_updates::CookingUpdateCandidates {
