@@ -30,6 +30,12 @@ TRIAGE_SPEC = importlib.util.spec_from_file_location(
 TRIAGE = importlib.util.module_from_spec(TRIAGE_SPEC)
 assert TRIAGE_SPEC.loader is not None
 TRIAGE_SPEC.loader.exec_module(TRIAGE)
+PROJECTOR_SPEC = importlib.util.spec_from_file_location(
+    "playwright_browser_summary", ROOT / "project-playwright-browser-summary.py"
+)
+PROJECTOR = importlib.util.module_from_spec(PROJECTOR_SPEC)
+assert PROJECTOR_SPEC.loader is not None
+PROJECTOR_SPEC.loader.exec_module(PROJECTOR)
 
 
 class GcpDiagnosticsPipelineTests(unittest.TestCase):
@@ -189,6 +195,12 @@ finish
             )
             self.assertEqual(triage["sources"]["truncatedCount"], 1)
             self.assertEqual(triage["sources"]["unavailableCount"], 1)
+            # Older retained summaries have no projector state; keep their
+            # typed failure visible while making the missing report state
+            # explicit for callers.
+            self.assertEqual(triage["browser"]["status"], "failed")
+            self.assertEqual(triage["browser"]["report_state"], "unknown")
+            self.assertEqual(triage["browser"]["failure_metadata"], [])
 
     def test_triage_projects_only_typed_failure_fields(self):
         with tempfile.TemporaryDirectory(prefix="heph-gcp-triage-failure-") as directory:
@@ -229,7 +241,7 @@ finish
             self._archive(root)
             (root / "bundle" / "sources" / "test-output").write_text(
                 "HEPHAESTUS_GCP_COOKING FAIL phase=evidence exit=1 "
-                "error=private-error-payload\n",
+                "reason_class=browser-tests-not-passed error=private-error-payload\n",
                 encoding="utf-8",
             )
             (root / "bundle" / "sources" / "browser-summary").write_text(
@@ -250,6 +262,7 @@ finish
                     "phase": "evidence",
                     "status": "failed",
                     "exit_code": 1,
+                    "reason_class": "browser-tests-not-passed",
                     "correlated": False,
                 },
                 failures,
@@ -312,6 +325,102 @@ finish
                 failures,
             )
             self.assertNotIn("browser-journey", json.dumps(failures))
+            browser = TRIAGE.summarize(root / "bundle")["browser"]
+            self.assertEqual(browser["status"], "not-run")
+            self.assertEqual(browser["report_state"], "unknown")
+            self.assertIsNone(browser["counts"])
+            self.assertEqual(browser["failure_metadata"], [])
+
+    def test_triage_preserves_projector_browser_schema_without_raw_error(self):
+        """Exercise the real Playwright projector through collector and triage."""
+
+        with tempfile.TemporaryDirectory(prefix="heph-gcp-browser-projector-") as directory:
+            root = Path(directory)
+            evidence = root / "playwright"
+            report_dir = evidence / "browser.post-operation"
+            report_dir.mkdir(parents=True)
+            report = {
+                "config": {"rootDir": "/repo/e2e/playwright"},
+                "suites": [{
+                    "file": "cooking-tests/cooking-post-operation.spec.ts",
+                    "title": "cooking-post-operation.spec.ts",
+                    "specs": [{
+                        "file": "cooking-tests/cooking-post-operation.spec.ts",
+                        "title": "cooking post-operation controls, provenance, recovery, and denial",
+                        "tests": [{"results": [{
+                            "status": "failed",
+                            "error": {
+                                "message": "expect(locator).toContainText()\nsecret=private",
+                                "stack": "Error: secret=private",
+                            },
+                            "errorLocation": {
+                                "file": "/repo/e2e/playwright/cooking-tests/cooking-post-operation.spec.ts",
+                                "line": 106,
+                                "column": 7,
+                            },
+                        }]}],
+                    }],
+                }],
+            }
+            (report_dir / "playwright-report.json").write_text(json.dumps(report), encoding="utf-8")
+            projected = PROJECTOR.project(evidence)
+            self.assertEqual(projected["report_state"], "complete")
+            self.assertEqual(projected["counts"], {"passed": 0, "failed": 1, "skipped": 0, "timed_out": 0})
+            summary_path = root / "browser-summary.json"
+            summary_path.write_text(json.dumps(projected), encoding="utf-8")
+            bundle = root / "bundle"
+            self.assertEqual(
+                COLLECTOR.main([
+                    "--output-dir", str(bundle),
+                    "--source", f"browser-summary={summary_path}",
+                ]),
+                0,
+            )
+            browser = TRIAGE.summarize(bundle)["browser"]
+            self.assertEqual(browser["status"], "failed")
+            self.assertEqual(browser["report_state"], "complete")
+            self.assertEqual(browser["counts"], {"passed": 0, "failed": 1, "skipped": 0, "timed_out": 0})
+            self.assertEqual(browser["observed_phases"], ["post-operation"])
+            self.assertEqual(browser["passed_phases"], [])
+            self.assertEqual(browser["failure_metadata"], [{
+                "test_id": "cooking-post-operation",
+                "phase": "post-operation",
+                "status": "failed",
+                "error_class": "assertion",
+                "matcher": "toContainText",
+                "source_file": "e2e/playwright/cooking-tests/cooking-post-operation.spec.ts",
+                "source_line": 106,
+                "source_column": 7,
+                "source_location_kind": "error",
+            }])
+            self.assertNotIn("private", json.dumps(browser).lower())
+
+            # The compatibility reader accepts the producer's complete
+            # two-phase enum but rejects duplicate or unknown phase values.
+            projected["passed_phases"] = ["initial", "post-operation"]
+            summary_path.write_text(json.dumps(projected), encoding="utf-8")
+            valid_bundle = root / "valid-bundle"
+            self.assertEqual(
+                COLLECTOR.main([
+                    "--output-dir", str(valid_bundle),
+                    "--source", f"browser-summary={summary_path}",
+                ]),
+                0,
+            )
+            self.assertEqual(
+                TRIAGE.summarize(valid_bundle)["browser"]["passed_phases"],
+                ["initial", "post-operation"],
+            )
+            projected["passed_phases"] = ["initial", "initial"]
+            summary_path.write_text(json.dumps(projected), encoding="utf-8")
+            invalid_bundle = root / "invalid-bundle"
+            self.assertEqual(
+                COLLECTOR.main([
+                    "--output-dir", str(invalid_bundle),
+                    "--source", f"browser-summary={summary_path}",
+                ]),
+                1,
+            )
 
     def test_triage_projects_bounded_browser_observations_from_collector(self):
         """Collector-normalized browser lines become typed, unassociated facts."""
@@ -1019,70 +1128,47 @@ finish
         runner = (ROOT / "gcp-cooking-run.sh").read_text(encoding="utf-8")
         workload_marker = "event=workload-result operation=cooking-workload"
         evidence_marker = "event=evidence-scan operation=evidence-scan"
-        browser_summary = '"component": "browser-e2e"'
         self.assertIn(workload_marker, runner)
         self.assertIn(evidence_marker, runner)
-        self.assertIn(browser_summary, runner)
-        self.assertIn('"result_origin": result_origin', runner)
+        self.assertIn("project-playwright-browser-summary.py", runner)
         workload_cleanup_guard = runner.index("if ((status != 0)); then", runner.index(workload_marker))
         self.assertLess(runner.index(workload_marker), workload_cleanup_guard)
         self.assertLess(runner.index(evidence_marker), runner.index('browser-summary.json'))
 
-        summary_start = 'python3 - "$evidence_root" >"$evidence_root/browser-summary.json" <<\'PY\'\n'
-        summary_body = runner.split(summary_start, 1)[1].split("\nPY\n", 1)[0]
         with tempfile.TemporaryDirectory(prefix="heph-gcp-browser-summary-") as directory:
             root = Path(directory)
             report_root = root / "browser.1"
             report_root.mkdir()
-            report = report_root / "playwright.log"
-
-            report.write_text("1 passed\n", encoding="utf-8")
-            passed = subprocess.run(
-                ["python3", "-", str(root)],
-                input=summary_body,
-                text=True,
-                capture_output=True,
-                check=False,
-            )
-            self.assertEqual(passed.returncode, 0, passed.stderr)
-            passed_summary = json.loads(passed.stdout)
+            report = {
+                "config": {"rootDir": "/repo/e2e/playwright"},
+                "suites": [{"file": "cooking-tests/cooking-live-review.spec.ts", "title": "suite", "specs": [{
+                    "file": "cooking-tests/cooking-live-review.spec.ts",
+                    "title": "cooking release install, mailbox, gateway configure, and binding",
+                    "tests": [{"results": [{"status": "passed"}]}],
+                }]}],
+            }
+            (report_root / "playwright-report.json").write_text(json.dumps(report), encoding="utf-8")
+            passed_summary = PROJECTOR.project(root)
             self.assertEqual(passed_summary["status"], "passed")
-            self.assertEqual(passed_summary["exit_code"], 0)
+            self.assertEqual(passed_summary["counts"]["passed"], 1)
             self.assertEqual(passed_summary["result_origin"], "playwright-report")
 
-            report.write_text("1 passed\n", encoding="utf-8")
             workload_failure = passed_summary.copy()
             workload_failure["workload_exit_code"] = 7
             self.assertEqual(workload_failure["status"], "passed")
             self.assertNotEqual(workload_failure["status"], "failed")
 
-            report.unlink()
-            not_run = subprocess.run(
-                ["python3", "-", str(root)],
-                input=summary_body,
-                text=True,
-                capture_output=True,
-                check=False,
-            )
-            self.assertEqual(not_run.returncode, 0, not_run.stderr)
-            not_run_summary = json.loads(not_run.stdout)
-            self.assertEqual(not_run_summary["status"], "not-run")
-            self.assertEqual(not_run_summary["result_origin"], "no-browser-report")
-            self.assertNotIn("exit_code", not_run_summary)
+            (report_root / "playwright-report.json").unlink()
+            not_run_summary = PROJECTOR.project(root)
+            self.assertEqual(not_run_summary["status"], "unknown")
+            self.assertEqual(not_run_summary["result_origin"], "playwright-report")
+            self.assertEqual(not_run_summary["report_state"], "partial")
 
-            report.write_text("one diagnostic line\n", encoding="utf-8")
-            unknown = subprocess.run(
-                ["python3", "-", str(root)],
-                input=summary_body,
-                text=True,
-                capture_output=True,
-                check=False,
-            )
-            self.assertEqual(unknown.returncode, 0, unknown.stderr)
-            unknown_summary = json.loads(unknown.stdout)
+            (report_root / "playwright-report.json").write_text("{malformed", encoding="utf-8")
+            unknown_summary = PROJECTOR.project(root)
             self.assertEqual(unknown_summary["status"], "unknown")
             self.assertEqual(unknown_summary["result_origin"], "playwright-report")
-            self.assertNotIn("exit_code", unknown_summary)
+            self.assertEqual(unknown_summary["report_state"], "malformed")
 
     def test_coordinator_uses_mode_bound_before_terminal_timeout(self):
         coordinator = (ROOT / "gcp-kvm-smoke.sh").read_text(encoding="utf-8")

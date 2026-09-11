@@ -331,8 +331,31 @@ def classify_readiness_error(line: str) -> str | None:
 BROWSER_FIELDS = frozenset(
     {
         "status", "suite", "test", "phase", "duration_ms", "exit_code", "error", "stack",
-        "started_at", "finished_at", "component", "result_origin",
+        "started_at", "finished_at", "component", "result_origin", "report_state",
+        "counts", "observed_phases", "passed_phases", "failure_metadata",
     }
+)
+BROWSER_REPORT_STATES = frozenset(
+    {"complete", "missing", "partial", "malformed", "truncated", "report-error"}
+)
+BROWSER_COUNT_FIELDS = frozenset({"passed", "failed", "skipped", "timed_out"})
+BROWSER_PHASE_VALUES = frozenset({"initial", "post-operation"})
+BROWSER_FAILURE_FIELDS = frozenset(
+    {
+        "test_id", "phase", "status", "error_class", "matcher", "source_file",
+        "source_line", "source_column", "source_location_kind",
+    }
+)
+BROWSER_TEST_IDS = frozenset({"cooking-live-review", "cooking-post-operation"})
+BROWSER_PHASES = frozenset({"initial", "post-operation"})
+BROWSER_FAILURE_STATUSES = frozenset({"failed", "timed_out"})
+BROWSER_ERROR_CLASSES = frozenset({"assertion", "timeout", "hook", "runtime", "unknown"})
+BROWSER_MATCHERS = frozenset(
+    {"toBe", "toBeEmpty", "toBeVisible", "toContainText", "toHaveCount", "toHaveURL", "toMatch", "unknown"}
+)
+BROWSER_SOURCE_LOCATION_KINDS = frozenset({"error", "test"})
+BROWSER_SOURCE_RE = re.compile(
+    r"^e2e/playwright/cooking-tests/cooking-(?:live-review|post-operation)\.spec\.ts$"
 )
 
 
@@ -621,6 +644,11 @@ def _project_browser_summary(source: Path, destination: Path) -> tuple[int, str]
         raise CollectionError("browser summary must be one JSON object") from error
     if not isinstance(value, dict) or set(value) - BROWSER_FIELDS:
         raise CollectionError("browser summary contains an unallowlisted field")
+    if (
+        ("report_state" in value or "failure_metadata" in value or "counts" in value)
+        and ("error" in value or "stack" in value)
+    ):
+        raise CollectionError("typed browser summary cannot retain error or stack text")
     safe: dict[str, Any] = {}
     for field, item in value.items():
         if item is None and field not in {"error", "stack"}:
@@ -637,6 +665,63 @@ def _project_browser_summary(source: Path, destination: Path) -> tuple[int, str]
         elif field == "result_origin":
             if item not in {"playwright-report", "no-browser-report"}:
                 raise CollectionError(f"browser summary result origin is invalid: {field}")
+        elif field == "report_state":
+            if item not in BROWSER_REPORT_STATES:
+                raise CollectionError(f"browser summary report state is invalid: {field}")
+        elif field == "counts":
+            if not isinstance(item, dict) or set(item) != BROWSER_COUNT_FIELDS:
+                raise CollectionError(f"browser summary counts are invalid: {field}")
+            if any(type(number) is not int or number < 0 or number > 256 for number in item.values()):
+                raise CollectionError(f"browser summary count is invalid: {field}")
+            safe[field] = dict(item)
+            continue
+        elif field == "observed_phases":
+            if (
+                not isinstance(item, list)
+                or len(item) > 2
+                or item != sorted(item)
+                or any(phase not in BROWSER_PHASE_VALUES for phase in item)
+                or len(set(item)) != len(item)
+            ):
+                raise CollectionError(f"browser summary observed phases are invalid: {field}")
+            safe[field] = list(item)
+            continue
+        elif field == "passed_phases":
+            if (
+                not isinstance(item, list)
+                or len(item) > 2
+                or item != sorted(item)
+                or any(phase not in BROWSER_PHASE_VALUES for phase in item)
+                or len(set(item)) != len(item)
+            ):
+                raise CollectionError(f"browser summary passed phases are invalid: {field}")
+            safe[field] = list(item)
+            continue
+        elif field == "failure_metadata":
+            if not isinstance(item, list) or len(item) > 8:
+                raise CollectionError(f"browser summary failure metadata is invalid: {field}")
+            projected_failures = []
+            for failure in item:
+                if not isinstance(failure, dict) or set(failure) != BROWSER_FAILURE_FIELDS:
+                    raise CollectionError(f"browser summary failure metadata entry is invalid: {field}")
+                if (
+                    failure["test_id"] not in BROWSER_TEST_IDS
+                    or failure["phase"] not in BROWSER_PHASES
+                    or failure["status"] not in BROWSER_FAILURE_STATUSES
+                    or failure["error_class"] not in BROWSER_ERROR_CLASSES
+                    or failure["matcher"] not in BROWSER_MATCHERS
+                    or failure["source_location_kind"] not in BROWSER_SOURCE_LOCATION_KINDS
+                    or not isinstance(failure["source_file"], str)
+                    or BROWSER_SOURCE_RE.fullmatch(failure["source_file"]) is None
+                    or type(failure["source_line"]) is not int
+                    or not 1 <= failure["source_line"] <= 100_000
+                    or type(failure["source_column"]) is not int
+                    or not 1 <= failure["source_column"] <= 10_000
+                ):
+                    raise CollectionError(f"browser summary failure metadata values are invalid: {field}")
+                projected_failures.append(dict(failure))
+            safe[field] = projected_failures
+            continue
         elif field in {"duration_ms", "exit_code"}:
             if type(item) is not int or item < 0:
                 raise CollectionError(f"browser summary number is invalid: {field}")

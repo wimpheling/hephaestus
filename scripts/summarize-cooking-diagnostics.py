@@ -39,7 +39,7 @@ SOURCE_LABELS = {
 SAFE_STATUS = COLLECTOR.SNAPSHOT_STATUS_VALUES
 TRIAGE_FIELDS = {
     "schema", "collectionStatus", "rejectedSources", "denial", "attempts", "snapshotStatus", "retry", "sources", "failures",
-    "browserObservations",
+    "browserObservations", "browser",
 }
 DENIAL_FIELDS = {"denial_stage", "denial_class", "run_id"}
 DENIAL_STAGES = {
@@ -208,6 +208,168 @@ def _project_browser_observations(
                 if len(observations) >= BROWSER_OBSERVATION_LIMIT:
                     return observations
     return observations
+BROWSER_SUMMARY_STATUS = {"passed", "failed", "timed_out", "not-run", "unknown"}
+BROWSER_SUMMARY_PHASES = {"browser", "cooking"}
+BROWSER_SUMMARY_ORIGINS = {"playwright-report", "no-browser-report"}
+BROWSER_SUMMARY_STATES = {
+    "complete", "missing", "partial", "malformed", "truncated", "report-error", "unknown",
+}
+BROWSER_SUMMARY_COUNT_FIELDS = {"passed", "failed", "skipped", "timed_out"}
+BROWSER_SUMMARY_PHASE_VALUES = {"initial", "post-operation"}
+BROWSER_SUMMARY_REASON_CLASSES = {
+    "browser-tests-not-passed", "browser-tests-failed", "clean-exit", "complete",
+    "incomplete-phases", "invalid-report", "report-validation-failed", "timeout",
+}
+BROWSER_SUMMARY_FAILURE_FIELDS = {
+    "test_id", "phase", "status", "error_class", "matcher", "source_file",
+    "source_line", "source_column", "source_location_kind",
+}
+BROWSER_SUMMARY_TEST_IDS = {"cooking-live-review", "cooking-post-operation"}
+BROWSER_SUMMARY_FAILURE_PHASES = {"initial", "post-operation"}
+BROWSER_SUMMARY_FAILURE_STATUSES = {"failed", "timed_out"}
+BROWSER_SUMMARY_ERROR_CLASSES = {"assertion", "timeout", "hook", "runtime", "unknown"}
+BROWSER_SUMMARY_MATCHERS = {
+    "toBe", "toBeEmpty", "toBeVisible", "toContainText", "toHaveCount", "toHaveURL", "toMatch", "unknown",
+}
+BROWSER_SUMMARY_LOCATION_KINDS = {"error", "test"}
+BROWSER_SUMMARY_SOURCE_RE = re.compile(
+    r"^e2e/playwright/cooking-tests/cooking-(?:live-review|post-operation)\.spec\.ts$"
+)
+
+
+def _unknown_browser_summary(state: str) -> dict[str, Any]:
+    """Return a typed browser state when no usable report is available."""
+
+    return {
+        "status": "not-run" if state == "missing" else "unknown",
+        "report_state": state,
+        "counts": None,
+        "observed_phases": [],
+        "failure_metadata": [],
+    }
+
+
+def _project_browser_summary(
+    root: Path,
+    source_records: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Project the collector's typed browser summary without error text."""
+
+    records = [record for record in source_records if record.get("label") == "browser-summary"]
+    if not records:
+        return _unknown_browser_summary("missing")
+    if len(records) != 1:
+        raise ValueError("browser summary source is duplicated")
+    try:
+        value = json.loads(_safe_path(root, records[0]["path"]).read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("browser summary is not valid JSON") from error
+    if not isinstance(value, dict):
+        raise ValueError("browser summary is not an object")
+
+    # ``error`` and ``stack`` are collector-accepted legacy fields, but they
+    # are intentionally absent from the public triage projection.
+    safe: dict[str, Any] = {}
+    for field, item in value.items():
+        if field in {"error", "stack"}:
+            continue
+        if field not in {
+            "status", "suite", "test", "phase", "component", "result_origin", "report_state",
+            "counts", "observed_phases", "passed_phases", "failure_metadata", "duration_ms", "exit_code", "started_at", "finished_at",
+        }:
+            raise ValueError("browser summary contains an unknown field")
+        if field == "status":
+            if item not in BROWSER_SUMMARY_STATUS:
+                raise ValueError("browser summary status is invalid")
+            safe[field] = item
+        elif field == "phase":
+            if item not in BROWSER_SUMMARY_PHASES:
+                raise ValueError("browser summary phase is invalid")
+            safe[field] = item
+        elif field == "component":
+            if item != "browser-e2e":
+                raise ValueError("browser summary component is invalid")
+            safe[field] = item
+        elif field == "result_origin":
+            if item not in BROWSER_SUMMARY_ORIGINS:
+                raise ValueError("browser summary origin is invalid")
+            safe[field] = item
+        elif field == "report_state":
+            if item not in BROWSER_SUMMARY_STATES:
+                raise ValueError("browser summary report state is invalid")
+            safe[field] = item
+        elif field in {"suite", "test"}:
+            if not isinstance(item, str) or not SAFE_VALUE.fullmatch(item):
+                raise ValueError("browser summary identifier is invalid")
+            safe[field] = item
+        elif field in {"duration_ms", "exit_code"}:
+            if type(item) is not int or not 0 <= item <= 2**31 - 1:
+                raise ValueError("browser summary number is invalid")
+            safe[field] = item
+        elif field in {"started_at", "finished_at"}:
+            # Timestamps are useful only when they are canonical bounded
+            # scalars; malformed legacy text is omitted rather than echoed.
+            if isinstance(item, str) and SAFE_VALUE.fullmatch(item):
+                safe[field] = item
+        elif field == "counts":
+            if (
+                not isinstance(item, dict)
+                or set(item) != BROWSER_SUMMARY_COUNT_FIELDS
+                or any(type(number) is not int or not 0 <= number <= 256 for number in item.values())
+            ):
+                raise ValueError("browser summary counts are invalid")
+            safe[field] = dict(item)
+        elif field == "observed_phases":
+            if (
+                not isinstance(item, list)
+                or len(item) > len(BROWSER_SUMMARY_PHASE_VALUES)
+                or item != sorted(item)
+                or any(phase not in BROWSER_SUMMARY_PHASE_VALUES for phase in item)
+                or len(set(item)) != len(item)
+            ):
+                raise ValueError("browser summary observed phases are invalid")
+            safe[field] = list(item)
+        elif field == "passed_phases":
+            if (
+                not isinstance(item, list)
+                or len(item) > len(BROWSER_SUMMARY_PHASE_VALUES)
+                or item != sorted(item)
+                or any(phase not in BROWSER_SUMMARY_PHASE_VALUES for phase in item)
+                or len(set(item)) != len(item)
+            ):
+                raise ValueError("browser summary passed phases are invalid")
+            safe[field] = list(item)
+        elif field == "failure_metadata":
+            if not isinstance(item, list) or len(item) > 8:
+                raise ValueError("browser summary failure metadata is invalid")
+            metadata: list[dict[str, Any]] = []
+            for failure in item:
+                if not isinstance(failure, dict) or set(failure) != BROWSER_SUMMARY_FAILURE_FIELDS:
+                    raise ValueError("browser summary failure metadata entry is invalid")
+                if (
+                    failure["test_id"] not in BROWSER_SUMMARY_TEST_IDS
+                    or failure["phase"] not in BROWSER_SUMMARY_FAILURE_PHASES
+                    or failure["status"] not in BROWSER_SUMMARY_FAILURE_STATUSES
+                    or failure["error_class"] not in BROWSER_SUMMARY_ERROR_CLASSES
+                    or failure["matcher"] not in BROWSER_SUMMARY_MATCHERS
+                    or failure["source_location_kind"] not in BROWSER_SUMMARY_LOCATION_KINDS
+                    or not isinstance(failure["source_file"], str)
+                    or BROWSER_SUMMARY_SOURCE_RE.fullmatch(failure["source_file"]) is None
+                    or type(failure["source_line"]) is not int
+                    or not 1 <= failure["source_line"] <= 100_000
+                    or type(failure["source_column"]) is not int
+                    or not 1 <= failure["source_column"] <= 10_000
+                ):
+                    raise ValueError("browser summary failure metadata values are invalid")
+                metadata.append(dict(failure))
+            safe[field] = metadata
+    safe.setdefault("status", "unknown")
+    safe.setdefault("report_state", "unknown")
+    safe.setdefault("counts", None)
+    safe.setdefault("observed_phases", [])
+    safe.setdefault("passed_phases", [])
+    safe.setdefault("failure_metadata", [])
+    return safe
 
 
 def _project_retry(
@@ -411,6 +573,8 @@ def _failure_record(
         fields.pop("component")
     if "result_origin" in fields and fields["result_origin"] not in FAILURE_ORIGIN_VALUES:
         fields.pop("result_origin")
+    if "reason_class" in fields and fields["reason_class"] not in BROWSER_SUMMARY_REASON_CLASSES:
+        fields.pop("reason_class")
     for field in ("run_id", "attempt_run_id"):
         if field in fields and (
             not isinstance(fields[field], str) or not COLLECTOR.UUID_RE.fullmatch(fields[field])
@@ -614,6 +778,7 @@ def summarize(bundle: Path) -> dict[str, Any]:
         "snapshotStatus": snapshot_status,
         "retry": _project_retry(bundle, records, attempts),
         "browserObservations": _project_browser_observations(bundle, records),
+        "browser": _project_browser_summary(bundle, records),
         "failures": _project_failures(bundle, records, attempts),
         "sources": {
             "available": sorted(set(available)),

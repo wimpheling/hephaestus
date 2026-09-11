@@ -607,68 +607,49 @@ evidence_scan_result='passed'
 ((scan_status == 0)) || evidence_scan_result='failed'
 printf 'HEPH_GCP_COOKING event=evidence-scan operation=evidence-scan phase=evidence status=%s exit_code=%s\n' \
     "$evidence_scan_result" "$scan_status"
-python3 - "$evidence_root" >"$evidence_root/browser-summary.json" <<'PY'
+set +e
+run_with_deadline python3 -B "$checkout_root/scripts/project-playwright-browser-summary.py" \
+    "$evidence_root" "$evidence_root/browser-summary.json" --require-complete-journey
+browser_summary_status=$?
+set -e
+browser_report_state='unknown'
+if [[ -s "$evidence_root/browser-summary.json" ]]; then
+    browser_report_state="$(python3 -B - "$evidence_root/browser-summary.json" <<'PY'
 import json
-import re
 import sys
-from pathlib import Path
-
-root = Path(sys.argv[1])
-reports = sorted(root.glob("browser.*/playwright.log"))
-passed = failed = skipped = timed_out = 0
-for report in reports:
-    try:
-        text = report.read_text(encoding="utf-8", errors="replace")[-262144:]
-    except OSError:
-        continue
-    passed += sum(int(value) for value in re.findall(r"\b(\d+)\s+passed\b", text, re.I))
-    failed += sum(int(value) for value in re.findall(r"\b(\d+)\s+failed\b", text, re.I))
-    skipped += sum(int(value) for value in re.findall(r"\b(\d+)\s+skipped\b", text, re.I))
-    timed_out += sum(int(value) for value in re.findall(r"\b(\d+)\s+timed out\b", text, re.I))
-if not reports:
-    state = "not-run"
-    result_origin = "no-browser-report"
-    detail = None
-    exit_code = None
-elif timed_out:
-    state = "timed_out"
-    result_origin = "playwright-report"
-    detail = f"assertions passed={passed} failed={failed} skipped={skipped} timed_out={timed_out} reports={len(reports)}"
-    exit_code = 1
-elif failed:
-    state = "failed"
-    result_origin = "playwright-report"
-    detail = f"assertions passed={passed} failed={failed} skipped={skipped} timed_out={timed_out} reports={len(reports)}"
-    exit_code = 1
-elif passed:
-    state = "passed"
-    result_origin = "playwright-report"
-    detail = f"assertions passed={passed} failed={failed} skipped={skipped} timed_out={timed_out} reports={len(reports)}"
-    exit_code = 0
+try:
+    value = json.load(open(sys.argv[1], encoding="utf-8"))
+except (OSError, ValueError):
+    print("unknown")
 else:
-    state = "unknown"
-    result_origin = "playwright-report"
-    detail = "browser report contained no recognized test result"
-    exit_code = None
-summary = {
-    "status": state,
-    "suite": "cooking-playwright",
-    "test": "browser-journey",
-    "phase": "browser",
-    "component": "browser-e2e",
-    "result_origin": result_origin,
-}
-if exit_code is not None:
-    summary["exit_code"] = exit_code
-if detail is not None:
-    summary["error"] = detail
-print(json.dumps(summary, separators=(",", ":")))
+    state = value.get("report_state") if isinstance(value, dict) else None
+    print(state if isinstance(state, str) else "unknown")
 PY
-chmod 0600 "$evidence_root/browser-summary.json"
+    )" || browser_report_state='unknown'
+fi
+case "$browser_report_state" in
+    complete|missing|partial|malformed|truncated|report-error) ;;
+    *) browser_report_state='unknown' ;;
+esac
+browser_validation_result='passed'
+browser_validation_reason='complete'
+if ((browser_summary_status != 0)); then
+    browser_validation_result='failed'
+    case "$browser_summary_status" in
+        2) browser_validation_reason='invalid-report' ;;
+        3) browser_validation_reason='incomplete-phases' ;;
+        4) browser_validation_reason='browser-tests-not-passed' ;;
+        124) browser_validation_reason='timeout' ;;
+        *) browser_validation_reason='report-validation-failed' ;;
+    esac
+fi
+printf 'HEPH_GCP_COOKING event=browser-report-validation operation=browser-report-validation phase=evidence status=%s report_state=%s reason=%s exit_code=%s\n' \
+    "$browser_validation_result" "$browser_report_state" "$browser_validation_reason" "$browser_summary_status"
 if ((status != 0)); then
     # Keep the acceptance-suite result authoritative when both it and the
     # retained-evidence scanner fail.
     exit "$status"
 fi
 ((scan_status == 0)) || exit "$scan_status"
+((browser_summary_status == 0)) || exit "$browser_summary_status"
 phase_pass

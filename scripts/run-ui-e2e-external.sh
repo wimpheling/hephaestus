@@ -206,12 +206,16 @@ done
 
 cd "${repo_root}/e2e/playwright"
 npm ci >/dev/null
+# Keep the human line report while writing the structured report to the private
+# phase directory. PLAYWRIGHT_JSON_OUTPUT_FILE prevents the JSON reporter from
+# writing report contents to the captured process log.
 if HEPHAESTUS_E2E_DATABASE_URL="${database_url}" \
     HEPHAESTUS_WEB_URL="${web_url}" \
     HEPHAESTUS_OIDC_URL="${oidc_issuer}" \
     HEPHAESTUS_COOKING_BROWSER_FIXTURE="${fixture}" \
     HEPHAESTUS_E2E_EVIDENCE_DIR="${evidence_dir}" \
-    npx playwright test --config=playwright.cooking.config.ts --grep "${test_grep}" --reporter=line \
+    PLAYWRIGHT_JSON_OUTPUT_FILE="${fixture_root}/playwright-report.json" \
+    npx playwright test --config=playwright.cooking.config.ts --grep "${test_grep}" --reporter=line,json \
     >"${fixture_root}/playwright.log" 2>&1
 then
     browser_status=0
