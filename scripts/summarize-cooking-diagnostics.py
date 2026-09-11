@@ -185,8 +185,27 @@ def _load_lineage(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
+def _timestamp_sort_key(value: str) -> tuple[datetime, int]:
+    """Parse Rust OffsetDateTime text, retaining nanoseconds beyond datetime."""
+
+    normalized = re.sub(r"^(\d{4}-\d{2}-\d{2})[ T]", r"\1T", value, count=1)
+    normalized = normalized.replace(" Z", "Z", 1)
+    normalized = re.sub(r" (?=(?:Z|[+-]\d{2}:\d{2}(?::\d{2})?)$)", "", normalized)
+    fraction = re.search(r"\.(\d+)(?=(?:Z|[+-]\d{2}:\d{2}(?::\d{2})?)$)", normalized)
+    extra_nanoseconds = 0
+    if fraction is not None and len(fraction.group(1)) > 6:
+        extra_nanoseconds = int((fraction.group(1)[6:] + "000")[:3])
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError as error:
+        raise ValueError("triage timestamp is invalid") from error
+    if parsed.tzinfo is None:
+        raise ValueError("triage timestamp has no timezone")
+    return parsed.astimezone(timezone.utc), extra_nanoseconds
+
+
 def _latest_attempts(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    latest: dict[str, tuple[tuple[datetime, int], dict[str, Any]]] = {}
+    latest: dict[str, tuple[tuple[datetime, int, int], dict[str, Any]]] = {}
     for index, row in enumerate(rows):
         key = row.get("attempt_id") or row.get("attempt_run_id")
         if key is None:
@@ -195,11 +214,8 @@ def _latest_attempts(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             (row[field] for field in ("terminal_at", "attempt_completed_at", "run_updated_at", "sampled_at", "attempt_created_at", "run_created_at") if row.get(field)),
             "1970-01-01T00:00:00Z",
         )
-        normalized = timestamp.replace(" Z", "+00:00")
-        if normalized.endswith("Z"):
-            normalized = normalized[:-1] + "+00:00"
-        parsed = datetime.fromisoformat(normalized.replace(" ", "T", 1))
-        sort_key = (parsed.astimezone(timezone.utc), index)
+        parsed, extra_nanoseconds = _timestamp_sort_key(timestamp)
+        sort_key = (parsed, extra_nanoseconds, index)
         previous = latest.get(key)
         if previous is None or sort_key >= previous[0]:
             latest[key] = (sort_key, row)

@@ -300,6 +300,33 @@ finish
                 {"event_id": True, "attempt_id": True, "run_id": True, "same_snapshot_row": True},
             )
 
+    def test_triage_orders_rust_offset_datetime_timestamps(self):
+        attempt_id = "00000000-0000-4000-8000-000000000099"
+        rows = [
+            {
+                "attempt_id": attempt_id,
+                "attempt_state": "running",
+                "run_updated_at": "2026-09-11 18:25:06.123456789 +00:00:00",
+            },
+            {
+                "attempt_id": attempt_id,
+                "attempt_state": "failed",
+                "run_updated_at": "2026-09-11 18:25:06.123456790 +00:00:00",
+            },
+        ]
+        latest = TRIAGE._latest_attempts(rows)
+        self.assertEqual(latest[0]["attempt_state"], "failed")
+
+    def test_triage_normalizes_rust_timestamp_variants_and_rejects_invalid(self):
+        self.assertEqual(
+            TRIAGE._timestamp_sort_key("2026-09-11 18:25:06.38 +00:00:00"),
+            TRIAGE._timestamp_sort_key("2026-09-11T19:25:06.38 +01:00:00"),
+        )
+        with self.assertRaises(ValueError):
+            TRIAGE._timestamp_sort_key("2026-09-11 18:25:06.38")
+        with self.assertRaises(ValueError):
+            TRIAGE._timestamp_sort_key("2026-09-11 18:25:06.38 not-a-zone")
+
     def test_triage_caps_latest_attempts_and_rejects_unknown_fields(self):
         with tempfile.TemporaryDirectory(prefix="heph-gcp-triage-cap-") as directory:
             root = Path(directory)
