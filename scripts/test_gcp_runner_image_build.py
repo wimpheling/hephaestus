@@ -97,6 +97,13 @@ PYJSON
     exit 0
     ;;
   "compute images list")
+    if [[ "${GCP_FAKE_ERROR:-}" == images-list ]]; then
+      printf 'ERROR: image list permission was denied\n' >&2
+      exit 13
+    fi
+    if [[ "${GCP_FAKE_WARNING:-}" == images-list ]]; then
+      printf 'WARNING: a harmless list warning was emitted on stderr\n' >&2
+    fi
     if [[ -f "$state/image" ]]; then
       printf '[{"name":"%s","status":"READY","labels":%s,"description":"%s"}]\n' "$(cat "$state/image-name")" "$(cat "$state/image-labels")" "$(cat "$state/image-description")"
     else
@@ -184,6 +191,32 @@ class RunnerImageBuildTests(unittest.TestCase):
             )
             self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
             self.assertEqual((state / "ops").read_text(encoding="utf-8").splitlines(), operations)
+
+    def test_valid_json_stdout_survives_gcloud_warning_stderr(self):
+        with tempfile.TemporaryDirectory(prefix="heph-runner-image-warning-") as directory:
+            root = Path(directory)
+            env = self._setup(root) | {"GCP_FAKE_WARNING": "images-list"}
+            result = subprocess.run(
+                [str(ROOT / "gcp-runner-image-build.sh"), "build"],
+                env=env, text=True, capture_output=True, check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("harmless list warning", result.stderr)
+            self.assertFalse((root / "state" / "vm").exists())
+            self.assertFalse((root / "state" / "disk").exists())
+
+    def test_json_command_error_keeps_provider_stderr_visible(self):
+        with tempfile.TemporaryDirectory(prefix="heph-runner-image-error-") as directory:
+            root = Path(directory)
+            env = self._setup(root) | {"GCP_FAKE_ERROR": "images-list"}
+            result = subprocess.run(
+                [str(ROOT / "gcp-runner-image-build.sh"), "build"],
+                env=env, text=True, capture_output=True, check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("image list permission was denied", result.stderr)
+            self.assertNotIn("create-disk", (root / "state" / "ops").read_text(encoding="utf-8")
+                              if (root / "state" / "ops").exists() else "")
 
     def test_provisioning_failure_cleans_owned_resources_and_candidate_image(self):
         with tempfile.TemporaryDirectory(prefix="heph-runner-image-fail-") as directory:

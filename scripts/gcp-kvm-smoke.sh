@@ -33,8 +33,30 @@ diagnostics_upload_state='unknown'
 diagnostics_download_state='failed'
 diagnostics_scan_state='not-run'
 diagnostics_triage_state='not-run'
+gcloud_json_output=''
+gcloud_json_stderr=''
 
 die() { printf 'gcp-kvm-smoke: %s\n' "$*" >&2; exit 1; }
+
+run_json_gcloud() {
+  local stderr_file rc
+  stderr_file="$(mktemp "${TMPDIR:-/tmp}/gcp-kvm-smoke-gcloud-stderr.XXXXXX")"
+  if gcloud_json_output="$(gcloud "$@" 2>"$stderr_file")"; then
+    rc=0
+  else
+    rc=$?
+  fi
+  gcloud_json_stderr="$(cat "$stderr_file")"
+  rm -f -- "$stderr_file"
+  return "$rc"
+}
+
+report_gcloud_json_stderr() {
+  if [[ -n "$gcloud_json_stderr" ]]; then
+    printf '%s\n' "$gcloud_json_stderr" >&2
+  fi
+  return 0
+}
 
 require_commands() {
   command -v gcloud >/dev/null 2>&1 || die 'gcloud is unavailable'
@@ -45,8 +67,13 @@ require_commands() {
 
 quota_preflight() {
   local mode="${1:-full}" quota_json
-  quota_json="$(gcloud compute regions describe "$REGION" --project="$PROJECT_ID" --format=json)" ||
+  if run_json_gcloud compute regions describe "$REGION" --project="$PROJECT_ID" --format=json; then
+    quota_json="$gcloud_json_output"
+    report_gcloud_json_stderr
+  else
+    printf '%s\n' "$gcloud_json_stderr" >&2
     die "cannot read regional quota for $REGION"
+  fi
   python3 -c 'import json,sys
 quotas={q.get("metric"):q for q in json.load(sys.stdin).get("quotas",[])}
 required={"INSTANCES":1}
@@ -68,9 +95,11 @@ for metric,need in required.items():
 cache_preflight() {
   local object_uri="gs://${CACHE_BUCKET}/${CACHE_OBJECT}"
   local describe_output describe_status list_output list_status metadata_output
-  if describe_output="$(gcloud storage objects describe "$object_uri" \
+  if run_json_gcloud storage objects describe "$object_uri" \
       --project="$PROJECT_ID" --billing-project="$PROJECT_ID" \
-      --raw --format='json(name,size,md5Hash,generation)' 2>&1)"; then
+      --raw --format='json(name,size,md5Hash,generation)'; then
+    describe_output="$gcloud_json_output"
+    report_gcloud_json_stderr
     if ! metadata_output="$(python3 -c '
 import json
 import sys
@@ -107,6 +136,7 @@ print(f"Private Cooking cache metadata: name={name} size={size} md5Hash={md5_has
     return 0
   else
     describe_status=$?
+    describe_output="$gcloud_json_stderr"
   fi
   printf 'Cache object lookup failed (exit=%s) for %s:\n' \
     "$describe_status" "$object_uri" >&2
@@ -358,7 +388,9 @@ cleanup_vm() {
   local name="heph-kvm-smoke-${GITHUB_RUN_ID:-manual}-${GITHUB_RUN_ATTEMPT:-1}"
   [[ "$zone" == "$REGION"-* ]] || die "zone must be in $REGION: $zone"
   local data
-  if data="$(gcloud compute instances describe "$name" --project="$PROJECT_ID" --zone="$zone" --format=json 2>&1)"; then
+  if run_json_gcloud compute instances describe "$name" --project="$PROJECT_ID" --zone="$zone" --format=json; then
+    data="$gcloud_json_output"
+    report_gcloud_json_stderr
     python3 -c 'import json,sys
 d=json.load(sys.stdin); labels=d.get("labels",{})
 expected={"purpose":"hephaestus-kvm-smoke","run_id":sys.argv[1],"run_attempt":sys.argv[2],"sha":sys.argv[3]}
@@ -460,10 +492,12 @@ smoke() {
   trap 'on_signal 2' INT
   trap 'on_signal 15' TERM
   local inspect
-  if inspect="$(gcloud compute instances describe "$smoke_name" --project="$PROJECT_ID" --zone="$smoke_zone" --format=json 2>&1)"; then
+  if run_json_gcloud compute instances describe "$smoke_name" --project="$PROJECT_ID" --zone="$smoke_zone" --format=json; then
+    inspect="$gcloud_json_output"
+    report_gcloud_json_stderr
     die "refusing to reuse existing smoke VM: $smoke_name"
-  elif ! grep -Eqi "instances/${smoke_name}[^[:alnum:]_].*was not found" <<<"$inspect"; then
-    printf '%s\n' "$inspect" >&2
+  elif ! grep -Eqi "instances/${smoke_name}[^[:alnum:]_].*was not found" <<<"$gcloud_json_stderr"; then
+    printf '%s\n' "$gcloud_json_stderr" >&2
     die "cannot establish that smoke VM name is absent: $smoke_name"
   fi
   local identity_args=(--no-service-account --no-scopes)
@@ -476,10 +510,12 @@ smoke() {
     image_recipe_sha="$(sha256sum "$(dirname -- "$STARTUP_SCRIPT")/gcp-runner-image-provision.sh" | awk '{print $1}')"
     image_verifier_sha="$(sha256sum "$(dirname -- "$STARTUP_SCRIPT")/gcp-runner-image-verify.py" | awk '{print $1}')"
     image_startup_sha="$(sha256sum "$STARTUP_SCRIPT" | awk '{print $1}')"
-    runner_image_data="$(gcloud compute images describe "$GCP_RUNNER_IMAGE" --project="$PROJECT_ID" --format='json(name,status,labels,description)' 2>&1)" || {
-      printf '%s\n' "$runner_image_data" >&2
+    run_json_gcloud compute images describe "$GCP_RUNNER_IMAGE" --project="$PROJECT_ID" --format='json(name,status,labels,description)' || {
+      printf '%s\n' "$gcloud_json_stderr" >&2
       die "custom runner image cannot be described: $GCP_RUNNER_IMAGE"
     }
+    runner_image_data="$gcloud_json_output"
+    report_gcloud_json_stderr
     runner_image_metadata="$(RUNNER_IMAGE_METADATA="$runner_image_data" RUNNER_IMAGE_RECIPE_SHA="$image_recipe_sha" RUNNER_IMAGE_VERIFIER_SHA="$image_verifier_sha" RUNNER_IMAGE_STARTUP_SHA="$image_startup_sha" python3 - "$GCP_RUNNER_IMAGE" <<'PY'
 import json
 import os

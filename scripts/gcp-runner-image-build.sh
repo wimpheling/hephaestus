@@ -28,8 +28,30 @@ builder_name=''
 disk_name=''
 startup_bundle=''
 recovery_status=''
+gcloud_json_output=''
+gcloud_json_stderr=''
 
 die() { printf 'gcp-runner-image-build: %s\n' "$*" >&2; exit 1; }
+
+run_json_gcloud() {
+  local stderr_file rc
+  stderr_file="$(mktemp "${TMPDIR:-/tmp}/gcp-runner-image-gcloud-stderr.XXXXXX")"
+  if gcloud_json_output="$(gcloud "$@" 2>"$stderr_file")"; then
+    rc=0
+  else
+    rc=$?
+  fi
+  gcloud_json_stderr="$(cat "$stderr_file")"
+  rm -f -- "$stderr_file"
+  return "$rc"
+}
+
+report_gcloud_json_stderr() {
+  if [[ -n "$gcloud_json_stderr" ]]; then
+    printf '%s\n' "$gcloud_json_stderr" >&2
+  fi
+  return 0
+}
 
 require_commands() {
   local command
@@ -116,22 +138,26 @@ derive_image_name() {
 
 describe_image() {
   local output
-  if output="$(gcloud compute images describe "$image_name" --project="$PROJECT_ID" --format=json 2>&1)"; then
+  if run_json_gcloud compute images describe "$image_name" --project="$PROJECT_ID" --format=json; then
+    output="$gcloud_json_output"
+    report_gcloud_json_stderr
     verify_image_labels "$output" "$image_name" || return 1
     grep -Eq '"status"[[:space:]]*:[[:space:]]*"READY"' <<<"$output" || die "existing image is not READY: $image_name"
     printf 'Existing immutable runner image is READY: %s\n' "$image_name"
     return 0
   fi
-  if not_found "$image_name" "$output"; then return 1; fi
-  printf '%s\n' "$output" >&2
+  if not_found "$image_name" "$gcloud_json_stderr"; then return 1; fi
+  printf '%s\n' "$gcloud_json_stderr" >&2
   die "cannot establish image state: $image_name"
 }
 
 find_existing_image() {
   local output selected
-  output="$(gcloud compute images list --project="$PROJECT_ID" \
+  run_json_gcloud compute images list --project="$PROJECT_ID" \
     --filter="labels.purpose=hephaestus-runner-image AND labels.repository_sha=$repo_sha" \
-    --format=json 2>&1)" || { printf '%s\n' "$output" >&2; die 'cannot list existing runner images'; }
+    --format=json || { printf '%s\n' "$gcloud_json_stderr" >&2; die 'cannot list existing runner images'; }
+  output="$gcloud_json_output"
+  report_gcloud_json_stderr
   selected="$(RUNNER_IMAGE_RECIPE_SHA="$recipe_sha" RUNNER_IMAGE_VERIFIER_SHA="$verifier_sha" \
     RUNNER_IMAGE_STARTUP_SHA="$startup_sha" python3 - "$output" <<'PY'
 import json
@@ -168,11 +194,13 @@ PY
 }
 describe_builder_absent() {
   local output
-  if output="$(gcloud compute instances describe "$builder_name" --project="$PROJECT_ID" --zone="$zone" --format=json 2>&1)"; then
+  if run_json_gcloud compute instances describe "$builder_name" --project="$PROJECT_ID" --zone="$zone" --format=json; then
+    output="$gcloud_json_output"
+    report_gcloud_json_stderr
     printf '%s\n' "$output" >&2
     return 1
   fi
-  not_found "$builder_name" "$output" || { printf '%s\n' "$output" >&2; return 1; }
+  not_found "$builder_name" "$gcloud_json_stderr" || { printf '%s\n' "$gcloud_json_stderr" >&2; return 1; }
 }
 
 create_owned_disk() {
@@ -183,45 +211,53 @@ create_owned_disk() {
 
 delete_owned_vm() {
   local output
-  if output="$(gcloud compute instances describe "$builder_name" --project="$PROJECT_ID" --zone="$zone" --format=json 2>&1)"; then
+  if run_json_gcloud compute instances describe "$builder_name" --project="$PROJECT_ID" --zone="$zone" --format=json; then
+    output="$gcloud_json_output"
+    report_gcloud_json_stderr
     verify_labels "$output" hephaestus-runner-image-builder "$builder_name" || return 1
     gcloud compute instances delete "$builder_name" --project="$PROJECT_ID" --zone="$zone" --quiet >/dev/null
     describe_builder_absent || return 1
-  elif ! not_found "$builder_name" "$output"; then
-    printf '%s\n' "$output" >&2
+  elif ! not_found "$builder_name" "$gcloud_json_stderr"; then
+    printf '%s\n' "$gcloud_json_stderr" >&2
     return 1
   fi
 }
 
 describe_disk_absent() {
   local output
-  if output="$(gcloud compute disks describe "$disk_name" --project="$PROJECT_ID" --zone="$zone" --format=json 2>&1)"; then
+  if run_json_gcloud compute disks describe "$disk_name" --project="$PROJECT_ID" --zone="$zone" --format=json; then
+    output="$gcloud_json_output"
+    report_gcloud_json_stderr
     printf '%s\n' "$output" >&2
     return 1
   fi
-  not_found "$disk_name" "$output" || { printf '%s\n' "$output" >&2; return 1; }
+  not_found "$disk_name" "$gcloud_json_stderr" || { printf '%s\n' "$gcloud_json_stderr" >&2; return 1; }
 }
 
 delete_owned_disk() {
   local output
-  if output="$(gcloud compute disks describe "$disk_name" --project="$PROJECT_ID" --zone="$zone" --format=json 2>&1)"; then
+  if run_json_gcloud compute disks describe "$disk_name" --project="$PROJECT_ID" --zone="$zone" --format=json; then
+    output="$gcloud_json_output"
+    report_gcloud_json_stderr
     verify_labels "$output" hephaestus-runner-image-builder "$disk_name" || return 1
     gcloud compute disks delete "$disk_name" --project="$PROJECT_ID" --zone="$zone" --quiet >/dev/null
     describe_disk_absent || return 1
-  elif ! not_found "$disk_name" "$output"; then
-    printf '%s\n' "$output" >&2
+  elif ! not_found "$disk_name" "$gcloud_json_stderr"; then
+    printf '%s\n' "$gcloud_json_stderr" >&2
     return 1
   fi
 }
 
 delete_owned_image() {
   local output
-  if output="$(gcloud compute images describe "$image_name" --project="$PROJECT_ID" --format=json 2>&1)"; then
+  if run_json_gcloud compute images describe "$image_name" --project="$PROJECT_ID" --format=json; then
+    output="$gcloud_json_output"
+    report_gcloud_json_stderr
     verify_labels "$output" hephaestus-runner-image "$image_name" || return 1
     gcloud compute images delete "$image_name" --project="$PROJECT_ID" --quiet >/dev/null
     describe_image_absent || return 1
-  elif ! not_found "$image_name" "$output"; then
-    printf '%s\n' "$output" >&2
+  elif ! not_found "$image_name" "$gcloud_json_stderr"; then
+    printf '%s\n' "$gcloud_json_stderr" >&2
     return 1
   fi
 }
@@ -229,11 +265,13 @@ delete_owned_image() {
 describe_image_absent() {
   local output
   [[ -n "$image_name" ]] || return 0
-  if output="$(gcloud compute images describe "$image_name" --project="$PROJECT_ID" --format=json 2>&1)"; then
+  if run_json_gcloud compute images describe "$image_name" --project="$PROJECT_ID" --format=json; then
+    output="$gcloud_json_output"
+    report_gcloud_json_stderr
     printf '%s\n' "$output" >&2
     return 1
   fi
-  not_found "$image_name" "$output" || { printf '%s\n' "$output" >&2; return 1; }
+  not_found "$image_name" "$gcloud_json_stderr" || { printf '%s\n' "$gcloud_json_stderr" >&2; return 1; }
 }
 
 cleanup() {
@@ -423,8 +461,10 @@ build_image() {
   gcloud compute images create "$image_name" --project="$PROJECT_ID" --source-disk="$disk_name" \
     --source-disk-zone="$zone" --labels="$(owned_labels hephaestus-runner-image)" \
     --description="hephaestus-runner manifest_sha256=$fingerprint recipe_sha256=$recipe_sha verifier_sha256=$verifier_sha startup_sha256=$startup_sha"
-  image_output="$(gcloud compute images describe "$image_name" --project="$PROJECT_ID" --format=json 2>&1)" || {
-    printf '%s\n' "$image_output" >&2; die 'created image cannot be described'; }
+  run_json_gcloud compute images describe "$image_name" --project="$PROJECT_ID" --format=json || {
+    printf '%s\n' "$gcloud_json_stderr" >&2; die 'created image cannot be described'; }
+  image_output="$gcloud_json_output"
+  report_gcloud_json_stderr
   verify_image_labels "$image_output" "$image_name"
   grep -Eq '"status"[[:space:]]*:[[:space:]]*"READY"' <<<"$image_output" || die 'created image is not READY'
   delete_owned_disk || die 'source disk deletion failed after image creation'
