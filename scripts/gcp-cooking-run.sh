@@ -34,6 +34,10 @@ node_path=''
 deadline_epoch="${HEPH_GCP_COOKING_DEADLINE_EPOCH:-}"
 token_json=''
 token_header=''
+runner_image_verified="${HEPH_GCP_RUNNER_IMAGE_VERIFIED:-false}"
+runner_image_browser_lock_sha="${HEPH_GCP_RUNNER_IMAGE_BROWSER_LOCK_SHA256:-}"
+runner_image_browser_version="${HEPH_GCP_RUNNER_IMAGE_BROWSER_VERSION:-}"
+runner_image_node_version="${HEPH_GCP_RUNNER_IMAGE_NODE_VERSION:-}"
 
 fail() { printf 'gcp-cooking-run: %s\n' "$*" >&2; return 1; }
 
@@ -44,6 +48,8 @@ validate_sha256() {
 }
 
 [[ "$(id -u)" -eq 0 ]] || fail 'this helper must be invoked as root'
+[[ "$runner_image_verified" == true || "$runner_image_verified" == false ]] ||
+    fail 'HEPH_GCP_RUNNER_IMAGE_VERIFIED must be true or false'
 [[ "$(id -u forge 2>/dev/null || true)" == "${forge_uid}" ]] ||
     fail 'the common startup must create forge with UID 10001'
 [[ -d "${checkout_root}" && ! -L "${checkout_root}" ]] ||
@@ -110,19 +116,23 @@ done
 # Keep this list aligned with the actual full Cooking scripts: repository image
 # import/build proof, the browser harness, and the compressed private cache.
 missing_packages=()
-for pair in 'skopeo:skopeo' 'nft:nftables' 'zstd:zstd'; do
-    command_name="${pair%%:*}"
-    package_name="${pair#*:}"
-    command -v "$command_name" >/dev/null 2>&1 || missing_packages+=("$package_name")
-done
-if ((${#missing_packages[@]})); then
-    run_with_deadline apt-get update -qq
-    run_with_deadline env DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends "${missing_packages[@]}"
+if [[ "$runner_image_verified" == false ]]; then
+    for pair in 'skopeo:skopeo' 'nft:nftables' 'zstd:zstd'; do
+        command_name="${pair%%:*}"
+        package_name="${pair#*:}"
+        command -v "$command_name" >/dev/null 2>&1 || missing_packages+=("$package_name")
+    done
+    if ((${#missing_packages[@]})); then
+        run_with_deadline apt-get update -qq
+        run_with_deadline env DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends "${missing_packages[@]}"
+    fi
 fi
 for command in nft podman python3 skopeo systemd-run tar timeout zstd; do
     require_command "$command"
 done
-if ! command -v oras >/dev/null 2>&1; then
+if [[ "$runner_image_verified" == true ]]; then
+    require_command oras
+elif ! command -v oras >/dev/null 2>&1; then
     oras_stage="$(mktemp -d "${work_root}/oras.XXXXXX")"
     oras_archive="${oras_stage}/oras.tar.gz"
     run_with_deadline curl --fail --location --silent --show-error --retry 3 \
@@ -150,7 +160,16 @@ node_major=0
 if command -v node >/dev/null 2>&1; then
     node_major="$(node --version | sed -E 's/^v([0-9]+).*/\1/' || true)"
 fi
-if [[ "$node_major" =~ ^[0-9]+$ && "$node_major" -ge 20 ]] &&
+if [[ "$runner_image_verified" == true ]]; then
+    [[ "$runner_image_node_version" == "$node_version" ]] ||
+        fail 'verified runner image Node pin does not match the Cooking helper'
+    [[ "$node_major" =~ ^[0-9]+$ && "$node_major" -ge 20 ]] ||
+        fail 'verified runner image does not contain a usable Node runtime'
+    [[ "$(node --version)" == "$runner_image_node_version" ]] ||
+        fail 'verified runner image Node executable version does not match its manifest'
+    node_bin="$(readlink -f "$(command -v node)")"
+    node_path="$(dirname "$node_bin")"
+elif [[ "$node_major" =~ ^[0-9]+$ && "$node_major" -ge 20 ]] &&
     command -v npm >/dev/null 2>&1 && command -v npx >/dev/null 2>&1; then
     node_bin="$(readlink -f "$(command -v node)")"
     node_path="$(dirname "$node_bin")"
@@ -427,15 +446,39 @@ phase_pass
 phase_start browser-host
 # Match the reviewed CI host setup: install browser OS dependencies as root,
 # then install the browser itself into a forge-owned shared cache.
+playwright_npm_env=()
+if [[ "$runner_image_verified" == true ]]; then
+    # The verified image already contains the exact browser for this lock;
+    # npm lifecycle hooks must not silently download another revision.
+    playwright_npm_env+=(PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1)
+fi
 run_with_deadline runuser -u forge -- env HOME=/home/forge XDG_RUNTIME_DIR=/run/user/10001 \
     PATH="$PATH" PLAYWRIGHT_BROWSERS_PATH="$browser_root" \
+    "${playwright_npm_env[@]}" \
     bash -Eeuo pipefail -c 'cd "$1/e2e/playwright" && npm ci' -- "$checkout_root"
-run_with_deadline env PATH="$PATH" bash -Eeuo pipefail -c \
-    'cd "$1/e2e/playwright" && npx playwright install-deps chromium' -- "$checkout_root"
-chown -R forge:forge "$browser_root"
-run_with_deadline runuser -u forge -- env HOME=/home/forge XDG_RUNTIME_DIR=/run/user/10001 \
-    PATH="$PATH" PLAYWRIGHT_BROWSERS_PATH="$browser_root" \
-    bash -Eeuo pipefail -c 'cd "$1/e2e/playwright" && npx playwright install chromium' -- "$checkout_root"
+browser_lock_sha="$(sha256sum "$checkout_root/e2e/playwright/package-lock.json" | awk '{print $1}')"
+if [[ "$runner_image_verified" == true ]]; then
+    [[ "$runner_image_browser_lock_sha" =~ ^[0-9a-f]{64}$ ]] ||
+        fail 'verified runner image browser lock anchor is missing or invalid'
+    [[ -n "$runner_image_browser_version" ]] ||
+        fail 'verified runner image browser version anchor is missing'
+    [[ "$browser_lock_sha" == "$runner_image_browser_lock_sha" ]] ||
+        fail 'checked-out browser lock does not match the baked browser assets'
+    browser_executable="$(find "$browser_root" -type f \( -name chrome-headless-shell -o -name chrome \) -perm -0100 -print -quit 2>/dev/null)"
+    [[ -n "$browser_executable" ]] || fail 'verified runner image Chromium executable is missing'
+    browser_version="$($browser_executable --version 2>/dev/null || true)"
+    [[ -n "$browser_version" && "$browser_version" == "$runner_image_browser_version" ]] ||
+        fail 'verified runner image Chromium executable version does not match its manifest'
+    printf 'HEPH_GCP_COOKING baked-browser status=pass lock_sha256=%s version=%s\n' \
+        "$browser_lock_sha" "$browser_version"
+else
+    run_with_deadline env PATH="$PATH" bash -Eeuo pipefail -c \
+        'cd "$1/e2e/playwright" && npx playwright install-deps chromium' -- "$checkout_root"
+    chown -R forge:forge "$browser_root"
+    run_with_deadline runuser -u forge -- env HOME=/home/forge XDG_RUNTIME_DIR=/run/user/10001 \
+        PATH="$PATH" PLAYWRIGHT_BROWSERS_PATH="$browser_root" \
+        bash -Eeuo pipefail -c 'cd "$1/e2e/playwright" && npx playwright install chromium' -- "$checkout_root"
+fi
 phase_pass
 
 phase_start metadata-guard

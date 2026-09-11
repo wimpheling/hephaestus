@@ -40,6 +40,7 @@ require_commands() {
   command -v gcloud >/dev/null 2>&1 || die 'gcloud is unavailable'
   command -v python3 >/dev/null 2>&1 || die 'python3 is unavailable'
   command -v timeout >/dev/null 2>&1 || die 'timeout is unavailable'
+  command -v sha256sum >/dev/null 2>&1 || die 'sha256sum is unavailable'
 }
 
 quota_preflight() {
@@ -466,6 +467,63 @@ smoke() {
     die "cannot establish that smoke VM name is absent: $smoke_name"
   fi
   local identity_args=(--no-service-account --no-scopes)
+  local image_args=(--image-family=ubuntu-2404-lts-amd64 --image-project=ubuntu-os-cloud)
+  local runner_image_metadata='runner-image-selection=stock'
+  if [[ -n "${GCP_RUNNER_IMAGE:-}" ]]; then
+    [[ "$mode" == diagnostic || "$mode" == smoke || "$mode" == gcp-cooking ]] || die 'custom runner images are supported only for diagnostic, smoke, and gcp-cooking modes'
+    [[ "$GCP_RUNNER_IMAGE" =~ ^[a-z][a-z0-9-]{0,62}$ ]] || die 'GCP_RUNNER_IMAGE is not a valid immutable image name'
+    local runner_image_data image_recipe_sha image_verifier_sha image_startup_sha
+    image_recipe_sha="$(sha256sum "$(dirname -- "$STARTUP_SCRIPT")/gcp-runner-image-provision.sh" | awk '{print $1}')"
+    image_verifier_sha="$(sha256sum "$(dirname -- "$STARTUP_SCRIPT")/gcp-runner-image-verify.py" | awk '{print $1}')"
+    image_startup_sha="$(sha256sum "$STARTUP_SCRIPT" | awk '{print $1}')"
+    runner_image_data="$(gcloud compute images describe "$GCP_RUNNER_IMAGE" --project="$PROJECT_ID" --format='json(name,status,labels,description)' 2>&1)" || {
+      printf '%s\n' "$runner_image_data" >&2
+      die "custom runner image cannot be described: $GCP_RUNNER_IMAGE"
+    }
+    runner_image_metadata="$(RUNNER_IMAGE_METADATA="$runner_image_data" RUNNER_IMAGE_RECIPE_SHA="$image_recipe_sha" RUNNER_IMAGE_VERIFIER_SHA="$image_verifier_sha" RUNNER_IMAGE_STARTUP_SHA="$image_startup_sha" python3 - "$GCP_RUNNER_IMAGE" <<'PY'
+import json
+import os
+import re
+import sys
+
+name = sys.argv[1]
+value = json.loads(os.environ["RUNNER_IMAGE_METADATA"])
+labels = value.get("labels", {})
+description = value.get("description", "")
+fingerprint = labels.get("fingerprint", "")
+if value.get("status") != "READY":
+    raise SystemExit("custom runner image is not READY")
+if labels.get("purpose") != "hephaestus-runner-image" or not re.fullmatch(r"[0-9a-f]{32}", fingerprint):
+    raise SystemExit("custom runner image lacks the immutable runner-image labels")
+manifest = re.search(r"(?:^|[ ,])manifest_sha256=([0-9a-f]{64})(?:$|[ ,])", description)
+if not manifest:
+    raise SystemExit("custom runner image manifest anchor is missing")
+if name != "hephaestus-runner-" + manifest.group(1)[:32] or fingerprint != manifest.group(1)[:32]:
+    raise SystemExit("custom runner image name does not match its manifest fingerprint")
+if not re.fullmatch(r"[0-9a-f]{40}", labels.get("repository_sha", "")):
+    raise SystemExit("custom runner image repository provenance is invalid")
+anchors = {"manifest_sha256": manifest.group(1)}
+expected_anchors = {
+    "recipe_sha256": os.environ["RUNNER_IMAGE_RECIPE_SHA"],
+    "verifier_sha256": os.environ["RUNNER_IMAGE_VERIFIER_SHA"],
+    "startup_sha256": os.environ["RUNNER_IMAGE_STARTUP_SHA"],
+}
+for field, expected in expected_anchors.items():
+    match = re.search(rf"(?:^|[ ,]){field}=([0-9a-f]{{64}})(?:$|[ ,])", description)
+    if not match:
+        raise SystemExit(f"custom runner image anchor is missing: {field}")
+    if match.group(1) != expected:
+        raise SystemExit(f"custom runner image {field} does not match current recipe")
+    anchors[field] = match.group(1)
+print("runner-image-selection=custom,runner-image-manifest-sha256=" + anchors["manifest_sha256"] +
+      ",runner-image-recipe-sha256=" + anchors["recipe_sha256"] +
+      ",runner-image-verifier-sha256=" + anchors["verifier_sha256"] +
+      ",runner-image-startup-sha256=" + anchors["startup_sha256"])
+PY
+    )" || die "custom runner image failed immutable-label validation: $GCP_RUNNER_IMAGE"
+    image_args=(--image="$GCP_RUNNER_IMAGE" --image-project="$PROJECT_ID")
+    printf 'Using validated immutable runner image: %s\n' "$GCP_RUNNER_IMAGE"
+  fi
   local machine_type="$MACHINE_TYPE" disk_size="$DISK_SIZE" nested_args=(--enable-nested-virtualization) \
     max_run_duration='45m' maintenance_args=(--maintenance-policy=TERMINATE)
   local diagnostics_metadata=( )
@@ -485,11 +543,14 @@ smoke() {
     nested_args=()
     max_run_duration='10m'
     maintenance_args=(--maintenance-policy=MIGRATE)
+    # A custom image is captured from a 150 GB builder disk; Compute Engine
+    # cannot boot that image from the diagnostic mode's 20 GB disk.
+    [[ -z "${GCP_RUNNER_IMAGE:-}" ]] || disk_size='150GB'
   fi
   # Capture the conservative VM-start anchor immediately before the create
   # request.  Startup derives both workload and collection deadlines from it.
   local trial_start_epoch="$(date +%s)"
-  local metadata_values="test-mode=${mode},github-sha=$GITHUB_SHA,trial-start-epoch=${trial_start_epoch}"
+  local metadata_values="test-mode=${mode},github-sha=$GITHUB_SHA,trial-start-epoch=${trial_start_epoch},${runner_image_metadata}"
   local metadata_value_item
   local metadata_file_values="startup-script=$STARTUP_SCRIPT,passt-preflight-script=$PASST_PREFLIGHT_SCRIPT"
   for metadata_value_item in "${diagnostics_metadata[@]}"; do
@@ -501,7 +562,7 @@ smoke() {
   gcloud compute instances create "$smoke_name" \
     --project="$PROJECT_ID" --zone="$smoke_zone" --machine-type="$machine_type" \
     --network-interface=network=default,network-tier=PREMIUM \
-    --image-family=ubuntu-2404-lts-amd64 --image-project=ubuntu-os-cloud \
+    "${image_args[@]}" \
     --boot-disk-size="$disk_size" --boot-disk-type=pd-balanced \
     --boot-disk-auto-delete "${nested_args[@]}" \
     --max-run-duration="$max_run_duration" --instance-termination-action=DELETE \

@@ -6,15 +6,23 @@
 set -Eeuo pipefail
 umask 077
 
+# A baked image installs the shared pin/verifier library. Stock Ubuntu keeps
+# the fallbacks below so the transition path remains usable.
+runner_image_helper="${HEPH_GCP_IMAGE_BAKE_HELPER:-/usr/local/libexec/hephaestus/gcp-runner-image-provision.sh}"
+if [[ -f "$runner_image_helper" && ! -L "$runner_image_helper" ]]; then
+  # shellcheck source=/dev/null
+  source "$runner_image_helper"
+fi
+
 readonly metadata_root='http://metadata.google.internal/computeMetadata/v1'
 readonly repository_url='https://github.com/wimpheling/hephaestus.git'
 readonly forge_uid=10001
 readonly forge_gid=10001
-readonly rust_version='1.88.0'
-readonly libkrun_tag='v1.19.0'
-readonly libkrun_revision_pin='9932c4b59d8f891e60c6aba20d22ebb99ceaa8e2'
-readonly libkrunfw_tag='v5.5.0'
-readonly passt_revision='386b5f5472b89769c025f5d5056348532a823b93'
+readonly rust_version="${HEPH_IMAGE_RUST_VERSION:-1.88.0}"
+readonly libkrun_tag="${HEPH_IMAGE_LIBKRUN_TAG:-v1.19.0}"
+readonly libkrun_revision_pin="${HEPH_IMAGE_LIBKRUN_REVISION:-9932c4b59d8f891e60c6aba20d22ebb99ceaa8e2}"
+readonly libkrunfw_tag="${HEPH_IMAGE_LIBKRUNFW_TAG:-v5.5.0}"
+readonly passt_revision="${HEPH_IMAGE_PASST_REVISION:-386b5f5472b89769c025f5d5056348532a823b93}"
 readonly passt_source_url='https://passt.top/passt'
 readonly work_root="${HEPH_GCP_WORK_ROOT:-/srv/hephaestus}"
 readonly checkout_root="${work_root}/checkout"
@@ -50,6 +58,9 @@ diagnostic_probe_completed=false
 diagnostic_quarantine_validated=false
 diagnostics_token_json=''
 diagnostics_header_file=''
+runner_image_manifest_sha=''
+runner_image_browser_lock_sha=''
+runner_image_browser_version=''
 
 die() { printf 'gcp-kvm-startup: %s\n' "$*" >&2; return 1; }
 
@@ -147,8 +158,23 @@ phase_start() { phase="$1"; marker phase-start; }
 phase_pass() { marker phase-pass; }
 
 metadata_value() {
+  if [[ "${HEPH_GCP_IMAGE_BAKE:-0}" == 1 ]]; then
+    case "$1" in
+      github-sha) printf '%s\n' "${HEPH_GCP_IMAGE_BAKE_REPO_SHA:-0000000000000000000000000000000000000000}" ;;
+      test-mode) printf '%s\n' smoke ;;
+      trial-start-epoch) date +%s ;;
+      passt-preflight-script) cat "${HEPH_GCP_LOCAL_PASST_PREFLIGHT:?}" ;;
+      *) die "image bake does not support metadata attribute: $1" ;;
+    esac
+    return 0
+  fi
   curl --fail --silent --show-error -H 'Metadata-Flavor: Google' \
     "${metadata_root}/instance/attributes/$1"
+}
+
+metadata_optional_value() {
+  curl --fail --silent --show-error -H 'Metadata-Flavor: Google' \
+    "${metadata_root}/instance/attributes/$1" 2>/dev/null || true
 }
 
 require_command() { command -v "$1" >/dev/null 2>&1 || die "missing command: $1"; }
@@ -535,6 +561,69 @@ else
 fi
 marker "ready mode=$test_mode"
 
+runner_image_ready=false
+runner_image_manifest_path="${HEPH_IMAGE_MANIFEST:-/usr/share/hephaestus/runner-image-manifest.json}"
+runner_image_selection=''
+if [[ "${HEPH_GCP_IMAGE_BAKE:-0}" == 1 ]]; then
+  runner_image_selection=stock
+else
+  runner_image_selection="${HEPH_GCP_RUNNER_IMAGE_SELECTION:-$(metadata_optional_value runner-image-selection)}"
+  case "$runner_image_selection" in
+    custom|stock) ;;
+    '') die 'runner-image-selection metadata must explicitly be custom or stock' ;;
+    *) die 'runner-image-selection metadata is invalid' ;;
+  esac
+fi
+if [[ "$runner_image_selection" == custom ]]; then
+  [[ -f /etc/hephaestus/runner-image-required ]] ||
+    die 'custom runner image was requested but its selection marker is missing'
+  if declare -F runner_image_verify >/dev/null 2>&1 && runner_image_verify; then
+    runner_image_ready=true
+    manifest_field() {
+      python3 - "$runner_image_manifest_path" "$1" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+value = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+field = sys.argv[2]
+item = value.get(field)
+if not isinstance(item, str) or not item:
+    raise SystemExit(f"runner image manifest field is missing: {field}")
+print(item)
+PY
+    }
+    runner_image_manifest_sha="$(manifest_field manifest_sha256)"
+    expected_manifest_sha="$(metadata_optional_value runner-image-manifest-sha256)"
+    [[ "$expected_manifest_sha" =~ ^[0-9a-f]{64}$ ]] ||
+      die 'custom runner image manifest anchor is missing or invalid'
+    [[ "$runner_image_manifest_sha" == "$expected_manifest_sha" ]] ||
+      die 'custom runner image manifest does not match the external anchor'
+    for image_hash_field in recipe_sha256 verifier_sha256 startup_sha256; do
+      image_hash="$(manifest_field "$image_hash_field")"
+      expected_hash="$(metadata_optional_value "runner-image-${image_hash_field%_sha256}-sha256")"
+      [[ "$expected_hash" =~ ^[0-9a-f]{64}$ ]] ||
+        die "external runner image ${image_hash_field} anchor is missing or invalid"
+      [[ "$image_hash" == "$expected_hash" ]] ||
+        die "runner image ${image_hash_field} does not match the external anchor"
+    done
+    runner_image_browser_lock_sha="$(manifest_field browser_lock_sha256)"
+    [[ "$runner_image_browser_lock_sha" =~ ^[0-9a-f]{64}$ ]] ||
+      die 'runner image browser lock fingerprint is invalid'
+    runner_image_browser_version="$(manifest_field browser_version)"
+    # The baked image's loader path is stable, but discover libclang so the
+    # checkout smoke receives the actual Ubuntu LLVM directory.
+    libclang_so="$(ldconfig -p 2>/dev/null | awk '/libclang\.so/{print $NF; exit}' || true)"
+    [[ -n "$libclang_so" ]] || die 'baked runner image has no libclang.so in its loader cache'
+    libclang_dir="$(dirname -- "$libclang_so")"
+    printf 'HEPH_GCP_RUNNER_IMAGE mode=prebuilt manifest=%s\n' "$runner_image_manifest_path"
+  else
+    die 'runner image marker exists but the immutable manifest did not verify'
+  fi
+elif [[ -f /etc/hephaestus/runner-image-required ]]; then
+  die 'stock runner image was requested but a baked-image marker is present'
+fi
+
 if [[ "$test_mode" == diagnostic || "$test_mode" == gcp-cooking ]]; then
   install -d -m 0700 "$diagnostics_metadata_root"
   metadata_value diagnostics-collector-script >"$diagnostics_metadata_root/collect-cooking-diagnostics.py"
@@ -572,13 +661,16 @@ if [[ "$test_mode" == diagnostic ]]; then
 fi
 
 phase_start host-packages
+if [[ "$runner_image_ready" == true ]]; then
+  printf 'HEPH_GCP_RUNNER_IMAGE phase=host-packages status=prebuilt\n'
+else
 run_with_deadline apt-get update -qq
 run_with_deadline env DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends \
-  apparmor bc bison build-essential ca-certificates clang cpio dwarves e2fsprogs flex \
+  apparmor bc bison build-essential ca-certificates clang cpio curl dwarves e2fsprogs flex \
   fuse-overlayfs git libcap-ng-dev libclang-dev libelf-dev libfdt-dev libglib2.0-dev \
   libncurses-dev libpixman-1-dev libseccomp-dev libslirp-dev libssl-dev \
-  libzstd-dev llvm-dev lld make musl-tools openssl patch patchelf perl podman \
-  python3 python3-pyelftools rsync rustup slirp4netns passt tar uidmap xz-utils
+  libzstd-dev llvm-dev lld make musl-tools nftables openssl patch patchelf perl podman \
+  python3 python3-pyelftools rsync rustup skopeo slirp4netns passt tar uidmap xz-utils zstd
 require_command llvm-config
 llvm_config_version="$(llvm-config --version)" || die 'llvm-config cannot report its version'
 llvm_prefix="$(llvm-config --prefix)" || die 'llvm-config cannot report its prefix'
@@ -595,11 +687,13 @@ libclang_dir="$(dirname "$libclang_so")"
 forge_env+=("LIBCLANG_PATH=$libclang_dir")
 printf 'HEPH_GCP_KVM_LLVM llvm-config=%s version=%s libclang=%s\n' \
   "$(command -v llvm-config)" "$llvm_config_version" "$libclang_so"
+fi
 phase_pass
-
 phase_start accounts
 [[ "$(uname -m)" == x86_64 ]] || die 'host must be x86_64'
-[[ -r /dev/kvm && -w /dev/kvm ]] || die '/dev/kvm is not readable and writable'
+if [[ "${HEPH_GCP_IMAGE_BAKE:-0}" != 1 ]]; then
+  [[ -r /dev/kvm && -w /dev/kvm ]] || die '/dev/kvm is not readable and writable'
+fi
 [[ -f /sys/fs/cgroup/cgroup.controllers ]] || die 'host must use cgroup v2'
 
 if getent group forge >/dev/null; then
@@ -614,10 +708,12 @@ else
   [[ -z "$(getent passwd "$forge_uid" || true)" ]] || die 'UID 10001 is already in use'
   useradd --uid "$forge_uid" --gid "$forge_gid" --create-home --home-dir /home/forge --shell /usr/sbin/nologin forge
 fi
-kvm_group="$(stat --format='%G' /dev/kvm)"
-[[ -n "$kvm_group" && "$kvm_group" != UNKNOWN ]] || die 'KVM device has no usable group'
-getent group "$kvm_group" >/dev/null || die "KVM group unavailable: $kvm_group"
-usermod --append --groups "$kvm_group" forge
+if [[ "${HEPH_GCP_IMAGE_BAKE:-0}" != 1 ]]; then
+  kvm_group="$(stat --format='%G' /dev/kvm)"
+  [[ -n "$kvm_group" && "$kvm_group" != UNKNOWN ]] || die 'KVM device has no usable group'
+  getent group "$kvm_group" >/dev/null || die "KVM group unavailable: $kvm_group"
+  usermod --append --groups "$kvm_group" forge
+fi
 for file in /etc/subuid /etc/subgid; do
   [[ -e "$file" ]] || install -m 0644 /dev/null "$file"
 done
@@ -627,6 +723,9 @@ install -d -m 0700 -o forge -g forge "$work_root" "$temporary_root" "$evidence_r
 phase_pass
 
 phase_start passt-compat
+if [[ "$runner_image_ready" == true ]]; then
+  printf 'HEPH_GCP_RUNNER_IMAGE phase=passt-compat status=prebuilt\n'
+else
 # Ubuntu Noble's passt predates the DHCP broadcast fix needed by libkrun's
 # minimal DHCP client. Build the reviewed upstream commit before installing
 # the AppArmor profile so the replacement keeps the packaged executable's
@@ -747,9 +846,12 @@ grep -Fq "$passt_revision" <<<"$passt_version_output" ||
 passt_version="${passt_version_output%%$'\n'*}"
 printf 'HEPH_GCP_PASST_COMPAT revision=%s version=%s binary=/usr/bin/passt avx2=/usr/bin/passt.avx2 distro=/usr/bin/passt.distrib,/usr/bin/passt.avx2.distrib\n' \
   "$passt_revision" "$passt_version"
+fi
 phase_pass
-
 phase_start cgroup-podman
+if [[ "${HEPH_GCP_IMAGE_BAKE:-0}" == 1 ]]; then
+  printf 'HEPH_GCP_RUNNER_IMAGE phase=cgroup-podman status=deferred-to-boot\n'
+else
 run_with_deadline systemd-run --unit="heph-gcp-kvm-preflight-${GITHUB_RUN_ID:-manual}" \
   --expand-environment=no \
   --service-type=oneshot --wait --pipe --collect --property=Delegate=yes \
@@ -799,8 +901,8 @@ run_with_deadline systemd-run --unit="heph-gcp-kvm-preflight-${GITHUB_RUN_ID:-ma
       END { exit !(identity && subordinate) }
     '\'' <<<"$gid_map"
   '
+fi
 phase_pass
-
 phase_start passt-apparmor
 require_command apparmor_parser
 [[ -f "$passt_profile_path" && ! -L "$passt_profile_path" ]] ||
@@ -865,12 +967,18 @@ run_with_deadline bash "$passt_preflight_path"
 phase_pass
 
 phase_start rust-toolchain
+if [[ "$runner_image_ready" == true ]]; then
+  printf 'HEPH_GCP_RUNNER_IMAGE phase=rust-toolchain status=prebuilt\n'
+else
 run_with_deadline "${forge_env[@]}" rustup toolchain install "$rust_version" --profile minimal --no-self-update
 run_with_deadline "${forge_env[@]}" rustup default "$rust_version"
 run_with_deadline "${forge_env[@]}" rustup target add x86_64-unknown-linux-musl
+fi
 phase_pass
-
 phase_start libkrunfw
+if [[ "$runner_image_ready" == true ]]; then
+  printf 'HEPH_GCP_RUNNER_IMAGE phase=libkrunfw status=prebuilt\n'
+else
 install -d -m 0700 -o forge -g forge "$source_root"
 run_with_deadline "${forge_env[@]}" git clone --depth 1 --branch "$libkrunfw_tag" \
   https://github.com/libkrun/libkrunfw.git "$source_root/libkrunfw"
@@ -883,9 +991,12 @@ run_with_deadline ldconfig
 libkrunfw_so="$(find /usr/local/lib64 -maxdepth 1 -type f -name 'libkrunfw.so.5*' -print -quit)"
 [[ -n "$libkrunfw_so" ]] || die 'libkrunfw install artifact is missing'
 readelf -d "$libkrunfw_so" | grep -q 'SONAME.*libkrunfw\.so\.5' || die 'libkrunfw SONAME is incompatible'
+fi
 phase_pass
-
 phase_start libkrun
+if [[ "$runner_image_ready" == true ]]; then
+  printf 'HEPH_GCP_RUNNER_IMAGE phase=libkrun status=prebuilt\n'
+else
 run_with_deadline "${forge_env[@]}" git clone --depth 1 --branch "$libkrun_tag" \
   https://github.com/libkrun/libkrun.git "$source_root/libkrun"
 [[ "$("${forge_env[@]}" git -C "$source_root/libkrun" rev-parse HEAD)" == "$libkrun_revision_pin" ]] ||
@@ -979,7 +1090,13 @@ ldconfig -p | grep 'libkrun\.so\.1' >/dev/null || die 'libkrun.so.1 missing from
 ldconfig -p | grep 'libkrunfw\.so\.5' >/dev/null || die 'libkrunfw.so.5 missing from loader cache'
 printf 'HEPH_GCP_KVM_LIBS libkrun_tag=%s commit=%s libkrunfw_tag=%s commit=%s features=blk,net\n' \
   "$libkrun_tag" "$libkrun_revision" "$libkrunfw_tag" "$libkrunfw_revision"
+fi
 phase_pass
+if [[ "${HEPH_GCP_IMAGE_BAKE:-0}" == 1 ]]; then
+  phase_start image-bake-ready
+  phase_pass
+  exit 0
+fi
 
 phase_start checkout
 run_with_deadline "${forge_env[@]}" git clone --filter=blob:none --no-checkout "$repository_url" "$checkout_root"
@@ -994,6 +1111,11 @@ if [[ "$test_mode" == gcp-cooking ]]; then
   run_with_deadline env \
     HEPH_GCP_COOKING_DEADLINE_EPOCH="$cooking_deadline_epoch" \
     HEPH_GCP_RUN_ID="${GITHUB_RUN_ID:-manual}" \
+    HEPH_GCP_RUNNER_IMAGE_VERIFIED="$runner_image_ready" \
+    HEPH_GCP_RUNNER_IMAGE_MANIFEST_SHA256="$runner_image_manifest_sha" \
+    HEPH_GCP_RUNNER_IMAGE_BROWSER_LOCK_SHA256="$runner_image_browser_lock_sha" \
+    HEPH_GCP_RUNNER_IMAGE_BROWSER_VERSION="$runner_image_browser_version" \
+    HEPH_GCP_RUNNER_IMAGE_NODE_VERSION="${HEPH_IMAGE_NODE_VERSION:-v24.16.0}" \
     "$checkout_root/scripts/gcp-cooking-run.sh"
   phase_pass
 else

@@ -20,6 +20,7 @@ settings are:
 | `diagnostic` | Ubuntu 24.04 `e2-small`, 20 GB `pd-balanced` | no nested KVM; auto-delete disk; 10-minute provider `DELETE` lifetime | runtime service account, `storage-rw` scope |
 | `smoke` | Ubuntu 24.04 `n2-standard-8`, 150 GB `pd-balanced` | nested KVM; auto-delete disk; 45-minute provider `DELETE` lifetime | no service account and no scopes |
 | `gcp-cooking` | Ubuntu 24.04 `n2-standard-8`, 150 GB `pd-balanced` | nested KVM; auto-delete disk; 45-minute provider `DELETE` lifetime | runtime service account, `storage-rw` scope |
+| `image-build` (planned) | disposable SA-less `n2-standard-8` builder | versioned source disk; image capture after stop; explicit cleanup | no service account and no scopes |
 | `cooking` | prepared self-hosted `heph-kvm` runner | 30-minute job; local fixture timeout is 1,500 seconds | runner environment, outside GCP |
 
 Quota output proves quota arithmetic, not zonal capacity. The cloud control
@@ -46,6 +47,65 @@ prevents activation or teardown from extending into the collection reserve.
 This deadline behavior remains pending live full-path proof. See
 [`scripts/gcp-kvm-startup.sh`](../scripts/gcp-kvm-startup.sh) and
 [`scripts/gcp-cooking-run.sh`](../scripts/gcp-cooking-run.sh).
+
+### Planned prebuilt image mode
+
+`image-build` is planned as a manual mode in the existing
+[`cooking-e2e.yml`](../.github/workflows/cooking-e2e.yml). Keeping it in this
+workflow preserves the current exact WIF provider and `workflow_dispatch`
+condition; no WIF change or additional IAM grant is planned. The existing CI
+identity already has `roles/compute.instanceAdmin.v1`, which covers the
+Compute image and disk operations needed here. A direct SA-less builder also
+avoids using the runtime `roles/iam.serviceAccountUser` binding. Google lists
+the required image permissions in its [custom image
+documentation](https://docs.cloud.google.com/compute/docs/images/create-custom).
+
+Dispatch the planned build from the immutable workflow reference:
+
+```sh
+gh workflow run cooking-e2e.yml --repo wimpheling/hephaestus --ref main \
+  -f cloud_mode=image-build -f gcp_zone=europe-west1-d
+```
+
+The build output will provide an immutable image name of the form
+`hephaestus-runner-<first-32-hex-digits-of-manifest-sha>`. The complete
+manifest SHA and current recipe, verifier and startup SHA anchors are stored
+in the image description; the label carries the shortened name-safe prefix.
+That permits an older image to remain usable when its recorded provenance is
+compatible with the current recipe, verifier and startup anchors, while the
+browser lock and baked browser executable/version are checked again at VM
+startup.
+
+After a build is human-reviewed, pass that name to a later mode in the same
+workflow. The `runner_image` input is optional for `diagnostic`, `smoke` and
+`gcp-cooking`; omit it to use the stock image path. A custom image in
+`diagnostic` uses the 150 GB diagnostic disk required by the baked image.
+
+```sh
+gh workflow run cooking-e2e.yml --repo wimpheling/hephaestus --ref main \
+  -f cloud_mode=diagnostic -f gcp_zone=europe-west1-d \
+  -f runner_image=hephaestus-runner-<manifest-prefix>
+gh workflow run cooking-e2e.yml --repo wimpheling/hephaestus --ref main \
+  -f cloud_mode=smoke -f gcp_zone=europe-west1-d \
+  -f runner_image=hephaestus-runner-<manifest-prefix>
+gh workflow run cooking-e2e.yml --repo wimpheling/hephaestus --ref main \
+  -f cloud_mode=gcp-cooking -f gcp_zone=europe-west1-d \
+  -f runner_image=hephaestus-runner-<manifest-prefix>
+```
+
+The builder will bake the reviewed Rust, libkrun/libkrunfw, passt/AppArmor,
+Node and browser dependencies into that versioned image. It will create a
+labelled source disk with auto-delete disabled, emit a successful build
+marker, stop and delete the builder while keeping the source disk, then create
+the image from the detached disk. The provider `DELETE` lifetime is only a
+backstop. The image-build path must not place credentials, checkout tokens or
+private cache contents in the image. Retain one current image and one rollback
+image, and delete older versions after promotion. Custom image storage is
+billable; see Google's [disk and image pricing](https://cloud.google.com/compute/disks-image-pricing).
+
+Failed-candidate deletion and recovery by a fresh workflow cleanup step remain
+planned acceptance checks until their focused tests pass. No image is
+currently claimed as live or approved for `gcp-cooking`.
 
 ### Keyless identities and bucket access
 
@@ -153,10 +213,10 @@ GitHub, or local checkout. Both scripts fail closed on an existing conflicting
 bucket policy. `plan` is local output; `apply` requires the human's Cloud
 Shell browser login. The diagnostics bucket apply is now human-verified: the
 one-day bucket exists with the runtime bucket-scoped object creator grant and
-the CI bucket-scoped object viewer grant. The diagnostic evidence path is
-verified by run 34586850977; full Cooking live pipeline validation remains
-pending a successful rerun. Do not run either script with personal local
-gcloud credentials.
+the CI bucket-scoped object viewer grant. The diagnostic evidence path and its
+live partial-source proof are verified by runs 34586850977 and 34593541194;
+full Cooking live pipeline validation remains pending a successful rerun. Do
+not run either script with personal local gcloud credentials.
 
 ## Dispatch and acceptance gate
 
@@ -181,6 +241,19 @@ scans. The object was
 safe status artifact is
 `/tmp/heph-diagnostic-34586850977-artifact2/gcp-diagnostics-status.json`.
 
+The live partial-source proof is [run
+34593541194](https://github.com/wimpheling/hephaestus/actions/runs/34593541194)
+at commit `ddb0920658417fb2bf6538ed7c066c18d8f742ed`. It completed in 3m11s;
+the exact `runtime-log` source was quarantined as
+`credential-scan-rejected`, safe evidence was retained, the VM was verified
+absent before download, and the authenticated private download and scan
+passed. The object was
+`cooking/runs/34593541194/1/ddb0920658417fb2bf6538ed7c066c18d8f742ed.tar.gz`
+(1,296 bytes, SHA-256
+`5b4f25d8e32533f25a5f88217483b3c8ce84649fdacf6f18aa895f0f328717f5`). The
+safe status artifact is
+`/tmp/heph-diagnostic-34593541194-artifact-2/gcp-diagnostics-status.json`.
+
 The full `gcp-cooking` pipeline remains **pending live validation**. A
 successful diagnostic test failure is acceptable only when its diagnostics
 result passes. For `gcp-cooking`, the test result must also contain the dedicated
@@ -201,9 +274,8 @@ The current collector quarantines an unsafe individual source, records its
 allowlisted `rejectedSources` classification, and can retain an independently
 safe lineage/status partial bundle. The retained files are scanned again before
 archive creation; a fixture-bearing source is never redacted into the bundle.
-The local partial-bundle regression passes, but this behavior still requires a
-cheap diagnostic live proof. The historical attempt establishes neither a
-denial cause nor snapshot evidence.
+The live partial-source behavior is proven by run 34593541194. The historical
+attempt establishes neither a denial cause nor snapshot evidence.
 
 The full acceptance evidence must show the exact checked-out SHA, selected
 zone, cache object metadata and checksum, build and installation, update
@@ -224,9 +296,10 @@ bundle. The producer passed its focused local payload-projection and schema
 gate. A rejected raw source is omitted and represented only by a stable
 `rejectedSources` label/reason/status entry; `collectionStatus: partial` makes
 the result explicit while the final scanner still gates archive creation. The
-diagnostic live bundle gate passed in run 34586850977; full GCP Cooking
-validation still requires the scanner, upload, post-delete download and
-checksum evidence below, plus a live proof of the partial-source path.
+diagnostic live bundle gate passed in run 34586850977, and the live
+partial-source path passed in run 34593541194. Full GCP Cooking validation
+still requires the scanner, upload, post-delete download and checksum
+evidence below from a successful full run.
 
 On a failed Cooking unit, the helper uses `systemctl show` with an allowlisted
 property set. It does not dump `systemctl status` process trees, because those

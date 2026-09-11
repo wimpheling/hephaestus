@@ -3,8 +3,8 @@
 The durable GCP configuration, keyless identities, bucket retention, dispatch
 gate and failure triage are in the [GCP Cooking CI runbook](../../docs/gcp-cooking-ci.md).
 Current `gcp-cooking` live validation is **pending**; the diagnostic evidence
-gate has passed, while the historical results below do not claim that the
-full path is green. The latest full run
+gate and live partial-source proof have passed, while the historical results
+below do not claim that the full path is green. The latest full run
 [34588821244](https://github.com/wimpheling/hephaestus/actions/runs/34588821244)
 at commit `18fff14` timed out with exit `124`; full runs are re-paused.
 
@@ -116,9 +116,17 @@ at commit `c252f0517c147c86d6560c79c403fe7ce6f6d4a4`; it completed in 3m11s,
 verified VM absence, and passed authenticated private download and scanning.
 An isolated diagnostic source containing known fixture content is quarantined
 by the current collector; safe lineage/status evidence can still form a
-private partial bundle with an explicit `rejectedSources` classification. That
-partial path remains pending live proof. The full `gcp-cooking` trial remains
-pending live validation.
+private partial bundle with an explicit `rejectedSources` classification.
+That behavior is proven by [run
+34593541194](https://github.com/wimpheling/hephaestus/actions/runs/34593541194)
+at commit `ddb0920658417fb2bf6538ed7c066c18d8f742ed`: the exact
+`runtime-log` was classified `credential-scan-rejected`, the VM was verified
+absent before download, and authenticated private download and scanning
+passed. Its object is
+`cooking/runs/34593541194/1/ddb0920658417fb2bf6538ed7c066c18d8f742ed.tar.gz`
+(1,296 bytes, SHA-256
+`5b4f25d8e32533f25a5f88217483b3c8ce84649fdacf6f18aa895f0f328717f5`). The
+full `gcp-cooking` trial remains pending live validation.
 
 The same `main` manual dispatch also offers `gcp-cooking`. Before creating a
 paid VM it checks the private, checksum-pinned cache object
@@ -143,6 +151,42 @@ oneshot with the remaining absolute deadline and a bounded stop timeout, so
 activation and teardown cannot consume the collection reserve. This remains
 pending live full-path proof. The smoke mode continues to use no service
 account and no scopes.
+
+The planned `image-build` mode stays in this same workflow, so the existing
+exact WIF workflow restriction needs no change. Dispatch it with:
+
+```sh
+gh workflow run cooking-e2e.yml --repo wimpheling/hephaestus --ref main \
+  -f cloud_mode=image-build -f gcp_zone=europe-west1-d
+```
+
+Its direct SA-less disposable builder will bake the reviewed Rust,
+libkrun/libkrunfw, passt/AppArmor, Node and browser dependencies into a
+SHA-versioned custom image. The output name is
+`hephaestus-runner-<first-32-hex-digits-of-manifest-sha>`; the complete
+manifest SHA and current recipe, verifier and startup provenance anchors are
+stored in the image description. An older image may be supplied when those
+anchors remain compatible, subject to the browser lock and baked
+browser executable/version checks at startup.
+
+The optional `runner_image` input is supported by `diagnostic`, `smoke` and
+`gcp-cooking`; omitting it keeps the stock image default. For example, after
+reviewing the build output:
+
+```sh
+gh workflow run cooking-e2e.yml --repo wimpheling/hephaestus --ref main \
+  -f cloud_mode=gcp-cooking -f gcp_zone=europe-west1-d \
+  -f runner_image=hephaestus-runner-<manifest-prefix>
+```
+
+A custom diagnostic image uses a 150 GB disk. The source disk must have
+auto-delete disabled, the builder must be stopped and deleted while keeping
+that disk, and image creation must complete before the source disk is deleted.
+Failure cleanup must remove and verify every builder disk and any failed image;
+fresh-workflow cleanup and failed-candidate recovery remain planned acceptance
+checks until their focused tests pass. Retain one current image and one
+rollback image; custom image storage is billable. This image mode is planned
+and no live image is claimed.
 
 The GCP Cooking path reports a dedicated `HEPHAESTUS_GCP_COOKING` marker and
 uses the same private collector/upload/download path. The GitHub workflow
