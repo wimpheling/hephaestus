@@ -226,6 +226,41 @@ RUNTIME_FIELDS = frozenset(
         "timestamp",
     }
 )
+READINESS_ERRORS = {
+    "custom runner image Node executable cannot run as forge": ("node", "node-not-runnable"),
+    "custom runner image Node executable version does not match its pin": ("node", "node-version-mismatch"),
+    "custom runner image Rust executable cannot run as forge": ("rust", "rust-not-runnable"),
+    "custom runner image Rust executable version does not match its pin": ("rust", "rust-version-mismatch"),
+    "custom runner image ORAS executable cannot run as forge": ("oras", "oras-not-runnable"),
+    "custom runner image ORAS executable version does not match its pin": ("oras", "oras-version-mismatch"),
+    "custom runner image Chromium executable is missing": ("chromium", "chromium-missing"),
+    "custom runner image Chromium executable cannot run as forge": ("chromium", "chromium-not-runnable"),
+    "custom runner image Chromium executable version does not match its manifest": (
+        "chromium",
+        "chromium-version-mismatch",
+    ),
+    "baked runner image has no usable libclang shared library": ("libclang", "libclang-missing"),
+    "libclang shared library is unavailable": ("libclang", "libclang-missing"),
+}
+
+
+def classify_readiness_error(line: str) -> str | None:
+    """Map one exact startup readiness error to a safe typed marker."""
+
+    normalized = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", line).strip()
+    if "startup-script:" in normalized:
+        normalized = normalized.split("startup-script:", 1)[1].lstrip()
+    prefix = "gcp-kvm-startup: "
+    if not normalized.startswith(prefix):
+        return None
+    message = normalized[len(prefix) :]
+    value = READINESS_ERRORS.get(message)
+    if value is None:
+        return None
+    tool, error_class = value
+    return f"HEPH_GCP_RUNNER_IMAGE_READINESS tool={tool} class={error_class} phase=runner-image-runtime"
+
+
 BROWSER_FIELDS = frozenset(
     {"status", "suite", "test", "phase", "duration_ms", "exit_code", "error", "stack", "started_at", "finished_at"}
 )
@@ -383,35 +418,39 @@ def _project_text(source: Path, destination: Path) -> tuple[int, str]:
             if len(raw) > MAX_LINE_BYTES:
                 continue
             line = ANSI_RE.sub(b"", raw).decode("utf-8", errors="replace").rstrip("\r\n")
-            if DROP_LINE_RE.search(line):
+            readiness = classify_readiness_error(line)
+            if readiness is not None:
+                projected = readiness
+            elif DROP_LINE_RE.search(line):
                 continue
-            marker = RUNTIME_MARKER_RE.search(line)
-            stripped = line.strip()
-            stack_match = SAFE_STACK_RE.fullmatch(stripped)
-            assertion_match = ASSERTION_LINE_RE.fullmatch(stripped)
-            error_match = ERROR_LINE_RE.fullmatch(stripped)
-            if stack_match:
-                # Keep only a canonical source location; never retain the
-                # caller's free-form stack text.
-                projected = f"location={stripped[3:].strip()}"
-            elif assertion_match or error_match:
-                match = assertion_match or error_match
-                assert match is not None
-                text = match.group("text").strip()
-                if (
-                    not SAFE_ERROR_RE.fullmatch(text)
-                    or BROWSER_DROP_WORD_RE.search(text)
-                    or len(text) > 1024
-                ):
-                    continue
-                field = "assertion" if assertion_match else "error"
-                projected = f"{field}={text}"
-            elif marker is not None:
-                projected, fields = _project_runtime_fields(line)
-                if not fields and not projected.split()[1:]:
-                    continue
             else:
-                continue
+                marker = RUNTIME_MARKER_RE.search(line)
+                stripped = line.strip()
+                stack_match = SAFE_STACK_RE.fullmatch(stripped)
+                assertion_match = ASSERTION_LINE_RE.fullmatch(stripped)
+                error_match = ERROR_LINE_RE.fullmatch(stripped)
+                if stack_match:
+                    # Keep only a canonical source location; never retain the
+                    # caller's free-form stack text.
+                    projected = f"location={stripped[3:].strip()}"
+                elif assertion_match or error_match:
+                    match = assertion_match or error_match
+                    assert match is not None
+                    text = match.group("text").strip()
+                    if (
+                        not SAFE_ERROR_RE.fullmatch(text)
+                        or BROWSER_DROP_WORD_RE.search(text)
+                        or len(text) > 1024
+                    ):
+                        continue
+                    field = "assertion" if assertion_match else "error"
+                    projected = f"{field}={text}"
+                elif marker is not None:
+                    projected, fields = _project_runtime_fields(line)
+                    if not fields and not projected.split()[1:]:
+                        continue
+                else:
+                    continue
             encoded = (projected[:16 * 1024] + (" [TRUNCATED]" if len(projected) > 16 * 1024 else "") + "\n").encode()
             output.write(encoded)
             digest.update(encoded)

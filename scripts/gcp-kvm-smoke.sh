@@ -392,18 +392,23 @@ report_serial_failure_context() {
   chmod 600 "$context_file"
   printf '%s\n' "$value" >"$context_file"
   set +e
-  context_output="$(python3 - "$context_file" "$(dirname -- "${BASH_SOURCE[0]}")/check-browser-evidence.py" <<'PY'
+  context_output="$(python3 - "$context_file" "$(dirname -- "${BASH_SOURCE[0]}")/check-browser-evidence.py" "$(dirname -- "${BASH_SOURCE[0]}")/collect-cooking-diagnostics.py" <<'PY'
 import importlib.util
 import pathlib
 import re
 import sys
 
-serial_path, scanner_path = sys.argv[1:]
+serial_path, scanner_path, collector_path = sys.argv[1:]
 spec = importlib.util.spec_from_file_location("serial_evidence", scanner_path)
 if spec is None or spec.loader is None:
     raise SystemExit("serial evidence scanner is unavailable")
 scanner = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(scanner)
+collector_spec = importlib.util.spec_from_file_location("diagnostic_collector", collector_path)
+if collector_spec is None or collector_spec.loader is None:
+    raise SystemExit("diagnostic collector is unavailable")
+collector = importlib.util.module_from_spec(collector_spec)
+collector_spec.loader.exec_module(collector)
 
 prefix = re.compile(r"^\[[^]]+\] google_metadata_script_runner\[\d+\]:\s*")
 safe_key = re.compile(r"^(?:event|phase|revision|exit|expected|test_result|status|error|stage|terminal|state|result|code)$")
@@ -422,6 +427,9 @@ def normalize(raw: str) -> str:
 
 def project(raw: str) -> str | None:
     line = normalize(raw)
+    readiness = collector.classify_readiness_error(line)
+    if readiness is not None:
+        return readiness
     if not line.startswith(("HEPH_", "HEPHAESTUS_")):
         return None
     encoded = line.encode("utf-8", errors="surrogateescape")

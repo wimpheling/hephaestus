@@ -61,6 +61,7 @@ class GcpKvmSmokeCleanupTests(unittest.TestCase):
         serial = "\n".join(
             [
                 "HEPH_GCP_KVM_STARTUP event=phase-start phase=diagnostic-bootstrap revision=" + "a" * 40,
+                "gcp-kvm-startup: custom runner image Node executable cannot run as forge",
                 f"fixture token={secret}",
                 *[f"ordinary boot line {index}" for index in range(100)],
                 "HEPHAESTUS_GCP_DIAGNOSTIC: DIAGNOSTICS FAIL test_result=expected-failure",
@@ -108,6 +109,10 @@ class GcpKvmSmokeCleanupTests(unittest.TestCase):
 
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Bounded typed serial failure context:", result.stderr)
+        self.assertIn(
+            "HEPH_GCP_RUNNER_IMAGE_READINESS tool=node class=node-not-runnable phase=runner-image-runtime",
+            result.stderr,
+        )
         self.assertIn("HEPHAESTUS_GCP_DIAGNOSTIC: DIAGNOSTICS FAIL test_result=expected-failure", result.stderr)
         self.assertIn("HEPH_GCP_KVM_STARTUP event=phase-start phase=diagnostic-bootstrap", result.stderr)
         self.assertNotIn(secret, result.stdout + result.stderr)
