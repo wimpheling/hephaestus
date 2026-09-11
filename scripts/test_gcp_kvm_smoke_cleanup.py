@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import hashlib
 import os
 import subprocess
 import tempfile
@@ -190,6 +191,59 @@ class GcpKvmSmokeCleanupTests(unittest.TestCase):
         )
         self.assertIn("diagnostics-collector-script=", create_args)
         self.assertIn("diagnostics-scanner-script=", create_args)
+
+    def test_new_run_gate_expectation_uses_mode_specific_script_hash(self) -> None:
+        """The downloader's persisted contract names each producer correctly."""
+
+        def run_mode(root: Path, mode: str) -> str:
+            fake_bin = root / "bin"
+            fake_bin.mkdir(parents=True)
+            fake_gcloud = fake_bin / "gcloud"
+            failure_marker = (
+                "HEPHAESTUS_GCP_DIAGNOSTIC: DIAGNOSTICS FAIL test_result=failed"
+                if mode == "diagnostic" else
+                "HEPHAESTUS_GCP_COOKING: FAIL phase=test exit=1"
+            )
+            fake_gcloud.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -eu\n"
+                "case \" $* \" in\n"
+                "  *' compute regions describe '*) printf '%s\\n' '{\"quotas\":[{\"metric\":\"INSTANCES\",\"limit\":\"2\",\"usage\":\"0\"},{\"metric\":\"N2_CPUS\",\"limit\":\"8\",\"usage\":\"0\"}]}' ;;\n"
+                "  *' storage objects describe '*) printf '%s\\n' '{\"name\":\"cooking/heph-gcp-cooking-cache.tar.zst\",\"size\":\"1783474345\",\"md5Hash\":\"di95x0b0Yqqt4RTyVUvb6A==\",\"generation\":\"1\"}' ;;\n"
+                "  *' instances describe '*) echo \"The resource 'projects/hephaestus-508000/zones/europe-west1-d/instances/heph-kvm-smoke-34599999996-1' was not found\" >&2; exit 1 ;;\n"
+                "  *' instances create '*) exit 0 ;;\n"
+                f"  *' get-serial-port-output '*) printf '%s\\n' '{failure_marker}' ;;\n"
+                "  *) exit 2 ;;\n"
+                "esac\n",
+                encoding="utf-8",
+            )
+            fake_gcloud.chmod(0o700)
+            environment = {
+                **os.environ,
+                "PATH": f"{fake_bin}:{os.environ['PATH']}",
+                "GITHUB_RUN_ID": "34599999996",
+                "GITHUB_RUN_ATTEMPT": "1",
+                "GITHUB_SHA": "a" * 40,
+                "GCP_ZONE": "europe-west1-d",
+                "RUNNER_TEMP": str(root),
+            }
+            result = subprocess.run(
+                [str(SMOKE), mode], cwd=ROOT.parent, env=environment,
+                text=True, capture_output=True, check=False,
+            )
+            if not (root / "gcp-diagnostics-gate-expectation").is_file():
+                raise AssertionError(result.stdout + result.stderr)
+            return (root / "gcp-diagnostics-gate-expectation").read_text(encoding="utf-8").strip()
+
+        with tempfile.TemporaryDirectory(prefix="heph-gcp-gate-hashes-") as raw:
+            root = Path(raw)
+            cooking = run_mode(root / "cooking", "gcp-cooking")
+            diagnostic = run_mode(root / "diagnostic", "diagnostic")
+        helper_hash = hashlib.sha256((ROOT / "cooking-gate-results.py").read_bytes()).hexdigest()
+        runtime_hash = hashlib.sha256((ROOT / "gcp-cooking-run.sh").read_bytes()).hexdigest()
+        self.assertEqual(cooking, f"gcp-cooking {runtime_hash}")
+        self.assertEqual(diagnostic, f"diagnostic {helper_hash}")
+        self.assertNotEqual(cooking, diagnostic)
 
     def test_workflow_downloads_and_retains_smoke_diagnostics_after_cleanup(self) -> None:
         workflow = (ROOT.parent / ".github" / "workflows" / "cooking-e2e.yml").read_text(encoding="utf-8")
