@@ -232,6 +232,61 @@ finish
             )
             self.assertNotIn("successful-smoke", json.dumps(triage["failures"]))
 
+    def test_triage_projects_collector_failure_aliases_from_all_evidence_sources(self):
+        with tempfile.TemporaryDirectory(prefix="heph-gcp-triage-aliases-") as directory:
+            root = Path(directory)
+            self._archive(root)
+            (root / "bundle" / "sources" / "test-output").write_text(
+                "HEPHAESTUS_GCP_COOKING FAIL phase=evidence exit=1 "
+                "error=private-error-payload\n",
+                encoding="utf-8",
+            )
+            (root / "bundle" / "sources" / "browser-summary").write_text(
+                '{"status":"failed","phase":"browser","test":"checkout",'
+                '"exit_code":1,"error":"private-request-body"}\n',
+                encoding="utf-8",
+            )
+            (root / "bundle" / "sources" / "runtime-structured").write_text(
+                "HEPH_GCP_DIAGNOSTICS test_result=1 phase=evidence\n"
+                "HEPH_GCP_DIAGNOSTICS test_result=0 phase=successful-probe\n",
+                encoding="utf-8",
+            )
+            failures = TRIAGE.summarize(root / "bundle")["failures"]
+            self.assertIn(
+                {
+                    "source": "test-output",
+                    "phase": "evidence",
+                    "status": "failed",
+                    "exit_code": 1,
+                    "correlated": False,
+                },
+                failures,
+            )
+            self.assertIn(
+                {
+                    "source": "browser-summary",
+                    "phase": "browser",
+                    "test": "checkout",
+                    "status": "failed",
+                    "exit_code": 1,
+                    "correlated": False,
+                },
+                failures,
+            )
+            self.assertIn(
+                {
+                    "source": "runtime-structured",
+                    "phase": "evidence",
+                    "exit_code": 1,
+                    "correlated": False,
+                },
+                failures,
+            )
+            serialized = json.dumps(failures)
+            self.assertNotIn("private-error-payload", serialized)
+            self.assertNotIn("private-request-body", serialized)
+            self.assertNotIn("successful-probe", serialized)
+
     def test_triage_preserves_terminal_retry_marker_when_snapshot_is_stale(self):
         with tempfile.TemporaryDirectory(prefix="heph-gcp-triage-retry-") as directory:
             root = Path(directory)

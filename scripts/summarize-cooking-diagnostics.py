@@ -58,7 +58,10 @@ ATTEMPT_FIELDS = {
     "attempt_completed_at", "run_state", "run_outcome", "run_created_at", "run_updated_at",
     "disposition", "next_eligible_at", "terminal_at", "sampled_at", "exit_code", "exit_signal",
 }
-FAILURE_SOURCE_LABELS = {"serial", "host-journal", "runtime-log", "runtime-structured"}
+FAILURE_SOURCE_LABELS = {
+    "serial", "host-journal", "runtime-log", "runtime-structured",
+    "browser-summary", "test-output",
+}
 FAILURE_MARKERS = {
     "HEPH_GCP_TEST",
     "HEPH_GCP_RUNTIME",
@@ -66,11 +69,12 @@ FAILURE_MARKERS = {
     "HEPH_GCP_KVM_FIRST_ERROR",
     "HEPH_GCP_KVM_SMOKE",
     "HEPH_GCP_RUNNER_IMAGE_READINESS",
+    "HEPH_GCP_DIAGNOSTICS",
     "HEPHAESTUS_GCP_COOKING",
 }
 FAILURE_FIELDS = {
     "test", "test_result", "status", "phase", "error_class", "location", "run_id",
-    "attempt_run_id", "exit_code", "exit_signal", "event", "operation", "reason_class", "class", "tool",
+    "attempt_run_id", "exit", "exit_code", "exit_signal", "event", "operation", "reason_class", "class", "tool",
 }
 FAILURE_STATUS_VALUES = {"failed", "error", "timeout", "timed-out", "nonzero"}
 FAILURE_VALUE = re.compile(r"^[A-Za-z0-9_.:/+-]{1,192}$")
@@ -320,6 +324,26 @@ def _failure_record(
     return result
 
 
+def _normalize_failure_fields(fields: dict[str, Any]) -> dict[str, Any]:
+    """Map collector aliases to the bounded failure schema."""
+
+    if "exit" in fields and "exit_code" not in fields:
+        fields["exit_code"] = fields.pop("exit")
+    elif "exit" in fields:
+        fields.pop("exit")
+    test_result = fields.get("test_result")
+    if isinstance(test_result, int) and not isinstance(test_result, bool):
+        if test_result > 0:
+            fields["exit_code"] = test_result
+        fields.pop("test_result")
+    elif isinstance(test_result, str) and test_result.isdigit():
+        numeric_result = int(test_result)
+        if numeric_result > 0:
+            fields["exit_code"] = numeric_result
+        fields.pop("test_result")
+    return fields
+
+
 def _project_failures(
     root: Path,
     source_records: list[dict[str, Any]],
@@ -352,7 +376,11 @@ def _project_failures(
                     for field, item in value.items()
                     if field in FAILURE_FIELDS and isinstance(item, (str, int))
                 }
-                if fields.get("test_result") not in FAILURE_STATUS_VALUES and fields.get("status") not in FAILURE_STATUS_VALUES:
+                fields = _normalize_failure_fields(fields)
+                if not any(
+                    field in fields
+                    for field in ("test", "test_result", "status", "error_class", "exit_code", "exit_signal")
+                ):
                     continue
             else:
                 marker = stripped.split(maxsplit=1)[0].rstrip(":") if stripped else ""
@@ -363,12 +391,15 @@ def _project_failures(
                     for match in FAILURE_PAIR.finditer(stripped)
                     if match.group("key") in FAILURE_FIELDS
                 }
+                if any(word.rstrip(":").upper() in {"FAIL", "FAILED"} for word in stripped.split()[1:]):
+                    fields["status"] = "failed"
                 if "class" in fields:
                     fields["error_class"] = fields.pop("class")
                 if "tool" in fields:
                     fields["test"] = fields.pop("tool")
                 if fields.get("status", "").isdigit():
                     fields["exit_code"] = fields.pop("status")
+                fields = _normalize_failure_fields(fields)
                 if "error=" in stripped and "error_class" not in fields:
                     error_value = dict(FAILURE_PAIR.findall(stripped)).get("error")
                     if error_value in FAILURE_ERROR_CLASSES:
