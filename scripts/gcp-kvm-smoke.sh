@@ -421,7 +421,7 @@ _download_diagnostics() {
   local destination="${GCP_DIAGNOSTICS_ARCHIVE:-${RUNNER_TEMP:-/tmp}/gcp-diagnostics.tar.gz}"
   local status_path="${GCP_DIAGNOSTICS_STATUS:-${RUNNER_TEMP:-/tmp}/gcp-diagnostics-status.json}"
   local extract_root="${destination}.extract" output digest archive_bytes download_timeout
-  local phase_timing_status='not-applicable' phase_timing_error='' phase_timing_object phase_timing_destination
+  local phase_timing_status='not-applicable' phase_timing_error='' phase_timing_object phase_timing_destination phase_timing_staging
   local expected_mode="${GCP_DIAGNOSTICS_EXPECT_MODE:-}"
   local expected_gate_script_sha256="${GCP_DIAGNOSTICS_EXPECT_GATE_SCRIPT_SHA256:-}"
   local expectation_file="${RUNNER_TEMP:-/tmp}/gcp-diagnostics-gate-expectation"
@@ -612,21 +612,26 @@ PYGATE
     # must not discard the archive scan and triage already completed above.
     phase_timing_object="${object%.tar.gz}.phase-timing.json"
     phase_timing_destination="${GCP_PHASE_TIMING_PROJECTION:-${RUNNER_TEMP:-/tmp}/gcp-cooking-phase-timing.json}"
-    rm -f -- "$phase_timing_destination"
+    phase_timing_staging="${phase_timing_destination}.download"
+    # Keep provider bytes outside the workflow artifact path until validation
+    # passes. Clear both paths on every rejected attempt.
+    rm -f -- "$phase_timing_destination" "$phase_timing_staging"
     if ! timeout --kill-after=5s "${download_timeout}s" gcloud storage cp \
-        "gs://${DIAGNOSTICS_BUCKET}/${phase_timing_object}" "$phase_timing_destination" \
+        "gs://${DIAGNOSTICS_BUCKET}/${phase_timing_object}" "$phase_timing_staging" \
         --project="$PROJECT_ID" --billing-project="$PROJECT_ID" --quiet >/dev/null 2>&1; then
       diagnostics_download_error='phase-timing-download-failed'
       phase_timing_status='unavailable'
       phase_timing_error="$diagnostics_download_error"
-    elif [[ ! -f "$phase_timing_destination" || -L "$phase_timing_destination" ]] ||
-        (( $(stat -c '%s' "$phase_timing_destination") > 65536 )); then
+      rm -f -- "$phase_timing_destination" "$phase_timing_staging"
+    elif [[ ! -f "$phase_timing_staging" || -L "$phase_timing_staging" ]] ||
+        (( $(stat -c '%s' "$phase_timing_staging") > 65536 )); then
       diagnostics_download_error='phase-timing-too-large'
       phase_timing_status='unavailable'
       phase_timing_error="$diagnostics_download_error"
-    elif ! chmod 0600 "$phase_timing_destination" ||
+      rm -f -- "$phase_timing_destination" "$phase_timing_staging"
+    elif ! chmod 0600 "$phase_timing_staging" ||
       ! python3 -B "$PHASE_TIMING_SCRIPT" validate-projection \
-        --path "$phase_timing_destination" \
+        --path "$phase_timing_staging" \
         --expected-run-id "$diagnostics_source_run_id" \
         --expected-attempt "$diagnostics_source_attempt" \
         --expected-source-sha "$diagnostics_source_sha" \
@@ -643,6 +648,12 @@ PYGATE
       diagnostics_download_error='phase-timing-invalid'
       phase_timing_status='unavailable'
       phase_timing_error="$diagnostics_download_error"
+      rm -f -- "$phase_timing_destination" "$phase_timing_staging"
+    elif ! mv -- "$phase_timing_staging" "$phase_timing_destination"; then
+      diagnostics_download_error='phase-timing-invalid'
+      phase_timing_status='unavailable'
+      phase_timing_error="$diagnostics_download_error"
+      rm -f -- "$phase_timing_destination" "$phase_timing_staging"
     else
       phase_timing_status='passed'
     fi
@@ -672,6 +683,7 @@ if phase_timing != "not-applicable":
     status["phaseTiming"] = phase_timing
 if phase_timing_error:
     status["error"] = phase_timing_error
+    status["timingAcceptance"] = "failed"
 Path(status_path).write_text(json.dumps(status, separators=(",", ":")) + "\n", encoding="utf-8")
 PY
   then

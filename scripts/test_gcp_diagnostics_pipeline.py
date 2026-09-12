@@ -238,6 +238,7 @@ finish
         for failure, expected_error in (
             ("download", "phase-timing-download-failed"),
             ("invalid", "phase-timing-invalid"),
+            ("oversize", "phase-timing-too-large"),
         ):
             for workload_exit in (0, 7):
                 with self.subTest(failure=failure, workload_exit=workload_exit), tempfile.TemporaryDirectory(
@@ -258,12 +259,15 @@ finish
                     self.assertEqual(status["scan"], "passed")
                     self.assertEqual(status["phaseTiming"], "unavailable")
                     self.assertEqual(status["error"], expected_error)
+                    self.assertEqual(status["timingAcceptance"], "failed")
                     self.assertEqual(status["gateAcceptance"], "passed" if workload_exit == 0 else "failed")
                     if workload_exit:
                         self.assertEqual(status["gateAcceptanceError"], "gate-results-acceptance-failed")
                     self.assertEqual(status["triage"]["gateResults"]["overall_exit_code"], workload_exit)
                     self.assertEqual(status["archiveBytes"], archive.stat().st_size)
                     self.assertEqual(status["archiveSha256"], hashlib.sha256(archive.read_bytes()).hexdigest())
+                    self.assertFalse((root / "gcp-cooking-phase-timing.json").exists())
+                    self.assertFalse((root / "gcp-cooking-phase-timing.json.download").exists())
 
     def test_missing_current_gate_sidecar_preserves_safe_triage(self):
         """A current archive missing its sidecar fails after safe triage."""
@@ -1098,6 +1102,7 @@ finish
             f"if [[ \"${{1:-}} ${{2:-}}\" == \"storage cp\" ]]; then\n"
             f"  if [[ \"${{3:-}}\" == *.phase-timing.json && \"${{HEPH_FAKE_PHASE_TIMING_FAILURE:-}}\" == download ]]; then exit 17; fi\n"
             f"  if [[ \"${{3:-}}\" == *.phase-timing.json && \"${{HEPH_FAKE_PHASE_TIMING_FAILURE:-}}\" == invalid ]]; then printf '{{}}\\n' >\"$4\"; exit 0; fi\n"
+            f"  if [[ \"${{3:-}}\" == *.phase-timing.json && \"${{HEPH_FAKE_PHASE_TIMING_FAILURE:-}}\" == oversize ]]; then head -c 65537 /dev/zero >\"$4\"; exit 0; fi\n"
             f"  {'sleep 5' if hang else f'if (( {exit_code} == 0 )); then cp {archive} \"$4\"; fi'}\n"
             f"  exit {exit_code}\n"
             "fi\n"

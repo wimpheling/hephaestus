@@ -941,7 +941,9 @@ projection, the post-delete status still retains the authenticated archive,
 credential-scan and triage results and records the timing error separately.
 Timing remains required for an accepted successful run; an unavailable or
 invalid projection keeps the workflow failed without hiding the original
-workload result.
+workload result. In the status artifact, `gateAcceptance` describes the
+workload gate sidecar, while `timingAcceptance: failed` records the separate
+timing requirement.
 
 For a retained historical bundle, use the workflow's `diagnostics-triage`
 mode. Supply all three source identity fields. `diagnostics_sha` identifies
