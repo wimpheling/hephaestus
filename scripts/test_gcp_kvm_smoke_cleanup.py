@@ -227,7 +227,7 @@ class GcpKvmSmokeCleanupTests(unittest.TestCase):
             failure_marker = (
                 "HEPHAESTUS_GCP_DIAGNOSTIC: DIAGNOSTICS FAIL test_result=failed"
                 if mode == "diagnostic" else
-                "HEPHAESTUS_GCP_COOKING: FAIL phase=test exit=1"
+                "HEPHAESTUS_GCP_COOKING: FAIL phase=test exit=1 revision=" + "a" * 40
             )
             fake_gcloud.write_text(
                 "#!/usr/bin/env bash\n"
@@ -269,6 +269,300 @@ class GcpKvmSmokeCleanupTests(unittest.TestCase):
         self.assertEqual(cooking, f"gcp-cooking {runtime_hash}")
         self.assertEqual(diagnostic, f"diagnostic {helper_hash}")
         self.assertNotEqual(cooking, diagnostic)
+
+    def test_cooking_waits_for_outer_terminal_marker_after_workload_failure(self) -> None:
+        """A workload marker cannot let cleanup kill the startup collector."""
+
+        run_id = "34599999995"
+        revision = "a" * 40
+        name = f"heph-kvm-smoke-{run_id}-1"
+        with tempfile.TemporaryDirectory(prefix="heph-gcp-terminal-order-") as raw:
+            root = Path(raw)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            vm_state = root / "vm-created"
+            state = root / "serial-count"
+            fake_gcloud = fake_bin / "gcloud"
+            fake_gcloud.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -Eeuo pipefail\n"
+                "case \" $* \" in\n"
+                "  *' compute regions describe '*) printf '%s\\n' "
+                "'{\"quotas\":[{\"metric\":\"INSTANCES\",\"limit\":\"2\",\"usage\":\"0\"},{\"metric\":\"N2_CPUS\",\"limit\":\"8\",\"usage\":\"0\"}]}' ;;\n"
+                "  *' storage objects describe '*) printf '%s\\n' "
+                "'{\"name\":\"cooking/heph-gcp-cooking-cache.tar.zst\",\"size\":\"1783474345\",\"md5Hash\":\"di95x0b0Yqqt4RTyVUvb6A==\",\"generation\":\"1\"}' ;;\n"
+                "  *' instances create '*) touch \"$GCP_VM_STATE\"; exit 0 ;;\n"
+                "  *' instances describe '*)\n"
+                "    if [[ -f \"$GCP_VM_STATE\" ]]; then printf '%s\\n' '{\"labels\":{\"purpose\":\"hephaestus-kvm-smoke\",\"run_id\":\"'\"$GITHUB_RUN_ID\"'\",\"run_attempt\":\"1\",\"sha\":\"'\"$GITHUB_SHA\"'\"}}'; exit 0; fi\n"
+                "    printf \"The resource 'projects/hephaestus-508000/zones/europe-west1-d/instances/heph-kvm-smoke-%s-1' was not found\\n\" \"$GITHUB_RUN_ID\" >&2; exit 1 ;;\n"
+                "  *' get-serial-port-output '*)\n"
+                "    count=0; [[ -f \"$GCP_SERIAL_STATE\" ]] && count=$(<\"$GCP_SERIAL_STATE\")\n"
+                "    count=$((count + 1)); printf '%s\\n' \"$count\" >\"$GCP_SERIAL_STATE\"\n"
+                "    case \"$count\" in\n"
+                "      1) printf '%s\\n' 'HEPHAESTUS_GCP_COOKING: FAIL phase=cooking exit=1' ;;\n"
+                "      2) printf '%s\\n' 'HEPHAESTUS_GCP_COOKING: FAIL phase=cooking exit=1'; printf '%s\\n' 'HEPH_GCP_DIAGNOSTICS event=collection status=start object=gs://private/run.tar.gz' ;;\n"
+                "      3) printf '%s\\n' 'HEPHAESTUS_GCP_COOKING: FAIL phase=cooking exit=1'; printf '%s\\n' 'HEPH_GCP_DIAGNOSTICS event=upload status=pass object=gs://private/run.tar.gz' ;;\n"
+                f"      *) printf '%s\\n' 'HEPHAESTUS_GCP_COOKING: FAIL phase=cooking exit=1'; printf '%s\\n' 'HEPHAESTUS_GCP_COOKING: FAIL phase=evidence exit=1 revision={revision}' ;;\n"
+                + "    esac\n"
+                "    exit 0 ;;\n"
+                "  *) exit 2 ;;\n"
+                "esac\n",
+                encoding="utf-8",
+            )
+            fake_gcloud.chmod(0o700)
+            fake_sleep = fake_bin / "sleep"
+            fake_sleep.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+            fake_sleep.chmod(0o700)
+            environment = os.environ.copy()
+            environment.update(
+                {
+                    "PATH": f"{fake_bin}:{environment['PATH']}",
+                    "GITHUB_RUN_ID": run_id,
+                    "GITHUB_RUN_ATTEMPT": "1",
+                    "GITHUB_SHA": revision,
+                    "GCP_ZONE": "europe-west1-d",
+                    "GCP_USE_STOCK_IMAGE": "true",
+                    "GCP_SERIAL_STATE": str(state),
+                    "GCP_VM_STATE": str(vm_state),
+                }
+            )
+            result = subprocess.run(
+                [str(SMOKE), "gcp-cooking"],
+                cwd=ROOT.parent,
+                env=environment,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(state.read_text(encoding="utf-8").strip(), "4")
+            self.assertIn("startup smoke reported failure", result.stderr)
+
+    def test_cooking_waits_for_evidence_before_accepting_inner_success(self) -> None:
+        """An inner PASS must leave time for the startup EXIT trap to upload."""
+
+        run_id = "34599999994"
+        revision = "b" * 40
+        name = f"heph-kvm-smoke-{run_id}-1"
+        with tempfile.TemporaryDirectory(prefix="heph-gcp-success-order-") as raw:
+            root = Path(raw)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            vm_state = root / "vm-created"
+            state = root / "serial-count"
+            fake_gcloud = fake_bin / "gcloud"
+            fake_gcloud.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -Eeuo pipefail\n"
+                "case \" $* \" in\n"
+                "  *' compute regions describe '*) printf '%s\\n' "
+                "'{\"quotas\":[{\"metric\":\"INSTANCES\",\"limit\":\"2\",\"usage\":\"0\"},{\"metric\":\"N2_CPUS\",\"limit\":\"8\",\"usage\":\"0\"}]}' ;;\n"
+                "  *' storage objects describe '*) printf '%s\\n' "
+                "'{\"name\":\"cooking/heph-gcp-cooking-cache.tar.zst\",\"size\":\"1783474345\",\"md5Hash\":\"di95x0b0Yqqt4RTyVUvb6A==\",\"generation\":\"1\"}' ;;\n"
+                "  *' instances create '*) touch \"$GCP_VM_STATE\"; exit 0 ;;\n"
+                "  *' instances describe '*)\n"
+                "    if [[ -f \"$GCP_VM_STATE\" ]]; then printf '%s\\n' '{\"labels\":{\"purpose\":\"hephaestus-kvm-smoke\",\"run_id\":\"'\"$GITHUB_RUN_ID\"'\",\"run_attempt\":\"1\",\"sha\":\"'\"$GITHUB_SHA\"'\"}}'; exit 0; fi\n"
+                "    printf \"The resource 'projects/hephaestus-508000/zones/europe-west1-d/instances/heph-kvm-smoke-%s-1' was not found\\n\" \"$GITHUB_RUN_ID\" >&2; exit 1 ;;\n"
+                "  *' get-serial-port-output '*)\n"
+                "    count=0; [[ -f \"$GCP_SERIAL_STATE\" ]] && count=$(<\"$GCP_SERIAL_STATE\")\n"
+                "    count=$((count + 1)); printf '%s\\n' \"$count\" >\"$GCP_SERIAL_STATE\"\n"
+                "    case \"$count\" in\n"
+                "      1|2) printf '%s\\n' 'HEPHAESTUS_GCP_COOKING: PASS phase=cooking' ;;\n"
+                "      3) printf '%s\\n' 'HEPHAESTUS_GCP_COOKING: PASS phase=cooking'; printf '%s\\n' 'HEPH_GCP_DIAGNOSTICS event=upload status=pass object=gs://private/run.tar.gz'; printf '%s\\n' 'HEPHAESTUS_GCP_COOKING: PASS' ;;\n"
+                "      *) printf '%s\\n' 'HEPHAESTUS_GCP_COOKING: PASS' ;;\n"
+                "    esac\n"
+                "    exit 0 ;;\n"
+                "  *) exit 2 ;;\n"
+                "esac\n",
+                encoding="utf-8",
+            )
+            fake_gcloud.chmod(0o700)
+            fake_sleep = fake_bin / "sleep"
+            fake_sleep.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+            fake_sleep.chmod(0o700)
+            environment = os.environ.copy()
+            environment.update(
+                {
+                    "PATH": f"{fake_bin}:{environment['PATH']}",
+                    "GITHUB_RUN_ID": run_id,
+                    "GITHUB_RUN_ATTEMPT": "1",
+                    "GITHUB_SHA": revision,
+                    "GCP_ZONE": "europe-west1-d",
+                    "GCP_USE_STOCK_IMAGE": "true",
+                    "GCP_SERIAL_STATE": str(state),
+                    "GCP_VM_STATE": str(vm_state),
+                }
+            )
+            result = subprocess.run(
+                [str(SMOKE), "gcp-cooking"],
+                cwd=ROOT.parent,
+                env=environment,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(state.read_text(encoding="utf-8").strip(), "3")
+            self.assertIn("GCE gcp-cooking passed", result.stdout)
+
+    def test_cooking_waits_through_timeout_and_collection_failure(self) -> None:
+        """Timeout and evidence failure still require the outer final marker."""
+
+        run_id = "34599999993"
+        revision = "c" * 40
+        with tempfile.TemporaryDirectory(prefix="heph-gcp-timeout-order-") as raw:
+            root = Path(raw)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            vm_state = root / "vm-created"
+            serial_state = root / "serial-count"
+            fake_gcloud = fake_bin / "gcloud"
+            fake_gcloud.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -Eeuo pipefail\n"
+                "case \" $* \" in\n"
+                "  *' compute regions describe '*) printf '%s\\n' "
+                "'{\"quotas\":[{\"metric\":\"INSTANCES\",\"limit\":\"2\",\"usage\":\"0\"},{\"metric\":\"N2_CPUS\",\"limit\":\"8\",\"usage\":\"0\"}]}' ;;\n"
+                "  *' storage objects describe '*) printf '%s\\n' "
+                "'{\"name\":\"cooking/heph-gcp-cooking-cache.tar.zst\",\"size\":\"1783474345\",\"md5Hash\":\"di95x0b0Yqqt4RTyVUvb6A==\",\"generation\":\"1\"}' ;;\n"
+                "  *' instances create '*) touch \"$GCP_VM_STATE\"; exit 0 ;;\n"
+                "  *' instances describe '*)\n"
+                "    if [[ -f \"$GCP_VM_STATE\" ]]; then exit 0; fi\n"
+                "    printf \"The resource 'projects/hephaestus-508000/zones/europe-west1-d/instances/heph-kvm-smoke-%s-1' was not found\\n\" \"$GITHUB_RUN_ID\" >&2; exit 1 ;;\n"
+                "  *' get-serial-port-output '*)\n"
+                "    count=0; [[ -f \"$GCP_SERIAL_STATE\" ]] && count=$(<\"$GCP_SERIAL_STATE\")\n"
+                "    count=$((count + 1)); printf '%s\\n' \"$count\" >\"$GCP_SERIAL_STATE\"\n"
+                "    case \"$count\" in\n"
+                "      1) printf '%s\\n' 'HEPHAESTUS_GCP_COOKING: FAIL phase=cooking exit=124' ;;\n"
+                "      2) printf '%s\\n' 'HEPHAESTUS_GCP_COOKING: FAIL phase=cooking exit=124'; printf '%s\\n' 'HEPH_GCP_DIAGNOSTICS event=scan status=fail reason=archive-invalid' ;;\n"
+                f"      *) printf '%s\\n' 'HEPHAESTUS_GCP_COOKING: FAIL phase=evidence exit=124 revision={revision}' ;;\n"
+                "    esac\n"
+                "    exit 0 ;;\n"
+                "  *) exit 2 ;;\n"
+                "esac\n",
+                encoding="utf-8",
+            )
+            fake_gcloud.chmod(0o700)
+            fake_sleep = fake_bin / "sleep"
+            fake_sleep.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+            fake_sleep.chmod(0o700)
+            environment = os.environ.copy()
+            environment.update(
+                {
+                    "PATH": f"{fake_bin}:{environment['PATH']}",
+                    "GITHUB_RUN_ID": run_id,
+                    "GITHUB_RUN_ATTEMPT": "1",
+                    "GITHUB_SHA": revision,
+                    "GCP_ZONE": "europe-west1-d",
+                    "GCP_USE_STOCK_IMAGE": "true",
+                    "GCP_SERIAL_STATE": str(serial_state),
+                    "GCP_VM_STATE": str(vm_state),
+                }
+            )
+            result = subprocess.run(
+                [str(SMOKE), "gcp-cooking"],
+                cwd=ROOT.parent,
+                env=environment,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(serial_state.read_text(encoding="utf-8").strip(), "3")
+            self.assertIn("startup smoke reported failure", result.stderr)
+
+    def test_cooking_poll_deadline_exits_without_outer_marker_and_cleanup_remains_available(self) -> None:
+        """An absent outer marker must hit the bound while leaving cleanup usable."""
+
+        run_id = "34599999992"
+        revision = "d" * 40
+        with tempfile.TemporaryDirectory(prefix="heph-gcp-poll-deadline-") as raw:
+            root = Path(raw)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            vm_state = root / "vm-created"
+            date_state = root / "date-count"
+            serial_state = root / "serial-count"
+            fake_gcloud = fake_bin / "gcloud"
+            fake_gcloud.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -Eeuo pipefail\n"
+                "case \" $* \" in\n"
+                "  *' compute regions describe '*) printf '%s\\n' "
+                "'{\"quotas\":[{\"metric\":\"INSTANCES\",\"limit\":\"2\",\"usage\":\"0\"},{\"metric\":\"N2_CPUS\",\"limit\":\"8\",\"usage\":\"0\"}]}' ;;\n"
+                "  *' storage objects describe '*) printf '%s\\n' "
+                "'{\"name\":\"cooking/heph-gcp-cooking-cache.tar.zst\",\"size\":\"1783474345\",\"md5Hash\":\"di95x0b0Yqqt4RTyVUvb6A==\",\"generation\":\"1\"}' ;;\n"
+                "  *' instances create '*) touch \"$GCP_VM_STATE\"; exit 0 ;;\n"
+                "  *' instances describe '*)\n"
+                "    if [[ -f \"$GCP_VM_STATE\" ]]; then printf '%s\\n' '{\"labels\":{\"purpose\":\"hephaestus-kvm-smoke\",\"run_id\":\"'\"$GITHUB_RUN_ID\"'\",\"run_attempt\":\"1\",\"sha\":\"'\"$GITHUB_SHA\"'\"}}'; exit 0; fi\n"
+                "    printf \"The resource 'projects/hephaestus-508000/zones/europe-west1-d/instances/heph-kvm-smoke-%s-1' was not found\\n\" \"$GITHUB_RUN_ID\" >&2; exit 1 ;;\n"
+                "  *' instances delete '*) rm -f \"$GCP_VM_STATE\"; exit 0 ;;\n"
+                "  *' get-serial-port-output '*)\n"
+                "    count=0; [[ -f \"$GCP_SERIAL_STATE\" ]] && count=$(<\"$GCP_SERIAL_STATE\")\n"
+                "    count=$((count + 1)); printf '%s\\n' \"$count\" >\"$GCP_SERIAL_STATE\"\n"
+                "    printf '%s\\n' 'HEPHAESTUS_GCP_COOKING: FAIL phase=cooking exit=1'\n"
+                "    exit 0 ;;\n"
+                "  *) exit 2 ;;\n"
+                "esac\n",
+                encoding="utf-8",
+            )
+            fake_gcloud.chmod(0o700)
+            fake_date = fake_bin / "date"
+            fake_date.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -Eeuo pipefail\n"
+                "if [[ \"${1:-}\" != +%s ]]; then exec /usr/bin/date \"$@\"; fi\n"
+                "count=0; [[ -f \"$GCP_DATE_STATE\" ]] && count=$(<\"$GCP_DATE_STATE\")\n"
+                "count=$((count + 1)); printf '%s\\n' \"$count\" >\"$GCP_DATE_STATE\"\n"
+                "if ((count == 1)); then printf '%s\\n' 1000; elif ((count == 2)); then printf '%s\\n' 1001; else printf '%s\\n' 3401; fi\n",
+                encoding="utf-8",
+            )
+            fake_date.chmod(0o700)
+            fake_sleep = fake_bin / "sleep"
+            fake_sleep.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+            fake_sleep.chmod(0o700)
+            environment = os.environ.copy()
+            environment.update(
+                {
+                    "PATH": f"{fake_bin}:{environment['PATH']}",
+                    "GITHUB_RUN_ID": run_id,
+                    "GITHUB_RUN_ATTEMPT": "1",
+                    "GITHUB_SHA": revision,
+                    "GCP_ZONE": "europe-west1-d",
+                    "GCP_SERIAL_STATE": str(serial_state),
+                    "GCP_DATE_STATE": str(date_state),
+                    "GCP_VM_STATE": str(vm_state),
+                }
+            )
+            result = subprocess.run(
+                [str(SMOKE), "gcp-cooking"],
+                cwd=ROOT.parent,
+                env=environment,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("timed out waiting for the startup gcp-cooking marker", result.stderr)
+            self.assertEqual(serial_state.read_text(encoding="utf-8").strip(), "1")
+            self.assertFalse(vm_state.exists())
+
+            cleanup = subprocess.run(
+                [str(SMOKE), "cleanup"],
+                cwd=ROOT.parent,
+                env=environment,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(cleanup.returncode, 0, cleanup.stdout + cleanup.stderr)
+            self.assertIn("Disposable VM already absent", cleanup.stdout)
+            self.assertFalse(vm_state.exists())
 
     def test_workflow_downloads_and_retains_smoke_diagnostics_after_cleanup(self) -> None:
         workflow = (ROOT.parent / ".github" / "workflows" / "cooking-e2e.yml").read_text(encoding="utf-8")

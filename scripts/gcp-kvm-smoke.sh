@@ -1036,9 +1036,14 @@ PY
   fi
   local pass_marker='HEPHAESTUS_GCP_KVM_SMOKE: PASS'
   local fail_marker='HEPHAESTUS_GCP_KVM_SMOKE: FAIL .*'
+  # gcp-cooking-run emits a provisional FAIL before the startup EXIT trap
+  # collects and uploads diagnostics.  The outer startup final failure marker
+  # includes the verified revision, so it is the authoritative terminal
+  # result and cannot be confused with the workload's provisional marker.
+  local cooking_final_fail_marker=''
   if [[ "$mode" == gcp-cooking ]]; then
     pass_marker='HEPHAESTUS_GCP_COOKING: PASS'
-    fail_marker='HEPHAESTUS_GCP_COOKING: FAIL .*'
+    cooking_final_fail_marker='HEPHAESTUS_GCP_COOKING: FAIL phase=[A-Za-z0-9_-]+ exit=[0-9]+ revision=[0-9a-f]{40}'
   fi
   marker_matches() {
     local body="$1" output="$2"
@@ -1080,7 +1085,12 @@ PY
       report_serial_failure_context "$serial"
       die 'diagnostic evidence pipeline failed'
     fi
-    if marker_matches "$fail_marker" "$serial"; then
+    if [[ "$mode" == gcp-cooking ]]; then
+      if marker_matches "$cooking_final_fail_marker" "$serial"; then
+        report_serial_failure_context "$serial"
+        die 'startup smoke reported failure'
+      fi
+    elif marker_matches "$fail_marker" "$serial"; then
       report_serial_failure_context "$serial"
       die 'startup smoke reported failure'
     fi
