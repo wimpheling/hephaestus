@@ -421,7 +421,7 @@ _download_diagnostics() {
   local destination="${GCP_DIAGNOSTICS_ARCHIVE:-${RUNNER_TEMP:-/tmp}/gcp-diagnostics.tar.gz}"
   local status_path="${GCP_DIAGNOSTICS_STATUS:-${RUNNER_TEMP:-/tmp}/gcp-diagnostics-status.json}"
   local extract_root="${destination}.extract" output digest archive_bytes download_timeout
-  local phase_timing_status='not-applicable' phase_timing_object phase_timing_destination
+  local phase_timing_status='not-applicable' phase_timing_error='' phase_timing_object phase_timing_destination
   local expected_mode="${GCP_DIAGNOSTICS_EXPECT_MODE:-}"
   local expected_gate_script_sha256="${GCP_DIAGNOSTICS_EXPECT_GATE_SCRIPT_SHA256:-}"
   local expectation_file="${RUNNER_TEMP:-/tmp}/gcp-diagnostics-gate-expectation"
@@ -608,6 +608,8 @@ PYGATE
     return 1
   fi
   if [[ "$expected_mode" == gcp-cooking && "${GCP_EXPECT_PHASE_TIMING:-false}" == true ]]; then
+    # Timing is required for acceptance, but a missing or invalid projection
+    # must not discard the archive scan and triage already completed above.
     phase_timing_object="${object%.tar.gz}.phase-timing.json"
     phase_timing_destination="${GCP_PHASE_TIMING_PROJECTION:-${RUNNER_TEMP:-/tmp}/gcp-cooking-phase-timing.json}"
     rm -f -- "$phase_timing_destination"
@@ -615,15 +617,15 @@ PYGATE
         "gs://${DIAGNOSTICS_BUCKET}/${phase_timing_object}" "$phase_timing_destination" \
         --project="$PROJECT_ID" --billing-project="$PROJECT_ID" --quiet >/dev/null 2>&1; then
       diagnostics_download_error='phase-timing-download-failed'
-      return 1
-    fi
-    if [[ ! -f "$phase_timing_destination" || -L "$phase_timing_destination" ]] ||
+      phase_timing_status='unavailable'
+      phase_timing_error="$diagnostics_download_error"
+    elif [[ ! -f "$phase_timing_destination" || -L "$phase_timing_destination" ]] ||
         (( $(stat -c '%s' "$phase_timing_destination") > 65536 )); then
       diagnostics_download_error='phase-timing-too-large'
-      return 1
-    fi
-    chmod 0600 "$phase_timing_destination"
-    if ! python3 -B "$PHASE_TIMING_SCRIPT" validate-projection \
+      phase_timing_status='unavailable'
+      phase_timing_error="$diagnostics_download_error"
+    elif ! chmod 0600 "$phase_timing_destination" ||
+      ! python3 -B "$PHASE_TIMING_SCRIPT" validate-projection \
         --path "$phase_timing_destination" \
         --expected-run-id "$diagnostics_source_run_id" \
         --expected-attempt "$diagnostics_source_attempt" \
@@ -639,16 +641,18 @@ PYGATE
         --require-workload-phase database-tests --require-workload-phase browser-initial \
         --require-workload-phase browser-post-operation >/dev/null; then
       diagnostics_download_error='phase-timing-invalid'
-      return 1
+      phase_timing_status='unavailable'
+      phase_timing_error="$diagnostics_download_error"
+    else
+      phase_timing_status='passed'
     fi
-    phase_timing_status='passed'
   fi
-  if ! python3 - "$status_path" "$triage_path" "$DIAGNOSTICS_BUCKET" "$object" "$archive_bytes" "$digest" "$extract_root/cooking-diagnostics/manifest.json" "$phase_timing_status" <<'PY'
+  if ! python3 - "$status_path" "$triage_path" "$DIAGNOSTICS_BUCKET" "$object" "$archive_bytes" "$digest" "$extract_root/cooking-diagnostics/manifest.json" "$phase_timing_status" "$phase_timing_error" <<'PY'
 import json
 from pathlib import Path
 import sys
 
-status_path, triage_path, bucket, object_name, archive_bytes, digest, manifest, phase_timing = sys.argv[1:]
+status_path, triage_path, bucket, object_name, archive_bytes, digest, manifest, phase_timing, phase_timing_error = sys.argv[1:]
 triage = json.loads(Path(triage_path).read_text(encoding="utf-8"))
 if not isinstance(triage, dict) or triage.get("schema") != 1:
     raise SystemExit("triage projection has an invalid schema")
@@ -666,6 +670,8 @@ status = {
 }
 if phase_timing != "not-applicable":
     status["phaseTiming"] = phase_timing
+if phase_timing_error:
+    status["error"] = phase_timing_error
 Path(status_path).write_text(json.dumps(status, separators=(",", ":")) + "\n", encoding="utf-8")
 PY
   then
@@ -719,7 +725,10 @@ if gate_validation == "passed" and gate_path.is_file():
 status["gateValidation"] = gate_validation
 status["gateAcceptance"] = "passed" if accepted else "failed"
 if not accepted:
-    status["error"] = "gate-results-acceptance-failed"
+    if "error" in status:
+        status["gateAcceptanceError"] = "gate-results-acceptance-failed"
+    else:
+        status["error"] = "gate-results-acceptance-failed"
 Path(status_path).write_text(json.dumps(status, separators=(",", ":")) + "\n", encoding="utf-8")
 raise SystemExit(0 if accepted else 1)
 PYGATE_ACCEPT
@@ -727,6 +736,10 @@ PYGATE_ACCEPT
       diagnostics_download_error='gate-results-acceptance-failed'
       return 1
     fi
+  fi
+  if [[ -n "$phase_timing_error" ]]; then
+    # The detailed status is already durable; keep the timing gate failed.
+    return 1
   fi
   diagnostics_triage_state='passed'
   printf 'HEPH_GCP_DIAGNOSTICS event=triage status=pass\n'
@@ -801,7 +814,13 @@ if value.get("upload") != "verified-by-download":
 if value.get("download") != "passed" or value.get("scan") != "passed":
     raise SystemExit(1)
 if os.environ.get("GCP_EXPECT_PHASE_TIMING") == "true" and value.get("phaseTiming") != "passed":
-    raise SystemExit(1)
+    timing_failure = {
+        "phase-timing-download-failed",
+        "phase-timing-too-large",
+        "phase-timing-invalid",
+    }
+    if value.get("phaseTiming") != "unavailable" or value.get("error") not in timing_failure:
+        raise SystemExit(1)
 triage = value.get("triage")
 if isinstance(triage, dict):
     if triage.get("schema") != 1:
