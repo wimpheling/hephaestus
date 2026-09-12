@@ -59,6 +59,8 @@ fi
 readonly script_dir repo_root cooking_root tmp_root libkrun_tmp_root python_image rust_builder_image timeout_seconds diagnostics_dir
 phase_timing_path="${HEPH_GCP_PHASE_TIMING_PATH:-}"
 phase_timing_source_sha="${HEPH_GCP_PHASE_TIMING_SOURCE_SHA:-}"
+phase_timing_run_id="${HEPH_GCP_PHASE_TIMING_RUN_ID:-${GITHUB_RUN_ID:-manual}}"
+phase_timing_attempt="${HEPH_GCP_PHASE_TIMING_ATTEMPT:-${GITHUB_RUN_ATTEMPT:-1}}"
 if [[ -n "${phase_timing_path}" && -z "${phase_timing_source_sha}" ]]; then
     phase_timing_source_sha="$(git -C "${repo_root}" rev-parse HEAD)"
 fi
@@ -71,8 +73,8 @@ phase_timing_start() {
     [[ -n "$source_sha" ]] || source_sha="$(git -C "$repo_root" rev-parse HEAD)"
     python3 "$repo_root/scripts/gcp_phase_timing.py" start \
         --path "$phase_timing_path" --phase "$name" --trust workload \
-        --clock-domain workload --run-id "${GITHUB_RUN_ID:-manual}" \
-        --attempt "${GITHUB_RUN_ATTEMPT:-1}" --source-sha "$source_sha"
+        --clock-domain workload --run-id "$phase_timing_run_id" \
+        --attempt "$phase_timing_attempt" --source-sha "$source_sha"
     phase_timing_open="$name"
 }
 
@@ -83,8 +85,8 @@ phase_timing_end() {
     [[ -n "$source_sha" ]] || source_sha="$(git -C "$repo_root" rev-parse HEAD)"
     python3 "$repo_root/scripts/gcp_phase_timing.py" end \
         --path "$phase_timing_path" --phase "$name" --trust workload \
-        --clock-domain workload --run-id "${GITHUB_RUN_ID:-manual}" \
-        --attempt "${GITHUB_RUN_ATTEMPT:-1}" --source-sha "$source_sha" --outcome "$outcome"
+        --clock-domain workload --run-id "$phase_timing_run_id" \
+        --attempt "$phase_timing_attempt" --source-sha "$source_sha" --outcome "$outcome"
     phase_timing_open=''
 }
 
@@ -269,13 +271,40 @@ run_cooking() {
     HEPHAESTUS_LIBKRUN_RUST_BUILDER_IMAGE="${rust_builder_image}" \
     HEPH_GCP_PHASE_TIMING_PATH="${phase_timing_path}" \
     HEPH_GCP_PHASE_TIMING_SOURCE_SHA="${phase_timing_source_sha}" \
-    HEPH_GCP_PHASE_TIMING_RUN_ID="${GITHUB_RUN_ID:-manual}" \
-    HEPH_GCP_PHASE_TIMING_ATTEMPT="${GITHUB_RUN_ATTEMPT:-1}" \
+    HEPH_GCP_PHASE_TIMING_RUN_ID="${phase_timing_run_id}" \
+    HEPH_GCP_PHASE_TIMING_ATTEMPT="${phase_timing_attempt}" \
         bash -Eeuo pipefail -c '
             timing_helper="$4"
             phase_timing_open=""
             workload_stage=initialization
+            workload_detail_stage=workload-boundary
+            workload_detail_active=0
             workload_failure_emitted=0
+            workload_detail_stage_start() {
+                case "$1" in
+                    timing-helper-start|preflight-command-checks|rustup-target|cargo-build|timing-helper-end|gateway-invocation) ;;
+                    *) return 1 ;;
+                esac
+                workload_detail_stage="$1"
+                workload_detail_active=1
+                printf "HEPH_GCP_COOKING event=workload-step operation=cooking-workload phase=cooking stage=%s status=start\\n" "$workload_detail_stage"
+            }
+            workload_detail_stage_pass() {
+                local stage="$1"
+                case "$stage" in
+                    timing-helper-start|preflight-command-checks|rustup-target|cargo-build|timing-helper-end|gateway-invocation) ;;
+                    *) return 1 ;;
+                esac
+                printf "HEPH_GCP_COOKING event=workload-step operation=cooking-workload phase=cooking stage=%s status=passed\\n" "$stage"
+                workload_detail_active=0
+            }
+            workload_detail_stage_fail() {
+                local status="$1"
+                ((workload_detail_active == 1)) || return 0
+                if ((status > 255)); then status=255; fi
+                printf "HEPH_GCP_COOKING event=workload-step operation=cooking-workload phase=cooking stage=%s status=failed exit_code=%s\\n" "$workload_detail_stage" "$status"
+                workload_detail_active=0
+            }
             workload_step_start() {
                 case "$1" in
                     dependency-setup|project-build|gateway-e2e) ;;
@@ -284,13 +313,17 @@ run_cooking() {
                 workload_stage="$1"
                 printf "HEPH_GCP_COOKING event=workload-step operation=cooking-workload phase=cooking stage=%s status=start\\n" "$workload_stage"
                 if [[ "$workload_stage" != gateway-e2e ]]; then
+                    workload_detail_stage_start timing-helper-start
                     phase_timing_start "$workload_stage"
+                    workload_detail_stage_pass timing-helper-start
                 fi
             }
             workload_step_pass() {
                 local step="$1"
                 if [[ "$step" != gateway-e2e ]]; then
+                    workload_detail_stage_start timing-helper-end
                     phase_timing_end "$step" passed
+                    workload_detail_stage_pass timing-helper-end
                 fi
                 printf "HEPH_GCP_COOKING event=workload-step operation=cooking-workload phase=cooking stage=%s status=passed\\n" "$step"
             }
@@ -301,6 +334,7 @@ run_cooking() {
                 workload_failure_emitted=1
                 if ((status > 255)); then status=255; fi
                 printf "HEPH_GCP_COOKING event=workload-step operation=cooking-workload phase=cooking stage=%s status=failed exit_code=%s\\n" "$workload_stage" "$status"
+                workload_detail_stage_fail "$status"
             }
             phase_timing_start() {
                 local name="$1"
@@ -328,23 +362,37 @@ run_cooking() {
                 if [[ -n "$phase_timing_open" ]]; then
                     if ((status == 124)); then outcome=timed-out; fi
                     if ((status == 130 || status == 143)); then outcome=cancelled; fi
-                    phase_timing_end "$phase_timing_open" "$outcome" || true
+                    workload_detail_stage_start timing-helper-end
+                    if phase_timing_end "$phase_timing_open" "$outcome"; then
+                        workload_detail_stage_pass timing-helper-end
+                    else
+                        timing_status=$?
+                        workload_detail_stage_fail "$timing_status"
+                    fi
                 fi
                 exit "$status"
             }
             trap '\''workload_failure "$?"'\'' ERR
             trap phase_timing_finish EXIT
             workload_step_start dependency-setup
+            workload_detail_stage_start preflight-command-checks
             "$1/preflight.sh"
+            workload_detail_stage_pass preflight-command-checks
             workload_step_pass dependency-setup
             cd -- "$2/cooking-gateway"
             workload_step_start project-build
+            workload_detail_stage_start rustup-target
             rustup target add x86_64-unknown-linux-musl
+            workload_detail_stage_pass rustup-target
+            workload_detail_stage_start cargo-build
             cargo build --locked --offline --release --target x86_64-unknown-linux-musl
+            workload_detail_stage_pass cargo-build
             workload_step_pass project-build
             cd -- "$3/.."
             workload_step_start gateway-e2e
+            workload_detail_stage_start gateway-invocation
             "$3/run-gateway-libkrun-e2e.sh"
+            workload_detail_stage_pass gateway-invocation
             workload_step_pass gateway-e2e
         ' -- "${script_dir}" "${cooking_root}" "${repo_root}/scripts" \
         "${repo_root}/scripts/gcp_phase_timing.py"
