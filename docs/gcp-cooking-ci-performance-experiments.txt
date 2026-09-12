@@ -154,7 +154,22 @@ PREPARED BASELINE
 ID: cold-gcp-pr-sandbox-baseline
 Hypothesis: Establish one cold disposable-GCP timing baseline for the
 instrumented trusted same-repository PR sandbox before testing a performance
-change.
+change. This run has no intended performance change; it should establish the
+complete correctness and phase-timing reference against which one-change
+experiments can later be compared. The previous dispatch failed in image
+startup preflight before VM creation and therefore does not test this
+hypothesis.
+Prerequisites: the controller and timing foundation from merged PR #19, the
+runtime compatibility fix on `main` (PR #21), and the private Podman store
+visibility fix (PR #22) must all be present in the trusted `main` workflow
+before dispatch. The protected image, immutable cache, zone, machine type,
+disk size and concurrency remain unchanged; no image, IAM/WIF or cache
+mutation is part of this baseline. The open PR #20 workload must be rebased
+onto the resulting `main` and its exact head SHA supplied to the controller.
+Standing authorization: the user explicitly authorized all GCP runs required
+for this task, so no additional per-run approval is required. Do not retry a
+paid failure automatically; a valid baseline remains required before any
+candidate experiment.
 Baseline (locked environment): source SHA is the exact open PR head supplied
 as `pr_head_sha` at dispatch and recorded by the trusted controller; no
 measured run exists yet. Use protected image
