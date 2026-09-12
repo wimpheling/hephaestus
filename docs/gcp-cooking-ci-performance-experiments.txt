@@ -211,21 +211,30 @@ used trusted controller SHA
 `7db6ac55bb64648159a86dfc08626a516dd8b27d2` with the same locked image,
 cache, machine, disk, zone and concurrency. Quota and cache preflight passed;
 VM creation passed in `33847` ms. Startup passed the protected image,
-`workflow-images`, and all preceding startup phases, then stopped at the
-`metadata-guard` phase. The authoritative controller projection records
+`workflow-images`, `metadata-guard`, `browser-host`, and the second
+`metadata-guard` check, then entered the Cooking workload. The delegated
+`examples/cooking/run.sh` exited with status `1`; its generic shell-failure
+handler recorded line `344`. The authoritative controller projection records
 `vm-wait` failed after `167456` ms; VM deletion took `54129` ms and cleanup
 verification passed with the owned VM explicitly absent.
 
 The original post-delete diagnostics download reached the private object and
 recorded `upload=verified-by-download` and `download=passed`, but failed closed
 because the expected Cooking phase-timing projection was missing; its scan was
-therefore not run. No-VM [diagnostics triage run 34703036967](https://github.com/wimpheling/hephaestus/actions/runs/34703036967)
+therefore not run. The controller did pass
+`HEPH_GCP_PHASE_TIMING_PATH` to the delegated workload, but the retained
+manifest contains no `phase-timing` source record or source rejection; its
+projected runtime-structured status only reports that timing as unavailable.
+The status artifact's explicit error was `phase-timing-download-failed`.
+No-VM [diagnostics triage run 34703036967](https://github.com/wimpheling/hephaestus/actions/runs/34703036967)
+and encrypted [triage run 34703564724](https://github.com/wimpheling/hephaestus/actions/runs/34703564724)
 validated the private bundle and evidence scan, but recorded a Cooking
-workload exit `1` at `cooking-run` line `344`, a missing/invalid browser report
-and failed gate acceptance. Authoritative test counts and workload timings
-were unavailable. This is infrastructure/workload failure evidence, not a
-performance result: no ACCEPTED or REJECTED decision is recorded, and the
-prepared baseline remains pending a valid run.
+workload exit `1` at the generic shell handler line `344`, a missing/invalid
+browser report and failed gate acceptance. The encrypted bundle retained no
+inner preflight stderr or narrower workload error. Authoritative test counts
+and workload timings are unavailable. This is infrastructure/workload failure
+evidence, not a performance result: no ACCEPTED or REJECTED decision is
+recorded, and the prepared baseline remains pending a valid run.
 
 ACCEPTED
 ========
