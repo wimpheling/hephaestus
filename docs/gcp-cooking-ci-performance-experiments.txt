@@ -161,10 +161,8 @@ measured run exists yet. Use protected image
 `hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d`, machine type
 `n2-standard-8`, `150 GB pd-balanced` disk, zone `europe-west1-d`,
 concurrency `1`, and cache generation `1789079827867335` with archive size
-`1783474345` bytes. The controller script
-`scripts/gcp-kvm-smoke.sh` has SHA-256
-`2ad39e50e4877d9308efdd192f4b6febca858ee77b3e1a8542a1838378a4a0f6` as
-measured from the checked-in script.
+`1783474345` bytes. The read-only cache archive SHA-256 is
+`0ed20efcc1aa019b79405d1eed626b13d4702019e9ceeba2bdde54e45ae29296`.
 Candidate: none before this baseline; the baseline and candidate will use the
 same reviewed same-repository PR sandbox and locked environment.
 Controlled variable: none. No implementation or performance change is made
