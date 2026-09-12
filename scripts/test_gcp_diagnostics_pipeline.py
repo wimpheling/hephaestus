@@ -1998,10 +1998,21 @@ PY
                 "missing_count=1 missing_phases=browser-setup\n",
                 encoding="utf-8",
             )
+            evidence = root / "test-output.log"
+            evidence.write_text("PASS\n", encoding="utf-8")
             bundle = root / "bundle"
-            self.assertEqual(COLLECTOR.collect(bundle, [f"serial={source}"], None, None, None), 0)
+            self.assertEqual(
+                COLLECTOR.collect(bundle, [f"serial={source}", f"test-output={evidence}"], None, None, None), 0
+            )
             projected = (bundle / "sources" / "serial").read_text(encoding="utf-8")
-            self.assertEqual(projected, source.read_text(encoding="utf-8"))
+            self.assertEqual(
+                projected,
+                "HEPH_GCP_DIAGNOSTICS event=phase-timing status=unavailable "
+                "failed_stage=projection reason_class=missing-phase "
+                "failed_phase=none failed_clock_domain=none failed_occurrence=0 "
+                "available_count=2 available_phases=dependency-setup,project-build "
+                "missing_count=1 missing_phases=browser-setup\n",
+            )
             timing = TRIAGE.summarize(bundle)["phaseTiming"]
             self.assertEqual(
                 timing,
@@ -2009,6 +2020,9 @@ PY
                     "status": "unavailable",
                     "failedStage": "projection",
                     "reasonClass": "missing-phase",
+                    "failedPhase": "none",
+                    "failedClockDomain": "none",
+                    "failedOccurrence": 0,
                     "availablePhases": ["dependency-setup", "project-build"],
                     "missingPhases": ["browser-setup"],
                     "availableCount": 2,
@@ -2031,12 +2045,68 @@ PY
                 "missing_count=0 missing_phases=none\n",
                 encoding="utf-8",
             )
+            evidence = root / "test-output.log"
+            evidence.write_text("PASS\n", encoding="utf-8")
             bundle = root / "bundle"
-            self.assertEqual(COLLECTOR.collect(bundle, [f"serial={source}"], None, None, None), 0)
+            self.assertEqual(
+                COLLECTOR.collect(bundle, [f"serial={source}", f"test-output={evidence}"], None, None, None), 0
+            )
             timing = TRIAGE.summarize(bundle)["phaseTiming"]
             self.assertEqual(timing["availableCount"], len(all_phases))
             self.assertEqual(timing["availablePhases"], all_phases)
             self.assertEqual(timing["missingPhases"], [])
+
+    def test_phase_timing_pair_diagnostics_survive_collector_and_triage(self):
+        """Pair-validation classes remain fixed after both safe projections."""
+
+        for reason in ("incomplete", "ordering", "duplicate", "trust", "clock-domain"):
+            with self.subTest(reason=reason), tempfile.TemporaryDirectory(
+                prefix="heph-gcp-phase-timing-pair-diagnostic-"
+            ) as directory:
+                root = Path(directory)
+                marker = (
+                    "HEPH_GCP_DIAGNOSTICS event=phase-timing status=unavailable "
+                    f"failed_stage=supervisor-validation reason_class={reason} "
+                    "failed_phase=none failed_clock_domain=none failed_occurrence=0 "
+                    "available_count=1 available_phases=project-build "
+                    "missing_count=0 missing_phases=none\n"
+                )
+                source = root / "serial.log"
+                source.write_text(marker, encoding="utf-8")
+                evidence = root / "test-output.log"
+                evidence.write_text("PASS\n", encoding="utf-8")
+                bundle = root / "bundle"
+                self.assertEqual(
+                    COLLECTOR.collect(bundle, [f"serial={source}", f"test-output={evidence}"], None, None, None),
+                    0,
+                )
+                self.assertEqual(
+                    TRIAGE.summarize(bundle)["phaseTiming"]["reasonClass"],
+                    reason,
+                )
+
+    def test_phase_timing_diagnostic_preserves_legacy_context_and_rejects_partial_context(self):
+        legacy = (
+            "HEPH_GCP_DIAGNOSTICS event=phase-timing status=unavailable "
+            "failed_stage=supervisor-validation reason_class=incomplete "
+            "available_count=1 available_phases=project-build "
+            "missing_count=0 missing_phases=none"
+        )
+        expected = (
+            "HEPH_GCP_DIAGNOSTICS event=phase-timing status=unavailable "
+            "failed_stage=supervisor-validation reason_class=incomplete "
+            "failed_phase=none failed_clock_domain=none failed_occurrence=0 "
+            "available_count=1 available_phases=project-build missing_count=0 missing_phases=none"
+        )
+        self.assertEqual(COLLECTOR._project_phase_timing_diagnostic(legacy), expected)
+        exact = legacy.replace(
+            "available_count=1",
+            "failed_phase=project-build failed_clock_domain=workload failed_occurrence=2 available_count=1",
+        )
+        self.assertEqual(COLLECTOR._project_phase_timing_diagnostic(exact), exact)
+        partial = exact.replace("failed_clock_domain=workload", "failed_clock_domain=none")
+        with self.assertRaises(COLLECTOR.CollectionError):
+            COLLECTOR._project_phase_timing_diagnostic(partial)
 
     def test_phase_timing_diagnostic_rejects_unknown_payload_duplicate_and_count(self):
         """Both projection layers reject unallowlisted timing diagnostic fields."""
