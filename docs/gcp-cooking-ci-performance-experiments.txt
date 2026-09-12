@@ -57,12 +57,11 @@ Implementation foundation (unreleased)
 - `scripts/gcp_phase_timing.py` records bounded start/end JSONL records using
   monotonic clocks and fixed phase, trust, provenance, cache and metric enums.
   Supervisor timings are authoritative for measurement; workload timings are
-  explicitly informational. The working tree contains private projection and
-  final-sidecar wiring for archive, evidence scanning and upload; post-delete
-  download is configured to validate the sidecar only after VM absence and
-  retain the safe projection for one day. End-to-end sidecar generation and
-  download still require final correction and live GCP validation; no
-  performance improvement is claimed.
+  explicitly informational. Trusted startup rereads the current supervisor
+  records after archive, evidence scanning and upload to create the final
+  private sidecar; post-delete download validates it only after VM absence and
+  retains the safe projection for one day. End-to-end GCP validation remains
+  pending; no performance improvement is claimed.
 - Root-side runtime commands reset `PATH` to root-owned system directories;
   the forge-writable cargo bin is passed only into workload units. PR units
   bind a private per-run runtime directory at `/run/user/10001` so host user
