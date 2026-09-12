@@ -785,6 +785,44 @@ timing-domain validation path; PR #38
 (`8bb067281e62d3f20c55aeb056dadeed47f01cd1`) carries the fix and must be
 merged and checked before another full GCP run.
 
+
+NEXT PREPARED COMPLETE COLD-GCP BASELINE AFTER PR #38
+======================================================
+Preparation revision: trusted `main` now contains merged PR #38 at exact SHA
+`9a2e741eade54bd52717d2de8bdb41e9cf9b1c34`. PR #38 fixes both observed
+failures in the previous baseline attempt: the final workload timing
+validation now accepts the producer's actual `workload-libkrun` domain, and
+post-delete timing retrieval revalidates the retained phase allowlist. The
+real local producer-to-startup-to-collector-to-controller-to-summarizer
+lifecycle passed with `287` Python tests and the final quality gate passed
+with exit `0`. This justifies one new baseline measurement without changing
+the workload or performance candidate.
+
+Hypothesis and acceptance: rerun the unchanged cold disposable-GCP workload
+to obtain the first valid timing baseline after the two instrumentation-path
+fixes. Keep the host `project-build` compile enabled and the Cooking OCI
+worker at `1` vCPU with `2048` MiB memory. Accept the baseline only when the
+Cooking, browser, golden, PostgreSQL, scanner, marker, provenance, complete
+timing, gate and verified post-delete cleanup requirements all pass. A
+passing workload without a complete trusted timing projection remains
+diagnostic evidence and yields no performance result.
+
+Selected workload: PR #20, same repository ID `1312377552`; the controller
+must receive and validate the exact open PR head SHA immediately before
+dispatch, and the dispatched SHA will be recorded with the terminal run.
+The prior ledger head `7be640ee38711c116394c743ce88c31e0ab58561` is not
+assumed to remain the selected head after this preparation is pushed.
+
+Locked environment and controls: protected image
+`hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d`, immutable cache
+generation `1789079827867335`, `n2-standard-8`, `150 GB pd-balanced`,
+`europe-west1-d`, one VM, 45-minute provider DELETE and 50-minute workflow
+timeout. Keep cache, image, IAM/WIF, machine, disk, zone, concurrency,
+acceptance and workload inputs unchanged. No CPU candidate or unused-host
+build removal is part of this baseline. Rollback is no code or infrastructure
+change; retain the diagnostic record if any required gate or timing artifact
+fails. This is exactly one authorized full baseline dispatch with no retry.
+
 ACCEPTED
 ========
 None yet.
