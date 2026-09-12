@@ -84,6 +84,7 @@ fail() { printf 'gcp-cooking-run: %s\n' "$*" >&2; return 1; }
 
 runtime_phase_timing_outcome() {
     case "$1" in
+        0) printf '%s\n' passed ;;
         124) printf '%s\n' timed-out ;;
         130|143) printf '%s\n' cancelled ;;
         *) printf '%s\n' failed ;;
@@ -370,7 +371,7 @@ runtime_phase_timing_end() {
     --clock-domain guest-runtime --run-id "${HEPH_GCP_RUN_ID:-manual}" \
     --attempt "${GITHUB_RUN_ATTEMPT:-1}" --occurrence "$occurrence" \
         --source-sha "${gate_results_revision:-}" --outcome "$outcome" \
-        --image-fingerprint "$runtime_phase_timing_image_fingerprint" "${cache_args[@]}"
+        --image-fingerprint "$runtime_phase_timing_image_fingerprint" "${cache_args[@]}" || return
     runtime_phase_timing_open=''
 }
 
@@ -382,6 +383,17 @@ phase_start() {
 phase_pass() {
     printf 'HEPH_GCP_COOKING event=phase-pass phase=%s\n' "$phase"
     runtime_phase_timing_end passed
+}
+phase_complete() {
+    local exit_code="$1" outcome
+    outcome="$(runtime_phase_timing_outcome "$exit_code")"
+    runtime_phase_timing_end "$outcome" || return
+    if ((exit_code == 0)); then
+        printf 'HEPH_GCP_COOKING event=phase-pass phase=%s\n' "$phase"
+    else
+        printf 'HEPH_GCP_COOKING event=phase-result phase=%s status=%s exit_code=%s\n' \
+            "$phase" "$outcome" "$exit_code"
+    fi
 }
 require_command() { command -v "$1" >/dev/null 2>&1 || fail "missing command: $1"; }
 
@@ -1036,6 +1048,10 @@ workload_result='passed'
 ((status == 0)) || workload_result='failed'
 printf 'HEPH_GCP_COOKING event=workload-result operation=cooking-workload phase=cooking status=%s exit_code=%s\n' \
     "$workload_result" "$status"
+# Timing is diagnostic; preserve the workload result when its end record cannot
+# be written. Startup will reject the resulting incomplete timing collection.
+phase_complete "$status" ||
+    printf 'HEPH_GCP_COOKING event=phase-timing status=unavailable phase=cooking reason=timing-helper-end-failed\n' >&2
 workload_gate_state='failed'
 workload_reason_class='workload-failed'
 if ((status == 0)); then
