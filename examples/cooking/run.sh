@@ -101,6 +101,19 @@ phase_timing_finish_open() {
     phase_timing_end "$phase_timing_open" "$outcome" || true
 }
 
+# Bash can run an EXIT trap with status zero after a direct signal. Convert
+# TERM and INT to their conventional exit codes first so the
+# timing record and the caller preserve cancellation as cancelled.
+cooking_signal_exit() {
+    case "$1" in
+        TERM) exit 143 ;;
+        INT) exit 130 ;;
+        *) exit 1 ;;
+    esac
+}
+trap 'cooking_signal_exit TERM' TERM
+trap 'cooking_signal_exit INT' INT
+
 # The deadline includes the browser fixture bootstrap as well as the joined
 # cooking run.  This keeps dependency installation from consuming an
 # unbounded amount of time before the VM timeout starts.
@@ -372,6 +385,15 @@ run_cooking() {
                 fi
                 exit "$status"
             }
+            workload_signal_exit() {
+                case "$1" in
+                    TERM) exit 143 ;;
+                    INT) exit 130 ;;
+                    *) exit 1 ;;
+                esac
+            }
+            trap '\''workload_signal_exit TERM'\'' TERM
+            trap '\''workload_signal_exit INT'\'' INT
             trap '\''workload_failure "$?"'\'' ERR
             trap phase_timing_finish EXIT
             workload_step_start dependency-setup
