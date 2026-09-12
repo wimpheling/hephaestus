@@ -60,6 +60,7 @@ workload_home='/home/forge'
 workload_cargo_home='/home/forge/.cargo'
 workload_rustup_home='/home/forge/.rustup'
 workload_npm_cache=''
+workflow_image_sandbox_args=()
 gate_results_initialized=false
 gate_results_write_failed=false
 runtime_phase_timing_script="${HEPH_GCP_PHASE_TIMING_SCRIPT:-}"
@@ -117,6 +118,12 @@ configure_pr_sandbox() {
         "--property=BindPaths=$pr_runtime:/run/user/10001"
         "--property=ReadWritePaths=$checkout_root $evidence_root $pr_state_root"
         '--property=InaccessiblePaths=/var/log/hephaestus /run/hephaestus /root'
+    )
+    # Trusted image import must use the same private Podman runtime namespace
+    # that the later PR workload receives. The import still runs before any
+    # PR-controlled setup starts.
+    workflow_image_sandbox_args=(
+        "--property=BindPaths=$pr_runtime:/run/user/10001"
     )
 }
 
@@ -542,6 +549,11 @@ mv -- "$stage_root" "$cache_root"
 stage_root=''
 phase_pass
 
+if [[ "$workload_trust" == untrusted-pr ]]; then
+    # Configure the private HOME/runtime before trusted image import so the
+    # rootless Podman store is visible to the later PR workload.
+    configure_pr_sandbox
+fi
 phase_start workflow-images
 # Convert the relocatable bundle workflow to the absolute paths expected by
 # preflight.sh and the Rust provisioning helper, without changing references.
@@ -582,8 +594,10 @@ run_with_deadline systemd-run --unit="heph-gcp-cooking-images-${HEPH_GCP_RUN_ID:
     --property=CPUAccounting=yes --property=MemoryAccounting=yes \
     --property=TasksAccounting=yes --property=IOAccounting=yes \
     --uid="$forge_uid" --gid="$forge_gid" \
-    --working-directory="$checkout_root" --setenv=HOME=/home/forge \
+    --working-directory="$checkout_root" --setenv=HOME="$workload_home" \
+    --setenv=XDG_DATA_HOME="$workload_home/.local/share" \
     --setenv=XDG_RUNTIME_DIR=/run/user/10001 --setenv=PATH="$workload_path" \
+    "${workflow_image_sandbox_args[@]}" \
     /bin/bash -Eeuo pipefail -c '
         mkdir -p -m 700 /tmp/hephaestus-libkrun
         candidate="/sys/fs/cgroup$(awk -F: '\''$1 == "0" { print $3 }'\'' /proc/self/cgroup)"
@@ -700,7 +714,6 @@ EOF
     # trust boundary.
     [[ "$runner_image_verified" == true ]] ||
         fail 'PR workload requires a verified runner image with browser dependencies preinstalled'
-    configure_pr_sandbox
 fi
 
 phase_start browser-host
@@ -835,6 +848,7 @@ timeout --kill-after=30s "${cooking_remaining}s" systemd-run \
     "${pr_sandbox_args[@]}" \
     --property=LimitNOFILE=65536 --uid="$forge_uid" --gid="$forge_gid" \
     --working-directory="$checkout_root" --setenv=HOME="$workload_home_value" \
+    --setenv=XDG_DATA_HOME="$workload_home_value/.local/share" \
     --setenv=XDG_RUNTIME_DIR=/run/user/10001 --setenv=RUSTUP_HOME="$workload_rustup_home_value" \
     --setenv=CARGO_HOME="$workload_cargo_home_value" --setenv=TMPDIR=/tmp/hephaestus-libkrun \
     --setenv=HEPHAESTUS_LIBKRUN_TMP_ROOT=/tmp/hephaestus-libkrun \

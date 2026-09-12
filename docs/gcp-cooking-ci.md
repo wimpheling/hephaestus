@@ -646,6 +646,12 @@ files, `/root`, and the trusted runtime paths are inaccessible. Private
 per-run state supplies `HOME` and the npm cache. The baked Rust toolchain and
 `/home/forge/.cargo` are the only writable host tool paths exposed to the
 workload; `/home/forge/.rustup` and the baked browser directory are read-only.
+Trusted workflow image imports run before PR setup but use that same private
+per-run `HOME` and runtime bind, so rootless Podman sees the imported image
+store (with `XDG_DATA_HOME` anchored below that HOME) during the workload
+without exposing the trusted `/home/forge` store.
+The imported references remain digest-checked before PR execution, while the
+cache itself stays read-only.
 The root runtime resets its own `PATH` to root-owned system directories before
 staging or collecting; the forge cargo path is passed only to workload units.
 PR units bind a private per-run runtime directory at `/run/user/10001` so the

@@ -15,6 +15,29 @@ RUNTIME = ROOT / "gcp-cooking-run.sh"
 
 
 class GcpPrSandboxTests(unittest.TestCase):
+    def test_trusted_image_import_uses_the_pr_store_namespace(self) -> None:
+        """The trusted import and PR workload must share private Podman state."""
+
+        source = RUNTIME.read_text(encoding="utf-8")
+        configure = source.index(
+            'if [[ "$workload_trust" == untrusted-pr ]]; then\n'
+            '    # Configure the private HOME/runtime before trusted image import'
+        )
+        workflow_phase = source.index("phase_start workflow-images")
+        self.assertLess(configure, workflow_phase)
+        workflow_start = source.index(
+            'run_with_deadline systemd-run --unit="heph-gcp-cooking-images-'
+        )
+        workflow_end = source.index("\nphase_pass", workflow_start)
+        workflow = source[workflow_start:workflow_end]
+        self.assertIn('--setenv=HOME="$workload_home"', workflow)
+        self.assertIn('--setenv=XDG_DATA_HOME="$workload_home/.local/share"', workflow)
+        self.assertIn('"${workflow_image_sandbox_args[@]}"', workflow)
+        self.assertIn(
+            '"--property=BindPaths=$pr_runtime:/run/user/10001"',
+            source,
+        )
+
     def test_root_helpers_ignore_forge_writable_cargo_bin(self) -> None:
         """A forge-planted interpreter must not affect root-side helpers."""
 
@@ -255,6 +278,7 @@ run_with_deadline() {{ "$@"; }}
 fail() {{ printf 'failure: %s\\n' "$*" >&2; exit 1; }}
 export FAKE_LOG={self._shell_quote(log)} BROWSER_PATH={self._shell_quote(browser)}
 {sandbox_function}
+configure_pr_sandbox
 {setup_flow}
 """
             result = subprocess.run(
