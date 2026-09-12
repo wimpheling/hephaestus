@@ -19,6 +19,12 @@ COLLECTOR_SPEC = importlib.util.spec_from_file_location(
 assert COLLECTOR_SPEC is not None and COLLECTOR_SPEC.loader is not None
 COLLECTOR = importlib.util.module_from_spec(COLLECTOR_SPEC)
 COLLECTOR_SPEC.loader.exec_module(COLLECTOR)
+TRIAGE_SPEC = importlib.util.spec_from_file_location(
+    "cooking_diagnostics_triage", ROOT / "summarize-cooking-diagnostics.py"
+)
+assert TRIAGE_SPEC is not None and TRIAGE_SPEC.loader is not None
+TRIAGE = importlib.util.module_from_spec(TRIAGE_SPEC)
+TRIAGE_SPEC.loader.exec_module(TRIAGE)
 
 
 class CookingPreflightMarkerTests(unittest.TestCase):
@@ -28,9 +34,10 @@ class CookingPreflightMarkerTests(unittest.TestCase):
         missing_command: str | None = None,
         cgroup_valid: bool = True,
         podman_rootless: bool = True,
+        podman_info_failure: bool = False,
         python_probe: bool = True,
         rust_probe: bool = True,
-    ) -> tuple[subprocess.CompletedProcess[str], str]:
+    ) -> tuple[subprocess.CompletedProcess[str], str, dict[str, object]]:
         with tempfile.TemporaryDirectory(prefix="heph-cooking-preflight-") as raw:
             root = Path(raw)
             repo = root / "repo"
@@ -86,6 +93,7 @@ class CookingPreflightMarkerTests(unittest.TestCase):
             podman_script = (
                 "#!/usr/bin/env bash\n"
                 "if [[ $1 == info ]]; then\n"
+                f"  {'exit 7' if podman_info_failure else ''}\n"
                 f"  printf '%s\\n' {'true' if podman_rootless else 'false'}\n"
                 "  exit 0\n"
                 "fi\n"
@@ -129,36 +137,46 @@ class CookingPreflightMarkerTests(unittest.TestCase):
             )
             source = root / "preflight-stderr.log"
             source.write_text(result.stderr, encoding="utf-8")
-            projected = root / "projected.log"
-            COLLECTOR._project_text(source, projected)
-            return result, projected.read_text(encoding="utf-8")
+            bundle = root / "bundle"
+            self.assertEqual(COLLECTOR.collect(bundle, [f"serial={source}"], None, None, None), 0)
+            projected = (bundle / "sources" / "serial").read_text(encoding="utf-8")
+            triage = TRIAGE.summarize(bundle)
+            return result, projected, triage
 
     def test_missing_command_marker_identifies_fixed_tool(self) -> None:
-        result, projected = self.run_preflight(missing_command="cargo")
+        result, projected, triage = self.run_preflight(missing_command="cargo")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(
             "stage=preflight-command-checks reason_class=missing-command status=failed exit_code=1 test=cargo",
             projected,
         )
+        self.assertTrue(any(f.get("reason_class") == "missing-command" and f.get("test") == "cargo" for f in triage["failures"]))
 
     def test_cgroup_failure_marker_identifies_delegation(self) -> None:
-        result, projected = self.run_preflight(cgroup_valid=False)
+        result, projected, _ = self.run_preflight(cgroup_valid=False)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("stage=cgroup-delegation reason_class=delegation-unavailable", projected)
 
     def test_rootful_podman_marker_identifies_sandbox_requirement(self) -> None:
-        result, projected = self.run_preflight(podman_rootless=False)
+        result, projected, triage = self.run_preflight(podman_rootless=False)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("stage=podman-rootless reason_class=rootful-podman", projected)
+        self.assertTrue(any(f.get("reason_class") == "rootful-podman" and f.get("test") == "podman" for f in triage["failures"]))
+
+    def test_podman_info_command_failure_is_distinct(self) -> None:
+        result, projected, triage = self.run_preflight(podman_info_failure=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("stage=podman-rootless reason_class=podman-info-failed", projected)
+        self.assertTrue(any(f.get("reason_class") == "podman-info-failed" and f.get("test") == "podman" for f in triage["failures"]))
 
     def test_python_probe_marker_identifies_guest_probe(self) -> None:
-        result, projected = self.run_preflight(python_probe=False)
+        result, projected, _ = self.run_preflight(python_probe=False)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("stage=python-image-probe reason_class=image-probe-failed status=failed", projected)
         self.assertIn("test=python-image", projected)
 
     def test_rust_probe_marker_identifies_guest_probe(self) -> None:
-        result, projected = self.run_preflight(rust_probe=False)
+        result, projected, _ = self.run_preflight(rust_probe=False)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("stage=rust-image-probe reason_class=image-probe-failed status=failed", projected)
         self.assertIn("test=rust-image", projected)

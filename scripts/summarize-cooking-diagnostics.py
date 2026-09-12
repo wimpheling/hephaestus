@@ -251,7 +251,15 @@ BROWSER_SUMMARY_REASON_CLASSES = {
     "incomplete-phases", "invalid-report", "report-validation-failed", "timeout",
 }
 COLLECTOR_FAILURE_REASON_CLASSES = COLLECTOR.COLLECTOR_FAILURE_REASONS
-WORKLOAD_FAILURE_REASON_CLASSES = {"insufficient-budget"}
+WORKLOAD_FAILURE_REASON_CLASSES = {
+    "insufficient-budget",
+    "unsupported-user", "unsupported-architecture", "kvm-unavailable", "passt-unavailable",
+    "libkrun-unavailable", "libkrunfw-unavailable", "uid-map-unavailable", "delegation-unavailable",
+    "rootful-podman", "podman-info-failed", "invalid-image-reference", "workflow-file-unavailable",
+    "workflow-key-unavailable", "layout-unavailable", "manifest-unavailable", "image-unavailable",
+    "image-pull-failed", "image-probe-failed", "missing-command", "identity", "path", "record-read",
+    "record-write", "pair",
+}
 BROWSER_SUMMARY_FAILURE_FIELDS = {
     "test_id", "phase", "status", "error_class", "matcher", "source_file",
     "source_line", "source_column", "source_location_kind",
