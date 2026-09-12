@@ -482,7 +482,7 @@ PYGATE
     diagnostics_download_error='triage-projection-failed'
     diagnostics_scan_state='passed'
     diagnostics_triage_state='failed'
-    printf '{"schema":1,"object":"gs://%s/%s","cleanup":"verified-absent","upload":"verified-by-download","download":"passed","scan":"passed","triage":"failed","archiveBytes":%s,"archiveSha256":"%s","manifest":"%s"}\n' \
+    printf '{"schema":1,"object":"gs://%s/%s","cleanup":"verified-absent","upload":"verified-by-download","download":"passed","scan":"passed","triage":"failed","error":"triage-projection-failed","archiveBytes":%s,"archiveSha256":"%s","manifest":"%s"}\n' \
       "$DIAGNOSTICS_BUCKET" "$object" "$archive_bytes" "$digest" "$extract_root/cooking-diagnostics/manifest.json" >"$status_path"
     return 1
   fi
@@ -627,11 +627,30 @@ download_diagnostics() {
     # status was safely written.
     if [[ ! -s "$status_path" ]] || ! python3 - "$status_path" <<'PY'
 import json
+import re
 import sys
 
 with open(sys.argv[1], encoding="utf-8") as stream:
     value = json.load(stream)
-if not isinstance(value, dict) or not isinstance(value.get("triage"), dict):
+if not isinstance(value, dict):
+    raise SystemExit(1)
+if value.get("cleanup") != "verified-absent":
+    raise SystemExit(1)
+if value.get("upload") != "verified-by-download":
+    raise SystemExit(1)
+if value.get("download") != "passed" or value.get("scan") != "passed":
+    raise SystemExit(1)
+triage = value.get("triage")
+if isinstance(triage, dict):
+    if triage.get("schema") != 1:
+        raise SystemExit(1)
+elif triage != "failed" or value.get("error") != "triage-projection-failed":
+    raise SystemExit(1)
+archive_bytes = value.get("archiveBytes")
+if type(archive_bytes) is not int or not 0 <= archive_bytes <= 67108864:
+    raise SystemExit(1)
+digest = value.get("archiveSha256")
+if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
     raise SystemExit(1)
 PY
     then

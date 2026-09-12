@@ -895,6 +895,10 @@ finish
             TRIAGE._timestamp_sort_key("2026-09-11 18:25:06.38 +00:00:00"),
             TRIAGE._timestamp_sort_key("2026-09-11T19:25:06.38 +01:00:00"),
         )
+        self.assertEqual(
+            TRIAGE._timestamp_sort_key("2026-09-11 4:25:06.38 +00:00:00"),
+            TRIAGE._timestamp_sort_key("2026-09-11 04:25:06.38 +00:00:00"),
+        )
         with self.assertRaises(ValueError):
             TRIAGE._timestamp_sort_key("2026-09-11 18:25:06.38")
         with self.assertRaises(ValueError):
@@ -1206,7 +1210,8 @@ finish
     def test_triage_failure_preserves_download_and_scan_success(self):
         with tempfile.TemporaryDirectory(prefix="heph-gcp-diagnostics-") as directory:
             root = Path(directory)
-            result = self._run_download(root, self._archive(root), triage_failure=True)
+            archive = self._archive(root)
+            result = self._run_download(root, archive, triage_failure=True)
             self.assertNotEqual(result.returncode, 0)
             status = json.loads((root / "status.json").read_text(encoding="utf-8"))
             self.assertEqual(status["cleanup"], "verified-absent")
@@ -1214,6 +1219,9 @@ finish
             self.assertEqual(status["download"], "passed")
             self.assertEqual(status["scan"], "passed")
             self.assertEqual(status["triage"], "failed")
+            self.assertEqual(status["error"], "triage-projection-failed")
+            self.assertEqual(status["archiveBytes"], archive.stat().st_size)
+            self.assertEqual(status["archiveSha256"], hashlib.sha256(archive.read_bytes()).hexdigest())
 
     def test_malformed_archive_is_recorded_and_fails_closed(self):
         with tempfile.TemporaryDirectory(prefix="heph-gcp-diagnostics-") as directory:
@@ -1336,6 +1344,52 @@ finish
             triage = TRIAGE.summarize(output)
             self.assertEqual(triage["snapshotStatus"]["status"], "query_failed")
             self.assertEqual(triage["snapshotStatus"]["rows"], 0)
+
+    def test_collector_to_triage_accepts_producer_unpadded_hour(self):
+        """Keep the real collector/summarizer path compatible with Rust timestamps."""
+        with tempfile.TemporaryDirectory(prefix="heph-gcp-unpadded-hour-") as directory:
+            root = Path(directory)
+            evidence = root / "evidence" / "cooking"
+            evidence.mkdir(mode=0o700, parents=True)
+            serial = evidence / "serial.log"
+            serial.write_text("HEPH_GCP_COOKING phase=running status=passed\n", encoding="utf-8")
+            lineage = evidence / "cooking-lineage.jsonl"
+            lineage.write_text(
+                '{"sampled_at":"2026-09-11 4:00:00 +00:00:00",'
+                '"mailbox_id":"00000000-0000-4000-8000-000000000001",'
+                '"event_id":"00000000-0000-4000-8000-000000000002",'
+                '"attempt_id":"00000000-0000-4000-8000-000000000003",'
+                '"attempt_number":1,"attempt_run_id":"00000000-0000-4000-8000-000000000004",'
+                '"attempt_state":"completed","attempt_created_at":"2026-09-11 3:59:00 Z",'
+                '"attempt_completed_at":"2026-09-11 4:00:00 Z","run_state":"succeeded",'
+                '"run_outcome":"succeeded","run_created_at":"2026-09-11 3:58:00 Z",'
+                '"run_updated_at":"2026-09-11 4:00:00 Z","disposition":"delivered"}\n',
+                encoding="utf-8",
+            )
+            lineage_status = evidence / "cooking-lineage-status.json"
+            lineage_status.write_text(
+                '{"schema":1,"status":"ok","sampled_at":"2026-09-11 4:00:00 Z",'
+                '"mailbox_id":"00000000-0000-4000-8000-000000000001",'
+                '"event_id":null,"rows":1}\n',
+                encoding="utf-8",
+            )
+            output = root / "bundle"
+            archive = root / "bundle.tar.gz"
+            self.assertEqual(
+                COLLECTOR.main([
+                    "--output-dir", str(output),
+                    "--source", f"serial={serial}",
+                    "--snapshot-jsonl", str(lineage),
+                    "--snapshot-status", str(lineage_status),
+                    "--archive", str(archive),
+                ]),
+                0,
+            )
+            self.assertIn(" 4:00:00 ", (output / "lineage.jsonl").read_text(encoding="utf-8"))
+            triage = TRIAGE.summarize(output)
+            self.assertEqual(len(triage["attempts"]), 1)
+            self.assertEqual(triage["attempts"][0]["attempt_state"], "completed")
+            self.assertEqual(triage["snapshotStatus"]["status"], "ok")
 
     def test_full_missing_lineage_is_an_explicit_collector_error(self):
         with tempfile.TemporaryDirectory(prefix="heph-gcp-missing-lineage-") as directory:

@@ -18,9 +18,34 @@ although the selected historical run still had a failed gate acceptance, the
 encryption steps succeeded. Local CMS decryption, helper revalidation, and
 byte-for-byte comparison passed for the 27,897-byte archive with SHA-256
 `1bb476f3d7ef3d5cefcf8176e8671ee6830b574a876c78aa9748e8345b8d3156`. The
-full GCP acceptance gate remains open; the next paid trial awaits the cheap
-diagnostic. The timestamp correction at `4bede2c` accepts the producer's single-digit UTC
-hours; the rejected historical raw inputs remain unavailable.
+full GCP acceptance gate remained open at that time; the next paid trial awaited
+the cheap diagnostic. The timestamp correction at `4bede2c` accepts the producer's
+single-digit UTC hours; the rejected historical raw inputs remain unavailable.
+
+The latest cheap diagnostic [run
+34672856178](https://github.com/wimpheling/hephaestus/actions/runs/34672856178)
+from source `4463764819082aa0ee56a960d642498598c4552e` passed with expected
+gates `42`/`1`/`42`, gate acceptance passed, and the intended `runtime-log`
+quarantine. It retained eight safe sources with no unavailable sources and one
+failed lineage source. The VM was absent at `04:26:04.221Z`; authenticated
+download began at `04:26:06.641Z`, scanning passed at `04:26:08.918Z`, and
+the run completed at `04:26:11Z`. The safe manifest is
+`/tmp/heph-gcp-diagnostic-34672856178/gcp-diagnostics-status.json`; the
+1,809-byte object has SHA-256
+`d98bf506eaac3b5b126dfe88c52bd442f930e9b62f3ea5ad29149328220c553d`.
+Full acceptance remained open after the cheap diagnostic.
+
+The latest full GCP trial [run
+34673076889](https://github.com/wimpheling/hephaestus/actions/runs/34673076889)
+from source `4463764819082aa0ee56a960d642498598c4552e` failed after 26m11s
+(04:28:13Z–04:54:24Z). VM absence was verified at approximately
+04:54:15Z–04:54:17Z before typed download at `04:54:18.556Z`; the download
+and credential scan passed, but triage failed with
+`triage-projection-failed`. The safe manifest is
+`/tmp/heph-gcp-cooking-34673076889/gcp-diagnostics-status.json`; it has no
+gate, lineage, object hash, or object size fields, so no workload or browser
+failure is inferred. Full acceptance remains open; paid runs are paused while
+bootstrap summary fixes and no-VM artifact-recovery planning proceed.
 
 The latest local full run is retained at `/tmp/heph-local-network-full.3FSjc8`
 from `HEAD` `87399f8` plus uncommitted shell/network changes. It passed 33
@@ -29,11 +54,10 @@ one report each, a 27-file credential scan covering 1,314,388 bytes, and
 cleanup verification and the shell post-check wiring. It did not emit a
 failure marker because the run succeeded. This is local evidence only. The
 full scripts discovery covered 203 scripts and the focused shell/network
-validation covered 29 tests; Bash, Python and diff checks passed. The next
-operational step is one cheap diagnostic and, only after it passes, one full
-GCP trial; the image-rebuild plan remains plan-only and the joint user-plan
-review still gates MVP-06 work. Focused shell tests verify failure-marker
-emission separately.
+validation covered 29 tests; Bash, Python and diff checks passed. Paid runs are paused while bootstrap summary fixes and no-VM artifact-recovery
+planning proceed; the image-rebuild plan remains plan-only and the joint user-plan
+review still gates MVP-06 work. Focused shell tests verify
+failure-marker emission separately.
 
 The most recent full [run 34667868345](https://github.com/wimpheling/hephaestus/actions/runs/34667868345)
 from source `874a55824d1316952b1c1ae3288ba00e5a9d4619` failed after 29m26s
@@ -335,10 +359,10 @@ startup recipe provenance. A custom image in `diagnostic` uses the 150 GB diagno
 required by the baked image.
 
 The startup provenance change required a replacement image build and
-validation. Candidate `hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d` is
-promoted after its real KVM smoke passed; full validation remains open. The
-next paid trial awaits the cheap diagnostic while local lineage diagnosis
-continues. Use the explicit stock-image diagnostic for cheap validation when
+validation. Candidate `hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d`
+was promoted after its real KVM smoke passed. At that time, full validation
+remained open, local lineage diagnosis was still in progress, and the next paid
+trial awaited the cheap diagnostic. Use the explicit stock-image diagnostic for cheap validation when
 testing startup changes.
 
 ```sh

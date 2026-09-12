@@ -980,6 +980,7 @@ def _timestamp_sort_key(value: str) -> tuple[datetime, int]:
     """Parse Rust OffsetDateTime text, retaining nanoseconds beyond datetime."""
 
     normalized = re.sub(r"^(\d{4}-\d{2}-\d{2})[ T]", r"\1T", value, count=1)
+    normalized = re.sub(r"^(\d{4}-\d{2}-\d{2}T)(\d):", r"\g<1>0\2:", normalized)
     normalized = normalized.replace(" Z", "Z", 1)
     normalized = re.sub(r" (?=(?:Z|[+-]\d{2}:\d{2}(?::\d{2})?)$)", "", normalized)
     fraction = re.search(r"\.(\d+)(?=(?:Z|[+-]\d{2}:\d{2}(?::\d{2})?)$)", normalized)

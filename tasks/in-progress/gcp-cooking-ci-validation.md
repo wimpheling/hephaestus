@@ -13,8 +13,9 @@ acceptance and does not reopen or expand that completed task.
 The optional encrypted diagnostics-triage export is published at source
 `87399f8` with 9 export tests and 90 diagnostics/collector tests. It
 revalidates the fixed bundle before
-local-recipient CMS encryption. Full GCP acceptance remains open; the next paid
-trial awaits the cheap diagnostic. See the [encrypted export guide](../../docs/gcp-encrypted-diagnostics.md)
+local-recipient CMS encryption. Full GCP acceptance remained open at that time;
+the next paid trial awaited the cheap diagnostic. See the
+[encrypted export guide](../../docs/gcp-encrypted-diagnostics.md)
 and the [canonical runbook](../../docs/gcp-cooking-ci.md) for operations.
 
 The first real no-VM encrypted-export proof is [run
@@ -23,10 +24,36 @@ from source `87399f8d5f7de8e7c107df3cb481344666040556`. It created no VM and
 completed local CMS decryption, helper revalidation, and byte comparison for
 the 27,897-byte archive (SHA-256
 `1bb476f3d7ef3d5cefcf8176e8671ee6830b574a876c78aa9748e8345b8d3156`). The
-historical gate acceptance was still failed; full GCP acceptance remains open.
-The next paid trial awaits the cheap diagnostic. The timestamp correction at `4bede2c`
+historical gate acceptance was still failed; at that time, full GCP acceptance
+remained open and the next paid trial awaited the cheap diagnostic. The
+timestamp correction at `4bede2c`
 accepts single-digit UTC producer hours; the rejected historical raw inputs
 remain unavailable.
+
+The latest cheap diagnostic [run
+34672856178](https://github.com/wimpheling/hephaestus/actions/runs/34672856178)
+from source `4463764819082aa0ee56a960d642498598c4552e` passed with expected
+gates `42`/`1`/`42`, gate acceptance passed, and the intended `runtime-log`
+quarantine. It retained eight safe sources with no unavailable sources and one
+failed lineage source. The VM was absent at `04:26:04.221Z`; authenticated
+download began at `04:26:06.641Z`, scanning passed at `04:26:08.918Z`, and
+the run completed at `04:26:11Z`. The safe manifest is
+`/tmp/heph-gcp-diagnostic-34672856178/gcp-diagnostics-status.json`; the
+1,809-byte object has SHA-256
+`d98bf506eaac3b5b126dfe88c52bd442f930e9b62f3ea5ad29149328220c553d`.
+Full acceptance remained open after the cheap diagnostic.
+
+The latest full GCP trial [run
+34673076889](https://github.com/wimpheling/hephaestus/actions/runs/34673076889)
+from source `4463764819082aa0ee56a960d642498598c4552e` failed after 26m11s
+(04:28:13Z–04:54:24Z). VM absence was verified at approximately
+04:54:15Z–04:54:17Z before typed download at `04:54:18.556Z`; the download
+and credential scan passed, but triage failed with
+`triage-projection-failed`. The safe manifest is
+`/tmp/heph-gcp-cooking-34673076889/gcp-diagnostics-status.json`; it has no
+gate, lineage, object hash, or object size fields, so no workload or browser
+failure is inferred. Full acceptance remains open; paid runs are paused while
+bootstrap summary fixes and no-VM artifact-recovery planning proceed.
 
 The latest local full run is retained at `/tmp/heph-local-network-full.3FSjc8`
 from `HEAD` `87399f8` plus uncommitted shell/network changes. It passed 33
@@ -34,9 +61,9 @@ golden tests with 1 ignored, six PostgreSQL tests, both browser phases, a
 27-file credential scan covering 1,314,388 bytes, and cleanup verification
 including post-check wiring. This is local evidence only; the successful run
 did not emit a failure marker. Full scripts discovery covered 203 scripts and
-focused shell/network validation covered 29 tests. The next step is one cheap
-diagnostic and, only after it passes, one full GCP trial; the image-rebuild plan
-remains plan-only and the joint user-plan review still gates MVP-06 work. The
+focused shell/network validation covered 29 tests. Paid runs are paused while bootstrap summary fixes and no-VM artifact-recovery
+planning proceed; the image-rebuild plan remains plan-only and the joint user-plan
+review still gates MVP-06 work. The
 canonical runbook documents the safe shell-failure fields and topology
 comparison.
 
