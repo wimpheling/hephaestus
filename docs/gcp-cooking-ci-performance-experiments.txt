@@ -352,6 +352,31 @@ infrastructure/workload evidence only: no baseline/performance result and no
 ACCEPTED or REJECTED decision is recorded; the prepared baseline remains
 pending a valid run.
 
+Terminal diagnostic baseline attempt: [run 34709290982](https://github.com/wimpheling/hephaestus/actions/runs/34709290982)
+used trusted controller SHA
+`0146104fb952921e2f6dd63d99b3b42cb2e85333` and workload SHA
+`278201587ca2fd06836965b5f13d171bca98b01b` with the locked image, immutable
+cache generation, machine, disk, zone and concurrency above. The trusted
+controller timing projection, with run ID `34709290982` and attempt `1`,
+records `preflight-quota=2355` ms, `preflight-cache=1720` ms,
+`vm-create=10278` ms, `vm-wait=202803` ms with outcome `failed`,
+`vm-delete=56846` ms, `cleanup-verification=1168` ms and
+`post-delete-download=1547` ms. The workflow's VM deletion passed and the
+owned VM was verified absent; the safe projection does not retain the
+workflow-images service readiness or lifecycle markers, so no stronger
+service-cleanup claim is made.
+The typed sequential workload progression passed `dependency-setup`, entered
+`project-build`, and failed at its `rustup-target` detail stage with exit `1`;
+the generic `cooking-run` shell marker is line `423`. No preflight
+`dependency-check` marker occurred, and no preflight reason/test was recorded.
+Diagnostics upload/download and evidence scan passed with partial collection;
+workload phase timing was unavailable. The workload gate failed, browser
+validation failed because its report was missing/invalid (exit `2`), and
+authoritative test counts were unavailable. This is diagnostic
+infrastructure/workload evidence only: no baseline/performance result and no
+ACCEPTED or REJECTED decision is recorded; the prepared baseline remains
+pending a valid run.
+
 ACCEPTED
 ========
 None yet.
