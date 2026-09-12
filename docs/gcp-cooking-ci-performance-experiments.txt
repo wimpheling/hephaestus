@@ -721,6 +721,56 @@ The user has authorized this GCP run and no additional approval is required.
 The pre-dispatch active-run check is empty and prior owned VM absence is
 independently recorded.
 
+TERMINAL COMPLETE BASELINE ATTEMPT: RUN 34722051935
+=====================================================
+The first complete baseline attempt used trusted controller `main` at
+`aea0051fd4692b5dc9a2e0a02457b11f70527a24` and the exact open PR #20 head
+`19352db65a972171805d0d17d62121f2c0175304`: [run
+34722051935](https://github.com/wimpheling/hephaestus/actions/runs/34722051935).
+The locked environment was unchanged: protected image
+`hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d`, cache generation
+`1789079827867335` (archive metadata size `1783474345` bytes),
+`n2-standard-8`, `150 GB pd-balanced`, `europe-west1-d`, concurrency `1`,
+45-minute provider DELETE and 50-minute workflow timeout. Quota and cache
+preflight passed. The VM was created as
+`heph-kvm-smoke-34722051935-1`; the workflow ran from
+`2026-09-12T22:11:31Z` through `22:37:46Z` (about `26m15s` end-to-end).
+
+The retained trusted controller timing projection records
+`preflight-quota=2452` ms, `preflight-cache=1580` ms,
+`vm-create=10374` ms, `vm-wait=1480789` ms with outcome `failed`,
+`vm-delete=53256` ms, `cleanup-verification=982` ms and
+`post-delete-download=1429` ms. Their sum is `1550862` ms (about
+`25m50.862s`); `vm-wait` failed because the workload returned a failure after
+its own Cooking command passed. VM deletion passed and the owned VM was
+verified absent by a subsequent describe, including the cleanup step.
+
+The workload log records the Cooking gateway invocation and gateway E2E as
+passed, `cooking-workload` result `passed` with exit `0`, and both Cooking and
+evidence phase-pass markers. It also records informational workload timing
+values of gateway-readiness `272` ms, production-project-build `82082` ms,
+oci-builder `102585` ms, oci-verifier `354625` ms, browser-initial `98487` ms
+and browser-post-operation `44379` ms. These values are not a valid
+performance measurement: the timing helper then failed its pair validation
+with exit `2`, emitted `phase-timing-sidecar status=invalid`, and the overall
+startup/workflow result exited `1`. The workload did not produce a valid
+phase-timing sidecar or projection.
+
+The retained diagnostics manifest reports
+`upload=verified-by-download`, `download=passed` and `scan=passed`, but
+`triage=failed` with `error=triage-projection-failed`; the download log gives
+the precise safe failure as `manifest source label is invalid`. Consequently
+the safe artifact does not provide authoritative browser-report validation,
+golden/PostgreSQL counts or a complete gate acceptance record. The available
+browser timing markers are workload-log observations only and do not prove the
+separate browser gate. The run therefore distinguishes a passing Cooking
+workload segment from an invalid measurement and failed overall gate; it is
+diagnostic evidence, not a valid baseline and not an ACCEPTED or REJECTED
+performance experiment. No elapsed time saved can be claimed. The remaining
+blocker is the trusted guest-runtime evidence-scan timing-domain validation
+path; PR #38 (`8bb067281e62d3f20c55aeb056dadeed47f01cd1`) carries the fix and
+must be merged and checked before another full GCP run.
+
 ACCEPTED
 ========
 None yet.
