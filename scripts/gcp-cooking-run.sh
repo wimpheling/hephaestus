@@ -42,6 +42,7 @@ readonly pr_npm_cache="${pr_state_root}/npm-cache"
 readonly pr_runtime="${pr_state_root}/runtime"
 readonly pr_tmp_root="${pr_state_root}/tmp"
 readonly pr_var_tmp_root="${pr_state_root}/var-tmp"
+readonly rust_toolchain="${HEPH_GCP_RUST_TOOLCHAIN:-}"
 
 phase='initializing'
 stage_root=''
@@ -150,6 +151,8 @@ case "$workload_trust" in
     trusted|untrusted-pr) ;;
     *) fail 'HEPH_GCP_WORKLOAD_TRUST is invalid' ;;
 esac
+[[ "$rust_toolchain" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
+    fail 'HEPH_GCP_RUST_TOOLCHAIN must be a trusted semantic Rust version'
 [[ "$(id -u forge 2>/dev/null || true)" == "${forge_uid}" ]] ||
     fail 'the common startup must create forge with UID 10001'
 [[ -d "${checkout_root}" && ! -L "${checkout_root}" ]] ||
@@ -986,6 +989,7 @@ timeout --kill-after=30s "${cooking_remaining}s" systemd-run \
     --working-directory="$checkout_root" --setenv=HOME="$workload_home_value" \
     --setenv=XDG_DATA_HOME="$workload_home_value/.local/share" \
     --setenv=XDG_RUNTIME_DIR=/run/user/10001 --setenv=RUSTUP_HOME="$workload_rustup_home_value" \
+    --setenv=RUSTUP_TOOLCHAIN="$rust_toolchain" \
     --setenv=CARGO_HOME="$workload_cargo_home_value" --setenv=TMPDIR=/tmp/hephaestus-libkrun \
     --setenv=HEPHAESTUS_LIBKRUN_TMP_ROOT=/tmp/hephaestus-libkrun \
     --setenv=HEPHAESTUS_COOKING_SOURCE_ROOT="$checkout_root/examples/cooking" \

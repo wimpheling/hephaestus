@@ -1724,6 +1724,7 @@ if [[ "$test_mode" == gcp-cooking ]]; then
     HEPH_GCP_DIAGNOSTICS_SCANNER_SCRIPT="$diagnostics_metadata_root/check-browser-evidence.py" \
     HEPH_GCP_PHASE_TIMING_SCRIPT="$trusted_phase_timing_script" \
     HEPH_GCP_SUPERVISOR_PHASE_TIMING_PATH="$supervisor_phase_timing_path" \
+    HEPH_GCP_RUST_TOOLCHAIN="$rust_version" \
     HEPH_GCP_CACHE_GENERATION="$cache_generation" \
     HEPH_GCP_PHASE_TIMING_IMAGE_FINGERPRINT="$timing_image_fingerprint" \
     HEPH_GCP_BROWSER_SUMMARY_SCRIPT="$trusted_browser_summary_script" \
