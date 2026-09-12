@@ -32,8 +32,11 @@ MAX_LINE_BYTES = 256 * 1024
 EXIT_LIMITS = {"exit_code": 255, "exit_signal": 64}
 LABEL_RE = re.compile(r"^[a-z][a-z0-9_-]{0,47}$")
 STATUS_RE = re.compile(r"^[a-z][a-z0-9_:-]{0,63}$")
+# Rust `time::OffsetDateTime::to_string()` emits single-digit hours without
+# padding; keep accepting that canonical producer format for early-UTC runs.
 TIMESTAMP_RE = re.compile(
-    r"^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z| Z| [+-]\d{2}:\d{2}(?::\d{2})?)$"
+    r"^\d{4}-\d{2}-\d{2}[ T](?:[01]?\d|2[0-3]):[0-5]\d:[0-5]\d"
+    r"(?:\.\d{1,9})?(?:Z| Z| [+-]\d{2}:\d{2}(?::\d{2})?)$"
 )
 UUID_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
@@ -1291,10 +1294,21 @@ def _snapshot_rejection_reason(error: Exception) -> str:
         return "snapshot-path"
     if "invalid json" in message or "one json object" in message:
         return "snapshot-invalid-json"
-    if "row budget" in message or "retention limit" in message or "source exceeds" in message:
+    if (
+        "row budget" in message
+        or "retention limit" in message
+        or "source exceeds" in message
+        or "row count" in message
+    ):
         return "snapshot-row-limit"
-    if "unallowlisted field" in message or "snapshot field cannot be" in message:
+    if (
+        "unallowlisted field" in message
+        or "snapshot field cannot be" in message
+        or "timestamp" in message
+    ):
         return "snapshot-schema"
+    if "attempt number" in message:
+        return "snapshot-enum"
     if "identifier" in message:
         return "snapshot-identifier"
     if "status" in message and "classification" in message:

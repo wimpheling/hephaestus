@@ -295,6 +295,169 @@ finish
             )
             self.assertNotIn("successful-smoke", json.dumps(triage["failures"]))
 
+    def test_triage_retains_safe_technical_context_without_promoting_caught_panics(self):
+        with tempfile.TemporaryDirectory(prefix="heph-gcp-triage-context-") as directory:
+            root = Path(directory)
+            self._archive(root)
+            runtime = root / "bundle" / "sources" / "runtime-structured"
+            runtime.write_text(
+                "HEPH_GCP_TEST test=rust-panic location=crates/hephaestus-app/tests/../../../examples/cooking/tests/confinement.rs:431:49\n"
+                "HEPH_GCP_RUNTIME error=not-found errno=ENOENT\n"
+                "HEPH_GCP_COOKING event=workload-result operation=cooking-workload phase=cooking status=failed exit_code=1\n"
+                "HEPHAESTUS_GCP_COOKING: FAIL phase=gcp-cooking exit=1 revision=" + "a" * 40 + "\n"
+                "HEPH_GCP_RUNTIME error=private-payload errno=ENOENT location=/tmp/private.log\n",
+                encoding="utf-8",
+            )
+            triage = TRIAGE.summarize(root / "bundle")
+            context = triage["technicalContext"]
+            self.assertIn(
+                {
+                    "source": "runtime-structured",
+                    "order": 1,
+                    "kind": "rust-panic",
+                    "test": "rust-panic",
+                    "source_file": "examples/cooking/tests/confinement.rs",
+                    "source_line": 431,
+                    "source_column": 49,
+                    "correlated": False,
+                },
+                context,
+            )
+            self.assertIn(
+                {
+                    "source": "runtime-structured",
+                    "order": 2,
+                    "kind": "runtime-error",
+                    "error_class": "not-found",
+                    "errno": "ENOENT",
+                    "correlated": False,
+                },
+                context,
+            )
+            self.assertIn(
+                {
+                    "source": "runtime-structured",
+                    "order": 3,
+                    "kind": "cooking-result",
+                    "event": "workload-result",
+                    "operation": "cooking-workload",
+                    "phase": "cooking",
+                    "status": "failed",
+                    "exit_code": 1,
+                    "correlated": False,
+                },
+                context,
+            )
+            self.assertIn(
+                {
+                    "source": "runtime-structured",
+                    "order": 4,
+                    "kind": "cooking-terminal",
+                    "phase": "gcp-cooking",
+                    "status": "failed",
+                    "exit_code": 1,
+                    "correlated": False,
+                },
+                context,
+            )
+            encoded = json.dumps(context)
+            self.assertNotIn("private-payload", encoded)
+            self.assertNotIn("private.log", encoded)
+            self.assertEqual(
+                [failure for failure in triage["failures"] if failure.get("test") == "rust-panic"],
+                [],
+            )
+
+    def test_triage_context_prioritizes_late_failures_and_deduplicates_sources(self):
+        with tempfile.TemporaryDirectory(prefix="heph-gcp-triage-context-cap-") as directory:
+            root = Path(directory)
+            self._archive(root)
+            runtime = root / "bundle" / "sources" / "runtime-structured"
+            runtime.write_text(
+                "\n".join(
+                    [
+                        *(
+                            f"HEPH_GCP_TEST test=examples::cooking::tests::passed_{index} status=passed"
+                            for index in range(60)
+                        ),
+                        "HEPH_GCP_RUNTIME error=not-found errno=ENOENT",
+                        "HEPH_GCP_RUNTIME error=not-found errno=ENOENT",
+                        "HEPH_GCP_COOKING event=workload-result operation=cooking-workload phase=cooking status=failed exit_code=7",
+                        "HEPH_GCP_RUNTIME error=private-payload errno=not-a-real-errno location=/tmp/private.log",
+                        "HEPH_GCP_COOKING event=workload-result operation=unknown phase=unsafe status=failed exit_code=999",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            context = TRIAGE._project_technical_context(
+                root / "bundle",
+                [
+                    {"label": "runtime-structured", "path": "sources/runtime-structured"},
+                    {"label": "runtime-structured", "path": "sources/runtime-structured"},
+                ],
+                [],
+            )
+            self.assertLessEqual(len(context), TRIAGE.TECHNICAL_CONTEXT_LIMIT)
+            self.assertTrue(any(item.get("error_class") == "not-found" for item in context))
+            self.assertTrue(any(item.get("exit_code") == 7 for item in context))
+            self.assertEqual(
+                sum(item.get("error_class") == "not-found" for item in context),
+                1,
+            )
+            self.assertFalse(any(item.get("source_file") == "tmp/private.log" for item in context))
+            self.assertFalse(any(item.get("phase") == "unsafe" for item in context))
+            self.assertNotIn("private-payload", json.dumps(context))
+
+    def test_triage_context_keeps_late_priority_tail_and_cross_source_unique_content(self):
+        with tempfile.TemporaryDirectory(prefix="heph-gcp-triage-context-priority-tail-") as directory:
+            root = Path(directory)
+            self._archive(root)
+            runtime = root / "bundle" / "sources" / "runtime-structured"
+            runtime.write_text(
+                "\n".join(
+                    [
+                        *(
+                            f"HEPH_GCP_TEST test=rust-panic location=examples/cooking/tests/confinement.rs:{index}:1"
+                            for index in range(1, 61)
+                        ),
+                        "HEPH_GCP_RUNTIME error=not-found errno=ENOENT",
+                        "HEPH_GCP_COOKING event=workload-result operation=cooking-workload phase=cooking status=failed exit_code=7",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            duplicate = root / "bundle" / "sources" / "runtime-log"
+            duplicate.write_text(runtime.read_text(encoding="utf-8"), encoding="utf-8")
+            context = TRIAGE._project_technical_context(
+                root / "bundle",
+                [
+                    {"label": "runtime-structured", "path": "sources/runtime-structured"},
+                    {"label": "runtime-log", "path": "sources/runtime-log"},
+                ],
+                [],
+            )
+            self.assertEqual(len(context), TRIAGE.TECHNICAL_CONTEXT_LIMIT)
+            self.assertTrue(any(item.get("error_class") == "not-found" for item in context))
+            self.assertTrue(any(item.get("exit_code") == 7 for item in context))
+            self.assertEqual(
+                sum(item.get("source_line") == index for item in context for index in range(1, 61)),
+                48,
+            )
+            self.assertEqual(
+                sum(item.get("kind") == "runtime-error" for item in context),
+                1,
+            )
+            self.assertEqual(
+                sum(item.get("kind") == "cooking-result" for item in context),
+                1,
+            )
+            self.assertEqual(
+                sum(item.get("kind") == "rust-panic" and item.get("source") == "runtime-structured" for item in context),
+                48,
+            )
+
     def test_triage_projects_collector_failure_aliases_from_all_evidence_sources(self):
         with tempfile.TemporaryDirectory(prefix="heph-gcp-triage-aliases-") as directory:
             root = Path(directory)
@@ -1232,6 +1395,11 @@ test_mode=diagnostic
 revision=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 diagnostics_gate_helper="$3"
 diagnostics_gate_script_sha256="$(sha256sum "$diagnostics_gate_helper" | awk '{print $1}')"
+# The startup library normally establishes these anchors before initialization;
+# this isolated finalizer test sources the library directly, so provide the
+# same bounded clocks instead of allowing a negative timeout argument.
+trial_deadline_epoch=$(( $(date +%s) + 30 ))
+collection_deadline_epoch=$(( $(date +%s) + 30 ))
 initialize_cooking_gate_results
 finalize_cooking_gate_results 137
 python3 - "$cooking_gate_results_path" <<'PY'

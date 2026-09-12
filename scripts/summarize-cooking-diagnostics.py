@@ -8,6 +8,7 @@ timestamps, and counts, never log excerpts or request data.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import importlib.util
 from datetime import datetime, timezone
@@ -39,7 +40,7 @@ SOURCE_LABELS = {
 SAFE_STATUS = COLLECTOR.SNAPSHOT_STATUS_VALUES
 TRIAGE_FIELDS = {
     "schema", "collectionStatus", "rejectedSources", "denial", "attempts", "snapshotStatus", "retry", "sources", "failures",
-    "browserObservations", "browser", "evidenceScan", "gateResults", "runtimeResults",
+    "browserObservations", "browser", "evidenceScan", "gateResults", "runtimeResults", "technicalContext",
 }
 DENIAL_FIELDS = {"denial_stage", "denial_class", "run_id"}
 DENIAL_STAGES = {
@@ -94,6 +95,28 @@ FAILURE_ERROR_CLASSES = {
     "oras-not-runnable", "oras-version-mismatch", "chromium-missing", "chromium-not-runnable",
     "chromium-version-mismatch", "libclang-missing",
 }
+TECHNICAL_CONTEXT_LIMIT = 50
+TECHNICAL_CONTEXT_KINDS = {
+    "rust-test-result", "rust-panic", "runtime-error", "cooking-result", "cooking-terminal", "diagnostics-result",
+}
+TECHNICAL_CONTEXT_FIELDS = {
+    "source", "order", "kind", "event", "operation", "phase", "status", "test", "error_class", "errno",
+    "location", "source_file", "source_line", "source_column", "exit_code", "run_id", "attempt_run_id", "correlated",
+}
+TECHNICAL_CONTEXT_STATUS = {"passed", "failed", "ignored", "error", "timed-out", "timeout"}
+TECHNICAL_CONTEXT_PHASES = {"cooking", "evidence", "gcp-cooking", "diagnostic-synthetic", "browser", "runner-image-runtime"}
+TECHNICAL_CONTEXT_EVENTS = {
+    "workload-result", "evidence-scan", "browser-report-validation", "collection", "collector-failure", "upload", "download",
+}
+TECHNICAL_CONTEXT_OPERATIONS = {
+    "cooking-workload", "evidence-scan", "browser-report-validation", "collection", "upload", "download",
+}
+TECHNICAL_CONTEXT_ERRNOS = {"EACCES", "ECONNREFUSED", "ECONNRESET", "EINTR", "EINVAL", "EIO", "ENOENT", "ENOSPC", "EPERM", "ETIMEDOUT"}
+RUST_TEST_IDENTIFIER_RE = re.compile(r"^(?:rust-panic|[A-Za-z_][A-Za-z0-9_:.-]{0,127})$")
+SOURCE_LOCATION_RE = re.compile(
+    r"^(?P<path>[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+):(?P<line>[1-9][0-9]{0,5})(?::(?P<column>[1-9][0-9]{0,5}))?$"
+)
+SOURCE_LOCATION_ROOTS = ("crates/", "examples/cooking/", "e2e/playwright/")
 
 # Browser output is retained by the collector only after its own safe-line
 # projection.  Triage applies a second, positive projection here: only these
@@ -615,6 +638,208 @@ def _project_runtime_results(
     return results
 
 
+def _safe_source_location(value: str) -> dict[str, Any] | None:
+    """Normalize a repository source location without retaining its raw path."""
+
+    match = SOURCE_LOCATION_RE.fullmatch(value)
+    if match is None:
+        return None
+    parts: list[str] = []
+    for part in PurePosixPath(match.group("path")).parts:
+        if part in {"", "."}:
+            continue
+        if part == "..":
+            if not parts:
+                return None
+            parts.pop()
+        else:
+            parts.append(part)
+    path = "/".join(parts)
+    if not path.startswith(SOURCE_LOCATION_ROOTS):
+        return None
+    result: dict[str, Any] = {
+        "source_file": path,
+        "source_line": int(match.group("line")),
+    }
+    if match.group("column") is not None:
+        result["source_column"] = int(match.group("column"))
+    return result
+
+
+def _technical_context_record(
+    source: str,
+    order: int,
+    line: str,
+    correlated_run_ids: set[str],
+) -> dict[str, Any] | None:
+    """Project known marker context while excluding arbitrary text and paths."""
+
+    stripped = line.strip()
+    marker = stripped.split(maxsplit=1)[0].rstrip(":") if stripped else ""
+    if marker not in {"HEPH_GCP_TEST", "HEPH_GCP_RUNTIME", "HEPH_GCP_COOKING", "HEPHAESTUS_GCP_COOKING", "HEPH_GCP_DIAGNOSTICS"}:
+        return None
+    fields = dict(FAILURE_PAIR.findall(stripped))
+    result: dict[str, Any] = {"source": source, "order": order}
+
+    if marker == "HEPH_GCP_TEST":
+        test = fields.get("test")
+        if test is None or RUST_TEST_IDENTIFIER_RE.fullmatch(test) is None:
+            return None
+        location = _safe_source_location(fields.get("location", ""))
+        status = fields.get("status")
+        if status is not None and status not in TECHNICAL_CONTEXT_STATUS:
+            return None
+        if test == "rust-panic":
+            result["kind"] = "rust-panic"
+        elif status is not None:
+            result["kind"] = "rust-test-result"
+        else:
+            return None
+        result["test"] = test
+        if status is not None:
+            result["status"] = status
+        if location is not None:
+            result.update(location)
+    elif marker == "HEPH_GCP_RUNTIME":
+        error_class = fields.get("error_class") or fields.get("error")
+        if error_class not in FAILURE_ERROR_CLASSES:
+            return None
+        result["kind"] = "runtime-error"
+        result["error_class"] = error_class
+        errno = fields.get("errno")
+        if errno in TECHNICAL_CONTEXT_ERRNOS:
+            result["errno"] = errno
+    elif marker in {"HEPH_GCP_COOKING", "HEPHAESTUS_GCP_COOKING"}:
+        event = fields.get("event")
+        if marker == "HEPH_GCP_COOKING" and event in TECHNICAL_CONTEXT_EVENTS:
+            operation = fields.get("operation")
+            phase = fields.get("phase")
+            status = fields.get("status")
+            if operation not in TECHNICAL_CONTEXT_OPERATIONS or phase not in TECHNICAL_CONTEXT_PHASES or status not in TECHNICAL_CONTEXT_STATUS:
+                return None
+            result.update({"kind": "cooking-result", "event": event, "operation": operation, "phase": phase, "status": status})
+            exit_code = fields.get("exit_code")
+            if exit_code is not None:
+                if not exit_code.isdecimal() or int(exit_code) > 255:
+                    return None
+                result["exit_code"] = int(exit_code)
+        elif marker == "HEPHAESTUS_GCP_COOKING":
+            phase = fields.get("phase")
+            exit_code = fields.get("exit")
+            if phase not in TECHNICAL_CONTEXT_PHASES or exit_code is None or not exit_code.isdecimal() or int(exit_code) > 255:
+                return None
+            result.update({
+                "kind": "cooking-terminal",
+                "phase": phase,
+                "status": "failed" if "FAIL" in stripped else "passed",
+                "exit_code": int(exit_code),
+            })
+        else:
+            return None
+    else:
+        event = fields.get("event")
+        phase = fields.get("phase")
+        status = fields.get("status")
+        reason_class = fields.get("reason_class")
+        if event not in {"collection", "collector-failure"} or phase not in {"collection", "evidence"} or status not in TECHNICAL_CONTEXT_STATUS:
+            return None
+        if reason_class not in COLLECTOR_FAILURE_REASON_CLASSES:
+            return None
+        result.update({"kind": "diagnostics-result", "event": event, "phase": phase, "status": status, "error_class": reason_class})
+
+    for field in ("run_id", "attempt_run_id"):
+        value = fields.get(field)
+        if value is None or not COLLECTOR.UUID_RE.fullmatch(value):
+            continue
+        if value.lower() in correlated_run_ids:
+            result[field] = value.lower()
+    result["correlated"] = bool(
+        result.get("run_id") in correlated_run_ids or result.get("attempt_run_id") in correlated_run_ids
+    )
+    return result
+
+
+def _project_technical_context(
+    root: Path,
+    source_records: list[dict[str, Any]],
+    attempts: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Retain bounded typed test/error context without counting failures."""
+
+    correlated_run_ids = {
+        value.lower()
+        for row in attempts
+        for field in ("attempt_run_id", "run_id")
+        if (value := row.get(field))
+    }
+    priority: list[dict[str, Any]] = []
+    recent_context: list[dict[str, Any]] = []
+    priority_keys: set[tuple[tuple[str, str], ...]] = set()
+    recent_keys: set[tuple[tuple[str, str], ...]] = set()
+    source_digests: set[str] = set()
+
+    def is_priority(record: dict[str, Any]) -> bool:
+        return (
+            record.get("kind") in {"runtime-error", "rust-panic", "diagnostics-result"}
+            or record.get("status") in {"failed", "error", "timed-out", "timeout"}
+        )
+
+    for record in source_records:
+        if record.get("label") not in FAILURE_SOURCE_LABELS:
+            continue
+        path = _safe_path(root, record["path"])
+        digest = hashlib.sha256()
+        with path.open("rb") as source_file:
+            for chunk in iter(lambda: source_file.read(64 * 1024), b""):
+                digest.update(chunk)
+        source_digest = digest.hexdigest()
+        if source_digest in source_digests:
+            continue
+        source_digests.add(source_digest)
+        for order, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            projected = _technical_context_record(record["label"], order, line, correlated_run_ids)
+            if projected is None:
+                continue
+            identity = tuple(
+                sorted((key, str(value)) for key, value in projected.items() if key not in {"source", "order"})
+            )
+            if identity in priority_keys or identity in recent_keys:
+                continue
+            if is_priority(projected):
+                if len(priority) >= TECHNICAL_CONTEXT_LIMIT:
+                    evicted = priority.pop(0)
+                    evicted_key = tuple(
+                        sorted(
+                            (key, str(value))
+                            for key, value in evicted.items()
+                            if key not in {"source", "order"}
+                        )
+                    )
+                    priority_keys.remove(evicted_key)
+                priority.append(projected)
+                priority_keys.add(identity)
+            else:
+                if len(recent_context) >= TECHNICAL_CONTEXT_LIMIT:
+                    evicted = recent_context.pop(0)
+                    evicted_key = tuple(
+                        sorted(
+                            (key, str(value))
+                            for key, value in evicted.items()
+                            if key not in {"source", "order"}
+                        )
+                    )
+                    recent_keys.remove(evicted_key)
+                recent_context.append(projected)
+                recent_keys.add(identity)
+
+    selected = priority[:TECHNICAL_CONTEXT_LIMIT]
+    remaining = max(0, TECHNICAL_CONTEXT_LIMIT - len(selected))
+    if remaining:
+        selected.extend(recent_context[-remaining:])
+    selected.sort(key=lambda record: (record["source"], record["order"]))
+    return selected
+
+
 def _project_retry(
     root: Path,
     source_records: list[dict[str, Any]],
@@ -1029,6 +1254,7 @@ def summarize(bundle: Path) -> dict[str, Any]:
         "evidenceScan": _project_evidence_scan(bundle, records),
         "gateResults": _project_gate_results(bundle, records),
         "runtimeResults": _project_runtime_results(bundle, records),
+        "technicalContext": _project_technical_context(bundle, records, attempts),
         "failures": _project_failures(bundle, records, attempts),
         "sources": {
             "available": sorted(set(available)),

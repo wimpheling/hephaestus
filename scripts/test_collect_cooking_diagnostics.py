@@ -17,6 +17,13 @@ SPEC.loader.exec_module(COLLECTOR)
 
 
 class CookingDiagnosticsTests(unittest.TestCase):
+    def test_accepts_all_hours_from_time_display_serialization(self):
+        for hour in range(24):
+            timestamp = f"2026-09-12 {hour}:03:04.123456789 +00:00:00"
+            self.assertEqual(COLLECTOR._safe_scalar("sampled_at", timestamp), timestamp)
+        self.assertIsNone(COLLECTOR.TIMESTAMP_RE.fullmatch("2026-09-12 24:03:04 Z"))
+        self.assertIsNone(COLLECTOR.TIMESTAMP_RE.fullmatch("2026-09-12 99:03:04 Z"))
+
     def test_collects_timeout_output_and_metadata_only_lineage(self):
         with tempfile.TemporaryDirectory() as root:
             root_path = Path(root)
@@ -260,6 +267,8 @@ class CookingDiagnosticsTests(unittest.TestCase):
             ("invalid-json", "{\"event_id\":\n", "snapshot-invalid-json"),
             ("schema", '{"request_body":"secret"}\n', "snapshot-schema"),
             ("enum", '{"attempt_state":"unknown-value"}\n', "snapshot-enum"),
+            ("timestamp", '{"sampled_at":"not-a-timestamp"}\n', "snapshot-schema"),
+            ("attempt", '{"attempt_number":0}\n', "snapshot-enum"),
             ("path", None, "snapshot-path"),
         ]
         with tempfile.TemporaryDirectory() as root:
