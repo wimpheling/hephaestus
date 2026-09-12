@@ -94,6 +94,8 @@ cache_root={root}/cache
 workload_trust=untrusted-pr
 pr_state_root={root}/pr-state
 pr_runtime={root}/pr-state/runtime
+pr_tmp_root={root}/pr-state/tmp
+pr_var_tmp_root={root}/pr-state/var-tmp
 pr_home={root}/pr-state/home
 pr_cargo_home={root}/pr-state/cargo
 pr_rustup_home={root}/pr-state/rustup
@@ -122,6 +124,14 @@ printf '<%s>\\n' "${{pr_sandbox_args[@]}}"
             self.assertIn("--property=BindPaths=/home/forge/.cargo", args)
             self.assertIn(
                 f"--property=BindPaths={root / 'pr-state' / 'runtime'}:/run/user/10001",
+                args,
+            )
+            self.assertIn(
+                f"--property=BindPaths={root / 'pr-state' / 'tmp'}:/tmp",
+                args,
+            )
+            self.assertIn(
+                f"--property=BindPaths={root / 'pr-state' / 'var-tmp'}:/var/tmp",
                 args,
             )
             self.assertNotIn(str(root / "evidence"), args)
@@ -199,6 +209,8 @@ workload_rustup_home=/home/forge/.rustup
 pr_sandbox_args=(
   '--property=ReadWritePaths={checkout} {evidence} {root}/pr-state'
   '--property=BindPaths={root}/pr-state/runtime:/run/user/10001'
+  '--property=BindPaths={root}/pr-state/tmp:/tmp'
+  '--property=BindPaths={root}/pr-state/var-tmp:/var/tmp'
   '--property=InaccessiblePaths=/var/log/hephaestus /run/hephaestus /root'
 )
 {function}
