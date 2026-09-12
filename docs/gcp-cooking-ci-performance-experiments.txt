@@ -149,6 +149,40 @@ Correctness/security coverage:
 Result/reason:
 Implementation commit:
 
+PREPARED BASELINE
+=================
+ID: cold-gcp-pr-sandbox-baseline
+Hypothesis: Establish one cold disposable-GCP timing baseline for the
+instrumented trusted same-repository PR sandbox before testing a performance
+change.
+Baseline (locked environment): source SHA is the exact open PR head supplied
+as `pr_head_sha` at dispatch and recorded by the trusted controller; no
+measured run exists yet. Use protected image
+`hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d`, machine type
+`n2-standard-8`, `150 GB pd-balanced` disk, zone `europe-west1-d`,
+concurrency `1`, and cache generation `1789079827867335` with archive size
+`1783474345` bytes. The controller script
+`scripts/gcp-kvm-smoke.sh` has SHA-256
+`2ad39e50e4877d9308efdd192f4b6febca858ee77b3e1a8542a1838378a4a0f6` as
+measured from the checked-in script.
+Candidate: none before this baseline; the baseline and candidate will use the
+same reviewed same-repository PR sandbox and locked environment.
+Controlled variable: none. No implementation or performance change is made
+before the baseline measurement.
+Run links: no paid baseline dispatch or measured run yet. No-VM preflight run
+`34694334476` is preparation evidence only; PR #19 is the trusted-controller
+foundation.
+Timings (total and phases): to be copied from the retained safe projection
+after dispatch; currently unmeasured.
+Cost proxy: one disposable VM, with no run dispatched yet.
+Correctness/security coverage: require the existing Cooking, browser, golden,
+scanner, marker, provenance and verified post-delete cleanup gates; the
+controller must validate the open same-repository PR number, repository ID
+`1312377552` and exact head SHA together.
+Result/reason: prepared baseline record only; it is neither accepted nor
+rejected.
+Implementation commit: none; this entry is docs-only preparation.
+
 ACCEPTED
 ========
 None yet.
