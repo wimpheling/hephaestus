@@ -242,9 +242,10 @@ Preparation revision: trusted `main` now includes merged PR #23 (preserve the
 diagnostics path when phase timing is unavailable), PR #24 (typed early
 Cooking workload failure stages), PR #25 (constrain the trusted Podman
 bootstrap sandbox and private namespace), and PR #26 (typed Cooking preflight
-failure stages), PR #28 (retain typed preflight failure reasons), and PR #29
-(fix trusted Podman bootstrap lifecycle and procfs visibility), with current
-main at `0146104fb952921e2f6dd63d99b3b42cb2e85333`. The next PR #20 workload
+failure stages), PR #28 (retain typed preflight failure reasons), PR #29
+(fix trusted Podman bootstrap lifecycle and procfs visibility), and PR #30
+(avoid mutating an already-installed Rust target), with current main at
+`c41bc5d7502adbf9f06fd2e8262cc49c2cc0eb43`. The next PR #20 workload
 will use the exact open-PR head supplied at dispatch after this preparation is
 pushed;
 the controller SHA and workload SHA will be recorded with the terminal result.
@@ -277,7 +278,12 @@ supervisor's explicit cleanup and applies the required public procfs statistics
 correction: `ProcSubset=all` exposes `/proc/meminfo`, `/proc/stat` and
 `/proc/uptime` while `ProtectProc=invisible` continues to hide other process
 metadata. This dispatch tests those lifecycle and visibility corrections with
-the same protected image, cache and workload gates.
+the same protected image, cache and workload gates. The preceding attempt
+`34709290982` passed `dependency-setup` and entered `project-build`, but its
+`rustup-target` detail stage failed with exit `1` while the protected image
+already contained `x86_64-unknown-linux-musl`. PR #30 checks the baked target
+first and invokes `rustup target add` only when it is absent; the host build,
+fixed inputs and workload gates remain unchanged.
 Hypothesis and acceptance: this remains a baseline, with no performance change
 under test. It can establish the cold-GCP reference only if all Cooking,
 browser, golden, database, scanner, marker, provenance, cleanup and required
