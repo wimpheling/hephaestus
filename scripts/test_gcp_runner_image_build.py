@@ -348,14 +348,13 @@ class RunnerImageBuildTests(unittest.TestCase):
     def test_smoke_has_explicit_opt_in_custom_image_validation(self):
         smoke = (ROOT / "gcp-kvm-smoke.sh").read_text(encoding="utf-8")
         self.assertIn("GCP_RUNNER_IMAGE", smoke)
-        self.assertIn("manifest.group(1)[:32]", smoke)
+        self.assertIn("gcp-runner-image-compatibility.py", smoke)
         self.assertIn("--image=\"$GCP_RUNNER_IMAGE\"", smoke)
         self.assertIn("--image-family=ubuntu-2404-lts-amd64", smoke)
         self.assertIn("json(name,status,labels,description)", smoke)
-        self.assertIn("runner-image-manifest-sha256", smoke)
-        self.assertIn("runner-image-recipe-sha256", smoke)
-        self.assertIn("runner-image-verifier-sha256", smoke)
-        self.assertIn("runner-image-startup-sha256", smoke)
+        self.assertIn("--expected-recipe", smoke)
+        self.assertIn("--expected-verifier", smoke)
+        self.assertIn("--runtime-startup", smoke)
 
     def test_workflow_keeps_image_build_manual_and_cleanup_separate(self):
         workflow = (ROOT.parent / ".github" / "workflows" / "cooking-e2e.yml").read_text(encoding="utf-8")

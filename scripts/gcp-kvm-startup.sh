@@ -43,6 +43,7 @@ readonly log_file="${HEPH_GCP_LOG_FILE:-/var/log/hephaestus/gcp-kvm-startup.log}
 readonly diagnostics_bucket='hephaestus-508000-cooking-diagnostics'
 readonly diagnostics_max_archive_bytes=67108864
 readonly diagnostics_metadata_root="${HEPH_GCP_DIAGNOSTICS_METADATA_ROOT:-/run/hephaestus/diagnostics}"
+readonly runner_image_compatibility_root="${HEPH_GCP_RUNNER_IMAGE_COMPATIBILITY_ROOT:-/run/hephaestus/runner-image-compatibility}"
 
 phase='initializing'
 revision='unknown'
@@ -81,6 +82,10 @@ runner_image_browser_lock_sha=''
 runner_image_browser_version=''
 runner_image_libkrun_revision=''
 runner_image_libkrunfw_tag=''
+runner_image_runtime_startup_sha=''
+runner_image_compatibility_validator=''
+runner_image_compatibility_records=''
+runtime_startup_script_path="${BASH_SOURCE[0]}"
 
 die() { printf 'gcp-kvm-startup: %s\n' "$*" >&2; return 1; }
 
@@ -350,6 +355,26 @@ stage_diagnostics_metadata() {
   fi
   chmod 0700 "$diagnostics_metadata_root"/*
   chmod 0700 "$diagnostics_metadata_root"
+}
+
+stage_runner_image_compatibility_metadata() {
+  runner_image_compatibility_validator="${runner_image_compatibility_root}/validator.py"
+  runner_image_compatibility_records="${runner_image_compatibility_root}/records.json"
+  install -d -m 0700 "$runner_image_compatibility_root"
+  metadata_value runner-image-compatibility-validator >"$runner_image_compatibility_validator"
+  metadata_value runner-image-compatibility-records >"$runner_image_compatibility_records"
+  local expected_validator_sha expected_records_sha
+  expected_validator_sha="$(metadata_value runner-image-compatibility-validator-sha256)"
+  expected_records_sha="$(metadata_value runner-image-compatibility-records-sha256)"
+  [[ "$expected_validator_sha" =~ ^[0-9a-f]{64}$ ]] ||
+    die 'runner image compatibility validator hash metadata is invalid'
+  [[ "$expected_records_sha" =~ ^[0-9a-f]{64}$ ]] ||
+    die 'runner image compatibility records hash metadata is invalid'
+  [[ "$(sha256sum "$runner_image_compatibility_validator" | awk '{print $1}')" == "$expected_validator_sha" ]] ||
+    die 'runner image compatibility validator hash does not match metadata'
+  [[ "$(sha256sum "$runner_image_compatibility_records" | awk '{print $1}')" == "$expected_records_sha" ]] ||
+    die 'runner image compatibility records hash does not match metadata'
+  chmod 0700 "$runner_image_compatibility_validator" "$runner_image_compatibility_records"
 }
 
 initialize_cooking_gate_results() {
@@ -1111,6 +1136,7 @@ fi
 if [[ "$runner_image_selection" == custom ]]; then
   [[ -f /etc/hephaestus/runner-image-required ]] ||
     die 'custom runner image was requested but its selection marker is missing'
+  stage_runner_image_compatibility_metadata
   if declare -F runner_image_verify >/dev/null 2>&1 && runner_image_verify; then
     runner_image_ready=true
     manifest_field() {
@@ -1157,6 +1183,23 @@ PY
       [[ "$image_hash" == "$expected_hash" ]] ||
         die "runner image ${image_hash_field} does not match the external anchor"
     done
+    runner_image_runtime_startup_sha="$(metadata_value runner-image-runtime-startup-sha256)"
+    [[ "$runner_image_runtime_startup_sha" =~ ^[0-9a-f]{64}$ ]] ||
+      die 'external runner image runtime startup anchor is missing or invalid'
+    [[ -f "$runtime_startup_script_path" && ! -L "$runtime_startup_script_path" ]] ||
+      die 'executing runtime startup script is unavailable or symlinked'
+    actual_runtime_startup_sha="$(sha256sum "$runtime_startup_script_path" | awk '{print $1}')"
+    [[ "$actual_runtime_startup_sha" == "$runner_image_runtime_startup_sha" ]] ||
+      die 'executing runtime startup script does not match the external anchor'
+    python3 "$runner_image_compatibility_validator" guest \
+      --records-file "$runner_image_compatibility_records" \
+      --manifest-file "$runner_image_manifest_path" \
+      --expected-manifest "$runner_image_manifest_sha" \
+      --expected-recipe "$(manifest_field recipe_sha256)" \
+      --expected-verifier "$(manifest_field verifier_sha256)" \
+      --expected-baked-startup "$(manifest_field startup_sha256)" \
+      --runtime-startup "$runner_image_runtime_startup_sha" ||
+      die 'runner image failed reviewed runtime compatibility validation'
     runner_image_browser_lock_sha="$(manifest_field browser_lock_sha256)"
     [[ "$runner_image_browser_lock_sha" =~ ^[0-9a-f]{64}$ ]] ||
       die 'runner image browser lock fingerprint is invalid'

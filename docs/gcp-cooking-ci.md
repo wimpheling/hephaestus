@@ -237,7 +237,7 @@ candidate build [run 34657052702](https://github.com/wimpheling/hephaestus/actio
 at source `672dbf5fe9d1e1bf2cffc9d828913eedfcb79268` completed successfully
 with pinned bake and builder VM/disk cleanup. It produced READY image
 `hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d` with manifest
-`f285fc2b8157f8053383fc98bcaec83d80ac8a0ce03e3e3c91de6de8b6f9efc`; it was
+`f285fc2b8157f8053383fc98bcaec83d80ac8a0ce03e3e3c91de6de8b6f9efc3`; it was
 promoted as the current image. Its real KVM smoke [run 34657895009](https://github.com/wimpheling/hephaestus/actions/runs/34657895009)
 at source `672dbf5fe9d1e1bf2cffc9d828913eedfcb79268` passed from 23:23:47Z
 to 23:29:16Z (5m29s), with the PASS marker at 23:28:08Z, VM absence verified
@@ -367,6 +367,19 @@ That permits an older image to remain usable when its recorded provenance is
 compatible with the current recipe, verifier and startup anchors, while the
 browser lock and baked browser executable/version are checked again at VM
 startup.
+
+The protected image has a reviewed runtime compatibility record because its
+immutable baked startup predates the current trusted startup supervisor. The
+record binds the full manifest fingerprint, baked recipe SHA, baked verifier
+SHA, baked startup SHA, and one allowed current runtime startup SHA. The
+controller validates that record before VM creation; startup stages the same
+record through hash-anchored metadata and validates it again after the
+immutable manifest, dependency, browser, label, and host checks. The manifest
+`startup_sha256` remains the baked file hash. The separate
+`runner-image-runtime-startup-sha256` identifies and is checked against the
+actual metadata startup script that is executing. Normal images whose baked
+and runtime startup hashes are equal continue through the existing strict
+equality path. Unknown divergent image, recipe, or runtime tuples fail closed.
 
 After a build is human-reviewed, pass that name to a later mode in the same
 workflow. The `runner_image` input is optional for `diagnostic`, `smoke` and
@@ -633,6 +646,12 @@ files, `/root`, and the trusted runtime paths are inaccessible. Private
 per-run state supplies `HOME` and the npm cache. The baked Rust toolchain and
 `/home/forge/.cargo` are the only writable host tool paths exposed to the
 workload; `/home/forge/.rustup` and the baked browser directory are read-only.
+Trusted workflow image imports run before PR setup but use that same private
+per-run `HOME` and runtime bind, so rootless Podman sees the imported image
+store (with `XDG_DATA_HOME` anchored below that HOME) during the workload
+without exposing the trusted `/home/forge` store.
+The imported references remain digest-checked before PR execution, while the
+cache itself stays read-only.
 The root runtime resets its own `PATH` to root-owned system directories before
 staging or collecting; the forge cargo path is passed only to workload units.
 PR units bind a private per-run runtime directory at `/run/user/10001` so the
