@@ -37,6 +37,10 @@ class GcpPrSandboxTests(unittest.TestCase):
             '"--property=BindPaths=$pr_runtime:/run/user/10001"',
             source,
         )
+        self.assertIn(
+            'workflow_image_sandbox_args=("${pr_sandbox_filesystem_args[@]}")',
+            source,
+        )
 
     def test_root_helpers_ignore_forge_writable_cargo_bin(self) -> None:
         """A forge-planted interpreter must not affect root-side helpers."""
@@ -74,7 +78,7 @@ class GcpPrSandboxTests(unittest.TestCase):
         """Each systemd property must receive its complete path list as one argv."""
 
         source = RUNTIME.read_text(encoding="utf-8")
-        start = source.index("    pr_sandbox_args=(\n") + len("    ")
+        start = source.index("    pr_sandbox_filesystem_args=(\n") + len("    ")
         end = source.index("\n    )", start) + len("\n    )")
         assignment = source[start:end]
         result = subprocess.run(
@@ -86,7 +90,10 @@ class GcpPrSandboxTests(unittest.TestCase):
                 browser_root=/srv/hephaestus/playwright-browsers
                 pr_state_root=/srv/hephaestus/pr-state
                 pr_runtime=/srv/hephaestus/pr-state/runtime
+                pr_tmp_root=/srv/hephaestus/pr-state/tmp
+                pr_var_tmp_root=/srv/hephaestus/pr-state/var-tmp
                 {assignment}
+                pr_sandbox_args=( '--property=NoNewPrivileges=yes' "${{pr_sandbox_filesystem_args[@]}}" )
                 printf '<%s>\\n' "${{pr_sandbox_args[@]}}"
             """],
             text=True,
@@ -123,6 +130,8 @@ class GcpPrSandboxTests(unittest.TestCase):
                 "/home/forge/.cargo",
                 "/srv/hephaestus/pr-state",
                 "/srv/hephaestus/pr-state/runtime:/run/user/10001",
+                "/srv/hephaestus/pr-state/tmp:/tmp",
+                "/srv/hephaestus/pr-state/var-tmp:/var/tmp",
             },
         )
         self.assertEqual(
@@ -252,6 +261,8 @@ smoke_temporary_root={self._shell_quote(root / 'tmp')}
 work_root={self._shell_quote(root)}
 pr_state_root={self._shell_quote(root / 'pr-state')}
 pr_runtime={self._shell_quote(root / 'pr-state' / 'runtime')}
+pr_tmp_root={self._shell_quote(root / 'pr-state' / 'tmp')}
+pr_var_tmp_root={self._shell_quote(root / 'pr-state' / 'var-tmp')}
 pr_home={self._shell_quote(root / 'pr-state' / 'home')}
 pr_cargo_home={self._shell_quote(root / 'pr-state' / 'cargo')}
 pr_rustup_home={self._shell_quote(root / 'pr-state' / 'rustup')}
