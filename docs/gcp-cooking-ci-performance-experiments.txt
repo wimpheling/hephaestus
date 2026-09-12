@@ -242,9 +242,11 @@ Preparation revision: trusted `main` now includes merged PR #23 (preserve the
 diagnostics path when phase timing is unavailable), PR #24 (typed early
 Cooking workload failure stages), PR #25 (constrain the trusted Podman
 bootstrap sandbox and private namespace), and PR #26 (typed Cooking preflight
-failure stages), with current main at
-`75caf103bb8d93a61e7fb14e5326662beaaedbe1`. The next PR #20 workload will use
-the exact open-PR head supplied at dispatch after this preparation is pushed;
+failure stages), PR #28 (retain typed preflight failure reasons), and PR #29
+(fix trusted Podman bootstrap lifecycle and procfs visibility), with current
+main at `0146104fb952921e2f6dd63d99b3b42cb2e85333`. The next PR #20 workload
+will use the exact open-PR head supplied at dispatch after this preparation is
+pushed;
 the controller SHA and workload SHA will be recorded with the terminal result.
 Reason: attempt `34702725501` reached the Cooking workload but its failure was
 only classified by the generic `examples/cooking/run.sh` shell handler, while
@@ -266,6 +268,16 @@ pairs are `host-identity` (`unsupported-user`, `unsupported-architecture`),
 `rust-image` (`image-unavailable`, `image-pull-failed`), and the image probe
 stages (`image-probe-failed`); `preflight-command-checks` uses
 `missing-command` with the bounded command name.
+The concrete local reproduction behind this dispatch imported the workflow
+images in a one-shot unit whose Podman pause process was killed before the
+readiness check; the resulting `podman info` failure was observed while the
+PR unit retained `NoNewPrivileges`. PR #28 preserves the typed reason and test
+fields in the safe projection. PR #29 keeps the import unit alive until the
+supervisor's explicit cleanup and applies the required public procfs statistics
+correction: `ProcSubset=all` exposes `/proc/meminfo`, `/proc/stat` and
+`/proc/uptime` while `ProtectProc=invisible` continues to hide other process
+metadata. This dispatch tests those lifecycle and visibility corrections with
+the same protected image, cache and workload gates.
 Hypothesis and acceptance: this remains a baseline, with no performance change
 under test. It can establish the cold-GCP reference only if all Cooking,
 browser, golden, database, scanner, marker, provenance, cleanup and required
