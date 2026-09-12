@@ -171,6 +171,28 @@ finish
         self.assertEqual(COLLECTOR.main(args), 0)
         return archive
 
+    def _cooking_gate_results(self, root: Path, *, workload_exit: int = 0) -> Path:
+        helper = ROOT / "cooking-gate-results.py"
+        state = "passed" if workload_exit == 0 else "failed"
+        reason = "none" if workload_exit == 0 else "workload-failed"
+        gate_results = root / "gate-results.json"
+        value = {
+            "schema": 1,
+            "revision": "a" * 40,
+            "script_sha256": hashlib.sha256(helper.read_bytes()).hexdigest(),
+            "test_mode": "gcp-cooking",
+            "overall_exit_code": workload_exit,
+            "supervisor_exit_code": workload_exit,
+            "finalized": True,
+            "gates": {
+                "workload": {"state": state, "exit_code": workload_exit, "reason_class": reason},
+                "evidence-scan": {"state": "passed", "exit_code": 0, "reason_class": "none"},
+                "browser-validation": {"state": "passed", "exit_code": 0, "reason_class": "none"},
+            },
+        }
+        gate_results.write_text(json.dumps(value) + "\n", encoding="utf-8")
+        return gate_results
+
     def test_failed_gate_sidecar_is_triaged_before_acceptance_fails(self):
         """A valid failed Cooking sidecar retains triage evidence and fails the gate."""
 
@@ -209,6 +231,43 @@ finish
             self.assertEqual(status["triage"]["gateResults"]["gates"]["workload"]["state"], "failed")
             self.assertEqual(status["gateAcceptance"], "failed")
             self.assertEqual(status["error"], "gate-results-acceptance-failed")
+
+    def test_phase_timing_failure_preserves_safe_triage_and_original_gate(self):
+        """Timing evidence failure cannot discard a valid archive or workload result."""
+
+        for failure, expected_error in (
+            ("download", "phase-timing-download-failed"),
+            ("invalid", "phase-timing-invalid"),
+            ("oversize", "phase-timing-too-large"),
+        ):
+            for workload_exit in (0, 7):
+                with self.subTest(failure=failure, workload_exit=workload_exit), tempfile.TemporaryDirectory(
+                    prefix="heph-gcp-phase-timing-failure-"
+                ) as directory:
+                    root = Path(directory)
+                    gate_results = self._cooking_gate_results(root, workload_exit=workload_exit)
+                    archive = self._archive(root, gate_results)
+                    result = self._run_download(
+                        root,
+                        archive,
+                        expected_mode="gcp-cooking",
+                        phase_timing_failure=failure,
+                    )
+                    self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                    status = json.loads((root / "status.json").read_text(encoding="utf-8"))
+                    self.assertEqual(status["download"], "passed")
+                    self.assertEqual(status["scan"], "passed")
+                    self.assertEqual(status["phaseTiming"], "unavailable")
+                    self.assertEqual(status["error"], expected_error)
+                    self.assertEqual(status["timingAcceptance"], "failed")
+                    self.assertEqual(status["gateAcceptance"], "passed" if workload_exit == 0 else "failed")
+                    if workload_exit:
+                        self.assertEqual(status["gateAcceptanceError"], "gate-results-acceptance-failed")
+                    self.assertEqual(status["triage"]["gateResults"]["overall_exit_code"], workload_exit)
+                    self.assertEqual(status["archiveBytes"], archive.stat().st_size)
+                    self.assertEqual(status["archiveSha256"], hashlib.sha256(archive.read_bytes()).hexdigest())
+                    self.assertFalse((root / "gcp-cooking-phase-timing.json").exists())
+                    self.assertFalse((root / "gcp-cooking-phase-timing.json.download").exists())
 
     def test_missing_current_gate_sidecar_preserves_safe_triage(self):
         """A current archive missing its sidecar fails after safe triage."""
@@ -1006,6 +1065,8 @@ finish
         source_identity: tuple[str, str, str] | None = None,
         source_api_sha: str | None = None,
         require_source: bool = False,
+        expected_mode: str | None = None,
+        phase_timing_failure: str | None = None,
     ):
         fake_bin = root / "bin"
         fake_bin.mkdir()
@@ -1039,6 +1100,9 @@ finish
             "  exit 1\n"
             "fi\n"
             f"if [[ \"${{1:-}} ${{2:-}}\" == \"storage cp\" ]]; then\n"
+            f"  if [[ \"${{3:-}}\" == *.phase-timing.json && \"${{HEPH_FAKE_PHASE_TIMING_FAILURE:-}}\" == download ]]; then exit 17; fi\n"
+            f"  if [[ \"${{3:-}}\" == *.phase-timing.json && \"${{HEPH_FAKE_PHASE_TIMING_FAILURE:-}}\" == invalid ]]; then printf '{{}}\\n' >\"$4\"; exit 0; fi\n"
+            f"  if [[ \"${{3:-}}\" == *.phase-timing.json && \"${{HEPH_FAKE_PHASE_TIMING_FAILURE:-}}\" == oversize ]]; then head -c 65537 /dev/zero >\"$4\"; exit 0; fi\n"
             f"  {'sleep 5' if hang else f'if (( {exit_code} == 0 )); then cp {archive} \"$4\"; fi'}\n"
             f"  exit {exit_code}\n"
             "fi\n"
@@ -1071,6 +1135,11 @@ finish
             "GCP_ZONE": zone,
             "RUNNER_TEMP": str(root),
         }
+        if expected_mode is not None:
+            env["GCP_DIAGNOSTICS_EXPECT_MODE"] = expected_mode
+        if phase_timing_failure is not None:
+            env["GCP_EXPECT_PHASE_TIMING"] = "true"
+            env["HEPH_FAKE_PHASE_TIMING_FAILURE"] = phase_timing_failure
         if source_identity is not None:
             source_run_id, source_attempt, source_sha = source_identity
             env.update(
