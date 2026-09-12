@@ -553,6 +553,33 @@ rollback is to remove the five fixture lines and close PR #34; the temporary
 fixture must never be merged. Preserve the run as diagnostic evidence even if
 all gates pass; record no ACCEPTED or REJECTED performance result.
 
+
+FIXTURE LIFECYCLE EVIDENCE: RUN 34719137588
+============================================
+The temporary draft fixture PR #34 was dispatched once at exact head
+`249c24010c9180934f084240687e80d72ff69df1` against trusted controller main
+`cfdf273ab82e769ffb9c0fcfe14503607e09fced`: [run
+34719137588](https://github.com/wimpheling/hephaestus/actions/runs/34719137588).
+The reviewed fixture's `(exit 42)` was preserved as a real Cooking workload
+failure at `dependency-setup`. This is live workload-failure lifecycle evidence,
+not a performance baseline and not an ACCEPTED or REJECTED result.
+
+The workload gate failed with exit `42`. Browser execution was expected but was
+not reached: its report was missing, status was `not-run`, and retained default
+counts were `0` passed, `0` failed, `0` skipped and `0` timed out; browser
+validation failed with `browser-report-invalid`. Private diagnostics upload was
+verified by download; diagnostics download and evidence scan passed, checking
+`7` files and `5,697` bytes. The owned VM was verified absent after cleanup.
+
+The precise safe supervisor timing classification was
+`reasonClass=unclosed-start`, `failedPhase=cooking-supervisor`,
+`failedClockDomain=guest-runtime`, `failedOccurrence=1`. The safe phase timing
+projection was unavailable despite `18` available phases and no listed missing
+phases. The fixture PR #34 remains open as a draft and must never be merged;
+rollback is removal of its five fixture lines followed by closing the PR. No
+second fixture run or timeout dispatch is authorized until the pairing fix is
+merged and the next bounded diagnostic validates it.
+
 ACCEPTED
 ========
 None yet.
