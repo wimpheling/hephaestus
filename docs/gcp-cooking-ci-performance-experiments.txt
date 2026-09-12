@@ -417,6 +417,29 @@ no conclusion is recorded here. This is diagnostic infrastructure/workload
 evidence only: no baseline/performance result and no ACCEPTED or REJECTED
 decision is recorded; the prepared baseline remains pending a valid run.
 
+Terminal baseline attempt: [run 34711223506](https://github.com/wimpheling/hephaestus/actions/runs/34711223506)
+used trusted controller SHA
+`1a9b666a48efc1c212749f304a23f2d7034f5cb8` and workload SHA
+`66ff322eb66072a23ca5f0c63ab4c69e8131affc` with the locked image, immutable
+cache generation, machine, disk, zone and concurrency above. Attempt `1`
+records trusted controller timings of `preflight-quota=2415` ms,
+`preflight-cache=1667` ms, `vm-create=12124` ms,
+`vm-wait=1569374` ms, `vm-delete=53395` ms,
+`cleanup-verification=1003` ms and `post-delete-download=1451` ms; all
+completed successfully. VM deletion and cleanup verification passed, and the
+owned VM was independently verified absent.
+Safe diagnostics upload/download and evidence scan passed; the retained scan
+checked `26` files and `1,155,817` bytes. The workload gate passed. Browser
+validation completed and passed with `2` passed, `0` failed, `0` skipped and
+`0` timed out. The safe projection has no separate authoritative golden or
+PostgreSQL count fields; those requested counts are absent from the retained
+projection. The safe gate record is passed, but the workload phase-timing
+projection download failed (`phase-timing-download-failed`), leaving phase
+timing unavailable and timing acceptance failed. This is an INVALID BASELINE:
+correctness evidence passed, but no performance result is accepted and no
+ACCEPTED or REJECTED decision is recorded; the prepared baseline remains
+pending a valid timing artifact.
+
 ACCEPTED
 ========
 None yet.
