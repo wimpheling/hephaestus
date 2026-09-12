@@ -283,11 +283,15 @@ run_cooking() {
                 esac
                 workload_stage="$1"
                 printf "HEPH_GCP_COOKING event=workload-step operation=cooking-workload phase=cooking stage=%s status=start\\n" "$workload_stage"
-                phase_timing_start "$workload_stage"
+                if [[ "$workload_stage" != gateway-e2e ]]; then
+                    phase_timing_start "$workload_stage"
+                fi
             }
             workload_step_pass() {
                 local step="$1"
-                phase_timing_end "$step" passed
+                if [[ "$step" != gateway-e2e ]]; then
+                    phase_timing_end "$step" passed
+                fi
                 printf "HEPH_GCP_COOKING event=workload-step operation=cooking-workload phase=cooking stage=%s status=passed\\n" "$step"
             }
             workload_failure() {

@@ -22,6 +22,7 @@ class CookingRunWorkloadMarkerTests(unittest.TestCase):
         cargo_status: int = 0,
         gateway_status: int = 0,
         timing_helper_status: int | None = None,
+        timing_enabled: bool = False,
     ) -> subprocess.CompletedProcess[str]:
         with tempfile.TemporaryDirectory(prefix="heph-cooking-run-marker-") as raw:
             root = Path(raw)
@@ -72,7 +73,7 @@ class CookingRunWorkloadMarkerTests(unittest.TestCase):
                 "GITHUB_RUN_ID": "123",
                 "GITHUB_RUN_ATTEMPT": "1",
             }
-            if timing_helper_status is not None:
+            if timing_enabled or timing_helper_status is not None:
                 environment.update(
                     HEPH_GCP_PHASE_TIMING_PATH=str(root / "phase-timing.jsonl"),
                     HEPH_GCP_PHASE_TIMING_SOURCE_SHA="a" * 40,
@@ -119,6 +120,11 @@ class CookingRunWorkloadMarkerTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         for stage in ("dependency-setup", "project-build", "gateway-e2e"):
             self.assertIn(f"stage={stage} status=passed", result.stdout)
+
+    def test_success_with_real_timing_helper_skips_marker_only_gateway_stage(self) -> None:
+        result = self.run_fixture(timing_enabled=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("stage=gateway-e2e status=passed", result.stdout)
 
 
 if __name__ == "__main__":
