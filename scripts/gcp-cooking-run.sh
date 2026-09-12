@@ -40,6 +40,8 @@ readonly pr_state_root="${work_root}/pr-state"
 readonly pr_home="${pr_state_root}/home"
 readonly pr_npm_cache="${pr_state_root}/npm-cache"
 readonly pr_runtime="${pr_state_root}/runtime"
+readonly pr_tmp_root="${pr_state_root}/tmp"
+readonly pr_var_tmp_root="${pr_state_root}/var-tmp"
 
 phase='initializing'
 stage_root=''
@@ -56,6 +58,7 @@ runner_image_browser_version="${HEPH_GCP_RUNNER_IMAGE_BROWSER_VERSION:-}"
 runner_image_node_version="${HEPH_GCP_RUNNER_IMAGE_NODE_VERSION:-}"
 workload_trust="${HEPH_GCP_WORKLOAD_TRUST:-trusted}"
 pr_sandbox_args=()
+pr_sandbox_filesystem_args=()
 workload_home='/home/forge'
 workload_cargo_home='/home/forge/.cargo'
 workload_rustup_home='/home/forge/.rustup'
@@ -95,7 +98,8 @@ configure_pr_sandbox() {
     # boundary.  These are deliberately array elements: each systemd
     # property must remain one complete argv value, including its path list.
     install -d -m 0700 -o forge -g forge \
-        "$pr_state_root" "$pr_home" "$pr_npm_cache" "$pr_runtime"
+        "$pr_state_root" "$pr_home" "$pr_npm_cache" "$pr_runtime" \
+        "$pr_tmp_root" "$pr_var_tmp_root"
     workload_home="$pr_home"
     # The baked image's Rust toolchain and cargo executable live under forge's
     # home.  Expose only those reviewed paths; cargo may update its local
@@ -103,8 +107,10 @@ configure_pr_sandbox() {
     workload_cargo_home='/home/forge/.cargo'
     workload_rustup_home='/home/forge/.rustup'
     workload_npm_cache="$pr_npm_cache"
-    pr_sandbox_args=(
-        '--property=NoNewPrivileges=yes'
+    # Keep filesystem and /proc restrictions identical for the trusted image
+    # bootstrap and PR units.  The bootstrap omits only NNP so rootless Podman
+    # can invoke newuidmap while creating its persistent pause namespace.
+    pr_sandbox_filesystem_args=(
         '--property=ProtectProc=invisible'
         '--property=ProcSubset=pid'
         '--property=ProtectSystem=strict'
@@ -116,15 +122,19 @@ configure_pr_sandbox() {
         '--property=BindPaths=/home/forge/.cargo'
         "--property=BindPaths=$pr_state_root"
         "--property=BindPaths=$pr_runtime:/run/user/10001"
+        "--property=BindPaths=$pr_tmp_root:/tmp"
+        "--property=BindPaths=$pr_var_tmp_root:/var/tmp"
         "--property=ReadWritePaths=$checkout_root $evidence_root $pr_state_root"
         '--property=InaccessiblePaths=/var/log/hephaestus /run/hephaestus /root'
+    )
+    pr_sandbox_args=(
+        '--property=NoNewPrivileges=yes'
+        "${pr_sandbox_filesystem_args[@]}"
     )
     # Trusted image import must use the same private Podman runtime namespace
     # that the later PR workload receives. The import still runs before any
     # PR-controlled setup starts.
-    workflow_image_sandbox_args=(
-        "--property=BindPaths=$pr_runtime:/run/user/10001"
-    )
+    workflow_image_sandbox_args=("${pr_sandbox_filesystem_args[@]}")
 }
 
 [[ "$(id -u)" -eq 0 ]] || fail 'this helper must be invoked as root'
