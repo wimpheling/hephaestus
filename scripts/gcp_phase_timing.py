@@ -92,6 +92,31 @@ CLOCK_DOMAINS = {
     "workload-gateway",
     "collection",
 }
+TIMING_DIAGNOSTIC_STAGES = {
+    "workload-source",
+    "supervisor-source",
+    "workload-validation",
+    "supervisor-validation",
+    "marker-import",
+    "projection",
+    "final-projection",
+    "upload",
+}
+TIMING_DIAGNOSTIC_REASONS = {
+    "missing-source",
+    "record-read",
+    "record-write",
+    "invalid",
+    "duplicate",
+    "identity",
+    "incomplete",
+    "ordering",
+    "missing-phase",
+    "trust",
+    "clock-domain",
+    "path",
+    "unknown",
+}
 SUPERVISOR_PHASE_DOMAINS = {
     "archive": {"guest-startup"},
     "evidence-scan": {"guest-startup"},
@@ -166,15 +191,29 @@ def timing_error_class(error: Exception) -> str:
     """Map helper failures to a fixed diagnostic class without echoing input."""
 
     message = str(error).lower()
+    if "duplicate" in message:
+        return "duplicate"
     if any(token in message for token in ("run_id", "attempt", "source_sha", "fingerprint", "identity")):
         return "identity"
+    if "required phase is missing" in message:
+        return "missing-phase"
+    if "trust" in message:
+        return "trust"
+    if "clock domain" in message:
+        return "clock-domain"
+    if any(token in message for token in ("incomplete", "no matching", "precedes")):
+        return "incomplete"
+    if "monotonic order" in message:
+        return "ordering"
     if "path" in message or "symlink" in message:
         return "path"
     if any(token in message for token in ("read", "decoded", "json")):
         return "record-read"
     if any(token in message for token in ("writ", "size bound", "count exceeds")):
         return "record-write"
-    return "pair"
+    if "invalid" in message or "unsupported" in message or "schema" in message:
+        return "invalid"
+    return "unknown"
 
 
 def bounded_int(value: Any, name: str) -> int:
@@ -284,6 +323,95 @@ def read_records(path: Path) -> list[dict[str, Any]]:
     except OSError as exc:
         fail(f"timing file cannot be read: {exc}")
     return records
+
+
+def timing_diagnostic(
+    path: Path,
+    *,
+    stage: str,
+    required: set[str],
+    required_trust: str | None = None,
+    expected_run_id: str | None = None,
+    expected_attempt: int | None = None,
+    expected_source_sha: str | None = None,
+    expected_image_fingerprint: str | None = None,
+) -> dict[str, Any]:
+    """Return a closed diagnostic summary while never returning source text.
+
+    This deliberately has a successful process exit: it is called after a
+    failed timing operation and must not replace the workload or collector
+    result.  Phase names are admitted only from ``PHASES`` and all output
+    fields have bounded vocabularies/counts.
+    """
+
+    if stage not in TIMING_DIAGNOSTIC_STAGES:
+        raise TimingError("timing diagnostic stage is invalid")
+    safe_required = required & PHASES
+    available: set[str] = set()
+    reason = "unknown"
+    records: list[dict[str, Any]] = []
+    if path.is_symlink() or any(parent.is_symlink() for parent in path.parents):
+        reason = "path"
+    elif not path.exists():
+        reason = "missing-source"
+    elif not path.is_file():
+        reason = "path"
+    else:
+        try:
+            records = read_records(path)
+            available = {record["phase"] for record in records}
+            validate_pairs(
+                records,
+                required=safe_required,
+                required_trust=required_trust,
+                expected_run_id=expected_run_id,
+                expected_attempt=expected_attempt,
+                expected_source_sha=expected_source_sha,
+                expected_image_fingerprint=expected_image_fingerprint,
+            )
+        except (TimingError, OSError, TypeError, ValueError) as error:
+            reason = timing_error_class(error)
+            # A valid prefix is useful even when a later line fails.  Read it
+            # through a bounded JSON pass and admit only known phase names.
+            try:
+                total_bytes = 0
+                with path.open(encoding="utf-8") as handle:
+                    for line_number in range(MAX_RECORDS):
+                        line = handle.readline(MAX_RECORD_BYTES + 1)
+                        if not line:
+                            break
+                        line_bytes = len(line.encode("utf-8"))
+                        total_bytes += line_bytes
+                        if line_bytes > MAX_RECORD_BYTES or total_bytes > MAX_RECORDS * MAX_RECORD_BYTES:
+                            if reason == "unknown":
+                                reason = "record-write"
+                            break
+                        try:
+                            value = json.loads(line)
+                        except (TypeError, ValueError):
+                            continue
+                        phase = value.get("phase") if isinstance(value, dict) else None
+                        if isinstance(phase, str) and phase in PHASES:
+                            available.add(phase)
+                        if len(available) >= len(PHASES):
+                            break
+            except (OSError, UnicodeError):
+                if reason == "unknown":
+                    reason = "record-read"
+    ordered_available = [phase for phase in PHASE_ORDER if phase in available]
+    ordered_missing = [phase for phase in PHASE_ORDER if phase in safe_required - available]
+    if reason not in TIMING_DIAGNOSTIC_REASONS:
+        reason = "unknown"
+    return {
+        "event": "phase-timing",
+        "status": "unavailable",
+        "failed_stage": stage,
+        "reason_class": reason,
+        "available_count": len(ordered_available),
+        "available_phases": ",".join(ordered_available) or "none",
+        "missing_count": len(ordered_missing),
+        "missing_phases": ",".join(ordered_missing) or "none",
+    }
 
 
 def write_record(path: Path, value: dict[str, Any]) -> None:
@@ -659,6 +787,15 @@ def parser() -> argparse.ArgumentParser:
     projection_parser.add_argument("--expected-attempt", type=int)
     projection_parser.add_argument("--expected-source-sha")
     projection_parser.add_argument("--expected-image-fingerprint")
+    diagnose = sub.add_parser("diagnose")
+    diagnose.add_argument("--path", required=True)
+    diagnose.add_argument("--failed-stage", required=True, choices=sorted(TIMING_DIAGNOSTIC_STAGES))
+    diagnose.add_argument("--require-phase", action="append", choices=sorted(PHASES), default=[])
+    diagnose.add_argument("--require-trust", choices=sorted(TRUST))
+    diagnose.add_argument("--expected-run-id")
+    diagnose.add_argument("--expected-attempt", type=int)
+    diagnose.add_argument("--expected-source-sha")
+    diagnose.add_argument("--expected-image-fingerprint")
     markers = sub.add_parser("import-markers")
     markers.add_argument("--input", required=True)
     markers.add_argument("--output", required=True)
@@ -671,6 +808,19 @@ def parser() -> argparse.ArgumentParser:
 
 
 def run(args: argparse.Namespace) -> int:
+    if args.command == "diagnose":
+        summary = timing_diagnostic(
+            Path(args.path),
+            stage=args.failed_stage,
+            required=set(args.require_phase),
+            required_trust=args.require_trust,
+            expected_run_id=args.expected_run_id,
+            expected_attempt=args.expected_attempt,
+            expected_source_sha=args.expected_source_sha,
+            expected_image_fingerprint=args.expected_image_fingerprint,
+        )
+        print("HEPH_GCP_DIAGNOSTICS " + " ".join(f"{key}={value}" for key, value in summary.items()))
+        return 0
     if args.command == "validate":
         path = path_for(args.path)
         validate_pairs(

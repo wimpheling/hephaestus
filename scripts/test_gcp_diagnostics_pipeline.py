@@ -1985,6 +1985,96 @@ PY
                 failures,
             )
 
+    def test_phase_timing_diagnostic_survives_collector_and_triage(self):
+        """A fixed timing reason remains available after both safe filters."""
+
+        with tempfile.TemporaryDirectory(prefix="heph-gcp-phase-timing-diagnostic-") as directory:
+            root = Path(directory)
+            source = root / "serial.log"
+            source.write_text(
+                "HEPH_GCP_DIAGNOSTICS event=phase-timing status=unavailable "
+                "failed_stage=projection reason_class=missing-phase "
+                "available_count=2 available_phases=dependency-setup,project-build "
+                "missing_count=1 missing_phases=browser-setup\n",
+                encoding="utf-8",
+            )
+            bundle = root / "bundle"
+            self.assertEqual(COLLECTOR.collect(bundle, [f"serial={source}"], None, None, None), 0)
+            projected = (bundle / "sources" / "serial").read_text(encoding="utf-8")
+            self.assertEqual(projected, source.read_text(encoding="utf-8"))
+            timing = TRIAGE.summarize(bundle)["phaseTiming"]
+            self.assertEqual(
+                timing,
+                {
+                    "status": "unavailable",
+                    "failedStage": "projection",
+                    "reasonClass": "missing-phase",
+                    "availablePhases": ["dependency-setup", "project-build"],
+                    "missingPhases": ["browser-setup"],
+                    "availableCount": 2,
+                    "missingCount": 1,
+                },
+            )
+
+    def test_phase_timing_diagnostic_accepts_long_phase_lists(self):
+        """The phase list is bounded by its enum, even when longer than a scalar value."""
+
+        all_phases = list(COLLECTOR.PHASE_TIMING_PHASE_ORDER)
+        self.assertGreater(len(",".join(all_phases)), 128)
+        with tempfile.TemporaryDirectory(prefix="heph-gcp-phase-timing-long-list-") as directory:
+            root = Path(directory)
+            source = root / "serial.log"
+            source.write_text(
+                "HEPH_GCP_DIAGNOSTICS event=phase-timing status=unavailable "
+                "failed_stage=projection reason_class=incomplete "
+                f"available_count={len(all_phases)} available_phases={','.join(all_phases)} "
+                "missing_count=0 missing_phases=none\n",
+                encoding="utf-8",
+            )
+            bundle = root / "bundle"
+            self.assertEqual(COLLECTOR.collect(bundle, [f"serial={source}"], None, None, None), 0)
+            timing = TRIAGE.summarize(bundle)["phaseTiming"]
+            self.assertEqual(timing["availableCount"], len(all_phases))
+            self.assertEqual(timing["availablePhases"], all_phases)
+            self.assertEqual(timing["missingPhases"], [])
+
+    def test_phase_timing_diagnostic_rejects_unknown_payload_duplicate_and_count(self):
+        """Both projection layers reject unallowlisted timing diagnostic fields."""
+
+        malformed_markers = (
+            "failed_stage=untrusted-stage",
+            "payload=private",
+            "available_count=999",
+            "reason_class=missing-phase reason_class=unknown",
+        )
+        for malformed in malformed_markers:
+            with self.subTest(malformed=malformed), tempfile.TemporaryDirectory(
+                prefix="heph-gcp-phase-timing-invalid-"
+            ) as directory:
+                root = Path(directory)
+                marker = (
+                    "HEPH_GCP_DIAGNOSTICS event=phase-timing status=unavailable "
+                    "failed_stage=projection reason_class=missing-phase "
+                    "available_count=1 available_phases=project-build "
+                    "missing_count=0 missing_phases=none\n"
+                )
+                if malformed.startswith("failed_stage="):
+                    marker = marker.replace("failed_stage=projection", malformed)
+                elif malformed.startswith("available_count="):
+                    marker = marker.replace("available_count=1", malformed)
+                else:
+                    marker = marker.replace("none\n", f"none {malformed}\n")
+                source = root / "serial.log"
+                source.write_text(marker, encoding="utf-8")
+                destination = root / "projected"
+                with self.assertRaises(COLLECTOR.CollectionError):
+                    COLLECTOR._project_text(source, destination)
+
+                self._archive(root)
+                (root / "bundle" / "sources" / "serial").write_text(marker, encoding="utf-8")
+                with self.assertRaises(ValueError):
+                    TRIAGE.summarize(root / "bundle")
+
     def test_workload_budget_marker_keeps_safe_deadline_fields(self):
         with tempfile.TemporaryDirectory(prefix="heph-gcp-workload-budget-") as directory:
             root = Path(directory)

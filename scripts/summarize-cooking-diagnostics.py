@@ -40,7 +40,7 @@ SOURCE_LABELS = {
 SAFE_STATUS = COLLECTOR.SNAPSHOT_STATUS_VALUES
 TRIAGE_FIELDS = {
     "schema", "collectionStatus", "rejectedSources", "denial", "attempts", "snapshotStatus", "retry", "sources", "failures",
-    "browserObservations", "browser", "evidenceScan", "gateResults", "runtimeResults", "technicalContext",
+    "browserObservations", "browser", "evidenceScan", "gateResults", "runtimeResults", "technicalContext", "phaseTiming",
 }
 DENIAL_FIELDS = {"denial_stage", "denial_class", "run_id"}
 DENIAL_STAGES = {
@@ -649,6 +649,73 @@ def _project_runtime_results(
             if len(results) >= 12:
                 return results
     return results
+
+
+def _project_phase_timing_diagnostic(
+    root: Path,
+    source_records: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Retain the controller's bounded timing failure summary."""
+
+    candidates: list[dict[str, Any]] = []
+    for record in source_records:
+        if record.get("label") not in {"serial", "runtime-log", "runtime-structured"}:
+            continue
+        path = _safe_path(root, record["path"])
+        for line in path.read_text(encoding="utf-8").splitlines():
+            try:
+                canonical = COLLECTOR._project_phase_timing_diagnostic(line)
+            except COLLECTOR.CollectionError as error:
+                raise ValueError("phase timing diagnostic is invalid") from error
+            if canonical is None:
+                continue
+            fields: dict[str, str] = {}
+            for token in canonical.split()[1:]:
+                key, separator, value = token.partition("=")
+                if not separator or key in fields:
+                    raise ValueError("phase timing diagnostic fields are duplicated")
+                fields[key] = value
+            expected = {
+                "event", "status", "failed_stage", "reason_class", "available_count", "available_phases",
+                "missing_count", "missing_phases",
+            }
+            if set(fields) != expected or fields["event"] != "phase-timing" or fields["status"] != "unavailable":
+                raise ValueError("phase timing diagnostic fields are invalid")
+            if fields["failed_stage"] not in COLLECTOR.PHASE_TIMING_DIAGNOSTIC_STAGES:
+                raise ValueError("phase timing diagnostic stage is invalid")
+            if fields["reason_class"] not in COLLECTOR.PHASE_TIMING_DIAGNOSTIC_REASONS:
+                raise ValueError("phase timing diagnostic reason is invalid")
+            values: dict[str, list[str]] = {}
+            for name in ("available_phases", "missing_phases"):
+                items = [] if fields[name] == "none" else fields[name].split(",")
+                if (
+                    any(item not in COLLECTOR.PHASE_TIMING_PHASES for item in items)
+                    or len(set(items)) != len(items)
+                    or items != sorted(items, key=COLLECTOR.PHASE_TIMING_PHASE_ORDER.index)
+                ):
+                    raise ValueError("phase timing diagnostic phase list is invalid")
+                values[name] = items
+            for count_name, list_name in (("available_count", "available_phases"), ("missing_count", "missing_phases")):
+                if (
+                    not fields[count_name].isdigit()
+                    or int(fields[count_name]) > len(COLLECTOR.PHASE_TIMING_PHASE_ORDER)
+                    or int(fields[count_name]) != len(values[list_name])
+                ):
+                    raise ValueError("phase timing diagnostic count is invalid")
+            candidate = {
+                "status": "unavailable",
+                "failedStage": fields["failed_stage"],
+                "reasonClass": fields["reason_class"],
+                "availablePhases": values["available_phases"],
+                "missingPhases": values["missing_phases"],
+                "availableCount": int(fields["available_count"]),
+                "missingCount": int(fields["missing_count"]),
+            }
+            if candidate not in candidates:
+                candidates.append(candidate)
+    if len(candidates) > 1:
+        raise ValueError("phase timing diagnostic is contradictory")
+    return candidates[0] if candidates else None
 
 
 def _safe_source_location(value: str) -> dict[str, Any] | None:
@@ -1299,6 +1366,7 @@ def summarize(bundle: Path) -> dict[str, Any]:
         "evidenceScan": _project_evidence_scan(bundle, records),
         "gateResults": _project_gate_results(bundle, records),
         "runtimeResults": _project_runtime_results(bundle, records),
+        "phaseTiming": _project_phase_timing_diagnostic(bundle, records),
         "technicalContext": _project_technical_context(bundle, records, attempts),
         "failures": _project_failures(bundle, records, attempts),
         "sources": {

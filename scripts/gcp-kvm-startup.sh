@@ -522,6 +522,22 @@ bounded_copy_status() {
   return 1
 }
 
+phase_timing_emit_failure() {
+  local stage="$1" path="$2" trust="${3:-}" include_required="${4:-false}" diagnostic
+  local diagnostic_args=(--path "$path" --failed-stage "$stage"
+    --expected-run-id "$run_id" --expected-attempt "$run_attempt"
+    --expected-source-sha "$revision" --expected-image-fingerprint "$timing_image_fingerprint")
+  [[ -z "$trust" ]] || diagnostic_args+=(--require-trust "$trust")
+  [[ "$include_required" != true ]] || diagnostic_args+=("${phase_timing_required_args[@]}")
+  if [[ "$stage" == final-projection ]]; then
+    diagnostic_args+=(--require-phase archive --require-phase evidence-scan --require-phase upload)
+  fi
+  diagnostic="$(run_with_collection_deadline python3 "$trusted_phase_timing_script" diagnose "${diagnostic_args[@]}" 2>/dev/null)" ||
+    diagnostic="HEPH_GCP_DIAGNOSTICS event=phase-timing status=unavailable failed_stage=$stage reason_class=unknown available_count=0 available_phases=none missing_count=0 missing_phases=none"
+  printf '%s\n' "$diagnostic"
+  printf '%s\n' "$diagnostic" >>"$status_json"
+}
+
 collect_diagnostics() {
   local test_status="$1" collector scanner output_root input_root archive snapshot snapshot_input snapshot_status_path status_json cooking_evidence_root
   local browser_summary_source journal_unit copy_status serial_copy_status
@@ -604,45 +620,64 @@ collect_diagnostics() {
   phase_timing_supervisor_source="$supervisor_phase_timing_path"
   phase_timing_combined="$input_root/phase-timing-workload.jsonl"
   phase_timing_input="$input_root/phase-timing.json"
+  for required_phase in \
+    dependency-setup project-build browser-setup runtime-guest-build runtime-worker-build \
+    oci-image-materialization gateway-edge-ready gateway-services-ready gateway-readiness \
+    oci-builder oci-verifier golden-tests database-tests browser-initial browser-post-operation; do
+    phase_timing_required_args+=(--require-phase "$required_phase")
+  done
   if [[ "$test_mode" == gcp-cooking &&
     ("$workload_trust" == untrusted-pr || -f "$phase_timing_source" || -f "$phase_timing_supervisor_source") ]]; then
-    if [[ -f "$phase_timing_source" && ! -L "$phase_timing_source" &&
-      -f "$phase_timing_supervisor_source" && ! -L "$phase_timing_supervisor_source" ]] &&
-      run_with_collection_deadline python3 "$trusted_phase_timing_script" validate \
+    phase_timing_failed_stage=''
+    phase_timing_failure_path=''
+    if [[ ! -f "$phase_timing_source" || -L "$phase_timing_source" ]]; then
+      phase_timing_failed_stage=workload-source
+      phase_timing_failure_path="$phase_timing_source"
+    elif ! run_with_collection_deadline python3 "$trusted_phase_timing_script" validate \
         --path "$phase_timing_source" --require-trust workload \
         --expected-run-id "$run_id" --expected-attempt "$run_attempt" \
-        --expected-source-sha "$revision" --expected-image-fingerprint "$timing_image_fingerprint" &&
-      run_with_collection_deadline python3 "$trusted_phase_timing_script" validate \
+        --expected-source-sha "$revision" --expected-image-fingerprint "$timing_image_fingerprint"; then
+      phase_timing_failed_stage=workload-validation
+      phase_timing_failure_path="$phase_timing_source"
+    elif [[ ! -f "$phase_timing_supervisor_source" || -L "$phase_timing_supervisor_source" ]]; then
+      phase_timing_failed_stage=supervisor-source
+      phase_timing_failure_path="$phase_timing_supervisor_source"
+    elif ! run_with_collection_deadline python3 "$trusted_phase_timing_script" validate \
         --path "$phase_timing_supervisor_source" --require-trust supervisor \
         --expected-run-id "$run_id" --expected-attempt "$run_attempt" \
-        --expected-source-sha "$revision" --expected-image-fingerprint "$timing_image_fingerprint" &&
-      install -m 0600 "$phase_timing_source" "$phase_timing_combined" &&
-      run_with_collection_deadline python3 "$trusted_phase_timing_script" import-markers \
+        --expected-source-sha "$revision" --expected-image-fingerprint "$timing_image_fingerprint"; then
+      phase_timing_failed_stage=supervisor-validation
+      phase_timing_failure_path="$phase_timing_supervisor_source"
+    elif ! install -m 0600 "$phase_timing_source" "$phase_timing_combined"; then
+      phase_timing_failed_stage=workload-source
+      phase_timing_failure_path="$phase_timing_source"
+    elif ! run_with_collection_deadline python3 "$trusted_phase_timing_script" import-markers \
         --input "$input_root/serial.log" --output "$phase_timing_combined" \
         --source-sha "$revision" --run-id "$run_id" --attempt "$run_attempt" \
-        --clock-domain workload-libkrun --image-fingerprint "$timing_image_fingerprint" &&
-      cat -- "$phase_timing_supervisor_source" >>"$phase_timing_combined"; then
-      for required_phase in \
-        dependency-setup project-build browser-setup runtime-guest-build runtime-worker-build \
-        oci-image-materialization gateway-edge-ready gateway-services-ready gateway-readiness \
-        oci-builder oci-verifier golden-tests database-tests browser-initial browser-post-operation; do
-        phase_timing_required_args+=(--require-phase "$required_phase")
-      done
-      if run_with_collection_deadline python3 "$trusted_phase_timing_script" project \
+        --clock-domain workload-libkrun --image-fingerprint "$timing_image_fingerprint"; then
+      phase_timing_failed_stage=marker-import
+      phase_timing_failure_path="$phase_timing_combined"
+    elif ! cat -- "$phase_timing_supervisor_source" >>"$phase_timing_combined"; then
+      phase_timing_failed_stage=supervisor-source
+      phase_timing_failure_path="$phase_timing_supervisor_source"
+    elif ! run_with_collection_deadline python3 "$trusted_phase_timing_script" project \
         --path "$phase_timing_combined" --output "$phase_timing_input" \
         --expected-run-id "$run_id" --expected-attempt "$run_attempt" \
         --expected-source-sha "$revision" --expected-image-fingerprint "$timing_image_fingerprint" \
         "${phase_timing_required_args[@]}"; then
-        phase_timing_projection_ready=true
-        printf 'HEPH_GCP_DIAGNOSTICS source=phase-timing status=projected\n' >>"$status_json"
-      else
-        printf 'HEPH_GCP_DIAGNOSTICS source=phase-timing status=unavailable reason=incomplete\n' >>"$status_json"
-      fi
-    elif [[ ! -f "$phase_timing_source" || -L "$phase_timing_source" ||
-      ! -f "$phase_timing_supervisor_source" || -L "$phase_timing_supervisor_source" ]]; then
-      printf 'HEPH_GCP_DIAGNOSTICS source=phase-timing status=unavailable reason=missing\n' >>"$status_json"
+      phase_timing_failed_stage=projection
+      phase_timing_failure_path="$phase_timing_combined"
     else
-      printf 'HEPH_GCP_DIAGNOSTICS source=phase-timing status=unavailable reason=invalid\n' >>"$status_json"
+      phase_timing_projection_ready=true
+      printf 'HEPH_GCP_DIAGNOSTICS source=phase-timing status=projected\n' >>"$status_json"
+    fi
+    if [[ -n "$phase_timing_failed_stage" ]]; then
+      case "$phase_timing_failed_stage" in
+        workload-validation) phase_timing_emit_failure "$phase_timing_failed_stage" "$phase_timing_failure_path" workload false ;;
+        supervisor-validation) phase_timing_emit_failure "$phase_timing_failed_stage" "$phase_timing_failure_path" supervisor false ;;
+        projection) phase_timing_emit_failure "$phase_timing_failed_stage" "$phase_timing_failure_path" '' true ;;
+        *) phase_timing_emit_failure "$phase_timing_failed_stage" "$phase_timing_failure_path" '' false ;;
+      esac
     fi
   elif [[ "$test_mode" == gcp-cooking ]]; then
     printf 'HEPH_GCP_DIAGNOSTICS source=phase-timing status=missing\n' >>"$status_json"
@@ -833,20 +868,40 @@ PY
     rm -f -- "$phase_timing_final_combined"
     # Rebuild after archive/evidence-scan/upload have closed their intervals.
     # The earlier combined file is intentionally only the archive snapshot.
-    install -m 0600 "$phase_timing_source" "$phase_timing_final_combined"
+    if ! install -m 0600 "$phase_timing_source" "$phase_timing_final_combined"; then
+      phase_timing_emit_failure final-projection "$phase_timing_source" '' true
+      rm -f -- "$phase_timing_sidecar"
+      return 1
+    fi
     run_with_collection_deadline python3 "$trusted_phase_timing_script" validate \
       --path "$phase_timing_source" --require-trust workload \
       --expected-run-id "$run_id" --expected-attempt "$run_attempt" \
-      --expected-source-sha "$revision" --expected-image-fingerprint "$timing_image_fingerprint" || return 1
+      --expected-source-sha "$revision" --expected-image-fingerprint "$timing_image_fingerprint" || {
+        phase_timing_emit_failure final-projection "$phase_timing_source" workload false
+        rm -f -- "$phase_timing_sidecar"
+        return 1
+      }
     run_with_collection_deadline python3 "$trusted_phase_timing_script" validate \
       --path "$phase_timing_supervisor_source" --require-trust supervisor \
       --expected-run-id "$run_id" --expected-attempt "$run_attempt" \
-      --expected-source-sha "$revision" --expected-image-fingerprint "$timing_image_fingerprint" || return 1
+      --expected-source-sha "$revision" --expected-image-fingerprint "$timing_image_fingerprint" || {
+        phase_timing_emit_failure final-projection "$phase_timing_supervisor_source" supervisor false
+        rm -f -- "$phase_timing_sidecar"
+        return 1
+      }
     run_with_collection_deadline python3 "$trusted_phase_timing_script" import-markers \
       --input "$input_root/serial.log" --output "$phase_timing_final_combined" \
       --source-sha "$revision" --run-id "$run_id" --attempt "$run_attempt" \
-      --clock-domain workload-libkrun --image-fingerprint "$timing_image_fingerprint" || return 1
-    cat -- "$phase_timing_supervisor_source" >>"$phase_timing_final_combined"
+      --clock-domain workload-libkrun --image-fingerprint "$timing_image_fingerprint" || {
+        phase_timing_emit_failure final-projection "$phase_timing_final_combined" '' false
+        rm -f -- "$phase_timing_sidecar"
+        return 1
+      }
+    if ! cat -- "$phase_timing_supervisor_source" >>"$phase_timing_final_combined"; then
+      phase_timing_emit_failure final-projection "$phase_timing_supervisor_source" '' false
+      rm -f -- "$phase_timing_sidecar"
+      return 1
+    fi
     run_with_collection_deadline python3 "$trusted_phase_timing_script" project \
       --path "$phase_timing_final_combined" --output "$phase_timing_sidecar" \
       --require-supervisor-phase archive --require-supervisor-phase evidence-scan \
@@ -861,6 +916,8 @@ PY
       --require-workload-phase browser-post-operation \
       --expected-run-id "$run_id" --expected-attempt "$run_attempt" \
       --expected-source-sha "$revision" --expected-image-fingerprint "$timing_image_fingerprint" || {
+        phase_timing_emit_failure final-projection "$phase_timing_final_combined" '' true
+        rm -f -- "$phase_timing_sidecar"
         printf 'HEPH_GCP_DIAGNOSTICS event=phase-timing-sidecar status=invalid\n'
         return 1
       }
@@ -871,6 +928,8 @@ PY
       --data-binary "@$phase_timing_sidecar" \
       "https://storage.googleapis.com/upload/storage/v1/b/${diagnostics_bucket}/o?uploadType=media&name=${encoded_sidecar}&ifGenerationMatch=0" \
       >/dev/null || {
+        phase_timing_emit_failure upload "$phase_timing_sidecar" '' false
+        rm -f -- "$phase_timing_sidecar"
         printf 'HEPH_GCP_DIAGNOSTICS event=phase-timing-sidecar status=upload-failed\n'
         return 1
       }
