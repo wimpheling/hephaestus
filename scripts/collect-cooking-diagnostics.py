@@ -218,6 +218,9 @@ SAFE_KEYS = frozenset(
         "exit_code",
         "exit_signal",
         "reason_class",
+        "stage",
+        "remaining_seconds",
+        "reserve_seconds",
         "test_result",
         "diagnostics_result",
         "diagnostic_probe_completed",
@@ -450,6 +453,49 @@ EVIDENCE = _load_evidence_module()
 
 class CollectionError(ValueError):
     """An input failed the collector's bounded safe-retention contract."""
+
+
+COLLECTOR_FAILURE_REASONS = frozenset(
+    {
+        "all-sources-rejected",
+        "retention-limit",
+        "output-path-invalid",
+        "snapshot-validation",
+        "archive-create",
+        "final-scan",
+        "internal-error",
+    }
+)
+
+
+def _collector_failure_marker(error: Exception) -> str:
+    """Return only a fixed, non-sensitive classification for a fatal error."""
+
+    scan_failure = getattr(EVIDENCE, "ScanFailure", None)
+    if scan_failure is not None and isinstance(error, scan_failure):
+        stage, reason = "final-scan", "final-scan"
+    else:
+        # Exception text is used only for local classification.  It is never
+        # emitted: paths, payloads, and provider/secret details stay out of
+        # the serial log even when a fatal path is reached.
+        message = str(error).lower()
+        if "at least one evidence source" in message:
+            stage, reason = "collection", "all-sources-rejected"
+        elif "exceeds retention" in message or "retention limit" in message:
+            stage, reason = "retention", "retention-limit"
+        elif "snapshot" in message or "lineage" in message:
+            stage, reason = "snapshot", "snapshot-validation"
+        elif "archive" in message:
+            stage, reason = "archive", "archive-create"
+        elif "output directory" in message or "staging directory" in message:
+            stage, reason = "validation", "output-path-invalid"
+        else:
+            stage, reason = "collection", "internal-error"
+    assert reason in COLLECTOR_FAILURE_REASONS
+    return (
+        "HEPH_GCP_DIAGNOSTICS event=collector-failure operation=collection "
+        f"stage={stage} reason_class={reason} status=failed exit_code=1"
+    )
 
 
 def _reject_secret_assignments(data: bytes) -> None:
@@ -1450,10 +1496,7 @@ def main(argv: list[str] | None = None) -> int:
             args.missing_source,
         )
     except (CollectionError, OSError, RuntimeError, ValueError) as error:
-        message = str(error)
-        for pattern in EVIDENCE.PATTERNS:
-            message = message.replace(pattern.decode("ascii"), "[REDACTED]")
-        print(f"Cooking diagnostics collection failed: {message}", file=sys.stderr)
+        print(_collector_failure_marker(error), file=sys.stderr)
         return 1
 
 

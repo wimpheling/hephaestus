@@ -136,6 +136,51 @@ class CookingGateResultsTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0)
             self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["script_sha256"], runner_hash)
 
+    def test_workload_budget_reserves_shutdown_and_evidence_time(self) -> None:
+        runner = RUNNER.read_text(encoding="utf-8")
+        self.assertNotIn("cooking_timeout=1500", runner)
+        self.assertIn(
+            "event=workload-budget operation=cooking-workload phase=cooking",
+            runner,
+        )
+        self.assertIn("stage=deadline reason_class=insufficient-budget", runner)
+        start = runner.index("workload_budget_seconds() {")
+        end = runner.index("\n}\n", start) + 2
+        function = runner[start:end]
+        command = f'''#!/usr/bin/env bash
+set -u
+workload_cleanup_reserve_seconds=120
+{function}
+for remaining in 2100 121 120 119; do
+    if budget="$(workload_budget_seconds "$remaining")"; then
+        printf '%s=%s\\n' "$remaining" "$budget"
+    else
+        printf '%s=insufficient\\n' "$remaining"
+    fi
+done
+'''
+        result = subprocess.run(["bash", "-Eeuo", "pipefail", "-c", command], text=True, capture_output=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.splitlines(), ["2100=1980", "121=1", "120=insufficient", "119=insufficient"])
+        workload_start = runner.index("run_cooking_workload() {")
+        workload_end = runner.index("\n}\n", workload_start) + 2
+        no_start_command = f'''#!/usr/bin/env bash
+set -u
+workload_started=false
+{runner[workload_start:workload_end]}
+set +e
+run_cooking_workload
+printf 'exit=%s\\n' "$?"
+'''
+        no_start = subprocess.run(
+            ["bash", "-Eeuo", "pipefail", "-c", no_start_command],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(no_start.returncode, 0, no_start.stderr)
+        self.assertEqual(no_start.stdout.strip(), "exit=124")
+
     def test_runtime_revision_lookup_allows_only_exact_forge_checkout(self) -> None:
         runner = RUNNER.read_text(encoding="utf-8")
         self.assertIn(
@@ -253,8 +298,12 @@ gate_results_helper={checkout}/cooking-gate-results.py
 gate_results_initialized=true
 gate_update() {{ python3 -B "$gate_results_helper" --path "$gate_results_path" "$@"; }}
 remaining_seconds() {{ printf '600\\n'; }}
-run_with_deadline() {{ "$@"; }}
-run_with_collection_deadline() {{ "$@"; }}
+run_with_deadline() {{
+  local remaining
+  remaining="$(remaining_seconds)"
+  timeout --kill-after=30s "${{remaining}}s" "$@"
+}}
+workload_started=true
 phase_start() {{ printf 'HEPH_GCP_COOKING event=phase-start phase=%s\\n' "$1"; }}
 phase_pass() {{ printf 'HEPH_GCP_COOKING event=phase-pass phase=%s\\n' "${{1:-evidence}}"; }}
 finish() {{ local rc=$?; trap - EXIT; python3 -B "$gate_results_helper" --path "$gate_results_path" finalize --overall-exit-code "$rc" || true; exit "$rc"; }}

@@ -27,6 +27,7 @@ readonly metadata_ipv6='fd20:ce::254'
 readonly log_file='/var/log/hephaestus/gcp-cooking-run.log'
 readonly gate_results_path='/var/log/hephaestus/cooking-gate-results.json'
 readonly gate_results_helper="${checkout_root}/scripts/cooking-gate-results.py"
+readonly workload_cleanup_reserve_seconds=120
 
 phase='initializing'
 stage_root=''
@@ -146,6 +147,11 @@ run_with_deadline() {
     local remaining
     remaining="$(remaining_seconds)"
     timeout --kill-after=30s "${remaining}s" "$@"
+}
+workload_budget_seconds() {
+    local remaining="$1"
+    ((remaining > workload_cleanup_reserve_seconds)) || return 1
+    printf '%s\n' "$((remaining - workload_cleanup_reserve_seconds))"
 }
 
 # Initialize the sidecar before the workload starts.  The checkout is already
@@ -575,16 +581,25 @@ phase_pass
 
 phase_start cooking
 cooking_remaining="$(remaining_seconds)"
-if ((cooking_remaining > 1500)); then
-    cooking_timeout=1500
+cooking_timeout=''
+workload_started=false
+if cooking_timeout="$(workload_budget_seconds "$cooking_remaining")"; then
+    workload_started=true
 else
-    cooking_timeout="$cooking_remaining"
+    # Preserve time for the bounded stop/evidence path when startup hands us
+    # too little of the common trial deadline to run Cooking safely.
+    printf 'HEPH_GCP_COOKING event=workload-budget operation=cooking-workload phase=cooking status=failed exit_code=124 duration_ms=0 stage=deadline reason_class=insufficient-budget remaining_seconds=%s reserve_seconds=%s\n' \
+        "$cooking_remaining" "$workload_cleanup_reserve_seconds"
+    status=124
 fi
 cooking_unit="heph-gcp-cooking-${HEPH_GCP_RUN_ID:-manual}"
 install -d -m 0700 -o forge -g forge "$evidence_root"
 gate_update begin workload || true
-set +e
-run_with_deadline systemd-run --unit="$cooking_unit" --service-type=oneshot --wait --pipe --collect \
+run_cooking_workload() {
+if [[ "$workload_started" != true ]]; then
+    return 124
+fi
+systemd-run --unit="$cooking_unit" --service-type=oneshot --wait --pipe --collect \
     --expand-environment=no --property=Delegate=yes --property=RuntimeMaxSec="${cooking_remaining}s" \
     --property=TimeoutStartSec="${cooking_remaining}s" --property=TimeoutStopSec=15s --property=TasksMax=infinity \
     --property=LimitNOFILE=65536 --uid="$forge_uid" --gid="$forge_gid" \
@@ -621,6 +636,9 @@ run_with_deadline systemd-run --unit="$cooking_unit" --service-type=oneshot --wa
         for controller in cpu io memory pids; do [[ " $enabled " == *" $controller "* ]]; done
         exec "$1/examples/cooking/run.sh"
     ' -- "$checkout_root"
+}
+set +e
+run_with_deadline run_cooking_workload
 status=$?
 set -e
 workload_result='passed'
@@ -638,13 +656,13 @@ elif ((status == 124)); then
 fi
 gate_update complete workload --state "$workload_gate_state" --exit-code "$status" \
     --reason-class "$workload_reason_class" || true
-if ((status != 0)); then
+if ((status != 0)) && [[ "$workload_started" == true ]]; then
     # The outer deadline can kill systemd-run while the delegated oneshot is
     # still activating.  Stop that unit from this supervisor's cgroup before
     # collecting evidence; otherwise the workload can consume the collection
     # reserve and keep fixture-bearing processes alive.
     set +e
-    run_with_collection_deadline timeout --kill-after=2s 15s systemctl stop "$cooking_unit" --no-pager >/dev/null 2>&1
+    run_with_deadline timeout --kill-after=2s 15s systemctl stop "$cooking_unit" --no-pager >/dev/null 2>&1
     stop_status=$?
     set -e
     active_state="$(timeout --kill-after=1s 5s systemctl show "$cooking_unit" --no-pager --property=ActiveState --value 2>/dev/null || true)"
@@ -652,8 +670,8 @@ if ((status != 0)); then
         printf 'Cooking systemd unit remained %s after stop (stop_exit=%s); issuing bounded kill\n' \
             "$active_state" "$stop_status" >&2
         set +e
-        run_with_collection_deadline timeout --kill-after=2s 15s systemctl kill "$cooking_unit" --kill-who=all --signal=KILL >/dev/null 2>&1
-        run_with_collection_deadline timeout --kill-after=2s 15s systemctl stop "$cooking_unit" --no-pager >/dev/null 2>&1
+        run_with_deadline timeout --kill-after=2s 15s systemctl kill "$cooking_unit" --kill-who=all --signal=KILL >/dev/null 2>&1
+        run_with_deadline timeout --kill-after=2s 15s systemctl stop "$cooking_unit" --no-pager >/dev/null 2>&1
         set -e
         active_state="$(timeout --kill-after=1s 5s systemctl show "$cooking_unit" --no-pager --property=ActiveState --value 2>/dev/null || true)"
     fi

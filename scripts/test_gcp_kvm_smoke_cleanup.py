@@ -62,6 +62,14 @@ class GcpKvmSmokeCleanupTests(unittest.TestCase):
         serial = "\n".join(
             [
                 "HEPH_GCP_KVM_STARTUP event=phase-start phase=diagnostic-bootstrap revision=" + "a" * 40,
+                "HEPH_GCP_DIAGNOSTICS event=collector-failure operation=collection "
+                "stage=final-scan reason_class=final-scan status=failed exit_code=1",
+                "HEPH_GCP_COOKING event=workload-budget operation=cooking-workload "
+                "phase=cooking status=failed exit_code=124 duration_ms=0 stage=deadline "
+                "reason_class=insufficient-budget remaining_seconds=12 reserve_seconds=30",
+                "HEPH_GCP_COOKING event=workload-budget operation=cooking-workload "
+                "phase=cooking status=passed exit_code=0 duration_ms=180000 stage=allocated "
+                "reason_class=none remaining_seconds=2400 reserve_seconds=300",
                 "gcp-kvm-startup: custom runner image Node executable cannot run as forge",
                 "thread 'cooking::smoke' panicked at crates/foo/src/lib.rs:42:7: Permission denied",
                 "error: Permission denied",
@@ -120,6 +128,23 @@ class GcpKvmSmokeCleanupTests(unittest.TestCase):
         )
         self.assertIn("HEPHAESTUS_GCP_DIAGNOSTIC: DIAGNOSTICS FAIL test_result=failed", result.stderr)
         self.assertIn("HEPH_GCP_KVM_STARTUP event=phase-start phase=diagnostic-bootstrap", result.stderr)
+        self.assertIn(
+            "HEPH_GCP_DIAGNOSTICS event=collector-failure operation=collection "
+            "stage=final-scan reason_class=final-scan status=failed exit_code=1",
+            result.stderr,
+        )
+        self.assertIn(
+            "HEPH_GCP_COOKING event=workload-budget operation=cooking-workload "
+            "phase=cooking status=failed exit_code=124 duration_ms=0 stage=deadline "
+            "reason_class=insufficient-budget remaining_seconds=12 reserve_seconds=30",
+            result.stderr,
+        )
+        self.assertIn(
+            "HEPH_GCP_COOKING event=workload-budget operation=cooking-workload "
+            "phase=cooking status=passed exit_code=0 duration_ms=180000 stage=allocated "
+            "reason_class=none remaining_seconds=2400 reserve_seconds=300",
+            result.stderr,
+        )
         self.assertIn("HEPH_GCP_TEST test=rust-panic location=crates/foo/src/lib.rs:42:7", result.stderr)
         self.assertIn("HEPH_GCP_RUNTIME error=permission-denied errno=EACCES", result.stderr)
         self.assertIn("HEPH_GCP_TEST test=cooking::smoke status=failed", result.stderr)

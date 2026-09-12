@@ -677,7 +677,7 @@ collector = importlib.util.module_from_spec(collector_spec)
 collector_spec.loader.exec_module(collector)
 
 prefix = re.compile(r"^\[[^]]+\] google_metadata_script_runner\[\d+\]:\s*")
-safe_key = re.compile(r"^(?:event|phase|revision|exit|expected|test_result|status|error|stage|terminal|state|result|code|test|location|errno)$")
+safe_key = re.compile(r"^(?:event|phase|revision|exit|exit_code|expected|test_result|status|error|stage|duration_ms|remaining_seconds|reserve_seconds|terminal|state|result|code|test|location|errno|operation|reason_class)$")
 safe_value = re.compile(r"^[A-Za-z0-9._:/=-]+$")
 safe_head = re.compile(r"^HE(?:PH|PHAESTUS)_[A-Z0-9_-]+:?$")
 interesting_keys = {"event", "phase", "terminal", "error", "stage", "status", "state", "result"}

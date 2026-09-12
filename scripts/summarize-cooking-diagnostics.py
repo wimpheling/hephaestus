@@ -77,7 +77,7 @@ FAILURE_MARKERS = {
 FAILURE_FIELDS = {
     "test", "test_result", "status", "phase", "error_class", "location", "run_id",
     "attempt_run_id", "exit", "exit_code", "exit_signal", "event", "operation", "reason_class", "class", "tool",
-    "component", "result_origin",
+    "component", "result_origin", "duration_ms", "stage", "remaining_seconds", "reserve_seconds",
 }
 FAILURE_STATUS_VALUES = {"failed", "error", "timeout", "timed-out", "timed_out", "nonzero"}
 FAILURE_COMPONENT_VALUES = {"browser-e2e"}
@@ -220,6 +220,8 @@ BROWSER_SUMMARY_REASON_CLASSES = {
     "browser-tests-not-passed", "browser-tests-failed", "clean-exit", "complete",
     "incomplete-phases", "invalid-report", "report-validation-failed", "timeout",
 }
+COLLECTOR_FAILURE_REASON_CLASSES = COLLECTOR.COLLECTOR_FAILURE_REASONS
+WORKLOAD_FAILURE_REASON_CLASSES = {"insufficient-budget"}
 BROWSER_SUMMARY_FAILURE_FIELDS = {
     "test_id", "phase", "status", "error_class", "matcher", "source_file",
     "source_line", "source_column", "source_location_kind",
@@ -812,7 +814,11 @@ def _failure_record(
         fields.pop("component")
     if "result_origin" in fields and fields["result_origin"] not in FAILURE_ORIGIN_VALUES:
         fields.pop("result_origin")
-    if "reason_class" in fields and fields["reason_class"] not in BROWSER_SUMMARY_REASON_CLASSES:
+    if "reason_class" in fields and fields["reason_class"] not in (
+        BROWSER_SUMMARY_REASON_CLASSES
+        | COLLECTOR_FAILURE_REASON_CLASSES
+        | WORKLOAD_FAILURE_REASON_CLASSES
+    ):
         fields.pop("reason_class")
     for field in ("run_id", "attempt_run_id"):
         if field in fields and (

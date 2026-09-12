@@ -1333,7 +1333,7 @@ PY
         self.assertIn('--property=TimeoutStartSec="${cooking_remaining}s" --property=TimeoutStopSec=15s', runner)
         self.assertNotIn('--property=TimeoutStartSec=15s', runner)
         self.assertIn('timeout --kill-after=1s 5s systemctl show "$cooking_unit"', runner)
-        self.assertIn('run_with_collection_deadline timeout --kill-after=2s 15s systemctl stop "$cooking_unit"', runner)
+        self.assertIn('run_with_deadline timeout --kill-after=2s 15s systemctl stop "$cooking_unit"', runner)
 
     def test_cooking_result_markers_and_browser_origin_are_component_specific(self):
         runner = (ROOT / "gcp-cooking-run.sh").read_text(encoding="utf-8")
@@ -1617,6 +1617,101 @@ PY
             self.assertEqual(results[0]["exit_code"], 1)
             self.assertEqual(results[0]["report_state"], "unknown")
             self.assertEqual(results[0]["reason"], "legacy-unavailable")
+
+    def test_collector_global_failure_is_typed_and_does_not_create_archive(self):
+        """Fatal CLI validation emits safe metadata without an exception/path dump."""
+
+        with tempfile.TemporaryDirectory(prefix="heph-gcp-collector-fatal-") as directory:
+            root = Path(directory)
+            output = root / "existing-PRIVATE_SECRET_VALUE"
+            output.mkdir()
+            archive = root / "should-not-be-created.tar.gz"
+            result = subprocess.run(
+                [
+                    "python3",
+                    str(ROOT / "collect-cooking-diagnostics.py"),
+                    "--output-dir",
+                    str(output),
+                    "--archive",
+                    str(archive),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 1)
+            self.assertEqual(
+                result.stderr.strip(),
+                "HEPH_GCP_DIAGNOSTICS event=collector-failure operation=collection "
+                "stage=validation reason_class=output-path-invalid status=failed exit_code=1",
+            )
+            self.assertNotIn("PRIVATE_SECRET_VALUE", result.stderr)
+            self.assertFalse(archive.exists())
+            self.assertTrue(output.is_dir())
+
+    def test_collector_fatal_marker_survives_safe_projection_and_triage(self):
+        """The serial-safe collector marker remains visible to the summary path."""
+
+        with tempfile.TemporaryDirectory(prefix="heph-gcp-collector-marker-") as directory:
+            root = Path(directory)
+            serial = root / "serial.log"
+            serial.write_text(
+                "HEPH_GCP_DIAGNOSTICS event=collector-failure operation=collection "
+                "stage=final-scan reason_class=final-scan status=failed exit_code=1\n",
+                encoding="utf-8",
+            )
+            bundle = root / "bundle"
+            self.assertEqual(
+                COLLECTOR.collect(bundle, [f"serial={serial}"], None, None, None),
+                0,
+            )
+            projected = (bundle / "sources" / "serial").read_text(encoding="utf-8")
+            self.assertIn("stage=final-scan", projected)
+            self.assertIn("reason_class=final-scan", projected)
+            failures = TRIAGE.summarize(bundle)["failures"]
+            self.assertTrue(
+                any(
+                    failure.get("operation") == "collection"
+                    and failure.get("reason_class") == "final-scan"
+                    and failure.get("status") == "failed"
+                    for failure in failures
+                ),
+                failures,
+            )
+
+    def test_workload_budget_marker_keeps_safe_deadline_fields(self):
+        with tempfile.TemporaryDirectory(prefix="heph-gcp-workload-budget-") as directory:
+            root = Path(directory)
+            runtime = root / "runtime.log"
+            runtime.write_text(
+                "HEPH_GCP_COOKING event=workload-budget operation=cooking-workload "
+                "phase=cooking status=failed exit_code=124 duration_ms=0 stage=deadline "
+                "reason_class=insufficient-budget remaining_seconds=12 reserve_seconds=30\n"
+                "HEPH_GCP_COOKING event=workload-budget operation=cooking-workload "
+                "phase=cooking status=passed exit_code=0 duration_ms=180000 stage=allocated "
+                "reason_class=none remaining_seconds=2400 reserve_seconds=300\n",
+                encoding="utf-8",
+            )
+            bundle = root / "bundle"
+            self.assertEqual(
+                COLLECTOR.collect(bundle, [f"runtime-log={runtime}"], None, None, None),
+                0,
+            )
+            projected = (bundle / "sources" / "runtime-log").read_text(encoding="utf-8")
+            self.assertIn("duration_ms=0 stage=deadline", projected)
+            self.assertIn("remaining_seconds=12 reserve_seconds=30", projected)
+            self.assertIn("duration_ms=180000 stage=allocated", projected)
+            failures = TRIAGE.summarize(bundle)["failures"]
+            self.assertTrue(
+                any(
+                    failure.get("event") == "workload-budget"
+                    and failure.get("duration_ms") == "0"
+                    and failure.get("stage") == "deadline"
+                    and failure.get("reason_class") == "insufficient-budget"
+                    for failure in failures
+                ),
+                failures,
+            )
 
 
 if __name__ == "__main__":
