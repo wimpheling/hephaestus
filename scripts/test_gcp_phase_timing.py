@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import importlib.util
 import os
 import subprocess
 import sys
@@ -16,6 +17,68 @@ SCRIPT = Path(__file__).with_name("gcp_phase_timing.py")
 SOURCE = "a" * 40
 IMAGE = "b" * 32
 CACHE = "c" * 64
+
+HELPER_SPEC = importlib.util.spec_from_file_location("gcp_phase_timing_under_test", SCRIPT)
+assert HELPER_SPEC is not None and HELPER_SPEC.loader is not None
+PHASE_TIMING = importlib.util.module_from_spec(HELPER_SPEC)
+HELPER_SPEC.loader.exec_module(PHASE_TIMING)
+
+
+class CountingReader:
+    def __init__(self, handle, limit: int, on_close) -> None:
+        self._handle = handle
+        self._limit = limit
+        self._on_close = on_close
+        self.reads = 0
+
+    def _count(self) -> None:
+        self.reads += 1
+        if self.reads > self._limit:
+            raise AssertionError("diagnostic fallback read beyond its bounded prefix")
+
+    def readline(self, *args):
+        self._count()
+        return self._handle.readline(*args)
+
+    def __iter__(self):
+        while True:
+            line = self.readline()
+            if not line:
+                return
+            yield line
+
+    def __enter__(self):
+        self._handle.__enter__()
+        return self
+
+    def __exit__(self, *args):
+        self._on_close(self.reads)
+        return self._handle.__exit__(*args)
+
+
+class CountingPath:
+    def __init__(self, path: Path, limit: int) -> None:
+        self._path = path
+        self._limit = limit
+        self.reads = 0
+
+    def exists(self):
+        return self._path.exists()
+
+    def is_symlink(self):
+        return self._path.is_symlink()
+
+    def is_file(self):
+        return self._path.is_file()
+
+    @property
+    def parents(self):
+        return self._path.parents
+
+    def open(self, *args, **kwargs):
+        return CountingReader(
+            self._path.open(*args, **kwargs), self._limit, lambda reads: setattr(self, "reads", reads)
+        )
 
 
 class PhaseTimingTests(unittest.TestCase):
@@ -202,6 +265,103 @@ class PhaseTimingTests(unittest.TestCase):
             oversized.write_text("x" * 20_000 + "\n", encoding="utf-8")
             self.assertNotEqual(self.run_cli("validate", "--path", str(oversized), check=False).returncode, 0)
 
+    def test_diagnose_keeps_malformed_values_bounded_and_typed(self) -> None:
+        """Malformed input yields a finite safe diagnostic without echoing it."""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            malformed = root / "malformed-diagnostic.jsonl"
+            malformed.write_text(
+                json.dumps(
+                    {
+                        "schema": 1,
+                        "record": "start",
+                        "phase": ["project-build", "PRIVATE_PAYLOAD"],
+                        "trust": "workload",
+                        "clock_domain": "workload",
+                        "mono_ns": 1,
+                        "run_id": "123",
+                        "attempt": 1,
+                        "occurrence": 1,
+                        "source_sha": SOURCE,
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            result = self.run_cli(
+                "diagnose",
+                "--path",
+                str(malformed),
+                "--failed-stage",
+                "projection",
+                "--require-phase",
+                "project-build",
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn(
+                "HEPH_GCP_DIAGNOSTICS event=phase-timing status=unavailable "
+                "failed_stage=projection reason_class=invalid available_count=0 "
+                "available_phases=none missing_count=1 missing_phases=project-build",
+                result.stdout,
+            )
+            self.assertNotIn("PRIVATE_PAYLOAD", result.stdout + result.stderr)
+            self.assertNotIn("Traceback", result.stderr)
+
+    def test_diagnose_limits_fallback_scan_of_excessive_short_records(self) -> None:
+        """A malformed prefix cannot make diagnosis scan an unbounded file."""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "many-short-records.jsonl"
+            source.write_text("{}\n" * (PHASE_TIMING.MAX_RECORDS * 4), encoding="utf-8")
+            bounded = CountingPath(source, PHASE_TIMING.MAX_RECORDS + 2)
+            summary = PHASE_TIMING.timing_diagnostic(
+                bounded,
+                stage="projection",
+                required={"project-build"},
+            )
+            self.assertEqual(summary["status"], "unavailable")
+            self.assertEqual(summary["reason_class"], "invalid")
+            self.assertEqual(summary["available_phases"], "none")
+            self.assertEqual(summary["missing_phases"], "project-build")
+            self.assertLessEqual(bounded.reads, PHASE_TIMING.MAX_RECORDS + 2)
+
+            oversized = root / "oversized-diagnostic.jsonl"
+            oversized.write_text(
+                json.dumps(
+                    {
+                        "schema": 1,
+                        "record": "start",
+                        "phase": "project-build",
+                        "trust": "workload",
+                        "clock_domain": "workload",
+                        "mono_ns": 1,
+                        "run_id": "123",
+                        "attempt": 1,
+                        "occurrence": 1,
+                        "source_sha": SOURCE,
+                        "payload": "PRIVATE_PAYLOAD" * 2_000,
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            result = self.run_cli(
+                "diagnose",
+                "--path",
+                str(oversized),
+                "--failed-stage",
+                "projection",
+                "--require-phase",
+                "project-build",
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertLess(len(result.stdout), 1024)
+            self.assertNotIn("PRIVATE_PAYLOAD", result.stdout + result.stderr)
+
     def test_invalid_timestamp_identity_and_counter_are_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "invalid.jsonl"
@@ -369,6 +529,93 @@ class PhaseTimingTests(unittest.TestCase):
                 ).returncode,
                 0,
             )
+
+    def test_success_projection_combines_five_rust_markers_with_shell_phases(self) -> None:
+        """Rust workload markers and shell timers form one valid projection."""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            markers = root / "rust-stderr.log"
+            markers.write_text(
+                "\n".join(
+                    f"HEPH_GCP_COOKING event=phase-timing phase={phase} status=passed duration_ms={duration}"
+                    for phase, duration in (
+                        ("runtime-guest-build", 11),
+                        ("runtime-worker-build", 13),
+                        ("oci-builder", 17),
+                        ("oci-verifier", 19),
+                        ("golden-tests", 23),
+                    )
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            timing = root / "timing.jsonl"
+            self.run_cli(
+                "import-markers",
+                "--input",
+                str(markers),
+                "--output",
+                str(timing),
+                "--source-sha",
+                SOURCE,
+                "--run-id",
+                "98765",
+                "--attempt",
+                "2",
+                "--image-fingerprint",
+                IMAGE,
+            )
+
+            for phase, clock_domain in (
+                ("dependency-setup", "workload"),
+                ("project-build", "workload"),
+                ("gateway-edge-ready", "workload-gateway"),
+            ):
+                shell_args = self.common(timing, phase)
+                shell_args[shell_args.index("supervisor")] = "workload"
+                shell_args[shell_args.index("guest-runtime")] = clock_domain
+                shell_args[shell_args.index("123")] = "98765"
+                shell_args[shell_args.index("1")] = "2"
+                shell_args[shell_args.index(IMAGE)] = IMAGE
+                self.run_cli("start", *shell_args)
+                self.run_cli("end", *shell_args, "--outcome", "passed")
+
+            required = [
+                "dependency-setup",
+                "project-build",
+                "gateway-edge-ready",
+                "runtime-guest-build",
+                "runtime-worker-build",
+                "oci-builder",
+                "oci-verifier",
+                "golden-tests",
+            ]
+            validate_args = ["validate", "--path", str(timing), "--require-trust", "workload"]
+            for phase in required:
+                validate_args.extend(("--require-workload-phase", phase))
+            self.run_cli(*validate_args, "--expected-run-id", "98765", "--expected-attempt", "2", "--expected-source-sha", SOURCE, "--expected-image-fingerprint", IMAGE)
+
+            projection = root / "projection.json"
+            project_args = ["project", "--path", str(timing), "--output", str(projection)]
+            for phase in required:
+                project_args.extend(("--require-workload-phase", phase))
+            self.run_cli(
+                *project_args,
+                "--expected-run-id",
+                "98765",
+                "--expected-attempt",
+                "2",
+                "--expected-source-sha",
+                SOURCE,
+                "--expected-image-fingerprint",
+                IMAGE,
+            )
+            value = json.loads(projection.read_text(encoding="utf-8"))
+            self.assertEqual(len(value["phases"]), len(required))
+            self.assertEqual({phase["phase"] for phase in value["phases"]}, set(required))
+            self.assertTrue(all(phase["measurement"] == "informational" for phase in value["phases"]))
+            self.assertTrue(all(phase["run_id"] == "98765" and phase["attempt"] == 2 for phase in value["phases"]))
 
     def test_symlinked_timing_paths_are_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

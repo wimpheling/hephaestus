@@ -235,6 +235,11 @@ SAFE_KEYS = frozenset(
         "error",
         "location",
         "timestamp",
+        "failed_stage",
+        "available_count",
+        "available_phases",
+        "missing_count",
+        "missing_phases",
     }
 )
 SAFE_VALUE_RE = re.compile(r"^[A-Za-z0-9_.:/+-]{1,128}$")
@@ -251,6 +256,31 @@ RUST_PANIC_LOCATION_RE = re.compile(
     r"^thread\s+'[^']{1,128}'\s+panicked at\s+"
     r"(?P<location>[A-Za-z0-9_./:-]+:\d+(?::\d+)?)(?:$|:.*$)"
 )
+PHASE_TIMING_DIAGNOSTIC_STAGES = frozenset(
+    {
+        "workload-source", "supervisor-source", "workload-validation", "supervisor-validation",
+        "marker-import", "projection", "final-projection", "upload",
+    }
+)
+PHASE_TIMING_DIAGNOSTIC_REASONS = frozenset(
+    {
+        "missing-source", "record-read", "record-write", "invalid", "duplicate", "identity",
+        "incomplete", "ordering", "missing-phase", "trust", "clock-domain", "path", "unknown",
+    }
+)
+PHASE_TIMING_PHASE_ORDER = (
+    "preflight-quota", "preflight-cache", "vm-create", "vm-wait", "startup-metadata",
+    "startup-runner-image", "startup-host-packages", "startup-accounts", "startup-passt",
+    "startup-cgroup", "startup-apparmor", "startup-rust-toolchain", "startup-libkrunfw",
+    "startup-libkrun", "startup-checkout", "cooking-supervisor", "dependency-setup",
+    "cache-download", "cache-extract", "workflow-images", "browser-setup", "metadata-guard",
+    "project-build", "runtime-guest-build", "runtime-worker-build", "runtime-smoke",
+    "gateway-edge-ready", "gateway-services-ready", "gateway-readiness", "oci-image-materialization",
+    "oci-builder", "oci-verifier", "golden-tests", "database-tests", "browser-initial",
+    "browser-post-operation", "evidence-scan", "archive", "upload", "vm-delete",
+    "post-delete-download", "cleanup-verification",
+)
+PHASE_TIMING_PHASES = frozenset(PHASE_TIMING_PHASE_ORDER)
 SAFE_ERROR_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _.,:;/'()\[\]-]{0,1023}$")
 STACK_LINE_RE = re.compile(r"^\s*(?:at\s+|File\s+|[A-Za-z0-9_.-]+\.\w+:\d+)")
 ASSERTION_LINE_RE = re.compile(
@@ -854,6 +884,49 @@ def _project_runtime_fields(line: str) -> tuple[str, list[str]]:
     return projected.strip(), list(fields)
 
 
+def _project_phase_timing_diagnostic(line: str) -> str | None:
+    """Project the timing failure summary using a closed field contract."""
+
+    marker = "HEPH_GCP_DIAGNOSTICS "
+    marker_start = line.find(marker)
+    if marker_start < 0 or "event=phase-timing" not in line[marker_start:]:
+        return None
+    fields: dict[str, str] = {}
+    for token in line[marker_start:].split()[1:]:
+        key, separator, value = token.partition("=")
+        if not separator or key in fields:
+            raise CollectionError("phase timing diagnostic fields are malformed")
+        fields[key] = value
+    expected = {
+        "event", "status", "failed_stage", "reason_class", "available_count", "available_phases",
+        "missing_count", "missing_phases",
+    }
+    if set(fields) != expected or fields["event"] != "phase-timing" or fields["status"] != "unavailable":
+        raise CollectionError("phase timing diagnostic fields are not allowlisted")
+    if fields["failed_stage"] not in PHASE_TIMING_DIAGNOSTIC_STAGES:
+        raise CollectionError("phase timing diagnostic stage is invalid")
+    if fields["reason_class"] not in PHASE_TIMING_DIAGNOSTIC_REASONS:
+        raise CollectionError("phase timing diagnostic reason is invalid")
+    values: dict[str, list[str]] = {}
+    for name in ("available_phases", "missing_phases"):
+        items = [] if fields[name] == "none" else fields[name].split(",")
+        if any(item not in PHASE_TIMING_PHASES for item in items) or len(set(items)) != len(items):
+            raise CollectionError("phase timing diagnostic phase list is invalid")
+        if items != sorted(items, key=PHASE_TIMING_PHASE_ORDER.index):
+            raise CollectionError("phase timing diagnostic phase order is invalid")
+        values[name] = items
+    for count_name, list_name in (("available_count", "available_phases"), ("missing_count", "missing_phases")):
+        count = fields[count_name]
+        if not count.isascii() or not count.isdecimal() or int(count) > len(PHASE_TIMING_PHASES) or int(count) != len(values[list_name]):
+            raise CollectionError("phase timing diagnostic count is invalid")
+    return (
+        "HEPH_GCP_DIAGNOSTICS event=phase-timing status=unavailable "
+        f"failed_stage={fields['failed_stage']} reason_class={fields['reason_class']} "
+        f"available_count={int(fields['available_count'])} available_phases={fields['available_phases']} "
+        f"missing_count={int(fields['missing_count'])} missing_phases={fields['missing_phases']}"
+    )
+
+
 def _project_text(source: Path, destination: Path) -> tuple[int, str]:
     """Project lifecycle key/value fields and safe assertion/stack lines."""
 
@@ -874,6 +947,8 @@ def _project_text(source: Path, destination: Path) -> tuple[int, str]:
             readiness = classify_readiness_error(line)
             if readiness is not None:
                 projected = readiness
+            elif (phase_timing_diagnostic := _project_phase_timing_diagnostic(line)) is not None:
+                projected = phase_timing_diagnostic
             elif (shell_failure := _project_shell_failure_marker(line)) is not None:
                 projected = shell_failure
             elif RETRY_MARKER_RE.search(line) is not None:
