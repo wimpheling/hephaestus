@@ -212,6 +212,7 @@ checkout_root={root}
 runtime_python_ref=python-ref
 runtime_rust_ref=rust-ref
 workload_path=/home/forge/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+rust_toolchain=1.88.0
 cache_root={root}/cache
 evidence_root={root}/evidence
 browser_root={root}/browsers
