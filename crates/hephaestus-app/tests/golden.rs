@@ -1022,22 +1022,27 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             } else {
                 None
             };
-        let builds = cooking_builds::build_and_publish(cooking_builds::CookingBuildContext {
-            pool: &pool,
-            running: &running,
-            root: &root,
-            source_root: &source_root,
-            project_id: project.id,
-            repositories: &fixture_repository,
-            identity: cooking_builds::CookingIdentity {
-                actor: &identity,
-                git_token: &token,
-                rpc_token: &rpc_token,
-            },
-            timeout: cooking_wait_timeout,
-        })
-        .await
-        .expect("real cooking source build and publish proof");
+        let builds = {
+            let production_project_build_timer =
+                WorkloadPhaseTimer::start("production-project-build", workload_phase_timing);
+            let result = cooking_builds::build_and_publish(cooking_builds::CookingBuildContext {
+                pool: &pool,
+                running: &running,
+                root: &root,
+                source_root: &source_root,
+                project_id: project.id,
+                repositories: &fixture_repository,
+                identity: cooking_builds::CookingIdentity {
+                    actor: &identity,
+                    git_token: &token,
+                    rpc_token: &rpc_token,
+                },
+                timeout: cooking_wait_timeout,
+            })
+            .await;
+            production_project_build_timer.finish(result.is_ok());
+            result.expect("real cooking source build and publish proof")
+        };
         let adversarial_agent_build = cooking_builds::build_and_publish_adversarial_agent(
             &cooking_builds::CookingBuildContext {
                 pool: &pool,

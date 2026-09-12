@@ -278,7 +278,7 @@ PHASE_TIMING_PHASE_ORDER = (
     "startup-cgroup", "startup-apparmor", "startup-rust-toolchain", "startup-libkrunfw",
     "startup-libkrun", "startup-checkout", "cooking-supervisor", "dependency-setup",
     "cache-download", "cache-extract", "workflow-images", "browser-setup", "metadata-guard",
-    "project-build", "runtime-guest-build", "runtime-worker-build", "runtime-smoke",
+    "project-build", "production-project-build", "runtime-guest-build", "runtime-worker-build", "runtime-smoke",
     "gateway-edge-ready", "gateway-services-ready", "gateway-readiness", "oci-image-materialization",
     "oci-builder", "oci-verifier", "golden-tests", "database-tests", "browser-initial",
     "browser-post-operation", "evidence-scan", "archive", "upload", "vm-delete",

@@ -637,7 +637,7 @@ PYGATE
         --expected-source-sha "$diagnostics_source_sha" \
         --require-supervisor-phase archive --require-supervisor-phase evidence-scan \
         --require-supervisor-phase upload \
-        --require-workload-phase dependency-setup --require-workload-phase project-build \
+        --require-workload-phase dependency-setup --require-workload-phase production-project-build \
         --require-workload-phase browser-setup --require-workload-phase runtime-guest-build \
         --require-workload-phase runtime-worker-build --require-workload-phase oci-image-materialization \
         --require-workload-phase gateway-edge-ready --require-workload-phase gateway-services-ready \

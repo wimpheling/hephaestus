@@ -621,7 +621,7 @@ collect_diagnostics() {
   phase_timing_combined="$input_root/phase-timing-workload.jsonl"
   phase_timing_input="$input_root/phase-timing.json"
   for required_phase in \
-    dependency-setup project-build browser-setup runtime-guest-build runtime-worker-build \
+    dependency-setup production-project-build browser-setup runtime-guest-build runtime-worker-build \
     oci-image-materialization gateway-edge-ready gateway-services-ready gateway-readiness \
     oci-builder oci-verifier golden-tests database-tests browser-initial browser-post-operation; do
     phase_timing_required_args+=(--require-phase "$required_phase")
@@ -906,7 +906,7 @@ PY
       --path "$phase_timing_final_combined" --output "$phase_timing_sidecar" \
       --require-supervisor-phase archive --require-supervisor-phase evidence-scan \
       --require-supervisor-phase upload \
-      --require-workload-phase dependency-setup --require-workload-phase project-build \
+      --require-workload-phase dependency-setup --require-workload-phase production-project-build \
       --require-workload-phase browser-setup --require-workload-phase runtime-guest-build \
       --require-workload-phase runtime-worker-build --require-workload-phase oci-image-materialization \
       --require-workload-phase gateway-edge-ready --require-workload-phase gateway-services-ready \
