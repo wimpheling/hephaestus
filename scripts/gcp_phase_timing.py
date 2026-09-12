@@ -653,6 +653,8 @@ def validate_projection(
             fail("timing projection contains an unsupported field")
         if not required_projection_keys <= set(phase):
             fail("timing projection is missing a required field")
+        if not isinstance(phase.get("phase"), str) or phase["phase"] not in PHASES:
+            fail("timing projection phase is invalid")
         if not isinstance(phase.get("measurement"), str) or phase["measurement"] not in {"trusted", "informational"}:
             fail("timing projection measurement is invalid")
         trust = phase.get("trust")
