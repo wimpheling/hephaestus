@@ -656,6 +656,35 @@ and prior owned VM absence before dispatch. After evidence collection, remove
 the five fixture lines and close PR #34; never merge the fixture. No automatic
 retry is permitted.
 
+
+WORKLOAD CANCELLATION FIXTURE EVIDENCE: RUN 34721027999
+========================================================
+The temporary draft fixture PR #34 was dispatched once at exact head
+`eec15ffce18e0159c3452ece1d96e761096e8354` against trusted controller main
+`5e001bb480ed00a71b6c6f469efe079d81df4aef`: [run
+34721027999](https://github.com/wimpheling/hephaestus/actions/runs/34721027999).
+The workload and supervisor both exited `143`, and the retained failure
+records identify a signal at the Cooking command. This is workload SIGTERM
+lifecycle evidence only; it does not test GitHub workflow cancellation and is
+not a performance baseline or result.
+
+Private diagnostics upload was verified by download; diagnostics download and
+evidence scan passed, checking `7` files and `5,573` bytes. Cleanup verified
+the owned VM absent. Browser execution was not reached and its report was
+missing with default retained counts all zero. The workload gate retained
+`exit_code=143` with `reason_class=workload-failed`; the safe projection did
+not expose a `cancelled` timing outcome. Supervisor validation passed, but
+phase timing retention was unavailable with `failedStage=projection`,
+`reasonClass=missing-phase`, `availableCount=19`, `missingCount=13`, and
+`failedPhase=none`, `failedClockDomain=none`, `failedOccurrence=0`. The missing
+phases are the later build, gateway, OCI, test and browser phases expected after
+the fixture signal. This unresolved distinction is preserved for follow-up;
+no ACCEPTED or REJECTED performance result is recorded.
+
+The temporary fixture PR #34 remains a draft and must never be merged. Its
+five-line block is now closed out after this one cancellation probe; rollback
+is removal of that block and closure of the temporary PR.
+
 ACCEPTED
 ========
 None yet.
