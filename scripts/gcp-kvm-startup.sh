@@ -533,7 +533,7 @@ phase_timing_emit_failure() {
     diagnostic_args+=(--require-phase archive --require-phase evidence-scan --require-phase upload)
   fi
   diagnostic="$(run_with_collection_deadline python3 "$trusted_phase_timing_script" diagnose "${diagnostic_args[@]}" 2>/dev/null)" ||
-    diagnostic="HEPH_GCP_DIAGNOSTICS event=phase-timing status=unavailable failed_stage=$stage reason_class=unknown available_count=0 available_phases=none missing_count=0 missing_phases=none"
+    diagnostic="HEPH_GCP_DIAGNOSTICS event=phase-timing status=unavailable failed_stage=$stage reason_class=unknown failed_phase=none failed_clock_domain=none failed_occurrence=0 available_count=0 available_phases=none missing_count=0 missing_phases=none"
   printf '%s\n' "$diagnostic"
   printf '%s\n' "$diagnostic" >>"$status_json"
 }

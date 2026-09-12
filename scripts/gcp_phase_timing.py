@@ -109,6 +109,9 @@ TIMING_DIAGNOSTIC_REASONS = {
     "invalid",
     "duplicate",
     "identity",
+    "unclosed-start",
+    "unmatched-end",
+    "end-before-start",
     "incomplete",
     "ordering",
     "missing-phase",
@@ -180,11 +183,35 @@ IDENTITY_KEYS = {
 
 
 class TimingError(ValueError):
-    """A malformed or unsafe timing record."""
+    """A malformed or unsafe timing record with bounded pair context."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        phase: str | None = None,
+        clock_domain: str | None = None,
+        occurrence: int = 0,
+    ) -> None:
+        super().__init__(message)
+        self.phase = phase
+        self.clock_domain = clock_domain
+        self.occurrence = occurrence
 
 
 def fail(message: str) -> "NoReturn":
     raise TimingError(message)
+
+
+def fail_at(message: str, value: dict[str, Any]) -> "NoReturn":
+    """Raise a timing error with only the current record's safe pair fields."""
+
+    raise TimingError(
+        message,
+        phase=value.get("phase") if isinstance(value.get("phase"), str) else None,
+        clock_domain=value.get("clock_domain") if isinstance(value.get("clock_domain"), str) else None,
+        occurrence=value.get("occurrence") if type(value.get("occurrence")) is int else 0,
+    )
 
 
 def timing_error_class(error: Exception) -> str:
@@ -201,7 +228,13 @@ def timing_error_class(error: Exception) -> str:
         return "trust"
     if "clock domain" in message:
         return "clock-domain"
-    if any(token in message for token in ("incomplete", "no matching", "precedes")):
+    if "contains an incomplete phase" in message:
+        return "unclosed-start"
+    if "no matching start" in message:
+        return "unmatched-end"
+    if "precedes phase start" in message:
+        return "end-before-start"
+    if "incomplete" in message:
         return "incomplete"
     if "monotonic order" in message:
         return "ordering"
@@ -359,6 +392,9 @@ def timing_diagnostic(
     available: set[str] = set()
     reason = "unknown"
     records: list[dict[str, Any]] = []
+    failed_phase = "none"
+    failed_clock_domain = "none"
+    failed_occurrence = 0
     if path.is_symlink() or any(parent.is_symlink() for parent in path.parents):
         reason = "path"
     elif not path.exists():
@@ -380,6 +416,18 @@ def timing_diagnostic(
             )
         except (TimingError, OSError, TypeError, ValueError) as error:
             reason = timing_error_class(error)
+            if isinstance(error, TimingError):
+                # Emit pair context atomically: partial context would be
+                # ambiguous after the safe collector strips the raw record.
+                if (
+                    error.phase in PHASES
+                    and error.clock_domain in CLOCK_DOMAINS
+                    and type(error.occurrence) is int
+                    and 1 <= error.occurrence <= MAX_COUNTER
+                ):
+                    failed_phase = error.phase
+                    failed_clock_domain = error.clock_domain
+                    failed_occurrence = error.occurrence
             # A valid prefix is useful even when a later line fails.  Read it
             # through a bounded JSON pass and admit only known phase names.
             try:
@@ -416,6 +464,9 @@ def timing_diagnostic(
         "status": "unavailable",
         "failed_stage": stage,
         "reason_class": reason,
+        "failed_phase": failed_phase,
+        "failed_clock_domain": failed_clock_domain,
+        "failed_occurrence": failed_occurrence,
         "available_count": len(ordered_available),
         "available_phases": ",".join(ordered_available) or "none",
         "missing_count": len(ordered_missing),
@@ -491,7 +542,7 @@ def validate_pairs(
     identity_values: tuple[Any, ...] | None = None
     for value in records:
         if required_trust is not None and value["trust"] != required_trust:
-            fail("timing record trust does not match the input origin")
+            fail_at("timing record trust does not match the input origin", value)
         identity = (
             value["run_id"],
             value["attempt"],
@@ -501,42 +552,42 @@ def validate_pairs(
         if identity_values is None:
             identity_values = identity
         elif identity != identity_values:
-            fail("timing record identity changed within the run")
+            fail_at("timing record identity changed within the run", value)
         if expected_run_id is not None and value["run_id"] != expected_run_id:
-            fail("timing run_id does not match the expected run")
+            fail_at("timing run_id does not match the expected run", value)
         if expected_attempt is not None and value["attempt"] != expected_attempt:
-            fail("timing attempt does not match the expected attempt")
+            fail_at("timing attempt does not match the expected attempt", value)
         if expected_source_sha is not None and value["source_sha"] != expected_source_sha:
-            fail("timing source_sha does not match the expected workload")
+            fail_at("timing source_sha does not match the expected workload", value)
         if expected_image_fingerprint and value.get("image_fingerprint") != expected_image_fingerprint:
-            fail("timing image fingerprint does not match the expected image")
+            fail_at("timing image fingerprint does not match the expected image", value)
         key = (value["phase"], value["trust"], value["clock_domain"], value["occurrence"])
         stream = (value["trust"], value["clock_domain"])
         if value["record"] == "start":
             if key in starts or key in seen_starts:
-                fail("duplicate phase start")
+                fail_at("duplicate phase start", value)
             starts[key] = value
             seen_starts.add(key)
             if value["mono_ns"] < previous.get(stream, 0):
-                fail("phase starts are out of monotonic order")
+                fail_at("phase starts are out of monotonic order", value)
             previous[stream] = value["mono_ns"]
             continue
         start = starts.pop(key, None)
         if start is None:
-            fail("phase end has no matching start")
+            fail_at("phase end has no matching start", value)
         if value["mono_ns"] < start["mono_ns"]:
-            fail("phase end precedes phase start")
+            fail_at("phase end precedes phase start", value)
         if value["mono_ns"] - start["mono_ns"] > MAX_DURATION_MS * 1_000_000:
-            fail("phase duration exceeds the bound")
+            fail_at("phase duration exceeds the bound", value)
         if any(start.get(name) != value.get(name) for name in IDENTITY_KEYS):
-            fail("phase provenance changed between start and end")
+            fail_at("phase provenance changed between start and end", value)
         item = dict(start)
         item.update(value)
         item["duration_ms"] = (value["mono_ns"] - start["mono_ns"]) // 1_000_000
         complete.append(item)
         previous[stream] = value["mono_ns"]
     if starts:
-        fail("timing file contains an incomplete phase")
+        fail_at("timing file contains an incomplete phase", next(iter(starts.values())))
     if required:
         observed = {item["phase"] for item in complete}
         missing = required - observed
@@ -546,7 +597,7 @@ def validate_pairs(
         for phase in phases:
             matches = [item for item in complete if item["phase"] == phase and item["trust"] == trust]
             if not matches:
-                fail("required phase trust is missing")
+                raise TimingError("required phase trust is missing", phase=phase)
             expected_domains = (
                 SUPERVISOR_PHASE_DOMAINS.get(phase)
                 if trust == "supervisor"
@@ -557,7 +608,8 @@ def validate_pairs(
                 else {"workload", "workload-libkrun", "workload-gateway"}
             )
             if any(item["clock_domain"] not in expected_domains for item in matches):
-                fail("required phase clock domain is invalid")
+                item = next(item for item in matches if item["clock_domain"] not in expected_domains)
+                fail_at("required phase clock domain is invalid", item)
     return complete
 
 
