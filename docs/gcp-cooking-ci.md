@@ -22,9 +22,29 @@ from VM creation to workload exit `1` does not prove a budget timeout. The
 coordinator fix is published at `d6ee8c25ac07da98407b4dd46b8282a3363965b7` and
 passed 177 focused tests. It makes strict outer `FAIL` records include the
 revision validated before mode startup; startup is unchanged, so the promoted
-image remains compatible. The next paid sequence is one cheap diagnostic, then
-one full trial only if that diagnostic passes. Full GCP validation remains open;
-no MVP-06 implementation is part of this work.
+image remains compatible. The later full [run
+34665815069](https://github.com/wimpheling/hephaestus/actions/runs/34665815069)
+from source `9bc0aada35cabdd73b77e13e54d8e2ce9f130774` confirmed the ordering
+fix: the workload passed with exit `0` and the evidence phase passed, then
+collection reached a typed fatal operation/collection stage before the strict
+outer `FAIL` with the expected revision. Its `snapshot-validation` failure
+still prevents full acceptance.
+The VM was absent at 02:13:04.247Z, but the private object lookup returned 404,
+so no archive or credential scan was available. The latest cheap diagnostic
+[run 34665616285](https://github.com/wimpheling/hephaestus/actions/runs/34665616285)
+passed in 2m51s with the 177-test baseline: expected gates `42`/`1`/`42` and
+quarantine passed; VM absence was verified at 01:45:24.466Z before download
+and scan at 01:45:28.838Z for 1,813 bytes, SHA-256
+`7d638e7699a6448e8c7d10009b940abea17e4ab224f5883f5f24ef19d3692cb6`. The
+collector snapshot fix is published at
+`e2b5fb4671dbc472cee594d5ddcf868ad8661c5e` with 180 passing tests, including
+real 11-row producer snapshots and status-`ok` stages through collection and
+summarization. It quarantines only invalid lineage/status, removes the partial
+projection, retains other strict safe sources and emits closed rejection
+classes, failing closed if none remain valid. Missing lineage is not full
+coverage; the next full run must review lineage specifically. Run one cheap
+diagnostic after this fix, then one full trial only if it passes. Full GCP
+validation remains open and no MVP-06 implementation is part of this work.
 Its predecessor [run 34662878781](https://github.com/wimpheling/hephaestus/actions/runs/34662878781)
 from source `5c453ea` failed conclusively with workload exit `127` from the
 wrapper before browser execution; the scanner ran and failed because no files
@@ -225,8 +245,9 @@ budget behavior is not yet validated: the earlier `5c453ea` baseline exposed
 an external-timeout invocation regression returning `127`, corrected in the
 published `8fe2e21` follow-up. The current image fingerprint is unchanged and
 the corrected full trial failed as recorded at the top of this runbook. Paid
-retries are paused pending one cheap diagnostic after the coordinator fix. Run
-one full trial only if that diagnostic passes. See
+retries are paused pending the post-fix cheap diagnostic. Run one full trial
+only if that diagnostic passes.
+See
 [`scripts/gcp-kvm-startup.sh`](../scripts/gcp-kvm-startup.sh) and
 [`scripts/gcp-cooking-run.sh`](../scripts/gcp-cooking-run.sh).
 
@@ -272,9 +293,9 @@ required by the baked image.
 The startup provenance change required a replacement image build and
 validation. Candidate `hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d` is
 promoted after its real KVM smoke passed; full validation remains open and paid
-full retries are paused pending the cheap diagnostic after the coordinator fix.
-Run one full trial only if that diagnostic passes. Use the explicit stock-image
-diagnostic for cheap validation when testing startup changes.
+full retries are paused pending the post-fix cheap diagnostic. Run one full
+trial only if that diagnostic passes. Use the explicit stock-image diagnostic for cheap validation when
+testing startup changes.
 
 ```sh
 gh workflow run cooking-e2e.yml --repo wimpheling/hephaestus --ref main \
@@ -467,8 +488,8 @@ Shell browser login. The diagnostics bucket apply is now human-verified: the
 one-day bucket exists with the runtime bucket-scoped object creator grant and
 the CI bucket-scoped object viewer grant. The diagnostic evidence path and its
 live partial-source proof are verified by runs 34586850977 and 34593541194;
-full Cooking live pipeline validation remains open pending the cheap diagnostic
-and one subsequent full trial. Do
+full Cooking live pipeline validation remains open pending one subsequent full
+trial. Do
 not run either script with personal local gcloud credentials.
 
 ## Dispatch and acceptance gate
@@ -550,8 +571,8 @@ result passes. For `gcp-cooking`, the test result must also contain the dedicate
 diagnostics are collected successfully. Do not weaken expected test counts or
 convert a missing marker into success. The preceding full trial is recorded at
 the top of this runbook as failed; full GCP validation remains open pending
-one cheap diagnostic and one subsequent full trial. Do not start another paid
-retry before those steps; no global budget-timeout cause is established.
+one subsequent full trial. Do not start another paid retry before that trial;
+no global budget-timeout cause is established.
 
 An earlier full attempt [34588821244](https://github.com/wimpheling/hephaestus/actions/runs/34588821244)
 at commit `18fff14` timed out with exit `124`. Its raw serial contained a
@@ -562,14 +583,18 @@ cleanup: a later download failure overwrote its previously verified cleanup
 state as `cleanup: unverified`; that status-writing defect is retained as
 historical evidence.
 
-The current collector quarantines an unsafe individual source, records its
-allowlisted `rejectedSources` classification, and can retain an independently
-safe lineage/status partial bundle. Fatal collector errors emit closed typed
-stage/reason metadata without paths or payloads, while the serial filter retains
-safe diagnostic lines. The retained files are scanned again before archive
-creation; a fixture-bearing source is never redacted into the bundle.
-The live partial-source behavior is proven by run 34593541194. The historical
-attempt establishes neither a denial cause nor snapshot evidence.
+The published collector snapshot fix quarantines only invalid lineage or
+status, removes the invalid partial projection, retains other strict safe
+sources and emits closed rejection classes; it fails closed if no valid source
+remains. Legitimate producer snapshots, including 11-row snapshots and
+status-`ok` stages, survive collection and summarization. Missing lineage does
+not constitute full coverage; the next full run must review lineage
+specifically. Fatal collector errors emit typed stage/reason metadata without
+paths or payloads, while the serial filter retains safe diagnostic lines. The
+retained files are scanned again before archive creation; a fixture-bearing
+source is never redacted into the bundle. The live partial-source behavior is
+proven by run 34593541194. The historical attempt establishes neither a denial
+cause nor snapshot evidence.
 
 ### Root-owned gate sidecars
 

@@ -23,9 +23,26 @@ not prove a budget timeout. The coordinator fix is published at
 `d6ee8c25ac07da98407b4dd46b8282a3363965b7` and passed 177 focused tests. It
 records the validated revision in strict outer `FAIL` results before mode
 startup; startup is unchanged, so the promoted image remains compatible. The
-next paid sequence is one cheap diagnostic, then one full trial only if that
-diagnostic passes. Full GCP validation remains open; no MVP-06 implementation
-is part of this work. Its predecessor [run 34662878781](https://github.com/wimpheling/hephaestus/actions/runs/34662878781)
+coordinator fix was followed by the passed cheap diagnostic. The later full [run 34665815069](https://github.com/wimpheling/hephaestus/actions/runs/34665815069)
+from source `9bc0aada35cabdd73b77e13e54d8e2ce9f130774` confirmed the ordering
+fix: the workload and evidence phases passed, then collection reached a typed
+fatal operation/collection stage before the strict outer `FAIL` with the
+expected revision. Its `snapshot-validation` failure prevented full
+acceptance. VM absence was
+verified at 02:13:04.247Z; the private object lookup returned 404, so no
+archive or credential scan was available. The latest cheap diagnostic [run
+34665616285](https://github.com/wimpheling/hephaestus/actions/runs/34665616285)
+passed in 2m51s with expected gates `42`/`1`/`42` and quarantine; VM absence
+preceded download/scan, which passed for 1,813 bytes (SHA-256
+`7d638e7699a6448e8c7d10009b940abea17e4ab224f5883f5f24ef19d3692cb6`). The
+collector snapshot fix is published at
+`e2b5fb4671dbc472cee594d5ddcf868ad8661c5e` with 180 passing tests, including
+real 11-row producer snapshots and status-`ok` stages through collection and
+summarization. It quarantines only invalid lineage/status, removes the partial
+projection, retains other strict safe sources and fails closed if none remain
+valid. Missing lineage is not full coverage; the next full run must review
+lineage specifically. Run one cheap diagnostic after this fix, then one full
+trial only if it passes. Its predecessor [run 34662878781](https://github.com/wimpheling/hephaestus/actions/runs/34662878781)
 from source `5c453ea` failed with workload exit `127` from the wrapper before
 browser execution; the scanner ran and failed because no files were available.
 Its sidecar was valid but gate acceptance failed. VM absence was verified at
@@ -41,8 +58,9 @@ its expected fixture gates and `browser-secret-org` quarantine passed. Its
 1,810-byte private object has SHA-256
 `f340874e7557ef9ba89199ba7cedf5153668ceb5201877abb21f2b868ce338cf`.
 The canonical runbook retains the complete diagnostic and full-run history.
-Paid full retries are stopped pending the cheap diagnostic; run one full trial
-only if that diagnostic passes. No global budget-timeout cause is established.
+Paid full retries are stopped pending the post-fix cheap diagnostic. Run one
+full trial only if that diagnostic passes. No global budget-timeout cause is
+established.
 
 ## Manual GCP modes
 
