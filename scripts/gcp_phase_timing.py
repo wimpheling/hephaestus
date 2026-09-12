@@ -162,6 +162,21 @@ def fail(message: str) -> "NoReturn":
     raise TimingError(message)
 
 
+def timing_error_class(error: Exception) -> str:
+    """Map helper failures to a fixed diagnostic class without echoing input."""
+
+    message = str(error).lower()
+    if any(token in message for token in ("run_id", "attempt", "source_sha", "fingerprint", "identity")):
+        return "identity"
+    if "path" in message or "symlink" in message:
+        return "path"
+    if any(token in message for token in ("read", "decoded", "json")):
+        return "record-read"
+    if any(token in message for token in ("writ", "size bound", "count exceeds")):
+        return "record-write"
+    return "pair"
+
+
 def bounded_int(value: Any, name: str) -> int:
     if type(value) is not int or value < 0 or value > MAX_COUNTER:
         fail(f"{name} is outside its bounded integer range")
@@ -764,9 +779,20 @@ def run(args: argparse.Namespace) -> int:
 
 
 def main() -> int:
+    args: argparse.Namespace | None = None
     try:
-        return run(parser().parse_args())
+        args = parser().parse_args()
+        return run(args)
     except (TimingError, OSError, ValueError) as exc:
+        stage = {
+            "start": "timing-helper-start",
+            "end": "timing-helper-end",
+        }.get(args.command if args is not None else "", "timing-helper-validation")
+        print(
+            "HEPH_GCP_COOKING event=timing-helper-error operation=cooking-workload "
+            f"phase=cooking stage={stage} reason_class={timing_error_class(exc)} status=failed exit_code=2",
+            file=sys.stderr,
+        )
         print(f"gcp phase timing: {exc}", file=sys.stderr)
         return 2
 
