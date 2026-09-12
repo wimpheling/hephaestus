@@ -825,7 +825,86 @@ fails. This is exactly one authorized full baseline dispatch with no retry.
 
 ACCEPTED
 ========
-None yet.
+ID: cold-gcp-pr-sandbox-baseline
+Hypothesis: establish the first valid cold disposable-GCP reference after the
+two locally reproduced timing-pipeline fixes. Result: ACCEPTED baseline; no
+performance change was made in this run.
+
+Run: [34724176879](https://github.com/wimpheling/hephaestus/actions/runs/34724176879),
+attempt `1`, workflow `main` at controller SHA
+`9a2e741eade54bd52717d2de8bdb41e9cf9b1c34`; selected same-repository PR #20
+workload SHA `635b5945ee2a19b645afb163fe6f9bfcab9e0af1`, repository ID
+`1312377552`. The controller and finalized gate results both preserve this
+workload SHA. The run job elapsed `26m32s` (`2026-09-12T22:58:52Z` to
+`23:25:24Z`); workflow elapsed was about `26m37s` including orchestration.
+
+Locked environment: image
+`hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d`, cache generation
+`1789079827867335`, cache SHA-256
+`0ed20efcc1aa019b79405d1eed626b13d4702019e9ceeba2bdde54e45ae29296`, cache
+archive `1783474345` bytes, `n2-standard-8`, `150 GB pd-balanced`,
+`europe-west1-d`, one VM, 45-minute provider DELETE and 50-minute workflow
+timeout. No CPU, host-build-removal, image, cache, IAM/WIF, machine, disk,
+zone, concurrency or acceptance change was made.
+
+Trusted controller timings (all `measurement=trusted`, clock domain
+`controller`, outcome `passed`): `preflight-quota=2585` ms,
+`preflight-cache=1397` ms, `vm-create=14759` ms,
+`vm-wait=1489141` ms, `vm-delete=54224` ms,
+`cleanup-verification=1630` ms and `post-delete-download=1745` ms. Their
+sum is `1565481` ms; controller phase spans are authoritative and the
+workload phase spans below overlap them.
+
+Trusted guest-startup timings (all passed): `startup-metadata=59` ms,
+`startup-runner-image=1076` ms, `startup-host-packages=62` ms,
+`startup-accounts=124` ms, `startup-passt#1=63` ms,
+`startup-cgroup=1037` ms, `startup-apparmor=113` ms,
+`startup-passt#2=1240` ms, `startup-rust-toolchain=63` ms,
+`startup-libkrunfw=61` ms, `startup-libkrun=64` ms,
+`startup-checkout=10840` ms, `cooking-supervisor=1426137` ms,
+`archive=576` ms, `evidence-scan=131` ms and `upload=438` ms.
+Trusted guest-runtime timings (all passed): `startup-host-packages=73` ms,
+`browser-setup#1=610` ms, `cache-download=11982` ms,
+`cache-extract=18110` ms, `workflow-images=50436` ms,
+`metadata-guard#1=152` ms, `browser-setup#2=1937` ms,
+`metadata-guard#2=105` ms, `cooking-supervisor=1341268` ms and
+`evidence-scan=514` ms.
+
+Workload timings are `measurement=informational` and all passed:
+`browser-setup=1765` ms and `dependency-setup=968` ms in clock domain
+`workload`; host `project-build=12917` ms in `workload`;
+`gateway-edge-ready=3078` ms in `workload-gateway`; and in
+`workload-libkrun`, `runtime-guest-build=87834` ms,
+`oci-image-materialization=23594` ms, `gateway-services-ready=14712` ms,
+`runtime-worker-build=19794` ms, `golden-tests=1120599` ms,
+`database-tests=45697` ms, `gateway-readiness=348` ms,
+`production-project-build=83685` ms, `oci-builder=102566` ms,
+`oci-verifier=364757` ms, `browser-initial=100622` ms and
+`browser-post-operation=47601` ms. These workload spans overlap and must not
+be summed into total runtime.
+
+Correctness and evidence: the finalized `gcp-cooking` gate result has
+`overall_exit_code=0`, `supervisor_exit_code=0`, `finalized=true`, and
+`workload`, `evidence-scan` and `browser-validation` all
+`state=passed`, `exit_code=0`, `reason_class=none`. The safe diagnostics
+manifest records `collectionStatus=complete`, 11 available sources, zero
+missing/rejected sources, `upload=verified-by-download`, `download=passed`,
+`scan=passed`, `phaseTiming=passed`, `gateValidation=passed` and
+`gateAcceptance=passed`. Browser validation is complete with `2` passed,
+`0` failed, `0` skipped and `0` timed out across initial and post-operation
+phases. The evidence scanner checked `26` files and `1157392` bytes. The
+downloaded private archive is `32558` bytes with SHA-256
+`0b33cc0abd6e10ef246dc9807f3422ab0ad0e98d3b03a422196cfbd8d5d3f0a5`.
+The owned VM `heph-kvm-smoke-34724176879-1` was verified absent after
+deletion and again during post-delete download.
+
+The local producer-to-startup-to-collector-to-controller-to-summarizer
+reproduction passed before dispatch, and this run validates the same path in
+GCP. This is the first valid baseline, so no elapsed time saved is claimed
+until a separate CPU candidate or unused-host-build experiment is completed
+against this locked reference. Implementation/instrumentation commit:
+`9a2e741eade54bd52717d2de8bdb41e9cf9b1c34`; ledger preparation commit:
+`635b5945ee2a19b645afb163fe6f9bfcab9e0af1`.
 
 REJECTED
 ========
