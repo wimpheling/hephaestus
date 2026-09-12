@@ -40,6 +40,11 @@ on:
         required: false
         type: string
         default: ''
+      diagnostics_recipient_cert:
+        description: 'Optional ephemeral public X.509 certificate for an encrypted diagnostics-triage artifact (never provide a private key)'
+        required: false
+        type: string
+        default: ''
   pull_request:
   push:
     branches: [main]
@@ -112,6 +117,46 @@ jobs:
           GCP_DIAGNOSTICS_ARCHIVE: ${{ runner.temp }}/gcp-diagnostics.tar.gz
           GCP_DIAGNOSTICS_STATUS: ${{ runner.temp }}/gcp-diagnostics-status.json
         run: bash scripts/gcp-kvm-smoke.sh download-diagnostics
+      - name: Encrypt revalidated private diagnostics for local inspection
+        id: encrypt_diagnostics
+        if: ${{ always() && inputs.cloud_mode == 'diagnostics-triage' && inputs.diagnostics_recipient_cert != '' }}
+        env:
+          HEPH_DIAGNOSTICS_RECIPIENT_CERT: ${{ inputs.diagnostics_recipient_cert }}
+        run: |
+          set -Eeuo pipefail
+          cert="$RUNNER_TEMP/diagnostics-recipient-cert.pem"
+          python3 - "$cert" <<'PY'
+          from pathlib import Path
+          import os
+          import re
+          import sys
+
+          value = os.environ["HEPH_DIAGNOSTICS_RECIPIENT_CERT"]
+          if len(value.encode("utf-8")) > 16 * 1024:
+              raise SystemExit("recipient certificate exceeds the 16 KiB bound")
+          if "PRIVATE KEY" in value:
+              raise SystemExit("private-key material is not accepted")
+          if re.fullmatch(
+              r"-----BEGIN CERTIFICATE-----\r?\n[A-Za-z0-9+/=\r\n]+"
+              r"-----END CERTIFICATE-----\r?\n?",
+              value,
+          ) is None:
+              raise SystemExit("recipient input must be exactly one X.509 certificate PEM")
+          Path(sys.argv[1]).write_bytes(value.encode("ascii"))
+          PY
+          bash scripts/export-encrypted-diagnostics.sh export \
+            "$RUNNER_TEMP/gcp-diagnostics.tar.gz" \
+            "$cert" \
+            "$RUNNER_TEMP/gcp-diagnostics.tar.gz.cms" \
+            "$RUNNER_TEMP/gcp-diagnostics-status.json"
+      - name: Retain encrypted diagnostics ciphertext
+        if: ${{ always() && inputs.cloud_mode == 'diagnostics-triage' && inputs.diagnostics_recipient_cert != '' && steps.encrypt_diagnostics.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: gcp-diagnostics-encrypted-${{ inputs.diagnostics_run_id || github.run_id }}-${{ inputs.diagnostics_attempt || github.run_attempt }}
+          path: ${{ runner.temp }}/gcp-diagnostics.tar.gz.cms
+          if-no-files-found: error
+          retention-days: 1
       - name: Cleanup immutable runner image build resources
         if: ${{ always() && inputs.cloud_mode == 'image-build' }}
         env:

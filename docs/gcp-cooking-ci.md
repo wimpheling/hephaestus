@@ -5,7 +5,28 @@ This runbook is the durable reference for the disposable GCP modes in
 validation is **pending**. Historical smoke or self-hosted Cooking results do
 not establish that the current GCP Cooking path is green.
 
-Current full validation is still open. Corrected full [run
+The optional encrypted `diagnostics-triage` export is published at source
+`4bede2c` with 184 focused tests; it revalidates the fixed private bundle
+before producing a one-day CMS ciphertext for a local recipient. The current
+paid full-run pause remains in force, and no actual no-VM encrypted-export
+proof has been recorded yet. See the [encrypted diagnostics export guide](gcp-encrypted-diagnostics.md)
+for the local key and inspection procedure.
+
+The most recent full [run 34667868345](https://github.com/wimpheling/hephaestus/actions/runs/34667868345)
+from source `874a55824d1316952b1c1ae3288ba00e5a9d4619` failed after 29m26s
+(02:30:44Z–03:00:10Z) on the promoted image. Workload exit was `1`; both
+browser phases passed, and evidence scanning passed for 26 files and 1,382,903
+bytes. The lineage and lineage-status sources were rejected with the generic
+`source-validation-rejected` class; collection was partial, but upload,
+post-delete download and scan passed. VM absence was verified at 03:00:03.309Z.
+The private object was 27,897 bytes with SHA-256
+`1bb476f3d7ef3d5cefcf8176e8671ee6830b574a876c78aa9748e8345b8d3156`.
+Gate validation passed but acceptance failed. The raw `ENOENT` observation is
+not causal proof, and caught-confinement panics are not an application-failure
+classification. Paid full retries are paused for no-VM retained-bundle triage
+improvement and local lineage diagnosis; no new full run is planned yet.
+
+An earlier corrected full attempt is recorded below: [run
 34663205477](https://github.com/wimpheling/hephaestus/actions/runs/34663205477)
 from source `a453d6dd1823fcf91c6934e9e91185b869ece718` failed on the unchanged
 promoted image `hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d` after
@@ -42,9 +63,10 @@ real 11-row producer snapshots and status-`ok` stages through collection and
 summarization. It quarantines only invalid lineage/status, removes the partial
 projection, retains other strict safe sources and emits closed rejection
 classes, failing closed if none remain valid. Missing lineage is not full
-coverage; the next full run must review lineage specifically. Run one cheap
-diagnostic after this fix, then one full trial only if it passes. Full GCP
-validation remains open and no MVP-06 implementation is part of this work.
+coverage; the next full run must review lineage specifically. The post-fix cheap
+diagnostic above passed. Full retries remain paused for no-VM retained-bundle
+triage improvement and local lineage diagnosis; no new full run is planned. No
+MVP-06 implementation is part of this work.
 Its predecessor [run 34662878781](https://github.com/wimpheling/hephaestus/actions/runs/34662878781)
 from source `5c453ea` failed conclusively with workload exit `127` from the
 wrapper before browser execution; the scanner ran and failed because no files
@@ -244,9 +266,8 @@ host-service/forge availability, so no host provisioning was performed. Live
 budget behavior is not yet validated: the earlier `5c453ea` baseline exposed
 an external-timeout invocation regression returning `127`, corrected in the
 published `8fe2e21` follow-up. The current image fingerprint is unchanged and
-the corrected full trial failed as recorded at the top of this runbook. Paid
-retries are paused pending the post-fix cheap diagnostic. Run one full trial
-only if that diagnostic passes.
+the corrected full trial failed as recorded at the top of this runbook. Paid retries are paused for no-VM retained-bundle triage improvement and local
+lineage diagnosis.
 See
 [`scripts/gcp-kvm-startup.sh`](../scripts/gcp-kvm-startup.sh) and
 [`scripts/gcp-cooking-run.sh`](../scripts/gcp-cooking-run.sh).
@@ -292,9 +313,8 @@ required by the baked image.
 
 The startup provenance change required a replacement image build and
 validation. Candidate `hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d` is
-promoted after its real KVM smoke passed; full validation remains open and paid
-full retries are paused pending the post-fix cheap diagnostic. Run one full
-trial only if that diagnostic passes. Use the explicit stock-image diagnostic for cheap validation when
+promoted after its real KVM smoke passed; full validation remains open and paid full retries are paused for no-VM retained-bundle triage improvement and
+local lineage diagnosis. Use the explicit stock-image diagnostic for cheap validation when
 testing startup changes.
 
 ```sh

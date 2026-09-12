@@ -7,7 +7,18 @@ The acceptance checklist and open work are in the [GCP Cooking CI validation
 task](../../tasks/in-progress/gcp-cooking-ci-validation.md).
 
 Current `gcp-cooking` live validation remains **open**. The promoted custom
-image is `hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d`. Corrected full
+image is `hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d`. The most recent
+full [run 34667868345](https://github.com/wimpheling/hephaestus/actions/runs/34667868345)
+from source `874a55824d1316952b1c1ae3288ba00e5a9d4619` failed after 29m26s with
+workload exit `1`; both browser phases and evidence scanning passed (26 files,
+1,382,903 bytes), but lineage and lineage-status were rejected as
+`source-validation-rejected`, so gate acceptance failed. Collection was
+partial, while upload, post-delete download and scan passed; VM absence was
+verified at 03:00:03.309Z. The 27,897-byte object SHA-256 is
+`1bb476f3d7ef3d5cefcf8176e8671ee6830b574a876c78aa9748e8345b8d3156`. Raw
+`ENOENT` and caught-confinement panics do not establish the application cause.
+Paid full retries are paused for no-VM triage improvement and local lineage
+diagnosis; no new full run is planned. The earlier corrected full
 [run 34663205477](https://github.com/wimpheling/hephaestus/actions/runs/34663205477)
 from source `a453d6dd1823fcf91c6934e9e91185b869ece718` failed on that image
 after 26m42s (00:55:21Z–01:22:03Z), with workload exit `1`. The VM was created
@@ -40,15 +51,23 @@ collector snapshot fix is published at
 real 11-row producer snapshots and status-`ok` stages through collection and
 summarization. It quarantines only invalid lineage/status, removes the partial
 projection, retains other strict safe sources and fails closed if none remain
-valid. Missing lineage is not full coverage; the next full run must review
-lineage specifically. Run one cheap diagnostic after this fix, then one full
-trial only if it passes. Its predecessor [run 34662878781](https://github.com/wimpheling/hephaestus/actions/runs/34662878781)
+valid. Missing lineage is not full coverage; the next full run must review lineage
+specifically. The post-fix cheap diagnostic above passed. Full retries remain
+paused for no-VM retained-bundle triage improvement and local lineage diagnosis;
+no new full run is planned. Its predecessor [run 34662878781](https://github.com/wimpheling/hephaestus/actions/runs/34662878781)
 from source `5c453ea` failed with workload exit `127` from the wrapper before
 browser execution; the scanner ran and failed because no files were available.
 Its sidecar was valid but gate acceptance failed. VM absence was verified at
 00:53:09Z, and authenticated post-delete download/scan passed for 2,321 bytes
 (SHA-256 `2db3b8f884fd8a59664147e4db1134189771e692103dbd423bd027495d82e6f4`).
 That result does not establish a full Cooking pass.
+
+The optional encrypted `diagnostics-triage` export is published at source
+`4bede2c` with 184 focused tests. It revalidates the fixed private bundle and
+retains only a one-day CMS ciphertext for local inspection; no actual no-VM
+encrypted-export proof has been recorded yet. Follow the [encrypted export
+guide](../../docs/gcp-encrypted-diagnostics.md) and the canonical runbook for
+the current paid-run pause and acceptance status.
 
 The cheap diagnostic and real KVM smoke paths have passed with private
 post-delete download and credential scanning. The accepted diagnostic
@@ -58,9 +77,8 @@ its expected fixture gates and `browser-secret-org` quarantine passed. Its
 1,810-byte private object has SHA-256
 `f340874e7557ef9ba89199ba7cedf5153668ceb5201877abb21f2b868ce338cf`.
 The canonical runbook retains the complete diagnostic and full-run history.
-Paid full retries are stopped pending the post-fix cheap diagnostic. Run one
-full trial only if that diagnostic passes. No global budget-timeout cause is
-established.
+Paid full retries remain stopped for no-VM retained-bundle triage improvement
+and local lineage diagnosis. No global budget-timeout cause is established.
 
 ## Manual GCP modes
 

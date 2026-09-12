@@ -10,9 +10,29 @@ Federation and cleanup controls while proving the diagnostic and full Cooking
 paths on the current configuration. This is a follow-up to the scoped MVP-05.1
 acceptance and does not reopen or expand that completed task.
 
+The optional encrypted diagnostics-triage export is published at source
+`4bede2c` with 184 focused tests. It revalidates the fixed bundle before
+local-recipient CMS encryption; no actual no-VM encrypted-export proof exists
+yet. Paid full retries remain paused while the full GCP acceptance gate stays
+open. See the [encrypted export guide](../../docs/gcp-encrypted-diagnostics.md)
+and the [canonical runbook](../../docs/gcp-cooking-ci.md) for operations.
+
 ## Current evidence
 
-- [ ] Current full validation is still open. Corrected full [run 34663205477](https://github.com/wimpheling/hephaestus/actions/runs/34663205477)
+- [ ] Most recent full [run 34667868345](https://github.com/wimpheling/hephaestus/actions/runs/34667868345)
+  from source `874a55824d1316952b1c1ae3288ba00e5a9d4619` failed after 29m26s
+  (02:30:44Z–03:00:10Z) on the promoted image. Workload exit was `1`; both
+  browser phases passed, and evidence scanning passed for 26 files and
+  1,382,903 bytes. Lineage and lineage-status were rejected with generic
+  `source-validation-rejected`; collection was partial, but upload, post-delete
+  download and scan passed. VM absence was verified at 03:00:03.309Z. The
+  private object was 27,897 bytes with SHA-256
+  `1bb476f3d7ef3d5cefcf8176e8671ee6830b574a876c78aa9748e8345b8d3156`.
+  Gate validation passed but acceptance failed. Raw `ENOENT` is not causal
+  proof, and caught-confinement panics are not an application-failure
+  classification. Paid full retries are paused for no-VM retained-bundle
+  triage improvement and local lineage diagnosis; no new full run is planned.
+- [ ] An earlier corrected full attempt is recorded below: [run 34663205477](https://github.com/wimpheling/hephaestus/actions/runs/34663205477)
   from source `a453d6dd1823fcf91c6934e9e91185b869ece718` failed on the
   unchanged promoted image `hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d`
   after 26m42s (00:55:21Z–01:22:03Z). Workload exit was `1`; the VM was
@@ -48,10 +68,10 @@ acceptance and does not reopen or expand that completed task.
   summarization. It quarantines only invalid lineage/status, removes the
   partial projection, retains other strict safe sources and emits closed
   rejection classes, failing closed if none remain valid. Missing lineage is
-  not full coverage; the next full run must review lineage specifically. Run
-  one cheap diagnostic after this fix, then one full trial only if it passes.
-  Full GCP validation remains open; no MVP-06 implementation is part of this
-  work.
+  not full coverage; the next full run must review lineage specifically. The
+  post-fix cheap diagnostic above passed. Full retries remain paused for no-VM
+  retained-bundle triage improvement and local lineage diagnosis; no new full
+  run is planned. No MVP-06 implementation is part of this work.
   Its predecessor [run 34662878781](https://github.com/wimpheling/hephaestus/actions/runs/34662878781)
   from source `5c453ea` failed with workload exit `127` from the wrapper before
   browser execution; the scanner ran and failed because no files were
@@ -145,8 +165,7 @@ acceptance and does not reopen or expand that completed task.
   external-timeout invocation regression returning `127`, corrected in the
   published `8fe2e21` follow-up. The current image fingerprint is unchanged
   and the corrected full trial failed as recorded above. Paid retries are
-  paused pending the post-fix cheap diagnostic. Run one full trial only if that
-  diagnostic passes. Fatal collector errors emit closed typed stage/reason metadata without paths or
+  paused for no-VM retained-bundle triage improvement and local lineage diagnosis. Fatal collector errors emit closed typed stage/reason metadata without paths or
   payloads, and the serial filter retains safe diagnostic lines.
 - [ ] Prior full `gcp-cooking` attempt [run 34658390612](https://github.com/wimpheling/hephaestus/actions/runs/34658390612)
   from source `672dbf5` used promoted image
