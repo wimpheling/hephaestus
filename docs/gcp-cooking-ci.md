@@ -936,6 +936,15 @@ and checksums, and accept it only after the post-delete authenticated download,
 archive validation and credential scan pass. The small status artifact is a
 safe triage projection, not a replacement for that bundle.
 
+When a `gcp-cooking` run fails before producing a complete workload timing
+projection, the post-delete status still retains the authenticated archive,
+credential-scan and triage results and records the timing error separately.
+Timing remains required for an accepted successful run; an unavailable or
+invalid projection keeps the workflow failed without hiding the original
+workload result. In the status artifact, `gateAcceptance` describes the
+workload gate sidecar, while `timingAcceptance: failed` records the separate
+timing requirement.
+
 For a retained historical bundle, use the workflow's `diagnostics-triage`
 mode. Supply all three source identity fields. `diagnostics_sha` identifies
 the trusted `main` controller workflow run; for a PR workload, also supply

@@ -274,6 +274,34 @@ run_cooking() {
         bash -Eeuo pipefail -c '
             timing_helper="$4"
             phase_timing_open=""
+            workload_stage=initialization
+            workload_failure_emitted=0
+            workload_step_start() {
+                case "$1" in
+                    dependency-setup|project-build|gateway-e2e) ;;
+                    *) return 1 ;;
+                esac
+                workload_stage="$1"
+                printf "HEPH_GCP_COOKING event=workload-step operation=cooking-workload phase=cooking stage=%s status=start\\n" "$workload_stage"
+                if [[ "$workload_stage" != gateway-e2e ]]; then
+                    phase_timing_start "$workload_stage"
+                fi
+            }
+            workload_step_pass() {
+                local step="$1"
+                if [[ "$step" != gateway-e2e ]]; then
+                    phase_timing_end "$step" passed
+                fi
+                printf "HEPH_GCP_COOKING event=workload-step operation=cooking-workload phase=cooking stage=%s status=passed\\n" "$step"
+            }
+            workload_failure() {
+                local status="$1"
+                ((status != 0)) || return 0
+                ((workload_failure_emitted == 0)) || return 0
+                workload_failure_emitted=1
+                if ((status > 255)); then status=255; fi
+                printf "HEPH_GCP_COOKING event=workload-step operation=cooking-workload phase=cooking stage=%s status=failed exit_code=%s\\n" "$workload_stage" "$status"
+            }
             phase_timing_start() {
                 local name="$1"
                 [[ -n "${HEPH_GCP_PHASE_TIMING_PATH:-}" ]] || return 0
@@ -304,17 +332,20 @@ run_cooking() {
                 fi
                 exit "$status"
             }
+            trap '\''workload_failure "$?"'\'' ERR
             trap phase_timing_finish EXIT
-            phase_timing_start dependency-setup
+            workload_step_start dependency-setup
             "$1/preflight.sh"
-            phase_timing_end dependency-setup passed
+            workload_step_pass dependency-setup
             cd -- "$2/cooking-gateway"
-            phase_timing_start project-build
+            workload_step_start project-build
             rustup target add x86_64-unknown-linux-musl
             cargo build --locked --offline --release --target x86_64-unknown-linux-musl
-            phase_timing_end project-build passed
+            workload_step_pass project-build
             cd -- "$3/.."
+            workload_step_start gateway-e2e
             "$3/run-gateway-libkrun-e2e.sh"
+            workload_step_pass gateway-e2e
         ' -- "${script_dir}" "${cooking_root}" "${repo_root}/scripts" \
         "${repo_root}/scripts/gcp_phase_timing.py"
 }
