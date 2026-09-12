@@ -11,6 +11,7 @@ from pathlib import Path
 import pwd
 import stat
 import subprocess
+import sys
 import tempfile
 import tarfile
 import unittest
@@ -36,6 +37,7 @@ PROJECTOR_SPEC = importlib.util.spec_from_file_location(
 PROJECTOR = importlib.util.module_from_spec(PROJECTOR_SPEC)
 assert PROJECTOR_SPEC.loader is not None
 PROJECTOR_SPEC.loader.exec_module(PROJECTOR)
+TIMING_HELPER = ROOT / "gcp_phase_timing.py"
 
 
 class GcpDiagnosticsPipelineTests(unittest.TestCase):
@@ -2084,6 +2086,76 @@ PY
                     TRIAGE.summarize(bundle)["phaseTiming"]["reasonClass"],
                     reason,
                 )
+
+    def test_real_pair_failures_diagnose_and_survive_collector_and_triage(self):
+        """Real malformed pairs retain their fixed class and bounded context."""
+
+        common = {
+            "schema": 1,
+            "phase": "archive",
+            "trust": "supervisor",
+            "clock_domain": "guest-startup",
+            "run_id": "123",
+            "attempt": 1,
+            "occurrence": 2,
+            "source_sha": "a" * 40,
+        }
+        cases = {
+            "unclosed-start": [
+                {**common, "record": "start", "mono_ns": 10},
+            ],
+            "unmatched-end": [
+                {**common, "record": "end", "mono_ns": 20, "outcome": "passed"},
+            ],
+            "end-before-start": [
+                {**common, "record": "start", "mono_ns": 10},
+                {**common, "record": "end", "mono_ns": 9, "outcome": "passed"},
+            ],
+        }
+        for expected_reason, records in cases.items():
+            with self.subTest(reason=expected_reason), tempfile.TemporaryDirectory(
+                prefix="heph-gcp-real-pair-diagnostic-"
+            ) as directory:
+                root = Path(directory)
+                timing = root / "supervisor.jsonl"
+                timing.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        str(TIMING_HELPER),
+                        "diagnose",
+                        "--path",
+                        str(timing),
+                        "--failed-stage",
+                        "supervisor-validation",
+                        "--require-trust",
+                        "supervisor",
+                    ],
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                marker = result.stdout
+                self.assertIn(f"reason_class={expected_reason}", marker)
+                self.assertIn(
+                    "failed_phase=archive failed_clock_domain=guest-startup failed_occurrence=2",
+                    marker,
+                )
+                serial = root / "serial.log"
+                serial.write_text(marker, encoding="utf-8")
+                evidence = root / "test-output.log"
+                evidence.write_text("PASS\n", encoding="utf-8")
+                bundle = root / "bundle"
+                self.assertEqual(
+                    COLLECTOR.collect(bundle, [f"serial={serial}", f"test-output={evidence}"], None, None, None),
+                    0,
+                )
+                projected = TRIAGE.summarize(bundle)["phaseTiming"]
+                self.assertEqual(projected["reasonClass"], expected_reason)
+                self.assertEqual(projected["failedPhase"], "archive")
+                self.assertEqual(projected["failedClockDomain"], "guest-startup")
+                self.assertEqual(projected["failedOccurrence"], 2)
 
     def test_phase_timing_diagnostic_preserves_legacy_context_and_rejects_partial_context(self):
         legacy = (
