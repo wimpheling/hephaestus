@@ -134,7 +134,8 @@ interactive-path audit rather than being treated as already implemented.
 A distribution ecosystem, UI marketplace, arbitrary in-shell JavaScript plugins,
 generalized widget framework, polished terminal chat, voice and broad messenger
 coverage are not prerequisites for the first distribution. MVP-05's scoped
-Telegram proof remains part of its own acceptance work.
+deterministic transport-fixture proof remains part of its own acceptance work;
+real Telegram transport and account integration are excluded.
 
 DO/celld may remain research references, but borrowing their concepts or adopting
 their infrastructure is not part of this roadmap. Broad core restructuring and

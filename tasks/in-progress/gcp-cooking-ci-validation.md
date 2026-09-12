@@ -19,7 +19,7 @@ acceptance and does not reopen or expand that completed task.
   startup recipe provenance. Replacement candidate build [run 34657052702](https://github.com/wimpheling/hephaestus/actions/runs/34657052702)
   at source `672dbf5fe9d1e1bf2cffc9d828913eedfcb79268` completed successfully
   with pinned bake and builder VM/disk cleanup. Its real KVM smoke [run 34657895009](https://github.com/wimpheling/hephaestus/actions/runs/34657895009)
-  passed; the new-default full attempt failed early as recorded below. The
+  passed; the latest new-default full attempt failed as recorded below. The
   cheap stock-image diagnostic below passed.
 - [x] The real KVM smoke and private diagnostics path passed in
   [run 34615599394](https://github.com/wimpheling/hephaestus/actions/runs/34615599394),
@@ -54,7 +54,54 @@ acceptance and does not reopen or expand that completed task.
   (1,768 bytes, SHA-256
   `38781dba3569ace67dc72a91b2e1ff71ad98d22ed4aac01bd7c5e297aa2ac7bd`); the
   safe status artifact is `/tmp/heph-diag-34656728282-1789168184/gcp-diagnostics-status.json`.
-- [ ] Latest full `gcp-cooking` attempt [run 34658390612](https://github.com/wimpheling/hephaestus/actions/runs/34658390612)
+- [x] Follow-up cheap diagnostic [run 34662650437](https://github.com/wimpheling/hephaestus/actions/runs/34662650437)
+  used source `5c453ea025c9b1df6670085bd324691c404026e5` and the promoted
+  `f285fc2b8157f8053383fc98bcaec83d` image. VM absence was verified at
+  00:47:34.021Z before authenticated private download, scan and triage. The
+  1,810-byte object has SHA-256
+  `f340874e7557ef9ba89199ba7cedf5153668ceb5201877abb21f2b868ce338cf`.
+  Finalized expected gates were workload `failed`/42, evidence-scan `failed`/1
+  with `browser-secret-org`, and browser validation `failed`/42; overall and
+  startup supervisor exits were both 42. Expected quarantine and gate
+  acceptance passed. The separate full trial remains pending; full validation
+  remains open.
+- [ ] Latest full `gcp-cooking` attempt [run 34659491446](https://github.com/wimpheling/hephaestus/actions/runs/34659491446)
+  from source `0c77eef` used promoted image
+  `hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d`. It ran from 23:49:34Z
+  on 2026-09-11 through 00:16:42Z on 2026-09-12 (27m08s), and verified VM
+  absence at 00:16:36Z. The runtime final phase returned evidence exit `1`,
+  and collection also returned exit `1`, so no diagnostics object was
+  uploaded. Post-delete download was absent; no checksum, scan or triage
+  result was retained. No valid gate or browser classification was retained;
+  the prior fixed `HEPHAESTUS_COOKING_TIMEOUT_SECONDS=1500` covered npm,
+  browser, build, update and Cooking and aligned with approximately 1,538
+  seconds from VM creation to failure; that timing is strong evidence but not
+  proof of the historical cause. Caught-confinement panics are not established
+  as the cause. Paid full
+  retries are paused while local whole-tree post-processing is replayed and
+  source-error policy is investigated. Full GCP validation remains open.
+- [ ] A subsequent full trial [run 34662878781](https://github.com/wimpheling/hephaestus/actions/runs/34662878781)
+  was dispatched separately at source `5c453ea` and remains pending. Live
+  runtime-budget behavior is not yet accepted while the external-timeout
+  invocation correction is completed.
+- [x] The published baseline at source revision `8fe2e21` has 173 passing
+  Python tests. The runtime budget/error-reporting correction is published in
+  that revision; its actual GNU-timeout mock executable regression was covered
+  by the added tests. It derives the Cooking timeout from the remaining
+  35-minute
+  trial budget minus a 120-second shutdown/evidence reserve; with 120 seconds
+  or less remaining, no systemd unit starts and the helper emits typed timeout
+  exit `124`. The existing 40-minute collection deadline, 45-minute provider
+  `DELETE` lifetime, test assertions and browser timeouts are unchanged.
+  Cleanup uses the existing `run_with_deadline` helper. Local retained-tree
+  post-processing passed workload exit 0 and exit 1 plus scanner-rejection
+  cases; actual systemd-run replay was blocked by host-service/forge
+  availability, so no host provisioning was performed. Live budget behavior
+  is not yet validated: the published baseline exposed an external-timeout
+  invocation regression returning `127`; the current image fingerprint is
+  unchanged and the full trial remains pending. Fatal collector errors emit closed typed stage/reason metadata without paths or
+  payloads, and the serial filter retains safe diagnostic lines.
+- [ ] Prior full `gcp-cooking` attempt [run 34658390612](https://github.com/wimpheling/hephaestus/actions/runs/34658390612)
   from source `672dbf5` used promoted image
   `hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d`. It ran from 23:31:40Z
   to 23:34:30Z (2m50s), reached `gcp-cooking` exit `128` before workload and
@@ -81,8 +128,8 @@ acceptance and does not reopen or expand that completed task.
   The evidence-scan result was unexpectedly unavailable/missing and
   `runtimeResults` was empty despite source `869dd20`; the executed script and
   capture path are under investigation. Full GCP validation remains open and
-  replacement-image smoke passed, but the new-default full attempt failed
-  early as recorded above. No denial observation is treated as the root cause.
+  replacement-image smoke passed, but subsequent new-default full attempts
+  failed as recorded above. No denial observation is treated as the root cause.
   No-VM
   triage [run 34653789352](https://github.com/wimpheling/hephaestus/actions/runs/34653789352)
   preserved the failed outcome and verified cleanup, but the historical

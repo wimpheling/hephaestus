@@ -5,6 +5,25 @@ gate and failure triage are in the [GCP Cooking CI runbook](../../docs/gcp-cooki
 Current `gcp-cooking` live validation is **pending**; the diagnostic evidence
 gate and live partial-source proof have passed, while the results below do not
 claim that the full path is green. The latest full run is
+[34659491446](https://github.com/wimpheling/hephaestus/actions/runs/34659491446)
+from source `0c77eef` using promoted image
+`hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d`. It ran from 23:49:34Z
+on 2026-09-11 through 00:16:42Z on 2026-09-12 (27m08s), and verified VM
+absence at 00:16:36Z. The runtime final phase returned evidence exit `1`, and
+collection also returned exit `1`, so no diagnostics object was uploaded.
+Post-delete download was absent; no checksum, scan or triage result was
+retained. No valid gate or browser classification was retained. The observed
+caught-confinement panics are not established as the cause. Paid full retries
+are paused while local whole-tree post-processing is replayed and source-error
+policy is investigated; full validation remains open. The prior fixed
+`HEPHAESTUS_COOKING_TIMEOUT_SECONDS=1500` covered npm, browser, build, update
+and Cooking and aligned with approximately 1,538 seconds from VM creation to
+failure; that timing is strong evidence but not proof of the historical cause.
+A subsequent full trial [34662878781](https://github.com/wimpheling/hephaestus/actions/runs/34662878781)
+was dispatched separately at source `5c453ea` and remains pending. Live
+runtime-budget behavior is not yet accepted while the external-timeout
+invocation correction is completed.
+The preceding full run is
 [34658390612](https://github.com/wimpheling/hephaestus/actions/runs/34658390612)
 from source `672dbf5` using promoted image
 `hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d`. It ran from 23:31:40Z
@@ -37,8 +56,7 @@ The evidence-scan result was unexpectedly unavailable/missing and
 `runtimeResults` was empty despite source `869dd20`; the executed script and
 capture path are under investigation. This is failed evidence rather than an
 accepted Cooking pass; full GCP validation remains open. The replacement-image
-smoke passed; the subsequent new-default full attempt failed early as recorded
-above. No
+smoke passed; subsequent new-default full attempts failed as recorded above. No
 denial observation is treated as the root cause. No-VM triage
 [run 34653789352](https://github.com/wimpheling/hephaestus/actions/runs/34653789352)
 preserved the failed-run outcome and verified cleanup, but the historical
@@ -67,7 +85,21 @@ startup supervisor exits were both 42. Expected runtime-log quarantine and
 gate acceptance passed. VM absence was verified at 23:47:55Z before private
 post-delete download and scan, which passed for 1,808 bytes, SHA-256
 `cb8eeca6e50155821ac9b48f52e8ed3c223324eebc5e1f245711fa7eecb5b470` under the
-fixed run/attempt/SHA prefix. The new-default full trial remains pending.
+fixed run/attempt/SHA prefix. Full validation remains open and paid full
+retries are paused pending the current post-processing and source-error-policy
+investigation.
+
+The follow-up cheap diagnostic [run 34662650437](https://github.com/wimpheling/hephaestus/actions/runs/34662650437)
+used source `5c453ea025c9b1df6670085bd324691c404026e5` and the promoted
+`f285fc2b8157f8053383fc98bcaec83d` image. VM absence was verified at
+00:47:34.021Z before authenticated private download, scan and triage. The
+1,810-byte object has SHA-256
+`f340874e7557ef9ba89199ba7cedf5153668ceb5201877abb21f2b868ce338cf`; the
+finalized expected diagnostic gates were workload `failed`/42, evidence-scan
+`failed`/1 with `browser-secret-org`, and browser validation `failed`/42, with
+overall and startup supervisor exits both 42. Expected quarantine and gate
+acceptance passed. The separate full trial remains pending, and full
+validation is still open.
 
 The prefix-marker correction is in source revision `a029192`. The root-owned
 sidecar implementation is published at `0c77eef`; its final local validation
@@ -83,7 +115,7 @@ at source `672dbf5fe9d1e1bf2cffc9d828913eedfcb79268` passed from 23:23:47Z to
 post-delete download/scan passing for 1,509 bytes, SHA-256
 `f8b4144861980f93bbc77947a3d7ba2ca2b423e44cfbf23333ecd8ae023e1c55`. The
 former `2a7223...` image is protected rollback and requires matching startup
-recipe provenance. The new-default full attempt failed early as recorded
+recipe provenance. Subsequent new-default full attempts failed as recorded
 above.
 
 The structured browser capture pipeline is published at commit `1b49264` and
@@ -326,11 +358,28 @@ provider-enforced `DELETE` lifetime. The startup script downloads and verifies
 the cache, checks out the exact workflow SHA, and runs the complete Cooking
 path through the checked-out `scripts/gcp-cooking-run.sh` helper. Its deadline
 shares the startup script's 35-minute test budget and leaves five minutes for
-collection/upload; it is not reset after bootstrap. Cooking runs as a systemd
-oneshot with the remaining absolute deadline and a bounded stop timeout, so
-activation and teardown cannot consume the collection reserve. The latest full
-trial failed as recorded above; full live-path validation remains open pending
-focused evidence-gate investigation. Smoke uses the same runtime service account and
+collection/upload; the collection deadline remains 40 minutes and the provider
+`DELETE` lifetime remains 45 minutes; it is not reset after bootstrap. The
+published baseline at source revision
+`8fe2e21` has 173 passing Python tests. The runtime budget/error-reporting
+correction is published in that revision; its actual GNU-timeout mock
+executable regression was covered by the added tests. It derives the Cooking
+timeout from
+the remaining 35-minute trial budget minus a 120-second shutdown/evidence
+reserve. If 120 seconds or less remain, no systemd unit starts and the helper
+emits typed timeout exit `124`. The existing test assertions and browser
+timeouts are unchanged. Local retained-tree post-processing passed workload
+exits 0 and 1 plus scanner-rejection cases; actual systemd-run replay was
+blocked by host-service/forge availability, so no host provisioning was
+performed. Live budget behavior is not yet validated: the published baseline
+exposed an external-timeout invocation regression returning `127`; the current
+image fingerprint is unchanged and the full trial remains pending. Cooking runs
+as a systemd oneshot with the remaining
+absolute deadline and a bounded stop timeout, so activation and teardown cannot
+consume the collection reserve; cleanup uses the existing `run_with_deadline`
+helper. The latest full trial failed as recorded above; full live-path
+validation remains open pending focused evidence-gate investigation. Smoke uses
+the same runtime service account and
 `storage-rw` scope for its private diagnostics and cache access.
 
 The implemented `image-build` mode stays in this same workflow, so the existing
@@ -476,6 +525,8 @@ outer startup deadline fires; retain both. Unfinished gates finalize as
 
 Startup copies the finalized sidecars before collection. The collector and
 summarizer reject extra fields, secrets, invalid provenance and transitions;
+fatal collector errors emit closed typed stage/reason metadata without paths or
+payloads, while the serial filter retains safe diagnostic lines;
 missing legacy sidecars are explicitly unavailable. Inspect
 `.triage.gateResults`, `.triage.evidenceScan` and `.triage.runtimeResults` in
 the safe status manifest. Acceptance still requires the failed/pass status,
