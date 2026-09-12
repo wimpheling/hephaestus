@@ -54,6 +54,23 @@ class ProductionProjectBuildTimingTests(unittest.TestCase):
             '"HEPH_GCP_COOKING event={WORKLOAD_PHASE_TIMING_EVENT} phase={} status={status} duration_ms={duration_ms}"',
             producer,
         )
+        timer_start = producer.index(
+            'WorkloadPhaseTimer::start("production-project-build", workload_phase_timing)'
+        )
+        build_call = producer.index("cooking_builds::build_and_publish(cooking_builds::CookingBuildContext", timer_start)
+        await_end = producer.index(".await;", build_call)
+        timer_finish = producer.index("production_project_build_timer.finish(result.is_ok())", await_end)
+        result_expect = producer.index("result.expect(\"real cooking source build and publish proof\")", timer_finish)
+        self.assertLess(timer_start, build_call)
+        self.assertLess(build_call, await_end)
+        self.assertLess(await_end, timer_finish)
+        self.assertLess(timer_finish, result_expect)
+
+        startup = (ROOT / "gcp-kvm-startup.sh").read_text(encoding="utf-8")
+        smoke = (ROOT / "gcp-kvm-smoke.sh").read_text(encoding="utf-8")
+        self.assertIn("dependency-setup production-project-build browser-setup", startup)
+        self.assertIn("--require-workload-phase dependency-setup --require-workload-phase production-project-build", startup)
+        self.assertIn("--require-workload-phase dependency-setup --require-workload-phase production-project-build", smoke)
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
