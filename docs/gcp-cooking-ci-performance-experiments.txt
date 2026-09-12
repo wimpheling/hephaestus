@@ -690,6 +690,37 @@ The temporary fixture PR #34 remains a draft and must never be merged. Its
 five-line block is now closed out after this one cancellation probe; rollback
 is removal of that block and closure of the temporary PR.
 
+
+PREPARED COMPLETE COLD-GCP BASELINE
+===================================
+Preparation revision: trusted controller and workload instrumentation are now
+on `main` at exact SHA
+`aea0051fd4692b5dc9a2e0a02457b11f70527a24` (PR #36). This is the first
+complete baseline attempt after supervisor timing closure and the production
+project-build timing profile were promoted. PR #20 remains docs-only; its exact
+open head is the workload SHA supplied to the controller at dispatch and will
+be recorded with the terminal run.
+
+Hypothesis and acceptance: establish the cold disposable-GCP reference with no
+performance change. Retain the existing host project compile and the Cooking
+OCI worker at `1` vCPU with `2048` MiB memory; all workload, assertions,
+browser, scanner, marker, cache and cleanup behavior remains unchanged. The
+run is valid only if the Cooking, browser, golden, PostgreSQL, scanner, marker,
+provenance, complete timing and verified post-delete cleanup gates all pass.
+Any missing gate or timing artifact leaves the baseline pending with no
+performance result.
+
+Locked environment: protected image
+`hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d`, immutable cache generation
+`1789079827867335`, `n2-standard-8`, `150 GB pd-balanced`,
+`europe-west1-d`, concurrency `1`, 45-minute provider DELETE and 50-minute
+workflow timeout. No image, IAM/WIF, cache, machine, zone, disk, concurrency,
+or acceptance change is part of this baseline. Rollback is no change to the
+workload; remove only this docs-only preparation if the run is not valid.
+The user has authorized this GCP run and no additional approval is required.
+The pre-dispatch active-run check is empty and prior owned VM absence is
+independently recorded.
+
 ACCEPTED
 ========
 None yet.
