@@ -136,6 +136,58 @@ class TimingCollectionLifecycleTests(unittest.TestCase):
             self.assertGreaterEqual(production["duration_ms"], 2)
             self.assertEqual(len(final_value["phases"]), len(initial_value["phases"]) + 3)
 
+            # The controller reads the archived collector manifest through this
+            # real CLI before accepting a measurement. A valid sidecar alone
+            # does not prove that this post-cleanup reader accepts the bundle.
+            bundle = root / "collected"
+            summary_command = [
+                sys.executable, str(repo / "scripts/summarize-cooking-diagnostics.py"),
+                str(bundle),
+            ]
+            result = subprocess.run(summary_command, text=True, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            summary = json.loads(result.stdout)
+            self.assertEqual(summary["sources"]["available"], ["phase-timing"])
+
+            manifest_path = bundle / "manifest.json"
+            manifest = json.loads(manifest_path.read_text())
+            timing_record = next(record for record in manifest["sources"] if record["label"] == "phase-timing")
+            retained_path = bundle / timing_record["path"]
+            valid_timing = retained_path.read_text()
+            wrong_domain = json.loads(valid_timing)
+            wrong_domain["phases"][0]["clock_domain"] = "unknown-domain"
+            for invalid in ("{", '{"malformed":true}', json.dumps(wrong_domain)):
+                with self.subTest(invalid_timing=invalid[:40]):
+                    retained_path.write_text(invalid)
+                    result = subprocess.run(summary_command, text=True, capture_output=True)
+                    self.assertEqual(result.returncode, 1)
+                    self.assertIn("phase timing records are invalid", result.stderr)
+            retained_path.write_text(valid_timing)
+            timing_record["label"] = "unknown-source"
+            manifest_path.write_text(json.dumps(manifest))
+            result = subprocess.run(summary_command, text=True, capture_output=True)
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("manifest source label is invalid", result.stderr)
+
+            # A rejected timing source must still allow safe partial triage.
+            invalid_source = root / "invalid-timing.json"
+            invalid_source.write_text('{"malformed":true}')
+            partial_bundle = root / "partial-collected"
+            result = subprocess.run([
+                sys.executable, str(repo / "scripts/collect-cooking-diagnostics.py"),
+                "--output-dir", str(partial_bundle),
+                "--source", f"phase-timing={invalid_source}",
+                "--source", f"serial={root / 'input/serial.log'}",
+            ], text=True, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            result = subprocess.run(
+                [*summary_command[:-1], str(partial_bundle)], text=True, capture_output=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            summary = json.loads(result.stdout)
+            self.assertEqual(summary["collectionStatus"], "partial")
+            self.assertEqual(summary["rejectedSources"][0]["label"], "phase-timing")
+
 
 if __name__ == "__main__":
     unittest.main()

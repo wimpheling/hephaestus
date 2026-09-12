@@ -674,15 +674,17 @@ def validate_projection(
         record = dict(phase)
         record.pop("measurement", None)
         record.pop("duration_ms", None)
+        record.update({"schema": SCHEMA, "record": "start", "mono_ns": 0})
+        validate_record(record, record="start")
         stream = (record["trust"], record["clock_domain"])
         start_ns = cursors.get(stream, 0)
-        record.update({"schema": SCHEMA, "record": "start", "mono_ns": start_ns})
+        record["mono_ns"] = start_ns
         records.append(record)
         record_end = dict(record)
         record_end["record"] = "end"
         record_end["outcome"] = phase.get("outcome")
         record_end["mono_ns"] = start_ns + phase["duration_ms"] * 1_000_000
-        records.append(record_end)
+        records.append(validate_record(record_end, record="end"))
         cursors[stream] = record_end["mono_ns"] + 1
     validate_pairs(
         records,
