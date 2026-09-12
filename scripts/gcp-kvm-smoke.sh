@@ -16,6 +16,8 @@ readonly COOKING_RUNTIME_SCRIPT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && 
 readonly COOKING_BROWSER_SUMMARY_SCRIPT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/project-playwright-browser-summary.py"
 readonly PHASE_TIMING_SCRIPT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/gcp_phase_timing.py"
 readonly PR_PROVENANCE_SCRIPT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/verify-gcp-pr-provenance.py"
+readonly RUNNER_IMAGE_COMPATIBILITY_VALIDATOR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/gcp-runner-image-compatibility.py"
+readonly RUNNER_IMAGE_COMPATIBILITY_RECORDS="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/gcp-runner-image-compatibility.json"
 readonly MACHINE_TYPE="n2-standard-8"
 readonly DISK_SIZE="150GB"
 readonly CACHE_BUCKET="hephaestus-508000-cooking-cache"
@@ -1099,56 +1101,31 @@ smoke() {
     [[ "$mode" == diagnostic || "$mode" == smoke || "$mode" == gcp-cooking ]] || die 'custom runner images are supported only for diagnostic, smoke, and gcp-cooking modes'
     [[ "$GCP_RUNNER_IMAGE" =~ ^[a-z][a-z0-9-]{0,62}$ ]] || die 'GCP_RUNNER_IMAGE is not a valid immutable image name'
     local runner_image_data image_recipe_sha image_verifier_sha image_startup_sha
+    local compatibility_validator_sha compatibility_records_sha
     image_recipe_sha="$(sha256sum "$(dirname -- "$STARTUP_SCRIPT")/gcp-runner-image-provision.sh" | awk '{print $1}')"
     image_verifier_sha="$(sha256sum "$(dirname -- "$STARTUP_SCRIPT")/gcp-runner-image-verify.py" | awk '{print $1}')"
     image_startup_sha="$(sha256sum "$STARTUP_SCRIPT" | awk '{print $1}')"
+    [[ -f "$RUNNER_IMAGE_COMPATIBILITY_VALIDATOR" && ! -L "$RUNNER_IMAGE_COMPATIBILITY_VALIDATOR" ]] ||
+      die 'runner image compatibility validator is unavailable or symlinked'
+    [[ -f "$RUNNER_IMAGE_COMPATIBILITY_RECORDS" && ! -L "$RUNNER_IMAGE_COMPATIBILITY_RECORDS" ]] ||
+      die 'runner image compatibility records are unavailable or symlinked'
+    compatibility_validator_sha="$(sha256sum "$RUNNER_IMAGE_COMPATIBILITY_VALIDATOR" | awk '{print $1}')"
+    compatibility_records_sha="$(sha256sum "$RUNNER_IMAGE_COMPATIBILITY_RECORDS" | awk '{print $1}')"
     run_json_gcloud compute images describe "$GCP_RUNNER_IMAGE" --project="$PROJECT_ID" --format='json(name,status,labels,description)' || {
       printf '%s\n' "$gcloud_json_stderr" >&2
       die "custom runner image cannot be described: $GCP_RUNNER_IMAGE"
     }
     runner_image_data="$gcloud_json_output"
     report_gcloud_json_stderr
-    runner_image_metadata="$(RUNNER_IMAGE_METADATA="$runner_image_data" RUNNER_IMAGE_RECIPE_SHA="$image_recipe_sha" RUNNER_IMAGE_VERIFIER_SHA="$image_verifier_sha" RUNNER_IMAGE_STARTUP_SHA="$image_startup_sha" python3 - "$GCP_RUNNER_IMAGE" <<'PY'
-import json
-import os
-import re
-import sys
-
-name = sys.argv[1]
-value = json.loads(os.environ["RUNNER_IMAGE_METADATA"])
-labels = value.get("labels", {})
-description = value.get("description", "")
-fingerprint = labels.get("fingerprint", "")
-if value.get("status") != "READY":
-    raise SystemExit("custom runner image is not READY")
-if labels.get("purpose") != "hephaestus-runner-image" or not re.fullmatch(r"[0-9a-f]{32}", fingerprint):
-    raise SystemExit("custom runner image lacks the immutable runner-image labels")
-manifest = re.search(r"(?:^|[ ,])manifest_sha256=([0-9a-f]{64})(?:$|[ ,])", description)
-if not manifest:
-    raise SystemExit("custom runner image manifest anchor is missing")
-if name != "hephaestus-runner-" + manifest.group(1)[:32] or fingerprint != manifest.group(1)[:32]:
-    raise SystemExit("custom runner image name does not match its manifest fingerprint")
-if not re.fullmatch(r"[0-9a-f]{40}", labels.get("repository_sha", "")):
-    raise SystemExit("custom runner image repository provenance is invalid")
-anchors = {"manifest_sha256": manifest.group(1)}
-expected_anchors = {
-    "recipe_sha256": os.environ["RUNNER_IMAGE_RECIPE_SHA"],
-    "verifier_sha256": os.environ["RUNNER_IMAGE_VERIFIER_SHA"],
-    "startup_sha256": os.environ["RUNNER_IMAGE_STARTUP_SHA"],
-}
-for field, expected in expected_anchors.items():
-    match = re.search(rf"(?:^|[ ,]){field}=([0-9a-f]{{64}})(?:$|[ ,])", description)
-    if not match:
-        raise SystemExit(f"custom runner image anchor is missing: {field}")
-    if match.group(1) != expected:
-        raise SystemExit(f"custom runner image {field} does not match current recipe")
-    anchors[field] = match.group(1)
-print("runner-image-selection=custom,runner-image-manifest-sha256=" + anchors["manifest_sha256"] +
-      ",runner-image-recipe-sha256=" + anchors["recipe_sha256"] +
-      ",runner-image-verifier-sha256=" + anchors["verifier_sha256"] +
-      ",runner-image-startup-sha256=" + anchors["startup_sha256"])
-PY
-    )" || die "custom runner image failed immutable-label validation: $GCP_RUNNER_IMAGE"
+    runner_image_metadata="$(python3 "$RUNNER_IMAGE_COMPATIBILITY_VALIDATOR" controller \
+      --records-file "$RUNNER_IMAGE_COMPATIBILITY_RECORDS" \
+      --metadata-json "$runner_image_data" --image-name "$GCP_RUNNER_IMAGE" \
+      --expected-recipe "$image_recipe_sha" --expected-verifier "$image_verifier_sha" \
+      --runtime-startup "$image_startup_sha")" ||
+      die "custom runner image failed immutable-label validation: $GCP_RUNNER_IMAGE"
+    runner_image_metadata="runner-image-selection=custom,${runner_image_metadata}"
+    runner_image_metadata+=",runner-image-compatibility-validator-sha256=${compatibility_validator_sha}"
+    runner_image_metadata+=",runner-image-compatibility-records-sha256=${compatibility_records_sha}"
     image_args=(--image="$GCP_RUNNER_IMAGE" --image-project="$PROJECT_ID")
     printf 'Using validated immutable runner image: %s\n' "$GCP_RUNNER_IMAGE"
   fi
@@ -1211,6 +1188,9 @@ PY
   fi
   if [[ "$mode" == gcp-cooking ]]; then
     metadata_file_values+=",cooking-runtime-script=$COOKING_RUNTIME_SCRIPT,cooking-browser-summary-script=$COOKING_BROWSER_SUMMARY_SCRIPT,phase-timing-script=$PHASE_TIMING_SCRIPT"
+  fi
+  if [[ -n "${GCP_RUNNER_IMAGE:-}" ]]; then
+    metadata_file_values+=",runner-image-compatibility-validator=$RUNNER_IMAGE_COMPATIBILITY_VALIDATOR,runner-image-compatibility-records=$RUNNER_IMAGE_COMPATIBILITY_RECORDS"
   fi
   controller_phase_timing_start vm-create
   gcloud compute instances create "$smoke_name" \
