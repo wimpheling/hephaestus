@@ -599,7 +599,8 @@ run_cooking_workload() {
 if [[ "$workload_started" != true ]]; then
     return 124
 fi
-systemd-run --unit="$cooking_unit" --service-type=oneshot --wait --pipe --collect \
+timeout --kill-after=30s "${cooking_remaining}s" systemd-run \
+    --unit="$cooking_unit" --service-type=oneshot --wait --pipe --collect \
     --expand-environment=no --property=Delegate=yes --property=RuntimeMaxSec="${cooking_remaining}s" \
     --property=TimeoutStartSec="${cooking_remaining}s" --property=TimeoutStopSec=15s --property=TasksMax=infinity \
     --property=LimitNOFILE=65536 --uid="$forge_uid" --gid="$forge_gid" \
@@ -638,7 +639,7 @@ systemd-run --unit="$cooking_unit" --service-type=oneshot --wait --pipe --collec
     ' -- "$checkout_root"
 }
 set +e
-run_with_deadline run_cooking_workload
+run_cooking_workload
 status=$?
 set -e
 workload_result='passed'

@@ -181,6 +181,56 @@ printf 'exit=%s\\n' "$?"
         self.assertEqual(no_start.returncode, 0, no_start.stderr)
         self.assertEqual(no_start.stdout.strip(), "exit=124")
 
+        # GNU timeout can execute systemd-run, but it cannot resolve a shell
+        # function name.  Exercise the production function with a real
+        # timeout and a harmless mocked systemd-run executable.
+        self.assertNotIn("run_with_deadline run_cooking_workload", runner)
+        with tempfile.TemporaryDirectory(prefix="heph-gate-workload-wrapper-") as directory:
+            root = Path(directory)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            args_file = root / "systemd-run.args"
+            fake_systemd_run = fake_bin / "systemd-run"
+            fake_systemd_run.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -Eeuo pipefail\n"
+                "printf '%s\\n' \"$*\" >\"$SYSTEMD_RUN_ARGS\"\n",
+                encoding="utf-8",
+            )
+            fake_systemd_run.chmod(0o700)
+            workload_command = f'''#!/usr/bin/env bash
+set -Eeuo pipefail
+export PATH={fake_bin}:$PATH
+export SYSTEMD_RUN_ARGS={args_file}
+workload_started=true
+cooking_remaining=5
+cooking_timeout=4
+cooking_unit=heph-test-cooking
+forge_uid=10001
+forge_gid=10001
+checkout_root={root}
+runtime_python_ref=python-ref
+runtime_rust_ref=rust-ref
+cache_root={root}/cache
+evidence_root={root}/evidence
+browser_root={root}/browsers
+{runner[workload_start:workload_end]}
+set +e
+run_cooking_workload
+status=$?
+set -e
+printf 'exit=%s\\n' "$status"
+'''
+            result = subprocess.run(
+                ["bash", "-Eeuo", "pipefail", "-c", workload_command],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+            self.assertEqual(result.stdout.strip(), "exit=0")
+            self.assertIn("--unit=heph-test-cooking", args_file.read_text(encoding="utf-8"))
+
     def test_runtime_revision_lookup_allows_only_exact_forge_checkout(self) -> None:
         runner = RUNNER.read_text(encoding="utf-8")
         self.assertIn(
