@@ -756,20 +756,34 @@ with exit `2`, emitted `phase-timing-sidecar status=invalid`, and the overall
 startup/workflow result exited `1`. The workload did not produce a valid
 phase-timing sidecar or projection.
 
-The retained diagnostics manifest reports
-`upload=verified-by-download`, `download=passed` and `scan=passed`, but
-`triage=failed` with `error=triage-projection-failed`; the download log gives
-the precise safe failure as `manifest source label is invalid`. Consequently
-the safe artifact does not provide authoritative browser-report validation,
-golden/PostgreSQL counts or a complete gate acceptance record. The available
-browser timing markers are workload-log observations only and do not prove the
-separate browser gate. The run therefore distinguishes a passing Cooking
-workload segment from an invalid measurement and failed overall gate; it is
-diagnostic evidence, not a valid baseline and not an ACCEPTED or REJECTED
-performance experiment. No elapsed time saved can be claimed. The remaining
-blocker is the trusted guest-runtime evidence-scan timing-domain validation
-path; PR #38 (`8bb067281e62d3f20c55aeb056dadeed47f01cd1`) carries the fix and
-must be merged and checked before another full GCP run.
+The retained diagnostics manifest at
+`gcp-diagnostics-manifest-34722051935-1/gcp-diagnostics-status.json` contains
+only the safe status fields: `cleanup=verified-absent`,
+`upload=verified-by-download`, `download=passed`, `scan=passed`,
+`triage=failed` and `error=triage-projection-failed`. The download log gives
+the precise triage-reader failure as `manifest source label is invalid`.
+That reader failure is a projection limitation; it does not establish that
+the underlying gate records failed or were absent. This run retained no
+separate safe gate JSON or browser-summary artifact, so browser,
+golden/PostgreSQL and gate fields cannot be extracted from the retained
+artifacts. The available browser timing markers are workload-log observations
+only and do not prove the separate browser gate. The run therefore
+distinguishes a passing Cooking workload segment from an invalid measurement
+and failed overall workflow; it is diagnostic evidence, not a valid baseline
+and not an ACCEPTED or REJECTED performance experiment. No elapsed time saved
+can be claimed.
+
+The `production-project-build` marker is the exact `82082` ms (`82.082s`)
+phase. Its schema domain is `workload-libkrun`, emitted by the Rust golden
+producer; it is not the optional host `project-build` phase. The workload
+phase projection was not retained: the `gcp-cooking-phase-timings-34722051935-1`
+artifact was not created because its projection file was absent. Only the
+trusted controller projection was retained at
+`gcp-controller-phase-timings-34722051935-1/gcp-phase-timing-controller.json`.
+The remaining blocker is the trusted guest-runtime evidence-scan
+timing-domain validation path; PR #38
+(`8bb067281e62d3f20c55aeb056dadeed47f01cd1`) carries the fix and must be
+merged and checked before another full GCP run.
 
 ACCEPTED
 ========
