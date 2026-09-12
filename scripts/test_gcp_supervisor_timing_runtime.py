@@ -314,6 +314,72 @@ exit "$status"
             )
             self.assertEqual(validation.returncode, 0, validation.stdout + validation.stderr)
 
+    def test_runtime_and_terminal_evidence_scans_survive_final_projection(self) -> None:
+        """The real runtime scan must coexist with the required startup scan."""
+        result, root = self._run_cooking_caller(0)
+        self.addCleanup(shutil.rmtree, root, True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        timing = root / "supervisor.jsonl"
+        projection = root / "final.json"
+
+        def run_helper(*arguments: str) -> subprocess.CompletedProcess[str]:
+            return subprocess.run(
+                ["python3", str(TIMING), *arguments],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        required = (
+            "--require-supervisor-phase", "archive",
+            "--require-supervisor-phase", "evidence-scan",
+            "--require-supervisor-phase", "upload",
+            "--expected-run-id", "98765", "--expected-attempt", "2",
+            "--expected-source-sha", SOURCE, "--expected-image-fingerprint", IMAGE,
+        )
+        for phase in ("archive", "evidence-scan", "upload"):
+            common = (
+                "--path", str(timing), "--phase", phase,
+                "--trust", "supervisor", "--clock-domain", "guest-startup",
+                "--run-id", "98765", "--attempt", "2", "--source-sha", SOURCE,
+                "--image-fingerprint", IMAGE,
+            )
+            for command in (("start", *common), ("end", *common, "--outcome", "passed")):
+                recorded = run_helper(*command)
+                self.assertEqual(recorded.returncode, 0, recorded.stdout + recorded.stderr)
+
+        projected = run_helper("project", "--path", str(timing), "--output", str(projection), *required)
+        self.assertEqual(projected.returncode, 0, projected.stdout + projected.stderr)
+        validated = run_helper("validate-projection", "--path", str(projection), *required)
+        self.assertEqual(validated.returncode, 0, validated.stdout + validated.stderr)
+        value = json.loads(projection.read_text(encoding="utf-8"))
+        self.assertEqual(
+            {item["clock_domain"] for item in value["phases"] if item["phase"] == "evidence-scan"},
+            {"guest-runtime", "guest-startup"},
+        )
+
+        # The runtime scan cannot replace the terminal scan.  Other domains,
+        # workload trust, and runtime archive timings remain unacceptable.
+        for mutation in ("missing-startup", "wrong-domain", "workload-trust", "runtime-archive"):
+            with self.subTest(mutation=mutation):
+                changed = json.loads(json.dumps(value))
+                if mutation == "missing-startup":
+                    changed["phases"] = [
+                        item for item in changed["phases"]
+                        if not (item["phase"] == "evidence-scan" and item["clock_domain"] == "guest-startup")
+                    ]
+                else:
+                    for item in changed["phases"]:
+                        if mutation == "wrong-domain" and item["phase"] == "evidence-scan" and item["clock_domain"] == "guest-runtime":
+                            item["clock_domain"] = "controller"
+                        elif mutation == "workload-trust" and item["phase"] == "evidence-scan" and item["clock_domain"] == "guest-startup":
+                            item.update(trust="workload", measurement="informational", clock_domain="workload")
+                        elif mutation == "runtime-archive" and item["phase"] == "archive":
+                            item["clock_domain"] = "guest-runtime"
+                projection.write_text(json.dumps(changed), encoding="utf-8")
+                rejected = run_helper("validate-projection", "--path", str(projection), *required)
+                self.assertNotEqual(rejected.returncode, 0, rejected.stdout + rejected.stderr)
+
     def test_timing_end_failure_keeps_workload_exit_and_reaches_evidence(self) -> None:
         """A diagnostic write failure cannot replace the acceptance result."""
         for status in (42, 124):

@@ -123,7 +123,7 @@ TIMING_DIAGNOSTIC_REASONS = {
 }
 SUPERVISOR_PHASE_DOMAINS = {
     "archive": {"guest-startup"},
-    "evidence-scan": {"guest-startup"},
+    "evidence-scan": {"guest-startup", "guest-runtime"},
     "upload": {"guest-startup"},
 }
 WORKLOAD_PHASE_DOMAINS = {
@@ -615,6 +615,13 @@ def validate_pairs(
             if any(item["clock_domain"] not in expected_domains for item in matches):
                 item = next(item for item in matches if item["clock_domain"] not in expected_domains)
                 fail_at("required phase clock domain is invalid", item)
+            # The runtime scans workload evidence before startup scans the
+            # collected archive.  Retain both timings, but the runtime scan
+            # cannot replace the terminal startup scan required by this profile.
+            if trust == "supervisor" and phase == "evidence-scan" and not any(
+                item["clock_domain"] == "guest-startup" for item in matches
+            ):
+                fail_at("required phase clock domain is invalid", matches[0])
     return complete
 
 
