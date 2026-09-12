@@ -96,11 +96,42 @@ class PhaseTimingTests(unittest.TestCase):
             self.run_cli("start", *common)
             self.assertNotEqual(self.run_cli("start", *common, check=False).returncode, 0)
             self.assertNotEqual(self.run_cli("validate", "--path", str(path), check=False).returncode, 0)
-
             self.run_cli("end", *common, "--outcome", "timed-out")
             self.assertNotEqual(
                 self.run_cli("validate", "--path", str(path), "--require-phase", "cache-extract", check=False).returncode,
                 0,
+            )
+
+    def test_helper_failures_emit_fixed_safe_categories(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            invalid_identity = self.run_cli(
+                "start", *self.common(root / "identity.jsonl"), "--source-sha", "bad", check=False
+            )
+            self.assertEqual(invalid_identity.returncode, 2)
+            self.assertIn(
+                "stage=timing-helper-start reason_class=identity status=failed exit_code=2",
+                invalid_identity.stderr,
+            )
+
+            invalid_path = root / "directory"
+            invalid_path.mkdir()
+            path_result = self.run_cli("start", *self.common(invalid_path), check=False)
+            self.assertEqual(path_result.returncode, 2)
+            self.assertIn(
+                "stage=timing-helper-start reason_class=path status=failed exit_code=2",
+                path_result.stderr,
+            )
+
+            pair_path = root / "pair.jsonl"
+            self.run_cli("start", *self.common(pair_path))
+            pair_result = self.run_cli(
+                "end", *self.common(pair_path), "--occurrence", "2", "--outcome", "failed", check=False
+            )
+            self.assertEqual(pair_result.returncode, 2)
+            self.assertIn(
+                "stage=timing-helper-end reason_class=pair status=failed exit_code=2",
+                pair_result.stderr,
             )
 
     def test_cancellation_is_a_valid_terminal_outcome(self) -> None:
