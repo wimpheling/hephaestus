@@ -496,6 +496,32 @@ workflow timeout. No image, IAM/WIF, cache, workload or test change is part
 of this run. The user has authorized all GCP runs required for this task; no
 additional per-run approval is required. Do not dispatch a second run.
 
+Terminal baseline attempt: [run 34714968258](https://github.com/wimpheling/hephaestus/actions/runs/34714968258)
+used trusted controller SHA
+`b542338aa974e1e04f08ca8117d1ef4300792c2f` and workload SHA
+`760118c3c2777bf2c0411446e747e7550e233812` with the exact locked environment
+above. Attempt `1` records trusted controller timings of
+`preflight-quota=2435` ms, `preflight-cache=2350` ms,
+`vm-create=13262` ms, `vm-wait=1548297` ms,
+`vm-delete=55322` ms, `cleanup-verification=1922` ms and
+`post-delete-download=3521` ms; every retained controller phase passed.
+The workload, browser and evidence gates passed; browser validation completed
+with `2` passed, `0` failed, `0` skipped and `0` timed out. Diagnostics
+upload/download and scan passed; the scan checked `26` files and `1,160,815`
+bytes, collection was complete, and the owned VM was verified absent after
+cleanup. The safe phase-timing projection reports
+`status=unavailable`, `failedStage=supervisor-validation`,
+`reasonClass=incomplete`, `availableCount=18`, `missingCount=0` and no missing
+phase names. The available phases are `startup-metadata`,
+`startup-runner-image`, `startup-host-packages`, `startup-accounts`,
+`startup-passt`, `startup-cgroup`, `startup-apparmor`,
+`startup-rust-toolchain`, `startup-libkrunfw`, `startup-libkrun`,
+`startup-checkout`, `cooking-supervisor`, `cache-download`, `cache-extract`,
+`workflow-images`, `browser-setup`, `metadata-guard` and `evidence-scan`.
+The workflow's explicit error is `phase-timing-download-failed`, so this is an
+INVALID BASELINE despite correctness and cleanup passing: no performance
+result is accepted and no ACCEPTED or REJECTED decision is recorded.
+
 ACCEPTED
 ========
 None yet.
