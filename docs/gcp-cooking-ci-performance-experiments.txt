@@ -383,6 +383,32 @@ infrastructure/workload evidence only: no baseline/performance result and no
 ACCEPTED or REJECTED decision is recorded; the prepared baseline remains
 pending a valid run.
 
+Terminal diagnostic baseline attempt: [run 34710183150](https://github.com/wimpheling/hephaestus/actions/runs/34710183150)
+used trusted controller SHA
+`c41bc5d7502adbf9f06fd2e8262cc49c2cc0eb43` and workload SHA
+`bc9823b6a2751fdb62f7793db094e28860e8eca3` with the locked image, immutable
+cache generation, machine, disk, zone and concurrency above. The trusted
+controller timing projection, with run ID `34710183150` and attempt `1`,
+records `preflight-quota=2415` ms, `preflight-cache=1727` ms,
+`vm-create=14451` ms, `vm-wait=166102` ms with outcome `failed`,
+`vm-delete=55352` ms, `cleanup-verification=1203` ms and
+`post-delete-download=1819` ms. VM deletion passed and the owned VM was
+verified absent; no stronger service-lifecycle claim is made from the safe
+projection.
+The sequential workload again passed `dependency-setup`, entered
+`project-build`, and failed at `rustup-target` with exit `1` after the PR #30
+installed-target check. The generic `cooking-run` shell marker is line `427`.
+No preflight `dependency-check` marker or reason/test was recorded. Browser
+validation failed because its report was missing/invalid; its all-zero counts
+are report defaults and do not represent executed tests. The workload gate
+failed, evidence scan passed, diagnostics upload/download and scan passed
+with partial collection, and workload phase timing was unavailable. The
+remaining investigation is whether the baked-target inventory differed at the
+invocation or whether a Rust toolchain component still required auto-install;
+no conclusion is recorded here. This is diagnostic infrastructure/workload
+evidence only: no baseline/performance result and no ACCEPTED or REJECTED
+decision is recorded; the prepared baseline remains pending a valid run.
+
 ACCEPTED
 ========
 None yet.
