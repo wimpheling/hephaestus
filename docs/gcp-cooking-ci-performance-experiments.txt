@@ -522,6 +522,37 @@ The workflow's explicit error is `phase-timing-download-failed`, so this is an
 INVALID BASELINE despite correctness and cleanup passing: no performance
 result is accepted and no ACCEPTED or REJECTED decision is recorded.
 
+
+NEXT TEMPORARY FAILURE FIXTURE TRIAL
+====================================
+Preparation revision: trusted `main` now includes merged PR #33 at
+`cfdf273ab82e769ffb9c0fcfe14503607e09fced`. PR #20 remains a docs-only
+experiment branch and is not the workload under test for this trial. The
+fixture is draft PR #34, `https://github.com/wimpheling/hephaestus/pull/34`,
+head `249c24010c9180934f084240687e80d72ff69df1`, from the same repository.
+It adds exactly five lines to `examples/cooking/run.sh`: a four-line reviewed
+comment and `(exit 42)` immediately after `dependency-setup` starts. The
+purpose is one real Cooking failure lifecycle probe with the precise pairing
+diagnostic path from PR #33; this is diagnostic evidence only, never a
+performance baseline or candidate.
+
+Dispatch contract: run trusted `main` with `cloud_mode=gcp-cooking`, targeting
+PR #34 with `pr_number=34`, `pr_repository_id=1312377552` and the exact fixture
+head above. This is exactly one authorized run and must not target PR #20.
+Keep the locked environment unchanged: protected image
+`hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d`, immutable cache generation
+`1789079827867335`, `n2-standard-8`, `150 GB pd-balanced`,
+`europe-west1-d`, concurrency `1`, 45-minute provider DELETE and 50-minute
+workflow timeout. No image, IAM/WIF, cache, machine, zone, concurrency,
+workflow or acceptance change is part of this fixture.
+
+The live paid-run check was clear before preparation, and the preceding owned
+VM was independently verified absent after cleanup. The user has authorized
+this GCP run and no additional approval is required. After evidence collection,
+rollback is to remove the five fixture lines and close PR #34; the temporary
+fixture must never be merged. Preserve the run as diagnostic evidence even if
+all gates pass; record no ACCEPTED or REJECTED performance result.
+
 ACCEPTED
 ========
 None yet.
