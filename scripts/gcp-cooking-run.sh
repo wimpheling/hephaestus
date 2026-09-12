@@ -64,6 +64,9 @@ workload_cargo_home='/home/forge/.cargo'
 workload_rustup_home='/home/forge/.rustup'
 workload_npm_cache=''
 workflow_image_sandbox_args=()
+workflow_images_unit=''
+workflow_images_ready=''
+workflow_images_log=''
 gate_results_initialized=false
 gate_results_write_failed=false
 runtime_phase_timing_script="${HEPH_GCP_PHASE_TIMING_SCRIPT:-}"
@@ -112,7 +115,10 @@ configure_pr_sandbox() {
     # can invoke newuidmap while creating its persistent pause namespace.
     pr_sandbox_filesystem_args=(
         '--property=ProtectProc=invisible'
-        '--property=ProcSubset=pid'
+        # Podman info needs public kernel statistics such as /proc/meminfo,
+        # /proc/stat, and /proc/uptime. ProtectProc still hides other users'
+        # process metadata while ProcSubset=all keeps those APIs available.
+        '--property=ProcSubset=all'
         '--property=ProtectSystem=strict'
         '--property=ProtectHome=tmpfs'
         '--property=PrivateTmp=yes'
@@ -156,11 +162,94 @@ install -m 0600 /dev/null "$log_file"
 [[ -w /dev/ttyS0 ]] || fail 'GCE serial console /dev/ttyS0 is unavailable'
 exec > >(tee -a "$log_file" /dev/ttyS0) 2>&1
 
+workflow_images_unit_state() {
+    local unit="$1" output load_state='' active_state='' query_status=0
+    output="$(systemctl show "$unit" --no-pager --property=LoadState --property=ActiveState 2>/dev/null)" ||
+        query_status=$?
+    while IFS='=' read -r key value; do
+        case "$key" in
+            LoadState) load_state="$value" ;;
+            ActiveState) active_state="$value" ;;
+        esac
+    done <<<"$output"
+    [[ -n "$load_state" && -n "$active_state" ]] || return 1
+    if ((query_status != 0)); then
+        [[ "$load_state" == not-found && "$active_state" == inactive ]] || return 1
+    fi
+    printf '%s|%s\n' "$load_state" "$active_state"
+}
+
+stop_workflow_images_unit() {
+    local unit="$1" state_pair load_state active_state stop_status=0
+    [[ -n "$unit" ]] || return 0
+    if ! state_pair="$(workflow_images_unit_state "$unit")"; then
+        printf 'HEPH_GCP_COOKING event=podman-pause-lifecycle operation=trusted-image-bootstrap status=failed reason=state-query-failed unit=%s\n' "$unit" >&2
+        return 1
+    fi
+    load_state="${state_pair%%|*}"
+    active_state="${state_pair#*|}"
+    case "$load_state:$active_state" in
+        not-found:*|loaded:inactive|loaded:failed|loaded:dead)
+            return 0
+            ;;
+        loaded:active|loaded:activating|loaded:deactivating)
+            if timeout --kill-after=2s 15s systemctl stop "$unit" --no-pager >/dev/null 2>&1; then
+                :
+            else
+                stop_status=1
+            fi
+            if ! state_pair="$(workflow_images_unit_state "$unit")"; then
+                printf 'HEPH_GCP_COOKING event=podman-pause-lifecycle operation=trusted-image-bootstrap status=failed reason=state-query-failed unit=%s\n' "$unit" >&2
+                return 1
+            fi
+            load_state="${state_pair%%|*}"
+            active_state="${state_pair#*|}"
+            if [[ "$load_state" == loaded && ( "$active_state" == active || "$active_state" == activating || "$active_state" == deactivating ) ]]; then
+                printf 'HEPH_GCP_COOKING event=podman-pause-lifecycle operation=trusted-image-bootstrap status=failed reason=stop-timeout unit=%s\n' "$unit" >&2
+                timeout --kill-after=2s 15s systemctl kill "$unit" --kill-who=all --signal=KILL >/dev/null 2>&1 || true
+                timeout --kill-after=2s 15s systemctl stop "$unit" --no-pager >/dev/null 2>&1 || true
+                if ! state_pair="$(workflow_images_unit_state "$unit")"; then
+                    printf 'HEPH_GCP_COOKING event=podman-pause-lifecycle operation=trusted-image-bootstrap status=failed reason=state-query-failed unit=%s\n' "$unit" >&2
+                    return 1
+                fi
+                load_state="${state_pair%%|*}"
+                active_state="${state_pair#*|}"
+            fi
+            case "$load_state:$active_state" in
+                not-found:*|loaded:inactive|loaded:failed|loaded:dead) ;;
+                *) stop_status=1 ;;
+            esac
+            ;;
+        *)
+            printf 'HEPH_GCP_COOKING event=podman-pause-lifecycle operation=trusted-image-bootstrap status=failed reason=state-invalid unit=%s\n' "$unit" >&2
+            return 1
+            ;;
+    esac
+    return "$stop_status"
+}
+
 finish() {
     local status=$?
     trap - EXIT
     if [[ -n "$runtime_phase_timing_open" ]]; then
         runtime_phase_timing_end "$(runtime_phase_timing_outcome "$status")" || true
+    fi
+    if [[ -n "$workflow_images_unit" ]]; then
+        local workflow_stop_status=0
+        if stop_workflow_images_unit "$workflow_images_unit"; then
+            workflow_stop_status=0
+        else
+            workflow_stop_status=$?
+        fi
+        if ((workflow_stop_status != 0)); then
+            printf 'HEPH_GCP_COOKING event=podman-pause-lifecycle operation=trusted-image-bootstrap status=failed reason=cleanup-failed exit_code=%s\n' \
+                "$workflow_stop_status" >&2
+            ((status == 0)) && status=$workflow_stop_status
+        else
+            printf 'HEPH_GCP_COOKING event=podman-pause-lifecycle operation=trusted-image-bootstrap status=stopped reason=supervisor-cleanup unit=%s\n' \
+                "$workflow_images_unit"
+        fi
+        workflow_images_unit=''
     fi
     if [[ "$gate_results_initialized" == true ]]; then
         local gate_finalize_status=0
@@ -333,7 +422,7 @@ gate_results_initialized=true
 
 phase_start host-tools
 validate_sha256 cache_sha256 "$cache_sha256"
-for command in awk bash curl date find git grep install ldconfig podman python3 readlink sha256sum systemd-run tar timeout; do
+for command in awk bash curl date find git grep install ldconfig podman python3 readlink sha256sum systemctl systemd-run tar timeout; do
     require_command "$command"
 done
 # Keep this list aligned with the actual full Cooking scripts: repository image
@@ -597,8 +686,13 @@ print('absolute workflow materialization: PASS')
 PY
 runtime_python_ref="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["runtime_image_references"]["HEPHAESTUS_LIBKRUN_UBUNTU_IMAGE"])' "$bundle_manifest")"
 runtime_rust_ref="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["runtime_image_references"]["HEPHAESTUS_LIBKRUN_RUST_BUILDER_IMAGE"])' "$bundle_manifest")"
-run_with_deadline systemd-run --unit="heph-gcp-cooking-images-${HEPH_GCP_RUN_ID:-manual}" \
-    --expand-environment=no --service-type=oneshot --wait --pipe --collect \
+workflow_images_unit="heph-gcp-cooking-images-${HEPH_GCP_RUN_ID:-manual}"
+workflow_images_ready="$evidence_root/workflow-images-ready"
+workflow_images_log="$evidence_root/workflow-images.log"
+rm -f -- "$workflow_images_ready" "$workflow_images_log"
+run_with_deadline systemd-run --unit="$workflow_images_unit" \
+    --expand-environment=no --service-type=oneshot --collect \
+    --property=RemainAfterExit=yes --property=KillMode=control-group \
     --property=Delegate=yes --property=RuntimeMaxSec="$(remaining_seconds)s" \
     --property=TasksMax=infinity --property=LimitNOFILE=65536 \
     --property=CPUAccounting=yes --property=MemoryAccounting=yes \
@@ -609,6 +703,8 @@ run_with_deadline systemd-run --unit="heph-gcp-cooking-images-${HEPH_GCP_RUN_ID:
     --setenv=XDG_RUNTIME_DIR=/run/user/10001 --setenv=PATH="$workload_path" \
     "${workflow_image_sandbox_args[@]}" \
     /bin/bash -Eeuo pipefail -c '
+        log="$4"; ready="$5"
+        exec >"$log" 2>&1
         mkdir -p -m 700 /tmp/hephaestus-libkrun
         candidate="/sys/fs/cgroup$(awk -F: '\''$1 == "0" { print $3 }'\'' /proc/self/cgroup)"
         test -d "$candidate" -a -w "$candidate" -a -w "$candidate/cgroup.subtree_control"
@@ -671,7 +767,37 @@ run_with_deadline systemd-run --unit="heph-gcp-cooking-images-${HEPH_GCP_RUN_ID:
         import_one rust-ubuntu "oci-archive:$cache/guest-images/rust-ubuntu-profile.oci" "$rust"
         import_one oci-builder-ubuntu "oci:$cache/layouts/oci-builder-ubuntu/image" "$(awk -F= '\''$1=="builder_vm_image" {print $2}'\'' "$cache/repository-images/workflow.env")"
         import_one oci-verifier-ubuntu "oci:$cache/layouts/oci-verifier-ubuntu/image" "$(awk -F= '\''$1=="verifier_vm_image" {print $2}'\'' "$cache/repository-images/workflow.env")"
-    ' -- "$cache_root" "$runtime_python_ref" "$runtime_rust_ref"
+        touch "$ready"
+    ' -- "$cache_root" "$runtime_python_ref" "$runtime_rust_ref" "$workflow_images_log" "$workflow_images_ready"
+workflow_images_deadline=$(( $(date +%s) + $(remaining_seconds) ))
+while :; do
+    workflow_images_state="$(systemctl show "$workflow_images_unit" --no-pager --property=ActiveState --value 2>/dev/null || true)"
+    case "$workflow_images_state" in
+        failed|inactive|deactivating|dead|'')
+            cat -- "$workflow_images_log" 2>/dev/null || true
+            printf 'HEPH_GCP_COOKING event=podman-pause-lifecycle operation=trusted-image-bootstrap status=failed reason=bootstrap-failed unit=%s\n' "$workflow_images_unit" >&2
+            fail 'trusted Podman image bootstrap failed before readiness'
+            ;;
+    esac
+    if [[ -f "$workflow_images_ready" && "$workflow_images_state" == active ]]; then
+        break
+    fi
+    (( $(date +%s) < workflow_images_deadline )) || {
+        cat -- "$workflow_images_log" 2>/dev/null || true
+        printf 'HEPH_GCP_COOKING event=podman-pause-lifecycle operation=trusted-image-bootstrap status=failed reason=readiness-timeout unit=%s\n' "$workflow_images_unit" >&2
+        fail 'trusted Podman image bootstrap readiness timed out'
+    }
+    sleep 0.2
+done
+workflow_images_state="$(systemctl show "$workflow_images_unit" --no-pager --property=ActiveState --value 2>/dev/null || true)"
+workflow_images_result="$(systemctl show "$workflow_images_unit" --no-pager --property=Result --value 2>/dev/null || true)"
+[[ "$workflow_images_state" == active && "$workflow_images_result" == success ]] || {
+    cat -- "$workflow_images_log" 2>/dev/null || true
+    printf 'HEPH_GCP_COOKING event=podman-pause-lifecycle operation=trusted-image-bootstrap status=failed reason=readiness-state-invalid unit=%s\n' "$workflow_images_unit" >&2
+    fail 'trusted Podman image bootstrap readiness state is invalid'
+}
+cat -- "$workflow_images_log"
+printf 'HEPH_GCP_COOKING event=podman-pause-lifecycle operation=trusted-image-bootstrap status=ready reason=persistent-unit unit=%s\n' "$workflow_images_unit"
 phase_pass
 
 # The cache is a trusted immutable input for PR runs.  Freeze it before any

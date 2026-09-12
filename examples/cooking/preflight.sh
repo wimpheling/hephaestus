@@ -20,7 +20,7 @@ preflight_marker() {
         *) return 1 ;;
     esac
     case "$reason" in
-        unsupported-user|unsupported-architecture|kvm-unavailable|passt-unavailable|libkrun-unavailable|libkrunfw-unavailable|uid-map-unavailable|delegation-unavailable|rootful-podman|invalid-image-reference|workflow-file-unavailable|workflow-key-unavailable|layout-unavailable|manifest-unavailable|image-unavailable|image-pull-failed|image-probe-failed|missing-command) ;;
+        unsupported-user|unsupported-architecture|kvm-unavailable|passt-unavailable|libkrun-unavailable|libkrunfw-unavailable|uid-map-unavailable|delegation-unavailable|rootful-podman|podman-info-failed|invalid-image-reference|workflow-file-unavailable|workflow-key-unavailable|layout-unavailable|manifest-unavailable|image-unavailable|image-pull-failed|image-probe-failed|missing-command) ;;
         *) return 1 ;;
     esac
     case "$test_name" in
@@ -126,8 +126,12 @@ if [[ "$(id -u)" -ne 10001 || "$(id -g)" -ne 10001 ]]; then
 fi
 
 cgroup_parent="$(discover_cgroup_parent)"
-podman_rootless="$(podman info --format '{{.Host.Security.Rootless}}' 2>/dev/null || true)"
-[[ "${podman_rootless}" == true ]] || preflight_fail podman-rootless rootful-podman 'Podman must run rootless for the cooking fixture'
+podman_info_status=0
+podman_rootless="$(podman info --format '{{.Host.Security.Rootless}}' 2>/dev/null)" || podman_info_status=$?
+if ((podman_info_status != 0)); then
+    preflight_fail podman-rootless podman-info-failed 'Podman rootless status could not be determined' podman
+fi
+[[ "${podman_rootless}" == true ]] || preflight_fail podman-rootless rootful-podman 'Podman must run rootless for the cooking fixture' podman
 require_digest_reference 'Python guest image' "${image}" python-image
 require_digest_reference 'Rust builder image' "${rust_builder_image}" rust-image
 require_digest_reference 'Caddy image' "${caddy_image}" caddy-image
