@@ -382,7 +382,11 @@ run_cooking() {
             cd -- "$2/cooking-gateway"
             workload_step_start project-build
             workload_detail_stage_start rustup-target
-            rustup target add x86_64-unknown-linux-musl
+            rust_target=x86_64-unknown-linux-musl
+            installed_rust_targets="$(rustup target list --installed)"
+            if ! grep -Fqx "$rust_target" <<<"$installed_rust_targets"; then
+                rustup target add "$rust_target"
+            fi
             workload_detail_stage_pass rustup-target
             workload_detail_stage_start cargo-build
             cargo build --locked --offline --release --target x86_64-unknown-linux-musl
