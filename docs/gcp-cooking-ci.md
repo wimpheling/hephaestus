@@ -2,7 +2,8 @@
 
 This runbook is the durable reference for the disposable GCP modes in
 [`cooking-e2e.yml`](../.github/workflows/cooking-e2e.yml). The current live
-validation is **pending**. Historical smoke or self-hosted Cooking results do
+validation is **accepted for the full-evidence gate** through the no-VM recovery
+recorded below. Historical smoke or self-hosted Cooking results do
 not establish that the current GCP Cooking path is green.
 
 The optional encrypted `diagnostics-triage` export is published at source
@@ -33,7 +34,7 @@ the run completed at `04:26:11Z`. The safe manifest is
 `/tmp/heph-gcp-diagnostic-34672856178/gcp-diagnostics-status.json`; the
 1,809-byte object has SHA-256
 `d98bf506eaac3b5b126dfe88c52bd442f930e9b62f3ea5ad29149328220c553d`.
-Full acceptance remained open after the cheap diagnostic.
+At that point, full acceptance remained open after the cheap diagnostic.
 
 The latest full GCP trial [run
 34673076889](https://github.com/wimpheling/hephaestus/actions/runs/34673076889)
@@ -44,8 +45,29 @@ and credential scan passed, but triage failed with
 `triage-projection-failed`. The safe manifest is
 `/tmp/heph-gcp-cooking-34673076889/gcp-diagnostics-status.json`; it has no
 gate, lineage, object hash, or object size fields, so no workload or browser
-failure is inferred. Full acceptance remains open; paid runs are paused while
-bootstrap summary fixes and no-VM artifact-recovery planning proceed.
+failure is inferred. That workflow result remains red because it predates the summary
+projection fix; its incomplete status does not provide a workload or
+browser failure classification.
+
+The no-VM recovery [run 34674597133](https://github.com/wimpheling/hephaestus/actions/runs/34674597133)
+from source `ab59988` recovered the full trial's workload source SHA
+`4463764819082aa0ee56a960d642498598c4552e`. All three gates exited `0`, the
+startup supervisor exit was `0`, both browser phases passed with `2` reports
+and `0` failures, and collection completed with 10 sources, no rejections or
+truncation, snapshot status `ok` and 11 rows. The snapshot includes two deliberate expected faults: a malformed model
+response and a relay-response loss; it also includes a sampled
+`running`/leased-revocation row captured before settlement. The source
+asserts same-run failure with no replacement, and later all gates passed; this
+is not a claim about a final database snapshot. The retained failure list is
+empty. VM absence was verified before
+private download and scan, and local encrypted-export decryption validated the
+30,077-byte archive with SHA-256
+`d798f71f467c9a45f25f6aec3568c993a5e5bb5bfbfde2bd514b42e233fbe153`. The safe
+manifest is `/tmp/heph-gcp-triage-34674597133-new/manifest/gcp-diagnostics-status.json`.
+This recovered evidence satisfies full acceptance; no additional paid run is
+needed. The original full workflow remains red because it ran before the
+summary projection fix; it does not provide a workload or browser failure
+classification.
 
 The latest local full run is retained at `/tmp/heph-local-network-full.3FSjc8`
 from `HEAD` `87399f8` plus uncommitted shell/network changes. It passed 33
@@ -54,9 +76,8 @@ one report each, a 27-file credential scan covering 1,314,388 bytes, and
 cleanup verification and the shell post-check wiring. It did not emit a
 failure marker because the run succeeded. This is local evidence only. The
 full scripts discovery covered 203 scripts and the focused shell/network
-validation covered 29 tests; Bash, Python and diff checks passed. Paid runs are paused while bootstrap summary fixes and no-VM artifact-recovery
-planning proceed; the image-rebuild plan remains plan-only and the joint user-plan
-review still gates MVP-06 work. Focused shell tests verify
+validation covered 29 tests; Bash, Python and diff checks passed. No additional paid run is needed; the image-rebuild plan remains plan-only and
+the joint user-plan review still gates MVP-06 work. Focused shell tests verify
 failure-marker emission separately.
 
 The most recent full [run 34667868345](https://github.com/wimpheling/hephaestus/actions/runs/34667868345)
@@ -175,7 +196,7 @@ The private object is
 The evidence-scan result was unexpectedly unavailable/missing and
 `runtimeResults` was empty despite source `869dd20`; the executed script and
 capture path remained unresolved for that run. This is failed evidence rather than an
-accepted Cooking pass; full GCP validation remains open. The replacement-image
+accepted Cooking pass; at that time, full GCP validation remained open. The replacement-image
 smoke passed; subsequent new-default full attempts failed as recorded above.
 No denial observation is treated as the root cause. No-VM triage
 [run 34653789352](https://github.com/wimpheling/hephaestus/actions/runs/34653789352)
@@ -251,7 +272,7 @@ runtime/cgroup marker passed, as did the whole-tree credential scan across 32
 files including the archive. The collector produced complete schema 1 with six
 sources and no rejections, and the summarizer reported no failure or retry.
 Private evidence is retained at `/tmp/heph-local-cooking-eef193d.PSyYRA`.
-This proves the local path only; full GCP validation remains open.
+This proves the local path only; at that time, full GCP validation remained open.
 
 ## Configuration
 
@@ -556,8 +577,7 @@ Shell browser login. The diagnostics bucket apply is now human-verified: the
 one-day bucket exists with the runtime bucket-scoped object creator grant and
 the CI bucket-scoped object viewer grant. The diagnostic evidence path and its
 live partial-source proof are verified by runs 34586850977 and 34593541194;
-full Cooking live pipeline validation remains open pending one subsequent full
-trial. Do
+full acceptance is recorded by the no-VM recovery above. Do
 not run either script with personal local gcloud credentials.
 
 ## Dispatch and acceptance gate
@@ -632,15 +652,14 @@ instrumentation defect related to those variables, but the live stderr does
 not establish that defect as this run's cause. No rerun had passed at that
 stage; the later replacement-image smoke passed as recorded above.
 
-The full `gcp-cooking` pipeline remains **pending live validation**. A
-successful diagnostic test failure is acceptable only when its diagnostics
-result passes. For `gcp-cooking`, the test result must also contain the dedicated
-`HEPHAESTUS_GCP_COOKING: PASS` marker. A failed test remains failed even when
-diagnostics are collected successfully. Do not weaken expected test counts or
-convert a missing marker into success. The preceding full trial is recorded at
-the top of this runbook as failed; full GCP validation remains open pending
-one subsequent full trial. Do not start another paid retry before that trial;
-no global budget-timeout cause is established.
+The `gcp-cooking` acceptance requirements remain strict: a successful
+diagnostic test failure is acceptable only when its diagnostics result passes,
+and a full run must contain the dedicated `HEPHAESTUS_GCP_COOKING: PASS`
+marker. A failed test remains failed even when diagnostics are collected
+successfully. The recovered full evidence above satisfies these requirements;
+the original workflow result remains a historical red result because it
+predates the summary projection fix. Do not weaken expected test counts or
+convert a missing marker into success.
 
 An earlier full attempt [34588821244](https://github.com/wimpheling/hephaestus/actions/runs/34588821244)
 at commit `18fff14` timed out with exit `124`. Its raw serial contained a
@@ -694,12 +713,11 @@ result cannot turn a failed Cooking workload into a pass. The prefix-marker
 correction is in source revision `a029192`; its no-VM historical triage is
 recorded above.
 
-The full acceptance evidence must show the exact checked-out SHA, selected
-zone, cache object metadata and checksum, build and installation, update
-admission, browser journey and golden assertions, scanner success, private
-bundle upload, verified VM absence, authenticated post-delete download,
-manifest checksums, and a passing credential scan. No current green claim is
-made here until that evidence is available from a live rerun.
+The accepted full evidence above shows the exact checked-out SHA, selected
+zone, build and installation, update admission, browser journey and golden
+assertions, scanner success, private bundle upload, verified VM absence,
+authenticated post-delete download, manifest checksums and a passing
+credential scan.
 
 The previous full attempt [34630967578](https://github.com/wimpheling/hephaestus/actions/runs/34630967578)
 at source `23bb3d4` failed at 18:28:19Z after approximately 26m36s. VM
@@ -713,8 +731,8 @@ expected denial or caught-confinement markers are observations, not proof of a
 bug. Later configuration and browser-capture changes addressed the
 `test-output` and `browser-summary` projection gap. PR #17
 ([track-caller correction](https://github.com/wimpheling/hephaestus/pull/17))
-was separate. The later full attempt is recorded at the top of this runbook;
-full GCP validation remains open.
+was separate. The later full attempt is recorded at the top of this runbook; at that time,
+full GCP validation remained open.
 
 The current code also passed a local full Cooking run using the evidence
 collector: the golden suite completed with 33 passed and 1 ignored, six
@@ -937,8 +955,8 @@ boundary:
   exact labelled VM. Accept cleanup only after verified absence.
 
 Keep the serial log, status manifest and private bundle tied to the same run,
-attempt and SHA. Do not broaden IAM, add credentials, reuse a VM name, or
-retry a paid run before identifying which boundary failed.
+attempt and SHA. The accepted recovery above needs no additional paid run.
+Do not broaden IAM, add credentials or reuse a VM name for future trials.
 
 Related implementation and evidence notes are in
 [`examples/cooking/CI.md`](../examples/cooking/CI.md). The outside-checkout

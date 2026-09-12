@@ -4,11 +4,12 @@ This page is the operator guide for local Cooking E2E and the manual disposable
 GCP modes. The durable configuration, identity policy, retained evidence and
 full historical record are in the [GCP Cooking CI runbook](../../docs/gcp-cooking-ci.md).
 The acceptance checklist and open work are in the [GCP Cooking CI validation
-task](../../tasks/in-progress/gcp-cooking-ci-validation.md).
+task](../../tasks/done/gcp-cooking-ci-validation.md).
 
-Current `gcp-cooking` live validation remains **open**. The promoted custom
-image is `hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d`. The most recent
-full [run 34667868345](https://github.com/wimpheling/hephaestus/actions/runs/34667868345)
+Current `gcp-cooking` live validation is **accepted for the full-evidence gate**
+through the no-VM recovery recorded below. Full acceptance does not require
+an additional paid run. The promoted custom
+image is `hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d`. The earlier full [run 34667868345](https://github.com/wimpheling/hephaestus/actions/runs/34667868345)
 from source `874a55824d1316952b1c1ae3288ba00e5a9d4619` failed after 29m26s with
 workload exit `1`; both browser phases and evidence scanning passed (26 files,
 1,382,903 bytes), but lineage and lineage-status were rejected as
@@ -67,7 +68,7 @@ The optional encrypted `diagnostics-triage` export is published at source
 revalidates the fixed private bundle and
 retains only a one-day CMS ciphertext for local inspection. Follow the [encrypted export
 guide](../../docs/gcp-encrypted-diagnostics.md) and the canonical runbook for
-the current paid-run pause and acceptance status.
+the current acceptance status.
 
 The first real no-VM encrypted-export proof is [run
 34670985068](https://github.com/wimpheling/hephaestus/actions/runs/34670985068)
@@ -91,7 +92,7 @@ the run completed at `04:26:11Z`. The safe manifest is
 `/tmp/heph-gcp-diagnostic-34672856178/gcp-diagnostics-status.json`; the
 1,809-byte object has SHA-256
 `d98bf506eaac3b5b126dfe88c52bd442f930e9b62f3ea5ad29149328220c553d`.
-Full acceptance remained open after the cheap diagnostic.
+At that point, full acceptance remained open after the cheap diagnostic.
 
 The latest full GCP trial [run
 34673076889](https://github.com/wimpheling/hephaestus/actions/runs/34673076889)
@@ -102,8 +103,29 @@ and credential scan passed, but triage failed with
 `triage-projection-failed`. The safe manifest is
 `/tmp/heph-gcp-cooking-34673076889/gcp-diagnostics-status.json`; it has no
 gate, lineage, object hash, or object size fields, so no workload or browser
-failure is inferred. Full acceptance remains open; paid runs are paused while
-bootstrap summary fixes and no-VM artifact-recovery planning proceed.
+failure is inferred. That workflow result remains red because it predates the summary
+projection fix; its incomplete status does not provide a workload or
+browser failure classification.
+
+The no-VM recovery [run 34674597133](https://github.com/wimpheling/hephaestus/actions/runs/34674597133)
+from source `ab59988` recovered the full trial's workload source SHA
+`4463764819082aa0ee56a960d642498598c4552e`. All three gates exited `0`, the
+startup supervisor exit was `0`, both browser phases passed with `2` reports
+and `0` failures, and collection completed with 10 sources, no rejections or
+truncation, snapshot status `ok` and 11 rows. The snapshot includes two deliberate expected faults: a malformed model
+response and a relay-response loss; it also includes a sampled
+`running`/leased-revocation row captured before settlement. The source
+asserts same-run failure with no replacement, and later all gates passed; this
+is not a claim about a final database snapshot. The retained failure list is
+empty. VM absence was verified before
+private download and scan, and local encrypted-export decryption validated the
+30,077-byte archive with SHA-256
+`d798f71f467c9a45f25f6aec3568c993a5e5bb5bfbfde2bd514b42e233fbe153`. The safe
+manifest is `/tmp/heph-gcp-triage-34674597133-new/manifest/gcp-diagnostics-status.json`.
+This recovered evidence satisfies full acceptance; no additional paid run is
+needed. The original full workflow remains red because it ran before the
+summary projection fix; it does not provide a workload or browser failure
+classification.
 
 The latest local full run is retained at `/tmp/heph-local-network-full.3FSjc8`
 from `HEAD` `87399f8` plus uncommitted shell/network changes. It passed 33
@@ -111,9 +133,8 @@ golden tests with 1 ignored, six PostgreSQL tests, both browser phases, a
 27-file credential scan covering 1,314,388 bytes, and cleanup verification
 including post-check wiring. This is local evidence only;
 the successful run did not emit a failure marker. Full scripts discovery covered
-203 scripts and focused shell/network validation covered 29 tests. Paid runs are paused while bootstrap summary fixes and no-VM artifact-recovery
-planning proceed. The image-rebuild plan remains plan-only and the joint user-plan
-review still gates MVP-06 work; see the canonical runbook for the safe shell-failure fields and topology
+203 scripts and focused shell/network validation covered 29 tests. No additional paid run is needed. The image-rebuild plan remains plan-only and
+the joint user-plan review still gates MVP-06 work; see the canonical runbook for the safe shell-failure fields and topology
 comparison.
 
 The cheap diagnostic and real KVM smoke paths have passed with private
@@ -124,8 +145,8 @@ its expected fixture gates and `browser-secret-org` quarantine passed. Its
 1,810-byte private object has SHA-256
 `f340874e7557ef9ba89199ba7cedf5153668ceb5201877abb21f2b868ce338cf`.
 The canonical runbook retains the complete diagnostic and full-run history.
-Paid full retries remain stopped for no-VM retained-bundle triage improvement
-and local lineage diagnosis. No global budget-timeout cause is established.
+At that time, paid full retries remained stopped for no-VM retained-bundle triage
+improvement and local lineage diagnosis. No global budget-timeout cause is established.
 
 ## Manual GCP modes
 
@@ -346,4 +367,4 @@ evidence.
 
 For the complete acceptance checklist, historical run links, failure
 classification and retry correlation, use the [canonical runbook](../../docs/gcp-cooking-ci.md)
-and [validation task](../../tasks/in-progress/gcp-cooking-ci-validation.md).
+and [validation task](../../tasks/done/gcp-cooking-ci-validation.md).

@@ -41,7 +41,7 @@ the run completed at `04:26:11Z`. The safe manifest is
 `/tmp/heph-gcp-diagnostic-34672856178/gcp-diagnostics-status.json`; the
 1,809-byte object has SHA-256
 `d98bf506eaac3b5b126dfe88c52bd442f930e9b62f3ea5ad29149328220c553d`.
-Full acceptance remained open after the cheap diagnostic.
+At that point, full acceptance remained open after the cheap diagnostic.
 
 The latest full GCP trial [run
 34673076889](https://github.com/wimpheling/hephaestus/actions/runs/34673076889)
@@ -52,8 +52,29 @@ and credential scan passed, but triage failed with
 `triage-projection-failed`. The safe manifest is
 `/tmp/heph-gcp-cooking-34673076889/gcp-diagnostics-status.json`; it has no
 gate, lineage, object hash, or object size fields, so no workload or browser
-failure is inferred. Full acceptance remains open; paid runs are paused while
-bootstrap summary fixes and no-VM artifact-recovery planning proceed.
+failure is inferred. That workflow result remains red because it predates the summary
+projection fix; its incomplete status does not provide a workload or
+browser failure classification.
+
+The no-VM recovery [run 34674597133](https://github.com/wimpheling/hephaestus/actions/runs/34674597133)
+from source `ab59988` recovered the full trial's workload source SHA
+`4463764819082aa0ee56a960d642498598c4552e`. All three gates exited `0`, the
+startup supervisor exit was `0`, both browser phases passed with `2` reports
+and `0` failures, and collection completed with 10 sources, no rejections or
+truncation, snapshot status `ok` and 11 rows. The snapshot includes two deliberate expected faults: a malformed model
+response and a relay-response loss; it also includes a sampled
+`running`/leased-revocation row captured before settlement. The source
+asserts same-run failure with no replacement, and later all gates passed; this
+is not a claim about a final database snapshot. The retained failure list is
+empty. VM absence was verified before
+private download and scan, and local encrypted-export decryption validated the
+30,077-byte archive with SHA-256
+`d798f71f467c9a45f25f6aec3568c993a5e5bb5bfbfde2bd514b42e233fbe153`. The safe
+manifest is `/tmp/heph-gcp-triage-34674597133-new/manifest/gcp-diagnostics-status.json`.
+This recovered evidence satisfies full acceptance; no additional paid run is
+needed. The original full workflow remains red because it ran before the
+summary projection fix; it does not provide a workload or browser failure
+classification.
 
 The latest local full run is retained at `/tmp/heph-local-network-full.3FSjc8`
 from `HEAD` `87399f8` plus uncommitted shell/network changes. It passed 33
@@ -61,15 +82,14 @@ golden tests with 1 ignored, six PostgreSQL tests, both browser phases, a
 27-file credential scan covering 1,314,388 bytes, and cleanup verification
 including post-check wiring. This is local evidence only; the successful run
 did not emit a failure marker. Full scripts discovery covered 203 scripts and
-focused shell/network validation covered 29 tests. Paid runs are paused while bootstrap summary fixes and no-VM artifact-recovery
-planning proceed; the image-rebuild plan remains plan-only and the joint user-plan
-review still gates MVP-06 work. The
+focused shell/network validation covered 29 tests. No additional paid run is needed; the image-rebuild plan remains plan-only and
+the joint user-plan review still gates MVP-06 work. The
 canonical runbook documents the safe shell-failure fields and topology
 comparison.
 
 ## Current evidence
 
-- [ ] Most recent full [run 34667868345](https://github.com/wimpheling/hephaestus/actions/runs/34667868345)
+- [x] Most recent full [run 34667868345](https://github.com/wimpheling/hephaestus/actions/runs/34667868345)
   from source `874a55824d1316952b1c1ae3288ba00e5a9d4619` failed after 29m26s
   (02:30:44Z–03:00:10Z) on the promoted image. Workload exit was `1`; both
   browser phases passed, and evidence scanning passed for 26 files and
@@ -82,7 +102,7 @@ comparison.
   proof, and caught-confinement panics are not an application-failure
   classification. At that time, paid full retries were paused for no-VM retained-bundle
   triage improvement and local lineage diagnosis.
-- [ ] An earlier corrected full attempt is recorded below: [run 34663205477](https://github.com/wimpheling/hephaestus/actions/runs/34663205477)
+- [x] An earlier corrected full attempt is recorded below: [run 34663205477](https://github.com/wimpheling/hephaestus/actions/runs/34663205477)
   from source `a453d6dd1823fcf91c6934e9e91185b869ece718` failed on the
   unchanged promoted image `hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d`
   after 26m42s (00:55:21Z–01:22:03Z). Workload exit was `1`; the VM was
@@ -180,8 +200,8 @@ comparison.
   with `browser-secret-org`, and browser validation `failed`/42; overall and
   startup supervisor exits were both 42. Expected quarantine and gate
   acceptance passed. The corrected full trial is recorded above; full
-  validation remains open.
-- [ ] Prior full `gcp-cooking` attempt [run 34659491446](https://github.com/wimpheling/hephaestus/actions/runs/34659491446)
+  validation remained open at that time.
+- [x] Prior full `gcp-cooking` attempt [run 34659491446](https://github.com/wimpheling/hephaestus/actions/runs/34659491446)
   from source `0c77eef` used promoted image
   `hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d`. It ran from 23:49:34Z
   on 2026-09-11 through 00:16:42Z on 2026-09-12 (27m08s), and verified VM
@@ -197,7 +217,7 @@ comparison.
   Caught-confinement panics are not established as the cause. Paid full
   retries were paused while local whole-tree post-processing and source-error
   policy work proceeded; the corrected follow-up is recorded above. Full GCP
-  validation remains open.
+  validation remained open at that time.
 - [x] The published baseline at source revision `8fe2e21` has 173 passing
   Python tests. The runtime budget/error-reporting correction is published in
   that revision; its actual GNU-timeout mock executable regression was covered
@@ -217,7 +237,7 @@ comparison.
   and the corrected full trial failed as recorded above. Paid retries are
   paused for no-VM retained-bundle triage improvement and local lineage diagnosis. Fatal collector errors emit closed typed stage/reason metadata without paths or
   payloads, and the serial filter retains safe diagnostic lines.
-- [ ] Prior full `gcp-cooking` attempt [run 34658390612](https://github.com/wimpheling/hephaestus/actions/runs/34658390612)
+- [x] Prior full `gcp-cooking` attempt [run 34658390612](https://github.com/wimpheling/hephaestus/actions/runs/34658390612)
   from source `672dbf5` used promoted image
   `hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d`. It ran from 23:31:40Z
   to 23:34:30Z (2m50s), reached `gcp-cooking` exit `128` before workload and
@@ -232,8 +252,8 @@ comparison.
   scanner results as expected; fallback browser-summary exit `128` does not
   establish a browser execution cause. Root fix `0c77eef` corrected the
   git-ownership lookup and preserves missing-gate triage retention. Full GCP
-  validation remains open.
-- [ ] Prior full `gcp-cooking` attempt [run 34650838816](https://github.com/wimpheling/hephaestus/actions/runs/34650838816)
+  validation remained open at that time.
+- [x] Prior full `gcp-cooking` attempt [run 34650838816](https://github.com/wimpheling/hephaestus/actions/runs/34650838816)
   from source `869dd20` used the validated default image, ran from 21:44:46Z
   to 22:12:06Z (27m20s), and returned aggregate workload exit `1`. Both browser
   phases passed 2/2 with complete reports. Collection completed, and
@@ -243,14 +263,14 @@ comparison.
   is `cooking/runs/34650838816/1/869dd209ae9569fb078ccc8a2e3a1bb41d4c0be6.tar.gz`.
   The evidence-scan result was unexpectedly unavailable/missing and
   `runtimeResults` was empty despite source `869dd20`; the executed script and
-  capture path remained unresolved for that run. Full GCP validation remains open and
+  capture path remained unresolved for that run. At that time, full GCP validation remained open and
   replacement-image smoke passed, but subsequent new-default full attempts
   failed as recorded above. No denial observation is treated as the root cause.
   No-VM
   triage [run 34653789352](https://github.com/wimpheling/hephaestus/actions/runs/34653789352)
   preserved the failed outcome and verified cleanup, but the historical
   failure remains unrecoverable from safe evidence.
-- [ ] Prior full attempt [run 34645906708](https://github.com/wimpheling/hephaestus/actions/runs/34645906708)
+- [x] Prior full attempt [run 34645906708](https://github.com/wimpheling/hephaestus/actions/runs/34645906708)
   remains failed evidence; its no-VM historical triage is recorded below.
 - [x] The prefix-marker correction is recorded in source revision `a029192`.
   The root-owned sidecars are `/var/log/hephaestus/cooking-gate-results.json`
@@ -289,14 +309,14 @@ comparison.
   cloud fixture's `evidenceScan` result was expected unavailable/missing; the
   typed scanner path is proven only by local proof. The later full trial at
   source `869dd20` failed as recorded above.
-- [ ] A full `gcp-cooking` pass has not yet been accepted. The full attempt in
+- [x] The full attempt in
   [run 34618088312](https://github.com/wimpheling/hephaestus/actions/runs/34618088312)
   failed after 24m39s after all eight diagnostic sources completed and five
   lineage rows were retained. VM cleanup and the private post-delete
   diagnostics download/scan succeeded. The exact failure cause remains under
   investigation; this is useful operational evidence but does not make the
-  Cooking run pass.
-- [ ] The later full attempt in
+  Cooking run pass. The later no-VM recovery is recorded above.
+- [x] The later full attempt in
   [run 34630967578](https://github.com/wimpheling/hephaestus/actions/runs/34630967578)
   at source `23bb3d4` failed at 18:28:19Z after approximately 26m36s. VM
   absence was verified at 18:28:07.989Z, and private diagnostics upload,
@@ -309,8 +329,8 @@ comparison.
   `test-output` and `browser-summary` projection gap. PR #17
   ([track-caller correction](https://github.com/wimpheling/hephaestus/pull/17))
   was separate. That earlier triage left the failure cause unresolved; full
-  GCP validation remains open.
-- [ ] A prior full attempt,
+  At that time, GCP validation remained open.
+- [x] A prior full attempt,
   [run 34638077629](https://github.com/wimpheling/hephaestus/actions/runs/34638077629),
   used source `bd777de2bd4100a43c22201219892c9b50f3273a`, the default validated
   runner image, and `europe-west1-d`. It ran from `19:18:02Z` through
@@ -323,8 +343,8 @@ comparison.
   `19:45:27.828Z` for 27,796 bytes, SHA-256
   `3027116b89450cc0458cc5258c437188bc6600692d9145842230ec9206bfecb0`.
   The raw Playwright report was not retained locally, so its exact assertion
-  remains unknown. Keep full GCP validation open pending one subsequent full
-  trial; do not retry the paid path before that trial.
+  remains unknown. The subsequent full trial and no-VM recovery are recorded above; no additional
+  paid retry is required.
 - [x] The current code passed a local full Cooking run: 33 golden tests passed
   with 1 ignored, six PostgreSQL tests completed in 1.75s, two browser reports
   passed with zero failures, and cleanup, same-stream live scanning, and the
@@ -339,7 +359,7 @@ comparison.
   projection without false panics; 82 focused tests cover the changes. The
   four track-caller attributes were merged in
   [PR #17](https://github.com/wimpheling/hephaestus/pull/17), with all three CI
-  checks and the quality gate passed. Cloud validation remains open.
+  checks and the quality gate passed. At that time, cloud validation remained open.
 - [x] The structured browser capture pipeline was published in commit
   `1b49264` with 123 focused tests and a real intentional Playwright failure
   proving typed source location. Raw reports remain VM-private and excluded
@@ -358,7 +378,8 @@ comparison.
   credential scan covered 32 files including the archive; collector schema 1
   was complete with six sources and no rejections; and the summarizer reported
   no failure or retry. Private evidence is at
-  `/tmp/heph-local-cooking-eef193d.PSyYRA`. Full GCP validation remains open.
+  `/tmp/heph-local-cooking-eef193d.PSyYRA`. The recovered full GCP acceptance is recorded above; historical failures remain
+part of the evidence record.
 - [x] No-VM historical triage was validated in [run 34626172381](https://github.com/wimpheling/hephaestus/actions/runs/34626172381)
   for run `34618088312`, attempt `1`, and the exact source SHA. It verified
   project-wide VM absence, downloaded and scanned the private object, and
@@ -381,13 +402,13 @@ comparison.
 
 ## Locked controls
 
-- [ ] Keep the existing WIF issuer, repository and workflow restrictions, CI
+- [x] Keep the existing WIF issuer, repository and workflow restrictions, CI
   service account, private cache/diagnostics buckets, and bucket-scoped access.
-- [ ] Keep the current runner image selection and rollback protection under
+- [x] Keep the current runner image selection and rollback protection under
   repository configuration; do not promote an image from cleanup evidence.
-- [ ] Keep disposable VM deletion, absence verification, private diagnostics
+- [x] Keep disposable VM deletion, absence verification, private diagnostics
   upload/download and credential scanning fail-closed.
-- [ ] Do not weaken expected test counts, substitute seeded or application-only
+- [x] Do not weaken expected test counts, substitute seeded or application-only
   evidence for the Cooking path, add service-account keys, or claim a dollar
   hard cap from the GCP budget configuration.
 
@@ -403,11 +424,11 @@ comparison.
   deliberate failure, startup/runtime evidence, collection and upload, verified
   VM absence, authenticated post-delete download, checksum and credential scan
   from runs 34593541194, 34609688851 and 34645473842.
-- [ ] Run one full `gcp-cooking` attempt after diagnosis and record build/update,
+- [x] Run one full `gcp-cooking` attempt after diagnosis and record build/update,
   browser, golden, scanner, marker, cleanup and private-artifact evidence.
-- [ ] Update the durable runbook and Cooking CI status with the accepted run
+- [x] Update the durable runbook and Cooking CI status with the accepted run
   links, exact revisions and any remaining operational limits.
-- [ ] Run focused workflow/script checks and `git diff --check`; retain the
+- [x] Run focused workflow/script checks and `git diff --check`; retain the
   evidence needed before moving this task to `tasks/done/`.
 
 ## Non-goals
@@ -422,9 +443,19 @@ automation remains tracked in
 
 ## Completion evidence
 
-Move this task only after a current diagnostic pass and a current full
-`gcp-cooking` pass satisfy the workflow's acceptance criteria. Record the exact
-GitHub run links, source/image revisions, test result counts, marker and startup
-evidence, VM absence timestamps, private object checksum, authenticated
-post-delete scan result, and verification commands. A successful cleanup or
-private download by itself is not sufficient evidence.
+No-VM recovery [run 34674597133](https://github.com/wimpheling/hephaestus/actions/runs/34674597133)
+from source `ab59988` recovered full trial `34673076889` and satisfies the
+workflow acceptance criteria. It recorded workload source SHA `4463764`, all
+three gates and startup supervisor exit `0`, both browser phases passing,
+complete 10-source collection with no rejections or truncation, snapshot status
+`ok` with 11 rows, VM absence before download/scan, and authenticated encrypted
+archive validation for 30,077 bytes with SHA-256
+`d798f71f467c9a45f25f6aec3568c993a5e5bb5bfbfde2bd514b42e233fbe153`. The
+archive-safe manifest is
+`/tmp/heph-gcp-triage-34674597133-new/manifest/gcp-diagnostics-status.json`.
+
+Focused workflow/script checks and `git diff --check` passed before publication.
+The original full workflow remains red because it predates the summary
+projection fix; its workload or browser failure is not inferred. No additional
+paid run is required. MVP-06 remains behind its joint user-plan review gate,
+and runner-image rebuild automation remains a pending plan.

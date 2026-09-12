@@ -29,11 +29,11 @@ require them to assemble everything before receiving value.
 - [x] Preserve the distinction between the verified first-request proof and
   remaining acceptance requirements; record the agreed scope changes explicitly.
 
-- [ ] Finish the [current GCP Cooking CI validation follow-up](in-progress/gcp-cooking-ci-validation.md)
-  as an operational follow-up to MVP-05.1. The protected prebuilt default image
-  and disposable smoke path have passed, and the diagnostic collection pipeline
-  is proven. Full Cooking acceptance remains outstanding; this follow-up must
-  not be treated as complete from cleanup evidence alone.
+- [x] Finish the [GCP Cooking CI validation follow-up](done/gcp-cooking-ci-validation.md)
+  as an operational follow-up to MVP-05.1. The protected prebuilt default image,
+  disposable smoke path and no-VM recovered full-evidence acceptance have passed.
+  The original workflow result remains historically red because it predates the
+  summary projection fix; the recovered evidence satisfies the acceptance gate.
 
 Do not introduce broad infrastructure merely to finish the scenario. Its
 existing task remains the source of truth for detailed acceptance and tests.
