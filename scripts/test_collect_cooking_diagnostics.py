@@ -189,11 +189,20 @@ class CookingDiagnosticsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             root_path = Path(root)
             source = root_path / "serial.log"
-            source.write_text("x\n", encoding="utf-8")
+            source.write_text("HEPH_GCP_KVM_STARTUP event=ready\n", encoding="utf-8")
             snapshot = root_path / "lineage.jsonl"
             snapshot.write_text(json.dumps({"event_id": "payload"}) + "\n", encoding="utf-8")
-            with self.assertRaises(COLLECTOR.CollectionError):
-                COLLECTOR.collect(root_path / "bundle", [f"serial={source}"], snapshot, None, None)
+            output = root_path / "bundle"
+            self.assertEqual(
+                COLLECTOR.collect(output, [f"serial={source}"], snapshot, None, None),
+                0,
+            )
+            manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(
+                manifest["rejectedSources"],
+                [{"label": "lineage", "reason": "snapshot-identifier", "status": "rejected"}],
+            )
+            self.assertFalse((output / "lineage.jsonl").exists())
             old_limit = COLLECTOR.MAX_SOURCE_BYTES
             try:
                 COLLECTOR.MAX_SOURCE_BYTES = 1
@@ -201,6 +210,100 @@ class CookingDiagnosticsTests(unittest.TestCase):
                     COLLECTOR.collect(root_path / "bundle-large", [f"serial={source}"], None, None, None)
             finally:
                 COLLECTOR.MAX_SOURCE_BYTES = old_limit
+
+    def test_quarantines_malformed_lineage_status_with_safe_snapshot(self):
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            serial = root_path / "serial.log"
+            serial.write_text("HEPH_GCP_KVM_STARTUP event=ready\n", encoding="utf-8")
+            snapshot = root_path / "lineage.jsonl"
+            snapshot.write_text(
+                json.dumps(
+                    {
+                        "event_id": "00000000-0000-4000-8000-000000000001",
+                        "attempt_id": "00000000-0000-4000-8000-000000000002",
+                        "attempt_run_id": "00000000-0000-4000-8000-000000000003",
+                        "attempt_number": 1,
+                        "attempt_state": "failed",
+                        "run_state": "failed",
+                        "run_outcome": "failed",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            status = root_path / "lineage-status.json"
+            status.write_text('{"schema":1,"status":"unexpected"}\n', encoding="utf-8")
+            output = root_path / "bundle"
+            self.assertEqual(
+                COLLECTOR.collect(output, [f"serial={serial}"], snapshot, status, None),
+                0,
+            )
+            manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(
+                manifest["rejectedSources"],
+                [{"label": "lineage-status", "reason": "snapshot-status", "status": "rejected"}],
+            )
+            self.assertTrue((output / "lineage.jsonl").is_file())
+            self.assertFalse((output / "lineage-status.json").exists())
+
+    def test_snapshot_only_rejection_still_fails_without_other_evidence(self):
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            snapshot = root_path / "lineage.jsonl"
+            snapshot.write_text('{"event_id":"payload"}\n', encoding="utf-8")
+            with self.assertRaises(COLLECTOR.CollectionError):
+                COLLECTOR.collect(root_path / "bundle", [], snapshot, None, None)
+
+    def test_classifies_snapshot_validation_without_retaining_invalid_values(self):
+        cases = [
+            ("invalid-json", "{\"event_id\":\n", "snapshot-invalid-json"),
+            ("schema", '{"request_body":"secret"}\n', "snapshot-schema"),
+            ("enum", '{"attempt_state":"unknown-value"}\n', "snapshot-enum"),
+            ("path", None, "snapshot-path"),
+        ]
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            serial = root_path / "serial.log"
+            serial.write_text("HEPH_GCP_KVM_STARTUP event=ready\n", encoding="utf-8")
+            for name, contents, reason in cases:
+                snapshot = root_path / f"{name}.jsonl"
+                if contents is not None:
+                    snapshot.write_text(contents, encoding="utf-8")
+                else:
+                    snapshot.write_text("{}\n", encoding="utf-8")
+                if name == "path":
+                    snapshot = root_path / "missing" / "lineage.jsonl"
+                output = root_path / f"bundle-{name}"
+                self.assertEqual(
+                    COLLECTOR.collect(output, [f"serial={serial}"], snapshot, None, None),
+                    0,
+                )
+                manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+                self.assertEqual(manifest["rejectedSources"][0]["reason"], reason)
+                self.assertFalse((output / "lineage.jsonl").exists())
+
+            old_limit = COLLECTOR.MAX_SNAPSHOT_ROWS
+            try:
+                COLLECTOR.MAX_SNAPSHOT_ROWS = 1
+                snapshot = root_path / "row-limit.jsonl"
+                snapshot.write_text("{}\n{}\n", encoding="utf-8")
+                output = root_path / "bundle-row-limit"
+                self.assertEqual(
+                    COLLECTOR.collect(output, [f"serial={serial}"], snapshot, None, None),
+                    0,
+                )
+                manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+                self.assertEqual(manifest["rejectedSources"][0]["reason"], "snapshot-row-limit")
+            finally:
+                COLLECTOR.MAX_SNAPSHOT_ROWS = old_limit
+
+            self.assertEqual(
+                COLLECTOR._snapshot_rejection_reason(
+                    COLLECTOR.CollectionError("source cannot be opened safely")
+                ),
+                "snapshot-read",
+            )
 
     def test_fails_closed_on_fixture_credential_and_missing_source(self):
         with tempfile.TemporaryDirectory() as root:

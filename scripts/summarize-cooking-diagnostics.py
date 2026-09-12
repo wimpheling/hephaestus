@@ -52,7 +52,9 @@ DENIAL_CLASSES = {
 }
 REJECTION_REASONS = {
     "credential-scan-rejected", "secret-assignment-rejected", "source-policy-rejected",
-    "source-limit-rejected", "source-validation-rejected",
+    "source-limit-rejected", "source-validation-rejected", "snapshot-invalid-json",
+    "snapshot-row-limit", "snapshot-schema", "snapshot-enum", "snapshot-identifier",
+    "snapshot-status", "snapshot-read", "snapshot-path",
 }
 ATTEMPT_FIELDS = {
     "event_id", "attempt_id", "attempt_number", "attempt_run_id", "attempt_state", "attempt_created_at",

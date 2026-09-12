@@ -1277,6 +1277,33 @@ def _source_rejection_reason(error: Exception) -> str:
     return "source-validation-rejected"
 
 
+def _snapshot_rejection_reason(error: Exception) -> str:
+    """Map snapshot validation failures to closed, non-sensitive classes."""
+
+    if isinstance(error, OSError):
+        return "snapshot-read"
+    message = str(error).lower()
+    # These are the only classes whose messages include caller-controlled
+    # paths. Check their controlled prefixes before field-name classes.
+    if message.startswith("source cannot be opened safely"):
+        return "snapshot-read"
+    if message.startswith("source must be") or message.startswith("source metadata"):
+        return "snapshot-path"
+    if "invalid json" in message or "one json object" in message:
+        return "snapshot-invalid-json"
+    if "row budget" in message or "retention limit" in message or "source exceeds" in message:
+        return "snapshot-row-limit"
+    if "unallowlisted field" in message or "snapshot field cannot be" in message:
+        return "snapshot-schema"
+    if "identifier" in message:
+        return "snapshot-identifier"
+    if "status" in message and "classification" in message:
+        return "snapshot-status"
+    if "status" in message and ("recognized" in message or "invalid" in message):
+        return "snapshot-enum"
+    return "source-validation-rejected"
+
+
 def _manifest(
     records: list[dict[str, Any]],
     errors: list[dict[str, str]],
@@ -1437,26 +1464,54 @@ def collect(
             errors.append({"label": label, "status": "missing"})
         if snapshot is not None:
             destination = staging / "lineage.jsonl"
-            rows, digest = _canonical_snapshot(snapshot, destination)
-            size = destination.stat().st_size
-            total += size
-            if total > MAX_TOTAL_BYTES:
-                raise CollectionError("combined evidence exceeds retention limit")
-            records.append({"label": "lineage", "path": "lineage.jsonl", "rows": rows, "bytes": size, "sha256": digest})
+            try:
+                rows, digest = _canonical_snapshot(snapshot, destination)
+                size = destination.stat().st_size
+            except (CollectionError, OSError, ValueError) as error:
+                # A malformed producer snapshot is one source failure. Keep
+                # independent serial/runtime evidence and report the typed
+                # rejection; never retain a partially projected JSONL file.
+                destination.unlink(missing_ok=True)
+                rejected.append(
+                    {
+                        "label": "lineage",
+                        "reason": _snapshot_rejection_reason(error),
+                        "status": "rejected",
+                    }
+                )
+            else:
+                total += size
+                if total > MAX_TOTAL_BYTES:
+                    raise CollectionError("combined evidence exceeds retention limit")
+                records.append({"label": "lineage", "path": "lineage.jsonl", "rows": rows, "bytes": size, "sha256": digest})
         if snapshot_status is not None:
             destination = staging / "lineage-status.json"
-            size, digest = _canonical_snapshot_status(snapshot_status, destination)
-            total += size
-            if total > MAX_TOTAL_BYTES:
-                raise CollectionError("combined evidence exceeds retention limit")
-            records.append(
-                {
-                    "label": "lineage-status",
-                    "path": "lineage-status.json",
-                    "bytes": size,
-                    "sha256": digest,
-                }
-            )
+            try:
+                size, digest = _canonical_snapshot_status(snapshot_status, destination)
+            except (CollectionError, OSError, ValueError) as error:
+                # See the lineage JSONL handling above. Status is retained
+                # only after its complete object passes the same strict
+                # schema validation.
+                destination.unlink(missing_ok=True)
+                rejected.append(
+                    {
+                        "label": "lineage-status",
+                        "reason": _snapshot_rejection_reason(error),
+                        "status": "rejected",
+                    }
+                )
+            else:
+                total += size
+                if total > MAX_TOTAL_BYTES:
+                    raise CollectionError("combined evidence exceeds retention limit")
+                records.append(
+                    {
+                        "label": "lineage-status",
+                        "path": "lineage-status.json",
+                        "bytes": size,
+                        "sha256": digest,
+                    }
+                )
         if not records:
             raise CollectionError("at least one evidence source is required")
         value = _manifest(records, errors, rejected)
