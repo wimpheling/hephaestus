@@ -239,17 +239,19 @@ recorded, and the prepared baseline remains pending a valid run.
 NEXT PREPARED BASELINE
 ======================
 Preparation revision: trusted `main` now includes merged PR #23 (preserve the
-diagnostics path when phase timing is unavailable) and PR #24 (typed early
-Cooking workload failure stages), merged at
-`e2ec3ee951cf2be7bb68c327f807c5d17f533a08`. The next PR #20 workload will use
+diagnostics path when phase timing is unavailable), PR #24 (typed early
+Cooking workload failure stages), and PR #25 (constrain the trusted Podman
+bootstrap sandbox and private namespace), with current main at
+`317d14684462ade5e2ef0c1bc8eb577e82a9ee3b`. The next PR #20 workload will use
 the exact open-PR head supplied at dispatch after this preparation is pushed;
 the controller SHA and workload SHA will be recorded with the terminal result.
 Reason: attempt `34702725501` reached the Cooking workload but its failure was
 only classified by the generic `examples/cooking/run.sh` shell handler, while
 the missing phase-timing projection prevented a complete baseline record. The
-new trusted workload stage markers and preserved failure/scan/triage path are
-intended to identify an early workload failure and retain diagnostic evidence
-without weakening the unchanged suite or scanner.
+new trusted workload stage markers, preserved failure/scan/triage path and
+private Podman namespace hardening are intended to identify an early workload
+failure and retain diagnostic evidence without weakening the unchanged suite
+or scanner.
 Hypothesis and acceptance: this remains a baseline, with no performance change
 under test. It can establish the cold-GCP reference only if all Cooking,
 browser, golden, database, scanner, marker, provenance, cleanup and required
