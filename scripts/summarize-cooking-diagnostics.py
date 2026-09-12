@@ -35,7 +35,7 @@ LINEAGE_FIELDS = COLLECTOR.SNAPSHOT_FIELDS
 LINEAGE_STATUS_FIELDS = COLLECTOR.SNAPSHOT_STATUS_FIELDS | {"rows"}
 SOURCE_LABELS = {
     "serial", "host-journal", "runtime-log", "runtime-structured",
-    "browser-summary", "test-output", "evidence-scan", "gate-results", "lineage", "lineage-status",
+    "browser-summary", "test-output", "evidence-scan", "gate-results", "phase-timing", "lineage", "lineage-status",
 }
 SAFE_STATUS = COLLECTOR.SNAPSHOT_STATUS_VALUES
 TRIAGE_FIELDS = {
@@ -1327,6 +1327,24 @@ def _project_failures(
     return failures
 
 
+def _validate_phase_timing(source: Path) -> None:
+    """Accept only the collector's bounded, typed timing projection."""
+    if source.stat().st_size > 64 * 1024:
+        raise ValueError("phase timing projection exceeds its retention limit")
+    helper_path = Path(__file__).with_name("gcp_phase_timing.py")
+    if helper_path.is_symlink() or not helper_path.is_file():
+        raise ValueError("phase timing validator is unavailable")
+    spec = importlib.util.spec_from_file_location("gcp_phase_timing", helper_path)
+    if spec is None or spec.loader is None:
+        raise ValueError("phase timing validator cannot be loaded")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    try:
+        module.validate_projection(json.loads(source.read_text(encoding="utf-8")))
+    except (ValueError, module.TimingError) as error:
+        raise ValueError("phase timing records are invalid") from error
+
+
 def summarize(bundle: Path) -> dict[str, Any]:
     manifest_path = _safe_path(bundle, "manifest.json")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -1362,7 +1380,9 @@ def summarize(bundle: Path) -> dict[str, Any]:
         label = record.get("label")
         if label not in SOURCE_LABELS or not isinstance(record.get("path"), str):
             raise ValueError("manifest source label is invalid")
-        _safe_path(bundle, record["path"])
+        source_path = _safe_path(bundle, record["path"])
+        if label == "phase-timing":
+            _validate_phase_timing(source_path)
         available.append(label)
         source = (bundle / record["path"]).read_text(encoding="utf-8")
         # The collector intentionally projects only the status field from
