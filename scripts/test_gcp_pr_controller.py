@@ -52,6 +52,8 @@ class PrControllerContractTests(unittest.TestCase):
         self.assertIn("HEPH_GCP_DIAGNOSTICS_SCANNER_SCRIPT:-", runtime)
         self.assertIn("HEPH_GCP_BROWSER_SUMMARY_SCRIPT:-", runtime)
         self.assertIn("HEPH_GCP_PHASE_TIMING_PATH", runtime)
+        self.assertIn('HEPH_GCP_RUST_TOOLCHAIN="$rust_version"', startup)
+        self.assertIn('--setenv=RUSTUP_TOOLCHAIN="$rust_toolchain"', runtime)
 
     def test_root_collection_does_not_fallback_to_pr_helpers(self) -> None:
         startup = STARTUP.read_text(encoding="utf-8")
@@ -206,6 +208,7 @@ workload_home={root}/pr-state/home
 workload_path=/home/forge/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 workload_cargo_home=/home/forge/.cargo
 workload_rustup_home=/home/forge/.rustup
+rust_toolchain=1.88.0
 pr_sandbox_args=(
   '--property=ReadWritePaths={checkout} {evidence} {root}/pr-state'
   '--property=BindPaths={root}/pr-state/runtime:/run/user/10001'
