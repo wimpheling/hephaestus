@@ -267,6 +267,32 @@ run. The user has authorized all GCP runs required for this task; no additional
 per-run approval is required. Do not dispatch automatically from this
 preparation record.
 
+Diagnostic baseline attempt: [run 34706097013](https://github.com/wimpheling/hephaestus/actions/runs/34706097013)
+used trusted controller SHA
+`317d14684462ade5e2ef0c1bc8eb577e82a9ee3b` and workload SHA
+`5f9da509c25b212a509605a50fd4c7a825531665` with the locked image, immutable
+cache generation, machine, disk, zone and concurrency above. The safe
+controller timing projection records `preflight-quota=2411` ms,
+`preflight-cache=1629` ms, `vm-create=10763` ms, `vm-wait=154793` ms with
+outcome `failed`, `vm-delete=53092` ms, `cleanup-verification=998` ms and
+`post-delete-download=1446` ms. VM deletion and cleanup verification passed;
+the owned VM was verified absent. The safe diagnostics manifest records
+`upload=verified-by-download`, `download=passed`, `scan=passed`, archive size
+`2423` bytes and archive SHA-256
+`d3a614907a9dc65956f20d5d50041974f396b67f16ad9ecc3201d98d808c5ff2`.
+The retained typed triage projection narrows the workload failure to Cooking
+`dependency-setup`, exit `1`; the generic `cooking-run` command marker is line
+`375`. Browser validation failed with a missing/invalid report (exit `2`),
+the evidence scan passed, and authoritative test counts are unavailable.
+The projection records `collectionStatus=partial` with triage and scan data
+present and no no-VM retrieval attempt. Workload phase timing is unavailable
+because the phase-timing download failed; the safe evidence does not yet
+distinguish a timer failure from a preflight failure within dependency setup.
+Gate acceptance therefore failed. This is diagnostic infrastructure/workload
+evidence only: no baseline/performance timing result and no ACCEPTED or
+REJECTED decision is recorded; the prepared baseline remains pending a valid
+run.
+
 ACCEPTED
 ========
 None yet.
