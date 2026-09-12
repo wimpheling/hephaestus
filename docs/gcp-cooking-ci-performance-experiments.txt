@@ -580,6 +580,36 @@ rollback is removal of its five fixture lines followed by closing the PR. No
 second fixture run or timeout dispatch is authorized until the pairing fix is
 merged and the next bounded diagnostic validates it.
 
+
+NEXT TEMPORARY TIMEOUT LIFECYCLE PROBE
+======================================
+Preparation revision: trusted `main` now includes merged PR #35 at
+`5e001bb480ed00a71b6c6f469efe079d81df4aef`. PR #20 remains docs-only and is
+not the workload under test. The temporary draft fixture PR #34 remains open
+and NEVER MERGE, now at exact head
+`a3bcbf19e6e400f718c285b079a85323e06b9dca` after replacing only the failure command with
+`timeout --kill-after=1s 1s sleep 2`. Supply this exact 40-character fixture
+head at dispatch.
+
+Hypothesis and purpose: one real Cooking timeout with exit `124` should
+validate supervisor interval closure and timeout lifecycle after PR #35. This
+is diagnostic lifecycle evidence, not a performance baseline or candidate;
+there is no speedup claim and no ACCEPTED or REJECTED performance result.
+Dispatch trusted `main` with `cloud_mode=gcp-cooking` selecting PR #34, never
+PR #20, using `pr_number=34`, `pr_repository_id=1312377552` and its exact open
+head SHA.
+
+Keep every experiment input locked: protected image
+`hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d`, immutable cache generation
+`1789079827867335`, `n2-standard-8`, `150 GB pd-balanced`,
+`europe-west1-d`, concurrency `1`, 45-minute provider DELETE and 50-minute
+workflow timeout. No image, IAM/WIF, cache, machine, disk, zone, concurrency,
+workflow or acceptance change is part of this probe. The pre-dispatch active
+run check must remain empty; the prior owned VM cleanup is independently
+verified absent. After evidence collection, remove the temporary fixture block
+and close PR #34; never merge it. Exactly one authorized timeout probe is
+permitted while this trial is pending.
+
 ACCEPTED
 ========
 None yet.
