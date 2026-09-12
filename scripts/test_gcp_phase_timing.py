@@ -193,7 +193,7 @@ class PhaseTimingTests(unittest.TestCase):
             )
             self.assertEqual(pair_result.returncode, 2)
             self.assertIn(
-                "stage=timing-helper-end reason_class=incomplete status=failed exit_code=2",
+                "stage=timing-helper-end reason_class=pair status=failed exit_code=2",
                 pair_result.stderr,
             )
 

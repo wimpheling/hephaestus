@@ -216,6 +216,15 @@ def timing_error_class(error: Exception) -> str:
     return "unknown"
 
 
+def shell_timing_error_class(error: Exception) -> str:
+    """Keep the legacy shell failure marker reason vocabulary stable."""
+
+    reason = timing_error_class(error)
+    if reason in {"identity", "path", "record-read", "record-write"}:
+        return reason
+    return "pair"
+
+
 def bounded_int(value: Any, name: str) -> int:
     if type(value) is not int or value < 0 or value > MAX_COUNTER:
         fail(f"{name} is outside its bounded integer range")
@@ -940,7 +949,7 @@ def main() -> int:
         }.get(args.command if args is not None else "", "timing-helper-validation")
         print(
             "HEPH_GCP_COOKING event=timing-helper-error operation=cooking-workload "
-            f"phase=cooking stage={stage} reason_class={timing_error_class(exc)} status=failed exit_code=2",
+            f"phase=cooking stage={stage} reason_class={shell_timing_error_class(exc)} status=failed exit_code=2",
             file=sys.stderr,
         )
         print(f"gcp phase timing: {exc}", file=sys.stderr)

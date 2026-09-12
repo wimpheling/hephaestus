@@ -2075,6 +2075,32 @@ PY
                 with self.assertRaises(ValueError):
                     TRIAGE.summarize(root / "bundle")
 
+    def test_timing_helper_failure_keeps_legacy_pair_reason_through_triage(self):
+        """The shell wrapper's fixed reason remains compatible with triage."""
+
+        with tempfile.TemporaryDirectory(prefix="heph-gcp-timing-helper-failure-") as directory:
+            root = Path(directory)
+            source = root / "runtime.log"
+            source.write_text(
+                "HEPH_GCP_COOKING event=timing-helper-error operation=cooking-workload "
+                "phase=cooking stage=timing-helper-end reason_class=pair status=failed exit_code=2\n",
+                encoding="utf-8",
+            )
+            bundle = root / "bundle"
+            self.assertEqual(COLLECTOR.collect(bundle, [f"runtime-log={source}"], None, None, None), 0)
+            projected = (bundle / "sources" / "runtime-log").read_text(encoding="utf-8")
+            self.assertIn("reason_class=pair", projected)
+            failures = TRIAGE.summarize(bundle)["failures"]
+            self.assertTrue(
+                any(
+                    failure.get("reason_class") == "pair"
+                    and failure.get("stage") == "timing-helper-end"
+                    and failure.get("exit_code") == 2
+                    for failure in failures
+                ),
+                failures,
+            )
+
     def test_workload_budget_marker_keeps_safe_deadline_fields(self):
         with tempfile.TemporaryDirectory(prefix="heph-gcp-workload-budget-") as directory:
             root = Path(directory)
