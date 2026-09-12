@@ -451,11 +451,17 @@ validator passed. The recovered archive is the same `31,057`-byte object with
 SHA-256
 `c5f7bad50343998683b5f76bfda621f8ea002524970d558accf8fe314ce39103`.
 The private projected `serial`, `runtime-log` and `test-output` sources each
-contain `39` canonical `HEPH_GCP_TEST` records, all passed. None has a
-golden/PostgreSQL/database test marker, so the authoritative `33 passed / 1
-ignored` golden and `6 passed` PostgreSQL counts remain unavailable; the
-public safe projection's 50-record technical-context cap also cannot establish
-those totals. The projected serial source has five typed workload
+contain the same `39` unique canonical `HEPH_GCP_TEST` names, all passed. An
+independent name reconciliation against workload source
+`66ff322eb66072a23ca5f0c63ab4c69e8131affc` found `34` golden tests (`33`
+runnable and `1` statically ignored) and all `6` gateway-PostgreSQL tests:
+the `33` runnable golden names and all six PostgreSQL names matched exactly,
+with no overlaps, missing names or unexpected names. The authoritative
+runtime counts are therefore golden `33` passed and PostgreSQL `6` passed;
+the golden ignored count is static source evidence only because no runtime
+ignored marker was retained. The public safe projection's 50-record
+technical-context cap cannot establish those totals by itself. The projected
+serial source has five typed workload
 `phase-timing` records, all passed: gateway-readiness `347` ms,
 oci-builder `105597` ms, oci-verifier `367396` ms, browser-initial `99037` ms
 and browser-post-operation `46721` ms. No typed timing-projection error marker
