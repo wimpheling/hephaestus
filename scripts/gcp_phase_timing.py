@@ -58,6 +58,7 @@ PHASE_ORDER = (
     "browser-setup",
     "metadata-guard",
     "project-build",
+    "production-project-build",
     "runtime-guest-build",
     "runtime-worker-build",
     "runtime-smoke",
@@ -128,6 +129,10 @@ SUPERVISOR_PHASE_DOMAINS = {
 WORKLOAD_PHASE_DOMAINS = {
     "dependency-setup": {"workload"},
     "project-build": {"workload"},
+    # The production proof is emitted by golden.rs and imported from the
+    # libkrun workload marker stream.  Keep the host project-build span
+    # separate so overlapping durations are never silently combined.
+    "production-project-build": {"workload-libkrun"},
     "browser-setup": {"workload", "workload-libkrun"},
     "runtime-guest-build": {"workload-libkrun"},
     "runtime-worker-build": {"workload-libkrun"},
