@@ -675,16 +675,41 @@ def _project_phase_timing_diagnostic(
                 if not separator or key in fields:
                     raise ValueError("phase timing diagnostic fields are duplicated")
                 fields[key] = value
-            expected = {
+            legacy_expected = {
                 "event", "status", "failed_stage", "reason_class", "available_count", "available_phases",
                 "missing_count", "missing_phases",
             }
-            if set(fields) != expected or fields["event"] != "phase-timing" or fields["status"] != "unavailable":
+            expected = {
+                "event", "status", "failed_stage", "reason_class", "failed_phase", "failed_clock_domain",
+                "failed_occurrence", "available_count", "available_phases",
+                "missing_count", "missing_phases",
+            }
+            field_names = set(fields)
+            if field_names not in (legacy_expected, expected) or fields["event"] != "phase-timing" or fields["status"] != "unavailable":
                 raise ValueError("phase timing diagnostic fields are invalid")
+            if field_names == legacy_expected:
+                fields.update(failed_phase="none", failed_clock_domain="none", failed_occurrence="0")
             if fields["failed_stage"] not in COLLECTOR.PHASE_TIMING_DIAGNOSTIC_STAGES:
                 raise ValueError("phase timing diagnostic stage is invalid")
             if fields["reason_class"] not in COLLECTOR.PHASE_TIMING_DIAGNOSTIC_REASONS:
                 raise ValueError("phase timing diagnostic reason is invalid")
+            if fields["failed_phase"] != "none" and fields["failed_phase"] not in COLLECTOR.PHASE_TIMING_PHASES:
+                raise ValueError("phase timing diagnostic failed phase is invalid")
+            if fields["failed_clock_domain"] not in COLLECTOR.PHASE_TIMING_CLOCK_DOMAINS:
+                raise ValueError("phase timing diagnostic failed clock domain is invalid")
+            occurrence = fields["failed_occurrence"]
+            if (
+                not occurrence.isascii()
+                or not occurrence.isdecimal()
+                or int(occurrence) > 1_000_000_000_000
+            ):
+                raise ValueError("phase timing diagnostic failed occurrence is invalid")
+            if (fields["failed_phase"] == "none") != (fields["failed_clock_domain"] == "none"):
+                raise ValueError("phase timing diagnostic failed context is incomplete")
+            if fields["failed_phase"] == "none" and int(occurrence) != 0:
+                raise ValueError("phase timing diagnostic failed occurrence is invalid")
+            if fields["failed_phase"] != "none" and int(occurrence) < 1:
+                raise ValueError("phase timing diagnostic failed occurrence is invalid")
             values: dict[str, list[str]] = {}
             for name in ("available_phases", "missing_phases"):
                 items = [] if fields[name] == "none" else fields[name].split(",")
@@ -706,6 +731,9 @@ def _project_phase_timing_diagnostic(
                 "status": "unavailable",
                 "failedStage": fields["failed_stage"],
                 "reasonClass": fields["reason_class"],
+                "failedPhase": fields["failed_phase"],
+                "failedClockDomain": fields["failed_clock_domain"],
+                "failedOccurrence": int(fields["failed_occurrence"]),
                 "availablePhases": values["available_phases"],
                 "missingPhases": values["missing_phases"],
                 "availableCount": int(fields["available_count"]),

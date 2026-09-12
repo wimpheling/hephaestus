@@ -165,6 +165,91 @@ class PhaseTimingTests(unittest.TestCase):
                 0,
             )
 
+    def test_validate_pairs_rejects_unclosed_unmatched_and_reversed_intervals(self) -> None:
+        common = {
+            "schema": 1,
+            "phase": "archive",
+            "trust": "supervisor",
+            "clock_domain": "guest-startup",
+            "run_id": "123",
+            "attempt": 1,
+            "occurrence": 2,
+            "source_sha": SOURCE,
+        }
+        start = {**common, "record": "start", "mono_ns": 10}
+        end = {**common, "record": "end", "mono_ns": 20, "outcome": "passed"}
+
+        with self.assertRaisesRegex(PHASE_TIMING.TimingError, "incomplete phase"):
+            PHASE_TIMING.validate_pairs([start])
+        with self.assertRaisesRegex(PHASE_TIMING.TimingError, "no matching start"):
+            PHASE_TIMING.validate_pairs([end])
+        with self.assertRaisesRegex(PHASE_TIMING.TimingError, "precedes phase start"):
+            PHASE_TIMING.validate_pairs([start, {**end, "mono_ns": 9}])
+
+        complete = PHASE_TIMING.validate_pairs(
+            [start, end], required_supervisor={"archive"}, expected_run_id="123", expected_attempt=1
+        )
+        self.assertEqual(len(complete), 1)
+        self.assertEqual(complete[0]["occurrence"], 2)
+        self.assertEqual(complete[0]["clock_domain"], "guest-startup")
+        with self.assertRaisesRegex(PHASE_TIMING.TimingError, "clock domain"):
+            PHASE_TIMING.validate_pairs(
+                [
+                    {**start, "clock_domain": "controller"},
+                    {**end, "clock_domain": "controller"},
+                ],
+                required_supervisor={"archive"},
+            )
+        with self.assertRaisesRegex(PHASE_TIMING.TimingError, "duplicate phase start"):
+            PHASE_TIMING.validate_pairs([start, start, end])
+
+    def test_validate_rejects_unhashable_phase_domain_and_occurrence_without_traceback(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            base = {
+                "schema": 1,
+                "record": "start",
+                "phase": "archive",
+                "trust": "supervisor",
+                "clock_domain": "guest-startup",
+                "mono_ns": 1,
+                "run_id": "123",
+                "attempt": 1,
+                "occurrence": 1,
+                "source_sha": SOURCE,
+            }
+            for field, value in (
+                ("phase", ["archive", "PRIVATE_PAYLOAD"]),
+                ("clock_domain", {"domain": "guest-startup"}),
+                ("occurrence", [1]),
+            ):
+                with self.subTest(field=field):
+                    path = root / f"bad-{field}.jsonl"
+                    path.write_text(json.dumps({**base, field: value}) + "\n", encoding="utf-8")
+                    result = self.run_cli("validate", "--path", str(path), check=False)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertNotIn("Traceback", result.stderr)
+                    self.assertNotIn("PRIVATE_PAYLOAD", result.stdout + result.stderr)
+
+    def test_shell_pairing_failures_keep_legacy_pair_reason(self) -> None:
+        for message in (
+            "phase end has no matching start",
+            "phase end precedes phase start",
+            "timing file contains an incomplete phase",
+        ):
+            with self.subTest(message=message):
+                self.assertEqual(PHASE_TIMING.shell_timing_error_class(PHASE_TIMING.TimingError(message)), "pair")
+
+    def test_pairing_diagnostics_distinguish_failure_classes(self) -> None:
+        cases = {
+            "timing file contains an incomplete phase": "unclosed-start",
+            "phase end has no matching start": "unmatched-end",
+            "phase end precedes phase start": "end-before-start",
+        }
+        for message, expected in cases.items():
+            with self.subTest(message=message):
+                self.assertEqual(PHASE_TIMING.timing_error_class(PHASE_TIMING.TimingError(message)), expected)
+
     def test_helper_failures_emit_fixed_safe_categories(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -302,7 +387,8 @@ class PhaseTimingTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn(
                 "HEPH_GCP_DIAGNOSTICS event=phase-timing status=unavailable "
-                "failed_stage=projection reason_class=invalid available_count=0 "
+                "failed_stage=projection reason_class=invalid failed_phase=none "
+                "failed_clock_domain=none failed_occurrence=0 available_count=0 "
                 "available_phases=none missing_count=1 missing_phases=project-build",
                 result.stdout,
             )

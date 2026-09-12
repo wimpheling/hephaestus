@@ -11,6 +11,7 @@ from pathlib import Path
 import pwd
 import stat
 import subprocess
+import sys
 import tempfile
 import tarfile
 import unittest
@@ -36,6 +37,7 @@ PROJECTOR_SPEC = importlib.util.spec_from_file_location(
 PROJECTOR = importlib.util.module_from_spec(PROJECTOR_SPEC)
 assert PROJECTOR_SPEC.loader is not None
 PROJECTOR_SPEC.loader.exec_module(PROJECTOR)
+TIMING_HELPER = ROOT / "gcp_phase_timing.py"
 
 
 class GcpDiagnosticsPipelineTests(unittest.TestCase):
@@ -1998,10 +2000,21 @@ PY
                 "missing_count=1 missing_phases=browser-setup\n",
                 encoding="utf-8",
             )
+            evidence = root / "test-output.log"
+            evidence.write_text("PASS\n", encoding="utf-8")
             bundle = root / "bundle"
-            self.assertEqual(COLLECTOR.collect(bundle, [f"serial={source}"], None, None, None), 0)
+            self.assertEqual(
+                COLLECTOR.collect(bundle, [f"serial={source}", f"test-output={evidence}"], None, None, None), 0
+            )
             projected = (bundle / "sources" / "serial").read_text(encoding="utf-8")
-            self.assertEqual(projected, source.read_text(encoding="utf-8"))
+            self.assertEqual(
+                projected,
+                "HEPH_GCP_DIAGNOSTICS event=phase-timing status=unavailable "
+                "failed_stage=projection reason_class=missing-phase "
+                "failed_phase=none failed_clock_domain=none failed_occurrence=0 "
+                "available_count=2 available_phases=dependency-setup,project-build "
+                "missing_count=1 missing_phases=browser-setup\n",
+            )
             timing = TRIAGE.summarize(bundle)["phaseTiming"]
             self.assertEqual(
                 timing,
@@ -2009,6 +2022,9 @@ PY
                     "status": "unavailable",
                     "failedStage": "projection",
                     "reasonClass": "missing-phase",
+                    "failedPhase": "none",
+                    "failedClockDomain": "none",
+                    "failedOccurrence": 0,
                     "availablePhases": ["dependency-setup", "project-build"],
                     "missingPhases": ["browser-setup"],
                     "availableCount": 2,
@@ -2031,12 +2047,138 @@ PY
                 "missing_count=0 missing_phases=none\n",
                 encoding="utf-8",
             )
+            evidence = root / "test-output.log"
+            evidence.write_text("PASS\n", encoding="utf-8")
             bundle = root / "bundle"
-            self.assertEqual(COLLECTOR.collect(bundle, [f"serial={source}"], None, None, None), 0)
+            self.assertEqual(
+                COLLECTOR.collect(bundle, [f"serial={source}", f"test-output={evidence}"], None, None, None), 0
+            )
             timing = TRIAGE.summarize(bundle)["phaseTiming"]
             self.assertEqual(timing["availableCount"], len(all_phases))
             self.assertEqual(timing["availablePhases"], all_phases)
             self.assertEqual(timing["missingPhases"], [])
+
+    def test_phase_timing_pair_diagnostics_survive_collector_and_triage(self):
+        """Pair-validation classes remain fixed after both safe projections."""
+
+        for reason in ("incomplete", "ordering", "duplicate", "trust", "clock-domain"):
+            with self.subTest(reason=reason), tempfile.TemporaryDirectory(
+                prefix="heph-gcp-phase-timing-pair-diagnostic-"
+            ) as directory:
+                root = Path(directory)
+                marker = (
+                    "HEPH_GCP_DIAGNOSTICS event=phase-timing status=unavailable "
+                    f"failed_stage=supervisor-validation reason_class={reason} "
+                    "failed_phase=none failed_clock_domain=none failed_occurrence=0 "
+                    "available_count=1 available_phases=project-build "
+                    "missing_count=0 missing_phases=none\n"
+                )
+                source = root / "serial.log"
+                source.write_text(marker, encoding="utf-8")
+                evidence = root / "test-output.log"
+                evidence.write_text("PASS\n", encoding="utf-8")
+                bundle = root / "bundle"
+                self.assertEqual(
+                    COLLECTOR.collect(bundle, [f"serial={source}", f"test-output={evidence}"], None, None, None),
+                    0,
+                )
+                self.assertEqual(
+                    TRIAGE.summarize(bundle)["phaseTiming"]["reasonClass"],
+                    reason,
+                )
+
+    def test_real_pair_failures_diagnose_and_survive_collector_and_triage(self):
+        """Real malformed pairs retain their fixed class and bounded context."""
+
+        common = {
+            "schema": 1,
+            "phase": "archive",
+            "trust": "supervisor",
+            "clock_domain": "guest-startup",
+            "run_id": "123",
+            "attempt": 1,
+            "occurrence": 2,
+            "source_sha": "a" * 40,
+        }
+        cases = {
+            "unclosed-start": [
+                {**common, "record": "start", "mono_ns": 10},
+            ],
+            "unmatched-end": [
+                {**common, "record": "end", "mono_ns": 20, "outcome": "passed"},
+            ],
+            "end-before-start": [
+                {**common, "record": "start", "mono_ns": 10},
+                {**common, "record": "end", "mono_ns": 9, "outcome": "passed"},
+            ],
+        }
+        for expected_reason, records in cases.items():
+            with self.subTest(reason=expected_reason), tempfile.TemporaryDirectory(
+                prefix="heph-gcp-real-pair-diagnostic-"
+            ) as directory:
+                root = Path(directory)
+                timing = root / "supervisor.jsonl"
+                timing.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        str(TIMING_HELPER),
+                        "diagnose",
+                        "--path",
+                        str(timing),
+                        "--failed-stage",
+                        "supervisor-validation",
+                        "--require-trust",
+                        "supervisor",
+                    ],
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                marker = result.stdout
+                self.assertIn(f"reason_class={expected_reason}", marker)
+                self.assertIn(
+                    "failed_phase=archive failed_clock_domain=guest-startup failed_occurrence=2",
+                    marker,
+                )
+                serial = root / "serial.log"
+                serial.write_text(marker, encoding="utf-8")
+                evidence = root / "test-output.log"
+                evidence.write_text("PASS\n", encoding="utf-8")
+                bundle = root / "bundle"
+                self.assertEqual(
+                    COLLECTOR.collect(bundle, [f"serial={serial}", f"test-output={evidence}"], None, None, None),
+                    0,
+                )
+                projected = TRIAGE.summarize(bundle)["phaseTiming"]
+                self.assertEqual(projected["reasonClass"], expected_reason)
+                self.assertEqual(projected["failedPhase"], "archive")
+                self.assertEqual(projected["failedClockDomain"], "guest-startup")
+                self.assertEqual(projected["failedOccurrence"], 2)
+
+    def test_phase_timing_diagnostic_preserves_legacy_context_and_rejects_partial_context(self):
+        legacy = (
+            "HEPH_GCP_DIAGNOSTICS event=phase-timing status=unavailable "
+            "failed_stage=supervisor-validation reason_class=incomplete "
+            "available_count=1 available_phases=project-build "
+            "missing_count=0 missing_phases=none"
+        )
+        expected = (
+            "HEPH_GCP_DIAGNOSTICS event=phase-timing status=unavailable "
+            "failed_stage=supervisor-validation reason_class=incomplete "
+            "failed_phase=none failed_clock_domain=none failed_occurrence=0 "
+            "available_count=1 available_phases=project-build missing_count=0 missing_phases=none"
+        )
+        self.assertEqual(COLLECTOR._project_phase_timing_diagnostic(legacy), expected)
+        exact = legacy.replace(
+            "available_count=1",
+            "failed_phase=project-build failed_clock_domain=workload failed_occurrence=2 available_count=1",
+        )
+        self.assertEqual(COLLECTOR._project_phase_timing_diagnostic(exact), exact)
+        partial = exact.replace("failed_clock_domain=workload", "failed_clock_domain=none")
+        with self.assertRaises(COLLECTOR.CollectionError):
+            COLLECTOR._project_phase_timing_diagnostic(partial)
 
     def test_phase_timing_diagnostic_rejects_unknown_payload_duplicate_and_count(self):
         """Both projection layers reject unallowlisted timing diagnostic fields."""

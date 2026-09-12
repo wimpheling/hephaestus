@@ -236,6 +236,9 @@ SAFE_KEYS = frozenset(
         "location",
         "timestamp",
         "failed_stage",
+        "failed_phase",
+        "failed_clock_domain",
+        "failed_occurrence",
         "available_count",
         "available_phases",
         "missing_count",
@@ -265,7 +268,8 @@ PHASE_TIMING_DIAGNOSTIC_STAGES = frozenset(
 PHASE_TIMING_DIAGNOSTIC_REASONS = frozenset(
     {
         "missing-source", "record-read", "record-write", "invalid", "duplicate", "identity",
-        "incomplete", "ordering", "missing-phase", "trust", "clock-domain", "path", "unknown",
+        "unclosed-start", "unmatched-end", "end-before-start", "incomplete", "ordering",
+        "missing-phase", "trust", "clock-domain", "path", "unknown",
     }
 )
 PHASE_TIMING_PHASE_ORDER = (
@@ -281,6 +285,9 @@ PHASE_TIMING_PHASE_ORDER = (
     "post-delete-download", "cleanup-verification",
 )
 PHASE_TIMING_PHASES = frozenset(PHASE_TIMING_PHASE_ORDER)
+PHASE_TIMING_CLOCK_DOMAINS = frozenset(
+    {"none", "controller", "guest-startup", "guest-runtime", "workload", "workload-libkrun", "workload-gateway", "collection"}
+)
 SAFE_ERROR_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _.,:;/'()\[\]-]{0,1023}$")
 STACK_LINE_RE = re.compile(r"^\s*(?:at\s+|File\s+|[A-Za-z0-9_.-]+\.\w+:\d+)")
 ASSERTION_LINE_RE = re.compile(
@@ -897,16 +904,37 @@ def _project_phase_timing_diagnostic(line: str) -> str | None:
         if not separator or key in fields:
             raise CollectionError("phase timing diagnostic fields are malformed")
         fields[key] = value
-    expected = {
+    legacy_expected = {
         "event", "status", "failed_stage", "reason_class", "available_count", "available_phases",
         "missing_count", "missing_phases",
     }
-    if set(fields) != expected or fields["event"] != "phase-timing" or fields["status"] != "unavailable":
+    expected = {
+        "event", "status", "failed_stage", "reason_class", "failed_phase", "failed_clock_domain",
+        "failed_occurrence", "available_count", "available_phases",
+        "missing_count", "missing_phases",
+    }
+    field_names = set(fields)
+    if field_names not in (legacy_expected, expected) or fields["event"] != "phase-timing" or fields["status"] != "unavailable":
         raise CollectionError("phase timing diagnostic fields are not allowlisted")
+    if field_names == legacy_expected:
+        fields.update(failed_phase="none", failed_clock_domain="none", failed_occurrence="0")
     if fields["failed_stage"] not in PHASE_TIMING_DIAGNOSTIC_STAGES:
         raise CollectionError("phase timing diagnostic stage is invalid")
     if fields["reason_class"] not in PHASE_TIMING_DIAGNOSTIC_REASONS:
         raise CollectionError("phase timing diagnostic reason is invalid")
+    if fields["failed_phase"] != "none" and fields["failed_phase"] not in PHASE_TIMING_PHASES:
+        raise CollectionError("phase timing diagnostic failed phase is invalid")
+    if fields["failed_clock_domain"] not in PHASE_TIMING_CLOCK_DOMAINS:
+        raise CollectionError("phase timing diagnostic failed clock domain is invalid")
+    occurrence = fields["failed_occurrence"]
+    if not occurrence.isascii() or not occurrence.isdecimal() or int(occurrence) > 1_000_000_000_000:
+        raise CollectionError("phase timing diagnostic failed occurrence is invalid")
+    if (fields["failed_phase"] == "none") != (fields["failed_clock_domain"] == "none"):
+        raise CollectionError("phase timing diagnostic failed context is incomplete")
+    if fields["failed_phase"] == "none" and int(occurrence) != 0:
+        raise CollectionError("phase timing diagnostic failed occurrence is invalid")
+    if fields["failed_phase"] != "none" and int(occurrence) < 1:
+        raise CollectionError("phase timing diagnostic failed occurrence is invalid")
     values: dict[str, list[str]] = {}
     for name in ("available_phases", "missing_phases"):
         items = [] if fields[name] == "none" else fields[name].split(",")
@@ -922,6 +950,8 @@ def _project_phase_timing_diagnostic(line: str) -> str | None:
     return (
         "HEPH_GCP_DIAGNOSTICS event=phase-timing status=unavailable "
         f"failed_stage={fields['failed_stage']} reason_class={fields['reason_class']} "
+        f"failed_phase={fields['failed_phase']} failed_clock_domain={fields['failed_clock_domain']} "
+        f"failed_occurrence={int(fields['failed_occurrence'])} "
         f"available_count={int(fields['available_count'])} available_phases={fields['available_phases']} "
         f"missing_count={int(fields['missing_count'])} missing_phases={fields['missing_phases']}"
     )
