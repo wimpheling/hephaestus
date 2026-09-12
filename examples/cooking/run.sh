@@ -57,6 +57,47 @@ if [[ -n "${diagnostics_dir}" ]]; then
     chmod 700 -- "${diagnostics_dir}"
 fi
 readonly script_dir repo_root cooking_root tmp_root libkrun_tmp_root python_image rust_builder_image timeout_seconds diagnostics_dir
+phase_timing_path="${HEPH_GCP_PHASE_TIMING_PATH:-}"
+phase_timing_source_sha="${HEPH_GCP_PHASE_TIMING_SOURCE_SHA:-}"
+if [[ -n "${phase_timing_path}" && -z "${phase_timing_source_sha}" ]]; then
+    phase_timing_source_sha="$(git -C "${repo_root}" rev-parse HEAD)"
+fi
+phase_timing_open=''
+
+phase_timing_start() {
+    local name="$1"
+    [[ -n "$phase_timing_path" ]] || return 0
+    local source_sha="${HEPH_GCP_PHASE_TIMING_SOURCE_SHA:-}"
+    [[ -n "$source_sha" ]] || source_sha="$(git -C "$repo_root" rev-parse HEAD)"
+    python3 "$repo_root/scripts/gcp_phase_timing.py" start \
+        --path "$phase_timing_path" --phase "$name" --trust workload \
+        --clock-domain workload --run-id "${GITHUB_RUN_ID:-manual}" \
+        --attempt "${GITHUB_RUN_ATTEMPT:-1}" --source-sha "$source_sha"
+    phase_timing_open="$name"
+}
+
+phase_timing_end() {
+    local name="$1" outcome="$2"
+    [[ -n "$phase_timing_path" ]] || return 0
+    local source_sha="${HEPH_GCP_PHASE_TIMING_SOURCE_SHA:-}"
+    [[ -n "$source_sha" ]] || source_sha="$(git -C "$repo_root" rev-parse HEAD)"
+    python3 "$repo_root/scripts/gcp_phase_timing.py" end \
+        --path "$phase_timing_path" --phase "$name" --trust workload \
+        --clock-domain workload --run-id "${GITHUB_RUN_ID:-manual}" \
+        --attempt "${GITHUB_RUN_ATTEMPT:-1}" --source-sha "$source_sha" --outcome "$outcome"
+    phase_timing_open=''
+}
+
+phase_timing_finish_open() {
+    local status="$1" outcome='failed'
+    [[ -n "$phase_timing_open" ]] || return 0
+    if ((status == 124)); then
+        outcome='timed-out'
+    elif ((status == 130 || status == 143)); then
+        outcome='cancelled'
+    fi
+    phase_timing_end "$phase_timing_open" "$outcome" || true
+}
 
 # The deadline includes the browser fixture bootstrap as well as the joined
 # cooking run.  This keeps dependency installation from consuming an
@@ -71,6 +112,7 @@ browser_bridge_pid=""
 browser_bridge_dir=""
 browser_cleanup() {
     local status=$?
+    phase_timing_finish_open "${status}"
     heph_shell_failure_on_exit "${status}" "${LINENO}"
     heph_shell_failure_begin_cleanup
     if [[ -n "${browser_oidc_pid}" ]]; then
@@ -94,6 +136,7 @@ browser_cleanup() {
 trap browser_cleanup EXIT
 
 if [[ "${HEPHAESTUS_COOKING_BROWSER_E2E:-1}" == "1" ]]; then
+    phase_timing_start browser-setup
     command -v node >/dev/null || {
         printf 'Cooking browser E2E requires node for the local OIDC fixture.\n' >&2
         exit 1
@@ -164,6 +207,7 @@ if [[ "${HEPHAESTUS_COOKING_BROWSER_E2E:-1}" == "1" ]]; then
         printf 'Cooking E2E deadline elapsed during browser setup.\n' >&2
         exit 124
     }
+    phase_timing_end browser-setup passed
 fi
 
 redact_diagnostics() {
@@ -223,14 +267,56 @@ run_cooking() {
     HEPHAESTUS_COOKING_GATEWAY_ARTIFACT="${cooking_root}/cooking-gateway/target/x86_64-unknown-linux-musl/release/cooking-gateway" \
     HEPHAESTUS_LIBKRUN_UBUNTU_IMAGE="${python_image}" \
     HEPHAESTUS_LIBKRUN_RUST_BUILDER_IMAGE="${rust_builder_image}" \
+    HEPH_GCP_PHASE_TIMING_PATH="${phase_timing_path}" \
+    HEPH_GCP_PHASE_TIMING_SOURCE_SHA="${phase_timing_source_sha}" \
+    HEPH_GCP_PHASE_TIMING_RUN_ID="${GITHUB_RUN_ID:-manual}" \
+    HEPH_GCP_PHASE_TIMING_ATTEMPT="${GITHUB_RUN_ATTEMPT:-1}" \
         bash -Eeuo pipefail -c '
+            timing_helper="$4"
+            phase_timing_open=""
+            phase_timing_start() {
+                local name="$1"
+                [[ -n "${HEPH_GCP_PHASE_TIMING_PATH:-}" ]] || return 0
+                python3 "$timing_helper" start --path "$HEPH_GCP_PHASE_TIMING_PATH" \
+                    --phase "$name" --trust workload --clock-domain workload \
+                    --run-id "${HEPH_GCP_PHASE_TIMING_RUN_ID:-manual}" \
+                    --attempt "${HEPH_GCP_PHASE_TIMING_ATTEMPT:-1}" \
+                    --source-sha "$HEPH_GCP_PHASE_TIMING_SOURCE_SHA"
+                phase_timing_open="$name"
+            }
+            phase_timing_end() {
+                local name="$1" outcome="$2"
+                [[ -n "${HEPH_GCP_PHASE_TIMING_PATH:-}" ]] || return 0
+                python3 "$timing_helper" end --path "$HEPH_GCP_PHASE_TIMING_PATH" \
+                    --phase "$name" --trust workload --clock-domain workload \
+                    --run-id "${HEPH_GCP_PHASE_TIMING_RUN_ID:-manual}" \
+                    --attempt "${HEPH_GCP_PHASE_TIMING_ATTEMPT:-1}" \
+                    --source-sha "$HEPH_GCP_PHASE_TIMING_SOURCE_SHA" --outcome "$outcome"
+                phase_timing_open=""
+            }
+            phase_timing_finish() {
+                local status=$? outcome=failed
+                trap - EXIT
+                if [[ -n "$phase_timing_open" ]]; then
+                    if ((status == 124)); then outcome=timed-out; fi
+                    if ((status == 130 || status == 143)); then outcome=cancelled; fi
+                    phase_timing_end "$phase_timing_open" "$outcome" || true
+                fi
+                exit "$status"
+            }
+            trap phase_timing_finish EXIT
+            phase_timing_start dependency-setup
             "$1/preflight.sh"
+            phase_timing_end dependency-setup passed
             cd -- "$2/cooking-gateway"
+            phase_timing_start project-build
             rustup target add x86_64-unknown-linux-musl
             cargo build --locked --offline --release --target x86_64-unknown-linux-musl
+            phase_timing_end project-build passed
             cd -- "$3/.."
-            exec "$3/run-gateway-libkrun-e2e.sh"
-        ' -- "${script_dir}" "${cooking_root}" "${repo_root}/scripts"
+            "$3/run-gateway-libkrun-e2e.sh"
+        ' -- "${script_dir}" "${cooking_root}" "${repo_root}/scripts" \
+        "${repo_root}/scripts/gcp_phase_timing.py"
 }
 
 run_with_diagnostics() {

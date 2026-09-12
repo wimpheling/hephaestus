@@ -28,7 +28,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Command as ProcessCommand, Stdio},
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio::process::Command;
 use vm_trait::{
@@ -54,6 +54,63 @@ const VERIFIER_TRIVY_CACHE_PATH: &str = "/workspace/verification/trivy-cache";
 const VERIFIER_SYFT_UPDATE_ENV: &str = "SYFT_CHECK_FOR_APP_UPDATE";
 const VERIFIER_SYFT_CACHE_ENV: &str = "XDG_CACHE_HOME";
 const VERIFIER_SYFT_CACHE_PATH: &str = "/workspace/verification/syft-cache";
+const WORKLOAD_PHASE_TIMING_EVENT: &str = "phase-timing";
+const WORKLOAD_PHASE_TIMING_MAX_MS: u128 = 45 * 60 * 1_000;
+
+/// Emits only a bounded workload measurement.  The outer GCP supervisor owns
+/// acceptance; these values help locate cost inside the untrusted workload
+/// and are therefore explicitly informational.
+struct WorkloadPhaseTimer {
+    phase: &'static str,
+    started: Instant,
+    enabled: bool,
+    finished: bool,
+}
+
+impl WorkloadPhaseTimer {
+    fn start(phase: &'static str, enabled: bool) -> Self {
+        Self {
+            phase,
+            started: Instant::now(),
+            enabled,
+            finished: false,
+        }
+    }
+
+    fn finish(mut self, success: bool) {
+        self.finished = true;
+        self.emit(if success { "passed" } else { "failed" });
+    }
+
+    fn emit(&self, status: &'static str) {
+        if !self.enabled {
+            return;
+        }
+        let elapsed_ms = self.started.elapsed().as_millis();
+        let duration_ms = if elapsed_ms <= WORKLOAD_PHASE_TIMING_MAX_MS {
+            elapsed_ms
+        } else {
+            0
+        };
+        let status = if elapsed_ms <= WORKLOAD_PHASE_TIMING_MAX_MS {
+            status
+        } else {
+            "unknown"
+        };
+        eprintln!(
+            "HEPH_GCP_COOKING event={WORKLOAD_PHASE_TIMING_EVENT} phase={} status={status} duration_ms={duration_ms}",
+            self.phase
+        );
+    }
+}
+
+impl Drop for WorkloadPhaseTimer {
+    fn drop(&mut self) {
+        if !self.finished {
+            self.emit("unknown");
+        }
+    }
+}
 
 /// Fixed local roots and VM resources for repository OCI operations.
 ///
@@ -75,6 +132,8 @@ pub struct VmOciOperationConfig {
     pub verification_root: PathBuf,
     /// Fixed bounded resources for each operational guest.
     pub resources: VmResources,
+    /// Whether the workload may emit bounded informational phase timings.
+    pub workload_phase_timing: bool,
 }
 
 /// Verified local outputs produced by distinct builder and verifier VMs.
@@ -113,6 +172,7 @@ pub struct VmOciOperation {
     mkfs_ext4: PathBuf,
     verification_root: PathBuf,
     resources: VmResources,
+    workload_phase_timing: bool,
 }
 
 impl VmOciOperation {
@@ -154,6 +214,7 @@ impl VmOciOperation {
             mkfs_ext4: config.mkfs_ext4,
             verification_root: config.verification_root,
             resources: config.resources,
+            workload_phase_timing: config.workload_phase_timing,
         })
     }
 
@@ -239,6 +300,22 @@ impl VmOciOperation {
     }
 
     async fn run_guest(&self, phase: &'static str, spec: VmSpec) -> Result<(), OciWorkerError> {
+        let timing_phase = match phase {
+            "builder" => "oci-builder",
+            "verifier" => "oci-verifier",
+            _ => return self.run_guest_inner(phase, spec).await,
+        };
+        let timer = WorkloadPhaseTimer::start(timing_phase, self.workload_phase_timing);
+        let result = self.run_guest_inner(phase, spec).await;
+        timer.finish(result.is_ok());
+        result
+    }
+
+    async fn run_guest_inner(
+        &self,
+        phase: &'static str,
+        spec: VmSpec,
+    ) -> Result<(), OciWorkerError> {
         let Ok(instance) = self.provider.provision(spec).await else {
             // Provider errors may wrap arbitrary source text. Preserve only
             // the fixed operation phase at this logging boundary.

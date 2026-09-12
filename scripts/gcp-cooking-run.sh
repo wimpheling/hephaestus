@@ -5,6 +5,12 @@
 # work as forge (UID/GID 10001) in a delegated transient systemd unit.
 set -Eeuo pipefail
 umask 077
+# This process remains root while it stages inputs and collects evidence.  Keep
+# its command lookup independent of the forge-writable cargo bin; workload
+# units receive workload_path explicitly below.
+readonly trusted_path='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
+PATH="$trusted_path"
+export PATH
 
 readonly metadata_root='http://metadata.google.internal/computeMetadata/v1'
 readonly gcs_bucket='hephaestus-508000-cooking-cache'
@@ -26,14 +32,21 @@ readonly metadata_ip='169.254.169.254'
 readonly metadata_ipv6='fd20:ce::254'
 readonly log_file='/var/log/hephaestus/gcp-cooking-run.log'
 readonly gate_results_path='/var/log/hephaestus/cooking-gate-results.json'
-readonly gate_results_helper="${checkout_root}/scripts/cooking-gate-results.py"
+readonly gate_results_helper="${HEPH_GCP_COOKING_GATE_RESULTS_HELPER:-${checkout_root}/scripts/cooking-gate-results.py}"
+readonly diagnostics_scanner_script="${HEPH_GCP_DIAGNOSTICS_SCANNER_SCRIPT:-${checkout_root}/scripts/check-browser-evidence.py}"
+readonly browser_summary_script="${HEPH_GCP_BROWSER_SUMMARY_SCRIPT:-${checkout_root}/scripts/project-playwright-browser-summary.py}"
 readonly workload_cleanup_reserve_seconds=120
+readonly pr_state_root="${work_root}/pr-state"
+readonly pr_home="${pr_state_root}/home"
+readonly pr_npm_cache="${pr_state_root}/npm-cache"
+readonly pr_runtime="${pr_state_root}/runtime"
 
 phase='initializing'
 stage_root=''
 archive_path=''
 node_bin=''
 node_path=''
+workload_path=''
 deadline_epoch="${HEPH_GCP_COOKING_DEADLINE_EPOCH:-}"
 token_json=''
 token_header=''
@@ -41,10 +54,33 @@ runner_image_verified="${HEPH_GCP_RUNNER_IMAGE_VERIFIED:-false}"
 runner_image_browser_lock_sha="${HEPH_GCP_RUNNER_IMAGE_BROWSER_LOCK_SHA256:-}"
 runner_image_browser_version="${HEPH_GCP_RUNNER_IMAGE_BROWSER_VERSION:-}"
 runner_image_node_version="${HEPH_GCP_RUNNER_IMAGE_NODE_VERSION:-}"
+workload_trust="${HEPH_GCP_WORKLOAD_TRUST:-trusted}"
+pr_sandbox_args=()
+workload_home='/home/forge'
+workload_cargo_home='/home/forge/.cargo'
+workload_rustup_home='/home/forge/.rustup'
+workload_npm_cache=''
 gate_results_initialized=false
 gate_results_write_failed=false
+runtime_phase_timing_script="${HEPH_GCP_PHASE_TIMING_SCRIPT:-}"
+runtime_phase_timing_path="${HEPH_GCP_SUPERVISOR_PHASE_TIMING_PATH:-}"
+runtime_phase_timing_open=''
+runtime_phase_timing_cache_state=''
+runtime_phase_timing_cache_sha256=''
+runtime_phase_timing_cache_generation=''
+runtime_phase_timing_cache_bytes=''
+runtime_phase_timing_image_fingerprint="${HEPH_GCP_PHASE_TIMING_IMAGE_FINGERPRINT:-}"
+declare -A runtime_phase_timing_occurrence=()
 
 fail() { printf 'gcp-cooking-run: %s\n' "$*" >&2; return 1; }
+
+runtime_phase_timing_outcome() {
+    case "$1" in
+        124) printf '%s\n' timed-out ;;
+        130|143) printf '%s\n' cancelled ;;
+        *) printf '%s\n' failed ;;
+    esac
+}
 
 validate_sha256() {
     local name="$1" value="$2"
@@ -52,9 +88,45 @@ validate_sha256() {
         fail "$name must be exactly 64 lowercase hexadecimal characters"
 }
 
+configure_pr_sandbox() {
+    [[ "$workload_trust" == untrusted-pr ]] || return 0
+    # Keep all PR-owned setup and the final workload in the same systemd
+    # boundary.  These are deliberately array elements: each systemd
+    # property must remain one complete argv value, including its path list.
+    install -d -m 0700 -o forge -g forge \
+        "$pr_state_root" "$pr_home" "$pr_npm_cache" "$pr_runtime"
+    workload_home="$pr_home"
+    # The baked image's Rust toolchain and cargo executable live under forge's
+    # home.  Expose only those reviewed paths; cargo may update its local
+    # package cache during an offline build, while rustup is read-only.
+    workload_cargo_home='/home/forge/.cargo'
+    workload_rustup_home='/home/forge/.rustup'
+    workload_npm_cache="$pr_npm_cache"
+    pr_sandbox_args=(
+        '--property=NoNewPrivileges=yes'
+        '--property=ProtectProc=invisible'
+        '--property=ProcSubset=pid'
+        '--property=ProtectSystem=strict'
+        '--property=ProtectHome=tmpfs'
+        '--property=PrivateTmp=yes'
+        "--property=BindReadOnlyPaths=$cache_root"
+        "--property=BindReadOnlyPaths=$browser_root"
+        '--property=BindReadOnlyPaths=/home/forge/.rustup'
+        '--property=BindPaths=/home/forge/.cargo'
+        "--property=BindPaths=$pr_state_root"
+        "--property=BindPaths=$pr_runtime:/run/user/10001"
+        "--property=ReadWritePaths=$checkout_root $evidence_root $pr_state_root"
+        '--property=InaccessiblePaths=/var/log/hephaestus /run/hephaestus /root'
+    )
+}
+
 [[ "$(id -u)" -eq 0 ]] || fail 'this helper must be invoked as root'
 [[ "$runner_image_verified" == true || "$runner_image_verified" == false ]] ||
     fail 'HEPH_GCP_RUNNER_IMAGE_VERIFIED must be true or false'
+case "$workload_trust" in
+    trusted|untrusted-pr) ;;
+    *) fail 'HEPH_GCP_WORKLOAD_TRUST is invalid' ;;
+esac
 [[ "$(id -u forge 2>/dev/null || true)" == "${forge_uid}" ]] ||
     fail 'the common startup must create forge with UID 10001'
 [[ -d "${checkout_root}" && ! -L "${checkout_root}" ]] ||
@@ -70,6 +142,9 @@ exec > >(tee -a "$log_file" /dev/ttyS0) 2>&1
 finish() {
     local status=$?
     trap - EXIT
+    if [[ -n "$runtime_phase_timing_open" ]]; then
+        runtime_phase_timing_end "$(runtime_phase_timing_outcome "$status")" || true
+    fi
     if [[ "$gate_results_initialized" == true ]]; then
         local gate_finalize_status=0
         set +e
@@ -127,11 +202,78 @@ gate_update() {
     return "$update_status"
 }
 
+runtime_phase_name() {
+    case "$1" in
+        host-tools) printf '%s\n' startup-host-packages ;;
+        node|browser-host) printf '%s\n' browser-setup ;;
+        cache-download) printf '%s\n' cache-download ;;
+        cache-extract) printf '%s\n' cache-extract ;;
+        workflow-images) printf '%s\n' workflow-images ;;
+        metadata-guard) printf '%s\n' metadata-guard ;;
+        cooking) printf '%s\n' cooking-supervisor ;;
+        evidence) printf '%s\n' evidence-scan ;;
+        *) return 1 ;;
+    esac
+}
+
+runtime_phase_timing_start() {
+    local name="$1" canonical occurrence source_sha="${gate_results_revision:-}"
+    [[ -n "$runtime_phase_timing_script" && -n "$runtime_phase_timing_path" ]] || return 0
+    [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]] || return 0
+    canonical="$(runtime_phase_name "$name")" || return 0
+    occurrence=$(( ${runtime_phase_timing_occurrence[$canonical]:-0} + 1 ))
+    runtime_phase_timing_occurrence[$canonical]="$occurrence"
+    runtime_phase_timing_cache_state=''
+    runtime_phase_timing_cache_sha256=''
+    runtime_phase_timing_cache_generation=''
+    runtime_phase_timing_cache_bytes=''
+    local cache_args=()
+    if [[ "$canonical" == cache-download ]]; then
+        runtime_phase_timing_cache_state=miss
+        runtime_phase_timing_cache_sha256="$cache_sha256"
+        runtime_phase_timing_cache_generation="${HEPH_GCP_CACHE_GENERATION:-}"
+        [[ "$runtime_phase_timing_cache_generation" =~ ^[1-9][0-9]*$ ]] ||
+            fail 'cache generation provenance is missing or invalid'
+        cache_args=(--cache-state miss --cache-sha256 "$cache_sha256" \
+            --cache-generation "$runtime_phase_timing_cache_generation")
+    fi
+    python3 -B "$runtime_phase_timing_script" start \
+        --path "$runtime_phase_timing_path" --phase "$canonical" --trust supervisor \
+    --clock-domain guest-runtime --run-id "${HEPH_GCP_RUN_ID:-manual}" \
+    --attempt "${GITHUB_RUN_ATTEMPT:-1}" --occurrence "$occurrence" \
+        --source-sha "$source_sha" --image-fingerprint "$runtime_phase_timing_image_fingerprint" "${cache_args[@]}"
+    runtime_phase_timing_open="$canonical:$occurrence"
+}
+
+runtime_phase_timing_end() {
+    local outcome="$1" name occurrence cache_args=()
+    [[ -n "$runtime_phase_timing_open" ]] || return 0
+    name="${runtime_phase_timing_open%:*}"
+    occurrence="${runtime_phase_timing_open##*:}"
+    if [[ "$runtime_phase_timing_cache_state" == miss ]]; then
+        cache_args=(--cache-state miss --cache-sha256 "$runtime_phase_timing_cache_sha256" \
+            --cache-generation "$runtime_phase_timing_cache_generation")
+        [[ -n "$runtime_phase_timing_cache_bytes" ]] &&
+            cache_args+=(--bytes "$runtime_phase_timing_cache_bytes")
+    fi
+    python3 -B "$runtime_phase_timing_script" end \
+        --path "$runtime_phase_timing_path" --phase "$name" --trust supervisor \
+    --clock-domain guest-runtime --run-id "${HEPH_GCP_RUN_ID:-manual}" \
+    --attempt "${GITHUB_RUN_ATTEMPT:-1}" --occurrence "$occurrence" \
+        --source-sha "${gate_results_revision:-}" --outcome "$outcome" \
+        --image-fingerprint "$runtime_phase_timing_image_fingerprint" "${cache_args[@]}"
+    runtime_phase_timing_open=''
+}
+
 phase_start() {
     phase="$1"
     printf 'HEPH_GCP_COOKING event=phase-start phase=%s\n' "$phase"
+    runtime_phase_timing_start "$phase"
 }
-phase_pass() { printf 'HEPH_GCP_COOKING event=phase-pass phase=%s\n' "$phase"; }
+phase_pass() {
+    printf 'HEPH_GCP_COOKING event=phase-pass phase=%s\n' "$phase"
+    runtime_phase_timing_end passed
+}
 require_command() { command -v "$1" >/dev/null 2>&1 || fail "missing command: $1"; }
 
 if [[ -z "$deadline_epoch" ]]; then
@@ -265,12 +407,11 @@ else
     node_path="$node_stage/bin"
     chmod -R a+rX "$node_stage"
 fi
-PATH="/home/forge/.cargo/bin:${node_path}:${PATH}"
-export PATH
+workload_path="/home/forge/.cargo/bin:${node_path}:${trusted_path}"
 node_major="$($node_bin --version | sed -E 's/^v([0-9]+).*/\1/')"
 [[ "$node_major" -ge 20 ]] || fail 'Node 20 or newer is required by the Playwright lockfile'
-runuser -u forge -- env PATH="$PATH" HOME=/home/forge "$node_bin" --version
-runuser -u forge -- env PATH="$PATH" HOME=/home/forge npm --version
+runuser -u forge -- env PATH="$workload_path" HOME=/home/forge "$node_bin" --version
+runuser -u forge -- env PATH="$workload_path" HOME=/home/forge npm --version
 phase_pass
 
 phase_start cache-download
@@ -311,6 +452,7 @@ if [[ "$actual_cache_sha256" != "$cache_sha256" ]]; then
         "$cache_sha256" "$actual_cache_sha256" >&2
     fail 'private Cooking cache checksum mismatch'
 fi
+runtime_phase_timing_cache_bytes="$(stat -c '%s' -- "$archive_path")"
 phase_pass
 
 phase_start cache-extract
@@ -441,8 +583,9 @@ run_with_deadline systemd-run --unit="heph-gcp-cooking-images-${HEPH_GCP_RUN_ID:
     --property=TasksAccounting=yes --property=IOAccounting=yes \
     --uid="$forge_uid" --gid="$forge_gid" \
     --working-directory="$checkout_root" --setenv=HOME=/home/forge \
-    --setenv=XDG_RUNTIME_DIR=/run/user/10001 --setenv=PATH="$PATH" \
+    --setenv=XDG_RUNTIME_DIR=/run/user/10001 --setenv=PATH="$workload_path" \
     /bin/bash -Eeuo pipefail -c '
+        mkdir -p -m 700 /tmp/hephaestus-libkrun
         candidate="/sys/fs/cgroup$(awk -F: '\''$1 == "0" { print $3 }'\'' /proc/self/cgroup)"
         test -d "$candidate" -a -w "$candidate" -a -w "$candidate/cgroup.subtree_control"
         [[ "$(<"$candidate/cgroup.type")" == domain ]]
@@ -507,19 +650,88 @@ run_with_deadline systemd-run --unit="heph-gcp-cooking-images-${HEPH_GCP_RUN_ID:
     ' -- "$cache_root" "$runtime_python_ref" "$runtime_rust_ref"
 phase_pass
 
+# The cache is a trusted immutable input for PR runs.  Freeze it before any
+# PR-owned setup starts; the derived workflow paths above are the last trusted
+# writes.  Keep the existing manual path's filesystem behavior.
+if [[ "$workload_trust" == untrusted-pr ]]; then
+    find "$cache_root" -type d -exec chmod a-w {} +
+    find "$cache_root" -type f -exec chmod a-w {} +
+fi
+
+if [[ "$workload_trust" == untrusted-pr ]]; then
+    # npm lifecycle hooks and browser setup consume PR-controlled files.  The
+    # forge metadata guard must therefore be active before this setup starts.
+    phase_start metadata-guard
+    require_command nft
+    if nft list table inet "$metadata_guard_table" >/dev/null 2>&1; then
+        fail "metadata guard table already exists: $metadata_guard_table"
+    fi
+    nft -f - <<EOF
+ table inet $metadata_guard_table {
+     chain output {
+         type filter hook output priority -150; policy accept;
+         meta skuid $forge_uid ip daddr $metadata_ip tcp dport 80 reject with tcp reset
+         meta skuid $forge_uid ip daddr $metadata_ip tcp dport 443 reject with tcp reset
+         meta skuid $forge_uid ip6 daddr $metadata_ipv6 tcp dport 80 reject with tcp reset
+         meta skuid $forge_uid ip6 daddr $metadata_ipv6 tcp dport 443 reject with tcp reset
+     }
+ }
+EOF
+    nft list table inet "$metadata_guard_table" | grep -q "$metadata_ip" || fail 'IPv4 metadata guard rule was not installed'
+    nft list table inet "$metadata_guard_table" | grep -q "$metadata_ipv6" || fail 'IPv6 metadata guard rule was not installed'
+    if curl --noproxy '*' --connect-timeout 1 --max-time 2 -H 'Metadata-Flavor: Google' \
+        --fail --silent "http://${metadata_ip}/computeMetadata/v1/instance/id" >/dev/null 2>&1; then
+        :
+    else
+        fail 'root cannot reach the GCE metadata endpoint before guard installation'
+    fi
+    if runuser -u forge -- env HOME=/home/forge curl --noproxy '*' --connect-timeout 1 --max-time 2 \
+        -H 'Metadata-Flavor: Google' --fail --silent "http://${metadata_ip}/computeMetadata/v1/instance/id" >/dev/null 2>&1; then
+        fail 'forge can still reach the GCE metadata HTTP endpoint'
+    fi
+    if runuser -u forge -- env HOME=/home/forge curl --noproxy '*' --connect-timeout 1 --max-time 2 \
+        -k --fail --silent "https://[${metadata_ipv6}]/computeMetadata/v1/instance/id" >/dev/null 2>&1; then
+        fail 'forge can still reach the GCE metadata HTTPS endpoint'
+    fi
+    phase_pass
+    # The stock-image dependency installer invokes the checked-out Playwright
+    # package as root.  PR mode requires the reviewed runner image so that this
+    # root-only setup is already complete and no PR-controlled code crosses the
+    # trust boundary.
+    [[ "$runner_image_verified" == true ]] ||
+        fail 'PR workload requires a verified runner image with browser dependencies preinstalled'
+    configure_pr_sandbox
+fi
+
 phase_start browser-host
 # Match the reviewed CI host setup: install browser OS dependencies as root,
 # then install the browser itself into a forge-owned shared cache.
 playwright_npm_env=()
+pr_playwright_npm_args=()
 if [[ "$runner_image_verified" == true ]]; then
     # The verified image already contains the exact browser for this lock;
     # npm lifecycle hooks must not silently download another revision.
     playwright_npm_env+=(PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1)
+    pr_playwright_npm_args+=(--setenv=PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1)
 fi
-run_with_deadline runuser -u forge -- env HOME=/home/forge XDG_RUNTIME_DIR=/run/user/10001 \
-    PATH="$PATH" PLAYWRIGHT_BROWSERS_PATH="$browser_root" \
-    "${playwright_npm_env[@]}" \
-    bash -Eeuo pipefail -c 'cd "$1/e2e/playwright" && npm ci' -- "$checkout_root"
+if [[ "$workload_trust" == untrusted-pr ]]; then
+    run_with_deadline systemd-run \
+        --unit="heph-gcp-pr-browser-setup-${HEPH_GCP_RUN_ID:-manual}" \
+        --service-type=oneshot --wait --pipe --collect --expand-environment=no \
+        --property=KillMode=control-group \
+        --uid="$forge_uid" --gid="$forge_gid" \
+        --working-directory="$checkout_root" \
+        --setenv=HOME="$workload_home" --setenv=XDG_RUNTIME_DIR=/run/user/10001 \
+        --setenv=PATH="$workload_path" --setenv=PLAYWRIGHT_BROWSERS_PATH="$browser_root" \
+        --setenv=npm_config_cache="$workload_npm_cache" \
+        "${pr_sandbox_args[@]}" "${pr_playwright_npm_args[@]}" \
+        /bin/bash -Eeuo pipefail -c 'cd "$1/e2e/playwright" && npm ci' -- "$checkout_root"
+else
+    run_with_deadline runuser -u forge -- env HOME=/home/forge XDG_RUNTIME_DIR=/run/user/10001 \
+        PATH="$workload_path" PLAYWRIGHT_BROWSERS_PATH="$browser_root" \
+        "${playwright_npm_env[@]}" \
+        bash -Eeuo pipefail -c 'cd "$1/e2e/playwright" && npm ci' -- "$checkout_root"
+fi
 browser_lock_sha="$(sha256sum "$checkout_root/e2e/playwright/package-lock.json" | awk '{print $1}')"
 if [[ "$runner_image_verified" == true ]]; then
     [[ "$runner_image_browser_lock_sha" =~ ^[0-9a-f]{64}$ ]] ||
@@ -536,11 +748,11 @@ if [[ "$runner_image_verified" == true ]]; then
     printf 'HEPH_GCP_COOKING baked-browser status=pass lock_sha256=%s version=%s\n' \
         "$browser_lock_sha" "$browser_version"
 else
-    run_with_deadline env PATH="$PATH" bash -Eeuo pipefail -c \
+    run_with_deadline env PATH="$workload_path" bash -Eeuo pipefail -c \
         'cd "$1/e2e/playwright" && npx playwright install-deps chromium' -- "$checkout_root"
     chown -R forge:forge "$browser_root"
     run_with_deadline runuser -u forge -- env HOME=/home/forge XDG_RUNTIME_DIR=/run/user/10001 \
-        PATH="$PATH" PLAYWRIGHT_BROWSERS_PATH="$browser_root" \
+        PATH="$workload_path" PLAYWRIGHT_BROWSERS_PATH="$browser_root" \
         bash -Eeuo pipefail -c 'cd "$1/e2e/playwright" && npx playwright install chromium' -- "$checkout_root"
 fi
 phase_pass
@@ -548,8 +760,8 @@ phase_pass
 phase_start metadata-guard
 require_command nft
 if nft list table inet "$metadata_guard_table" >/dev/null 2>&1; then
-    fail "metadata guard table already exists: $metadata_guard_table"
-fi
+    [[ "$workload_trust" == untrusted-pr ]] || fail "metadata guard table already exists: $metadata_guard_table"
+else
 nft -f - <<EOF
  table inet $metadata_guard_table {
      chain output {
@@ -561,6 +773,7 @@ nft -f - <<EOF
      }
  }
 EOF
+fi
 nft list table inet "$metadata_guard_table" | grep -q "$metadata_ip" || fail 'IPv4 metadata guard rule was not installed'
 nft list table inet "$metadata_guard_table" | grep -q "$metadata_ipv6" || fail 'IPv6 metadata guard rule was not installed'
 if curl --noproxy '*' --connect-timeout 1 --max-time 2 -H 'Metadata-Flavor: Google' \
@@ -599,14 +812,31 @@ run_cooking_workload() {
 if [[ "$workload_started" != true ]]; then
     return 124
 fi
+local phase_timing_path="$evidence_root/phase-timing-workload.jsonl"
+local workload_trust_value="${workload_trust:-trusted}"
+local workload_home_value="${workload_home:-/home/forge}"
+local workload_cargo_home_value="${workload_cargo_home:-/home/forge/.cargo}"
+local workload_rustup_home_value="${workload_rustup_home:-/home/forge/.rustup}"
+if [[ "$workload_trust_value" == untrusted-pr ]]; then
+    # PR code is a forge workload.  Keep the KVM/passthrough devices and
+    # network available, while hiding controller state, credentials, and the
+    # metadata path.  The metadata nftables guard below also covers forge's
+    # passt process and nested guest traffic.
+    ((${#pr_sandbox_args[@]} > 0)) || {
+        printf 'gcp-cooking-run: PR sandbox was not configured\n' >&2
+        return 1
+    }
+    install -d -m 0700 -o forge -g forge "$(dirname -- "$phase_timing_path")"
+fi
 timeout --kill-after=30s "${cooking_remaining}s" systemd-run \
     --unit="$cooking_unit" --service-type=oneshot --wait --pipe --collect \
     --expand-environment=no --property=Delegate=yes --property=RuntimeMaxSec="${cooking_remaining}s" \
     --property=TimeoutStartSec="${cooking_remaining}s" --property=TimeoutStopSec=15s --property=TasksMax=infinity \
+    "${pr_sandbox_args[@]}" \
     --property=LimitNOFILE=65536 --uid="$forge_uid" --gid="$forge_gid" \
-    --working-directory="$checkout_root" --setenv=HOME=/home/forge \
-    --setenv=XDG_RUNTIME_DIR=/run/user/10001 --setenv=RUSTUP_HOME=/home/forge/.rustup \
-    --setenv=CARGO_HOME=/home/forge/.cargo --setenv=TMPDIR=/tmp/hephaestus-libkrun \
+    --working-directory="$checkout_root" --setenv=HOME="$workload_home_value" \
+    --setenv=XDG_RUNTIME_DIR=/run/user/10001 --setenv=RUSTUP_HOME="$workload_rustup_home_value" \
+    --setenv=CARGO_HOME="$workload_cargo_home_value" --setenv=TMPDIR=/tmp/hephaestus-libkrun \
     --setenv=HEPHAESTUS_LIBKRUN_TMP_ROOT=/tmp/hephaestus-libkrun \
     --setenv=HEPHAESTUS_COOKING_SOURCE_ROOT="$checkout_root/examples/cooking" \
     --setenv=HEPHAESTUS_LOCAL_ROOT="$cache_root" \
@@ -622,8 +852,14 @@ timeout --kill-after=30s "${cooking_remaining}s" systemd-run \
     --setenv=HEPHAESTUS_COOKING_DIAGNOSTICS_DIR="$evidence_root" \
     --setenv=HEPHAESTUS_COOKING_BROWSER_E2E=1 \
     --setenv=PLAYWRIGHT_BROWSERS_PATH="$browser_root" \
-    --setenv=PATH="$PATH" \
+    --setenv=HEPH_GCP_PHASE_TIMING_PATH="$phase_timing_path" \
+    --setenv=HEPH_GCP_PHASE_TIMING_SOURCE_SHA="${gate_results_revision:-unknown}" \
+    --setenv=HEPH_GCP_PHASE_TIMING_RUN_ID="${HEPH_GCP_RUN_ID:-manual}" \
+    --setenv=HEPH_GCP_PHASE_TIMING_ATTEMPT="${GITHUB_RUN_ATTEMPT:-1}" \
+    --setenv=HEPH_GCP_PHASE_TIMING_IMAGE_FINGERPRINT="${runtime_phase_timing_image_fingerprint:-}" \
+    --setenv=PATH="$workload_path" \
     /bin/bash -Eeuo pipefail -c '
+        mkdir -p -m 700 /tmp/hephaestus-libkrun
         candidate="/sys/fs/cgroup$(awk -F: '\''$1 == "0" { print $3 }'\'' /proc/self/cgroup)"
         test -d "$candidate" -a -w "$candidate" -a -w "$candidate/cgroup.subtree_control"
         [[ "$(<"$candidate/cgroup.type")" == domain ]]
@@ -696,7 +932,7 @@ scan_status_report="$evidence_root/evidence-scan-status.json"
 scan_status_report='/var/log/hephaestus/evidence-scan-status.json'
 rm -f -- "$scan_status_report"
 set +e
-run_with_deadline python3 -B "$checkout_root/scripts/check-browser-evidence.py" \
+  run_with_deadline python3 -B "${diagnostics_scanner_script:-${checkout_root:-}/scripts/check-browser-evidence.py}" \
     "$evidence_root" --status-output "$scan_status_report"
 scan_status=$?
 set -e
@@ -772,7 +1008,7 @@ gate_update complete evidence-scan --state "$scan_gate_state" --exit-code "$scan
     --reason-class "$scan_reason_class" || true
 gate_update begin browser-validation || true
 set +e
-run_with_deadline python3 -B "$checkout_root/scripts/project-playwright-browser-summary.py" \
+run_with_deadline python3 -B "${browser_summary_script:-${checkout_root:-}/scripts/project-playwright-browser-summary.py}" \
     "$evidence_root" "$evidence_root/browser-summary.json" --require-complete-journey
 browser_summary_status=$?
 set -e

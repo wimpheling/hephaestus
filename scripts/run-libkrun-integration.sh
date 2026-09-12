@@ -48,6 +48,41 @@ verifier_layout=""
 base_layout_manifest=""
 builder_image_loaded=false
 verifier_image_loaded=false
+phase_timing_path="${HEPH_GCP_PHASE_TIMING_PATH:-}"
+phase_timing_open=''
+
+phase_timing_start() {
+    local name="$1"
+    [[ -n "$phase_timing_path" ]] || return 0
+    local source_sha="${HEPH_GCP_PHASE_TIMING_SOURCE_SHA:-}"
+    [[ -n "$source_sha" ]] || source_sha="$(git -C "$repo_root" rev-parse HEAD)"
+    python3 "$repo_root/scripts/gcp_phase_timing.py" start \
+        --path "$phase_timing_path" --phase "$name" --trust workload \
+        --clock-domain workload-libkrun --source-sha "$source_sha"
+    phase_timing_open="$name"
+}
+
+phase_timing_end() {
+    local name="$1" outcome="$2"
+    [[ -n "$phase_timing_path" ]] || return 0
+    local source_sha="${HEPH_GCP_PHASE_TIMING_SOURCE_SHA:-}"
+    [[ -n "$source_sha" ]] || source_sha="$(git -C "$repo_root" rev-parse HEAD)"
+    python3 "$repo_root/scripts/gcp_phase_timing.py" end \
+        --path "$phase_timing_path" --phase "$name" --trust workload \
+        --clock-domain workload-libkrun --source-sha "$source_sha" --outcome "$outcome"
+    phase_timing_open=''
+}
+
+phase_timing_finish_open() {
+    local status="$1" outcome='failed'
+    [[ -n "$phase_timing_open" ]] || return 0
+    if ((status == 124)); then
+        outcome='timed-out'
+    elif ((status == 130 || status == 143)); then
+        outcome='cancelled'
+    fi
+    phase_timing_end "$phase_timing_open" "$outcome" || true
+}
 
 reserve_port() {
     python3 -c 'import socket; sock = socket.socket(); sock.bind(("127.0.0.1", 0)); print(sock.getsockname()[1]); sock.close()'
@@ -677,6 +712,7 @@ cleanup() {
     local status=$?
     trap - EXIT INT TERM
     set +e
+    phase_timing_finish_open "${status}"
     heph_shell_failure_on_exit "${status}" "${LINENO}"
     heph_shell_failure_begin_cleanup
     if [[ "${status}" -ne 0 ]]; then
@@ -752,6 +788,7 @@ fi
 cgroup_parent="$(discover_cgroup_parent)"
 readonly cgroup_parent
 
+phase_timing_start runtime-guest-build
 rustup target add "${GUEST_TARGET}"
 cargo build \
     --manifest-path "${repo_root}/Cargo.toml" \
@@ -761,6 +798,7 @@ cargo build \
     --bin heph-integration-check \
     --features integration-guest \
     --target "${GUEST_TARGET}"
+phase_timing_end runtime-guest-build passed
 
 # libkrun appends a UUID and supervisor.sock beneath this directory. Keep the
 # generated prefix short enough for Linux's 108-byte Unix socket limit.
@@ -779,6 +817,7 @@ chmod 0700 "${fixture_root}/runtime"
 materialize_image "${ubuntu_image}" "${fixture_root}/rootfs" fixture
 prepare_guest_root "${fixture_root}/rootfs"
 if [[ "${HEPHAESTUS_APP_COOKING_BUILD_PROOF:-0}" == "1" ]]; then
+    phase_timing_start oci-image-materialization
     load_repository_image_workflow
     builder_operation_root="${fixture_root}/image-root/oci-builder"
     verifier_operation_root="${fixture_root}/image-root/oci-verifier"
@@ -797,6 +836,9 @@ if [[ -n "${rust_builder_image}" ]]; then
     prepare_guest_root "${rust_builder_root}"
     printf 'Rust builder root prepared at %s from %s\n' \
         "${rust_builder_root}" "${rust_builder_image}"
+fi
+if [[ -n "${phase_timing_path}" && "${HEPHAESTUS_APP_COOKING_BUILD_PROOF:-0}" == "1" ]]; then
+    phase_timing_end oci-image-materialization passed
 fi
 printf 'repository\n' >"${fixture_root}/mounts/repository/integration-marker"
 chmod 0777 "${fixture_root}/mounts/workspace"
@@ -822,11 +864,16 @@ if command -v rpm >/dev/null 2>&1; then
 fi
 if [[ "${HEPHAESTUS_APP_LIBKRUN_E2E:-0}" == "1" ]]; then
     printf 'Running daemon golden E2E with pinned image %s\n' "${ubuntu_image}"
+    phase_timing_start gateway-services-ready
     start_golden_services
+    phase_timing_end gateway-services-ready passed
+    phase_timing_start runtime-worker-build
     cargo build \
         --manifest-path "${repo_root}/Cargo.toml" \
         --package vm-libkrun \
         --bin hephaestus-vm-libkrun-worker
+    phase_timing_end runtime-worker-build passed
+    phase_timing_start golden-tests
     run_as_guest_owner env \
         HEPHAESTUS_APP_LIBKRUN_E2E=1 \
         HEPHAESTUS_POSTGRES_TEST_URL="${postgres_url}" \
@@ -852,9 +899,11 @@ if [[ "${HEPHAESTUS_APP_LIBKRUN_E2E:-0}" == "1" ]]; then
         --package hephaestus-app \
         --test golden \
         -- --nocapture
+    phase_timing_end golden-tests passed
     # Reuse the same disposable authority database and JetStream fixture for
     # the gateway publication persistence, RLS, and recovery proof. Keeping
     # it here makes the joined wrapper one complete operator command.
+    phase_timing_start database-tests
     run_as_guest_owner env \
         HEPHAESTUS_POSTGRES_TEST_URL="${postgres_url}" \
         HEPHAESTUS_NATS_TEST_URL="${nats_url}" \
@@ -863,6 +912,7 @@ if [[ "${HEPHAESTUS_APP_LIBKRUN_E2E:-0}" == "1" ]]; then
         --package gateway-postgres \
         --test postgres \
         -- --nocapture
+    phase_timing_end database-tests passed
 elif [[ "${HEPHAESTUS_PHASE1B_INTEGRATION:-0}" == "1" ]]; then
     printf 'Running Phase 1B persistence test with pinned image %s\n' "${ubuntu_image}"
     [[ -n "${HEPHAESTUS_POSTGRES_TEST_URL:-}" ]] ||

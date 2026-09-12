@@ -46,7 +46,7 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 use time::OffsetDateTime;
 use tokio::process::Command;
@@ -59,6 +59,63 @@ use tokio_rustls::TlsAcceptor;
 use vm_trait::RootFilesystem;
 use volume_local::LocalVolumeConfig;
 use workspace_local::{LocalWorkspaceConfig, WorkspaceLimits};
+
+const WORKLOAD_PHASE_TIMING_EVENT: &str = "phase-timing";
+const WORKLOAD_PHASE_TIMING_MAX_MS: u128 = 45 * 60 * 1_000;
+
+/// Reports bounded timings from the workload process. The trusted supervisor
+/// remains authoritative for test outcomes and acceptance decisions.
+struct WorkloadPhaseTimer {
+    phase: &'static str,
+    started: Instant,
+    enabled: bool,
+    finished: bool,
+}
+
+impl WorkloadPhaseTimer {
+    fn start(phase: &'static str, enabled: bool) -> Self {
+        Self {
+            phase,
+            started: Instant::now(),
+            enabled,
+            finished: false,
+        }
+    }
+
+    fn finish(mut self, success: bool) {
+        self.finished = true;
+        self.emit(if success { "passed" } else { "failed" });
+    }
+
+    fn emit(&self, status: &'static str) {
+        if !self.enabled {
+            return;
+        }
+        let elapsed_ms = self.started.elapsed().as_millis();
+        let duration_ms = if elapsed_ms <= WORKLOAD_PHASE_TIMING_MAX_MS {
+            elapsed_ms
+        } else {
+            0
+        };
+        let status = if elapsed_ms <= WORKLOAD_PHASE_TIMING_MAX_MS {
+            status
+        } else {
+            "unknown"
+        };
+        eprintln!(
+            "HEPH_GCP_COOKING event={WORKLOAD_PHASE_TIMING_EVENT} phase={} status={status} duration_ms={duration_ms}",
+            self.phase
+        );
+    }
+}
+
+impl Drop for WorkloadPhaseTimer {
+    fn drop(&mut self) {
+        if !self.finished {
+            self.emit("unknown");
+        }
+    }
+}
 
 fn cooking_base_layout(layouts: &BTreeMap<String, PathBuf>, reference: &str) -> Option<PathBuf> {
     let (name, digest) = reference.rsplit_once('@')?;
@@ -123,9 +180,14 @@ fn cooking_base_layout_mount_roots_are_canonical_and_exact() {
     assert!(cooking_base_layout_mount_roots(&missing).is_err());
 }
 
+fn workload_phase_timing_from_environment() -> bool {
+    env::var_os("HEPH_GCP_PHASE_TIMING_PATH").is_some()
+}
+
 fn cooking_oci_worker_config(
     root: &Path,
     repository_root: &Path,
+    workload_phase_timing: bool,
 ) -> Option<OciBuilderWorkerConfig> {
     let builder_image = env::var("HEPHAESTUS_TEST_OCI_BUILDER_VM_IMAGE").ok()?;
     let verifier_image = env::var("HEPHAESTUS_TEST_OCI_VERIFIER_VM_IMAGE").ok()?;
@@ -216,6 +278,7 @@ fn cooking_oci_worker_config(
             // at the reviewed 2 GiB operation allocation.
             memory_mib: 2048,
         },
+        workload_phase_timing,
         preparation_worker_name: String::from("golden-cooking-oci-preparation"),
         materialization_worker_name: String::from("golden-cooking-oci-materialization"),
         rootfs_root,
@@ -395,6 +458,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             .with_test_writer()
             .try_init(),
     );
+    let workload_phase_timing = workload_phase_timing_from_environment();
     let (Ok(database_url), Ok(nats_url)) = (
         std::env::var("HEPHAESTUS_POSTGRES_TEST_URL"),
         std::env::var("HEPHAESTUS_NATS_TEST_URL"),
@@ -681,7 +745,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
         );
     }
     let cooking_worker = if cooking_build_proof {
-        let worker = cooking_oci_worker_config(&root, &repository_root)
+        let worker = cooking_oci_worker_config(&root, &repository_root, workload_phase_timing)
             .expect("cooking OCI worker environment");
         root_images.insert(
             worker.builder_vm_image.to_string(),
@@ -847,7 +911,11 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
     let app = HephaestusApp::build(app_config.clone())
         .await
         .expect("build production application");
-    let running = app.start().await.expect("start ready application");
+    let daemon_readiness_timer =
+        WorkloadPhaseTimer::start("gateway-readiness", workload_phase_timing);
+    let running = app.start().await;
+    daemon_readiness_timer.finish(running.is_ok());
+    let running = running.expect("start ready application");
     // The Cooking proof deliberately spans several production builds before
     // it creates the separate blog repository. Keep its fixture assertion
     // valid for the bounded 45-minute host trial while ordinary golden tests
@@ -1257,6 +1325,8 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
                     .expect("cooking browser OIDC issuer");
                 let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                     .join("../../scripts/run-ui-e2e-external.sh");
+                let browser_timer =
+                    WorkloadPhaseTimer::start("browser-initial", workload_phase_timing);
                 let status = tokio::process::Command::new(script)
                     .env("HEPHAESTUS_E2E_COOKING_FIXTURE", &path)
                     .env("HEPHAESTUS_E2E_EXTERNAL_DATABASE_URL", &database_url)
@@ -1271,8 +1341,9 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
                     .env("HEPHAESTUS_E2E_EXTERNAL_OIDC_ISSUER", issuer)
                     .env("HEPHAESTUS_E2E_COOKING_PHASE", "initial")
                     .status()
-                    .await
-                    .expect("run cooking browser E2E");
+                    .await;
+                browser_timer.finish(status.as_ref().is_ok_and(std::process::ExitStatus::success));
+                let status = status.expect("run cooking browser E2E");
                 assert!(status.success(), "cooking browser E2E failed: {status}");
                 let browser_gateway_id = installed_gateway.gateway_id;
                 let active_revision_id: uuid::Uuid =
@@ -2020,6 +2091,8 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
                 .expect("cooking browser OIDC issuer");
             let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("../../scripts/run-ui-e2e-external.sh");
+            let browser_timer =
+                WorkloadPhaseTimer::start("browser-post-operation", workload_phase_timing);
             let status = tokio::process::Command::new(script)
                 .env("HEPHAESTUS_E2E_COOKING_FIXTURE", &post_path)
                 .env("HEPHAESTUS_E2E_EXTERNAL_DATABASE_URL", &database_url)
@@ -2034,8 +2107,9 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
                 .env("HEPHAESTUS_E2E_EXTERNAL_OIDC_ISSUER", issuer)
                 .env("HEPHAESTUS_E2E_COOKING_PHASE", "post-operation")
                 .status()
-                .await
-                .expect("run cooking post-operation browser E2E");
+                .await;
+            browser_timer.finish(status.as_ref().is_ok_and(std::process::ExitStatus::success));
+            let status = status.expect("run cooking post-operation browser E2E");
             assert!(
                 status.success(),
                 "cooking post-operation browser E2E failed: {status}"

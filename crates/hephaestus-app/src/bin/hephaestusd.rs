@@ -337,6 +337,7 @@ fn oci_builder_from_environment(
         buildah_output_prefix: env::var("HEPHAESTUS_OCI_BUILDER_OUTPUT_PREFIX")
             .unwrap_or_else(|_| String::from("heph-builder")),
     };
+    let workload_phase_timing = env::var_os("HEPH_GCP_PHASE_TIMING_PATH").is_some();
     let publisher = registry_publisher::PublisherConfiguration::new(
         registry_authority,
         &output_root,
@@ -374,6 +375,7 @@ fn oci_builder_from_environment(
             vcpus: optional_u64("HEPHAESTUS_OCI_BUILDER_VM_VCPUS", 1)?.try_into()?,
             memory_mib: optional_u64("HEPHAESTUS_OCI_BUILDER_VM_MEMORY_MIB", 1024)?.try_into()?,
         },
+        workload_phase_timing,
         preparation_worker_name,
         materialization_worker_name,
         rootfs_root: PathBuf::from(rootfs_root),

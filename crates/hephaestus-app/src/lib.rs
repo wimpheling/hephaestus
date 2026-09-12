@@ -269,6 +269,8 @@ pub struct OciBuilderWorkerConfig {
     pub mkfs_ext4: PathBuf,
     /// Fixed resources for both one-shot operation VMs.
     pub vm_resources: VmResources,
+    /// Whether GCP Cooking may collect bounded informational workload timings.
+    pub workload_phase_timing: bool,
     /// Stable identity for durable OCI preparation claims.
     pub preparation_worker_name: String,
     /// Stable daemon-local identity for rootfs materialization claims.
@@ -1019,6 +1021,7 @@ impl OciBuilderWorkers {
                 mkfs_ext4: config.mkfs_ext4,
                 verification_root: config.verification_root,
                 resources: config.vm_resources,
+                workload_phase_timing: config.workload_phase_timing,
             },
         )
         .map_err(component("OCI VM operation configuration"))?;

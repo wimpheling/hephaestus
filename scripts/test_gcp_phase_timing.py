@@ -1,0 +1,556 @@
+#!/usr/bin/env python3
+"""Focused contract tests for the safe GCP Cooking phase timing helper."""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+
+SCRIPT = Path(__file__).with_name("gcp_phase_timing.py")
+SOURCE = "a" * 40
+IMAGE = "b" * 32
+CACHE = "c" * 64
+
+
+class PhaseTimingTests(unittest.TestCase):
+    def run_cli(self, *arguments: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, str(SCRIPT), *arguments],
+            check=check,
+            capture_output=True,
+            text=True,
+        )
+
+    def common(self, path: Path, phase: str = "cache-download") -> list[str]:
+        return [
+            "--path",
+            str(path),
+            "--phase",
+            phase,
+            "--trust",
+            "supervisor",
+            "--clock-domain",
+            "guest-runtime",
+            "--run-id",
+            "123",
+            "--attempt",
+            "1",
+            "--source-sha",
+            SOURCE,
+            "--image-fingerprint",
+            IMAGE,
+            "--cache-sha256",
+            CACHE,
+            "--cache-generation",
+            "17",
+            "--cache-state",
+            "miss",
+        ]
+
+    def test_start_end_and_projection_marks_workload_informational(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "timing.jsonl"
+            self.run_cli("start", *self.common(path))
+            self.run_cli("end", *self.common(path), "--outcome", "passed", "--bytes", "99", "--count", "4")
+            output = path.with_name("projection.json")
+            self.run_cli("project", "--path", str(path), "--output", str(output), "--require-phase", "cache-download")
+            value = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(value["schema"], 1)
+            phase = value["phases"][0]
+            self.assertEqual(phase["measurement"], "trusted")
+            self.assertGreaterEqual(phase["duration_ms"], 0)
+            self.assertEqual(phase["bytes"], 99)
+            self.assertNotIn("mono_ns", phase)
+
+            hit = path.with_name("cache-hit.jsonl")
+            hit_args = self.common(hit)
+            hit_args[hit_args.index("miss")] = "hit"
+            self.run_cli("start", *hit_args)
+            self.run_cli("end", *hit_args, "--outcome", "passed", "--bytes", "101")
+            self.run_cli("validate", "--path", str(hit), "--require-phase", "cache-download")
+            hit_projection = hit.with_name("cache-hit-projection.json")
+            self.run_cli("project", "--path", str(hit), "--output", str(hit_projection))
+            self.assertEqual(json.loads(hit_projection.read_text())["phases"][0]["cache_state"], "hit")
+
+            workload = path.with_name("workload.jsonl")
+            workload_args = self.common(workload, "golden-tests")
+            workload_args[workload_args.index("supervisor")] = "workload"
+            workload_args[workload_args.index("guest-runtime")] = "workload-libkrun"
+            self.run_cli("start", *workload_args)
+            self.run_cli("end", *workload_args, "--outcome", "passed")
+            projected = workload.with_name("workload-projection.json")
+            self.run_cli("project", "--path", str(workload), "--output", str(projected))
+            self.assertEqual(json.loads(projected.read_text())["phases"][0]["measurement"], "informational")
+
+    def test_missing_and_duplicate_phases_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "timing.jsonl"
+            common = self.common(path)
+            self.assertNotEqual(self.run_cli("end", *common, "--outcome", "passed", check=False).returncode, 0)
+            self.run_cli("start", *common)
+            self.assertNotEqual(self.run_cli("start", *common, check=False).returncode, 0)
+            self.assertNotEqual(self.run_cli("validate", "--path", str(path), check=False).returncode, 0)
+
+            self.run_cli("end", *common, "--outcome", "timed-out")
+            self.assertNotEqual(
+                self.run_cli("validate", "--path", str(path), "--require-phase", "cache-extract", check=False).returncode,
+                0,
+            )
+
+    def test_cancellation_is_a_valid_terminal_outcome(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "timing.jsonl"
+            common = self.common(path, "cleanup-verification")
+            self.run_cli("start", *common)
+            self.run_cli("end", *common, "--outcome", "cancelled")
+            self.run_cli("validate", "--path", str(path))
+            self.assertEqual(json.loads(path.read_text().splitlines()[1])["outcome"], "cancelled")
+
+    def test_malformed_fields_secrets_and_oversized_records_are_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            malformed = root / "malformed.jsonl"
+            malformed.write_text(
+                json.dumps(
+                    {
+                        "schema": 1,
+                        "record": "end",
+                        "phase": "cache-download",
+                        "trust": "supervisor",
+                        "clock_domain": "guest-runtime",
+                        "mono_ns": 1,
+                        "run_id": "1",
+                        "attempt": 1,
+                        "source_sha": SOURCE,
+                        "outcome": "passed",
+                        "command": "Authorization: Bearer secret",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            malformed_result = self.run_cli("validate", "--path", str(malformed), check=False)
+            self.assertNotEqual(malformed_result.returncode, 0)
+            self.assertNotIn("secret", malformed_result.stderr)
+            typed = root / "typed.jsonl"
+            typed.write_text(
+                json.dumps(
+                    {
+                        "schema": True,
+                        "record": "end",
+                        "phase": "cache-download",
+                        "trust": "supervisor",
+                        "clock_domain": "guest-runtime",
+                        "mono_ns": 1,
+                        "run_id": "1",
+                        "attempt": 1,
+                        "source_sha": SOURCE,
+                        "cache_state": ["miss"],
+                        "outcome": ["passed"],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            typed_result = self.run_cli("validate", "--path", str(typed), check=False)
+            self.assertNotEqual(typed_result.returncode, 0)
+            self.assertNotIn("Traceback", typed_result.stderr)
+            typed_value = json.loads(typed.read_text(encoding="utf-8"))
+            typed_value["cache_state"] = "miss"
+            typed.write_text(json.dumps(typed_value) + "\n", encoding="utf-8")
+            typed_result = self.run_cli("validate", "--path", str(typed), check=False)
+            self.assertNotEqual(typed_result.returncode, 0)
+            self.assertNotIn("Traceback", typed_result.stderr)
+            oversized = root / "oversized.jsonl"
+            oversized.write_text("x" * 20_000 + "\n", encoding="utf-8")
+            self.assertNotEqual(self.run_cli("validate", "--path", str(oversized), check=False).returncode, 0)
+
+    def test_invalid_timestamp_identity_and_counter_are_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "invalid.jsonl"
+            path.write_text(
+                json.dumps(
+                    {
+                        "schema": 1,
+                        "record": "start",
+                        "phase": "cache-download",
+                        "trust": "supervisor",
+                        "clock_domain": "guest-runtime",
+                        "mono_ns": -1,
+                        "run_id": "1",
+                        "attempt": 1,
+                        "source_sha": "bad",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            self.assertNotEqual(self.run_cli("validate", "--path", str(path), check=False).returncode, 0)
+
+            cache = root = Path(directory) / "counter.jsonl"
+            args = self.common(cache)
+            args[args.index("17")] = str(10**20)
+            self.assertNotEqual(self.run_cli("start", *args, check=False).returncode, 0)
+
+    def test_end_provenance_mismatch_and_negative_metrics_fail(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "timing.jsonl"
+            common = self.common(path)
+            self.run_cli("start", *common)
+            changed = list(common)
+            changed[changed.index(SOURCE)] = "d" * 40
+            self.assertNotEqual(self.run_cli("end", *changed, "--outcome", "passed", check=False).returncode, 0)
+            self.assertNotEqual(
+                self.run_cli("end", *common, "--outcome", "passed", "--bytes", "-1", check=False).returncode,
+                0,
+            )
+
+    def test_validator_rejects_duplicate_and_out_of_order_records(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            duplicate = root / "duplicate.jsonl"
+            common = self.common(duplicate)
+            self.run_cli("start", *common)
+            self.run_cli("end", *common, "--outcome", "passed")
+            first_start = duplicate.read_text(encoding="utf-8").splitlines()[0]
+            with duplicate.open("a", encoding="utf-8") as handle:
+                handle.write(first_start + "\n")
+            self.assertNotEqual(self.run_cli("validate", "--path", str(duplicate), check=False).returncode, 0)
+
+            out_of_order = root / "out-of-order.jsonl"
+            base = {
+                "schema": 1,
+                "record": "start",
+                "trust": "supervisor",
+                "clock_domain": "controller",
+                "run_id": "1",
+                "attempt": 1,
+                "source_sha": SOURCE,
+            }
+            records = [
+                {**base, "phase": "cleanup-verification", "mono_ns": 1},
+                {**base, "phase": "preflight-quota", "mono_ns": 2},
+            ]
+            out_of_order.write_text("".join(json.dumps(item) + "\n" for item in records), encoding="utf-8")
+            self.assertNotEqual(self.run_cli("validate", "--path", str(out_of_order), check=False).returncode, 0)
+
+    def test_nested_repeated_and_concurrent_workload_phases_validate(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "nested.jsonl"
+            outer = self.common(path, "golden-tests")
+            outer[outer.index("supervisor")] = "workload"
+            outer[outer.index("guest-runtime")] = "workload-libkrun"
+            self.run_cli("start", *outer)
+            nested = list(outer)
+            nested[nested.index("golden-tests")] = "oci-builder"
+            nested.extend(("--occurrence", "1"))
+            self.run_cli("start", *nested)
+            self.run_cli("end", *nested, "--outcome", "passed")
+            repeated = list(outer)
+            repeated[repeated.index("golden-tests")] = "oci-builder"
+            repeated.extend(("--occurrence", "2"))
+            self.run_cli("start", *repeated)
+            self.run_cli("end", *repeated, "--outcome", "passed")
+            self.run_cli("end", *outer, "--outcome", "passed")
+
+            edge = self.common(path, "gateway-edge-ready")
+            edge[edge.index("supervisor")] = "workload"
+            edge[edge.index("guest-runtime")] = "workload-gateway"
+            self.run_cli("start", *edge)
+            self.run_cli("end", *edge, "--outcome", "passed")
+            self.run_cli("validate", "--path", str(path), "--require-trust", "workload")
+
+    def test_marker_import_is_strict_and_workload_origin_is_enforced(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            markers = root / "markers.log"
+            markers.write_text(
+                "ordinary output\n"
+                "HEPH_GCP_COOKING event=phase-timing phase=oci-builder status=passed duration_ms=12\n"
+                "HEPH_GCP_COOKING event=phase-timing phase=oci-builder status=failed duration_ms=7\n",
+                encoding="utf-8",
+            )
+            output = root / "timing.jsonl"
+            self.run_cli(
+                "import-markers",
+                "--input",
+                str(markers),
+                "--output",
+                str(output),
+                "--source-sha",
+                SOURCE,
+                "--run-id",
+                "123",
+                "--attempt",
+                "1",
+            )
+            self.run_cli("validate", "--path", str(output), "--require-trust", "workload")
+            records = [json.loads(line) for line in output.read_text().splitlines()]
+            self.assertEqual({record["occurrence"] for record in records}, {1, 2})
+
+            malformed = root / "malformed-markers.log"
+            malformed.write_text(
+                "HEPH_GCP_COOKING event=phase-timing phase=oci-builder status=passed duration_ms=secret\n",
+                encoding="utf-8",
+            )
+            malformed_result = self.run_cli(
+                "import-markers",
+                "--input",
+                str(malformed),
+                "--output",
+                str(root / "malformed.jsonl"),
+                "--source-sha",
+                SOURCE,
+                check=False,
+            )
+            self.assertNotEqual(malformed_result.returncode, 0)
+            self.assertNotIn("secret", malformed_result.stderr)
+
+            supervisor_output = root / "supervisor.jsonl"
+            self.run_cli("start", *self.common(supervisor_output))
+            self.assertNotEqual(
+                self.run_cli(
+                    "import-markers",
+                    "--input",
+                    str(markers),
+                    "--output",
+                    str(supervisor_output),
+                    "--source-sha",
+                    SOURCE,
+                    check=False,
+                ).returncode,
+                0,
+            )
+            self.assertNotEqual(
+                self.run_cli(
+                    "validate",
+                    "--path",
+                    str(supervisor_output),
+                    "--require-trust",
+                    "workload",
+                    check=False,
+                ).returncode,
+                0,
+            )
+
+    def test_symlinked_timing_paths_are_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "target"
+            target.mkdir()
+            link = root / "link"
+            os.symlink(target, link)
+            result = self.run_cli(
+                "start",
+                *self.common(link / "timing.jsonl"),
+                check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+
+    def test_complete_cooking_profile_accepts_nested_domains_and_rejects_missing_critical_phase(self) -> None:
+        required = [
+            "dependency-setup",
+            "project-build",
+            "browser-setup",
+            "runtime-guest-build",
+            "runtime-worker-build",
+            "oci-image-materialization",
+            "gateway-edge-ready",
+            "gateway-services-ready",
+            "gateway-readiness",
+            "oci-builder",
+            "oci-verifier",
+            "golden-tests",
+            "database-tests",
+            "browser-initial",
+            "browser-post-operation",
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "complete.jsonl"
+            records: list[dict[str, object]] = []
+            clock = {"workload-libkrun": 1, "workload-gateway": 1}
+            for index, phase in enumerate(required):
+                domain = "workload-gateway" if phase in {"gateway-edge-ready", "gateway-services-ready"} else "workload-libkrun"
+                start = clock[domain]
+                common = {
+                    "schema": 1,
+                    "trust": "workload",
+                    "clock_domain": domain,
+                    "run_id": "1",
+                    "attempt": 1,
+                    "occurrence": 1,
+                    "source_sha": SOURCE,
+                    "phase": phase,
+                }
+                records.append({**common, "record": "start", "mono_ns": start})
+                records.append(
+                    {
+                        **common,
+                        "record": "end",
+                        "mono_ns": start + index + 1,
+                        "outcome": "cancelled" if phase == "browser-post-operation" else "passed",
+                    }
+                )
+                clock[domain] = start + index + 2
+            path.write_text("".join(json.dumps(item) + "\n" for item in records), encoding="utf-8")
+            args = ["--path", str(path), "--require-trust", "workload"]
+            for phase in required:
+                args.extend(("--require-phase", phase))
+            self.run_cli("validate", *args)
+            path.write_text(
+                "".join(json.dumps(item) + "\n" for item in records if item["phase"] != "browser-post-operation"),
+                encoding="utf-8",
+            )
+            self.assertNotEqual(self.run_cli("validate", *args, check=False).returncode, 0)
+
+    def test_final_projection_enforces_global_identity_and_trust_domains(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            raw = root / "full.jsonl"
+            records: list[dict[str, object]] = []
+            for index, (phase, trust, domain) in enumerate(
+                (
+                    ("archive", "supervisor", "guest-startup"),
+                    ("evidence-scan", "supervisor", "guest-startup"),
+                    ("upload", "supervisor", "guest-startup"),
+                    ("project-build", "workload", "workload"),
+                )
+            ):
+                common = {
+                    "schema": 1,
+                    "phase": phase,
+                    "trust": trust,
+                    "clock_domain": domain,
+                    "run_id": "1",
+                    "attempt": 1,
+                    "occurrence": 1,
+                    "source_sha": SOURCE,
+                }
+                records.extend(
+                    (
+                        {**common, "record": "start", "mono_ns": index * 10},
+                        {**common, "record": "end", "mono_ns": index * 10 + 1, "outcome": "passed"},
+                    )
+                )
+            raw.write_text("".join(json.dumps(item) + "\n" for item in records), encoding="utf-8")
+            projection = root / "projection.json"
+            self.run_cli("project", "--path", str(raw), "--output", str(projection), "--expected-run-id", "1", "--expected-attempt", "1", "--expected-source-sha", SOURCE)
+            self.run_cli(
+                "validate-projection",
+                "--path",
+                str(projection),
+                "--expected-run-id",
+                "1",
+                "--expected-attempt",
+                "1",
+                "--expected-source-sha",
+                SOURCE,
+                "--require-supervisor-phase",
+                "archive",
+                "--require-supervisor-phase",
+                "evidence-scan",
+                "--require-supervisor-phase",
+                "upload",
+            )
+            changed = [dict(item) for item in records]
+            changed[-1]["source_sha"] = "d" * 40
+            raw.write_text("".join(json.dumps(item) + "\n" for item in changed), encoding="utf-8")
+            self.assertNotEqual(
+                self.run_cli("validate", "--path", str(raw), check=False).returncode,
+                0,
+            )
+
+    def test_final_projection_rebuild_includes_phases_closed_after_archive_snapshot(self) -> None:
+        """Model the collector snapshot followed by terminal phase closure."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workload = root / "workload.jsonl"
+            supervisor = root / "supervisor.jsonl"
+            combined = root / "combined.jsonl"
+            final_combined = root / "final-combined.jsonl"
+            common = {
+                "schema": 1,
+                "trust": "workload",
+                "clock_domain": "workload",
+                "run_id": "1",
+                "attempt": 1,
+                "occurrence": 1,
+                "source_sha": SOURCE,
+            }
+            workload.write_text(
+                json.dumps({**common, "record": "start", "phase": "project-build", "mono_ns": 1})
+                + "\n"
+                + json.dumps({**common, "record": "end", "phase": "project-build", "mono_ns": 2, "outcome": "passed"})
+                + "\n",
+                encoding="utf-8",
+            )
+            supervisor_common = {
+                **{key: value for key, value in common.items() if key != "clock_domain"},
+                "trust": "supervisor",
+                "clock_domain": "guest-startup",
+            }
+            supervisor.write_text(
+                json.dumps({**supervisor_common, "record": "start", "phase": "cooking-supervisor", "mono_ns": 1})
+                + "\n"
+                + json.dumps({**supervisor_common, "record": "end", "phase": "cooking-supervisor", "mono_ns": 2, "outcome": "passed"})
+                + "\n",
+                encoding="utf-8",
+            )
+            combined.write_text(workload.read_text() + supervisor.read_text(), encoding="utf-8")
+            initial = root / "initial.json"
+            self.run_cli("project", "--path", str(combined), "--output", str(initial), "--require-workload-phase", "project-build")
+
+            terminal = []
+            for index, phase in enumerate(("archive", "evidence-scan", "upload"), start=3):
+                terminal.extend(
+                    (
+                        {**supervisor_common, "record": "start", "phase": phase, "mono_ns": index * 10},
+                        {**supervisor_common, "record": "end", "phase": phase, "mono_ns": index * 10 + 1, "outcome": "passed"},
+                    )
+                )
+            with supervisor.open("a", encoding="utf-8") as handle:
+                handle.write("".join(json.dumps(item) + "\n" for item in terminal))
+            final_combined.write_text(workload.read_text() + supervisor.read_text(), encoding="utf-8")
+            final = root / "final.json"
+            self.run_cli(
+                "project",
+                "--path",
+                str(final_combined),
+                "--output",
+                str(final),
+                "--expected-run-id",
+                "1",
+                "--expected-attempt",
+                "1",
+                "--expected-source-sha",
+                SOURCE,
+                "--require-workload-phase",
+                "project-build",
+                "--require-supervisor-phase",
+                "archive",
+                "--require-supervisor-phase",
+                "evidence-scan",
+                "--require-supervisor-phase",
+                "upload",
+            )
+            self.run_cli(
+                "validate-projection",
+                "--path",
+                str(final),
+                "--require-supervisor-phase",
+                "archive",
+                "--require-supervisor-phase",
+                "evidence-scan",
+                "--require-supervisor-phase",
+                "upload",
+            )
+
+
+if __name__ == "__main__":
+    unittest.main()
