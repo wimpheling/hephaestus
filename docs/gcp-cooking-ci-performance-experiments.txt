@@ -245,7 +245,7 @@ bootstrap sandbox and private namespace), and PR #26 (typed Cooking preflight
 failure stages), PR #28 (retain typed preflight failure reasons), PR #29
 (fix trusted Podman bootstrap lifecycle and procfs visibility), and PR #30
 (avoid mutating an already-installed Rust target), with current main at
-`c41bc5d7502adbf9f06fd2e8262cc49c2cc0eb43`. The next PR #20 workload
+`1a9b666a48efc1c212749f304a23f2d7034f5cb8`. The next PR #20 workload
 will use the exact open-PR head supplied at dispatch after this preparation is
 pushed;
 the controller SHA and workload SHA will be recorded with the terminal result.
@@ -284,6 +284,14 @@ the same protected image, cache and workload gates. The preceding attempt
 already contained `x86_64-unknown-linux-musl`. PR #30 checks the baked target
 first and invokes `rustup target add` only when it is absent; the host build,
 fixed inputs and workload gates remain unchanged.
+The concrete cause remained that the Cooking PR unit did not set
+`RUSTUP_TOOLCHAIN`, allowing repository/default Rust tool selection and
+clippy/fmt component auto-install behavior against the read-only minimal
+image. PR #31 pins the trusted baked toolchain as `RUSTUP_TOOLCHAIN=1.88.0`
+for the workload, keeping the compiler version, cache, protected image, host
+build and fixed inputs unchanged. Only the trusted startup compatibility hash
+was updated to authorize this runtime wiring; no image rebuild or IAM/cache
+change is part of the baseline.
 Hypothesis and acceptance: this remains a baseline, with no performance change
 under test. It can establish the cold-GCP reference only if all Cooking,
 browser, golden, database, scanner, marker, provenance, cleanup and required
