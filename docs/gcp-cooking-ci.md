@@ -1,5 +1,24 @@
 # GCP Cooking CI runbook
 
+The PR Cooking path imports its fixed images in a root-started forge unit that
+remains active until the root supervisor finishes the workload. The unit uses
+`RemainAfterExit=yes` and is started without `--wait`/`--pipe`; a readiness file
+and the unit's `ActiveState=active`/`Result=success` are checked before PR setup
+continues. The supervisor stops that unit on every exit path, so its rootless
+Podman pause process is not orphaned or killed between trusted import and PR
+execution. The import and workload retain the same HOME, XDG runtime, private
+`/tmp` and `/var/tmp`, cache bindings, and filesystem restrictions.
+
+Both units retain `ProtectProc=invisible` while using `ProcSubset=all`; the
+existing `ProtectSystem=strict` and PR `NoNewPrivileges=yes` restrictions stay
+in force. Podman's `info` command reads public kernel statistics
+from `/proc/meminfo`, `/proc/stat`, and `/proc/uptime`; `ProcSubset=pid` hides
+those paths and makes rootless readiness report a false result. `ProtectProc`
+continues to hide other users' process metadata, and the PR workload keeps
+`NoNewPrivileges=yes`. `ProtectKernelTunables` was not added because its
+procfs remount prevents the trusted `newuidmap` bootstrap from writing
+`/proc/<pid>/uid_map`.
+
 This runbook is the durable reference for the disposable GCP modes in
 [`cooking-e2e.yml`](../.github/workflows/cooking-e2e.yml). The current live
 validation is **accepted for the full-evidence gate** through the no-VM recovery
