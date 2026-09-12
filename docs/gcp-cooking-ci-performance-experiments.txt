@@ -240,9 +240,10 @@ NEXT PREPARED BASELINE
 ======================
 Preparation revision: trusted `main` now includes merged PR #23 (preserve the
 diagnostics path when phase timing is unavailable), PR #24 (typed early
-Cooking workload failure stages), and PR #25 (constrain the trusted Podman
-bootstrap sandbox and private namespace), with current main at
-`317d14684462ade5e2ef0c1bc8eb577e82a9ee3b`. The next PR #20 workload will use
+Cooking workload failure stages), PR #25 (constrain the trusted Podman
+bootstrap sandbox and private namespace), and PR #26 (typed Cooking preflight
+failure stages), with current main at
+`75caf103bb8d93a61e7fb14e5326662beaaedbe1`. The next PR #20 workload will use
 the exact open-PR head supplied at dispatch after this preparation is pushed;
 the controller SHA and workload SHA will be recorded with the terminal result.
 Reason: attempt `34702725501` reached the Cooking workload but its failure was
@@ -251,7 +252,20 @@ the missing phase-timing projection prevented a complete baseline record. The
 new trusted workload stage markers, preserved failure/scan/triage path and
 private Podman namespace hardening are intended to identify an early workload
 failure and retain diagnostic evidence without weakening the unchanged suite
-or scanner.
+or scanner. PR #26 additionally classifies preflight failures with bounded
+`dependency-check` markers, so a failure can be attributed to a specific
+check rather than to the generic shell handler. The allowed stage/reason
+pairs are `host-identity` (`unsupported-user`, `unsupported-architecture`),
+`host-device` (`kvm-unavailable`, `passt-unavailable`), `loader-checks`
+(`libkrun-unavailable`, `libkrunfw-unavailable`), `uid-map`
+(`uid-map-unavailable`), `cgroup-delegation` (`delegation-unavailable`),
+`podman-rootless` (`rootful-podman`), `immutable-references`
+(`invalid-image-reference`), `workflow-inputs`
+(`workflow-file-unavailable`, `workflow-key-unavailable`), `oci-layout`
+(`layout-unavailable`, `manifest-unavailable`), `python-image` or
+`rust-image` (`image-unavailable`, `image-pull-failed`), and the image probe
+stages (`image-probe-failed`); `preflight-command-checks` uses
+`missing-command` with the bounded command name.
 Hypothesis and acceptance: this remains a baseline, with no performance change
 under test. It can establish the cold-GCP reference only if all Cooking,
 browser, golden, database, scanner, marker, provenance, cleanup and required
@@ -266,6 +280,13 @@ workflow timeout. No image, IAM/WIF, cache or test change is part of this
 run. The user has authorized all GCP runs required for this task; no additional
 per-run approval is required. Do not dispatch automatically from this
 preparation record.
+Run identity preservation: the trusted controller's actual workflow run ID
+and attempt number must be propagated to
+`HEPH_GCP_PHASE_TIMING_RUN_ID` and `HEPH_GCP_PHASE_TIMING_ATTEMPT`; workload
+timing records and the retained projection must preserve and validate those
+same values. The terminal ledger entry will record the actual run ID and
+attempt returned by GitHub and the controller, without inferring or replacing
+either value.
 
 Diagnostic baseline attempt: [run 34706097013](https://github.com/wimpheling/hephaestus/actions/runs/34706097013)
 used trusted controller SHA
