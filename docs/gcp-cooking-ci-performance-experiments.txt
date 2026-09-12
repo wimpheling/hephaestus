@@ -121,6 +121,11 @@ inconclusive and cannot be accepted.
   trusted prepared input can reduce `project-build` time. Guard: keep build
   proof, golden assertions and source/image provenance unchanged. Rollback:
   restore the prior build setup and command sequence.
+  The `production-project-build` phase measures the production source
+  build-and-publish proof inside the golden workload. It overlaps the
+  enclosing `golden-tests` span, so phase durations are not additive. The
+  existing host `project-build` compile remains enabled and optional until a
+  measured candidate justifies changing it.
 - **Gateway readiness:** Hypothesis: bounded readiness polling or phase
   ordering can reduce gateway wait time. Guard: retain every readiness check,
   timeout and failure marker. Rollback: restore the existing polling and
