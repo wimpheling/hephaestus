@@ -610,6 +610,52 @@ verified absent. After evidence collection, remove the temporary fixture block
 and close PR #34; never merge it. Exactly one authorized timeout probe is
 permitted while this trial is pending.
 
+
+TIMEOUT FIXTURE LIFECYCLE EVIDENCE: RUN 34720523600
+=====================================================
+The temporary draft fixture PR #34 was dispatched once at exact head
+`a3bcbf19e6e400f718c285b079a85323e06b9dca` against trusted controller main
+`5e001bb480ed00a71b6c6f469efe079d81df4aef`: [run
+34720523600](https://github.com/wimpheling/hephaestus/actions/runs/34720523600).
+The reviewed timeout command produced a real Cooking workload and supervisor
+exit `124`, with the timed-out workload gate preserved. Supervisor validation
+passed; safe timing projection failed only because the expected later workload
+phases were missing after the intentional timeout (`13` missing phases).
+This is lifecycle evidence, not a performance baseline or performance result.
+
+Private diagnostics upload was verified by download; diagnostics download and
+evidence scan passed, checking `7` files and `5,702` bytes. Browser execution
+was not reached and its report was missing with retained default counts all
+zero. The owned VM was verified absent after cleanup. Controller timing
+projection and retention passed; the `vm-wait` phase failed consistently with
+the intentional workload timeout. No ACCEPTED or REJECTED performance result
+is recorded.
+
+NEXT WORKLOAD CANCELLATION LIFECYCLE PROBE
+==========================================
+Preparation revision remains trusted `main` at
+`5e001bb480ed00a71b6c6f469efe079d81df4aef`. Draft fixture PR #34 remains open
+and NEVER MERGE at exact head
+`eec15ffce18e0159c3452ece1d96e761096e8354`, with the same reviewed five-line
+fixture block and only its command changed to `kill -TERM "$BASHPID"`.
+Hypothesis and purpose: one real Cooking workload SIGTERM should preserve exit
+`143`, close the workload timing interval with a `cancelled` outcome, and
+exercise supervisor cancellation lifecycle. This proves workload signal
+handling only; it does not prove GitHub workflow cancellation propagation and
+is not a performance baseline or candidate.
+
+Dispatch exactly one authorized trusted-main `gcp-cooking` run selecting PR
+#34, never PR #20, with `pr_number=34`, `pr_repository_id=1312377552` and this
+exact fixture head. Keep the locked environment unchanged: protected image
+`hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d`, immutable cache generation
+`1789079827867335`, `n2-standard-8`, `150 GB pd-balanced`,
+`europe-west1-d`, concurrency `1`, 45-minute provider DELETE and 50-minute
+workflow timeout. No image, IAM/WIF, cache, machine, disk, zone, concurrency,
+workflow or acceptance change is part of this probe. Confirm no active paid run
+and prior owned VM absence before dispatch. After evidence collection, remove
+the five fixture lines and close PR #34; never merge the fixture. No automatic
+retry is permitted.
+
 ACCEPTED
 ========
 None yet.
