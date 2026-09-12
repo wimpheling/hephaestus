@@ -236,6 +236,35 @@ and workload timings are unavailable. This is infrastructure/workload failure
 evidence, not a performance result: no ACCEPTED or REJECTED decision is
 recorded, and the prepared baseline remains pending a valid run.
 
+NEXT PREPARED BASELINE
+======================
+Preparation revision: trusted `main` now includes merged PR #23 (preserve the
+diagnostics path when phase timing is unavailable) and PR #24 (typed early
+Cooking workload failure stages), merged at
+`e2ec3ee951cf2be7bb68c327f807c5d17f533a08`. The next PR #20 workload will use
+the exact open-PR head supplied at dispatch after this preparation is pushed;
+the controller SHA and workload SHA will be recorded with the terminal result.
+Reason: attempt `34702725501` reached the Cooking workload but its failure was
+only classified by the generic `examples/cooking/run.sh` shell handler, while
+the missing phase-timing projection prevented a complete baseline record. The
+new trusted workload stage markers and preserved failure/scan/triage path are
+intended to identify an early workload failure and retain diagnostic evidence
+without weakening the unchanged suite or scanner.
+Hypothesis and acceptance: this remains a baseline, with no performance change
+under test. It can establish the cold-GCP reference only if all Cooking,
+browser, golden, database, scanner, marker, provenance, cleanup and required
+phase-timing gates pass. If any required gate or timing evidence fails, record
+the run as diagnostic/infrastructure evidence and leave ACCEPTED/REJECTED
+empty.
+Locked environment: retain the protected image
+`hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d`, immutable cache generation
+`1789079827867335`, `n2-standard-8`, `150 GB pd-balanced`,
+`europe-west1-d`, concurrency `1`, 45-minute provider DELETE and 50-minute
+workflow timeout. No image, IAM/WIF, cache or test change is part of this
+run. The user has authorized all GCP runs required for this task; no additional
+per-run approval is required. Do not dispatch automatically from this
+preparation record.
+
 ACCEPTED
 ========
 None yet.
