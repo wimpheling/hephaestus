@@ -26,7 +26,7 @@ class GcpPrSandboxTests(unittest.TestCase):
         workflow_phase = source.index("phase_start workflow-images")
         self.assertLess(configure, workflow_phase)
         workflow_start = source.index(
-            'run_with_deadline systemd-run --unit="heph-gcp-cooking-images-'
+            'workflow_images_unit="heph-gcp-cooking-images-'
         )
         workflow_end = source.index("\nphase_pass", workflow_start)
         workflow = source[workflow_start:workflow_end]
@@ -41,6 +41,152 @@ class GcpPrSandboxTests(unittest.TestCase):
             'workflow_image_sandbox_args=("${pr_sandbox_filesystem_args[@]}")',
             source,
         )
+
+    def test_trusted_import_stays_alive_until_supervisor_cleanup(self) -> None:
+        """The import pause namespace must survive until the PR unit starts."""
+
+        source = RUNTIME.read_text(encoding="utf-8")
+        workflow_start = source.index(
+            'workflow_images_unit="heph-gcp-cooking-images-'
+        )
+        workflow_end = source.index("\nphase_pass", workflow_start)
+        workflow = source[workflow_start:workflow_end]
+        self.assertIn("--service-type=oneshot --collect", workflow)
+        self.assertIn("--property=RemainAfterExit=yes", workflow)
+        self.assertIn("--property=KillMode=control-group", workflow)
+        self.assertNotIn("--wait", workflow)
+        self.assertNotIn("--pipe", workflow)
+        self.assertIn('touch "$ready"', workflow)
+        self.assertIn('systemctl show "$workflow_images_unit"', workflow)
+        self.assertIn("--property=ActiveState", workflow)
+        self.assertIn("--property=Result", workflow)
+        self.assertIn(
+            'if [[ -f "$workflow_images_ready" && "$workflow_images_state" == active ]]; then',
+            workflow,
+        )
+        self.assertIn("reason=supervisor-cleanup", source)
+        self.assertIn("stop_workflow_images_unit", source)
+
+    def test_cleanup_fails_closed_when_systemd_state_query_fails(self) -> None:
+        """A missing systemd answer must not be reported as successful cleanup."""
+
+        source = RUNTIME.read_text(encoding="utf-8")
+        start = source.index("workflow_images_unit_state()")
+        end = source.index("\nfinish()", start)
+        helpers = source[start:end]
+        with tempfile.TemporaryDirectory(prefix="heph-podman-cleanup-test-") as directory:
+            root = Path(directory)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            (fake_bin / "systemctl").write_text(
+                "#!/usr/bin/env bash\n"
+                "[[ ${1:-} == show ]] && exit 42\n"
+                "exit 1\n",
+                encoding="utf-8",
+            )
+            (fake_bin / "systemctl").chmod(0o700)
+            harness = (
+                helpers
+                + "\nset +e\n"
+                + "stop_workflow_images_unit heph-test\n"
+                + "status=$?\n"
+                + "printf 'status=%s\\n' \"$status\"\n"
+            )
+            result = subprocess.run(
+                ["bash", "-Eeuo", "pipefail", "-c", harness],
+                env={**os.environ, "PATH": f"{fake_bin}:/usr/bin:/bin"},
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("status=1", result.stdout)
+            self.assertIn("reason=state-query-failed", result.stderr)
+
+    def test_cleanup_fails_closed_for_unknown_systemd_state(self) -> None:
+        """An unrecognized unit state cannot count as stopped."""
+
+        source = RUNTIME.read_text(encoding="utf-8")
+        start = source.index("workflow_images_unit_state()")
+        end = source.index("\nfinish()", start)
+        helpers = source[start:end]
+        with tempfile.TemporaryDirectory(prefix="heph-podman-state-test-") as directory:
+            root = Path(directory)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            (fake_bin / "systemctl").write_text(
+                "#!/usr/bin/env bash\n"
+                "if [[ ${1:-} == show ]]; then\n"
+                "  printf 'LoadState=loaded\\nActiveState=unknown\\n'\n"
+                "  exit 0\n"
+                "fi\n"
+                "exit 1\n",
+                encoding="utf-8",
+            )
+            (fake_bin / "systemctl").chmod(0o700)
+            harness = (
+                helpers
+                + "\nset +e\n"
+                + "stop_workflow_images_unit heph-test\n"
+                + "status=$?\n"
+                + "printf 'status=%s\\n' \"$status\"\n"
+            )
+            result = subprocess.run(
+                ["bash", "-Eeuo", "pipefail", "-c", harness],
+                env={**os.environ, "PATH": f"{fake_bin}:/usr/bin:/bin"},
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("status=1", result.stdout)
+            self.assertIn("reason=state-invalid", result.stderr)
+
+    def test_cleanup_accepts_explicit_not_found_after_systemctl_status(self) -> None:
+        """A removed collect unit is safe only with an explicit not-found tuple."""
+
+        source = RUNTIME.read_text(encoding="utf-8")
+        start = source.index("workflow_images_unit_state()")
+        end = source.index("\nfinish()", start)
+        helpers = source[start:end]
+        with tempfile.TemporaryDirectory(prefix="heph-podman-not-found-test-") as directory:
+            root = Path(directory)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            (fake_bin / "systemctl").write_text(
+                "#!/usr/bin/env bash\n"
+                "if [[ ${1:-} == show ]]; then\n"
+                "  printf 'LoadState=not-found\\nActiveState=inactive\\n'\n"
+                "  exit 42\n"
+                "fi\n"
+                "exit 1\n",
+                encoding="utf-8",
+            )
+            (fake_bin / "systemctl").chmod(0o700)
+            harness = (
+                helpers
+                + "\nset +e\n"
+                + "stop_workflow_images_unit heph-test\n"
+                + "status=$?\n"
+                + "printf 'status=%s\\n' \"$status\"\n"
+            )
+            result = subprocess.run(
+                ["bash", "-Eeuo", "pipefail", "-c", harness],
+                env={**os.environ, "PATH": f"{fake_bin}:/usr/bin:/bin"},
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("status=0", result.stdout)
+
+    def test_podman_info_kernel_statistics_remain_visible(self) -> None:
+        """ProcSubset keeps Podman public kernel-stat APIs available."""
+
+        source = RUNTIME.read_text(encoding="utf-8")
+        self.assertIn("--property=ProtectProc=invisible", source)
+        self.assertIn("--property=ProcSubset=all", source)
+        self.assertNotIn("--property=ProcSubset=pid", source)
 
     def test_root_helpers_ignore_forge_writable_cargo_bin(self) -> None:
         """A forge-planted interpreter must not affect root-side helpers."""
@@ -312,7 +458,7 @@ configure_pr_sandbox
             for required in (
                 "NoNewPrivileges=yes",
                 "ProtectProc=invisible",
-                "ProcSubset=pid",
+                "ProcSubset=all",
                 "ProtectSystem=strict",
                 "ProtectHome=tmpfs",
                 "PrivateTmp=yes",
