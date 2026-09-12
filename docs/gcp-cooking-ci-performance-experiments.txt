@@ -314,6 +314,32 @@ evidence only: no baseline/performance timing result and no ACCEPTED or
 REJECTED decision is recorded; the prepared baseline remains pending a valid
 run.
 
+Terminal diagnostic baseline attempt: [run 34707241193](https://github.com/wimpheling/hephaestus/actions/runs/34707241193)
+used trusted controller SHA
+`75caf103bb8d93a61e7fb14e5326662beaaedbe1` and workload SHA
+`e8bf29a49dc89e94cde60eaa56648b82d32bb7a8` with the locked image, immutable
+cache generation, machine, disk, zone and concurrency above. The trusted
+controller timing projection, with run ID `34707241193` and attempt `1`,
+records `preflight-quota=3040` ms, `preflight-cache=1765` ms,
+`vm-create=14526` ms, `vm-wait=184847` ms with outcome `failed`,
+`vm-delete=55475` ms, `cleanup-verification=1070` ms and
+`post-delete-download=1701` ms. VM deletion and cleanup verification passed;
+the owned VM was verified absent.
+The retained typed triage projection records a failed `dependency-check` at
+the `podman-rootless` check, exit `1`, followed by
+`dependency-setup`/`preflight-command-checks` workload failure. Its safe
+projection omits the marker `reason_class` and `test`, and suppresses the
+underlying `podman info` stderr; therefore this record does not establish
+that Podman was rootful, since the check may also have failed because the
+command itself was unavailable or errored. Browser validation failed because
+the report was missing/invalid (exit `2`), the evidence scan passed, and
+authoritative test counts were unavailable. Diagnostics upload/download and
+scan passed with `collectionStatus=partial`, while workload phase timing was
+unavailable and gate acceptance failed. This is diagnostic
+infrastructure/workload evidence only: no baseline/performance result and no
+ACCEPTED or REJECTED decision is recorded; the prepared baseline remains
+pending a valid run.
+
 ACCEPTED
 ========
 None yet.
