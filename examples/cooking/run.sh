@@ -401,7 +401,7 @@ run_cooking() {
             # run, or replace this one command with the bounded timeout variant
             # documented with the test evidence.  It intentionally takes no
             # workflow-controlled value.
-            (exit 42)
+            timeout --kill-after=1s 1s sleep 2
             workload_detail_stage_start preflight-command-checks
             "$1/preflight.sh"
             workload_detail_stage_pass preflight-command-checks
