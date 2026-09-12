@@ -205,6 +205,28 @@ Result/reason: baseline remains pending a valid cold-GCP run. Attempt
 accepted nor rejected performance experiment decision.
 Implementation commit: none; this entry is docs-only preparation.
 
+Terminal baseline attempt: [run 34702725501](https://github.com/wimpheling/hephaestus/actions/runs/34702725501)
+used trusted controller SHA
+`90d8db6e7b1b7b4e472595c8b5352f8262018419` and workload SHA
+`7db6ac55bb64648159a86dfc08626a516dd8b27d2` with the same locked image,
+cache, machine, disk, zone and concurrency. Quota and cache preflight passed;
+VM creation passed in `33847` ms. Startup passed the protected image,
+`workflow-images`, and all preceding startup phases, then stopped at the
+`metadata-guard` phase. The authoritative controller projection records
+`vm-wait` failed after `167456` ms; VM deletion took `54129` ms and cleanup
+verification passed with the owned VM explicitly absent.
+
+The original post-delete diagnostics download reached the private object and
+recorded `upload=verified-by-download` and `download=passed`, but failed closed
+because the expected Cooking phase-timing projection was missing; its scan was
+therefore not run. No-VM [diagnostics triage run 34703036967](https://github.com/wimpheling/hephaestus/actions/runs/34703036967)
+validated the private bundle and evidence scan, but recorded a Cooking
+workload exit `1` at `cooking-run` line `344`, a missing/invalid browser report
+and failed gate acceptance. Authoritative test counts and workload timings
+were unavailable. This is infrastructure/workload failure evidence, not a
+performance result: no ACCEPTED or REJECTED decision is recorded, and the
+prepared baseline remains pending a valid run.
+
 ACCEPTED
 ========
 None yet.
