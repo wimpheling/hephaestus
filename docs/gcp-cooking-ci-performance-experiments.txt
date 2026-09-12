@@ -468,6 +468,34 @@ and browser-post-operation `46721` ms. No typed timing-projection error marker
 is retained in the archive; the separate workload timing artifact remains
 unavailable, so the run stays an INVALID BASELINE with no performance result.
 
+NEXT PREPARED BASELINE AFTER PR #32
+===================================
+Preparation revision: trusted `main` now includes merged PR #32 at
+`b542338aa974e1e04f08ca8117d1ef4300792c2f`. PR #20 remains a docs-only
+same-repository workload and will supply its exact open-PR head to the trusted
+controller at dispatch. The previous full workload run `34711223506` completed
+the workload gate with the authoritative name-reconciled counts of golden
+`33` passed and gateway-PostgreSQL `6` passed, and browser validation passed
+with `2` tests; it was still an INVALID BASELINE because the required workload
+timing sidecar was absent and timing acceptance failed. PR #32 now preserves a
+bounded typed phase-timing failed stage, reason, available/missing phase counts
+and phase names through the private collector and safe triage projection. This
+trial verifies that diagnostic path while retaining the unchanged workload,
+correctness, scanner, provenance and cleanup requirements.
+Hypothesis and acceptance: this remains a baseline, with no performance
+change under test. It can establish the cold-GCP reference only if all
+Cooking, browser, golden, database, scanner, marker, provenance, cleanup and
+required phase-timing gates pass. If any required gate or timing evidence fails,
+record the run as diagnostic/infrastructure evidence and leave ACCEPTED/REJECTED
+empty.
+Locked environment: retain the protected image
+`hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d`, immutable cache generation
+`1789079827867335`, `n2-standard-8`, `150 GB pd-balanced`,
+`europe-west1-d`, concurrency `1`, 45-minute provider DELETE and 50-minute
+workflow timeout. No image, IAM/WIF, cache, workload or test change is part
+of this run. The user has authorized all GCP runs required for this task; no
+additional per-run approval is required. Do not dispatch a second run.
+
 ACCEPTED
 ========
 None yet.
