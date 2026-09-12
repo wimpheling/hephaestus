@@ -1,0 +1,159 @@
+GCP Cooking CI performance experiment ledger
+
+Purpose
+-------
+Measure cold disposable-GCP Cooking CI performance and evaluate one bounded
+change at a time without weakening correctness, security, private evidence or
+cleanup. The linked plan is tasks/todo/optimize-gcp-cooking-ci-performance.md.
+
+Rules
+-----
+- Keep image, machine type, zone, cache generation and concurrency fixed for a
+  comparison. Keep source SHA fixed only when the candidate makes no code
+  change; otherwise record baseline SHA and candidate SHA separately.
+- Record monotonic phase timings, cache hit/bytes, bounded counts, outcomes,
+  cleanup and evidence-scan results. Do not record secrets, commands, payloads,
+  raw browser/network errors or unbounded logs.
+- A faster run is not accepted if any required test, marker, scanner,
+  post-delete check or provenance check is missing or weaker.
+- An accepted experiment requires an implementation commit and a committed
+  ledger result on its dedicated experiment branch, including the commit hash.
+  A rejected experiment reverts only its own changes and commits the reason and
+  measurements in the ledger; unrelated work is never reset.
+
+Current facts
+------------
+- The current disposable path uses one paid VM, a 45-minute provider DELETE
+  lifetime, a 50-minute workflow timeout, a protected prebuilt runner image and
+  one-day private diagnostics.
+- The latest full disposable run measured about 26m11s total. The VM-running
+  through host-pass interval was about 24m07s; cleanup added about 85s before
+  verified absence. OCI builder time was about 105s and verifier time about
+  353s. The early roughly eight-minute interval remains unclassified until
+  safe phase instrumentation exists.
+- A historical pull-request run of about 9m32s used a warm self-hosted
+  environment and is not a comparable cold-GCP baseline.
+- No accepted or rejected performance experiment has been recorded.
+
+Implementation foundation (unreleased)
+---------------------------------------
+- The working branch adds a trusted `main` workflow controller for manually
+  selected same-repository PRs. It requires the PR number, repository ID
+  `1312377552`, and exact head SHA together; the controller validates the open
+  PR through the GitHub API before VM creation and anchors labels, checkout and
+  diagnostics to that SHA. Historical triage keeps the controller workflow
+  SHA separate from an optional PR workload SHA when validating the Actions
+  run and locating its private object. Fork execution remains deferred.
+- PR workloads are marked `untrusted-pr`, run as `forge`, use a verified image
+  with browser dependencies already baked, receive a frozen read-only cache,
+  and are separated from root-owned collectors, gate files, raw diagnostics,
+  controller paths and metadata credentials. PR npm setup and the workload
+  share the same systemd sandbox; only private per-run state, the read-only
+  baked browser/Rust toolchain, a writable cargo cache, and checkout/evidence
+  paths are exposed. The IPv4/IPv6 metadata guard is installed before PR
+  npm/browser hooks and remains active through passt and the nested guest.
+  This boundary is source-reviewed and locally contract tested; it has no
+  live GCP proof yet.
+- `scripts/gcp_phase_timing.py` records bounded start/end JSONL records using
+  monotonic clocks and fixed phase, trust, provenance, cache and metric enums.
+  Supervisor timings are authoritative for measurement; workload timings are
+  explicitly informational. The working tree contains private projection and
+  final-sidecar wiring for archive, evidence scanning and upload; post-delete
+  download is configured to validate the sidecar only after VM absence and
+  retain the safe projection for one day. End-to-end sidecar generation and
+  download still require final correction and live GCP validation; no
+  performance improvement is claimed.
+- Root-side runtime commands reset `PATH` to root-owned system directories;
+  the forge-writable cargo bin is passed only into workload units. PR units
+  bind a private per-run runtime directory at `/run/user/10001` so host user
+  manager sockets are not exposed. This is locally contract tested and still
+  awaits live guest validation.
+- Local validation currently passes 230 focused tests covering provenance,
+  controller contracts, timing schema/projection, diagnostics, sidecars and
+  runner-image contracts, plus Bash syntax, Python compilation and diff
+  checks. The count includes an evolving working-tree diff and is not a
+  replacement for the unchanged full Cooking acceptance gate.
+
+TO DO
+=====
+1. Define the trusted main-controller PR-SHA contract for reviewed
+   same-repository PRs, including operator approval, provenance checks and a
+   guest with no ADC, metadata credentials or service-account scopes for PR
+   code. Defer fork execution pending a separate trust-policy decision.
+2. Add and locally validate safe structured phase instrumentation for setup,
+   cache, OCI, build, gateway, browser, tests, scanning, upload, deletion and
+   post-delete checks.
+3. Establish the smallest justified cold-GCP baseline comparison with the
+   current image, cache and machine settings; add repeats only if observed
+   variance prevents a decision.
+4. Test the OCI verification hypothesis: measure whether verification work can
+   be bounded or reused while retaining full archive and checksum validation.
+5. Test cache/setup reuse and hit-rate hypotheses without exposing the private
+   cache or allowing PR code to write it.
+6. Test project-build and gateway-readiness hypotheses, including duplicate npm
+   or CI setup work, while retaining all required assertions and reports.
+7. Test cancellation and concurrency behavior for bounded cost and cleanup;
+   never add automatic paid retries.
+8. Record each trial's exact run link, baseline/candidate source and
+   image/cache identity, timings, cost proxy, correctness/security coverage,
+   result/reason and rollback decision before changing the ledger sections
+   below.
+
+Pre-trial policy and bounded hypothesis register
+================================================
+Before any paid dispatch, record the selected ID, fixed environment, baseline
+SHA, candidate SHA (when code changes), expected phase effect, correctness
+guard, and rollback command in the per-experiment record. The initial
+comparison is one baseline run and one candidate run. Add repeats only when
+their observed phase or total-time variance prevents a decision; explain the
+variance and keep the same image, machine type, zone, cache generation and
+concurrency. A baseline/candidate pair with incomplete evidence is
+inconclusive and cannot be accepted.
+
+- **OCI verification:** Hypothesis: bounded reuse of already checksum-verified
+  OCI metadata can reduce `oci-builder`/`oci-verifier` time. Guard: retain
+  complete archive, manifest and digest validation. Rollback: restore the
+  prior verification path and rerun the one-pair comparison.
+- **Cache/setup:** Hypothesis: immutable cache layout or staging changes can
+  reduce cache extraction and dependency setup. Guard: preserve cache SHA,
+  generation, read-only handoff and all cache gates. Rollback: restore the
+  previous staging path and cache settings.
+- **Project build:** Hypothesis: eliminating duplicate setup or reusing a
+  trusted prepared input can reduce `project-build` time. Guard: keep build
+  proof, golden assertions and source/image provenance unchanged. Rollback:
+  restore the prior build setup and command sequence.
+- **Gateway readiness:** Hypothesis: bounded readiness polling or phase
+  ordering can reduce gateway wait time. Guard: retain every readiness check,
+  timeout and failure marker. Rollback: restore the existing polling and
+  timeout implementation.
+- **npm/browser setup:** Hypothesis: the verified image or cache can remove
+  repeated npm/browser setup. Guard: keep the exact lockfile, browser version,
+  browser assertions and credential scan. Rollback: restore the previous
+  setup path; PR mode must continue to fail closed if trusted setup is absent.
+- **Cancellation/concurrency:** Hypothesis: explicit cancellation handling or
+  serialized resource ownership can reduce paid tail time. Guard: preserve
+  one-VM ownership labels, no automatic paid retries, provider DELETE and
+  verified absence. Rollback: restore the prior cancellation/concurrency
+  settings and confirm cleanup under timeout and cancellation.
+
+Per-experiment record template
+------------------------------
+ID:
+Hypothesis:
+Baseline (SHA/image/machine/zone/cache):
+Candidate (SHA/image/machine/zone/cache):
+Controlled variable:
+Run links:
+Timings (total and phases):
+Cost proxy:
+Correctness/security coverage:
+Result/reason:
+Implementation commit:
+
+ACCEPTED
+========
+None yet.
+
+REJECTED
+========
+None yet.

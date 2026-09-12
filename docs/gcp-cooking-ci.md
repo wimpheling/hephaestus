@@ -71,7 +71,7 @@ classification.
 
 The latest local full run is retained at `/tmp/heph-local-network-full.3FSjc8`
 from `HEAD` `87399f8` plus uncommitted shell/network changes. It passed 33
-golden tests with 1 ignored, six PostgreSQL tests, both browser phases with
+34 golden tests (33 passed, 1 ignored), six PostgreSQL tests, both browser phases with
 one report each, a 27-file credential scan covering 1,314,388 bytes, and
 cleanup verification and the shell post-check wiring. It did not emit a
 failure marker because the run succeeded. This is local evidence only. The
@@ -592,6 +592,63 @@ Dispatch from the immutable `main` workflow reference. Use this sequence:
 4. After the diagnostic gate passes, dispatch `gcp-cooking` manually for the
    full build, update, browser and Cooking scenario.
 
+### Reviewed same-repository PR controller
+
+The performance work adds an operator-approved PR input contract to the
+trusted workflow. The workflow must be dispatched from `main`, and its WIF
+condition remains pinned to
+`cooking-e2e.yml@refs/heads/main`. The current branch's workflow changes are
+therefore not exercised by GCP until they have been reviewed and promoted to
+`main`; no IAM or WIF change is required.
+
+For a reviewed pull request in `wimpheling/hephaestus`, supply all three PR
+fields together. The repository ID is the fixed numeric ID `1312377552`.
+The controller calls the GitHub API before creating a VM and requires the PR
+to be open, based on that repository, and still pointed at the submitted
+40-character lowercase head SHA. A mismatch stops before VM creation.
+
+After the implementation is reviewed on `main`, the operator command is:
+
+```sh
+gh workflow run cooking-e2e.yml --repo wimpheling/hephaestus --ref main \
+  -f cloud_mode=gcp-cooking -f gcp_zone=europe-west1-d \
+  -f runner_image=hephaestus-runner-<validated-manifest-prefix> \
+  -f pr_number=<open-pr-number> \
+  -f pr_repository_id=1312377552 \
+  -f pr_head_sha=<exact-pr-head-sha>
+```
+
+PR mode requires the reviewed runner image with browser dependencies already
+baked. It fails closed on the stock image because installing Playwright
+dependencies as root would execute PR-controlled package code. The
+controller labels the VM and diagnostics with the validated PR SHA, run ID
+and attempt. Startup fetches only that public source SHA and stages
+hash-anchored trusted runtime, gate, scanner, browser-summary and timing
+helpers from metadata before invoking the workload.
+
+The PR process and its npm lifecycle setup both run as `forge` in delegated
+systemd units with the same sandbox. Its cache is staged and frozen
+read-only; controller logs, gate files, raw diagnostics, workflow command
+files, `/root`, and the trusted runtime paths are inaccessible. Private
+per-run state supplies `HOME` and the npm cache. The baked Rust toolchain and
+`/home/forge/.cargo` are the only writable host tool paths exposed to the
+workload; `/home/forge/.rustup` and the baked browser directory are read-only.
+The root runtime resets its own `PATH` to root-owned system directories before
+staging or collecting; the forge cargo path is passed only to workload units.
+PR units bind a private per-run runtime directory at `/run/user/10001` so the
+host user manager and its sockets are not exposed.
+`ProtectProc=invisible`, `ProcSubset=pid`, `ProtectSystem`, `ProtectHome`,
+`PrivateTmp`, and owner-based IPv4/IPv6 nftables metadata guards prevent
+access to controller credentials and the GCE metadata service. The guard is
+installed before PR npm/browser hooks and remains active for passt and the
+nested guest. Collection and upload stay root-owned and retain only validated
+safe projections. Fork execution remains deferred pending a separate trust
+and approval policy.
+
+This is a local implementation foundation, not live PR acceptance evidence.
+No paid PR dispatch, cloud baseline, performance claim, image promotion or
+IAM change is authorized by this section.
+
 The diagnostic gate is proven by [run 34586850977](https://github.com/wimpheling/hephaestus/actions/runs/34586850977)
 at commit `c252f0517c147c86d6560c79c403fe7ce6f6d4a4`: it completed from
 09:58:05Z to 10:01:16Z, independently verified VM absence at 10:01:09Z,
@@ -861,11 +918,13 @@ archive validation and credential scan pass. The small status artifact is a
 safe triage projection, not a replacement for that bundle.
 
 For a retained historical bundle, use the workflow's `diagnostics-triage`
-mode. Supply all three source identity fields; the job validates the selected
-per-attempt GitHub Actions API record against the exact workflow path, `main`
-branch and SHA, then checks the exact disposable VM name project-wide before
-reading the fixed private object prefix. It creates no VM and retains only the
-one-day safe status artifact:
+mode. Supply all three source identity fields. `diagnostics_sha` identifies
+the trusted `main` controller workflow run; for a PR workload, also supply
+`diagnostics_workload_sha` with the PR head SHA used in the object key. The
+job validates the selected per-attempt GitHub Actions API record against the
+exact workflow path, `main` branch and controller SHA, then checks the exact
+disposable VM name project-wide before reading the fixed private object
+prefix. It creates no VM and retains only the one-day safe status artifact.
 
 ```sh
 gh workflow run cooking-e2e.yml --repo wimpheling/hephaestus --ref main \
@@ -873,6 +932,10 @@ gh workflow run cooking-e2e.yml --repo wimpheling/hephaestus --ref main \
   -f diagnostics_run_id=34618088312 -f diagnostics_attempt=1 \
   -f diagnostics_sha=1645642605925fa6835291df4a792d3b1123387a
 ```
+
+For a PR-backed object, append
+`-f diagnostics_workload_sha=<exact-pr-head-sha>`; omit it when the workload
+SHA is the same as the controller run SHA.
 
 The first live no-VM validation was [run 34626172381](https://github.com/wimpheling/hephaestus/actions/runs/34626172381),
 which completed successfully for that source identity. Its safe status

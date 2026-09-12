@@ -51,6 +51,7 @@ ALLOWED_LABELS = frozenset(
         "test-output",
         "evidence-scan",
         "gate-results",
+        "phase-timing",
         # These labels are used only in collectionErrors for producer files
         # that were absent; they are never accepted as retained raw sources.
         "lineage",
@@ -1250,6 +1251,30 @@ def _project_runtime_structured(source: Path, destination: Path) -> tuple[int, s
     return len(encoded), hashlib.sha256(encoded).hexdigest()
 
 
+def _project_phase_timing(source: Path, destination: Path) -> tuple[int, str]:
+    """Validate and retain only the safe phase-timing projection."""
+
+    source = _safe_input(source)
+    helper_path = Path(__file__).with_name("gcp_phase_timing.py")
+    if helper_path.is_symlink() or not helper_path.is_file():
+        raise CollectionError("phase timing validator is unavailable")
+    spec = importlib.util.spec_from_file_location("gcp_phase_timing", helper_path)
+    if spec is None or spec.loader is None:
+        raise CollectionError("phase timing validator cannot be loaded")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    try:
+        safe = module.validate_projection(json.loads(source.read_text(encoding="utf-8")))
+    except (OSError, ValueError, module.TimingError) as error:
+        raise CollectionError("phase timing records are invalid") from error
+    encoded = (json.dumps(safe, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    if len(encoded) > 64 * 1024:
+        raise CollectionError("phase timing projection exceeds its retention limit")
+    destination.write_bytes(encoded)
+    destination.chmod(0o600)
+    return len(encoded), hashlib.sha256(encoded).hexdigest()
+
+
 def _canonical_snapshot(source: Path, destination: Path) -> tuple[int, str]:
     source = _safe_input(source)
     if source.stat(follow_symlinks=False).st_size > MAX_SNAPSHOT_BYTES:
@@ -1494,6 +1519,8 @@ def collect(
                     size, digest = _project_gate_results(source_path, destination)
                 elif label == "runtime-structured":
                     size, digest = _project_runtime_structured(source_path, destination)
+                elif label == "phase-timing":
+                    size, digest = _project_phase_timing(source_path, destination)
                 else:
                     size, digest = _project_text(source_path, destination)
             except (CollectionError, OSError, ValueError) as error:

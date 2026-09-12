@@ -48,10 +48,14 @@ class GcpDiagnosticsPipelineTests(unittest.TestCase):
     ) -> tuple[subprocess.CompletedProcess[str], Path]:
         root = Path(tempfile.mkdtemp(prefix="heph-gcp-finish-"))
         work = root / "work"
+        metadata_root = root / "metadata"
+        metadata_root.mkdir(parents=True)
         checkout_scripts = work / "checkout" / "scripts"
         checkout_scripts.mkdir(parents=True)
         shutil.copy2(ROOT / "collect-cooking-diagnostics.py", checkout_scripts / "collect-cooking-diagnostics.py")
         shutil.copy2(ROOT / "check-browser-evidence.py", checkout_scripts / "check-browser-evidence.py")
+        shutil.copy2(ROOT / "collect-cooking-diagnostics.py", metadata_root / "collect-cooking-diagnostics.py")
+        shutil.copy2(ROOT / "check-browser-evidence.py", metadata_root / "check-browser-evidence.py")
         if scanner == "reject":
             shutil.copy2(ROOT / "check-browser-evidence.py", checkout_scripts / "check-browser-evidence-real.py")
             (checkout_scripts / "check-browser-evidence.py").write_text(
@@ -63,6 +67,7 @@ class GcpDiagnosticsPipelineTests(unittest.TestCase):
                 "if __name__ == '__main__': raise SystemExit(7)\n",
                 encoding="utf-8",
             )
+            shutil.copy2(checkout_scripts / "check-browser-evidence.py", metadata_root / "check-browser-evidence.py")
         evidence = work / "evidence" / "cooking"
         evidence.mkdir(parents=True, mode=0o700)
         (evidence / "cooking-lineage.jsonl").write_text("", encoding="utf-8")
@@ -116,7 +121,7 @@ finish
             "HEPH_GCP_STARTUP_LIBRARY": "1",
             "HEPH_GCP_WORK_ROOT": str(work),
             "HEPH_GCP_LOG_FILE": str(log_file),
-            "HEPH_GCP_DIAGNOSTICS_METADATA_ROOT": str(root / "metadata"),
+            "HEPH_GCP_DIAGNOSTICS_METADATA_ROOT": str(metadata_root),
             "HEPH_FAKE_UPLOAD": upload,
             "HEPH_FAKE_DEADLINE": "2" if upload == "hang" else "30",
             "HEPH_FINISH_RESULT": workload,
@@ -1679,6 +1684,16 @@ PY
         self.assertEqual(result.returncode, 7, result.stdout + result.stderr)
         self.assertIn("HEPHAESTUS_GCP_COOKING: FAIL", result.stdout)
         self.assertIn("exit=7", result.stdout)
+        self.assertIn("event=upload status=pass", result.stdout)
+        self.assertNotIn("phase-timing-sidecar status=invalid", result.stdout)
+        archive = root / "work" / "tmp" / "cooking-diagnostics.tar.gz"
+        self.assertTrue(archive.is_file())
+        with tarfile.open(archive, "r:gz") as bundle:
+            names = {member.name for member in bundle.getmembers()}
+        # Missing workload phases make the timing evidence unavailable.  The
+        # raw failure archive still uploads, but no partial projection may be
+        # retained as performance evidence.
+        self.assertNotIn("cooking-diagnostics/sources/phase-timing", names)
 
     def test_real_finish_preserves_timeout_status_and_runs_collection(self):
         result, root = self._run_real_finish("gcp-cooking", workload="timeout")

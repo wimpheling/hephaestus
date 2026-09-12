@@ -17,11 +17,47 @@ caddy_image="${HEPHAESTUS_CADDY_TEST_IMAGE:-docker.io/library/caddy@sha256:d8c17
 readonly caddy_image
 container_name="hephaestus-gateway-libkrun-caddy-${PPID}-${RANDOM}"
 fixture_root="$(mktemp -d)"
+phase_timing_path="${HEPH_GCP_PHASE_TIMING_PATH:-}"
+phase_timing_open=''
+
+phase_timing_start() {
+    local name="$1"
+    [[ -n "$phase_timing_path" ]] || return 0
+    local source_sha="${HEPH_GCP_PHASE_TIMING_SOURCE_SHA:-}"
+    [[ -n "$source_sha" ]] || source_sha="$(git -C "$repo_root" rev-parse HEAD)"
+    python3 "$repo_root/scripts/gcp_phase_timing.py" start \
+        --path "$phase_timing_path" --phase "$name" --trust workload \
+        --clock-domain workload-gateway --source-sha "$source_sha"
+    phase_timing_open="$name"
+}
+
+phase_timing_end() {
+    local name="$1" outcome="$2"
+    [[ -n "$phase_timing_path" ]] || return 0
+    local source_sha="${HEPH_GCP_PHASE_TIMING_SOURCE_SHA:-}"
+    [[ -n "$source_sha" ]] || source_sha="$(git -C "$repo_root" rev-parse HEAD)"
+    python3 "$repo_root/scripts/gcp_phase_timing.py" end \
+        --path "$phase_timing_path" --phase "$name" --trust workload \
+        --clock-domain workload-gateway --source-sha "$source_sha" --outcome "$outcome"
+    phase_timing_open=''
+}
+
+phase_timing_finish_open() {
+    local status="$1" outcome='failed'
+    [[ -n "$phase_timing_open" ]] || return 0
+    if ((status == 124)); then
+        outcome='timed-out'
+    elif ((status == 130 || status == 143)); then
+        outcome='cancelled'
+    fi
+    phase_timing_end "$phase_timing_open" "$outcome" || true
+}
 
 cleanup() {
     local status=$?
     heph_shell_failure_on_exit "${status}" "${LINENO}"
     heph_shell_failure_begin_cleanup
+    phase_timing_finish_open "${status}"
     podman rm --force "${container_name}" >/dev/null 2>&1 || true
     rm -rf "${fixture_root}"
     return "${status}"
@@ -50,6 +86,7 @@ readonly admin_url public_url public_listen
 printf '{\n    auto_https off\n    admin 127.0.0.1:%s\n}\n\nhttp://%s {\n    respond "gateway configuration pending" 503\n}\n' \
     "${admin_port}" "${public_listen}" >"${fixture_root}/Caddyfile"
 
+phase_timing_start gateway-edge-ready
 podman run --detach --rm \
     --name "${container_name}" \
     --network host \
@@ -68,6 +105,7 @@ for attempt in $(seq 1 30); do
         exit 1
     fi
 done
+phase_timing_end gateway-edge-ready passed
 
 HEPHAESTUS_APP_LIBKRUN_E2E=1 \
 HEPHAESTUS_APP_GATEWAY_CADDY_E2E=1 \

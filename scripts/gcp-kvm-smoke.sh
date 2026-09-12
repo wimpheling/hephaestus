@@ -13,6 +13,9 @@ readonly DIAGNOSTICS_SCANNER_SCRIPT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 readonly DIAGNOSTICS_TRIAGE_SCRIPT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/summarize-cooking-diagnostics.py"
 readonly COOKING_GATE_RESULTS_HELPER_SCRIPT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/cooking-gate-results.py"
 readonly COOKING_RUNTIME_SCRIPT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/gcp-cooking-run.sh"
+readonly COOKING_BROWSER_SUMMARY_SCRIPT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/project-playwright-browser-summary.py"
+readonly PHASE_TIMING_SCRIPT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/gcp_phase_timing.py"
+readonly PR_PROVENANCE_SCRIPT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/verify-gcp-pr-provenance.py"
 readonly MACHINE_TYPE="n2-standard-8"
 readonly DISK_SIZE="150GB"
 readonly CACHE_BUCKET="hephaestus-508000-cooking-cache"
@@ -40,11 +43,60 @@ diagnostics_source_mode=false
 diagnostics_source_run_id=''
 diagnostics_source_attempt=''
 diagnostics_source_sha=''
+diagnostics_controller_sha=''
 diagnostics_source_zone=''
+validated_source_sha=''
+pr_workload_mode=false
+cache_generation=''
 gcloud_json_output=''
 gcloud_json_stderr=''
+controller_phase_timing_path="${HEPH_GCP_CONTROLLER_PHASE_TIMING_PATH:-${RUNNER_TEMP:-/tmp}/gcp-phase-timing-controller-${GITHUB_RUN_ID:-manual}-${GITHUB_RUN_ATTEMPT:-1}-$(date +%s%N)-$$.jsonl}"
+controller_phase_timing_open=''
 
 die() { printf 'gcp-kvm-smoke: %s\n' "$*" >&2; exit 1; }
+
+controller_phase_timing_start() {
+  local name="$1" source_sha="${GCP_WORKLOAD_SHA:-${validated_source_sha:-${GITHUB_SHA:-}}}"
+  [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]] || return 0
+  python3 -B "$PHASE_TIMING_SCRIPT" start \
+    --path "$controller_phase_timing_path" --phase "$name" --trust supervisor \
+    --clock-domain controller --run-id "${GITHUB_RUN_ID:-manual}" \
+    --attempt "${GITHUB_RUN_ATTEMPT:-1}" --source-sha "$source_sha"
+  controller_phase_timing_open="$name"
+}
+
+controller_phase_timing_end() {
+  local outcome="$1" source_sha="${GCP_WORKLOAD_SHA:-${validated_source_sha:-${GITHUB_SHA:-}}}"
+  [[ -n "$controller_phase_timing_open" ]] || return 0
+  python3 -B "$PHASE_TIMING_SCRIPT" end \
+    --path "$controller_phase_timing_path" --phase "$controller_phase_timing_open" \
+    --trust supervisor --clock-domain controller --run-id "${GITHUB_RUN_ID:-manual}" \
+    --attempt "${GITHUB_RUN_ATTEMPT:-1}" --source-sha "$source_sha" --outcome "$outcome"
+  controller_phase_timing_open=''
+}
+
+controller_phase_timing_finish_open() {
+  local status="$1" outcome='failed'
+  [[ -n "$controller_phase_timing_open" ]] || return 0
+  if ((status == 124)); then outcome='timed-out'; fi
+  if ((status == 130 || status == 143)); then outcome='cancelled'; fi
+  controller_phase_timing_end "$outcome" || true
+}
+
+timed_controller_phase() {
+  local name="$1"; shift
+  controller_phase_timing_start "$name"
+  set +e
+  "$@"
+  local status=$?
+  set -e
+  if ((status == 0)); then
+    controller_phase_timing_end passed
+  else
+    controller_phase_timing_finish_open "$status"
+  fi
+  return "$status"
+}
 
 run_json_gcloud() {
   local stderr_file rc
@@ -140,6 +192,9 @@ print(f"Private Cooking cache metadata: name={name} size={size} md5Hash={md5_has
       sed -n '1,20p' <<<"$metadata_output" >&2
       die 'private Cooking cache metadata does not match the reviewed local archive'
     fi
+    cache_generation="$(sed -n 's/.* generation=\([0-9][0-9]*\)$/\1/p' <<<"$metadata_output")"
+    [[ "$cache_generation" =~ ^[1-9][0-9]*$ ]] ||
+      die 'private Cooking cache generation is missing or invalid'
     printf '%s\n' "$metadata_output"
     return 0
   else
@@ -162,6 +217,57 @@ print(f"Private Cooking cache metadata: name={name} size={size} md5Hash={md5_has
   die "required private Cooking cache object is unavailable: $object_uri"
 }
 
+validate_workload_provenance() {
+  local mode="${1:-gcp-cooking}"
+  local pull_number="${GCP_PR_NUMBER:-}" repository_id="${GCP_PR_REPOSITORY_ID:-}"
+  local head_sha="${GCP_PR_HEAD_SHA:-}" any=false response auth_file api_status
+  [[ -f "$PR_PROVENANCE_SCRIPT" && ! -L "$PR_PROVENANCE_SCRIPT" ]] ||
+    die 'PR provenance validator is unavailable or symlinked'
+  for value in "$pull_number" "$repository_id" "$head_sha"; do
+    [[ -z "$value" ]] || any=true
+  done
+  [[ "$any" == false || "$mode" == gcp-cooking ]] ||
+    die 'PR provenance inputs are supported only for gcp-cooking'
+  if [[ "$any" == false ]]; then
+    validated_source_sha="${GCP_WORKLOAD_SHA:-${GITHUB_SHA:-}}"
+    [[ "$validated_source_sha" =~ ^[0-9a-f]{40}$ ]] ||
+      die 'GCP_WORKLOAD_SHA or GITHUB_SHA must be an exact 40-character commit SHA'
+    pr_workload_mode=false
+    return 0
+  fi
+  [[ -n "$pull_number" && -n "$repository_id" && -n "$head_sha" ]] ||
+    die 'PR provenance inputs must be supplied together'
+  [[ -n "${GH_TOKEN:-}" ]] || die 'GH_TOKEN is required to validate PR provenance'
+  auth_file="$(mktemp "${TMPDIR:-/tmp}/gcp-pr-auth.XXXXXX")" || die 'cannot create PR auth file'
+  response="$(mktemp "${TMPDIR:-/tmp}/gcp-pr-response.XXXXXX")" || {
+    rm -f -- "$auth_file"
+    die 'cannot create PR response file'
+  }
+  chmod 0600 "$auth_file" "$response"
+  printf 'header = "Authorization: Bearer %s"\n' "$GH_TOKEN" >"$auth_file"
+  set +e
+  curl --fail --silent --show-error --connect-timeout 5 --max-time 20 \
+    --max-filesize 1048576 --config "$auth_file" \
+    -H 'Accept: application/vnd.github+json' \
+    "https://api.github.com/repos/wimpheling/hephaestus/pulls/${pull_number}" \
+    >"$response"
+  api_status=$?
+  set -e
+  rm -f -- "$auth_file"
+  if ((api_status != 0)); then
+    rm -f -- "$response"
+    die 'GitHub PR provenance lookup failed'
+  fi
+  if ! python3 "$PR_PROVENANCE_SCRIPT" --response-file "$response" \
+      --pull-number "$pull_number" --repository-id "$repository_id" --head-sha "$head_sha"; then
+    rm -f -- "$response"
+    die 'GitHub PR provenance validation failed'
+  fi
+  rm -f -- "$response"
+  validated_source_sha="$head_sha"
+  pr_workload_mode=true
+}
+
 configure_diagnostics_source() {
   local historical="${1:-false}" explicit=false name value
   if [[ "$historical" == true ]]; then
@@ -182,17 +288,23 @@ configure_diagnostics_source() {
     diagnostics_source_run_id="$GCP_DIAGNOSTICS_SOURCE_RUN_ID"
     diagnostics_source_attempt="$GCP_DIAGNOSTICS_SOURCE_ATTEMPT"
     diagnostics_source_sha="$GCP_DIAGNOSTICS_SOURCE_SHA"
+    diagnostics_controller_sha="${GCP_DIAGNOSTICS_CONTROLLER_SHA:-$diagnostics_source_sha}"
     diagnostics_source_zone="${GCP_DIAGNOSTICS_SOURCE_ZONE:-${GCP_ZONE:-}}"
   else
     diagnostics_source_run_id="${GITHUB_RUN_ID:-}"
     diagnostics_source_attempt="${GITHUB_RUN_ATTEMPT:-}"
-    diagnostics_source_sha="${GITHUB_SHA:-}"
+    diagnostics_source_sha="${validated_source_sha:-${GCP_WORKLOAD_SHA:-${GITHUB_SHA:-}}}"
+    diagnostics_controller_sha="${GITHUB_SHA:-}"
     diagnostics_source_zone="${GCP_ZONE:-}"
   fi
   [[ "$diagnostics_source_run_id" =~ ^[0-9]+$ &&
     "$diagnostics_source_attempt" =~ ^[0-9]+$ &&
     "$diagnostics_source_sha" =~ ^[0-9a-f]{40}$ ]] || {
     diagnostics_download_error='source-identity-invalid'
+    return 1
+  }
+  [[ "$diagnostics_controller_sha" =~ ^[0-9a-f]{40}$ ]] || {
+    diagnostics_download_error='controller-identity-invalid'
     return 1
   }
   if [[ "$diagnostics_source_mode" == true && "$diagnostics_source_zone" != "$REGION"-* ]]; then
@@ -235,16 +347,16 @@ verify_github_source_run() {
     return 1
   fi
   rm -f -- "$auth_file"
-  if ! python3 - "$api_output" "$diagnostics_source_sha" "$diagnostics_source_attempt" <<'PY'
+  if ! python3 - "$api_output" "$diagnostics_controller_sha" "$diagnostics_source_attempt" <<'PY'
 import json
 import sys
 
 value = json.loads(sys.argv[1])
-expected_sha, expected_attempt = sys.argv[2:]
+expected_controller_sha, expected_attempt = sys.argv[2:]
 if not isinstance(value, dict):
     raise SystemExit("source run response is not an object")
-if value.get("head_sha") != expected_sha:
-    raise SystemExit("source run SHA does not match")
+if value.get("head_sha") != expected_controller_sha:
+    raise SystemExit("controller run SHA does not match")
 if value.get("path") != ".github/workflows/cooking-e2e.yml":
     raise SystemExit("source run workflow does not match")
 if value.get("head_branch") != "main":
@@ -307,6 +419,7 @@ _download_diagnostics() {
   local destination="${GCP_DIAGNOSTICS_ARCHIVE:-${RUNNER_TEMP:-/tmp}/gcp-diagnostics.tar.gz}"
   local status_path="${GCP_DIAGNOSTICS_STATUS:-${RUNNER_TEMP:-/tmp}/gcp-diagnostics-status.json}"
   local extract_root="${destination}.extract" output digest archive_bytes download_timeout
+  local phase_timing_status='not-applicable' phase_timing_object phase_timing_destination
   local expected_mode="${GCP_DIAGNOSTICS_EXPECT_MODE:-}"
   local expected_gate_script_sha256="${GCP_DIAGNOSTICS_EXPECT_GATE_SCRIPT_SHA256:-}"
   local expectation_file="${RUNNER_TEMP:-/tmp}/gcp-diagnostics-gate-expectation"
@@ -321,22 +434,28 @@ _download_diagnostics() {
   if ! verify_github_source_run; then
     return 1
   fi
+  controller_phase_timing_start cleanup-verification
   if ! verify_disposable_vm_absent; then
     diagnostics_download_error='cleanup-unverified'
+    controller_phase_timing_finish_open 1
     return 1
   fi
+  controller_phase_timing_end passed
   mkdir -p -- "$(dirname -- "$destination")" "$(dirname -- "$status_path")"
   rm -rf -- "$extract_root"
   mkdir -m 700 -- "$extract_root"
   printf 'HEPH_GCP_DIAGNOSTICS event=download status=start object=gs://%s/%s\n' "$DIAGNOSTICS_BUCKET" "$object"
+  controller_phase_timing_start post-delete-download
   if ! output="$(timeout --kill-after=5s "${download_timeout}s" gcloud storage cp "gs://${DIAGNOSTICS_BUCKET}/${object}" "$destination" \
       --project="$PROJECT_ID" --billing-project="$PROJECT_ID" --quiet 2>&1)"; then
     diagnostics_download_error='provider-download-failed'
+    controller_phase_timing_finish_open 1
     printf '{"schema":1,"object":"gs://%s/%s","download":"failed","error":"provider download failed"}\n' \
       "$DIAGNOSTICS_BUCKET" "$object" >"$status_path"
     printf '%s\n' "$output" >&2
     return 1
   fi
+  controller_phase_timing_end passed
   [[ -f "$destination" && ! -L "$destination" ]] || {
     diagnostics_download_error='archive-missing'
     printf '{"schema":1,"object":"gs://%s/%s","download":"failed","error":"archive missing"}\n' \
@@ -486,12 +605,48 @@ PYGATE
       "$DIAGNOSTICS_BUCKET" "$object" "$archive_bytes" "$digest" "$extract_root/cooking-diagnostics/manifest.json" >"$status_path"
     return 1
   fi
-  if ! python3 - "$status_path" "$triage_path" "$DIAGNOSTICS_BUCKET" "$object" "$archive_bytes" "$digest" "$extract_root/cooking-diagnostics/manifest.json" <<'PY'
+  if [[ "$expected_mode" == gcp-cooking && "${GCP_EXPECT_PHASE_TIMING:-false}" == true ]]; then
+    phase_timing_object="${object%.tar.gz}.phase-timing.json"
+    phase_timing_destination="${GCP_PHASE_TIMING_PROJECTION:-${RUNNER_TEMP:-/tmp}/gcp-cooking-phase-timing.json}"
+    rm -f -- "$phase_timing_destination"
+    if ! timeout --kill-after=5s "${download_timeout}s" gcloud storage cp \
+        "gs://${DIAGNOSTICS_BUCKET}/${phase_timing_object}" "$phase_timing_destination" \
+        --project="$PROJECT_ID" --billing-project="$PROJECT_ID" --quiet >/dev/null 2>&1; then
+      diagnostics_download_error='phase-timing-download-failed'
+      return 1
+    fi
+    if [[ ! -f "$phase_timing_destination" || -L "$phase_timing_destination" ]] ||
+        (( $(stat -c '%s' "$phase_timing_destination") > 65536 )); then
+      diagnostics_download_error='phase-timing-too-large'
+      return 1
+    fi
+    chmod 0600 "$phase_timing_destination"
+    if ! python3 -B "$PHASE_TIMING_SCRIPT" validate-projection \
+        --path "$phase_timing_destination" \
+        --expected-run-id "$diagnostics_source_run_id" \
+        --expected-attempt "$diagnostics_source_attempt" \
+        --expected-source-sha "$diagnostics_source_sha" \
+        --require-supervisor-phase archive --require-supervisor-phase evidence-scan \
+        --require-supervisor-phase upload \
+        --require-workload-phase dependency-setup --require-workload-phase project-build \
+        --require-workload-phase browser-setup --require-workload-phase runtime-guest-build \
+        --require-workload-phase runtime-worker-build --require-workload-phase oci-image-materialization \
+        --require-workload-phase gateway-edge-ready --require-workload-phase gateway-services-ready \
+        --require-workload-phase gateway-readiness --require-workload-phase oci-builder \
+        --require-workload-phase oci-verifier --require-workload-phase golden-tests \
+        --require-workload-phase database-tests --require-workload-phase browser-initial \
+        --require-workload-phase browser-post-operation >/dev/null; then
+      diagnostics_download_error='phase-timing-invalid'
+      return 1
+    fi
+    phase_timing_status='passed'
+  fi
+  if ! python3 - "$status_path" "$triage_path" "$DIAGNOSTICS_BUCKET" "$object" "$archive_bytes" "$digest" "$extract_root/cooking-diagnostics/manifest.json" "$phase_timing_status" <<'PY'
 import json
 from pathlib import Path
 import sys
 
-status_path, triage_path, bucket, object_name, archive_bytes, digest, manifest = sys.argv[1:]
+status_path, triage_path, bucket, object_name, archive_bytes, digest, manifest, phase_timing = sys.argv[1:]
 triage = json.loads(Path(triage_path).read_text(encoding="utf-8"))
 if not isinstance(triage, dict) or triage.get("schema") != 1:
     raise SystemExit("triage projection has an invalid schema")
@@ -507,6 +662,8 @@ status = {
     "archiveSha256": digest,
     "manifest": manifest,
 }
+if phase_timing != "not-applicable":
+    status["phaseTiming"] = phase_timing
 Path(status_path).write_text(json.dumps(status, separators=(",", ":")) + "\n", encoding="utf-8")
 PY
   then
@@ -627,6 +784,7 @@ download_diagnostics() {
     # status was safely written.
     if [[ ! -s "$status_path" ]] || ! python3 - "$status_path" <<'PY'
 import json
+import os
 import re
 import sys
 
@@ -639,6 +797,8 @@ if value.get("cleanup") != "verified-absent":
 if value.get("upload") != "verified-by-download":
     raise SystemExit(1)
 if value.get("download") != "passed" or value.get("scan") != "passed":
+    raise SystemExit(1)
+if os.environ.get("GCP_EXPECT_PHASE_TIMING") == "true" and value.get("phaseTiming") != "passed":
     raise SystemExit(1)
 triage = value.get("triage")
 if isinstance(triage, dict):
@@ -816,7 +976,7 @@ cleanup_vm() {
 d=json.load(sys.stdin); labels=d.get("labels",{})
 expected={"purpose":"hephaestus-kvm-smoke","run_id":sys.argv[1],"run_attempt":sys.argv[2],"sha":sys.argv[3]}
 if any(labels.get(k)!=v for k,v in expected.items()): raise SystemExit("ownership labels do not match this workflow run")' \
-      "${GITHUB_RUN_ID:-manual}" "${GITHUB_RUN_ATTEMPT:-1}" "${GITHUB_SHA:-}" <<<"$data" || { printf 'gcp-kvm-smoke: refusing to delete an unowned VM: %s\n' "$name" >&2; return 1; }
+      "${GITHUB_RUN_ID:-manual}" "${GITHUB_RUN_ATTEMPT:-1}" "${GCP_WORKLOAD_SHA:-${GITHUB_SHA:-}}" <<<"$data" || { printf 'gcp-kvm-smoke: refusing to delete an unowned VM: %s\n' "$name" >&2; return 1; }
     local delete_output delete_status inspect
     for delete_attempt in {1..3}; do
       if delete_output="$(gcloud compute instances delete "$name" --project="$PROJECT_ID" --zone="$zone" --quiet 2>&1)"; then
@@ -897,13 +1057,21 @@ smoke() {
       die "Cooking gate sidecar helper is unavailable or symlinked: $COOKING_GATE_RESULTS_HELPER_SCRIPT"
   fi
   [[ "${GITHUB_SHA:-}" =~ ^[0-9a-f]{40}$ ]] || die 'GITHUB_SHA must be the exact 40-character workflow commit SHA'
+  validate_workload_provenance "$mode"
   smoke_zone="${GCP_ZONE:-europe-west1-b}"
   smoke_name="heph-kvm-smoke-${GITHUB_RUN_ID:-manual}-${GITHUB_RUN_ATTEMPT:-1}"
   [[ "$smoke_zone" == "$REGION"-* ]] || die "zone must be in $REGION: $smoke_zone"
   smoke_created=false
   cleanup() {
+    controller_phase_timing_finish_open 1
     if [[ "$smoke_created" == true ]]; then
-      cleanup_vm || printf 'warning: cleanup will be retried by the workflow cleanup step\n' >&2
+      controller_phase_timing_start vm-delete
+      if cleanup_vm; then
+        controller_phase_timing_end passed
+      else
+        controller_phase_timing_finish_open 1
+        printf 'warning: cleanup will be retried by the workflow cleanup step\n' >&2
+      fi
     fi
   }
   on_signal() {
@@ -1010,9 +1178,12 @@ PY
   # Capture the conservative VM-start anchor immediately before the create
   # request.  Startup derives both workload and collection deadlines from it.
   local trial_start_epoch="$(date +%s)"
-  local cooking_gate_script_sha256 cooking_runtime_script_sha256 gate_expectation_hash
+  local cooking_gate_script_sha256 cooking_runtime_script_sha256 cooking_browser_summary_script_sha256 gate_expectation_hash
   cooking_gate_script_sha256="$(sha256sum "$COOKING_GATE_RESULTS_HELPER_SCRIPT" | awk '{print $1}')"
   cooking_runtime_script_sha256="$(sha256sum "$COOKING_RUNTIME_SCRIPT" | awk '{print $1}')"
+  cooking_browser_summary_script_sha256="$(sha256sum "$COOKING_BROWSER_SUMMARY_SCRIPT" | awk '{print $1}')"
+  local phase_timing_script_sha256
+  phase_timing_script_sha256="$(sha256sum "$PHASE_TIMING_SCRIPT" | awk '{print $1}')"
   if [[ "$mode" == diagnostic || "$mode" == gcp-cooking ]]; then
     local gate_expectation_file="${RUNNER_TEMP:-/tmp}/gcp-diagnostics-gate-expectation"
     install -m 0600 /dev/null "$gate_expectation_file"
@@ -1020,7 +1191,16 @@ PY
     [[ "$mode" == diagnostic ]] || gate_expectation_hash="$cooking_runtime_script_sha256"
     printf '%s %s\n' "$mode" "$gate_expectation_hash" >"$gate_expectation_file"
   fi
-  local metadata_values="test-mode=${mode},github-sha=$GITHUB_SHA,trial-start-epoch=${trial_start_epoch},cooking-gate-results-script-sha256=${cooking_gate_script_sha256},${runner_image_metadata}"
+  local metadata_values="test-mode=${mode},github-sha=$validated_source_sha,run-id=${GITHUB_RUN_ID:-manual},run-attempt=${GITHUB_RUN_ATTEMPT:-1},trial-start-epoch=${trial_start_epoch},cooking-gate-results-script-sha256=${cooking_gate_script_sha256},${runner_image_metadata}"
+  if [[ "$mode" == gcp-cooking ]]; then
+    [[ "$cache_generation" =~ ^[1-9][0-9]*$ ]] ||
+      die 'cache preflight generation is unavailable for gcp-cooking'
+    metadata_values+=",cooking-runtime-script-sha256=${cooking_runtime_script_sha256},cooking-browser-summary-script-sha256=${cooking_browser_summary_script_sha256},phase-timing-script-sha256=${phase_timing_script_sha256}"
+    metadata_values+=",cache-generation=${cache_generation}"
+    if [[ "$pr_workload_mode" == true ]]; then
+      metadata_values+=",workload-trust=untrusted-pr"
+    fi
+  fi
   local metadata_value_item
   local metadata_file_values="startup-script=$STARTUP_SCRIPT,passt-preflight-script=$PASST_PREFLIGHT_SCRIPT"
   for metadata_value_item in "${diagnostics_metadata[@]}"; do
@@ -1029,6 +1209,10 @@ PY
   if [[ "$mode" == smoke || "$mode" == gcp-cooking || "$mode" == diagnostic ]]; then
     metadata_file_values+=",diagnostics-collector-script=$DIAGNOSTICS_COLLECTOR_SCRIPT,diagnostics-scanner-script=$DIAGNOSTICS_SCANNER_SCRIPT,cooking-gate-results-helper=$COOKING_GATE_RESULTS_HELPER_SCRIPT"
   fi
+  if [[ "$mode" == gcp-cooking ]]; then
+    metadata_file_values+=",cooking-runtime-script=$COOKING_RUNTIME_SCRIPT,cooking-browser-summary-script=$COOKING_BROWSER_SUMMARY_SCRIPT,phase-timing-script=$PHASE_TIMING_SCRIPT"
+  fi
+  controller_phase_timing_start vm-create
   gcloud compute instances create "$smoke_name" \
     --project="$PROJECT_ID" --zone="$smoke_zone" --machine-type="$machine_type" \
     --network-interface=network=default,network-tier=PREMIUM \
@@ -1037,12 +1221,14 @@ PY
     --boot-disk-auto-delete "${nested_args[@]}" \
     --max-run-duration="$max_run_duration" --instance-termination-action=DELETE \
     "${maintenance_args[@]}" "${identity_args[@]}" \
-    --labels="purpose=hephaestus-kvm-smoke,run_id=${GITHUB_RUN_ID:-manual},run_attempt=${GITHUB_RUN_ATTEMPT:-1},sha=$GITHUB_SHA" \
+    --labels="purpose=hephaestus-kvm-smoke,run_id=${GITHUB_RUN_ID:-manual},run_attempt=${GITHUB_RUN_ATTEMPT:-1},sha=$validated_source_sha" \
     --metadata="$metadata_values" \
     --metadata-from-file="$metadata_file_values" || {
+      controller_phase_timing_finish_open 1
       gcloud compute instances describe "$smoke_name" --project="$PROJECT_ID" --zone="$smoke_zone" >/dev/null 2>&1 && smoke_created=true
       die 'instance creation failed'
     }
+  controller_phase_timing_end passed
   smoke_created=true
   local poll_deadline_epoch serial='' last_serial='' describe_output
   if [[ "$mode" == diagnostic ]]; then
@@ -1075,6 +1261,7 @@ PY
     fi
     grep -Eqi "instances/${smoke_name}[^[:alnum:]_].*was not found" <<<"$output"
   }
+  controller_phase_timing_start vm-wait
   while (( $(date +%s) < poll_deadline_epoch )); do
     if serial="$(gcloud compute instances get-serial-port-output "$smoke_name" --project="$PROJECT_ID" --zone="$smoke_zone" --port=1 2>&1)"; then
       serial="${serial//$'\r'/}"
@@ -1090,12 +1277,14 @@ PY
       continue
     fi
     if marker_matches "$pass_marker" "$serial"; then
+      controller_phase_timing_end passed
       printf 'GCE %s passed for %s (%s); cleanup is automatic.\n' "$mode" "$smoke_name" "$GITHUB_SHA"
       return 0
     fi
     if [[ "$mode" == diagnostic ]] &&
         marker_matches 'HEPHAESTUS_GCP_DIAGNOSTIC: TEST-FAIL expected=true .*' "$serial" &&
         marker_matches 'HEPHAESTUS_GCP_DIAGNOSTIC: DIAGNOSTICS PASS .*' "$serial"; then
+      controller_phase_timing_end passed
       printf 'GCE diagnostic produced the expected test failure and passed its evidence gate for %s.\n' "$smoke_name"
       return 0
     fi
@@ -1129,11 +1318,11 @@ PY
 
 require_commands
 case "${1:-preflight}" in
-  preflight) quota_preflight full ;;
-  cache-preflight) quota_preflight full; cache_preflight ;;
-  diagnostic) quota_preflight diagnostic; smoke diagnostic ;;
-  smoke) quota_preflight full; smoke smoke ;;
-  gcp-cooking) quota_preflight full; cache_preflight; smoke gcp-cooking ;;
+  preflight) timed_controller_phase preflight-quota quota_preflight full ;;
+  cache-preflight) timed_controller_phase preflight-quota quota_preflight full; timed_controller_phase preflight-cache cache_preflight ;;
+  diagnostic) timed_controller_phase preflight-quota quota_preflight diagnostic; smoke diagnostic ;;
+  smoke) timed_controller_phase preflight-quota quota_preflight full; smoke smoke ;;
+  gcp-cooking) timed_controller_phase preflight-quota quota_preflight full; timed_controller_phase preflight-cache cache_preflight; smoke gcp-cooking ;;
   download-diagnostics) download_diagnostics ;;
   cleanup) cleanup_vm ;;
   *) die 'usage: scripts/gcp-kvm-smoke.sh [preflight|cache-preflight|diagnostic|smoke|gcp-cooking|download-diagnostics|cleanup]' ;;

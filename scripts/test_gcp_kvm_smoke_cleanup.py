@@ -578,6 +578,8 @@ class GcpKvmSmokeCleanupTests(unittest.TestCase):
         self.assertIn("GCP_DIAGNOSTICS_SOURCE_RUN_ID", workflow)
         self.assertIn("GCP_DIAGNOSTICS_SOURCE_ATTEMPT", workflow)
         self.assertIn("GCP_DIAGNOSTICS_SOURCE_SHA", workflow)
+        self.assertIn("GCP_DIAGNOSTICS_CONTROLLER_SHA", workflow)
+        self.assertIn("diagnostics_workload_sha", workflow)
         self.assertIn("GCP_DIAGNOSTICS_REQUIRE_SOURCE: 'true'", workflow)
         self.assertIn("Download and triage selected private diagnostics without a VM", workflow)
         self.assertIn("GH_TOKEN: ${{ github.token }}", workflow)

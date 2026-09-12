@@ -40,8 +40,28 @@ on:
         required: false
         type: string
         default: ''
+      diagnostics_workload_sha:
+        description: 'Optional exact 40-character workload SHA for PR diagnostics-triage (defaults to diagnostics_sha)'
+        required: false
+        type: string
+        default: ''
       diagnostics_recipient_cert:
         description: 'Optional ephemeral public X.509 certificate for an encrypted diagnostics-triage artifact (never provide a private key)'
+        required: false
+        type: string
+        default: ''
+      pr_number:
+        description: 'Operator-approved same-repository pull request number for gcp-cooking'
+        required: false
+        type: string
+        default: ''
+      pr_repository_id:
+        description: 'Exact reviewed repository ID for pr_number (1312377552)'
+        required: false
+        type: string
+        default: ''
+      pr_head_sha:
+        description: 'Exact 40-character pull request head SHA for pr_number'
         required: false
         type: string
         default: ''
@@ -93,11 +113,17 @@ jobs:
       - name: Read quota or run disposable GCE KVM mode
         if: ${{ inputs.cloud_mode != 'image-build' && inputs.cloud_mode != 'image-retire' && inputs.cloud_mode != 'diagnostics-triage' }}
         env:
+          GH_TOKEN: ${{ github.token }}
           GCP_ZONE: ${{ inputs.gcp_zone || 'europe-west1-b' }}
           GCP_RUNNER_IMAGE: ${{ inputs.runner_image || vars.GCP_RUNNER_IMAGE }}
           GCP_USE_STOCK_IMAGE: ${{ inputs.use_stock_image }}
+          GCP_PR_NUMBER: ${{ inputs.pr_number }}
+          GCP_PR_REPOSITORY_ID: ${{ inputs.pr_repository_id }}
+          GCP_PR_HEAD_SHA: ${{ inputs.pr_head_sha }}
+          GCP_WORKLOAD_SHA: ${{ inputs.pr_head_sha || github.sha }}
           GCP_SMOKE_LOG: ${{ runner.temp }}/gcp-kvm-smoke.log
           GCP_DIAGNOSTICS_STATUS: ${{ runner.temp }}/gcp-diagnostics-status.json
+          HEPH_GCP_CONTROLLER_PHASE_TIMING_PATH: ${{ runner.temp }}/gcp-phase-timing-controller.jsonl
         run: |
           set -Eeuo pipefail
           if [[ "$GCP_USE_STOCK_IMAGE" == true ]]; then
@@ -112,7 +138,8 @@ jobs:
           GCP_ZONE: ${{ inputs.gcp_zone || 'europe-west1-b' }}
           GCP_DIAGNOSTICS_SOURCE_RUN_ID: ${{ inputs.diagnostics_run_id }}
           GCP_DIAGNOSTICS_SOURCE_ATTEMPT: ${{ inputs.diagnostics_attempt }}
-          GCP_DIAGNOSTICS_SOURCE_SHA: ${{ inputs.diagnostics_sha }}
+          GCP_DIAGNOSTICS_CONTROLLER_SHA: ${{ inputs.diagnostics_sha }}
+          GCP_DIAGNOSTICS_SOURCE_SHA: ${{ inputs.diagnostics_workload_sha || inputs.diagnostics_sha }}
           GCP_DIAGNOSTICS_REQUIRE_SOURCE: 'true'
           GCP_DIAGNOSTICS_ARCHIVE: ${{ runner.temp }}/gcp-diagnostics.tar.gz
           GCP_DIAGNOSTICS_STATUS: ${{ runner.temp }}/gcp-diagnostics-status.json
@@ -167,14 +194,54 @@ jobs:
         if: ${{ always() && (inputs.cloud_mode == 'diagnostic' || inputs.cloud_mode == 'smoke' || inputs.cloud_mode == 'gcp-cooking') }}
         env:
           GCP_ZONE: ${{ inputs.gcp_zone || 'europe-west1-b' }}
+          GCP_WORKLOAD_SHA: ${{ inputs.pr_head_sha || github.sha }}
+          HEPH_GCP_CONTROLLER_PHASE_TIMING_PATH: ${{ runner.temp }}/gcp-phase-timing-controller.jsonl
         run: bash scripts/gcp-kvm-smoke.sh cleanup
       - name: Download and scan private diagnostics after VM deletion
         if: ${{ always() && (inputs.cloud_mode == 'diagnostic' || inputs.cloud_mode == 'smoke' || inputs.cloud_mode == 'gcp-cooking') }}
         env:
           GCP_ZONE: ${{ inputs.gcp_zone || 'europe-west1-b' }}
+          GCP_WORKLOAD_SHA: ${{ inputs.pr_head_sha || github.sha }}
           GCP_DIAGNOSTICS_ARCHIVE: ${{ runner.temp }}/gcp-diagnostics.tar.gz
           GCP_DIAGNOSTICS_STATUS: ${{ runner.temp }}/gcp-diagnostics-status.json
+          GCP_EXPECT_PHASE_TIMING: ${{ inputs.cloud_mode == 'gcp-cooking' && 'true' || 'false' }}
+          GCP_PHASE_TIMING_PROJECTION: ${{ runner.temp }}/gcp-cooking-phase-timing.json
+          HEPH_GCP_CONTROLLER_PHASE_TIMING_PATH: ${{ runner.temp }}/gcp-phase-timing-controller.jsonl
         run: bash scripts/gcp-kvm-smoke.sh download-diagnostics
+      - name: Retain safe Cooking phase timing projection
+        if: ${{ always() && inputs.cloud_mode == 'gcp-cooking' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: gcp-cooking-phase-timings-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/gcp-cooking-phase-timing.json
+          if-no-files-found: error
+          retention-days: 1
+      - name: Validate and project controller phase timings
+        if: ${{ always() && (inputs.cloud_mode == 'diagnostic' || inputs.cloud_mode == 'smoke' || inputs.cloud_mode == 'gcp-cooking') }}
+        env:
+          GCP_CLOUD_MODE: ${{ inputs.cloud_mode }}
+          HEPH_GCP_CONTROLLER_PHASE_TIMING_PATH: ${{ runner.temp }}/gcp-phase-timing-controller.jsonl
+          GCP_CONTROLLER_PHASE_TIMING_PROJECTION: ${{ runner.temp }}/gcp-phase-timing-controller.json
+        run: |
+          set -Eeuo pipefail
+          required=(preflight-quota vm-create vm-wait vm-delete cleanup-verification post-delete-download)
+          if [[ "$GCP_CLOUD_MODE" == gcp-cooking ]]; then
+            required+=(preflight-cache)
+          fi
+          args=()
+          for phase in "${required[@]}"; do args+=(--require-phase "$phase"); done
+          python3 -B scripts/gcp_phase_timing.py project \
+            --path "$HEPH_GCP_CONTROLLER_PHASE_TIMING_PATH" \
+            --output "$GCP_CONTROLLER_PHASE_TIMING_PROJECTION" \
+            --require-trust supervisor "${args[@]}"
+      - name: Retain safe controller phase timings
+        if: ${{ always() && (inputs.cloud_mode == 'diagnostic' || inputs.cloud_mode == 'smoke' || inputs.cloud_mode == 'gcp-cooking') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: gcp-controller-phase-timings-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/gcp-phase-timing-controller.json
+          if-no-files-found: error
+          retention-days: 1
       - name: Retain safe diagnostics manifest
         if: ${{ always() && (inputs.cloud_mode == 'diagnostic' || inputs.cloud_mode == 'smoke' || inputs.cloud_mode == 'gcp-cooking' || inputs.cloud_mode == 'diagnostics-triage') }}
         uses: actions/upload-artifact@v4
