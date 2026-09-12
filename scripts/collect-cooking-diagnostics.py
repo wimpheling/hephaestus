@@ -301,6 +301,18 @@ RUNTIME_FIELDS = frozenset(
         "timestamp",
     }
 )
+SHELL_FAILURE_MARKER = "HEPH_GCP_SHELL_FAILURE"
+SHELL_FAILURE_FIELDS = (
+    "script", "component", "operation", "reason", "exit_code", "line",
+)
+SHELL_FAILURE_SCRIPTS = frozenset({"cooking-run", "gateway-libkrun-e2e", "libkrun-integration"})
+SHELL_FAILURE_COMPONENTS = frozenset({"cooking", "gateway", "libkrun"})
+SHELL_FAILURE_OPERATIONS = frozenset(
+    {"preflight", "command", "cgroup-events", "runtime-cleanup", "cgroup-cleanup", "network-integrity", "gateway-cleanup", "cooking-cleanup"}
+)
+SHELL_FAILURE_REASONS = frozenset(
+    {"command-failed", "missing-input", "assertion-mismatch", "network-mismatch", "read-failed", "signal", "process-exit", "timeout"}
+)
 READINESS_ERRORS = {
     "custom runner image Node executable cannot run as forge": ("node", "node-not-runnable"),
     "custom runner image Node executable version does not match its pin": ("node", "node-version-mismatch"),
@@ -765,6 +777,42 @@ def _project_gate_marker(line: str) -> str | None:
     return None
 
 
+def _project_shell_failure_marker(line: str) -> str | None:
+    """Project the shell runner's fixed, argument-free failure marker."""
+
+    marker_start = line.find(SHELL_FAILURE_MARKER + " ")
+    if marker_start < 0:
+        return None
+    tokens = line[marker_start:].split()
+    fields: dict[str, str] = {}
+    if not tokens or tokens[0] != SHELL_FAILURE_MARKER:
+        raise CollectionError("shell failure marker is malformed")
+    for token in tokens[1:]:
+        key, separator, value = token.partition("=")
+        if not separator or key in fields:
+            raise CollectionError("shell failure marker fields are malformed")
+        fields[key] = value
+    if tuple(fields) != SHELL_FAILURE_FIELDS:
+        raise CollectionError("shell failure marker fields are not allowlisted")
+    if (fields["script"], fields["component"]) not in {
+        ("cooking-run", "cooking"),
+        ("gateway-libkrun-e2e", "gateway"),
+        ("libkrun-integration", "libkrun"),
+    }:
+        raise CollectionError("shell failure marker source is invalid")
+    if fields["operation"] not in SHELL_FAILURE_OPERATIONS or fields["reason"] not in SHELL_FAILURE_REASONS:
+        raise CollectionError("shell failure marker classification is invalid")
+    if not fields["exit_code"].isascii() or not fields["exit_code"].isdecimal() or not 1 <= int(fields["exit_code"]) <= 255:
+        raise CollectionError("shell failure marker exit code is invalid")
+    if not fields["line"].isascii() or not fields["line"].isdecimal() or not 1 <= int(fields["line"]) <= 1_000_000:
+        raise CollectionError("shell failure marker source line is invalid")
+    return (
+        f"{SHELL_FAILURE_MARKER} script={fields['script']} component={fields['component']} "
+        f"operation={fields['operation']} reason={fields['reason']} "
+        f"exit_code={int(fields['exit_code'])} line={int(fields['line'])}"
+    )
+
+
 def _project_runtime_fields(line: str) -> tuple[str, list[str]]:
     """Extract approved fields from tracing lifecycle lines.
 
@@ -825,6 +873,8 @@ def _project_text(source: Path, destination: Path) -> tuple[int, str]:
             readiness = classify_readiness_error(line)
             if readiness is not None:
                 projected = readiness
+            elif (shell_failure := _project_shell_failure_marker(line)) is not None:
+                projected = shell_failure
             elif RETRY_MARKER_RE.search(line) is not None:
                 projected = _project_retry_marker(line)
             elif (gate_marker := _project_gate_marker(line)) is not None:

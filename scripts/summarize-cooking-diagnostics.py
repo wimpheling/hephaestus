@@ -74,13 +74,14 @@ FAILURE_MARKERS = {
     "HEPH_GCP_KVM_SMOKE",
     "HEPH_GCP_RUNNER_IMAGE_READINESS",
     "HEPH_GCP_DIAGNOSTICS",
+    "HEPH_GCP_SHELL_FAILURE",
     "HEPH_GCP_COOKING",
     "HEPHAESTUS_GCP_COOKING",
 }
 FAILURE_FIELDS = {
     "test", "test_result", "status", "phase", "error_class", "location", "run_id",
     "attempt_run_id", "exit", "exit_code", "exit_signal", "event", "operation", "reason_class", "class", "tool",
-    "component", "result_origin", "duration_ms", "stage", "remaining_seconds", "reserve_seconds",
+    "script", "component", "reason", "line", "result_origin", "duration_ms", "stage", "remaining_seconds", "reserve_seconds",
 }
 FAILURE_STATUS_VALUES = {"failed", "error", "timeout", "timed-out", "timed_out", "nonzero"}
 FAILURE_COMPONENT_VALUES = {"browser-e2e"}
@@ -97,11 +98,11 @@ FAILURE_ERROR_CLASSES = {
 }
 TECHNICAL_CONTEXT_LIMIT = 50
 TECHNICAL_CONTEXT_KINDS = {
-    "rust-test-result", "rust-panic", "runtime-error", "cooking-result", "cooking-terminal", "diagnostics-result",
+    "rust-test-result", "rust-panic", "runtime-error", "cooking-result", "cooking-terminal", "diagnostics-result", "shell-failure",
 }
 TECHNICAL_CONTEXT_FIELDS = {
     "source", "order", "kind", "event", "operation", "phase", "status", "test", "error_class", "errno",
-    "location", "source_file", "source_line", "source_column", "exit_code", "run_id", "attempt_run_id", "correlated",
+    "script", "component", "reason", "line", "location", "source_file", "source_line", "source_column", "exit_code", "run_id", "attempt_run_id", "correlated",
 }
 TECHNICAL_CONTEXT_STATUS = {"passed", "failed", "ignored", "error", "timed-out", "timeout"}
 TECHNICAL_CONTEXT_PHASES = {"cooking", "evidence", "gcp-cooking", "diagnostic-synthetic", "browser", "runner-image-runtime"}
@@ -110,7 +111,11 @@ TECHNICAL_CONTEXT_EVENTS = {
 }
 TECHNICAL_CONTEXT_OPERATIONS = {
     "cooking-workload", "evidence-scan", "browser-report-validation", "collection", "upload", "download",
+    "preflight", "command", "cgroup-events", "runtime-cleanup", "cgroup-cleanup", "network-integrity", "gateway-cleanup", "cooking-cleanup",
 }
+TECHNICAL_CONTEXT_SHELL_SCRIPTS = {"cooking-run", "gateway-libkrun-e2e", "libkrun-integration"}
+TECHNICAL_CONTEXT_SHELL_COMPONENTS = {"cooking", "gateway", "libkrun"}
+TECHNICAL_CONTEXT_SHELL_REASONS = {"command-failed", "missing-input", "assertion-mismatch", "network-mismatch", "read-failed", "signal", "process-exit", "timeout"}
 TECHNICAL_CONTEXT_ERRNOS = {"EACCES", "ECONNREFUSED", "ECONNRESET", "EINTR", "EINVAL", "EIO", "ENOENT", "ENOSPC", "EPERM", "ETIMEDOUT"}
 RUST_TEST_IDENTIFIER_RE = re.compile(r"^(?:rust-panic|[A-Za-z_][A-Za-z0-9_:.-]{0,127})$")
 SOURCE_LOCATION_RE = re.compile(
@@ -676,7 +681,7 @@ def _technical_context_record(
 
     stripped = line.strip()
     marker = stripped.split(maxsplit=1)[0].rstrip(":") if stripped else ""
-    if marker not in {"HEPH_GCP_TEST", "HEPH_GCP_RUNTIME", "HEPH_GCP_COOKING", "HEPHAESTUS_GCP_COOKING", "HEPH_GCP_DIAGNOSTICS"}:
+    if marker not in {"HEPH_GCP_TEST", "HEPH_GCP_RUNTIME", "HEPH_GCP_COOKING", "HEPHAESTUS_GCP_COOKING", "HEPH_GCP_DIAGNOSTICS", "HEPH_GCP_SHELL_FAILURE"}:
         return None
     fields = dict(FAILURE_PAIR.findall(stripped))
     result: dict[str, Any] = {"source": source, "order": order}
@@ -700,6 +705,37 @@ def _technical_context_record(
             result["status"] = status
         if location is not None:
             result.update(location)
+    elif marker == "HEPH_GCP_SHELL_FAILURE":
+        script = fields.get("script")
+        component = fields.get("component")
+        operation = fields.get("operation")
+        reason = fields.get("reason")
+        exit_code = fields.get("exit_code")
+        line_number = fields.get("line")
+        if (
+            script not in TECHNICAL_CONTEXT_SHELL_SCRIPTS
+            or component not in TECHNICAL_CONTEXT_SHELL_COMPONENTS
+            or operation not in TECHNICAL_CONTEXT_OPERATIONS
+            or reason not in TECHNICAL_CONTEXT_SHELL_REASONS
+            or exit_code is None
+            or not exit_code.isdecimal()
+            or not 1 <= int(exit_code) <= 255
+            or line_number is None
+            or not line_number.isdecimal()
+            or not 1 <= int(line_number) <= 1_000_000
+        ):
+            return None
+        result.update(
+            {
+                "kind": "shell-failure",
+                "script": script,
+                "component": component,
+                "operation": operation,
+                "reason": reason,
+                "exit_code": int(exit_code),
+                "line": int(line_number),
+            }
+        )
     elif marker == "HEPH_GCP_RUNTIME":
         error_class = fields.get("error_class") or fields.get("error")
         if error_class not in FAILURE_ERROR_CLASSES:
@@ -780,7 +816,7 @@ def _project_technical_context(
 
     def is_priority(record: dict[str, Any]) -> bool:
         return (
-            record.get("kind") in {"runtime-error", "rust-panic", "diagnostics-result"}
+            record.get("kind") in {"runtime-error", "rust-panic", "diagnostics-result", "shell-failure"}
             or record.get("status") in {"failed", "error", "timed-out", "timeout"}
         )
 

@@ -11,11 +11,34 @@ paths on the current configuration. This is a follow-up to the scoped MVP-05.1
 acceptance and does not reopen or expand that completed task.
 
 The optional encrypted diagnostics-triage export is published at source
-`4bede2c` with 184 focused tests. It revalidates the fixed bundle before
-local-recipient CMS encryption; no actual no-VM encrypted-export proof exists
-yet. Paid full retries remain paused while the full GCP acceptance gate stays
-open. See the [encrypted export guide](../../docs/gcp-encrypted-diagnostics.md)
+`87399f8` with 9 export tests and 90 diagnostics/collector tests. It
+revalidates the fixed bundle before
+local-recipient CMS encryption. Full GCP acceptance remains open; the next paid
+trial awaits the cheap diagnostic. See the [encrypted export guide](../../docs/gcp-encrypted-diagnostics.md)
 and the [canonical runbook](../../docs/gcp-cooking-ci.md) for operations.
+
+The first real no-VM encrypted-export proof is [run
+34670985068](https://github.com/wimpheling/hephaestus/actions/runs/34670985068)
+from source `87399f8d5f7de8e7c107df3cb481344666040556`. It created no VM and
+completed local CMS decryption, helper revalidation, and byte comparison for
+the 27,897-byte archive (SHA-256
+`1bb476f3d7ef3d5cefcf8176e8671ee6830b574a876c78aa9748e8345b8d3156`). The
+historical gate acceptance was still failed; full GCP acceptance remains open.
+The next paid trial awaits the cheap diagnostic. The timestamp correction at `4bede2c`
+accepts single-digit UTC producer hours; the rejected historical raw inputs
+remain unavailable.
+
+The latest local full run is retained at `/tmp/heph-local-network-full.3FSjc8`
+from `HEAD` `87399f8` plus uncommitted shell/network changes. It passed 33
+golden tests with 1 ignored, six PostgreSQL tests, both browser phases, a
+27-file credential scan covering 1,314,388 bytes, and cleanup verification
+including post-check wiring. This is local evidence only; the successful run
+did not emit a failure marker. Full scripts discovery covered 203 scripts and
+focused shell/network validation covered 29 tests. The next step is one cheap
+diagnostic and, only after it passes, one full GCP trial; the image-rebuild plan
+remains plan-only and the joint user-plan review still gates MVP-06 work. The
+canonical runbook documents the safe shell-failure fields and topology
+comparison.
 
 ## Current evidence
 
@@ -30,8 +53,8 @@ and the [canonical runbook](../../docs/gcp-cooking-ci.md) for operations.
   `1bb476f3d7ef3d5cefcf8176e8671ee6830b574a876c78aa9748e8345b8d3156`.
   Gate validation passed but acceptance failed. Raw `ENOENT` is not causal
   proof, and caught-confinement panics are not an application-failure
-  classification. Paid full retries are paused for no-VM retained-bundle
-  triage improvement and local lineage diagnosis; no new full run is planned.
+  classification. At that time, paid full retries were paused for no-VM retained-bundle
+  triage improvement and local lineage diagnosis.
 - [ ] An earlier corrected full attempt is recorded below: [run 34663205477](https://github.com/wimpheling/hephaestus/actions/runs/34663205477)
   from source `a453d6dd1823fcf91c6934e9e91185b869ece718` failed on the
   unchanged promoted image `hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d`
@@ -69,9 +92,9 @@ and the [canonical runbook](../../docs/gcp-cooking-ci.md) for operations.
   partial projection, retains other strict safe sources and emits closed
   rejection classes, failing closed if none remain valid. Missing lineage is
   not full coverage; the next full run must review lineage specifically. The
-  post-fix cheap diagnostic above passed. Full retries remain paused for no-VM
-  retained-bundle triage improvement and local lineage diagnosis; no new full
-  run is planned. No MVP-06 implementation is part of this work.
+  post-fix cheap diagnostic above passed. At that time, full retries remained
+  paused for no-VM retained-bundle triage improvement and local lineage
+  diagnosis. No MVP-06 implementation is part of this work.
   Its predecessor [run 34662878781](https://github.com/wimpheling/hephaestus/actions/runs/34662878781)
   from source `5c453ea` failed with workload exit `127` from the wrapper before
   browser execution; the scanner ran and failed because no files were

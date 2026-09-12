@@ -20,6 +20,8 @@ fi
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 repo_root="$(cd -- "${script_dir}/../.." && pwd -P)"
 cooking_root="${HEPHAESTUS_COOKING_SOURCE_ROOT:-${script_dir}}"
+source "${repo_root}/scripts/shell-failure-diagnostics.sh"
+heph_shell_failure_init cooking-run cooking
 tmp_root="${TMPDIR:-/var/tmp}"
 libkrun_tmp_root="${HEPHAESTUS_LIBKRUN_TMP_ROOT:-/var/tmp}"
 for path in "${tmp_root}" "${libkrun_tmp_root}"; do
@@ -68,6 +70,9 @@ browser_fixture=""
 browser_bridge_pid=""
 browser_bridge_dir=""
 browser_cleanup() {
+    local status=$?
+    heph_shell_failure_on_exit "${status}" "${LINENO}"
+    heph_shell_failure_begin_cleanup
     if [[ -n "${browser_oidc_pid}" ]]; then
         kill "${browser_oidc_pid}" >/dev/null 2>&1 || true
         wait "${browser_oidc_pid}" 2>/dev/null || true
@@ -84,6 +89,7 @@ browser_cleanup() {
     if [[ -n "${browser_bridge_dir}" && -z "${diagnostics_dir}" ]]; then
         rm -rf -- "${browser_bridge_dir}"
     fi
+    return "${status}"
 }
 trap browser_cleanup EXIT
 
@@ -249,6 +255,7 @@ if run_with_diagnostics; then
     exit 0
 else
     status="$?"
+    heph_shell_failure_on_exit "${status}" "${LINENO}"
     if [[ "${status}" -eq 124 || "${status}" -eq 137 ]]; then
         printf 'Cooking E2E exceeded its %ss timeout.\n' "${timeout_seconds}" >&2
     fi

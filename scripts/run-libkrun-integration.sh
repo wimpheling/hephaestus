@@ -17,6 +17,8 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly script_dir
 repo_root="$(cd -- "${script_dir}/.." && pwd -P)"
 readonly repo_root
+source "${repo_root}/scripts/shell-failure-diagnostics.sh"
+heph_shell_failure_init libkrun-integration libkrun
 ubuntu_image="${HEPHAESTUS_LIBKRUN_UBUNTU_IMAGE:-${DEFAULT_UBUNTU_IMAGE}}"
 readonly ubuntu_image
 postgres_image="${HEPHAESTUS_POSTGRES_TEST_IMAGE:-${DEFAULT_POSTGRES_IMAGE}}"
@@ -52,6 +54,7 @@ reserve_port() {
 }
 
 die() {
+    heph_shell_failure_die command command-failed 1 "${BASH_LINENO[0]:-1}"
     printf 'libkrun integration: %s\n' "$*" >&2
     exit 1
 }
@@ -215,11 +218,7 @@ contains_word() {
 }
 
 network_snapshot() {
-    {
-        find /sys/class/net -mindepth 1 -maxdepth 1 -printf '%f\n' | sort
-        cat /proc/net/route
-        cat /proc/net/ipv6_route
-    } | sha256sum | awk '{ print $1 }'
+    python3 "${repo_root}/scripts/canonical-network-snapshot.py"
 }
 
 published_port() {
@@ -678,6 +677,8 @@ cleanup() {
     local status=$?
     trap - EXIT INT TERM
     set +e
+    heph_shell_failure_on_exit "${status}" "${LINENO}"
+    heph_shell_failure_begin_cleanup
     if [[ "${status}" -ne 0 ]]; then
         failure_diagnostics
     fi
@@ -808,7 +809,11 @@ cgroup_root="${cgroup_parent}/hephaestus-integration-$$"
 mkdir "${cgroup_root}"
 printf '+cpu +io +memory +pids\n' >"${cgroup_root}/cgroup.subtree_control"
 
-network_before="$(network_snapshot)"
+network_before=''
+if ! network_before="$(network_snapshot)"; then
+    heph_shell_failure_die network-integrity read-failed 1 "${LINENO}"
+    die "unable to read the initial host network snapshot"
+fi
 readonly network_before
 printf 'Host kernel: %s\n' "$(uname -r)"
 printf 'passt: %s\n' "$(/usr/bin/passt --version | head -n 1)"
@@ -902,16 +907,59 @@ else
         -- --nocapture
 fi
 
-if find "${fixture_root}/runtime" -mindepth 1 -print -quit | grep -q .; then
+if [[ ! -d "${fixture_root}/runtime" ]]; then
+    heph_shell_failure_die runtime-cleanup missing-input 1 "${LINENO}"
+    die "runtime cleanup directory is unavailable"
+fi
+runtime_entries=''
+if ! runtime_entries="$(find "${fixture_root}/runtime" -mindepth 1 -print -quit)"; then
+    heph_shell_failure_die runtime-cleanup read-failed 1 "${LINENO}"
+    die "runtime cleanup directory cannot be inspected"
+fi
+if [[ -n "${runtime_entries}" ]]; then
+    heph_shell_failure_die runtime-cleanup assertion-mismatch 1 "${LINENO}"
     die "runtime files leaked after the integration test"
 fi
-if find "${cgroup_root}" -mindepth 1 -maxdepth 1 -type d -print -quit | grep -q .; then
+if [[ ! -d "${cgroup_root}" ]]; then
+    heph_shell_failure_die cgroup-cleanup missing-input 1 "${LINENO}"
+    die "per-VM cgroup directory is unavailable"
+fi
+cgroup_entries=''
+if ! cgroup_entries="$(find "${cgroup_root}" -mindepth 1 -maxdepth 1 -type d -print -quit)"; then
+    heph_shell_failure_die cgroup-cleanup read-failed 1 "${LINENO}"
+    die "per-VM cgroup directory cannot be inspected"
+fi
+if [[ -n "${cgroup_entries}" ]]; then
+    heph_shell_failure_die cgroup-cleanup assertion-mismatch 1 "${LINENO}"
     die "per-VM cgroups leaked after the integration test"
 fi
-grep -q '^populated 0$' "${cgroup_root}/cgroup.events" ||
+if [[ ! -r "${cgroup_root}/cgroup.events" ]]; then
+    heph_shell_failure_die cgroup-events missing-input 1 "${LINENO}"
+    die "the integration cgroup events file is unavailable"
+fi
+cgroup_events_status=0
+if grep -q '^populated 0$' "${cgroup_root}/cgroup.events"; then
+    cgroup_events_status=0
+else
+    cgroup_events_status=$?
+fi
+if (( cgroup_events_status > 1 )); then
+    heph_shell_failure_die cgroup-events read-failed 1 "${LINENO}"
+    die "the integration cgroup events file cannot be read"
+fi
+if (( cgroup_events_status == 1 )); then
+    heph_shell_failure_die cgroup-events assertion-mismatch 1 "${LINENO}"
     die "the integration cgroup remains populated"
-[[ "$(network_snapshot)" == "${network_before}" ]] ||
+fi
+network_after=''
+if ! network_after="$(network_snapshot)"; then
+    heph_shell_failure_die network-integrity read-failed 1 "${LINENO}"
+    die "unable to read the final host network snapshot"
+fi
+if [[ "${network_after}" != "${network_before}" ]]; then
+    heph_shell_failure_die network-integrity network-mismatch 1 "${LINENO}"
     die "host network interfaces or routes changed during the integration test"
+fi
 
 if [[ "${HEPHAESTUS_APP_LIBKRUN_E2E:-0}" == "1" ]]; then
     printf 'daemon golden E2E passed; runtime and cgroup cleanup verified\n'

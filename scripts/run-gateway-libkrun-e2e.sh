@@ -11,14 +11,20 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly script_dir
 repo_root="$(cd -- "${script_dir}/.." && pwd -P)"
 readonly repo_root
+source "${repo_root}/scripts/shell-failure-diagnostics.sh"
+heph_shell_failure_init gateway-libkrun-e2e gateway
 caddy_image="${HEPHAESTUS_CADDY_TEST_IMAGE:-docker.io/library/caddy@sha256:d8c17a862962def15cde69863a3a463f25a2664942eafd7bdbf050e9c3116b83}"
 readonly caddy_image
 container_name="hephaestus-gateway-libkrun-caddy-${PPID}-${RANDOM}"
 fixture_root="$(mktemp -d)"
 
 cleanup() {
+    local status=$?
+    heph_shell_failure_on_exit "${status}" "${LINENO}"
+    heph_shell_failure_begin_cleanup
     podman rm --force "${container_name}" >/dev/null 2>&1 || true
     rm -rf "${fixture_root}"
+    return "${status}"
 }
 trap cleanup EXIT
 

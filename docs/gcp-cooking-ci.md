@@ -6,11 +6,34 @@ validation is **pending**. Historical smoke or self-hosted Cooking results do
 not establish that the current GCP Cooking path is green.
 
 The optional encrypted `diagnostics-triage` export is published at source
-`4bede2c` with 184 focused tests; it revalidates the fixed private bundle
-before producing a one-day CMS ciphertext for a local recipient. The current
-paid full-run pause remains in force, and no actual no-VM encrypted-export
-proof has been recorded yet. See the [encrypted diagnostics export guide](gcp-encrypted-diagnostics.md)
+`87399f8` with 9 export tests and 90 diagnostics/collector tests; it
+revalidates the fixed private bundle before producing a one-day CMS ciphertext
+for a local recipient. See the [encrypted diagnostics export guide](gcp-encrypted-diagnostics.md)
 for the local key and inspection procedure.
+
+The first real no-VM encrypted-export proof is [run
+34670985068](https://github.com/wimpheling/hephaestus/actions/runs/34670985068)
+from source `87399f8d5f7de8e7c107df3cb481344666040556`. It created no VM;
+although the selected historical run still had a failed gate acceptance, the
+encryption steps succeeded. Local CMS decryption, helper revalidation, and
+byte-for-byte comparison passed for the 27,897-byte archive with SHA-256
+`1bb476f3d7ef3d5cefcf8176e8671ee6830b574a876c78aa9748e8345b8d3156`. The
+full GCP acceptance gate remains open; the next paid trial awaits the cheap
+diagnostic. The timestamp correction at `4bede2c` accepts the producer's single-digit UTC
+hours; the rejected historical raw inputs remain unavailable.
+
+The latest local full run is retained at `/tmp/heph-local-network-full.3FSjc8`
+from `HEAD` `87399f8` plus uncommitted shell/network changes. It passed 33
+golden tests with 1 ignored, six PostgreSQL tests, both browser phases with
+one report each, a 27-file credential scan covering 1,314,388 bytes, and
+cleanup verification and the shell post-check wiring. It did not emit a
+failure marker because the run succeeded. This is local evidence only. The
+full scripts discovery covered 203 scripts and the focused shell/network
+validation covered 29 tests; Bash, Python and diff checks passed. The next
+operational step is one cheap diagnostic and, only after it passes, one full
+GCP trial; the image-rebuild plan remains plan-only and the joint user-plan
+review still gates MVP-06 work. Focused shell tests verify failure-marker
+emission separately.
 
 The most recent full [run 34667868345](https://github.com/wimpheling/hephaestus/actions/runs/34667868345)
 from source `874a55824d1316952b1c1ae3288ba00e5a9d4619` failed after 29m26s
@@ -23,8 +46,8 @@ The private object was 27,897 bytes with SHA-256
 `1bb476f3d7ef3d5cefcf8176e8671ee6830b574a876c78aa9748e8345b8d3156`.
 Gate validation passed but acceptance failed. The raw `ENOENT` observation is
 not causal proof, and caught-confinement panics are not an application-failure
-classification. Paid full retries are paused for no-VM retained-bundle triage
-improvement and local lineage diagnosis; no new full run is planned yet.
+classification. At that time, paid full retries were paused for no-VM
+retained-bundle triage improvement and local lineage diagnosis.
 
 An earlier corrected full attempt is recorded below: [run
 34663205477](https://github.com/wimpheling/hephaestus/actions/runs/34663205477)
@@ -64,9 +87,9 @@ summarization. It quarantines only invalid lineage/status, removes the partial
 projection, retains other strict safe sources and emits closed rejection
 classes, failing closed if none remain valid. Missing lineage is not full
 coverage; the next full run must review lineage specifically. The post-fix cheap
-diagnostic above passed. Full retries remain paused for no-VM retained-bundle
-triage improvement and local lineage diagnosis; no new full run is planned. No
-MVP-06 implementation is part of this work.
+diagnostic above passed. At that time, full retries remained paused for no-VM retained-bundle triage
+improvement and local lineage diagnosis. No MVP-06 implementation is part of
+this work.
 Its predecessor [run 34662878781](https://github.com/wimpheling/hephaestus/actions/runs/34662878781)
 from source `5c453ea` failed conclusively with workload exit `127` from the
 wrapper before browser execution; the scanner ran and failed because no files
@@ -313,8 +336,9 @@ required by the baked image.
 
 The startup provenance change required a replacement image build and
 validation. Candidate `hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d` is
-promoted after its real KVM smoke passed; full validation remains open and paid full retries are paused for no-VM retained-bundle triage improvement and
-local lineage diagnosis. Use the explicit stock-image diagnostic for cheap validation when
+promoted after its real KVM smoke passed; full validation remains open. The
+next paid trial awaits the cheap diagnostic while local lineage diagnosis
+continues. Use the explicit stock-image diagnostic for cheap validation when
 testing startup changes.
 
 ```sh
@@ -707,6 +731,27 @@ The published browser capture writes one private Playwright JSON report per
 phase, then projects only the typed `.triage.browser` fields before collection.
 Missing, malformed, partial or nonpassing phase reports fail evidence
 validation without turning an unknown report into a fabricated browser cause.
+
+### Shell failure and network diagnostics
+
+The local shell runners emit one safe `HEPH_GCP_SHELL_FAILURE` record for the
+first failure. Its operator-facing fields are `script`, `component`,
+`operation`, `reason`, `exit_code` and `line`; the allowlisted values identify
+the runner (`cooking-run`, `gateway-libkrun-e2e` or `libkrun-integration`),
+the failure stage and its closed reason class. The marker excludes commands,
+arguments, paths, payloads and error text. The collector retains the fixed
+marker, and the summarizer exposes it as a `shell-failure` technical-context
+record with safe `source` and `order` lineage. A successful run does not emit
+this failure marker; the focused failure tests exercise that path.
+
+For local topology checks, `scripts/canonical-network-snapshot.py` compares
+the interface names and IPv4/IPv6 route topology before and after the test.
+It preserves route destinations, gateways, flags, metrics, masks, MTU, window,
+IRTT, prefixes and interfaces. It validates but omits only the volatile route
+`RefCnt` and `Use` counters, so counter churn does not hide topology changes.
+Malformed, oversized or unreadable procfs input fails closed. The full local
+shell/network validation covered 203 scripts and 29 focused tests; it passed
+without weakening assertions.
 
 The evidence-gate projection fix is published at `869dd20`. Its typed
 `.triage.evidenceScan` records the specific rule, file class, path digest and
