@@ -375,6 +375,11 @@ run_cooking() {
             trap '\''workload_failure "$?"'\'' ERR
             trap phase_timing_finish EXIT
             workload_step_start dependency-setup
+            # Temporary reviewed acceptance fixture: remove after the lifecycle
+            # run, or replace this one command with the bounded timeout variant
+            # documented with the test evidence.  It intentionally takes no
+            # workflow-controlled value.
+            (exit 42)
             workload_detail_stage_start preflight-command-checks
             "$1/preflight.sh"
             workload_detail_stage_pass preflight-command-checks
