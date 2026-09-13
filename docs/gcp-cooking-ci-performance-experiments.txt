@@ -48,7 +48,8 @@ Current facts
   run `34730591477 <https://github.com/wimpheling/hephaestus/actions/runs/34730591477>`_,
   and overlap through PR #42 (`151s`, `9.62%`) in run
   `34732597502 <https://github.com/wimpheling/hephaestus/actions/runs/34732597502>`_.
-  All are single-pair results; overlap is the newest valid comparison.
+  All are single-pair results; overlap is the newest accepted implementation
+  comparison.
 - The local verifier memory candidate remains held. Actual local libkrun
   feasibility passed in `259.460s`, but its earlier local probe input
   equivalence is incomplete. The corrected local ext4 scratch candidate was
