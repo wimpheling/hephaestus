@@ -949,6 +949,84 @@ exactly one authorized `gcp-cooking` run from trusted `main` at
 `9a2e741eade54bd52717d2de8bdb41e9cf9b1c34`, selecting PR #37 with its exact
 open head above; do not retry automatically.
 
-REJECTED
-========
-None yet.
+ACCEPTED CPU TRIAL: TWO VCPUS
+=============================
+Result: ACCEPTED as a modest single-pair measurement. This result does not
+support a drastic-improvement claim and has low repeatability confidence until
+another controlled pair is available. The candidate remained unchanged for
+root's integration review.
+
+Run: [34725585641](https://github.com/wimpheling/hephaestus/actions/runs/34725585641),
+attempt `1`, workflow `main` at controller SHA
+`9a2e741eade54bd52717d2de8bdb41e9cf9b1c34`; selected PR #37 workload SHA
+`46c4269ad30e810798f4926ccf06d63c757c6ba3`, repository ID `1312377552`.
+Reference baseline: [34724176879](https://github.com/wimpheling/hephaestus/actions/runs/34724176879),
+controller `9a2e741eade54bd52717d2de8bdb41e9cf9b1c34`, selected PR #20
+workload SHA `635b5945ee2a19b645afb163fe6f9bfcab9e0af1`.
+
+The CPU trial job elapsed `26m07s` (`23:30:27Z` to `23:56:34Z`) versus the
+baseline's `26m32s` (`22:58:52Z` to `23:25:24Z`): `25s` saved, `1.57%`.
+Trusted controller timing decreased from `1565481` ms to `1537016` ms:
+`28465` ms, `1.82%`, saved. The workload OCI builder plus verifier spans
+decreased from `467323` ms to `431953` ms: `35370` ms, `7.57%`, saved.
+These are one-run comparisons with fixed image, cache, host machine, zone,
+disk, concurrency, timeout, workload, gates and cleanup; workload spans
+overlap and are not additive totals.
+
+Phase comparison (baseline -> CPU candidate, delta in ms): controller
+`preflight-quota 2585 -> 3099 (+514)`, `preflight-cache 1397 -> 2287
+(+890)`, `vm-create 14759 -> 16923 (+2164)`, `vm-wait 1489141 -> 1454247
+(-34894)`, `vm-delete 54224 -> 54909 (+685)`, `cleanup-verification 1630
+-> 1757 (+127)`, `post-delete-download 1745 -> 3794 (+2049)`; workload
+`project-build 12917 -> 12186 (-731)`, `production-project-build 83685 ->
+80482 (-3203)`, `oci-builder 102566 -> 85681 (-16885)`, `oci-verifier
+364757 -> 346272 (-18485)`, and `golden-tests 1120599 -> 1089757 (-30842)`.
+Trusted guest-startup sums were `1442084 -> 1399500` ms (`-42584`), and
+trusted guest-runtime sums were `1425187 -> 1384084` ms (`-41103`); these
+phase-domain sums also contain overlapping supervisor spans.
+
+Correctness and evidence remained valid: finalized workload, evidence-scan
+and browser-validation gates all passed with exit code `0`; collection was
+complete with 11 available and zero missing sources; upload/download/scan and
+phase validation/acceptance passed. Browser validation was complete with 2
+passed, 0 failed, 0 skipped and 0 timed out. The evidence scanner checked 26
+files and 1156416 bytes. The downloaded archive was 32117 bytes with SHA-256
+`93a929ea63598b9f9aac5eaecf2090d6f452f74b5ec8a8ec828a00adb41a1499`, and the
+owned VM was verified absent after cleanup and post-delete collection.
+
+The retained technical marker inventory had 38 distinct passed Rust markers
+versus 39 in the baseline, with no failed markers. The missing retained marker
+was `support::vm_observer::tests::rejects_fixture_pattern_in_vm_identifier`.
+This was reviewed as an inventory/projection difference rather than a source
+or test omission; the workload gate passed. Preserve this caveat with the
+measurement and do not treat the marker inventories as test counts.
+
+
+PREPARED HOST BUILD REMOVAL TRIAL
+=================================
+ID: remove-unused-host-build
+Hypothesis: after accepting the CPU change, removing only the unused host
+`project-build` compile will eliminate its measured baseline cost of about
+`12917` ms (`12.917s`). Keep the accepted Cooking worker at `2` vCPUs and
+retain the production project build as the correctness proof. The total job
+delta may be smaller than run-to-run variance; this is one bounded experiment
+and will not be inflated into a larger claim.
+
+Reference: accepted CPU run `34725585641`, exact candidate head
+`46c4269ad30e810798f4926ccf06d63c757c6ba3`, and baseline `34724176879`.
+Controlled variable: remove the unused host project-build phase only. Fixed
+controls remain the accepted CPU configuration: worker `vcpus=2`, memory
+`2048` MiB, protected image
+`hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d`, immutable cache
+generation `1789079827867335`, `n2-standard-8`, `150 GB pd-balanced`,
+`europe-west1-d`, one VM, concurrency `1`, 45-minute provider DELETE and
+50-minute workflow timeout. Keep all production proof, workload, browser,
+golden/PostgreSQL, scanner, marker, provenance, complete-timing, gate and
+post-delete cleanup requirements unchanged.
+
+Acceptance requires a complete valid evidence path and the same passing gates;
+compare total elapsed time, the retained host phase, production build, OCI
+phases and golden tests. Rollback is to restore the host build while retaining
+the accepted CPU change. Do not dispatch until root supplies the exact
+integrated `main` SHA and PR #39 open head; dispatch exactly one run, with no
+retry or additional infrastructure work.
