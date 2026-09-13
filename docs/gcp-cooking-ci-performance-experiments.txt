@@ -1366,8 +1366,10 @@ and diff checks passed. Full `cargo dev quality` and independent integration
 review have now completed: the full `cargo dev quality` gate passed in
 session `48642` (exit `0`, log `/tmp/heph-overlap-quality-7a6ba94.log`), and
 the independent Astra integration review approved the bounded scope and
-safety properties. No GCP dispatch has occurred. This remains a pretrial
-record, not a performance result.
+safety properties. No GCP dispatch was part of this preparation entry. This
+remains a pretrial record, not a performance result. Its single authorized
+trial is recorded below; no additional dispatch is part of this pretrial
+entry.
 
 Implementation commit: `7a6ba94e55e3b2cc42f8960578d6a4ad54b1c0ae`.
 
@@ -1444,7 +1446,13 @@ The candidate retained 41 distinct passed Rust marker names: the baseline's
 and `cooking_preparation_drains_child_before_resuming_either_panic`; no
 baseline marker was lost and no failed marker was retained. This is a marker
 inventory, not a test count. The producer-to-timing-to-collection-to-
-validation path passed with the frozen instrumentation. The result is ready
-for root's merge decision; rollback is reverting
+validation path passed with the frozen instrumentation. The result was
+accepted and merged after root's integration decision; rollback is reverting
 `7a6ba94e55e3b2cc42f8960578d6a4ad54b1c0ae` to restore serial blog
-preparation. No merge or further GCP dispatch is implied by this ledger entry.
+preparation. No further GCP dispatch is implied by this ledger entry.
+
+Merge handoff: PR #42 was marked ready after its visible checks, full quality
+gate and independent review, then merged with commit
+`6e812d2e0e22c489541eb34fe8d85ce481970d81` at
+`2026-09-13T02:43:22Z`. The next source baseline for any future experiment is
+this merged main revision; no repeat run is implied by the single-pair result.

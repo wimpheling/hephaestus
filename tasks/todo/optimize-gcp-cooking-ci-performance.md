@@ -16,8 +16,9 @@ avoidable work.
 The experiment ledger is
 [`docs/gcp-cooking-ci-performance-experiments.txt`](../../docs/gcp-cooking-ci-performance-experiments.txt).
 It is the only place where a change may be recorded as accepted or rejected.
-The ledger currently records a valid cold-GCP baseline and accepted CPU and
-host-build-removal trials; broader optimization work remains in progress.
+The ledger currently records a valid cold-GCP baseline and accepted CPU,
+host-build-removal and overlap trials; broader optimization work remains in
+progress.
 
 ## Working-tree implementation status
 
@@ -67,10 +68,25 @@ it completed in 26m09s, saving 14s (0.88%) against the fresh control. Trusted
 controller time decreased from 1552264ms to 1542869ms, a 9395ms (0.61%)
 reduction. The host candidate had 39 matching retained markers, browser
 validation 2/2 passed, all required gates and 11/11 evidence sources passed,
-and verified VM absence. Both candidate results are modest single-pair
-measurements with limited repeatability evidence and do not support a drastic
-improvement claim. Passing workload gates and passing diagnostic collection
-are reported separately from valid performance measurements.
+and verified VM absence. Both earlier candidate results are modest
+single-pair measurements with limited repeatability evidence. The accepted
+overlap candidate is run
+[`34732597502`](https://github.com/wimpheling/hephaestus/actions/runs/34732597502),
+which completed in 23m38s (`1418s`) against the host-removal baseline's
+26m09s (`1569s`), saving 151s (9.62%). Trusted controller time decreased
+from 1542869ms to 1394357ms, saving 148512ms (9.63%); `golden-tests`
+decreased 141430ms (12.76%), while `production-project-build` increased
+8514ms and OCI builder plus verifier increased 11749ms. The candidate
+retained 41 distinct passed marker names: the baseline's 39 plus the two new
+preparation regression markers, with no baseline marker lost or failed marker
+retained. All workload, browser, timing, evidence, upload/download, scanner,
+gate and verified VM-absence requirements passed with 11/11 sources and
+browser validation 2/2. The private archive SHA-256 is
+`82a4d45146ad35af7974b99a54a3a7303f81293948740ced37f78a99d0c29dc9`. Passing
+workload gates and passing diagnostic collection are reported separately from
+valid performance measurements; all workload spans remain informational and
+non-additive. The single overlap pair is material but does not establish
+repeatability or a drastic improvement guarantee.
 
 The CPU implementation was merged through PR #37 (merge
 `c0bd1c61f85a6537feb3ee682d178fe92f4ad432`), and the host-build-removal
@@ -80,6 +96,11 @@ gate passed, and the ledger handoff was pushed at `069c8d6`. PR #38 froze the
 instrumentation after its real lifecycle regression and quality checks; PR #40
 supplied the shared wait fix. The larger optimization sequence remains open,
 and the partial GitHub hard-cancellation evidence remains an explicit gap.
+The overlap implementation was merged through PR #42 (merge
+`6e812d2e0e22c489541eb34fe8d85ce481970d81`) after the full quality gate
+(`48642`), independent Astra review, real callsite fixture and valid GCP
+comparison. Its next source baseline is the merged main revision; no repeat
+run has been claimed.
 
 ## Locked constraints
 
