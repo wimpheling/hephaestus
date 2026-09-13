@@ -974,12 +974,19 @@ pub async fn build_and_publish_adversarial_gateway(
 }
 
 /// Creates and pushes the separate blog repository used by the cooking
-/// instance attachment.
+/// instance attachment, after verifying its Hugo toolchain.
 pub async fn create_cooking_blog_repository(
     context: &CookingBuildContext<'_>,
 ) -> Result<PreparedCookingBlog, BuildError> {
-    let source = canonical_source(context.source_root, "cooking-blog");
-    create_cooking_blog_toolchain_repository(context, &source).await?;
+    let repository_id = create_cooking_blog_repository_metadata(context).await?;
+    populate_cooking_blog_repository(context, repository_id).await
+}
+
+/// Creates an empty repository so manual attachments and browser configuration
+/// can be prepared while the independent Hugo image is built and verified.
+pub async fn create_cooking_blog_repository_metadata(
+    context: &CookingBuildContext<'_>,
+) -> Result<RepositoryId, BuildError> {
     let repository = context
         .repositories
         .create_repository_trusted(&CreateRepository {
@@ -990,6 +997,17 @@ pub async fn create_cooking_blog_repository(
             agent_runs_enabled: false,
         })
         .await?;
+    Ok(repository.id)
+}
+
+/// Populates the precreated repository only after its project image is ready.
+/// Early manual attachments cannot turn this source push into an agent run.
+pub async fn populate_cooking_blog_repository(
+    context: &CookingBuildContext<'_>,
+    repository_id: RepositoryId,
+) -> Result<PreparedCookingBlog, BuildError> {
+    let source = canonical_source(context.source_root, "cooking-blog");
+    create_cooking_blog_toolchain_repository(context, &source).await?;
     let destination = context
         .root
         .join(format!("cooking-blog-{}", Uuid::new_v4()));
@@ -1002,7 +1020,7 @@ pub async fn create_cooking_blog_repository(
     fs::remove_file(destination.join("verify-hugo.sh"))?;
     fs::remove_dir_all(destination.join("vendor"))?;
     initialize_git(&destination, "Cooking blog").await?;
-    let remote = format!("http://{}/{}", context.running.http_addr(), repository.id);
+    let remote = format!("http://{}/{}", context.running.http_addr(), repository_id);
     git(&destination, &["remote", "add", "origin", &remote]).await?;
     authenticated_git(
         &destination,
@@ -1012,7 +1030,7 @@ pub async fn create_cooking_blog_repository(
     .await?;
     let source_commit = git_output(&destination, &["rev-parse", "HEAD"]).await;
     Ok(PreparedCookingBlog {
-        repository_id: repository.id,
+        repository_id,
         source_commit: source_commit?,
     })
 }
