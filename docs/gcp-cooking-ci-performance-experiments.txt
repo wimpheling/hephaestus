@@ -63,15 +63,23 @@ Current facts
   closes the stale harness-fidelity gap for the current input, but local host
   timing is not GCP savings and exact byte equivalence to the retained GCP
   candidate is unavailable.
-- Candidate PR #43 removes only the guarded CPython
-  `/opt/python/lib/python3.13/test` tree. Its local OCI operation was
-  `105.346s` versus the current-input control's `120.512s`; this is local
-  evidence only. Final quality passed in session `18452`, the site fixture
-  passed for both pages, and independent review conditionally approved the
-  narrow hypothesis. The authorized GCP trial is active as run
-  `34738676749 <https://github.com/wimpheling/hephaestus/actions/runs/34738676749>`_
-  at exact head `9b39eb489d8a87c8d71db6c6c9bb573e124f1891`; terminal
-  measurement and acceptance are pending.
+- Candidate PR #43 removed only the guarded CPython
+  `/opt/python/lib/python3.13/test` tree. Its authorized locked GCP trial,
+  run `34738676749 <https://github.com/wimpheling/hephaestus/actions/runs/34738676749>`_,
+  completed successfully at exact head
+  `9b39eb489d8a87c8d71db6c6c9bb573e124f1891`, but is **not accepted**: the
+  workload, browser, timing, private-evidence, scanner, gate and cleanup
+  checks passed, while the retained Rust marker inventory was 40 versus the
+  control's 41 (the missing marker is
+  `cooking_confinement::tests::native_vm_logs_reject_split_encodings_without_joining_streams`).
+  The job took `1485s` versus control `1418s` (`+67s`, `+4.73%`); trusted
+  controller time was `1448925ms` versus `1394357ms` (`+54568ms`, `+3.91%`).
+  The candidate's workload phases were faster in one pair (`golden-tests`
+  `884033ms` vs `966549ms`, OCI builder `88689ms` vs `93001ms`, verifier
+  `322770ms` vs `364207ms`), but the marker mismatch prevents acceptance and
+  no optimization claim or merge follows. Final quality passed in session
+  `18452`, and the site fixture passed for both pages; these are separate from
+  valid GCP performance acceptance.
 
 Implementation foundation (live and frozen)
 --------------------------------------------
@@ -119,10 +127,11 @@ TO DO
    is retained.
 3. Keep fork execution deferred pending a separate trust-policy decision and
    keep MVP-06 unchecked; neither is part of this task.
-4. Keep the memory and scratch candidates held/rejected and keep PR #43's
-   exact head frozen while run `34738676749` completes. Decide acceptance only
-   from complete workload, timing, provenance, evidence, gate and cleanup
-   results; do not retry or dispatch another run.
+4. Keep the memory and scratch candidates held/rejected. PR #43 run
+   `34738676749` is terminal but not accepted because its complete evidence
+   retained 40 Rust markers versus the control's 41. Preserve the exact
+   evidence and do not retry, merge or dispatch another run until the marker
+   discrepancy has an independently reviewed explanation.
 5. Record any future bounded trial with exact provenance, complete gates,
    cleanup evidence, measurements, decision and rollback. Preserve frozen
    instrumentation and do not treat overlapping workload phases as additive.
@@ -163,9 +172,12 @@ CURRENT REJECTED AND HELD LOCAL RESULTS
   not an accepted GCP optimization: exact byte equivalence to the retained GCP
   candidate is unavailable, and no GCP saving is claimed. Memory remains held,
   scratch remains rejected, and no identity or toolchain candidate is approved.
-- PR #43 is the active paid trial at run `34738676749`, exact head
-  `9b39eb489d8a87c8d71db6c6c9bb573e124f1891`; it remains unaccepted pending
-  terminal evidence and the paired comparison.
+- PR #43 trial run `34738676749` at exact head
+  `9b39eb489d8a87c8d71db6c6c9bb573e124f1891` is terminal and workload-valid
+  but not accepted. It ran `1485s` versus the `1418s` control (`+67s`), with
+  trusted controller `1448925ms` versus `1394357ms` (`+54568ms`); its 40
+  retained Rust markers versus 41 in the control are an acceptance blocker.
+  Do not claim the local or phase-level speedups as a GCP optimization.
 
 CHRONOLOGICAL EXPERIMENT RECORDS (HISTORICAL DETAIL)
 =====================================================
@@ -1754,5 +1766,21 @@ and the retained 41-marker set. Keep the image, cache, machine, zone, disk,
 concurrency, resources and frozen instrumentation unchanged. Acceptance would
 require complete workload, browser, golden, scanner, marker, provenance,
 timing, private evidence and post-delete cleanup, with no weakened test
-meaning. Rollback is reverting the Dockerfile-only commit. This is a prepared
-draft pending final review; no GCP dispatch is authorized by this entry.
+meaning. Rollback is reverting the Dockerfile-only commit. The single
+authorized GCP trial was run as `34738676749` and completed
+successfully, but acceptance is blocked by the marker inventory mismatch:
+40 candidate markers versus 41 control markers. Its workload and diagnostics
+were otherwise complete (browser `2/2`, 11/11 sources, all gates and cleanup),
+and its slower job time was `1485s` versus `1418s` control. No retry or merge
+is authorized from this result; rollback is reverting the Dockerfile-only
+commit while the precise marker discrepancy receives independent review.
+
+PR #43 TERMINAL TRIAL: NOT ACCEPTED
+===================================
+The locked GCP trial `34738676749 <https://github.com/wimpheling/hephaestus/actions/runs/34738676749>`_ completed with workflow and cloud job success at exact workload head `9b39eb489d8a87c8d71db6c6c9bb573e124f1891`. The controller ran from `main` at `6e812d2e0e22c489541eb34fe8d85ce481970d81`; the control workload was `7a6ba94e55e3b2cc42f8960578d6a4ad54b1c0ae`. The source difference from the control was the Dockerfile-only guarded CPython test-tree removal; the other main drift was documentation-only. The locked image fingerprint was `f285fc2b8157f8053383fc98bcaec83d`, cache generation `1789079827867335`, and the machine/zone/disk/concurrency settings were unchanged.
+
+The candidate job elapsed `1485s` (`24m45s`) versus control `1418s` (`23m38s`): `+67s` (`+4.73%`). Trusted controller time was `1448925ms` versus `1394357ms`: `+54568ms` (`+3.91%`). Candidate controller phases were quota `3055ms`, cache `1772ms`, VM create `27212ms`, VM wait `1327327ms`, VM delete `85869ms`, cleanup verification `1758ms`, and post-delete download `1932ms`; every required controller phase passed. Workload timing is informational and spans overlap. Paired candidate/control phases were: `golden-tests 884033/966549ms` (`-82516ms`), `production-project-build 89028/91190ms` (`-2162ms`), `oci-builder 88689/93001ms` (`-4312ms`), `oci-verifier 322770/364207ms` (`-41437ms`), `browser-initial 93604/98616ms` (`-5012ms`), and `browser-post-operation 43354/43805ms` (`-451ms`). The combined OCI reduction was `45749ms` (`-10.01%`) in this one pair; it is not accepted or promoted because evidence completeness takes precedence over phase speed.
+
+The candidate passed workload, browser `2/2`, phase timing, provenance, evidence scan (`26` files and `1154680` bytes), upload/download, all three acceptance gates, and verified VM absence. The private archive was uploaded and verified by download at `gs://hephaestus-508000-cooking-diagnostics/cooking/runs/34738676749/1/9b39eb489d8a87c8d71db6c6c9bb573e124f1891.tar.gz`, `31961` bytes, SHA-256 `6ee50982cfa06cd3f3376483b10d46361793515803193d91f6145b98f3fa9ed0`; all `11/11` evidence sources were complete with no missing, truncated or unavailable source.
+
+The acceptance blocker is the retained Rust marker inventory: the candidate has `40` distinct passed Rust marker names while the control has `41`. The missing control marker is `cooking_confinement::tests::native_vm_logs_reject_split_encodings_without_joining_streams`; the candidate source still contains this test, so this result does not identify a production defect or justify a retry. Marker inventories are not test counts. Treat the run as a passing workload with an invalid/inconclusive performance acceptance result. Rollback remains reverting the Dockerfile-only commit; no merge, retry or additional dispatch follows without an independently reviewed explanation of the marker discrepancy.

@@ -38,10 +38,12 @@ diagnostic harness omission; it is not production mechanism evidence. Withdraw
 the identity-projection and image-change candidate. A complete current-input
 production OCI operation then passed locally (builder 35.353s, verifier
 84.866s, execute 120.512s) with no wrappers; this is local evidence only and
-does not establish GCP savings. Draft PR #43 (`9b39eb489d8a87c8d71db6c6c9bb573e124f1891`)
-is now the active authorized trial as run `34738676749`, with terminal
-measurement and acceptance pending; no retry or second dispatch is planned.
-It was prepared for
+does not establish GCP savings. PR #43
+(`9b39eb489d8a87c8d71db6c6c9bb573e124f1891`) was the authorized trial run `34738676749`. It completed successfully, but is not accepted:
+its workload and all collection gates passed while its retained Rust marker
+inventory was 40 versus the control's 41. The job was 1485s versus 1418s
+control (+67s, +4.73%), so no GCP optimization claim or merge follows. No
+retry or second dispatch is planned. It was prepared for
 the separately reviewed Python test-tree hypothesis. It removes only the
 guarded `/opt/python/lib/python3.13/test` directory; local OCI time was
 105.346s versus 120.512s, with quality session 18452 and the two-page site
@@ -226,12 +228,13 @@ passed. This is representative local evidence correcting the stale harness
 fidelity gap, but exact byte equivalence to the retained GCP candidate is not
 available and no GCP saving is claimed. One pre-provision launcher failure due
 to missing empty allowlist directories was corrected before the single actual
-operation. The next step is Astra's read-only review of toolchain packaging
-and test meaning; no candidate is approved. Evidence is at
+operation. The Python trial has now completed, and the marker discrepancy is the
+remaining acceptance blocker; no candidate is approved from that run.
+Evidence is at
 `/home/a/.cache/heph-current-oci-p_xchkk6/summary.json` and
 `/home/a/.cache/heph-current-oci-p_xchkk6/build-provenance.json`.
 
-Prepared pretrial PR #43 has exact head
+PR #43 trial has exact head
 `9b39eb489d8a87c8d71db6c6c9bb573e124f1891` and base
 `6e812d2e0e22c489541eb34fe8d85ce481970d81`. It changes one guarded Dockerfile
 RUN to remove only `/opt/python/lib/python3.13/test`, retaining Hugo checksum
@@ -239,8 +242,14 @@ and mode, base/Python/site validation, scanner identities and test meaning.
 The locked GCP control is run #34732597502 (`1418s`, controller `1394357ms`,
 golden `966549ms`, OCI builder `93001ms`, verifier `364207ms`, complete gates,
 cleanup and 41 markers). Rollback is reverting the Dockerfile-only commit.
-The draft remains pending the separate paid-trial decision; no GCP dispatch is
-included.
+The single paid trial was dispatched as run `34738676749` and completed
+successfully. It is not accepted because the complete candidate evidence
+retained 40 Rust markers versus 41 in control; all other gates passed. The
+candidate job was `1485s` versus `1418s` control, trusted controller
+`1448925ms` versus `1394357ms`. Do not claim the local or phase-level speedup
+as a GCP optimization. Rollback is reverting the Dockerfile-only commit; no
+retry, merge or second dispatch follows without independent review of the
+marker discrepancy.
 
 ## Locked constraints
 
