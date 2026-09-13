@@ -15,18 +15,17 @@ avoidable work.
 
 The experiment ledger is
 [`docs/gcp-cooking-ci-performance-experiments.txt`](../../docs/gcp-cooking-ci-performance-experiments.txt).
-It is the only place where a change may be recorded as accepted or rejected;
-its initial accepted and rejected sections are intentionally empty.
+It is the only place where a change may be recorded as accepted or rejected.
+The ledger currently records a valid cold-GCP baseline and accepted CPU and
+host-build-removal trials; broader optimization work remains in progress.
 
 ## Working-tree implementation status
 
-The current implementation branch contains the controller and instrumentation
-foundation, but no live acceptance result. The trusted workflow remains the
-`main` workflow pinned by the existing WIF condition, and must be reviewed and
-promoted to `main` before it can exercise these changes. Local contract tests,
-Python compilation, Bash syntax checks and diff checks pass for the evolving
-working tree; this does not prove a GCP run, a PR run, a performance baseline,
-or a security boundary under a live systemd/KVM guest.
+The trusted controller and instrumentation foundation are live on `main` and
+have a valid cold-GCP baseline. PR #38's producer-to-startup-to-collector-to-
+controller-to-summarizer lifecycle was reproduced locally with the real timing
+scripts, and its required quality gate passed. The instrumentation scope is
+now frozen.
 
 The controller accepts an operator-supplied PR number, repository ID
 `1312377552`, and exact head SHA only as an all-or-none tuple. It validates the
@@ -47,27 +46,56 @@ an optional PR workload SHA: the controller SHA authenticates the selected
 `main` Actions run, while the workload SHA locates the private object and
 retained workload provenance.
 
-The phase timing helper now emits bounded monotonic JSONL records with fixed
-phase, trust, provenance, cache and metric fields. Trusted startup projects
-the private file into safe diagnostics; workload timings are informational and
-never determine correctness. No measured performance improvement is claimed,
-and no paid dispatch is authorized by this status note.
+The phase timing helper emits bounded monotonic JSONL records with fixed phase,
+trust, provenance, cache and metric fields. Trusted startup projects the
+private file into safe diagnostics; workload timings are informational and
+never determine correctness. The measured results and evidence status are
+recorded in the handoff below; the earlier host-removal run `34727051946`
+remains failed/inconclusive and is not a performance measurement.
+
+Measured experiment handoff: the valid baseline is run
+[`34724176879`](https://github.com/wimpheling/hephaestus/actions/runs/34724176879)
+with the locked configuration and a 26m32s job. The accepted CPU2 experiment
+is run
+[`34725585641`](https://github.com/wimpheling/hephaestus/actions/runs/34725585641),
+which completed in 26m07s, saving 25s (1.57%) in one pair; its repeatability
+is unconfirmed. The fresh CPU2 plus host-build control is run
+[`34729302087`](https://github.com/wimpheling/hephaestus/actions/runs/34729302087)
+with a 26m23s job. The host-build-removal candidate is run
+[`34730591477`](https://github.com/wimpheling/hephaestus/actions/runs/34730591477);
+it completed in 26m09s, saving 14s (0.88%) against the fresh control. Trusted
+controller time decreased from 1552264ms to 1542869ms, a 9395ms (0.61%)
+reduction. The host candidate had 39 matching retained markers, browser
+validation 2/2 passed, all required gates and 11/11 evidence sources passed,
+and verified VM absence. Both candidate results are modest single-pair
+measurements with limited repeatability evidence and do not support a drastic
+improvement claim. Passing workload gates and passing diagnostic collection
+are reported separately from valid performance measurements.
+
+The CPU implementation was merged through PR #37 (merge
+`c0bd1c61f85a6537feb3ee682d178fe92f4ad432`), and the host-build-removal
+implementation was merged through PR #39 (merge
+`39b8032796637c6898b41c281754c38bb3be41ee`). The integrated candidate quality
+gate passed, and the ledger handoff was pushed at `069c8d6`. PR #38 froze the
+instrumentation after its real lifecycle regression and quality checks; PR #40
+supplied the shared wait fix. The larger optimization sequence remains open,
+and the partial GitHub hard-cancellation evidence remains an explicit gap.
 
 ## Locked constraints
 
-- [ ] Keep the existing WIF provider, exact `cooking-e2e.yml@refs/heads/main`
+- [x] Keep the existing WIF provider, exact `cooking-e2e.yml@refs/heads/main`
   workflow restriction, repository and branch conditions, pinned actions and
   CI service account. Do not add `pull_request_target`, widen WIF to arbitrary
   pull-request refs, or let a pull request replace the trusted workflow.
-- [ ] Keep the current protected runner image
+- [x] Keep the current protected runner image
   `hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d` until a separately
   reviewed image change is promoted. Keep one disposable VM, the 45-minute
   provider `DELETE` lifetime, the 50-minute job timeout and one-day private
   diagnostics retention.
-- [ ] Keep expected test counts, browser assertions, golden assertions,
+- [x] Keep expected test counts, browser assertions, golden assertions,
   scanner checks, marker checks and cleanup verification unchanged. Never hide
   a timeout or failed test behind a performance result.
-- [ ] Keep diagnostics private, bounded and credential-free in uploaded
+- [x] Keep diagnostics private, bounded and credential-free in uploaded
   projections. Do not add service-account keys, repository secrets to guest
   processes, public buckets or persistent runners.
 - [ ] Keep the MVP-06 joint user-plan review unchecked; this performance task
@@ -80,59 +108,59 @@ there is no registered self-hosted runner. A pull request must therefore be
 represented as data selected by a trusted `main` controller, while the
 workflow, permissions and cleanup code continue to come from `main`.
 
-- [ ] Define an operator-approved `workflow_dispatch` or trusted main-branch
+- [x] Define an operator-approved `workflow_dispatch` or trusted main-branch
   controller input containing the PR number, repository ID and exact PR head
   SHA. Resolve the PR through the GitHub API, require that the submitted SHA
   equals the PR head SHA, and record the SHA as the immutable workload
   provenance before creating a VM.
-- [ ] Treat reviewed same-repository pull requests as untrusted workload code
+- [x] Treat reviewed same-repository pull requests as untrusted workload code
   and support that path first. Fetch only the public source at the validated
   SHA after the trusted workflow starts; never execute a PR workflow file,
   interpolate PR text into shell code, or use `pull_request_target` with a PR
   checkout and secrets. Fork pull requests are declined/deferred until a
   separate trust and approval policy is reviewed.
-- [ ] Split trusted setup/collection from the workload. The controller and
+- [x] Split trusted setup/collection from the workload. The controller and
   pinned startup code may use the existing WIF identity for resource lifecycle,
   cache staging and post-delete evidence handling. The PR workload must run
   without ADC, metadata credentials, service-account scopes or write access to
   the cache and diagnostics buckets.
-- [ ] Stage the immutable cache through a trusted setup step before handing
+- [x] Stage the immutable cache through a trusted setup step before handing
   control to PR code, or prove an equivalent read-only artifact path that
   exposes no credential-bearing metadata. Keep diagnostics upload in trusted
   controller/collector code and upload only the validated safe projection.
-- [ ] Define the guest boundary explicitly: the PR process receives only the
+- [x] Define the guest boundary explicitly: the PR process receives only the
   checked-out source, selected immutable cache inputs and ordinary test
   configuration; it cannot read the controller's WIF token, runtime identity,
   private key, raw diagnostics, workflow command files or unrelated host paths.
-- [ ] Use a fixed controller-created resource name and labels containing the
+- [x] Use a fixed controller-created resource name and labels containing the
   validated PR SHA, run ID and attempt. Require project-wide ownership checks,
   verified absence after deletion and private post-delete download/scan before
   declaring the run complete.
-- [ ] Make the controller fail closed before VM creation when the PR identity,
+- [x] Make the controller fail closed before VM creation when the PR identity,
   source SHA, image fingerprint, cache checksum, zone, quota or trust
   conditions are missing or mismatched. Do not retry paid failures
   automatically.
 
 ## Measurement and instrumentation
 
-- [ ] Instrument monotonic, structured phase records before establishing the
+- [x] Instrument monotonic, structured phase records before establishing the
   performance baseline. Cover preflight, VM create, startup, cache hit/miss and
   bytes, dependency/setup, OCI builder and verifier, project build, gateway
   readiness, browser phases, golden tests, credential scanning, archive/upload,
   VM deletion, post-delete download and cleanup verification.
-- [ ] Record phase start/end monotonic durations, outcome, bounded byte/count
+- [x] Record phase start/end monotonic durations, outcome, bounded byte/count
   fields, cache identity and source/image/run provenance. Use an explicit
   schema and fixed enum vocabulary; reject malformed or incomplete records.
-- [ ] Ensure instrumentation has no shell arguments, command lines, source
+- [x] Ensure instrumentation has no shell arguments, command lines, source
   payloads, paths outside the approved field classes, credentials or raw
   browser/network errors. Store only the safe status projection in the
   one-day artifact; keep raw diagnostics VM-private and subject to the same
   archive validation.
-- [ ] Add focused tests for phase ordering, missing/duplicate phases, timeout
+- [x] Add focused tests for phase ordering, missing/duplicate phases, timeout
   and cancellation, cache hit/miss, oversized values, malformed fields and
   credential-like input. Confirm the original workload exit and test counts
   remain authoritative before using the timings.
-- [ ] Establish an instrumented cold-GCP baseline on a justified minimum set of
+- [x] Establish an instrumented cold-GCP baseline on a justified minimum set of
   runs. Keep image fingerprint, machine type, cache generation, zone and
   concurrency fixed; record baseline SHA separately from each candidate SHA
   when code changes. The historical warm self-hosted PR result is not
@@ -140,7 +168,7 @@ workflow, permissions and cleanup code continue to come from `main`.
 
 ## Controlled experiment sequence
 
-- [ ] Run the instrumented baseline first and copy its measurements to the
+- [x] Run the instrumented baseline first and copy its measurements to the
   experiment ledger. Keep image, machine type, zone, cache generation and
   concurrency fixed; keep source SHA fixed only when the candidate makes no
   code change, otherwise record baseline SHA and candidate SHA explicitly.
@@ -148,36 +176,37 @@ workflow, permissions and cleanup code continue to come from `main`.
   work, then project-build and gateway-readiness work, then any duplicate npm
   or CI setup work. Record an explicit hypothesis and rollback plan before
   each paid trial.
-- [ ] Include bounded hypotheses for OCI verification, cache hit/setup, project
+- [x] Include bounded hypotheses for OCI verification, cache hit/setup, project
   builds, gateway wait, duplicate npm/CI work and cancellation/concurrency.
   Reject any idea that weakens assertions, skips a required test, broadens
   credentials or makes cleanup less reliable.
-- [ ] Use the smallest justified baseline/candidate comparison within the
+- [x] Use the smallest justified baseline/candidate comparison within the
   budget policy. Add repeats only when observed variance prevents a decision.
   Compare total wall time, each phase, cache bytes/hits, correctness result,
   scan result, cleanup result and any material cost exposure; do not accept a
   faster run with incomplete evidence.
-- [ ] For an accepted change, commit the implementation and ledger result on a
-  dedicated experiment branch, record the commit hash, and include before/after
-  measurements, variance, provenance, test evidence and rollback instructions.
-  For a rejected change, revert only that experiment's changes, commit the
-  rejection reason and measurements in the ledger, and never reset unrelated
-  work.
+- [x] Commit the implementation and ledger result for each completed CPU and
+  host-build-removal trial on its dedicated experiment branch, recording the
+  commit hash, before/after measurements, variance, provenance, test evidence
+  and rollback instructions. Any future rejected experiment must revert only
+  its own changes, commit the rejection reason and measurements in the ledger,
+  and never reset unrelated work.
 
 ## Acceptance and handoff
 
-- [ ] Prove a trusted controller can run a validated reviewed same-repository PR
+- [x] Prove a trusted controller can run a validated reviewed same-repository PR
   SHA without exposing credentials or PR-controlled workflow execution. Record
   fork execution as deferred unless a separate trust and approval policy is
   accepted.
 - [ ] Prove the disposable VM, cache staging, private diagnostics, post-delete
   download/scan and ownership cleanup behavior under success, test failure,
-  timeout and cancellation.
-- [ ] Prove the instrumented baseline still passes the unchanged Cooking,
+  timeout and cancellation. Success, test-failure, timeout and workload-signal
+  cleanup evidence exists; GitHub hard-cancellation propagation remains open.
+- [x] Prove the instrumented baseline still passes the unchanged Cooking,
   browser, golden, scanner and marker requirements with complete safe evidence.
-- [ ] Update the experiment ledger and this task with each accepted or rejected
+- [x] Update the experiment ledger and this task with each accepted or rejected
   result, exact run links, source/image revisions and reproducible commands.
-- [ ] Keep the current paid GCP manual path available until the replacement PR
+- [x] Keep the current paid GCP manual path available until the replacement PR
   path has its own acceptance evidence; do not claim a self-hosted migration
   from plan text alone.
 
