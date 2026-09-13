@@ -1370,3 +1370,81 @@ safety properties. No GCP dispatch has occurred. This remains a pretrial
 record, not a performance result.
 
 Implementation commit: `7a6ba94e55e3b2cc42f8960578d6a4ad54b1c0ae`.
+
+
+VALID MEASURED OVERLAP TRIAL: RUN 34732597502
+===============================================
+Result: ACCEPTED as a valid single-pair performance measurement. The
+candidate job elapsed `1418s` (`23m38s`) versus the primary host-removal
+baseline's `1569s` (`26m09s`): `151s` saved (`9.62%`). Trusted controller
+lifecycle decreased from `1542869` ms to `1394357` ms: `148512` ms saved
+(`9.63%`). This is a material measured improvement, but one pair does not
+establish repeatability or justify promising the same saving on every run.
+No retry or next dispatch is recorded here.
+
+Run: [34732597502](https://github.com/wimpheling/hephaestus/actions/runs/34732597502),
+attempt `1`, selected PR #42 workload SHA
+`7a6ba94e55e3b2cc42f8960578d6a4ad54b1c0ae`. The trusted controller SHA was
+`1f0c828db5e57996022bcccf608e883e57ad2907`, a descendant of the planned
+`39b8032796637c6898b41c281754c38bb3be41ee` main. The intervening commit
+`1f0c828` changed only `AGENTS.md`, `README.md` and task/roadmap documents;
+workflow, scripts, frozen instrumentation, image, cache and GCP configuration
+were unchanged. The baseline was accepted run
+[34730591477](https://github.com/wimpheling/hephaestus/actions/runs/34730591477),
+workload SHA `ca4669cce9a64029c15e0dad92d466ac0990190d`, with the same
+locked configuration and host-build-removal mode.
+
+The locked configuration was unchanged: image
+`hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d`, cache generation
+`1789079827867335`, cache SHA-256
+`0ed20efcc1aa019b79405d1eed626b13d4702019e9ceeba2bdde54e45ae29296`,
+`n2-standard-8`, `150 GB pd-balanced`, `europe-west1-d`, one VM,
+concurrency `1`, 45-minute provider DELETE and 50-minute workflow timeout.
+
+Trusted controller phase pairs (baseline -> candidate, delta in ms) were:
+`preflight-quota 3008 -> 2124 (-884)`, `preflight-cache 1655 -> 1424
+(-231)`, `vm-create 14228 -> 12669 (-1559)`, `vm-wait 1466068 -> 1321424
+(-144644)`, `vm-delete 54551 -> 52488 (-2063)`, `cleanup-verification
+1046 -> 908 (-138)` and `post-delete-download 2313 -> 3320 (+1007)`. The
+controller timings are trusted lifecycle spans; the run's overall job
+elapsed time above is the paired wall-clock result.
+
+Informational workload phase pairs (baseline -> candidate, delta in ms) were:
+`browser-setup 1837 -> 1734 (-103)`, `dependency-setup 931 -> 928 (-3)`,
+`gateway-edge-ready 2944 -> 3032 (+88)`, `runtime-guest-build 88099 ->
+87505 (-594)`, `oci-image-materialization 23572 -> 23506 (-66)`,
+`gateway-services-ready 14537 -> 14923 (+386)`, `runtime-worker-build
+19577 -> 19496 (-81)`, `golden-tests 1107979 -> 966549 (-141430, 12.76%
+faster)`, `database-tests 45309 -> 45415 (+106)`, `gateway-readiness 341
+-> 342 (+1)`, `production-project-build 82676 -> 91190 (+8514)`, `oci-builder
+87131 -> 93001 (+5870)`, `oci-verifier 358328 -> 364207 (+5879)`,
+`browser-initial 93102 -> 98616 (+5514)` and `browser-post-operation
+44984 -> 43805 (-1179)`. The host `project-build` phase was already absent
+in the host-removal baseline and remains absent; no phase was synthesized.
+Workload spans overlap and are informational, so they are not additive. The
+production build was `8.51s` slower and OCI builder plus verifier was
+`11.749s` slower (`445459 -> 457208` ms); the overall job and trusted
+controller reductions remain the authoritative measured result.
+
+Correctness and evidence were complete: workload, evidence-scan and
+browser-validation gates were finalized with exit code `0`, all 41 retained
+phase records passed validation, collection retained 11 available sources
+with zero missing, rejected, unavailable or truncated sources, and upload,
+authenticated download, scan, phase validation and gate acceptance passed.
+Browser validation was complete with `2` passed, `0` failed, `0` skipped and
+`0` timed out. The credential scanner checked `26` files and `1153674` bytes.
+The private archive was `32039` bytes with SHA-256
+`82a4d45146ad35af7974b99a54a3a7303f81293948740ced37f78a99d0c29dc9` at
+`gs://hephaestus-508000-cooking-diagnostics/cooking/runs/34732597502/1/7a6ba94e55e3b2cc42f8960578d6a4ad54b1c0ae.tar.gz`. The owned VM
+`heph-kvm-smoke-34732597502-1` was verified absent after deletion and before
+post-delete collection.
+
+The candidate retained 41 distinct passed Rust marker names: the baseline's
+39-marker set plus exactly `cooking_preparation_overlaps_child_lifecycles`
+and `cooking_preparation_drains_child_before_resuming_either_panic`; no
+baseline marker was lost and no failed marker was retained. This is a marker
+inventory, not a test count. The producer-to-timing-to-collection-to-
+validation path passed with the frozen instrumentation. The result is ready
+for root's merge decision; rollback is reverting
+`7a6ba94e55e3b2cc42f8960578d6a4ad54b1c0ae` to restore serial blog
+preparation. No merge or further GCP dispatch is implied by this ledger entry.
