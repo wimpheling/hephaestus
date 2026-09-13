@@ -60,6 +60,27 @@ use vm_trait::RootFilesystem;
 use volume_local::LocalVolumeConfig;
 use workspace_local::{LocalWorkspaceConfig, WorkspaceLimits};
 
+// Owned setup state crosses the preparation barrier; no scenario ingress or
+// agent execution begins until both branches and their build queues settle.
+struct PreparedCookingScenario {
+    builds: cooking_builds::PublishedCookingBuilds,
+    adversarial_agent_build: cooking_builds::PublishedCookingRepository,
+    adversarial_gateway_build: cooking_builds::PublishedCookingRepository,
+    update_builds: Option<cooking_builds::PublishedCookingUpdateBuilds>,
+    instance: cooking_builds::PreparedCookingInstance,
+    actual_instance: SeededInstance,
+    actual_brokered: BrokeredFixture,
+    cooking_update_rule_ids: Option<(
+        cooking_updates::BrokeredRuleIds,
+        cooking_updates::BrokeredRuleIds,
+        cooking_updates::BrokeredRuleIds,
+        cooking_updates::BrokeredRuleIds,
+    )>,
+    cooking_inbound_placeholder: String,
+    foreign_instance: cooking_builds::PreparedCookingInstance,
+    actual_fixture: GatewayGoldenFixture,
+}
+
 // Wait for both bounded preparation branches even if an assertion or an
 // expected-result check panics. Dropping the sibling could abandon published
 // production work; resume the original panic only after both futures settle.
@@ -1135,10 +1156,15 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             },
             timeout: cooking_wait_timeout,
         };
-        // These repositories share only their project: Python/Rust release builds
-        // do not consume the blog's Hugo image. Keep same-family release mutations
-        // serial while the independent OCI build and verification make progress.
-        let (prepared_releases, blog_repository) = Box::pin(join_cooking_preparation(
+        // Manual attachments can target the empty repository. Keep its source
+        // push behind image verification, and all ingress behind the final join.
+        let blog_repository_id =
+            cooking_builds::create_cooking_blog_repository_metadata(&cooking_context)
+                .await
+                .expect("create empty cooking blog repository");
+        // Release mutations and browser configuration remain serial while the
+        // independent OCI build and verification make progress.
+        let (prepared_scenario, blog_repository) = Box::pin(join_cooking_preparation(
             async {
                 let builds = {
                     let production_project_build_timer = WorkloadPhaseTimer::start(
@@ -1255,15 +1281,241 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
                     } else {
                         None
                     };
-                (
+                let instance = cooking_builds::prepare_cooking_instance(
+                    &cooking_context,
+                    builds.agent.release_agent_id,
+                    blog_repository_id,
+                    cooking_builds::cooking_agent_parameters(),
+                )
+                .await
+                .expect("ImportAgent/CreateAttachment/CreateMailbox cooking instance");
+                let actual_instance = SeededInstance {
+                    instance: instance.instance_id,
+                    revision: instance.revision_id,
+                    attachment: instance.attachment_id,
+                    release: builds.agent.release_id,
+                    release_agent: builds.agent.release_agent_id,
+                };
+                let actual_brokered = cooking::seed_brokered_fixture(
+                    &pool,
+                    user_id,
+                    organization_id,
+                    project.id.as_uuid(),
+                    &actual_instance,
+                )
+                .await;
+                let cooking_update_rule_ids = update_builds.as_ref().map(|_| {
+                    (
+                        cooking_updates::BrokeredRuleIds::fresh(),
+                        cooking_updates::BrokeredRuleIds::fresh(),
+                        cooking_updates::BrokeredRuleIds::fresh(),
+                        cooking_updates::BrokeredRuleIds::fresh(),
+                    )
+                });
+                if let Some((migration, rollback, abnormal, browser)) = cooking_update_rule_ids {
+                    actual_brokered.upstream.register_rule_copies(&[
+                        (cooking::MODEL_RULE, migration.model),
+                        (cooking::RELAY_RULE, migration.relay),
+                        (migration.model, rollback.model),
+                        (migration.relay, rollback.relay),
+                        (migration.model, abnormal.model),
+                        (migration.relay, abnormal.relay),
+                        (migration.model, browser.model),
+                        (migration.relay, browser.relay),
+                    ]);
+                }
+                let cooking_inbound_placeholder =
+                    cooking_builds::cooking_inbound_placeholder(actual_brokered.version_id);
+                let installed_gateway = cooking_builds::install_cooking_gateway(
+                    &cooking_context,
+                    builds.gateway.release_id,
+                    builds.gateway.repository_id,
+                )
+                .await
+                .expect("install released cooking gateway");
+                // The browser owns the first configuration when it is enabled. This
+                // keeps its immutable-revision proof independent from the ordinary
+                // RPC configure/replay proof used by the backend-only path.
+                let mut actual_grant_id = None;
+                if browser_e2e {
+                    assert_eq!(
+                        installed_gateway.revision_id,
+                        sqlx::query_scalar::<_, uuid::Uuid>(
+                            "SELECT active_revision_id FROM gateways WHERE id = $1",
+                        )
+                        .bind(installed_gateway.gateway_id)
+                        .fetch_one(&pool)
+                        .await
+                        .expect("installed cooking gateway active revision"),
+                        "browser must start from the installed, unconfigured gateway revision"
+                    );
+                    let initial_binding_count: i64 = sqlx::query_scalar(
+                        "SELECT count(*) FROM gateway_mailbox_bindings WHERE gateway_revision_id = $1",
+                    )
+                    .bind(installed_gateway.revision_id)
+                    .fetch_one(&pool)
+                    .await
+                    .expect("installed cooking gateway initial bindings");
+                    assert_eq!(
+                        initial_binding_count, 0,
+                        "browser must start from a gateway revision without mailbox bindings"
+                    );
+                } else {
+                    let configured_revision = cooking_builds::configure_cooking_gateway(
+                        &cooking_context,
+                        installed_gateway,
+                        cooking_builds::cooking_gateway_parameters(
+                            &cooking_inbound_placeholder,
+                            1001,
+                            1002,
+                        ),
+                        actual_brokered.import_id,
+                        actual_brokered.version_id,
+                        instance.mailbox_id,
+                    )
+                    .await
+                    .expect("ConfigureGateway/CreateMailboxBinding cooking gateway");
+                    assert_ne!(
+                        configured_revision.revision_id,
+                        installed_gateway.revision_id
+                    );
+                    assert!(!configured_revision.grant_id.is_nil());
+                    actual_grant_id = Some(configured_revision.grant_id);
+                }
+                assert_ne!(instance.instance_id, uuid::Uuid::nil());
+                // Provision a real second mailbox through the instance RPC and point
+                // a temporary immutable gateway revision at it. The released source
+                // then asks the host to publish through an undeclared slot; the edge
+                // must reject it before creating a foreign event or run.
+                let foreign_instance = cooking_builds::prepare_cooking_instance_variant(
+                    &cooking_context,
+                    builds.agent.release_agent_id,
+                    blog_repository_id,
+                    cooking_builds::cooking_agent_parameters(),
+                    "cooking-agent-foreign",
+                    "cooking-agent-foreign",
+                )
+                .await
+                .expect("provision adversarial foreign mailbox");
+                assert_ne!(foreign_instance.instance_id, instance.instance_id);
+                assert_ne!(foreign_instance.mailbox_id, instance.mailbox_id);
+                let fixture_path = if browser_e2e {
+                    Some(
+                        env::var("HEPHAESTUS_COOKING_BROWSER_FIXTURE_OUTPUT")
+                            .expect("cooking browser fixture output path"),
+                    )
+                } else {
+                    env::var("HEPHAESTUS_COOKING_BROWSER_FIXTURE_OUTPUT").ok()
+                };
+                if let Some(path) = fixture_path {
+                    let fixture = serde_json::json!({
+                        "organization_id": organization_id,
+                        "project_id": project.id,
+                        "repository_id": builds.gateway.repository_id,
+                        "release_id": builds.gateway.release_id,
+                        "release_agent_id": builds.agent.release_agent_id,
+                        "instance_id": instance.instance_id,
+                        "mailbox_id": instance.mailbox_id,
+                        "gateway_id": installed_gateway.gateway_id,
+                        "inbound_import_id": actual_brokered.import_id,
+                        "inbound_secret_version_id": actual_brokered.version_id,
+                        "inbound_selection": format!(
+                            "{}|{}|/cooking/telegram|x-telegram-bot-api-secret-token",
+                            actual_brokered.import_id, actual_brokered.version_id
+                        ),
+                        "parameters": {
+                            "inbound_placeholder": cooking_inbound_placeholder.clone(),
+                            "alice_provider_id": 1001,
+                            "bob_provider_id": 1002
+                        }
+                    });
+                    tokio::fs::write(
+                        &path,
+                        serde_json::to_vec_pretty(&fixture).expect("cooking browser fixture JSON"),
+                    )
+                    .await
+                    .expect("write cooking browser fixture JSON");
+                    if browser_e2e {
+                        let issuer = env::var("HEPHAESTUS_COOKING_BROWSER_OIDC_ISSUER")
+                            .expect("cooking browser OIDC issuer");
+                        let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                            .join("../../scripts/run-ui-e2e-external.sh");
+                        let browser_timer =
+                            WorkloadPhaseTimer::start("browser-initial", workload_phase_timing);
+                        let status = tokio::process::Command::new(script)
+                            .env("HEPHAESTUS_E2E_COOKING_FIXTURE", &path)
+                            .env("HEPHAESTUS_E2E_EXTERNAL_DATABASE_URL", &database_url)
+                            .env(
+                                "HEPHAESTUS_E2E_EXTERNAL_RPC_ENDPOINT",
+                                running.http_addr().to_string(),
+                            )
+                            .env(
+                                "HEPHAESTUS_E2E_EXTERNAL_RPC_SECRET",
+                                "golden-internal-command-token-with-sufficient-entropy",
+                            )
+                            .env("HEPHAESTUS_E2E_EXTERNAL_OIDC_ISSUER", issuer)
+                            .env("HEPHAESTUS_E2E_COOKING_PHASE", "initial")
+                            .status()
+                            .await;
+                        browser_timer.finish(status.as_ref().is_ok_and(std::process::ExitStatus::success));
+                        let status = status.expect("run cooking browser E2E");
+                        assert!(status.success(), "cooking browser E2E failed: {status}");
+                        let browser_gateway_id = installed_gateway.gateway_id;
+                        let active_revision_id: uuid::Uuid =
+                            sqlx::query_scalar("SELECT active_revision_id FROM gateways WHERE id = $1")
+                                .bind(browser_gateway_id)
+                                .fetch_one(&pool)
+                                .await
+                                .expect("cooking browser active gateway revision");
+                        assert_ne!(
+                            active_revision_id, installed_gateway.revision_id,
+                            "browser must create a new gateway revision"
+                        );
+                        actual_grant_id = Some(
+                            sqlx::query_scalar(
+                                "SELECT binding_grant.id
+                             FROM gateways gateway
+                             JOIN gateway_revisions revision
+                               ON revision.gateway_id = gateway.id
+                              AND revision.id = gateway.active_revision_id
+                             JOIN gateway_mailbox_bindings binding
+                               ON binding.gateway_revision_id = revision.id
+                              AND binding.mailbox_id = $1
+                             JOIN gateway_mailbox_binding_grants binding_grant
+                               ON binding_grant.binding_id = binding.id
+                              AND binding_grant.status = 'active'
+                             WHERE gateway.id = $2
+                             ORDER BY binding_grant.granted_at DESC, binding_grant.id DESC
+                                 LIMIT 1",
+                            )
+                            .bind(instance.mailbox_id)
+                            .bind(browser_gateway_id)
+                            .fetch_one(&pool)
+                            .await
+                            .expect("cooking browser active binding grant"),
+                        );
+                    }
+                }
+                let actual_fixture = GatewayGoldenFixture {
+                    mailbox_id: MailboxId::from_uuid(instance.mailbox_id),
+                    grant_id: actual_grant_id.expect("cooking gateway mailbox grant after setup"),
+                };
+                PreparedCookingScenario {
                     builds,
                     adversarial_agent_build,
                     adversarial_gateway_build,
                     update_builds,
-                )
+                    instance,
+                    actual_instance,
+                    actual_brokered,
+                    cooking_update_rule_ids,
+                    cooking_inbound_placeholder,
+                    foreign_instance,
+                    actual_fixture,
+                }
             },
             async {
-                let blog_repository = cooking_builds::create_cooking_blog_repository(
+                let blog_repository = cooking_builds::populate_cooking_blog_repository(
                     &cooking_builds::CookingBuildContext {
                         pool: &pool,
                         running: &running,
@@ -1278,6 +1530,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
                         },
                         timeout: cooking_wait_timeout,
                     },
+                    blog_repository_id,
                 )
                 .await
                 .expect("create and push separate cooking blog repository");
@@ -1286,8 +1539,19 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             },
         ))
         .await;
-        let (builds, adversarial_agent_build, adversarial_gateway_build, update_builds) =
-            prepared_releases;
+        let PreparedCookingScenario {
+            builds,
+            adversarial_agent_build,
+            adversarial_gateway_build,
+            update_builds,
+            instance,
+            actual_instance,
+            actual_brokered,
+            cooking_update_rule_ids,
+            cooking_inbound_placeholder,
+            foreign_instance,
+            mut actual_fixture,
+        } = prepared_scenario;
         cooking_builds::wait_for_cooking_build_quiescence(
             &pool,
             project.id,
@@ -1295,225 +1559,6 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             cooking_wait_timeout,
         )
         .await;
-        let instance = cooking_builds::prepare_cooking_instance(
-            &cooking_context,
-            builds.agent.release_agent_id,
-            blog_repository.repository_id,
-            cooking_builds::cooking_agent_parameters(),
-        )
-        .await
-        .expect("ImportAgent/CreateAttachment/CreateMailbox cooking instance");
-        let actual_instance = SeededInstance {
-            instance: instance.instance_id,
-            revision: instance.revision_id,
-            attachment: instance.attachment_id,
-            release: builds.agent.release_id,
-            release_agent: builds.agent.release_agent_id,
-        };
-        let actual_brokered = cooking::seed_brokered_fixture(
-            &pool,
-            user_id,
-            organization_id,
-            project.id.as_uuid(),
-            &actual_instance,
-        )
-        .await;
-        let cooking_update_rule_ids = update_builds.as_ref().map(|_| {
-            (
-                cooking_updates::BrokeredRuleIds::fresh(),
-                cooking_updates::BrokeredRuleIds::fresh(),
-                cooking_updates::BrokeredRuleIds::fresh(),
-                cooking_updates::BrokeredRuleIds::fresh(),
-            )
-        });
-        if let Some((migration, rollback, abnormal, browser)) = cooking_update_rule_ids {
-            actual_brokered.upstream.register_rule_copies(&[
-                (cooking::MODEL_RULE, migration.model),
-                (cooking::RELAY_RULE, migration.relay),
-                (migration.model, rollback.model),
-                (migration.relay, rollback.relay),
-                (migration.model, abnormal.model),
-                (migration.relay, abnormal.relay),
-                (migration.model, browser.model),
-                (migration.relay, browser.relay),
-            ]);
-        }
-        let cooking_inbound_placeholder =
-            cooking_builds::cooking_inbound_placeholder(actual_brokered.version_id);
-        let installed_gateway = cooking_builds::install_cooking_gateway(
-            &cooking_context,
-            builds.gateway.release_id,
-            builds.gateway.repository_id,
-        )
-        .await
-        .expect("install released cooking gateway");
-        // The browser owns the first configuration when it is enabled. This
-        // keeps its immutable-revision proof independent from the ordinary
-        // RPC configure/replay proof used by the backend-only path.
-        let mut actual_grant_id = None;
-        if browser_e2e {
-            assert_eq!(
-                installed_gateway.revision_id,
-                sqlx::query_scalar::<_, uuid::Uuid>(
-                    "SELECT active_revision_id FROM gateways WHERE id = $1",
-                )
-                .bind(installed_gateway.gateway_id)
-                .fetch_one(&pool)
-                .await
-                .expect("installed cooking gateway active revision"),
-                "browser must start from the installed, unconfigured gateway revision"
-            );
-            let initial_binding_count: i64 = sqlx::query_scalar(
-                "SELECT count(*) FROM gateway_mailbox_bindings WHERE gateway_revision_id = $1",
-            )
-            .bind(installed_gateway.revision_id)
-            .fetch_one(&pool)
-            .await
-            .expect("installed cooking gateway initial bindings");
-            assert_eq!(
-                initial_binding_count, 0,
-                "browser must start from a gateway revision without mailbox bindings"
-            );
-        } else {
-            let configured_revision = cooking_builds::configure_cooking_gateway(
-                &cooking_context,
-                installed_gateway,
-                cooking_builds::cooking_gateway_parameters(
-                    &cooking_inbound_placeholder,
-                    1001,
-                    1002,
-                ),
-                actual_brokered.import_id,
-                actual_brokered.version_id,
-                instance.mailbox_id,
-            )
-            .await
-            .expect("ConfigureGateway/CreateMailboxBinding cooking gateway");
-            assert_ne!(
-                configured_revision.revision_id,
-                installed_gateway.revision_id
-            );
-            assert!(!configured_revision.grant_id.is_nil());
-            actual_grant_id = Some(configured_revision.grant_id);
-        }
-        assert_ne!(instance.instance_id, uuid::Uuid::nil());
-        // Provision a real second mailbox through the instance RPC and point
-        // a temporary immutable gateway revision at it. The released source
-        // then asks the host to publish through an undeclared slot; the edge
-        // must reject it before creating a foreign event or run.
-        let foreign_instance = cooking_builds::prepare_cooking_instance_variant(
-            &cooking_context,
-            builds.agent.release_agent_id,
-            blog_repository.repository_id,
-            cooking_builds::cooking_agent_parameters(),
-            "cooking-agent-foreign",
-            "cooking-agent-foreign",
-        )
-        .await
-        .expect("provision adversarial foreign mailbox");
-        assert_ne!(foreign_instance.instance_id, instance.instance_id);
-        assert_ne!(foreign_instance.mailbox_id, instance.mailbox_id);
-        let fixture_path = if browser_e2e {
-            Some(
-                env::var("HEPHAESTUS_COOKING_BROWSER_FIXTURE_OUTPUT")
-                    .expect("cooking browser fixture output path"),
-            )
-        } else {
-            env::var("HEPHAESTUS_COOKING_BROWSER_FIXTURE_OUTPUT").ok()
-        };
-        if let Some(path) = fixture_path {
-            let fixture = serde_json::json!({
-                "organization_id": organization_id,
-                "project_id": project.id,
-                "repository_id": builds.gateway.repository_id,
-                "release_id": builds.gateway.release_id,
-                "release_agent_id": builds.agent.release_agent_id,
-                "instance_id": instance.instance_id,
-                "mailbox_id": instance.mailbox_id,
-                "gateway_id": installed_gateway.gateway_id,
-                "inbound_import_id": actual_brokered.import_id,
-                "inbound_secret_version_id": actual_brokered.version_id,
-                "inbound_selection": format!(
-                    "{}|{}|/cooking/telegram|x-telegram-bot-api-secret-token",
-                    actual_brokered.import_id, actual_brokered.version_id
-                ),
-                "parameters": {
-                    "inbound_placeholder": cooking_inbound_placeholder.clone(),
-                    "alice_provider_id": 1001,
-                    "bob_provider_id": 1002
-                }
-            });
-            tokio::fs::write(
-                &path,
-                serde_json::to_vec_pretty(&fixture).expect("cooking browser fixture JSON"),
-            )
-            .await
-            .expect("write cooking browser fixture JSON");
-            if browser_e2e {
-                let issuer = env::var("HEPHAESTUS_COOKING_BROWSER_OIDC_ISSUER")
-                    .expect("cooking browser OIDC issuer");
-                let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                    .join("../../scripts/run-ui-e2e-external.sh");
-                let browser_timer =
-                    WorkloadPhaseTimer::start("browser-initial", workload_phase_timing);
-                let status = tokio::process::Command::new(script)
-                    .env("HEPHAESTUS_E2E_COOKING_FIXTURE", &path)
-                    .env("HEPHAESTUS_E2E_EXTERNAL_DATABASE_URL", &database_url)
-                    .env(
-                        "HEPHAESTUS_E2E_EXTERNAL_RPC_ENDPOINT",
-                        running.http_addr().to_string(),
-                    )
-                    .env(
-                        "HEPHAESTUS_E2E_EXTERNAL_RPC_SECRET",
-                        "golden-internal-command-token-with-sufficient-entropy",
-                    )
-                    .env("HEPHAESTUS_E2E_EXTERNAL_OIDC_ISSUER", issuer)
-                    .env("HEPHAESTUS_E2E_COOKING_PHASE", "initial")
-                    .status()
-                    .await;
-                browser_timer.finish(status.as_ref().is_ok_and(std::process::ExitStatus::success));
-                let status = status.expect("run cooking browser E2E");
-                assert!(status.success(), "cooking browser E2E failed: {status}");
-                let browser_gateway_id = installed_gateway.gateway_id;
-                let active_revision_id: uuid::Uuid =
-                    sqlx::query_scalar("SELECT active_revision_id FROM gateways WHERE id = $1")
-                        .bind(browser_gateway_id)
-                        .fetch_one(&pool)
-                        .await
-                        .expect("cooking browser active gateway revision");
-                assert_ne!(
-                    active_revision_id, installed_gateway.revision_id,
-                    "browser must create a new gateway revision"
-                );
-                actual_grant_id = Some(
-                    sqlx::query_scalar(
-                        "SELECT binding_grant.id
-                     FROM gateways gateway
-                     JOIN gateway_revisions revision
-                       ON revision.gateway_id = gateway.id
-                      AND revision.id = gateway.active_revision_id
-                     JOIN gateway_mailbox_bindings binding
-                       ON binding.gateway_revision_id = revision.id
-                      AND binding.mailbox_id = $1
-                     JOIN gateway_mailbox_binding_grants binding_grant
-                       ON binding_grant.binding_id = binding.id
-                      AND binding_grant.status = 'active'
-                     WHERE gateway.id = $2
-                     ORDER BY binding_grant.granted_at DESC, binding_grant.id DESC
-                         LIMIT 1",
-                    )
-                    .bind(instance.mailbox_id)
-                    .bind(browser_gateway_id)
-                    .fetch_one(&pool)
-                    .await
-                    .expect("cooking browser active binding grant"),
-                );
-            }
-        }
-        let mut actual_fixture = GatewayGoldenFixture {
-            mailbox_id: MailboxId::from_uuid(instance.mailbox_id),
-            grant_id: actual_grant_id.expect("cooking gateway mailbox grant after setup"),
-        };
         // Run the adversarial release only after the optional browser phase:
         // the browser is allowed to install/configure the canonical release,
         // and must not accidentally make this authority probe a no-op.
