@@ -5,10 +5,12 @@ Owner: unassigned
 ## Outcome
 
 Let a published release provide a user interface that Hephaestus can mount as
-a project or repository tab. The release UI may be either a static artifact
-served by Hephaestus or an application served from a Hephaestus-managed VM.
-It reaches only explicitly declared gateway APIs and inherits the platform's
-authorization, lifecycle, revocation, and audit boundaries.
+a project or repository tab, or register as an explicitly installed global
+interface such as the distribution's Assistant entry point. The release UI may
+be either a static artifact served by Hephaestus or an application served from a
+Hephaestus-managed VM. It reaches only explicitly declared gateway APIs and
+inherits the platform's authorization, lifecycle, revocation, and audit
+boundaries.
 
 The first usable result may be visually minimal: a tab that hosts a same-site
 iframe or opens a full-page release UI. It must nevertheless be a real,
@@ -22,7 +24,7 @@ escape hatch for custom HTML in core pages.
 | UI ownership | A release owns its routes, markup, client behavior, and domain semantics. Hephaestus owns publication, serving, authorization, lifecycle, gateway mediation, and the bounded host shell. |
 | Artifact kinds | A release may declare a static UI artifact or a UI service executed in a Hephaestus-managed VM. Both are immutable release inputs and are served only after the ordinary release/runtime checks succeed. |
 | Origin and routing | Hephaestus serves a release UI through a gateway-owned same-site route. Direct arbitrary third-party iframe URLs are unsupported. |
-| Embedding | A bounded tab declaration can select a label, icon, route, and initial presentation (`iframe` or full page). The host rejects undeclared routes and does not let arbitrary project content alter core navigation. |
+| Embedding | A bounded tab or global-interface declaration can select a scope, label, icon, route, and initial presentation (`iframe` or full page). The host rejects undeclared routes and does not let arbitrary project content alter core navigation. |
 | API access | A UI reaches APIs only through explicitly declared gateway routes/capabilities. It receives no ambient database access, platform bearer token, raw secret, or authority greater than its release declaration. |
 | Authentication | The host establishes the human browser session. The UI does not receive reusable human credentials; any browser-to-service identity handoff is audience-bound, short-lived, revocable, and scoped to the exact release UI route/API. |
 | Isolation | Iframes use a restrictive sandbox and CSP. Static UI has no server-side execution. VM UI service authority is an exact runtime/gateway capability, not host or project authority. |
@@ -51,8 +53,9 @@ escape hatch for custom HTML in core pages.
 
 - [ ] **1. Specify the distribution UI declaration and publication model**
   - [ ] Define a versioned release declaration for UI artifact kind, immutable
-    artifact reference, bounded route base, tab label/icon, presentation mode,
-    declared gateway APIs, and compatibility behavior.
+    artifact reference, scope (`project`, `repository`, or explicitly installed
+    `global`), bounded route base, tab label/icon, presentation mode, declared
+    gateway APIs, and compatibility behavior.
   - [ ] Validate names, paths, route ownership, icon allowlist, MIME types,
     artifact size, entrypoint, cache policy, and duplicate/conflicting tabs.
   - [ ] Persist an immutable published UI declaration tied to the release and
@@ -70,7 +73,9 @@ escape hatch for custom HTML in core pages.
 
 - [ ] **3. Add bounded host navigation and embedding**
   - [ ] Add a release/UI-tab projection to the appropriate project/repository
-    page and render declared tabs through the existing design system.
+    page, and add an explicitly authorized global-interface projection for
+    releases installed as global entries; render declared tabs through the
+    existing design system.
   - [ ] Implement exact `iframe` and full-page presentations with a stable
     loading, unavailable, access-revoked, and terminated state.
   - [ ] Apply a restrictive iframe sandbox, referrer policy, CSP `frame-src`
@@ -120,11 +125,11 @@ escape hatch for custom HTML in core pages.
 ## Completion evidence
 
 Record the declaration schema/version; static and managed-service release
-fixtures; artifact integrity and route-binding evidence; browser screenshots
-or tests for both presentation modes and themes; allowed/denied gateway and
-browser authority fixtures; sandbox/CSP checks; revocation/restart/cleanup
-evidence; UI-kit package/version and reference project; and all verification
-results.
+fixtures; project/repository and global-interface registration evidence; artifact
+integrity and route-binding evidence; browser screenshots or tests for both
+presentation modes and themes; allowed/denied gateway and browser authority
+fixtures; sandbox/CSP checks; revocation/restart/cleanup evidence; UI-kit
+package/version and reference project; and all verification results.
 
 Only after this task is complete may a distribution journey such as MVP-06 use
 a release-owned chat tab.

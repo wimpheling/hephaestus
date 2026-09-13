@@ -4,11 +4,17 @@ Owner: unassigned
 
 ## Outcome
 
-Prove the main Hephaestus distribution UX: a user starts a chat session backed
-by a repository, uses the selected release's chat adapter to submit a message,
-and an ordinary released agent reads, commits, and pushes its response with a
-tightly scoped Git capability. The agent calls its model API through MVP 04
-placeholder substitution and never sees provider credentials.
+Prove a reference Git-backed project session chat journey that supplies
+interaction, isolated execution, and reconnect evidence for the agent-led Heph
+distribution. A user starts a chat session backed by a repository, uses the
+selected release's chat adapter to submit a message, and an ordinary released
+agent reads, commits, and pushes its response with a tightly scoped Git
+capability. The agent calls its model API through MVP 04 placeholder
+substitution and never sees provider credentials.
+
+This is a precursor for the distribution's primary administration UI. It does
+not by itself provide the default installation, instance-administration agent,
+or complete create/code/run project journey.
 
 The session layout, message semantics, ordering, concurrency, retention, and
 history interpretation belong to the repository and released chat agent. The
@@ -24,7 +30,7 @@ universal prompt, workflow, form, or session protocol.
 | User input | The selected release's distribution adapter writes user input according to that repository's contract. Hephaestus attributes the authenticated Git receive but does not construct platform-defined message commits. |
 | Agent output | The runtime uses normal Git to commit and fast-forward only its bound repository/ref capability. The repository/release defines how that commit affects a turn; its receive does not recursively trigger the same attachment. |
 | Protocol | A chat release pins and documents its own versioned session repository protocol, including records, IDs, ordering, branching, retention, content references, and concurrent-writer behavior. |
-| UI | Chat is the primary distribution UX for the selected release. The host supplies generic authenticated repository access and attribution; any message rendering, commands, forms, or richer UI remain release/distribution adapters. |
+| UI | Chat is a release-owned project/session interface and reference interaction path for the selected release. The host supplies generic authenticated repository access and attribution; any message rendering, commands, forms, or richer UI remain release/distribution adapters. The primary distribution entry point is specified by the agent-led distribution task. |
 | Model | Automated coverage uses a deterministic fake model HTTPS API. A real OpenRouter smoke test is optional and uses MVP 04 destination-bound placeholder substitution. |
 
 ## Dependencies
@@ -40,9 +46,10 @@ universal prompt, workflow, form, or session protocol.
 
 MVP-06 implementation is gated on a joint plan review with the user. The review
 must happen before implementation starts or resumes and must confirm the
-intended scope, dependency order, and acceptance evidence. The GCP Cooking
-validation follow-up is tracked separately; its current status must be
-considered during the review rather than assumed to be complete.
+intended scope, dependency order, and acceptance evidence, including its role as
+a precursor rather than the final administration UI. The GCP Cooking validation
+follow-up is tracked separately; its current status must be considered during
+the review rather than assumed to be complete.
 
 - [ ] Review this plan jointly with the user and record the agreed scope and
   sequence here.
