@@ -30,14 +30,16 @@ the locked image/configuration, frozen instrumentation, 41 markers, browser
 time was `1442149ms` versus `1333101ms` (`+109048ms`), mainly `vm-wait`
 (`+98596ms`); this is an observed pair result, not a causal boot or polling
 measurement. Independent review recommends holding PR #45: its faster runtime
-phases do not establish an end-to-end gain, regression or repeatable magnitude.
+phases establish no end-to-end gain; the observed slowdown is not proven to be
+a code-caused regression, and repeatability remains unestablished.
 The CPU2, host-build-removal and PR #42 overlap results remain separate
 historical single-pair comparisons and are not additive. Instrumentation is
 frozen and live-proven through PR #38 and the accepted runs. The local memory
 candidate is held, the corrected ext4 scratch candidate is rejected, and the
-actual local libkrun probe is feasibility evidence only; GCP input identity
-remains unproven. Cancellation propagation is partial, fork execution is
-deferred, MVP-06 remains unchecked, and the broader goal remains open.
+actual local libkrun probe is feasibility evidence only; earlier local probe
+input equivalence was incomplete, while this pair has exact GCP source
+provenance. Cancellation propagation is partial, fork execution is deferred,
+MVP-06 remains unchecked, and the broader goal remains open.
 PR #44's terminal trial run #34742470212 is operationally valid but held: its
 job was 1428s versus the 1418s control (+10s, +0.71%), with 41 markers, browser
 2/2, all gates and cleanup passing. The candidate's trusted controller was
@@ -118,12 +120,14 @@ same locked configuration and frozen instrumentation. Both runs passed all
 The candidate job was `1470s` versus `1358s` control (`+112s`, `+8.25%`);
 controller time was `1442149ms` versus `1333101ms` (`+109048ms`), mainly
 `vm-wait` (`+98596ms`). This is an observed pair result, not causal boot or
-polling evidence. Independent review holds PR #45: no end-to-end gain,
-intrinsic regression or repeatable magnitude is established. Rollback is the
+polling evidence. Independent review holds PR #45: the pair establishes no
+end-to-end gain; the observed slowdown is not proven to be a code-caused
+regression, and repeatability remains unestablished. Rollback is the
 Dockerfile-only candidate revert; no retry or automatic merge follows. The
-private run artifacts are `/tmp/heph-gcp-34746767593` and
-`/tmp/heph-gcp-34747950421`; their controller logs and safe projections retain
-the exact provenance.
+private run artifacts are `/tmp/heph-gcp-34746767593-artifacts` and
+`/tmp/heph-gcp-34747950421-artifacts`; controller logs are
+`/tmp/heph-gcp-34746767593.log` and `/tmp/heph-gcp-34747950421.log`. Their safe
+projections retain the exact provenance.
 
 The local production-controller cancellation reproduction is retained at
 `/home/a/.cache/heph-hard-cancel-fixture-open-phase2-6JOIYo`. It executed the

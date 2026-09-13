@@ -36,9 +36,10 @@ Current facts
   controller time was `1442149ms` versus `1333101ms` (`+109048ms`), mainly
   `vm-wait` (`+98596ms`); this is an observed pair result, not a causal boot or
   polling measurement. Independent review recommends holding PR #45: faster
-  runtime phases do not establish an end-to-end gain, regression or repeatable
-  magnitude. The earlier overlap pair, CPU2 pair and host-build-removal pair
-  remain separate historical single-pair comparisons and are not additive.
+  runtime phases establish no end-to-end gain; the observed slowdown is not
+  proven to be a code-caused regression, and repeatability remains
+  unestablished. The earlier overlap pair, CPU2 pair and host-build-removal
+  pair remain separate historical single-pair comparisons and are not additive.
 - A historical pull-request run of about 9m32s used a warm self-hosted
   environment and is not a comparable cold-GCP baseline.
 - Accepted measured results are CPU2 through PR #37 (`25s`, `1.57%`) in run
@@ -49,9 +50,10 @@ Current facts
   `34732597502 <https://github.com/wimpheling/hephaestus/actions/runs/34732597502>`_.
   All are single-pair results; overlap is the newest valid comparison.
 - The local verifier memory candidate remains held. Actual local libkrun
-  feasibility passed in `259.460s`, but GCP input identity is unproven. The
-  corrected local ext4 scratch candidate was rejected (`81.388s` versus
-  `77.143s` control); neither local result is a GCP performance measurement.
+  feasibility passed in `259.460s`, but its earlier local probe input
+  equivalence is incomplete. The corrected local ext4 scratch candidate was
+  rejected (`81.388s` versus `77.143s` control); neither local result is a GCP
+  performance measurement.
 - Critical correction: at measured candidate `7a6ba94`, production
   `scripts/run-libkrun-integration.sh` already adds the fixed `heph-agent`
   UID/GID `10001` records in `prepare_guest_root` (lines `232-238`) before
@@ -1992,8 +1994,10 @@ Both runs passed their exact provenance checks, all `41` markers, browser
 private upload/download and VM absence cleanup. The candidate is operationally
 valid but held after independent review; faster selected runtime phases do not
 override the slower total job. Private run evidence is retained under
-`/tmp/heph-gcp-34746767593` and `/tmp/heph-gcp-34747950421`, with the terminal
-logs and safe projections preserving the source and configuration identities.
+`/tmp/heph-gcp-34746767593-artifacts` and
+`/tmp/heph-gcp-34747950421-artifacts`; terminal logs are
+`/tmp/heph-gcp-34746767593.log` and `/tmp/heph-gcp-34747950421.log`, with safe
+projections preserving the source and configuration identities.
 Do not promote PR #45 or claim a drastic improvement from this single pair.
 
 The local production-controller cancellation reproduction at
