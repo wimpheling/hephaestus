@@ -1136,3 +1136,51 @@ change; the host candidate rollback restores the host artifact export and
 compile. Await the exact merged `main` SHA and root's explicit dispatch
 instruction; no GCP dispatch or additional infrastructure work is authorized
 by this preparation entry.
+
+VALID POST-WAIT-FIX CPU2 + HOST-BUILD CONTROL: RUN 34729302087
+===============================================================
+The common wait fix was measured first with CPU2 and the host `project-build`
+enabled, isolating the later host-only comparison. Run
+[34729302087](https://github.com/wimpheling/hephaestus/actions/runs/34729302087)
+completed successfully with workflow `main` at controller SHA
+`3939f48bc07fd36f366a2f61b9365a0b617045a2`, selecting docs-only PR #20 exact
+workload head `736b64805e70d9bb34e5ab15106ca1d0f19cf33f`.
+
+The locked configuration was unchanged: image
+`hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d`, cache generation
+`1789079827867335`, `n2-standard-8`, `150 GB pd-balanced`,
+`europe-west1-d`, one VM, concurrency `1`, 45-minute provider DELETE and
+50-minute workflow timeout. CPU2 and host `project-build` were enabled, and
+production project build remained enabled. The job elapsed `26m23s`
+(`2026-09-13T00:57:44Z` to `01:24:07Z`). Trusted controller timings totaled
+`1552264` ms: `preflight-quota=3044`, `preflight-cache=1714`,
+`vm-create=12277`, `vm-wait=1477251`, `vm-delete=54253`,
+`cleanup-verification=1761` and `post-delete-download=1964`.
+
+Passed informational workload timings were `browser-setup=1689`,
+`dependency-setup=931`, host `project-build=12769`,
+`gateway-edge-ready=3071`, `runtime-guest-build=86739`,
+`oci-image-materialization=23412`, `gateway-services-ready=15072`,
+`runtime-worker-build=19283`, `golden-tests=1107116`, `database-tests=44920`,
+`gateway-readiness=344`, `production-project-build=81638`,
+`oci-builder=85750`, `oci-verifier=358534`, `browser-initial=93839` and
+`browser-post-operation=45062` ms. These workload spans overlap and are
+informational; the controller timings above are authoritative for lifecycle
+elapsed time.
+
+All required gates passed with exit code `0`: workload, browser validation and
+evidence scan were finalized and passed; collection was complete with 11
+available and zero missing sources; upload, download, scan, phase validation
+and acceptance passed. Browser validation reported 2 passed, 0 failed,
+skipped or timed out over initial and post-operation phases. The scanner
+checked 26 files and `1154293` bytes. The retained archive was `32194` bytes
+with SHA-256
+`582eceed7dc54806198308744f700b1c7394e1d0a5eb08b2e0092c5c8c5eedb9`.
+The owned VM `heph-kvm-smoke-34729302087-1` was verified absent after delete
+and during post-delete collection.
+
+The retained technical context contained 39 distinct passed Rust markers, no
+failed markers, and an exact set equality with the accepted baseline's 39
+markers. This is a marker inventory, not a test count. The control is the
+valid post-fix reference for the next PR #39 host-only measurement; no host
+dispatch or performance claim is made until root reviews this evidence.
