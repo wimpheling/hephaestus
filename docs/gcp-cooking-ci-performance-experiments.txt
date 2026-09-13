@@ -1918,3 +1918,46 @@ the setup was corrected before this measured operation and is not a candidate
 defect. The diagnostic does not establish GCP equivalence or a GCP saving, so
 the 4 GiB experiment remains rejected for now. The next packaging review is
 only under review; no new experiment is approved.
+
+
+LOCAL FULL COOKING LIFECYCLE: PR #45 CANDIDATE, NO GCP RESULT
+================================================================
+The Dockerfile-only compiler/development-toolchain removal candidate is PR #45
+at exact workload head
+`939e9a1e2bc4a1d6bae82f779645199878c1a713`. The real
+`examples/cooking/run.sh` completed once locally with run ID `9399001`, using
+the accepted pinned images, fixed deferred Cargo target, short disk-backed
+runtime roots and the unchanged Cooking source/tests. Session `54034` exited
+`0` after `386s` wall time. Preflight passed with delegated
+`cpu/io/memory/pids`; representative supervisor socket paths were at most 95
+bytes. The candidate Dockerfile SHA-256 was
+`54ce71e5c09a1ced1fa5b406103f70c3bb5a0e6e5b843071a54e6fb16683d0e4`.
+
+The local lifecycle passed the production project build (`28915ms`), OCI
+builder (`40906ms`) and verifier (`82234ms`), both browser phases
+(`53101ms` initial and `31447ms` post-operation), gateway readiness/services,
+golden tests (`35` passed, `0` failed, `1` ignored), and PostgreSQL tests
+(`6` passed, `0` failed). Credential scans passed for decoded VM logs
+(`4108` bytes), stored build logs (`2742` bytes), raw database state
+(`117` tables and `7759` rows), and retained NATS state (`5` streams and
+`2486` messages). Browser validation was `2/2`; lineage status was `ok`; the
+terminal reported runtime and cgroup cleanup verified, with no active worker
+processes and an empty short libkrun root after teardown.
+
+The required repository quality gate was run once on this exact clean head
+with `CARGO_TARGET_DIR=/home/a/.cache/heph-deferred-target`; session `14390`
+exited `0`. Its private log is
+`/home/a/.cache/heph-remove-dev-toolchain-cargo-quality-939e9a1-final.log`.
+The first launcher-only invocation with an unsupported `--manifest-path`
+argument exited `2` before the gate and is retained separately; it is not a
+quality result. Existing dependency advisories printed by the gate did not
+fail it.
+
+This full local run establishes candidate correctness and lifecycle evidence,
+not a GCP speedup or input-equivalence claim. The prospective fixed paid pair
+is PR #45 candidate first, followed by the refreshed docs-only PR #20 control
+commit containing this record. Keep the locked image, machine, zone, cache,
+concurrency, resources and frozen instrumentation unchanged. Require all 41
+markers, browser `2/2`, workload and collection gates, private evidence and
+post-delete cleanup on both runs. Do not auto-retry or make a performance
+claim before independent review of the completed pair.

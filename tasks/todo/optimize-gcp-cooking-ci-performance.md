@@ -87,6 +87,25 @@ held because this pair demonstrates no end-to-end gain and its marker
 projection discrepancy remains unresolved; its recorded timings are valid and
 its workload and collection gates passed.
 
+PR #45 is the current Dockerfile-only compiler/development-toolchain removal
+candidate at exact head
+`939e9a1e2bc4a1d6bae82f779645199878c1a713`. Its required full local Cooking
+lifecycle run used the real `examples/cooking/run.sh` with both browser phases,
+production project build, OCI builder/verifier, golden/PostgreSQL tests,
+credential scans and cleanup; session `54034` exited `0` after 386 seconds.
+The required repository gate session `14390` also exited `0` using the fixed
+deferred target. This is local correctness and lifecycle evidence only, not a
+GCP performance result. The private evidence is
+`/home/a/.cache/heph-cooking-remove-dev-toolchain-full-939e9a1/summary.json`
+and the quality log is
+`/home/a/.cache/heph-remove-dev-toolchain-cargo-quality-939e9a1-final.log`.
+The prospective fixed GCP pair is candidate PR #45 first, followed by the
+refreshed docs-only PR #20 control commit containing this record. Both runs
+must use the same locked configuration and frozen instrumentation and must
+pass all 41 markers, browser `2/2`, required gates, evidence collection and
+cleanup. No performance claim or automatic retry follows; independent review
+will decide after the pair.
+
 ## Working-tree implementation status
 
 The trusted controller and instrumentation foundation are live on `main` and
