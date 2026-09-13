@@ -34,7 +34,11 @@ Critical correction: at measured candidate `7a6ba94`, production
 10001 records in `prepare_guest_root` before preparing and exporting the
 verifier root. The account-only 76.180s to 46.561s local pair corrected a
 diagnostic harness omission; it is not production mechanism evidence. Withdraw
-the identity-projection and image-change candidate.
+the identity-projection and image-change candidate. A complete current-input
+production OCI operation then passed locally (builder 35.353s, verifier
+84.866s, execute 120.512s) with no wrappers; this is local evidence only and
+does not establish GCP savings. The next review is Astra's read-only
+toolchain-packaging and test-meaning review, with no candidate approved.
 
 ## Working-tree implementation status
 
@@ -160,10 +164,10 @@ from the local 259.460-second verifier result or its comparison with the
 14.131-second Podman path. Earlier local Umoci timings near 225s and 61s are
 likewise harness-limited by omitted production identity preparation and
 unproven input equivalence. The memory candidate remains held and no GCP
-dispatch is justified yet. The next bounded step is to execute the complete
-production `prepare_guest_root` path with the current generated OCI input
-before attributing verifier cost; no immediate GCP, image, cache or bootstrap
-promotion is justified, and instrumentation remains frozen.
+dispatch is justified yet. The complete current-input production OCI operation
+has now passed locally with builder `35.353s`, verifier `84.866s` and execute
+`120.512s`; no immediate GCP, image, cache or bootstrap promotion is justified,
+and instrumentation remains frozen.
 
 The corrected local ext4 scratch probe is rejected as an optimization. It
 passed correctness and cleanup, but full VM elapsed time was 81.388s (81.474s
@@ -202,6 +206,22 @@ change follows. The next diagnostic must execute the complete production
 verifier-cost attribution. Memory remains held, scratch remains rejected, and
 instrumentation remains frozen. Evidence is at
 `/home/a/.cache/heph-umoci-account-hj5a9l3v/summary.json`.
+
+The current-input production OCI operation used source `7a6ba94`, the current
+Dockerfile, vendor Hugo `9eff60e`, Python base `24b78e`, pinned tools, complete
+materialization and `prepare_guest_root`, both guest payloads, fixed
+`heph-agent` UID/GID `10001`, and no diagnostic wrappers. Its sealed outer
+digest was `sha256:116128c0092d61c2439ba500f004a05fb37b6880e7b9b74001903673ac2d486d`
+with 310.3 MB compressed layers, 16,770 regular files, 296 packages and zero
+vulnerabilities; Hugo hashes matched pinned values. VM/cgroup/scratch cleanup
+passed. This is representative local evidence correcting the stale harness
+fidelity gap, but exact byte equivalence to the retained GCP candidate is not
+available and no GCP saving is claimed. One pre-provision launcher failure due
+to missing empty allowlist directories was corrected before the single actual
+operation. The next step is Astra's read-only review of toolchain packaging
+and test meaning; no candidate is approved. Evidence is at
+`/home/a/.cache/heph-current-oci-p_xchkk6/summary.json` and
+`/home/a/.cache/heph-current-oci-p_xchkk6/build-provenance.json`.
 
 ## Locked constraints
 

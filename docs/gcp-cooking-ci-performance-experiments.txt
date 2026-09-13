@@ -54,6 +54,13 @@ Current facts
   harness omission, not production behavior. Withdraw its missing-NSS
   optimization hypothesis, identity-projection candidate and image-change
   implication. Optional profiling remains informational.
+- The complete current-input production OCI operation has now passed locally:
+  `oci-builder=35.353s`, `oci-verifier=84.866s`, operation execute
+  `120.512s`, with complete materialization and `prepare_guest_root`, both
+  guest payloads, `heph-agent` `10001`, and no diagnostic tool wrappers. This
+  closes the stale harness-fidelity gap for the current input, but local host
+  timing is not GCP savings and exact byte equivalence to the retained GCP
+  candidate is unavailable.
 
 Implementation foundation (live and frozen)
 --------------------------------------------
@@ -101,10 +108,10 @@ TO DO
    is retained.
 3. Keep fork execution deferred pending a separate trust-policy decision and
    keep MVP-06 unchecked; neither is part of this task.
-4. Keep the local memory candidate held. Any next diagnostic must execute the
-   complete production `prepare_guest_root` path and current generated OCI
-   input before attributing verifier cost; no immediate GCP, image, cache or
-   bootstrap promotion is justified.
+4. Keep the memory and scratch candidates held/rejected and approve no new
+   candidate. Astra's next step is a read-only review of toolchain packaging
+   and test meaning; no immediate GCP, image, cache or bootstrap promotion is
+   justified after the complete current-input local operation.
 5. Record any future bounded trial with exact provenance, complete gates,
    cleanup evidence, measurements, decision and rollback. Preserve frozen
    instrumentation and do not treat overlapping workload phases as additive.
@@ -141,6 +148,10 @@ CURRENT REJECTED AND HELD LOCAL RESULTS
   It is not a supported production mechanism, optimization, GCP result or
   design candidate. Do not add the reserved ID to the image; the Dockerfile's
   collision check would reject that change.
+- The current-input production OCI operation is representative local evidence,
+  not an accepted GCP optimization: exact byte equivalence to the retained GCP
+  candidate is unavailable, and no GCP saving is claimed. Memory remains held,
+  scratch remains rejected, and no identity or toolchain candidate is approved.
 
 CHRONOLOGICAL EXPERIMENT RECORDS (HISTORICAL DETAIL)
 =====================================================
@@ -1656,3 +1667,39 @@ candidate are withdrawn. The next diagnostic must execute the complete
 production `prepare_guest_root` path with the current generated OCI input
 before any verifier-cost attribution; memory remains held and the ext4
 scratch candidate remains rejected.
+
+
+CURRENT-INPUT PRODUCTION OCI OPERATION: LOCAL EVIDENCE, NO GCP RESULT
+=====================================================================
+The complete current-input OCI operation passed locally using source revision
+`7a6ba94e55e3b2cc42f8960578d6a4ad54b1c0ae`, the current Dockerfile, vendor
+Hugo `9eff60e`, Python base `24b78e`, pinned tools and focused offline build
+provenance. It used the public `VmOciOperation::execute` path with freshly
+built runtime/worker/bootstrap artifacts, complete extracted materialization
+and `prepare_guest_root` functions, both guest payloads, the fixed
+`heph-agent` UID/GID `10001`, and no diagnostic tool wrappers. The resulting
+operation took `120.512s`: OCI builder `35.353s` and verifier `84.866s`.
+
+The sealed candidate outer manifest digest was
+`sha256:116128c0092d61c2439ba500f004a05fb37b6880e7b9b74001903673ac2d486d`,
+with `310260570` compressed layer bytes (`310.3 MB`), `16770` regular files,
+`1760` directories and `895` symlinks. Hugo mode `0555` input/output hashes
+matched the pinned values; the SBOM and scan validated `296` packages and `0`
+vulnerabilities. CAS hashes, sealing and manifest validation passed. Both VM
+cgroups and the operation scratch/runtime parents were removed successfully;
+private candidate and outputs were retained without publication.
+
+One initial launcher failed before provisioning because empty provider allowlist
+directories were absent. That failure was preserved and corrected before the
+single actual builder/verifier operation; no retry of the measured operation
+was made. The complete operation is representative of the current local
+production path and corrects the stale diagnostic harness-fidelity gap, but it
+is not a GCP performance measurement: exact byte equivalence to the retained
+GCP candidate is unavailable and no GCP saving is claimed. Evidence is
+retained in `/home/a/.cache/heph-current-oci-p_xchkk6/summary.json` and
+`build-provenance.json`.
+
+The memory candidate remains held, the scratch candidate remains rejected and
+the withdrawn identity candidate is not revived. Astra's next bounded step is
+a read-only review of toolchain packaging and test meaning; no image, cache,
+bootstrap or cloud promotion is approved by this local result.
