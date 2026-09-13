@@ -26,15 +26,19 @@ Current facts
 - The current disposable path uses one paid VM, a 45-minute provider DELETE
   lifetime, a 50-minute workflow timeout, a protected prebuilt runner image and
   one-day private diagnostics.
-- The newest valid GCP comparison is overlap run
-  `34732597502 <https://github.com/wimpheling/hephaestus/actions/runs/34732597502>`_,
-  at `23m38s` (`1418s`), against host-removal control run
-  `34730591477 <https://github.com/wimpheling/hephaestus/actions/runs/34730591477>`_
-  at `26m09s` (`1569s`); it saved `151s` (`9.62%`) in one valid pair. The
-  original locked baseline `34724176879` was `1592s` and is historical context
-  for this later control sequence. Workload phase spans overlap and are not
-  additive, so this does not establish repeatability or a drastic-improvement
-  guarantee.
+- The newest fixed candidate/control pair is PR #45 run
+  `34746767593 <https://github.com/wimpheling/hephaestus/actions/runs/34746767593>`_,
+  at `1470s`, against frozen docs-only control run
+  `34747950421 <https://github.com/wimpheling/hephaestus/actions/runs/34747950421>`_
+  at `1358s`: candidate `+112s` (`+8.25%`). Both exact source heads, the
+  locked image/configuration, frozen instrumentation, 41 markers, browser
+  `2/2`, all gates, 11 evidence sources, scans and VM cleanup passed. Trusted
+  controller time was `1442149ms` versus `1333101ms` (`+109048ms`), mainly
+  `vm-wait` (`+98596ms`); this is an observed pair result, not a causal boot or
+  polling measurement. Independent review recommends holding PR #45: faster
+  runtime phases do not establish an end-to-end gain, regression or repeatable
+  magnitude. The earlier overlap pair, CPU2 pair and host-build-removal pair
+  remain separate historical single-pair comparisons and are not additive.
 - A historical pull-request run of about 9m32s used a warm self-hosted
   environment and is not a comparable cold-GCP baseline.
 - Accepted measured results are CPU2 through PR #37 (`25s`, `1.57%`) in run
@@ -1920,8 +1924,8 @@ the 4 GiB experiment remains rejected for now. The next packaging review is
 only under review; no new experiment is approved.
 
 
-LOCAL FULL COOKING LIFECYCLE: PR #45 CANDIDATE, NO GCP RESULT
-================================================================
+LOCAL FULL COOKING LIFECYCLE: PR #45 CANDIDATE
+==============================================
 The Dockerfile-only compiler/development-toolchain removal candidate is PR #45
 at exact workload head
 `939e9a1e2bc4a1d6bae82f779645199878c1a713`. The real
@@ -1953,11 +1957,53 @@ argument exited `2` before the gate and is retained separately; it is not a
 quality result. Existing dependency advisories printed by the gate did not
 fail it.
 
-This full local run establishes candidate correctness and lifecycle evidence,
-not a GCP speedup or input-equivalence claim. The prospective fixed paid pair
-is PR #45 candidate first, followed by the refreshed docs-only PR #20 control
-commit containing this record. Keep the locked image, machine, zone, cache,
-concurrency, resources and frozen instrumentation unchanged. Require all 41
-markers, browser `2/2`, workload and collection gates, private evidence and
-post-delete cleanup on both runs. Do not auto-retry or make a performance
-claim before independent review of the completed pair.
+This full local run established candidate correctness and lifecycle evidence
+before the fixed paid pair; it was not a GCP speedup or input-equivalence
+claim. The candidate-first/control-second pair below used the locked image,
+machine, zone, cache, concurrency, resources and frozen instrumentation.
+
+
+PR #45 FIXED GCP TRIAL: HOLD PERFORMANCE PROMOTION
+===================================================
+The predeclared hypothesis was that removing the unused compiler and
+development toolchain from the Cooking-only Dockerfile would reduce avoidable
+image/build or OCI work while preserving all tests, browser assertions,
+evidence and cleanup. The predeclared pair ran candidate PR #45 first at exact
+head `939e9a1e2bc4a1d6bae82f779645199878c1a713`, then the frozen docs-only PR
+#20 control at exact head `127f57e3707b687d4083c365de5537014abe7098`, with the
+locked configuration and frozen instrumentation unchanged:
+`34746767593 <https://github.com/wimpheling/hephaestus/actions/runs/34746767593>`_
+and `34747950421 <https://github.com/wimpheling/hephaestus/actions/runs/34747950421>`_.
+Rollback is reverting the Dockerfile-only candidate commit; no retry or
+automatic merge follows this pair.
+
+The candidate job elapsed `1470s` versus the control's `1358s`, a candidate
+increase of `112s` (`8.25%`). Trusted controller time was `1442149ms` versus
+`1333101ms`, an increase of `109048ms`; `vm-wait` accounted for `98596ms` of
+that difference. The candidate's runtime phases were faster in this pair:
+`golden-tests` by `27834ms`, `oci-verifier` by `32098ms`, and runtime
+supervisor by `26831ms`, while controller and other phases were slower. The
+controller wait difference is not a measured boot or polling phase and has no
+causal attribution. These timings therefore establish no end-to-end gain,
+intrinsic regression or repeatable magnitude.
+
+Both runs passed their exact provenance checks, all `41` markers, browser
+`2/2`, all workload and collection gates, all `11` evidence sources, scans,
+private upload/download and VM absence cleanup. The candidate is operationally
+valid but held after independent review; faster selected runtime phases do not
+override the slower total job. Private run evidence is retained under
+`/tmp/heph-gcp-34746767593` and `/tmp/heph-gcp-34747950421`, with the terminal
+logs and safe projections preserving the source and configuration identities.
+Do not promote PR #45 or claim a drastic improvement from this single pair.
+
+The local production-controller cancellation reproduction at
+`/home/a/.cache/heph-hard-cancel-fixture-open-phase2-6JOIYo` executed the
+unchanged controller trap, cleanup, post-delete download and timing projection
+against a stateful fake cloud transport. A SIGTERM during open `vm-wait`
+returned `143`, but the open phase was recorded `failed` because the handler
+closes it with status `1`; cleanup verified VM absence while a separate modeled
+guest lost unpublished diagnostics before download. This is not GitHub runner
+or GCP transport proof: the fake guest/storage path did not run startup
+finalization. Hard GitHub cancellation propagation and reliable `always()`
+post-cancel scheduling remain open, so this fixture does not justify a paid
+cancellation run or completion claim.

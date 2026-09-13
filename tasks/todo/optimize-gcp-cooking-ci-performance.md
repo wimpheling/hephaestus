@@ -20,16 +20,24 @@ The ledger currently records a valid cold-GCP baseline and accepted CPU,
 host-build-removal and overlap trials; broader optimization work remains in
 progress.
 
-Current handoff: the newest valid GCP pair is overlap run #34732597502 at
-23m38s versus host-removal control #34730591477 at 26m09s, saving 151s
-(9.62%) in one pair; the original 26m32s baseline #34724176879 is historical
-context. Overlapping workload spans are informational and non-additive. CPU2 and
-host-build removal remain accepted modest single-pair results. Instrumentation
-is frozen and live-proven through PR #38 and the accepted runs. The local
-memory candidate is held, the corrected ext4 scratch candidate is rejected,
-and the actual local libkrun probe is feasibility evidence only; GCP input
-identity remains unproven. Cancellation propagation is partial, fork execution
-is deferred, MVP-06 remains unchecked, and the broader goal remains open.
+Current handoff: the newest fixed candidate/control pair is PR #45 run
+[`34746767593`](https://github.com/wimpheling/hephaestus/actions/runs/34746767593)
+at `1470s` versus frozen docs-only control
+[`34747950421`](https://github.com/wimpheling/hephaestus/actions/runs/34747950421)
+at `1358s`, a `+112s` (`+8.25%`) candidate result. Both exact source heads,
+the locked image/configuration, frozen instrumentation, 41 markers, browser
+`2/2`, all gates, 11 evidence sources, scans and VM cleanup passed. Controller
+time was `1442149ms` versus `1333101ms` (`+109048ms`), mainly `vm-wait`
+(`+98596ms`); this is an observed pair result, not a causal boot or polling
+measurement. Independent review recommends holding PR #45: its faster runtime
+phases do not establish an end-to-end gain, regression or repeatable magnitude.
+The CPU2, host-build-removal and PR #42 overlap results remain separate
+historical single-pair comparisons and are not additive. Instrumentation is
+frozen and live-proven through PR #38 and the accepted runs. The local memory
+candidate is held, the corrected ext4 scratch candidate is rejected, and the
+actual local libkrun probe is feasibility evidence only; GCP input identity
+remains unproven. Cancellation propagation is partial, fork execution is
+deferred, MVP-06 remains unchecked, and the broader goal remains open.
 PR #44's terminal trial run #34742470212 is operationally valid but held: its
 job was 1428s versus the 1418s control (+10s, +0.71%), with 41 markers, browser
 2/2, all gates and cleanup passing. The candidate's trusted controller was
@@ -87,8 +95,8 @@ held because this pair demonstrates no end-to-end gain and its marker
 projection discrepancy remains unresolved; its recorded timings are valid and
 its workload and collection gates passed.
 
-PR #45 is the current Dockerfile-only compiler/development-toolchain removal
-candidate at exact head
+PR #45 is the Dockerfile-only compiler/development-toolchain removal candidate
+at exact head
 `939e9a1e2bc4a1d6bae82f779645199878c1a713`. Its required full local Cooking
 lifecycle run used the real `examples/cooking/run.sh` with both browser phases,
 production project build, OCI builder/verifier, golden/PostgreSQL tests,
@@ -99,12 +107,36 @@ GCP performance result. The private evidence is
 `/home/a/.cache/heph-cooking-remove-dev-toolchain-full-939e9a1/summary.json`
 and the quality log is
 `/home/a/.cache/heph-remove-dev-toolchain-cargo-quality-939e9a1-final.log`.
-The prospective fixed GCP pair is candidate PR #45 first, followed by the
-refreshed docs-only PR #20 control commit containing this record. Both runs
-must use the same locked configuration and frozen instrumentation and must
-pass all 41 markers, browser `2/2`, required gates, evidence collection and
-cleanup. No performance claim or automatic retry follows; independent review
-will decide after the pair.
+The predeclared hypothesis was that removing the unused compiler and
+development toolchain would reduce avoidable Cooking image/build or OCI work
+without changing tests, browser assertions, evidence or cleanup. The fixed
+pair used candidate PR #45 first at exact head
+`939e9a1e2bc4a1d6bae82f779645199878c1a713`, then the frozen docs-only PR #20
+control at exact head `127f57e3707b687d4083c365de5537014abe7098`, with the
+same locked configuration and frozen instrumentation. Both runs passed all
+41 markers, browser `2/2`, required gates, evidence collection and cleanup.
+The candidate job was `1470s` versus `1358s` control (`+112s`, `+8.25%`);
+controller time was `1442149ms` versus `1333101ms` (`+109048ms`), mainly
+`vm-wait` (`+98596ms`). This is an observed pair result, not causal boot or
+polling evidence. Independent review holds PR #45: no end-to-end gain,
+intrinsic regression or repeatable magnitude is established. Rollback is the
+Dockerfile-only candidate revert; no retry or automatic merge follows. The
+private run artifacts are `/tmp/heph-gcp-34746767593` and
+`/tmp/heph-gcp-34747950421`; their controller logs and safe projections retain
+the exact provenance.
+
+The local production-controller cancellation reproduction is retained at
+`/home/a/.cache/heph-hard-cancel-fixture-open-phase2-6JOIYo`. It executed the
+unchanged controller trap, cleanup, post-delete download and timing projection
+with a stateful fake cloud transport. A controller SIGTERM during an open
+`vm-wait` exited `143`, but the open phase was recorded `failed` because the
+signal handler closes it with status `1`; cleanup verified VM absence while a
+separate modeled guest lost unpublished diagnostics before download. This is
+not GitHub runner or GCP transport proof: the fake guest/storage path did not
+run startup finalization. Hard GitHub-cancellation propagation and reliable
+`always()` post-cancel scheduling remain open; no paid cancellation run is
+accepted until that behavior has a reviewed implementation and validation
+plan.
 
 ## Working-tree implementation status
 
