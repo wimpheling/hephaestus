@@ -39,6 +39,12 @@ production OCI operation then passed locally (builder 35.353s, verifier
 84.866s, execute 120.512s) with no wrappers; this is local evidence only and
 does not establish GCP savings. The next review is Astra's read-only
 toolchain-packaging and test-meaning review, with no candidate approved.
+Draft PR #43 (`9b39eb489d8a87c8d71db6c6c9bb573e124f1891`) is now prepared for
+the separately reviewed Python test-tree hypothesis. It removes only the
+guarded `/opt/python/lib/python3.13/test` directory; local OCI time was
+105.346s versus 120.512s, with quality session 18452 and the two-page site
+fixture passing. This remains unapproved local evidence pending the separate
+trial decision; no GCP dispatch is included.
 
 ## Working-tree implementation status
 
@@ -222,6 +228,17 @@ operation. The next step is Astra's read-only review of toolchain packaging
 and test meaning; no candidate is approved. Evidence is at
 `/home/a/.cache/heph-current-oci-p_xchkk6/summary.json` and
 `/home/a/.cache/heph-current-oci-p_xchkk6/build-provenance.json`.
+
+Prepared pretrial PR #43 has exact head
+`9b39eb489d8a87c8d71db6c6c9bb573e124f1891` and base
+`6e812d2e0e22c489541eb34fe8d85ce481970d81`. It changes one guarded Dockerfile
+RUN to remove only `/opt/python/lib/python3.13/test`, retaining Hugo checksum
+and mode, base/Python/site validation, scanner identities and test meaning.
+The locked GCP control is run #34732597502 (`1418s`, controller `1394357ms`,
+golden `966549ms`, OCI builder `93001ms`, verifier `364207ms`, complete gates,
+cleanup and 41 markers). Rollback is reverting the Dockerfile-only commit.
+The draft remains pending the separate paid-trial decision; no GCP dispatch is
+included.
 
 ## Locked constraints
 

@@ -61,6 +61,13 @@ Current facts
   closes the stale harness-fidelity gap for the current input, but local host
   timing is not GCP savings and exact byte equivalence to the retained GCP
   candidate is unavailable.
+- Prepared but unapproved candidate PR #43 removes only the guarded CPython
+  `/opt/python/lib/python3.13/test` tree. Its local OCI operation was
+  `105.346s` versus the current-input control's `120.512s`; this is local
+  evidence only. Final quality passed in session `18452`, the site fixture
+  passed for both pages, and independent review conditionally approved the
+  narrow hypothesis. Root integration review is complete, but no GCP trial
+  has been authorized or dispatched.
 
 Implementation foundation (live and frozen)
 --------------------------------------------
@@ -152,6 +159,9 @@ CURRENT REJECTED AND HELD LOCAL RESULTS
   not an accepted GCP optimization: exact byte equivalence to the retained GCP
   candidate is unavailable, and no GCP saving is claimed. Memory remains held,
   scratch remains rejected, and no identity or toolchain candidate is approved.
+- PR #43 is a prepared draft only. Its exact head is
+  `9b39eb489d8a87c8d71db6c6c9bb573e124f1891`; no candidate acceptance or paid
+  run follows from the local timing until the separate trial decision.
 
 CHRONOLOGICAL EXPERIMENT RECORDS (HISTORICAL DETAIL)
 =====================================================
@@ -1703,3 +1713,42 @@ The memory candidate remains held, the scratch candidate remains rejected and
 the withdrawn identity candidate is not revived. Astra's next bounded step is
 a read-only review of toolchain packaging and test meaning; no image, cache,
 bootstrap or cloud promotion is approved by this local result.
+
+
+PREPARED PYTHON TEST-TREE REDUCTION TRIAL: PR #43
+===================================================
+ID: python-runtime-test-tree-removal
+Hypothesis: removing only the unused CPython regression-test tree from the
+Cooking runtime image may reduce OCI verifier and golden-workload time while
+preserving the Hugo checksum and mode, Python base, site validation, scanner
+identities, assertions, provenance and cleanup. The candidate is PR #43,
+`9b39eb489d8a87c8d71db6c6c9bb573e124f1891`, based on merged main
+`6e812d2e0e22c489541eb34fe8d85ce481970d81`.
+
+Controlled variable: one guarded Dockerfile operation checks that
+`/opt/python/lib/python3.13/test` exists and removes only that directory. The
+Dockerfile retains the Hugo checksum, `0555` mode, base image and Python/site
+validation. Independent Astra review conditionally approved the narrow
+hypothesis. The final formatting-only candidate passed quality session
+`18452`; the real `build.sh` and `check_site.py` fixture passed for both pages.
+
+Local evidence: the complete local OCI operation on the candidate was
+`105.346s` versus the current-input control's `120.512s`; this is a local
+timing and not a GCP saving claim. The tree reduction removed `4703` files and
+`224` directories; every retained file hash and symlink target was unchanged,
+and SBOM dependency identities, scanner database and scanner targets were
+identical. The runtime used for the local operation was `7a6ba94`; the measured
+OCI input was `a119299`; final candidate provenance is `9b39eb4`. The input is
+semantically the same RUN, but these runtime/input/candidate references remain
+distinct and are recorded separately.
+
+Primary locked GCP control: run
+`34732597502 <https://github.com/wimpheling/hephaestus/actions/runs/34732597502>`_
+with job `1418s`, trusted controller `1394357ms`, `golden-tests=966549ms`,
+`oci-builder=93001ms` and `oci-verifier=364207ms`, complete gates and cleanup,
+and the retained 41-marker set. Keep the image, cache, machine, zone, disk,
+concurrency, resources and frozen instrumentation unchanged. Acceptance would
+require complete workload, browser, golden, scanner, marker, provenance,
+timing, private evidence and post-delete cleanup, with no weakened test
+meaning. Rollback is reverting the Dockerfile-only commit. This is a prepared
+draft pending final review; no GCP dispatch is authorized by this entry.
