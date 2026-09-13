@@ -121,12 +121,16 @@ materialize_image() {
     local reference="$1"
     local destination="$2"
     local label="$3"
+    local local_only="${4:-false}"
 
     mkdir -p -- "${destination}"
     chmod 0700 -- "${destination}"
     container_name="hephaestus-libkrun-${label}-$$"
-    podman image exists "${reference}" || podman pull "${reference}"
-    podman create --name "${container_name}" "${reference}" /bin/true >/dev/null
+    if ! podman image exists "${reference}"; then
+        [[ "${local_only}" == false ]] || die "reviewed local image was not imported: ${reference}"
+        podman pull "${reference}"
+    fi
+    podman create --pull never --name "${container_name}" "${reference}" /bin/true >/dev/null
     podman export "${container_name}" | tar -C "${destination}" -xf -
     podman rm "${container_name}" >/dev/null
     container_name=""
@@ -150,7 +154,7 @@ materialize_layout_image() {
             oci-verifier) verifier_image_loaded=true ;;
         esac
     fi
-    materialize_image "${reference}" "${destination}" "${label}"
+    materialize_image "${reference}" "${destination}" "${label}" true
 }
 
 workflow_value() {
@@ -819,6 +823,16 @@ prepare_guest_root "${fixture_root}/rootfs"
 if [[ "${HEPHAESTUS_APP_COOKING_BUILD_PROOF:-0}" == "1" ]]; then
     phase_timing_start oci-image-materialization
     load_repository_image_workflow
+    # The cache is immutable platform input. Derive only this checkout's
+    # verifier entrypoint inside the unprivileged workload and keep its
+    # digest/layout private; never rewrite cached release evidence.
+    verifier_derivation="${fixture_root}/verifier-derivation"
+    python3 "${repo_root}/scripts/derive-cooking-verifier.py" \
+        --baseline-reference "${verifier_vm_image}" --baseline-layout "${verifier_layout}" \
+        --script "${repo_root}/platform/builders/oci-verifier-ubuntu/oci-verify" \
+        --source-revision "$(git -C "${repo_root}" rev-parse HEAD)" --output "${verifier_derivation}"
+    verifier_vm_image="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["reference"])' "${verifier_derivation}/derivation.json")"
+    verifier_layout="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["layout"])' "${verifier_derivation}/derivation.json")"
     builder_operation_root="${fixture_root}/image-root/oci-builder"
     verifier_operation_root="${fixture_root}/image-root/oci-verifier"
     materialize_layout_image \
@@ -826,6 +840,14 @@ if [[ "${HEPHAESTUS_APP_COOKING_BUILD_PROOF:-0}" == "1" ]]; then
     prepare_guest_root "${builder_operation_root}"
     materialize_layout_image \
         "${verifier_vm_image}" "${verifier_layout}" "${verifier_operation_root}" oci-verifier
+    python3 - "${verifier_operation_root}" "${verifier_derivation}/derivation.json" <<'PYVERIFY'
+import hashlib, json, pathlib, stat, sys
+root = pathlib.Path(sys.argv[1])
+script = root / "usr/libexec/hephaestus/oci-verify"
+record = json.loads(pathlib.Path(sys.argv[2]).read_text())
+if not stat.S_ISREG(script.lstat().st_mode) or stat.S_IMODE(script.stat().st_mode) != 0o555 or hashlib.sha256(script.read_bytes()).hexdigest() != record["script_sha256"]:
+    raise SystemExit("materialized verifier does not match checkout source")
+PYVERIFY
     prepare_guest_root "${verifier_operation_root}"
     printf 'OCI worker roots prepared from reviewed layouts:\n  builder=%s\n  verifier=%s\n' \
         "${builder_vm_image}" "${verifier_vm_image}"
