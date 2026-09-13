@@ -66,9 +66,17 @@ no causal performance claim. A same-input raw extraction/runtime-config
 validation remains a local hypothesis only; no host-16 or storage change is
 justified, and the protected image and instrumentation stay unchanged.
 
-PR #47 is a draft local OCI verifier candidate at original commit
+PR #47 is a draft local OCI verifier candidate. Its local candidate worktree
+now has commit `a2914d997630f82cd60e226088b884053140d48f`, which adds private
+checkout-derived verifier materialization and five focused real-CLI fixtures;
+those fixtures passed in `3.304s`, but the commit is not yet pushed to PR #47.
+Host_result owns the full local Cooking validation using the original cached
+workflow; no GCP trial has run. The measured pair below predates this
+derivation commit and must not be attributed to it. The original
+candidate commit was
 `f8a928160d9398bf14b509a4455476d6becc9fff`, refreshed onto current main at
-`1fee77852ac7f0fd060bf453e27b510791770604`; its diff remains only
+`1fee77852ac7f0fd060bf453e27b510791770604`; that measured predecessor's diff
+remains only
 `platform/builders/oci-verifier-ubuntu/oci-verify`. Against the current input
 and Dockerfile SHA-256
 `86af387bcda2e9fe0687aa863e87b93649869c1ae4bf65f4ebccf646a64577cc`, the
@@ -78,12 +86,21 @@ local baseline/candidate pair measured `122.325865874s`/`84.209289853s`
 vulnerabilities. Evidence is retained at
 `/home/a/.cache/ovr-base-20260913T104216Z` and
 `/home/a/.cache/ovr-candidate-20260913T104216Z`; the quality gate exited `0`
-(`/tmp/oci-raw-unpack-quality-f8a9281.log`). This is local-only evidence: the
-full Cooking lifecycle and GCP saving remain unproven, detailed retained
-xattr/hardlink comparison review is pending, and omitted `mtree`/`umoci.json`
-metadata plus incidental I/O-failure semantics remain caveats. Derive the
-nested image and complete full local validation before any new locked GCP
-trial; keep the protected image and instrumentation unchanged.
+(`/tmp/oci-raw-unpack-quality-f8a9281.log`). An independent rootfs comparison
+found no differences outside the intentionally ignored
+`usr/libexec/hephaestus/oci-verify` path. Each side of the baseline comparison
+had `19,426` entries and each side of the derived comparison had `4,071`
+entries, checking file content, type, mode, UID, GID, size, symlink target,
+xattrs and hardlink groups; xattr errors were empty and hardlink groups
+matched. It did not check timestamps or device IDs, and the ignored verifier
+path is outside this equivalence claim. This remains
+local-only evidence: the full Cooking lifecycle and GCP saving remain
+unproven, while omitted `mtree`/`umoci.json` metadata and incidental
+I/O-failure semantics remain caveats. The cache stays fixed; Astra's committed
+unprivileged derived image runs inside the existing materialization phase,
+followed by integrated local Cooking validation and a new locked GCP
+comparison. Keep the existing cache, protected image and instrumentation
+unchanged.
 PR #44's terminal trial run #34742470212 is operationally valid but held: its
 job was 1428s versus the 1418s control (+10s, +0.71%), with 41 markers, browser
 2/2, all gates and cleanup passing. The candidate's trusted controller was

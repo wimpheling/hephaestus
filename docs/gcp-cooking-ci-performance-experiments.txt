@@ -2090,7 +2090,15 @@ candidate is approved by these read-only queries.
 
 LOCAL RAW OCI UNPACK PAIR: PR #47 CANDIDATE, PENDING FURTHER VALIDATION
 =======================================================================
-The unchanged OCI verifier candidate is PR #47
+The local PR #47 candidate worktree now has commit
+`a2914d997630f82cd60e226088b884053140d48f`, which adds private
+checkout-derived verifier materialization and five focused real-CLI fixtures.
+Those fixtures passed in `3.304s`; the commit is not yet pushed to PR #47.
+Full local Cooking validation using the original cached workflow is now owned
+by host_result; no GCP trial has run. The measured pair below predates this
+derivation commit and must not be attributed to it.
+
+The measured raw-unpack OCI verifier candidate was PR #47 at
 `https://github.com/wimpheling/hephaestus/pull/47`, with original candidate
 commit `f8a928160d9398bf14b509a4455476d6becc9fff` and refreshed branch tip
 `1fee77852ac7f0fd060bf453e27b510791770604` after merging current main. The
@@ -2114,16 +2122,30 @@ classification fixtures passed, and the required quality gate passed at exit
 `0` with log `/tmp/oci-raw-unpack-quality-f8a9281.log`.
 
 This is a local measurement only and is not a GCP saving or full Cooking
-lifecycle result. The local result reports matching rootfs metadata/content,
-xattrs and hardlink groups, but the retained detailed comparison method still
-needs independent review; scanner dependency identity and zero-vulnerability
-results were independently checked. Raw/legacy runtime-config equivalence was
-validated separately. The full script escape fixture and mtree I/O-failure
-equivalence were not exercised. The candidate intentionally omits unused
-`mtree`/`umoci.json` metadata, so those outputs and any incidental I/O failure
-semantics remain a caveat.
+lifecycle result. An independent comparison of the baseline and candidate
+rootfs reports no differences outside the intentionally ignored
+`usr/libexec/hephaestus/oci-verify` path: each side of the baseline comparison
+had `19,426` entries and each side of the derived comparison had `4,071`
+entries. The comparison checked file content, type, mode, UID, GID, size,
+symlink target, xattrs and hardlink groups, with no xattr errors and equal
+hardlink-group results. It does not check timestamps or device IDs, and the
+ignored verifier path is outside this equivalence claim.
+Scanner dependency identity and zero-vulnerability results were independently
+checked. Raw/legacy runtime-config equivalence was validated separately. The
+full script escape fixture and mtree I/O-failure equivalence were not
+exercised. The candidate intentionally omits unused `mtree`/`umoci.json`
+metadata, so those outputs and any incidental I/O-failure semantics remain a
+caveat.
 
-Before any paid trial, derive and validate the nested image and complete the
-full local Cooking lifecycle, then establish a new locked cache identity. Keep
-the protected GCE image and frozen instrumentation unchanged. No GCP
-performance claim or paid candidate is approved by this pair.
+The cache remains the fixed reviewed input; no new cache archive publication is
+needed for this private derivation step. Astra's unprivileged derived-image
+implementation is committed in `a2914d997630f82cd60e226088b884053140d48f` and
+runs inside the existing materialization phase. Delivery is still
+unproven until that image completes integrated local Cooking validation and a
+new locked GCP comparison; this local pair does not authorize either.
+
+Before any paid trial, complete the full local Cooking lifecycle using the
+`a2914d997630f82cd60e226088b884053140d48f` derived image, then establish a new
+locked comparison while keeping the existing cache, protected GCE image and
+frozen instrumentation unchanged. No GCP performance claim or paid candidate
+is approved by this pair.
