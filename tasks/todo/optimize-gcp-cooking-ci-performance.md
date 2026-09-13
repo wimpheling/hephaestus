@@ -39,11 +39,10 @@ the identity-projection and image-change candidate. A complete current-input
 production OCI operation then passed locally (builder 35.353s, verifier
 84.866s, execute 120.512s) with no wrappers; this is local evidence only and
 does not establish GCP savings. PR #43
-(`9b39eb489d8a87c8d71db6c6c9bb573e124f1891`) was the authorized trial run `34738676749`. It completed successfully, but is not accepted:
-its workload and all collection gates passed while its retained Rust marker
-inventory was 40 versus the control's 41. The job was 1485s versus 1418s
-control (+67s, +4.73%), so no GCP optimization claim or merge follows. No
-retry or second dispatch is planned. It was prepared for
+(`9b39eb489d8a87c8d71db6c6c9bb573e124f1891`) was the authorized trial run `34738676749`. It is operationally passing, while performance acceptance is inconclusive: its workload and all collection gates passed, but its retained Rust marker inventory was 40 versus the control's 41. The job was 1485s versus 1418s
+control (+67s, +4.73%), so performance acceptance is inconclusive: there is
+no demonstrated end-to-end gain and no proven workload regression. No GCP
+optimization claim or merge follows. No retry or second dispatch is planned. It was prepared for
 the separately reviewed Python test-tree hypothesis. It removes only the
 guarded `/opt/python/lib/python3.13/test` directory; local OCI time was
 105.346s versus 120.512s, with quality session 18452 and the two-page site
@@ -229,7 +228,8 @@ fidelity gap, but exact byte equivalence to the retained GCP candidate is not
 available and no GCP saving is claimed. One pre-provision launcher failure due
 to missing empty allowlist directories was corrected before the single actual
 operation. The Python trial has now completed, and the marker discrepancy is the
-remaining acceptance blocker; no candidate is approved from that run.
+remaining acceptance blocker; no candidate is approved from that run. The
+operational pass does not resolve the marker projection discrepancy.
 Evidence is at
 `/home/a/.cache/heph-current-oci-p_xchkk6/summary.json` and
 `/home/a/.cache/heph-current-oci-p_xchkk6/build-provenance.json`.
@@ -246,8 +246,12 @@ The single paid trial was dispatched as run `34738676749` and completed
 successfully. It is not accepted because the complete candidate evidence
 retained 40 Rust markers versus 41 in control; all other gates passed. The
 candidate job was `1485s` versus `1418s` control, trusted controller
-`1448925ms` versus `1394357ms`. Do not claim the local or phase-level speedup
-as a GCP optimization. Rollback is reverting the Dockerfile-only commit; no
+`1448925ms` versus `1394357ms`. Create/delete accounted for `+47924ms` of the
+controller increase and wait for `+5903ms`. The technical-context projection
+was 43 versus 44 records, below its 50-record cap; filtering/interleaving is
+plausible but unproven. Treat performance acceptance as inconclusive: do not
+claim a local or phase-level speedup as a GCP optimization, and do not claim a
+workload regression. Rollback is reverting the Dockerfile-only commit; no
 retry, merge or second dispatch follows without independent review of the
 marker discrepancy.
 
