@@ -26,18 +26,156 @@ Current facts
 - The current disposable path uses one paid VM, a 45-minute provider DELETE
   lifetime, a 50-minute workflow timeout, a protected prebuilt runner image and
   one-day private diagnostics.
-- The latest full disposable run measured about 26m11s total. The VM-running
-  through host-pass interval was about 24m07s; cleanup added about 85s before
-  verified absence. OCI builder time was about 105s and verifier time about
-  353s. The early roughly eight-minute interval remains unclassified until
-  safe phase instrumentation exists.
+- The newest fixed candidate/control pair is PR #45 run
+  `34746767593 <https://github.com/wimpheling/hephaestus/actions/runs/34746767593>`_,
+  at `1470s`, against frozen docs-only control run
+  `34747950421 <https://github.com/wimpheling/hephaestus/actions/runs/34747950421>`_
+  at `1358s`: candidate `+112s` (`+8.25%`). Both exact source heads, the
+  locked image/configuration, frozen instrumentation, 41 markers, browser
+  `2/2`, all gates, 11 evidence sources, scans and VM cleanup passed. Trusted
+  controller time was `1442149ms` versus `1333101ms` (`+109048ms`), mainly
+  `vm-wait` (`+98596ms`); this is an observed pair result, not a causal boot or
+  polling measurement. Independent review recommends holding PR #45: faster
+  runtime phases establish no end-to-end gain; the observed slowdown is not
+  proven to be a code-caused regression, and repeatability remains
+  unestablished. The earlier overlap pair, CPU2 pair and host-build-removal
+  pair remain separate historical single-pair comparisons and are not additive.
 - A historical pull-request run of about 9m32s used a warm self-hosted
   environment and is not a comparable cold-GCP baseline.
-- No accepted or rejected performance experiment has been recorded.
+- Accepted measured results are CPU2 through PR #37 (`25s`, `1.57%`) in run
+  `34725585641 <https://github.com/wimpheling/hephaestus/actions/runs/34725585641>`_,
+  host-build removal through PR #39 (`14s`, `0.88%` versus fresh control) in
+  run `34730591477 <https://github.com/wimpheling/hephaestus/actions/runs/34730591477>`_,
+  and overlap through PR #42 (`151s`, `9.62%`) in run
+  `34732597502 <https://github.com/wimpheling/hephaestus/actions/runs/34732597502>`_.
+  All are single-pair results; overlap is the newest accepted implementation
+  comparison.
+- The local verifier memory candidate remains held. Actual local libkrun
+  feasibility passed in `259.460s`, but its earlier local probe input
+  equivalence is incomplete. The corrected local ext4 scratch candidate was
+  rejected (`81.388s` versus `77.143s` control); neither local result is a GCP
+  performance measurement.
+- Critical correction: at measured candidate `7a6ba94`, production
+  `scripts/run-libkrun-integration.sh` already adds the fixed `heph-agent`
+  UID/GID `10001` records in `prepare_guest_root` (lines `232-238`) before
+  preparing the verifier root (line `829`) and exporting it (line `895`). The
+  account-only `76.180s -> 46.561s` local pair therefore corrected a diagnostic
+  harness omission, not production behavior. Withdraw its missing-NSS
+  optimization hypothesis, identity-projection candidate and image-change
+  implication. Optional profiling remains informational.
+- The complete current-input production OCI operation has now passed locally:
+  `oci-builder=35.353s`, `oci-verifier=84.866s`, operation execute
+  `120.512s`, with complete materialization and `prepare_guest_root`, both
+  guest payloads, `heph-agent` `10001`, and no diagnostic tool wrappers. This
+  closes the stale harness-fidelity gap for the current input, but local host
+  timing is not GCP savings and exact byte equivalence to the retained GCP
+  candidate is unavailable.
+- A faithful current-input pressure diagnostic at
+  `/home/a/.cache/hp-lx9k_o05` retained the original worker/bootstrap and
+  complete preparation path while sampling guest `/proc` and the host worker
+  cgroup. The authoritative operation elapsed time was `112.55043015s`; the
+  phase sum was `112.386s` (`oci-builder=26.950s`, `oci-verifier=85.436s`),
+  while launcher wall time was `112.633882885s` including launch/teardown.
+  The 2 GiB guest had minimum `MemAvailable=1.537 GiB`, peak anonymous memory
+  `271.203 MiB`, and `15` file refaults. Host worker peak was `5.389 GB` of
+  its 8 GiB cgroup ceiling, with no memory PSI, limit, OOM, direct-reclaim,
+  major-fault or throttle signal; background kswapd reclaim occurred without
+  an observed stall. Guest PSI and detailed reclaim/fault counters were
+  unavailable, which is not a zero-pressure measurement. Correctness,
+  `296` packages, zero vulnerabilities and cleanup passed. This is local
+  pressure evidence only, not GCP equivalence or a saving; advance no 4 GiB
+  experiment for now. The next packaging review remains under review and no
+  new experiment is approved.
+- The browser/npm reuse opportunity was measured locally with the real `npm ci`
+  commands in private cache directory
+  `/home/a/.cache/heph-browser-npm-ci-measurement`, using Node `v24.16.0` and
+  npm `11.15.0`. Playwright took `0.574s` for the first install and `0.547s`
+  for a full reinstall; web assets took `0.508s` and `0.549s`, with every
+  command exiting `0` and the locked trees installing 25 and 44 packages.
+  The current GCP path repeats Playwright three times and web assets once after
+  the required per-run installs, so this warm-local pair estimates about
+  `2.19s` of duplicate work. The result is too small and too cache-dependent
+  to justify implementation or a paid trial; it is not a GCP timing claim.
+- A private actual golden preparation-prefix diagnostic for the proposed
+  crash-build hoist completed with cleanup and provenance complete at
+  `/home/a/.cache/heph-crash-prefix-diagnostic`. It intentionally skipped the
+  remaining scenarios and browser phases, so it is not a full workload pass:
+  real prefix `R=61.899s`, candidate `C=0.754s`, baseline `B=139.442s`, with
+  conservative predicted overlap gain
+  `min(C,max(B-R,0))=0.754s`. A separate actual production build and OCI path
+  passed in session `39200` (`31.601s` build, `39.504s` builder,
+  `89.501s` verifier, `139.952s` quiescent, `139.957s` application shutdown,
+  exit `0`); these are prefix/operation timings and do not establish a full
+  Cooking workload result. The initial attempt's private Unix-socket path was
+  `126` bytes versus the `108`-byte limit and is retained as a setup failure;
+  correcting private temporary roots was not a candidate change. Because the
+  predicted gain is below one second, reject the crash-build-hoist candidate
+  without a GCP run, full quality gate or PR. The source-only candidate remains
+  held and uncommitted at
+  `/home/a/projects/hephaestus-worktrees/gcp-prebuild-crash-release` after
+  independent design review and local fmt/check. Evidence files are
+  `summary.json`, `run.sh`, `source.patch` and `provenance.json` in the
+  diagnostic directory.
+- PR #44 (`a6bf87b9cf8a20d59a5afa2a784802ba9cd7308c`, branch
+  `perf/cooking-overlap-initial-browser`) splits blog-repository metadata from
+  population and joins the independent release and blog preparation branches.
+  Source push, manual attachments and browser configuration remain behind the
+  final join; browser assertions, workload timers, cleanup and security/update
+  scenarios are unchanged. Full local lifecycle run 3 passed at
+  `/home/a/.cache/heph-overlap-initial-browser-a6bf87b9-run3`: total
+  `268446ms`, golden `35 passed/1 ignored/0 failed`, PostgreSQL `6 passed`,
+  browser initial `55353ms` and post-operation `29611ms`, OCI builder
+  `36145ms` and verifier `97354ms`, with credential scans and VM/cgroup/
+  container cleanup passed. Independent review confirmed initial Playwright
+  `06:07:28.632-06:07:43.965` ran inside verifier
+  `06:06:36.859-06:08:14.213` and before initial blog publication at source
+  line `549` (`06:08:16.260739`); line `825` is a later update. The causal
+  call order attaches both branches before browser execution, so the
+  Playwright `attachments[]` field is not used as proof. Full quality gate
+  session `58696` exited `0`, with log
+  `/home/a/.cache/heph-pr44-cargo-dev-quality.log`.
+  The terminal locked GCP trial was run as
+  `34742470212 <https://github.com/wimpheling/hephaestus/actions/runs/34742470212>`_,
+  against control run `34732597502`, using the frozen instrumentation and
+  unchanged configuration. The candidate job was `1428s` versus `1418s`
+  (`+10s`, `+0.71%`); trusted controller time was `1399784ms` versus
+  `1394357ms` (`+5427ms`). Golden-tests decreased `17279ms`, runtime
+  supervisor decreased `8093ms`, and startup supervisor decreased `7350ms`,
+  while OCI verifier increased `59541ms`, browser initial increased `14574ms`,
+  browser post-operation increased `5519ms`, and other phases also increased.
+  The workload retained 41 markers, browser validation was `2/2`, all gates
+  passed, and VM cleanup was verified. This is a valid operational measurement
+  but demonstrates no end-to-end gain; contention is plausible but unproven
+  because unrelated phases also slowed, and no intrinsic regression is
+  established. Independent review recommends holding PR #44; no retry or
+  automatic merge is planned. Private evidence is at
+  `/tmp/heph-gcp-34742470212`. The archive is
+  `gs://hephaestus-508000-cooking-diagnostics/cooking/runs/34742470212/1/a6bf87b9cf8a20d59a5afa2a784802ba9cd7308c.tar.gz`,
+  SHA-256 `375a64d695c5a60ae8ae63915ac2f1cd13d6d5b0d745fc1d4a2d9ed7cf109564`.
+- Candidate PR #43 removed only the guarded CPython
+  `/opt/python/lib/python3.13/test` tree. Its authorized locked GCP trial,
+  run `34738676749 <https://github.com/wimpheling/hephaestus/actions/runs/34738676749>`_,
+  completed successfully at exact head
+  `9b39eb489d8a87c8d71db6c6c9bb573e124f1891`; it is operationally passing,
+  while performance acceptance is **inconclusive**: the workload, browser,
+  timing, private-evidence, scanner, gate and cleanup
+  checks passed, while the retained Rust marker inventory was 40 versus the
+  control's 41 (the missing marker is
+  `cooking_confinement::tests::native_vm_logs_reject_split_encodings_without_joining_streams`).
+  The job took `1485s` versus control `1418s` (`+67s`, `+4.73%`); trusted
+  controller time was `1448925ms` versus `1394357ms` (`+54568ms`, `+3.91%`).
+  The candidate's workload phases were faster in one pair (`golden-tests`
+  `884033ms` vs `966549ms`, OCI builder `88689ms` vs `93001ms`, verifier
+  `322770ms` vs `364207ms`), but the marker mismatch prevents acceptance and
+  no optimization claim or merge follows. Final quality passed in session
+  `18452`, and the site fixture passed for both pages; these are separate from
+  valid GCP performance acceptance. The result is an operational pass with an
+  inconclusive performance acceptance decision, not evidence of a proven
+  workload regression.
 
-Implementation foundation (unreleased)
----------------------------------------
-- The working branch adds a trusted `main` workflow controller for manually
+Implementation foundation (live and frozen)
+--------------------------------------------
+- `main` contains the trusted workflow controller for manually
   selected same-repository PRs. It requires the PR number, repository ID
   `1312377552`, and exact head SHA together; the controller validates the open
   PR through the GitHub API before VM creation and anchors labels, checkout and
@@ -52,51 +190,109 @@ Implementation foundation (unreleased)
   baked browser/Rust toolchain, a writable cargo cache, and checkout/evidence
   paths are exposed. The IPv4/IPv6 metadata guard is installed before PR
   npm/browser hooks and remains active through passt and the nested guest.
-  This boundary is source-reviewed and locally contract tested; it has no
-  live GCP proof yet.
+  This boundary is source-reviewed, locally contract tested and live-proven by
+  the valid baseline and subsequent accepted runs.
 - `scripts/gcp_phase_timing.py` records bounded start/end JSONL records using
   monotonic clocks and fixed phase, trust, provenance, cache and metric enums.
   Supervisor timings are authoritative for measurement; workload timings are
   explicitly informational. Trusted startup rereads the current supervisor
   records after archive, evidence scanning and upload to create the final
   private sidecar; post-delete download validates it only after VM absence and
-  retains the safe projection for one day. End-to-end GCP validation remains
-  pending; no performance improvement is claimed.
+  retains the safe projection for one day. End-to-end GCP validation passed in
+  the valid baseline and accepted runs; supervisor timings remain authoritative
+  and overlapping workload spans are not additive.
 - Root-side runtime commands reset `PATH` to root-owned system directories;
   the forge-writable cargo bin is passed only into workload units. PR units
   bind a private per-run runtime directory at `/run/user/10001` so host user
-  manager sockets are not exposed. This is locally contract tested and still
-  awaits live guest validation.
-- Local validation currently passes 230 focused tests covering provenance,
-  controller contracts, timing schema/projection, diagnostics, sidecars and
-  runner-image contracts, plus Bash syntax, Python compilation and diff
-  checks. The count includes an evolving working-tree diff and is not a
-  replacement for the unchanged full Cooking acceptance gate.
+  manager sockets are not exposed. This is locally contract tested and covered
+  by the live GCP evidence path.
+- PR #38 froze the instrumentation after its real lifecycle regression and
+  quality checks. Its producer-to-timing-to-collection-to-validation path has
+  live GCP proof; instrumentation scope is closed for this task.
 
 TO DO
 =====
-1. Define the trusted main-controller PR-SHA contract for reviewed
-   same-repository PRs, including operator approval, provenance checks and a
-   guest with no ADC, metadata credentials or service-account scopes for PR
-   code. Defer fork execution pending a separate trust-policy decision.
-2. Add and locally validate safe structured phase instrumentation for setup,
-   cache, OCI, build, gateway, browser, tests, scanning, upload, deletion and
-   post-delete checks.
-3. Establish the smallest justified cold-GCP baseline comparison with the
-   current image, cache and machine settings; add repeats only if observed
-   variance prevents a decision.
-4. Test the OCI verification hypothesis: measure whether verification work can
-   be bounded or reused while retaining full archive and checksum validation.
-5. Test cache/setup reuse and hit-rate hypotheses without exposing the private
-   cache or allowing PR code to write it.
-6. Test project-build and gateway-readiness hypotheses, including duplicate npm
-   or CI setup work, while retaining all required assertions and reports.
-7. Test cancellation and concurrency behavior for bounded cost and cleanup;
-   never add automatic paid retries.
-8. Record each trial's exact run link, baseline/candidate source and
-   image/cache identity, timings, cost proxy, correctness/security coverage,
-   result/reason and rollback decision before changing the ledger sections
-   below.
+1. Keep the accepted overlap implementation and locked paid path available
+   while the broader optimization goal remains open.
+2. Close the remaining GitHub hard-cancellation propagation evidence gap;
+   existing success, test-failure, timeout and workload-signal cleanup evidence
+   is retained.
+3. Keep fork execution deferred pending a separate trust-policy decision and
+   keep MVP-06 unchecked; neither is part of this task.
+4. Keep the memory and scratch candidates held/rejected. PR #43 run
+   `34738676749` is terminal but not accepted because its complete evidence
+   retained 40 Rust markers versus the control's 41. Preserve the exact
+   evidence and do not retry, merge or dispatch another run until the marker
+   discrepancy has an independently reviewed explanation. PR #44 run
+   `34742470212` is also terminal and held: it passed its workload and
+   collection gates but showed no end-to-end gain (`1428s` versus `1418s`).
+   Do not automatically retry or merge it; any repeat requires a predefined
+   alternating control/candidate protocol.
+5. Record any future bounded trial with exact provenance, complete gates,
+   cleanup evidence, measurements, decision and rollback. Preserve frozen
+   instrumentation and do not treat overlapping workload phases as additive.
+
+CURRENT ACCEPTED RESULTS
+========================
+- Locked baseline: run `34724176879`, `26m32s`, complete evidence.
+- CPU2: PR #37 merged as `c0bd1c61f85a6537feb3ee682d178fe92f4ad432`; run
+  `34725585641`, `26m07s`, `25s` (`1.57%`) saved in one pair.
+- Host-build removal: PR #39 merged as
+  `39b8032796637c6898b41c281754c38bb3be41ee`; run `34730591477`, `26m09s`
+  versus fresh control `34729302087` at `26m23s`, `14s` (`0.88%`) saved.
+- Overlap: PR #42 merged as `6e812d2e0e22c489541eb34fe8d85ce481970d81`;
+  run `34732597502`, `23m38s` versus `26m09s`, `151s` (`9.62%`) saved.
+  This is the newest valid pair, with complete evidence and no repeatability
+  claim. Workload spans overlap and are not additive.
+
+CURRENT REJECTED AND HELD LOCAL RESULTS
+=======================================
+- The local 2 GiB memory candidate remains held: actual libkrun feasibility
+  passed in `259.460s`, but GCP input identity remains unproven, so no GCP
+  saving or performance baseline is claimed. Earlier local Umoci timings near
+  `225s` and `61s` are likewise harness-limited by omitted production identity
+  preparation and unproven input equivalence.
+- The corrected ext4 scratch probe is rejected as a local optimization:
+  `81.388s` versus `77.143s` control. The earlier preseed-link scratch probe
+  is invalid because real cleanup removed the link before placement. These
+  probes produced matching correctness and cleanup evidence, but no
+  production, image or GCP change.
+- Optional profiling is informational and subordinate to the input-identity
+  and storage-mapping question. No new cloud run is currently justified.
+- The account-only probe is superseded as a harness-correction-only result:
+  its private clone supplied records already present in production preparation.
+  It is not a supported production mechanism, optimization, GCP result or
+  design candidate. Do not add the reserved ID to the image; the Dockerfile's
+  collision check would reject that change.
+- The current-input production OCI operation is representative local evidence,
+  not an accepted GCP optimization: exact byte equivalence to the retained GCP
+  candidate is unavailable, and no GCP saving is claimed. Memory remains held,
+  scratch remains rejected, and no identity or toolchain candidate is approved.
+- PR #43 trial run `34738676749` at exact head
+  `9b39eb489d8a87c8d71db6c6c9bb573e124f1891` is terminal and workload-valid
+  but not accepted. It ran `1485s` versus the `1418s` control (`+67s`), with
+  trusted controller `1448925ms` versus `1394357ms` (`+54568ms`); its 40
+  retained Rust markers versus 41 in the control are an acceptance blocker.
+  Do not claim the local or phase-level speedups as a GCP optimization.
+- PR #44 trial run `34742470212` at exact head
+  `a6bf87b9cf8a20d59a5afa2a784802ba9cd7308c` is terminal, operationally valid
+  and held. It ran `1428s` versus the `1418s` control (`+10s`, `+0.71%`),
+  with trusted controller `1399784ms` versus `1394357ms` (`+5427ms`). It
+  retained 41 markers, browser validation `2/2`, all gates and cleanup passed.
+  Golden-tests, runtime supervisor and startup supervisor were faster, while
+  OCI verifier, both browser phases and other phases were slower. This valid
+  measurement demonstrates no end-to-end gain; contention is plausible but
+  unproven because unrelated phases also slowed, and no intrinsic regression
+  is established. Independent review recommends holding PR #44; no retry or
+  automatic merge is planned. Evidence is at `/tmp/heph-gcp-34742470212`,
+  with archive SHA-256
+  `375a64d695c5a60ae8ae63915ac2f1cd13d6d5b0d745fc1d4a2d9ed7cf109564`.
+
+CHRONOLOGICAL EXPERIMENT RECORDS (HISTORICAL DETAIL)
+=====================================================
+The prepared attempts, lifecycle fixtures, baseline work and detailed result
+records below are retained as dated evidence. Historical preparation language
+does not override the current facts and result sections above.
 
 Pre-trial policy and bounded hypothesis register
 ================================================
@@ -154,10 +350,1665 @@ Correctness/security coverage:
 Result/reason:
 Implementation commit:
 
+PREPARED BASELINE
+=================
+ID: cold-gcp-pr-sandbox-baseline
+Hypothesis: Establish one cold disposable-GCP timing baseline for the
+instrumented trusted same-repository PR sandbox before testing a performance
+change. This run has no intended performance change; it should establish the
+complete correctness and phase-timing reference against which one-change
+experiments can later be compared. The previous dispatch failed in image
+startup preflight before VM creation and therefore does not test this
+hypothesis.
+Prerequisites: the controller and timing foundation from merged PR #19, the
+runtime compatibility fix on `main` (PR #21), and the private Podman store
+visibility fix (PR #22) must all be present in the trusted `main` workflow
+before dispatch. The protected image, immutable cache, zone, machine type,
+disk size and concurrency remain unchanged; no image, IAM/WIF or cache
+mutation is part of this baseline. The open PR #20 workload must be rebased
+onto the resulting `main` and its exact head SHA supplied to the controller.
+Standing authorization: the user explicitly authorized all GCP runs required
+for this task, so no additional per-run approval is required. Do not retry a
+paid failure automatically; a valid baseline remains required before any
+candidate experiment.
+Baseline (locked environment): source SHA is the exact open PR head supplied
+as `pr_head_sha` at dispatch and recorded by the trusted controller; no
+measured run exists yet. Use protected image
+`hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d`, machine type
+`n2-standard-8`, `150 GB pd-balanced` disk, zone `europe-west1-d`,
+concurrency `1`, and cache generation `1789079827867335` with archive size
+`1783474345` bytes. The read-only cache archive SHA-256 is
+`0ed20efcc1aa019b79405d1eed626b13d4702019e9ceeba2bdde54e45ae29296`.
+Candidate: none before this baseline; the baseline and candidate will use the
+same reviewed same-repository PR sandbox and locked environment.
+Controlled variable: none. No implementation or performance change is made
+before the baseline measurement.
+Run links: dispatch attempt
+`34700357882 <https://github.com/wimpheling/hephaestus/actions/runs/34700357882>`_
+ran the trusted `main` controller at `982733cb67eae991e03de86ce0b6ef63ba06985d`
+with workload source `6264d25b574e5020e33b5b3bf312ceccf564a7e2` (PR #20 head at
+dispatch). Quota and cache preflight passed; cache generation
+`1789079827867335` and the exact PR provenance tuple passed validation. The
+controller then failed closed because the protected image's
+`startup_sha256` did not match the current recipe. No VM was created.
+Timings (total and phases): approximately 37 seconds end-to-end; no workload
+or safe phase-timing projection was produced. The failure is infrastructure
+preflight evidence, not a performance experiment result.
+Cost proxy: no VM created and no paid VM runtime incurred. The safe retained
+manifest recorded cleanup `verified-absent`, upload `unknown`, and download,
+scan and triage `not-run`.
+Correctness/security coverage: require the existing Cooking, browser, golden,
+scanner, marker, provenance and verified post-delete cleanup gates; the
+controller must validate the open same-repository PR number, repository ID
+`1312377552` and exact head SHA together.
+Result/reason: baseline remains pending a valid cold-GCP run. Attempt
+`34700357882` is an infrastructure preflight failure and is neither an
+accepted nor rejected performance experiment decision.
+Implementation commit: none; this entry is docs-only preparation.
+
+Terminal baseline attempt: [run 34702725501](https://github.com/wimpheling/hephaestus/actions/runs/34702725501)
+used trusted controller SHA
+`90d8db6e7b1b7b4e472595c8b5352f8262018419` and workload SHA
+`7db6ac55bb64648159a86dfc08626a516dd8b27d2` with the same locked image,
+cache, machine, disk, zone and concurrency. Quota and cache preflight passed;
+VM creation passed in `33847` ms. Startup passed the protected image,
+`workflow-images`, `metadata-guard`, `browser-host`, and the second
+`metadata-guard` check, then entered the Cooking workload. The delegated
+`examples/cooking/run.sh` exited with status `1`; its generic shell-failure
+handler recorded line `344`. The authoritative controller projection records
+`vm-wait` failed after `167456` ms; VM deletion took `54129` ms and cleanup
+verification passed with the owned VM explicitly absent.
+
+The original post-delete diagnostics download reached the private object and
+recorded `upload=verified-by-download` and `download=passed`, but failed closed
+because the expected Cooking phase-timing projection was missing; its scan was
+therefore not run. The controller did pass
+`HEPH_GCP_PHASE_TIMING_PATH` to the delegated workload, but the retained
+manifest contains no `phase-timing` source record or source rejection; its
+projected runtime-structured status only reports that timing as unavailable.
+The status artifact's explicit error was `phase-timing-download-failed`.
+No-VM [diagnostics triage run 34703036967](https://github.com/wimpheling/hephaestus/actions/runs/34703036967)
+and encrypted [triage run 34703564724](https://github.com/wimpheling/hephaestus/actions/runs/34703564724)
+validated the private bundle and evidence scan, but recorded a Cooking
+workload exit `1` at the generic shell handler line `344`, a missing/invalid
+browser report and failed gate acceptance. The encrypted bundle retained no
+inner preflight stderr or narrower workload error. Authoritative test counts
+and workload timings are unavailable. This is infrastructure/workload failure
+evidence, not a performance result: no ACCEPTED or REJECTED decision is
+recorded, and the prepared baseline remains pending a valid run.
+
+NEXT PREPARED BASELINE
+======================
+Preparation revision: trusted `main` now includes merged PR #23 (preserve the
+diagnostics path when phase timing is unavailable), PR #24 (typed early
+Cooking workload failure stages), PR #25 (constrain the trusted Podman
+bootstrap sandbox and private namespace), and PR #26 (typed Cooking preflight
+failure stages), PR #28 (retain typed preflight failure reasons), PR #29
+(fix trusted Podman bootstrap lifecycle and procfs visibility), and PR #30
+(avoid mutating an already-installed Rust target), with current main at
+`1a9b666a48efc1c212749f304a23f2d7034f5cb8`. The next PR #20 workload
+will use the exact open-PR head supplied at dispatch after this preparation is
+pushed;
+the controller SHA and workload SHA will be recorded with the terminal result.
+Reason: attempt `34702725501` reached the Cooking workload but its failure was
+only classified by the generic `examples/cooking/run.sh` shell handler, while
+the missing phase-timing projection prevented a complete baseline record. The
+new trusted workload stage markers, preserved failure/scan/triage path and
+private Podman namespace hardening are intended to identify an early workload
+failure and retain diagnostic evidence without weakening the unchanged suite
+or scanner. PR #26 additionally classifies preflight failures with bounded
+`dependency-check` markers, so a failure can be attributed to a specific
+check rather than to the generic shell handler. The allowed stage/reason
+pairs are `host-identity` (`unsupported-user`, `unsupported-architecture`),
+`host-device` (`kvm-unavailable`, `passt-unavailable`), `loader-checks`
+(`libkrun-unavailable`, `libkrunfw-unavailable`), `uid-map`
+(`uid-map-unavailable`), `cgroup-delegation` (`delegation-unavailable`),
+`podman-rootless` (`rootful-podman`), `immutable-references`
+(`invalid-image-reference`), `workflow-inputs`
+(`workflow-file-unavailable`, `workflow-key-unavailable`), `oci-layout`
+(`layout-unavailable`, `manifest-unavailable`), `python-image` or
+`rust-image` (`image-unavailable`, `image-pull-failed`), and the image probe
+stages (`image-probe-failed`); `preflight-command-checks` uses
+`missing-command` with the bounded command name.
+The concrete local reproduction behind this dispatch imported the workflow
+images in a one-shot unit whose Podman pause process was killed before the
+readiness check; the resulting `podman info` failure was observed while the
+PR unit retained `NoNewPrivileges`. PR #28 preserves the typed reason and test
+fields in the safe projection. PR #29 keeps the import unit alive until the
+supervisor's explicit cleanup and applies the required public procfs statistics
+correction: `ProcSubset=all` exposes `/proc/meminfo`, `/proc/stat` and
+`/proc/uptime` while `ProtectProc=invisible` continues to hide other process
+metadata. This dispatch tests those lifecycle and visibility corrections with
+the same protected image, cache and workload gates. The preceding attempt
+`34709290982` passed `dependency-setup` and entered `project-build`, but its
+`rustup-target` detail stage failed with exit `1` while the protected image
+already contained `x86_64-unknown-linux-musl`. PR #30 checks the baked target
+first and invokes `rustup target add` only when it is absent; the host build,
+fixed inputs and workload gates remain unchanged.
+The concrete cause remained that the Cooking PR unit did not set
+`RUSTUP_TOOLCHAIN`, allowing repository/default Rust tool selection and
+clippy/fmt component auto-install behavior against the read-only minimal
+image. PR #31 pins the trusted baked toolchain as `RUSTUP_TOOLCHAIN=1.88.0`
+for the workload, keeping the compiler version, cache, protected image, host
+build and fixed inputs unchanged. Only the trusted startup compatibility hash
+was updated to authorize this runtime wiring; no image rebuild or IAM/cache
+change is part of the baseline.
+Hypothesis and acceptance: this remains a baseline, with no performance change
+under test. It can establish the cold-GCP reference only if all Cooking,
+browser, golden, database, scanner, marker, provenance, cleanup and required
+phase-timing gates pass. If any required gate or timing evidence fails, record
+the run as diagnostic/infrastructure evidence and leave ACCEPTED/REJECTED
+empty.
+Locked environment: retain the protected image
+`hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d`, immutable cache generation
+`1789079827867335`, `n2-standard-8`, `150 GB pd-balanced`,
+`europe-west1-d`, concurrency `1`, 45-minute provider DELETE and 50-minute
+workflow timeout. No image, IAM/WIF, cache or test change is part of this
+run. The user has authorized all GCP runs required for this task; no additional
+per-run approval is required. Do not dispatch automatically from this
+preparation record.
+Run identity preservation: the trusted controller's actual workflow run ID
+and attempt number must be propagated to
+`HEPH_GCP_PHASE_TIMING_RUN_ID` and `HEPH_GCP_PHASE_TIMING_ATTEMPT`; workload
+timing records and the retained projection must preserve and validate those
+same values. The terminal ledger entry will record the actual run ID and
+attempt returned by GitHub and the controller, without inferring or replacing
+either value.
+
+Diagnostic baseline attempt: [run 34706097013](https://github.com/wimpheling/hephaestus/actions/runs/34706097013)
+used trusted controller SHA
+`317d14684462ade5e2ef0c1bc8eb577e82a9ee3b` and workload SHA
+`5f9da509c25b212a509605a50fd4c7a825531665` with the locked image, immutable
+cache generation, machine, disk, zone and concurrency above. The safe
+controller timing projection records `preflight-quota=2411` ms,
+`preflight-cache=1629` ms, `vm-create=10763` ms, `vm-wait=154793` ms with
+outcome `failed`, `vm-delete=53092` ms, `cleanup-verification=998` ms and
+`post-delete-download=1446` ms. VM deletion and cleanup verification passed;
+the owned VM was verified absent. The safe diagnostics manifest records
+`upload=verified-by-download`, `download=passed`, `scan=passed`, archive size
+`2423` bytes and archive SHA-256
+`d3a614907a9dc65956f20d5d50041974f396b67f16ad9ecc3201d98d808c5ff2`.
+The retained typed triage projection narrows the workload failure to Cooking
+`dependency-setup`, exit `1`; the generic `cooking-run` command marker is line
+`375`. Browser validation failed with a missing/invalid report (exit `2`),
+the evidence scan passed, and authoritative test counts are unavailable.
+The projection records `collectionStatus=partial` with triage and scan data
+present and no no-VM retrieval attempt. Workload phase timing is unavailable
+because the phase-timing download failed; the safe evidence does not yet
+distinguish a timer failure from a preflight failure within dependency setup.
+Gate acceptance therefore failed. This is diagnostic infrastructure/workload
+evidence only: no baseline/performance timing result and no ACCEPTED or
+REJECTED decision is recorded; the prepared baseline remains pending a valid
+run.
+
+Terminal diagnostic baseline attempt: [run 34707241193](https://github.com/wimpheling/hephaestus/actions/runs/34707241193)
+used trusted controller SHA
+`75caf103bb8d93a61e7fb14e5326662beaaedbe1` and workload SHA
+`e8bf29a49dc89e94cde60eaa56648b82d32bb7a8` with the locked image, immutable
+cache generation, machine, disk, zone and concurrency above. The trusted
+controller timing projection, with run ID `34707241193` and attempt `1`,
+records `preflight-quota=3040` ms, `preflight-cache=1765` ms,
+`vm-create=14526` ms, `vm-wait=184847` ms with outcome `failed`,
+`vm-delete=55475` ms, `cleanup-verification=1070` ms and
+`post-delete-download=1701` ms. VM deletion and cleanup verification passed;
+the owned VM was verified absent.
+The retained typed triage projection records a failed `dependency-check` at
+the `podman-rootless` check, exit `1`, followed by
+`dependency-setup`/`preflight-command-checks` workload failure. Its safe
+projection omits the marker `reason_class` and `test`, and suppresses the
+underlying `podman info` stderr; therefore this record does not establish
+that Podman was rootful, since the check may also have failed because the
+command itself was unavailable or errored. Browser validation failed because
+the report was missing/invalid (exit `2`), the evidence scan passed, and
+authoritative test counts were unavailable. Diagnostics upload/download and
+scan passed with `collectionStatus=partial`, while workload phase timing was
+unavailable and gate acceptance failed. This is diagnostic
+infrastructure/workload evidence only: no baseline/performance result and no
+ACCEPTED or REJECTED decision is recorded; the prepared baseline remains
+pending a valid run.
+
+Terminal diagnostic baseline attempt: [run 34709290982](https://github.com/wimpheling/hephaestus/actions/runs/34709290982)
+used trusted controller SHA
+`0146104fb952921e2f6dd63d99b3b42cb2e85333` and workload SHA
+`278201587ca2fd06836965b5f13d171bca98b01b` with the locked image, immutable
+cache generation, machine, disk, zone and concurrency above. The trusted
+controller timing projection, with run ID `34709290982` and attempt `1`,
+records `preflight-quota=2355` ms, `preflight-cache=1720` ms,
+`vm-create=10278` ms, `vm-wait=202803` ms with outcome `failed`,
+`vm-delete=56846` ms, `cleanup-verification=1168` ms and
+`post-delete-download=1547` ms. The workflow's VM deletion passed and the
+owned VM was verified absent; the safe projection does not retain the
+workflow-images service readiness or lifecycle markers, so no stronger
+service-cleanup claim is made.
+The typed sequential workload progression passed `dependency-setup`, entered
+`project-build`, and failed at its `rustup-target` detail stage with exit `1`;
+the generic `cooking-run` shell marker is line `423`. No preflight
+`dependency-check` marker occurred, and no preflight reason/test was recorded.
+Diagnostics upload/download and evidence scan passed with partial collection;
+workload phase timing was unavailable. The workload gate failed, browser
+validation failed because its report was missing/invalid (exit `2`), and
+authoritative test counts were unavailable. This is diagnostic
+infrastructure/workload evidence only: no baseline/performance result and no
+ACCEPTED or REJECTED decision is recorded; the prepared baseline remains
+pending a valid run.
+
+Terminal diagnostic baseline attempt: [run 34710183150](https://github.com/wimpheling/hephaestus/actions/runs/34710183150)
+used trusted controller SHA
+`c41bc5d7502adbf9f06fd2e8262cc49c2cc0eb43` and workload SHA
+`bc9823b6a2751fdb62f7793db094e28860e8eca3` with the locked image, immutable
+cache generation, machine, disk, zone and concurrency above. The trusted
+controller timing projection, with run ID `34710183150` and attempt `1`,
+records `preflight-quota=2415` ms, `preflight-cache=1727` ms,
+`vm-create=14451` ms, `vm-wait=166102` ms with outcome `failed`,
+`vm-delete=55352` ms, `cleanup-verification=1203` ms and
+`post-delete-download=1819` ms. VM deletion passed and the owned VM was
+verified absent; no stronger service-lifecycle claim is made from the safe
+projection.
+The sequential workload again passed `dependency-setup`, entered
+`project-build`, and failed at `rustup-target` with exit `1` after the PR #30
+installed-target check. The generic `cooking-run` shell marker is line `427`.
+No preflight `dependency-check` marker or reason/test was recorded. Browser
+validation failed because its report was missing/invalid; its all-zero counts
+are report defaults and do not represent executed tests. The workload gate
+failed, evidence scan passed, diagnostics upload/download and scan passed
+with partial collection, and workload phase timing was unavailable. The
+remaining investigation is whether the baked-target inventory differed at the
+invocation or whether a Rust toolchain component still required auto-install;
+no conclusion is recorded here. This is diagnostic infrastructure/workload
+evidence only: no baseline/performance result and no ACCEPTED or REJECTED
+decision is recorded; the prepared baseline remains pending a valid run.
+
+Terminal baseline attempt: [run 34711223506](https://github.com/wimpheling/hephaestus/actions/runs/34711223506)
+used trusted controller SHA
+`1a9b666a48efc1c212749f304a23f2d7034f5cb8` and workload SHA
+`66ff322eb66072a23ca5f0c63ab4c69e8131affc` with the locked image, immutable
+cache generation, machine, disk, zone and concurrency above. Attempt `1`
+records trusted controller timings of `preflight-quota=2415` ms,
+`preflight-cache=1667` ms, `vm-create=12124` ms,
+`vm-wait=1569374` ms, `vm-delete=53395` ms,
+`cleanup-verification=1003` ms and `post-delete-download=1451` ms; all
+completed successfully. VM deletion and cleanup verification passed, and the
+owned VM was independently verified absent.
+Safe diagnostics upload/download and evidence scan passed; the retained scan
+checked `26` files and `1,155,817` bytes. The workload gate passed. Browser
+validation completed and passed with `2` passed, `0` failed, `0` skipped and
+`0` timed out. The safe projection has no separate authoritative golden or
+PostgreSQL count fields; those requested counts are absent from the retained
+projection. The safe gate record is passed, but the workload phase-timing
+projection download failed (`phase-timing-download-failed`), leaving phase
+timing unavailable and timing acceptance failed. This is an INVALID BASELINE:
+correctness evidence passed, but no performance result is accepted and no
+ACCEPTED or REJECTED decision is recorded; the prepared baseline remains
+pending a valid timing artifact.
+
+No-VM encrypted diagnostics triage: [run 34713106813](https://github.com/wimpheling/hephaestus/actions/runs/34713106813)
+validated source run `34711223506`, attempt `1`, against controller SHA
+`1a9b666a48efc1c212749f304a23f2d7034f5cb8` and workload SHA
+`66ff322eb66072a23ca5f0c63ab4c69e8131affc`. The triage workflow completed
+successfully without creating a VM. It verified the source object, VM absence,
+archive checksum, archive member contract and credential scan, then produced
+the encrypted artifact; local CMS decryption and the repository archive
+validator passed. The recovered archive is the same `31,057`-byte object with
+SHA-256
+`c5f7bad50343998683b5f76bfda621f8ea002524970d558accf8fe314ce39103`.
+The private projected `serial`, `runtime-log` and `test-output` sources each
+contain the same `39` unique canonical `HEPH_GCP_TEST` names, all passed. An
+independent name reconciliation against workload source
+`66ff322eb66072a23ca5f0c63ab4c69e8131affc` found `34` golden tests (`33`
+runnable and `1` statically ignored) and all `6` gateway-PostgreSQL tests:
+the `33` runnable golden names and all six PostgreSQL names matched exactly,
+with no overlaps, missing names or unexpected names. The authoritative
+runtime counts are therefore golden `33` passed and PostgreSQL `6` passed;
+the golden ignored count is static source evidence only because no runtime
+ignored marker was retained. The public safe projection's 50-record
+technical-context cap cannot establish those totals by itself. The projected
+serial source has five typed workload
+`phase-timing` records, all passed: gateway-readiness `347` ms,
+oci-builder `105597` ms, oci-verifier `367396` ms, browser-initial `99037` ms
+and browser-post-operation `46721` ms. No typed timing-projection error marker
+is retained in the archive; the separate workload timing artifact remains
+unavailable, so the run stays an INVALID BASELINE with no performance result.
+
+NEXT PREPARED BASELINE AFTER PR #32
+===================================
+Preparation revision: trusted `main` now includes merged PR #32 at
+`b542338aa974e1e04f08ca8117d1ef4300792c2f`. PR #20 remains a docs-only
+same-repository workload and will supply its exact open-PR head to the trusted
+controller at dispatch. The previous full workload run `34711223506` completed
+the workload gate with the authoritative name-reconciled counts of golden
+`33` passed and gateway-PostgreSQL `6` passed, and browser validation passed
+with `2` tests; it was still an INVALID BASELINE because the required workload
+timing sidecar was absent and timing acceptance failed. PR #32 now preserves a
+bounded typed phase-timing failed stage, reason, available/missing phase counts
+and phase names through the private collector and safe triage projection. This
+trial verifies that diagnostic path while retaining the unchanged workload,
+correctness, scanner, provenance and cleanup requirements.
+Hypothesis and acceptance: this remains a baseline, with no performance
+change under test. It can establish the cold-GCP reference only if all
+Cooking, browser, golden, database, scanner, marker, provenance, cleanup and
+required phase-timing gates pass. If any required gate or timing evidence fails,
+record the run as diagnostic/infrastructure evidence and leave ACCEPTED/REJECTED
+empty.
+Locked environment: retain the protected image
+`hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d`, immutable cache generation
+`1789079827867335`, `n2-standard-8`, `150 GB pd-balanced`,
+`europe-west1-d`, concurrency `1`, 45-minute provider DELETE and 50-minute
+workflow timeout. No image, IAM/WIF, cache, workload or test change is part
+of this run. The user has authorized all GCP runs required for this task; no
+additional per-run approval is required. Do not dispatch a second run.
+
+Terminal baseline attempt: [run 34714968258](https://github.com/wimpheling/hephaestus/actions/runs/34714968258)
+used trusted controller SHA
+`b542338aa974e1e04f08ca8117d1ef4300792c2f` and workload SHA
+`760118c3c2777bf2c0411446e747e7550e233812` with the exact locked environment
+above. Attempt `1` records trusted controller timings of
+`preflight-quota=2435` ms, `preflight-cache=2350` ms,
+`vm-create=13262` ms, `vm-wait=1548297` ms,
+`vm-delete=55322` ms, `cleanup-verification=1922` ms and
+`post-delete-download=3521` ms; every retained controller phase passed.
+The workload, browser and evidence gates passed; browser validation completed
+with `2` passed, `0` failed, `0` skipped and `0` timed out. Diagnostics
+upload/download and scan passed; the scan checked `26` files and `1,160,815`
+bytes, collection was complete, and the owned VM was verified absent after
+cleanup. The safe phase-timing projection reports
+`status=unavailable`, `failedStage=supervisor-validation`,
+`reasonClass=incomplete`, `availableCount=18`, `missingCount=0` and no missing
+phase names. The available phases are `startup-metadata`,
+`startup-runner-image`, `startup-host-packages`, `startup-accounts`,
+`startup-passt`, `startup-cgroup`, `startup-apparmor`,
+`startup-rust-toolchain`, `startup-libkrunfw`, `startup-libkrun`,
+`startup-checkout`, `cooking-supervisor`, `cache-download`, `cache-extract`,
+`workflow-images`, `browser-setup`, `metadata-guard` and `evidence-scan`.
+The workflow's explicit error is `phase-timing-download-failed`, so this is an
+INVALID BASELINE despite correctness and cleanup passing: no performance
+result is accepted and no ACCEPTED or REJECTED decision is recorded.
+
+
+NEXT TEMPORARY FAILURE FIXTURE TRIAL
+====================================
+Preparation revision: trusted `main` now includes merged PR #33 at
+`cfdf273ab82e769ffb9c0fcfe14503607e09fced`. PR #20 remains a docs-only
+experiment branch and is not the workload under test for this trial. The
+fixture is draft PR #34, `https://github.com/wimpheling/hephaestus/pull/34`,
+head `249c24010c9180934f084240687e80d72ff69df1`, from the same repository.
+It adds exactly five lines to `examples/cooking/run.sh`: a four-line reviewed
+comment and `(exit 42)` immediately after `dependency-setup` starts. The
+purpose is one real Cooking failure lifecycle probe with the precise pairing
+diagnostic path from PR #33; this is diagnostic evidence only, never a
+performance baseline or candidate.
+
+Dispatch contract: run trusted `main` with `cloud_mode=gcp-cooking`, targeting
+PR #34 with `pr_number=34`, `pr_repository_id=1312377552` and the exact fixture
+head above. This is exactly one authorized run and must not target PR #20.
+Keep the locked environment unchanged: protected image
+`hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d`, immutable cache generation
+`1789079827867335`, `n2-standard-8`, `150 GB pd-balanced`,
+`europe-west1-d`, concurrency `1`, 45-minute provider DELETE and 50-minute
+workflow timeout. No image, IAM/WIF, cache, machine, zone, concurrency,
+workflow or acceptance change is part of this fixture.
+
+The live paid-run check was clear before preparation, and the preceding owned
+VM was independently verified absent after cleanup. The user has authorized
+this GCP run and no additional approval is required. After evidence collection,
+rollback is to remove the five fixture lines and close PR #34; the temporary
+fixture must never be merged. Preserve the run as diagnostic evidence even if
+all gates pass; record no ACCEPTED or REJECTED performance result.
+
+
+FIXTURE LIFECYCLE EVIDENCE: RUN 34719137588
+============================================
+The temporary draft fixture PR #34 was dispatched once at exact head
+`249c24010c9180934f084240687e80d72ff69df1` against trusted controller main
+`cfdf273ab82e769ffb9c0fcfe14503607e09fced`: [run
+34719137588](https://github.com/wimpheling/hephaestus/actions/runs/34719137588).
+The reviewed fixture's `(exit 42)` was preserved as a real Cooking workload
+failure at `dependency-setup`. This is live workload-failure lifecycle evidence,
+not a performance baseline and not an ACCEPTED or REJECTED result.
+
+The workload gate failed with exit `42`. Browser execution was expected but was
+not reached: its report was missing, status was `not-run`, and retained default
+counts were `0` passed, `0` failed, `0` skipped and `0` timed out; browser
+validation failed with `browser-report-invalid`. Private diagnostics upload was
+verified by download; diagnostics download and evidence scan passed, checking
+`7` files and `5,697` bytes. The owned VM was verified absent after cleanup.
+
+The precise safe supervisor timing classification was
+`reasonClass=unclosed-start`, `failedPhase=cooking-supervisor`,
+`failedClockDomain=guest-runtime`, `failedOccurrence=1`. The safe phase timing
+projection was unavailable despite `18` available phases and no listed missing
+phases. The fixture PR #34 remains open as a draft and must never be merged;
+rollback is removal of its five fixture lines followed by closing the PR. No
+second fixture run or timeout dispatch is authorized until the pairing fix is
+merged and the next bounded diagnostic validates it.
+
+
+NEXT TEMPORARY TIMEOUT LIFECYCLE PROBE
+======================================
+Preparation revision: trusted `main` now includes merged PR #35 at
+`5e001bb480ed00a71b6c6f469efe079d81df4aef`. PR #20 remains docs-only and is
+not the workload under test. The temporary draft fixture PR #34 remains open
+and NEVER MERGE, now at exact head
+`a3bcbf19e6e400f718c285b079a85323e06b9dca` after replacing only the failure command with
+`timeout --kill-after=1s 1s sleep 2`. Supply this exact 40-character fixture
+head at dispatch.
+
+Hypothesis and purpose: one real Cooking timeout with exit `124` should
+validate supervisor interval closure and timeout lifecycle after PR #35. This
+is diagnostic lifecycle evidence, not a performance baseline or candidate;
+there is no speedup claim and no ACCEPTED or REJECTED performance result.
+Dispatch trusted `main` with `cloud_mode=gcp-cooking` selecting PR #34, never
+PR #20, using `pr_number=34`, `pr_repository_id=1312377552` and its exact open
+head SHA.
+
+Keep every experiment input locked: protected image
+`hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d`, immutable cache generation
+`1789079827867335`, `n2-standard-8`, `150 GB pd-balanced`,
+`europe-west1-d`, concurrency `1`, 45-minute provider DELETE and 50-minute
+workflow timeout. No image, IAM/WIF, cache, machine, disk, zone, concurrency,
+workflow or acceptance change is part of this probe. The pre-dispatch active
+run check must remain empty; the prior owned VM cleanup is independently
+verified absent. After evidence collection, remove the temporary fixture block
+and close PR #34; never merge it. Exactly one authorized timeout probe is
+permitted while this trial is pending.
+
+
+TIMEOUT FIXTURE LIFECYCLE EVIDENCE: RUN 34720523600
+=====================================================
+The temporary draft fixture PR #34 was dispatched once at exact head
+`a3bcbf19e6e400f718c285b079a85323e06b9dca` against trusted controller main
+`5e001bb480ed00a71b6c6f469efe079d81df4aef`: [run
+34720523600](https://github.com/wimpheling/hephaestus/actions/runs/34720523600).
+The reviewed timeout command produced a real Cooking workload and supervisor
+exit `124`, with the timed-out workload gate preserved. Supervisor validation
+passed; safe timing projection failed only because the expected later workload
+phases were missing after the intentional timeout (`13` missing phases).
+This is lifecycle evidence, not a performance baseline or performance result.
+
+Private diagnostics upload was verified by download; diagnostics download and
+evidence scan passed, checking `7` files and `5,702` bytes. Browser execution
+was not reached and its report was missing with retained default counts all
+zero. The owned VM was verified absent after cleanup. Controller timing
+projection and retention passed; the `vm-wait` phase failed consistently with
+the intentional workload timeout. No ACCEPTED or REJECTED performance result
+is recorded.
+
+NEXT WORKLOAD CANCELLATION LIFECYCLE PROBE
+==========================================
+Preparation revision remains trusted `main` at
+`5e001bb480ed00a71b6c6f469efe079d81df4aef`. Draft fixture PR #34 remains open
+and NEVER MERGE at exact head
+`eec15ffce18e0159c3452ece1d96e761096e8354`, with the same reviewed five-line
+fixture block and only its command changed to `kill -TERM "$BASHPID"`.
+Hypothesis and purpose: one real Cooking workload SIGTERM should preserve exit
+`143`, close the workload timing interval with a `cancelled` outcome, and
+exercise supervisor cancellation lifecycle. This proves workload signal
+handling only; it does not prove GitHub workflow cancellation propagation and
+is not a performance baseline or candidate.
+
+Dispatch exactly one authorized trusted-main `gcp-cooking` run selecting PR
+#34, never PR #20, with `pr_number=34`, `pr_repository_id=1312377552` and this
+exact fixture head. Keep the locked environment unchanged: protected image
+`hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d`, immutable cache generation
+`1789079827867335`, `n2-standard-8`, `150 GB pd-balanced`,
+`europe-west1-d`, concurrency `1`, 45-minute provider DELETE and 50-minute
+workflow timeout. No image, IAM/WIF, cache, machine, disk, zone, concurrency,
+workflow or acceptance change is part of this probe. Confirm no active paid run
+and prior owned VM absence before dispatch. After evidence collection, remove
+the five fixture lines and close PR #34; never merge the fixture. No automatic
+retry is permitted.
+
+
+WORKLOAD CANCELLATION FIXTURE EVIDENCE: RUN 34721027999
+========================================================
+The temporary draft fixture PR #34 was dispatched once at exact head
+`eec15ffce18e0159c3452ece1d96e761096e8354` against trusted controller main
+`5e001bb480ed00a71b6c6f469efe079d81df4aef`: [run
+34721027999](https://github.com/wimpheling/hephaestus/actions/runs/34721027999).
+The workload and supervisor both exited `143`, and the retained failure
+records identify a signal at the Cooking command. This is workload SIGTERM
+lifecycle evidence only; it does not test GitHub workflow cancellation and is
+not a performance baseline or result.
+
+Private diagnostics upload was verified by download; diagnostics download and
+evidence scan passed, checking `7` files and `5,573` bytes. Cleanup verified
+the owned VM absent. Browser execution was not reached and its report was
+missing with default retained counts all zero. The workload gate retained
+`exit_code=143` with `reason_class=workload-failed`; the safe projection did
+not expose a `cancelled` timing outcome. Supervisor validation passed, but
+phase timing retention was unavailable with `failedStage=projection`,
+`reasonClass=missing-phase`, `availableCount=19`, `missingCount=13`, and
+`failedPhase=none`, `failedClockDomain=none`, `failedOccurrence=0`. The missing
+phases are the later build, gateway, OCI, test and browser phases expected after
+the fixture signal. This unresolved distinction is preserved for follow-up;
+no ACCEPTED or REJECTED performance result is recorded.
+
+The temporary fixture PR #34 remains a draft and must never be merged. Its
+five-line block is now closed out after this one cancellation probe; rollback
+is removal of that block and closure of the temporary PR.
+
+
+PREPARED COMPLETE COLD-GCP BASELINE
+===================================
+Preparation revision: trusted controller and workload instrumentation are now
+on `main` at exact SHA
+`aea0051fd4692b5dc9a2e0a02457b11f70527a24` (PR #36). This is the first
+complete baseline attempt after supervisor timing closure and the production
+project-build timing profile were promoted. PR #20 remains docs-only; its exact
+open head is the workload SHA supplied to the controller at dispatch and will
+be recorded with the terminal run.
+
+Hypothesis and acceptance: establish the cold disposable-GCP reference with no
+performance change. Retain the existing host project compile and the Cooking
+OCI worker at `1` vCPU with `2048` MiB memory; all workload, assertions,
+browser, scanner, marker, cache and cleanup behavior remains unchanged. The
+run is valid only if the Cooking, browser, golden, PostgreSQL, scanner, marker,
+provenance, complete timing and verified post-delete cleanup gates all pass.
+Any missing gate or timing artifact leaves the baseline pending with no
+performance result.
+
+Locked environment: protected image
+`hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d`, immutable cache generation
+`1789079827867335`, `n2-standard-8`, `150 GB pd-balanced`,
+`europe-west1-d`, concurrency `1`, 45-minute provider DELETE and 50-minute
+workflow timeout. No image, IAM/WIF, cache, machine, zone, disk, concurrency,
+or acceptance change is part of this baseline. Rollback is no change to the
+workload; remove only this docs-only preparation if the run is not valid.
+The user has authorized this GCP run and no additional approval is required.
+The pre-dispatch active-run check is empty and prior owned VM absence is
+independently recorded.
+
+TERMINAL COMPLETE BASELINE ATTEMPT: RUN 34722051935
+=====================================================
+The first complete baseline attempt used trusted controller `main` at
+`aea0051fd4692b5dc9a2e0a02457b11f70527a24` and the exact open PR #20 head
+`19352db65a972171805d0d17d62121f2c0175304`: [run
+34722051935](https://github.com/wimpheling/hephaestus/actions/runs/34722051935).
+The locked environment was unchanged: protected image
+`hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d`, cache generation
+`1789079827867335` (archive metadata size `1783474345` bytes),
+`n2-standard-8`, `150 GB pd-balanced`, `europe-west1-d`, concurrency `1`,
+45-minute provider DELETE and 50-minute workflow timeout. Quota and cache
+preflight passed. The VM was created as
+`heph-kvm-smoke-34722051935-1`; the workflow ran from
+`2026-09-12T22:11:31Z` through `22:37:46Z` (about `26m15s` end-to-end).
+
+The retained trusted controller timing projection records
+`preflight-quota=2452` ms, `preflight-cache=1580` ms,
+`vm-create=10374` ms, `vm-wait=1480789` ms with outcome `failed`,
+`vm-delete=53256` ms, `cleanup-verification=982` ms and
+`post-delete-download=1429` ms. Their sum is `1550862` ms (about
+`25m50.862s`); `vm-wait` failed because the workload returned a failure after
+its own Cooking command passed. VM deletion passed and the owned VM was
+verified absent by a subsequent describe, including the cleanup step.
+
+The workload log records the Cooking gateway invocation and gateway E2E as
+passed, `cooking-workload` result `passed` with exit `0`, and both Cooking and
+evidence phase-pass markers. It also records informational workload timing
+values of gateway-readiness `272` ms, production-project-build `82082` ms,
+oci-builder `102585` ms, oci-verifier `354625` ms, browser-initial `98487` ms
+and browser-post-operation `44379` ms. These values are not a valid
+performance measurement: the timing helper then failed its pair validation
+with exit `2`, emitted `phase-timing-sidecar status=invalid`, and the overall
+startup/workflow result exited `1`. The workload did not produce a valid
+phase-timing sidecar or projection.
+
+The retained diagnostics manifest at
+`gcp-diagnostics-manifest-34722051935-1/gcp-diagnostics-status.json` contains
+only the safe status fields: `cleanup=verified-absent`,
+`upload=verified-by-download`, `download=passed`, `scan=passed`,
+`triage=failed` and `error=triage-projection-failed`. The download log gives
+the precise triage-reader failure as `manifest source label is invalid`.
+That reader failure is a projection limitation; it does not establish that
+the underlying gate records failed or were absent. This run retained no
+separate safe gate JSON or browser-summary artifact, so browser,
+golden/PostgreSQL and gate fields cannot be extracted from the retained
+artifacts. The available browser timing markers are workload-log observations
+only and do not prove the separate browser gate. The run therefore
+distinguishes a passing Cooking workload segment from an invalid measurement
+and failed overall workflow; it is diagnostic evidence, not a valid baseline
+and not an ACCEPTED or REJECTED performance experiment. No elapsed time saved
+can be claimed.
+
+The `production-project-build` marker is the exact `82082` ms (`82.082s`)
+phase. Its schema domain is `workload-libkrun`, emitted by the Rust golden
+producer; it is not the optional host `project-build` phase. The workload
+phase projection was not retained: the `gcp-cooking-phase-timings-34722051935-1`
+artifact was not created because its projection file was absent. Only the
+trusted controller projection was retained at
+`gcp-controller-phase-timings-34722051935-1/gcp-phase-timing-controller.json`.
+The remaining blocker is the trusted guest-runtime evidence-scan
+timing-domain validation path; PR #38
+(`8bb067281e62d3f20c55aeb056dadeed47f01cd1`) carries the fix and must be
+merged and checked before another full GCP run.
+
+
+NEXT PREPARED COMPLETE COLD-GCP BASELINE AFTER PR #38
+======================================================
+Preparation revision: trusted `main` now contains merged PR #38 at exact SHA
+`9a2e741eade54bd52717d2de8bdb41e9cf9b1c34`. PR #38 fixes both observed
+failures in the previous baseline attempt: the final workload timing
+validation now accepts the producer's actual `workload-libkrun` domain, and
+post-delete timing retrieval revalidates the retained phase allowlist. The
+real local producer-to-startup-to-collector-to-controller-to-summarizer
+lifecycle passed with `287` Python tests and the final quality gate passed
+with exit `0`. This justifies one new baseline measurement without changing
+the workload or performance candidate.
+
+Hypothesis and acceptance: rerun the unchanged cold disposable-GCP workload
+to obtain the first valid timing baseline after the two instrumentation-path
+fixes. Keep the host `project-build` compile enabled and the Cooking OCI
+worker at `1` vCPU with `2048` MiB memory. Accept the baseline only when the
+Cooking, browser, golden, PostgreSQL, scanner, marker, provenance, complete
+timing, gate and verified post-delete cleanup requirements all pass. A
+passing workload without a complete trusted timing projection remains
+diagnostic evidence and yields no performance result.
+
+Selected workload: PR #20, same repository ID `1312377552`; the controller
+must receive and validate the exact open PR head SHA immediately before
+dispatch, and the dispatched SHA will be recorded with the terminal run.
+The prior ledger head `7be640ee38711c116394c743ce88c31e0ab58561` is not
+assumed to remain the selected head after this preparation is pushed.
+
+Locked environment and controls: protected image
+`hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d`, immutable cache
+generation `1789079827867335`, `n2-standard-8`, `150 GB pd-balanced`,
+`europe-west1-d`, one VM, 45-minute provider DELETE and 50-minute workflow
+timeout. Keep cache, image, IAM/WIF, machine, disk, zone, concurrency,
+acceptance and workload inputs unchanged. No CPU candidate or unused-host
+build removal is part of this baseline. Rollback is no code or infrastructure
+change; retain the diagnostic record if any required gate or timing artifact
+fails. This is exactly one authorized full baseline dispatch with no retry.
+
 ACCEPTED
 ========
-None yet.
+ID: cold-gcp-pr-sandbox-baseline
+Hypothesis: establish the first valid cold disposable-GCP reference after the
+two locally reproduced timing-pipeline fixes. Result: ACCEPTED baseline; no
+performance change was made in this run.
 
-REJECTED
-========
-None yet.
+Run: [34724176879](https://github.com/wimpheling/hephaestus/actions/runs/34724176879),
+attempt `1`, workflow `main` at controller SHA
+`9a2e741eade54bd52717d2de8bdb41e9cf9b1c34`; selected same-repository PR #20
+workload SHA `635b5945ee2a19b645afb163fe6f9bfcab9e0af1`, repository ID
+`1312377552`. The controller and finalized gate results both preserve this
+workload SHA. The run job elapsed `26m32s` (`2026-09-12T22:58:52Z` to
+`23:25:24Z`); workflow elapsed was about `26m37s` including orchestration.
+
+Locked environment: image
+`hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d`, cache generation
+`1789079827867335`, cache SHA-256
+`0ed20efcc1aa019b79405d1eed626b13d4702019e9ceeba2bdde54e45ae29296`, cache
+archive `1783474345` bytes, `n2-standard-8`, `150 GB pd-balanced`,
+`europe-west1-d`, one VM, 45-minute provider DELETE and 50-minute workflow
+timeout. No CPU, host-build-removal, image, cache, IAM/WIF, machine, disk,
+zone, concurrency or acceptance change was made.
+
+Trusted controller timings (all `measurement=trusted`, clock domain
+`controller`, outcome `passed`): `preflight-quota=2585` ms,
+`preflight-cache=1397` ms, `vm-create=14759` ms,
+`vm-wait=1489141` ms, `vm-delete=54224` ms,
+`cleanup-verification=1630` ms and `post-delete-download=1745` ms. Their
+sum is `1565481` ms; controller phase spans are authoritative and the
+workload phase spans below overlap them.
+
+Trusted guest-startup timings (all passed): `startup-metadata=59` ms,
+`startup-runner-image=1076` ms, `startup-host-packages=62` ms,
+`startup-accounts=124` ms, `startup-passt#1=63` ms,
+`startup-cgroup=1037` ms, `startup-apparmor=113` ms,
+`startup-passt#2=1240` ms, `startup-rust-toolchain=63` ms,
+`startup-libkrunfw=61` ms, `startup-libkrun=64` ms,
+`startup-checkout=10840` ms, `cooking-supervisor=1426137` ms,
+`archive=576` ms, `evidence-scan=131` ms and `upload=438` ms.
+Trusted guest-runtime timings (all passed): `startup-host-packages=73` ms,
+`browser-setup#1=610` ms, `cache-download=11982` ms,
+`cache-extract=18110` ms, `workflow-images=50436` ms,
+`metadata-guard#1=152` ms, `browser-setup#2=1937` ms,
+`metadata-guard#2=105` ms, `cooking-supervisor=1341268` ms and
+`evidence-scan=514` ms.
+
+Workload timings are `measurement=informational` and all passed:
+`browser-setup=1765` ms and `dependency-setup=968` ms in clock domain
+`workload`; host `project-build=12917` ms in `workload`;
+`gateway-edge-ready=3078` ms in `workload-gateway`; and in
+`workload-libkrun`, `runtime-guest-build=87834` ms,
+`oci-image-materialization=23594` ms, `gateway-services-ready=14712` ms,
+`runtime-worker-build=19794` ms, `golden-tests=1120599` ms,
+`database-tests=45697` ms, `gateway-readiness=348` ms,
+`production-project-build=83685` ms, `oci-builder=102566` ms,
+`oci-verifier=364757` ms, `browser-initial=100622` ms and
+`browser-post-operation=47601` ms. These workload spans overlap and must not
+be summed into total runtime.
+
+Correctness and evidence: the finalized `gcp-cooking` gate result has
+`overall_exit_code=0`, `supervisor_exit_code=0`, `finalized=true`, and
+`workload`, `evidence-scan` and `browser-validation` all
+`state=passed`, `exit_code=0`, `reason_class=none`. The safe diagnostics
+manifest records `collectionStatus=complete`, 11 available sources, zero
+missing/rejected sources, `upload=verified-by-download`, `download=passed`,
+`scan=passed`, `phaseTiming=passed`, `gateValidation=passed` and
+`gateAcceptance=passed`. Browser validation is complete with `2` passed,
+`0` failed, `0` skipped and `0` timed out across initial and post-operation
+phases. The evidence scanner checked `26` files and `1157392` bytes. The
+downloaded private archive is `32558` bytes with SHA-256
+`0b33cc0abd6e10ef246dc9807f3422ab0ad0e98d3b03a422196cfbd8d5d3f0a5`.
+The owned VM `heph-kvm-smoke-34724176879-1` was verified absent after
+deletion and again during post-delete download.
+
+The local producer-to-startup-to-collector-to-controller-to-summarizer
+reproduction passed before dispatch, and this run validates the same path in
+GCP. This is the first valid baseline, so no elapsed time saved is claimed
+until a separate CPU candidate or unused-host-build experiment is completed
+against this locked reference. Implementation/instrumentation commit:
+`9a2e741eade54bd52717d2de8bdb41e9cf9b1c34`; ledger preparation commit:
+`635b5945ee2a19b645afb163fe6f9bfcab9e0af1`.
+
+
+PREPARED CPU TRIAL: TWO VCPUS
+=============================
+ID: cpu-worker-v2
+Hypothesis: increasing only the Cooking OCI worker allocation from `1` to
+`2` vCPUs will reduce CPU-bound OCI builder/verifier and related worker time,
+while leaving correctness, security, diagnostics and cleanup unchanged. The
+candidate is PR #37, exact open head
+`46c4269ad30e810798f4926ccf06d63c757c6ba3`, whose one-line diff changes only
+`vm_resources.vcpus` in `crates/hephaestus-app/tests/golden.rs`; memory remains
+`2048` MiB.
+
+Baseline reference: accepted run `34724176879`, controller
+`9a2e741eade54bd52717d2de8bdb41e9cf9b1c34`, selected workload
+`635b5945ee2a19b645afb163fe6f9bfcab9e0af1`, with host `project-build=12917`
+ms, `production-project-build=83685` ms, `oci-builder=102566` ms,
+`oci-verifier=364757` ms and `golden-tests=1120599` ms. Compare total job
+elapsed and these same phase timings; workload timings remain informational,
+while controller timings remain authoritative. Do not combine overlapping
+phase spans.
+
+Controlled variable: Cooking OCI worker `vcpus=1` to `vcpus=2` only.
+Fixed controls: memory `2048` MiB, protected image
+`hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d`, immutable cache
+generation `1789079827867335`, cache SHA-256
+`0ed20efcc1aa019b79405d1eed626b13d4702019e9ceeba2bdde54e45ae29296`,
+`n2-standard-8`, `150 GB pd-balanced`, `europe-west1-d`, one VM,
+concurrency `1`, 45-minute provider DELETE and 50-minute workflow timeout.
+Keep the same PR repository ID `1312377552`, image, cache, source checkout
+contract, assertions, browser, scanner, marker, provenance, complete timing,
+gate and post-delete cleanup requirements. No host-build removal or other
+candidate is part of this run.
+
+Acceptance: require workload, browser, golden, PostgreSQL, scanner, marker,
+provenance, complete timing, gate and verified post-delete cleanup to pass.
+Report the total and phase deltas only when the candidate produces the same
+complete evidence quality as the accepted baseline. Rollback is to restore
+`vcpus: 1` by reverting PR #37's one-line change; no image, cache, IAM/WIF,
+machine, disk, zone, concurrency or workflow change is permitted. Dispatch
+exactly one authorized `gcp-cooking` run from trusted `main` at
+`9a2e741eade54bd52717d2de8bdb41e9cf9b1c34`, selecting PR #37 with its exact
+open head above; do not retry automatically.
+
+ACCEPTED CPU TRIAL: TWO VCPUS
+=============================
+Result: ACCEPTED as a modest single-pair measurement. This result does not
+support a drastic-improvement claim and has low repeatability confidence until
+another controlled pair is available. The candidate remained unchanged for
+root's integration review.
+
+Run: [34725585641](https://github.com/wimpheling/hephaestus/actions/runs/34725585641),
+attempt `1`, workflow `main` at controller SHA
+`9a2e741eade54bd52717d2de8bdb41e9cf9b1c34`; selected PR #37 workload SHA
+`46c4269ad30e810798f4926ccf06d63c757c6ba3`, repository ID `1312377552`.
+Reference baseline: [34724176879](https://github.com/wimpheling/hephaestus/actions/runs/34724176879),
+controller `9a2e741eade54bd52717d2de8bdb41e9cf9b1c34`, selected PR #20
+workload SHA `635b5945ee2a19b645afb163fe6f9bfcab9e0af1`.
+
+The CPU trial job elapsed `26m07s` (`23:30:27Z` to `23:56:34Z`) versus the
+baseline's `26m32s` (`22:58:52Z` to `23:25:24Z`): `25s` saved, `1.57%`.
+Trusted controller timing decreased from `1565481` ms to `1537016` ms:
+`28465` ms, `1.82%`, saved. The workload OCI builder plus verifier spans
+decreased from `467323` ms to `431953` ms: `35370` ms, `7.57%`, saved.
+These are one-run comparisons with fixed image, cache, host machine, zone,
+disk, concurrency, timeout, workload, gates and cleanup; workload spans
+overlap and are not additive totals.
+
+Phase comparison (baseline -> CPU candidate, delta in ms): controller
+`preflight-quota 2585 -> 3099 (+514)`, `preflight-cache 1397 -> 2287
+(+890)`, `vm-create 14759 -> 16923 (+2164)`, `vm-wait 1489141 -> 1454247
+(-34894)`, `vm-delete 54224 -> 54909 (+685)`, `cleanup-verification 1630
+-> 1757 (+127)`, `post-delete-download 1745 -> 3794 (+2049)`; workload
+`project-build 12917 -> 12186 (-731)`, `production-project-build 83685 ->
+80482 (-3203)`, `oci-builder 102566 -> 85681 (-16885)`, `oci-verifier
+364757 -> 346272 (-18485)`, and `golden-tests 1120599 -> 1089757 (-30842)`.
+Trusted guest-startup sums were `1442084 -> 1399500` ms (`-42584`), and
+trusted guest-runtime sums were `1425187 -> 1384084` ms (`-41103`); these
+phase-domain sums also contain overlapping supervisor spans.
+
+Correctness and evidence remained valid: finalized workload, evidence-scan
+and browser-validation gates all passed with exit code `0`; collection was
+complete with 11 available and zero missing sources; upload/download/scan and
+phase validation/acceptance passed. Browser validation was complete with 2
+passed, 0 failed, 0 skipped and 0 timed out. The evidence scanner checked 26
+files and 1156416 bytes. The downloaded archive was 32117 bytes with SHA-256
+`93a929ea63598b9f9aac5eaecf2090d6f452f74b5ec8a8ec828a00adb41a1499`, and the
+owned VM was verified absent after cleanup and post-delete collection.
+
+The retained technical marker inventory had 38 distinct passed Rust markers
+versus 39 in the baseline, with no failed markers. The missing retained marker
+was `support::vm_observer::tests::rejects_fixture_pattern_in_vm_identifier`.
+This was reviewed as an inventory/projection difference rather than a source
+or test omission; the workload gate passed. Preserve this caveat with the
+measurement and do not treat the marker inventories as test counts.
+
+
+PREPARED HOST BUILD REMOVAL TRIAL
+=================================
+ID: remove-unused-host-build
+Hypothesis: after accepting the CPU change, removing only the unused host
+`project-build` compile will eliminate its measured baseline cost of about
+`12917` ms (`12.917s`). Keep the accepted Cooking worker at `2` vCPUs and
+retain the production project build as the correctness proof. The total job
+delta may be smaller than run-to-run variance; this is one bounded experiment
+and will not be inflated into a larger claim.
+
+Reference: accepted CPU run `34725585641`, exact candidate head
+`46c4269ad30e810798f4926ccf06d63c757c6ba3`, and baseline `34724176879`.
+Controlled variable: remove the unused host project-build phase only. Fixed
+controls remain the accepted CPU configuration: worker `vcpus=2`, memory
+`2048` MiB, protected image
+`hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d`, immutable cache
+generation `1789079827867335`, `n2-standard-8`, `150 GB pd-balanced`,
+`europe-west1-d`, one VM, concurrency `1`, 45-minute provider DELETE and
+50-minute workflow timeout. Keep all production proof, workload, browser,
+golden/PostgreSQL, scanner, marker, provenance, complete-timing, gate and
+post-delete cleanup requirements unchanged.
+
+Acceptance requires a complete valid evidence path and the same passing gates;
+compare total elapsed time, the retained host phase, production build, OCI
+phases and golden tests. Rollback is to restore the host build while retaining
+the accepted CPU change. The accepted CPU change is integrated on trusted
+`main` at exact SHA `c0bd1c61f85a6537feb3ee682d178fe92f4ad432`. PR #39 is open
+at exact head `204bcee68f7d4718aafa4ebf85bcb1b65e53a02f`, based on that main,
+and its only change is 14 deleted lines in `examples/cooking/run.sh`: the
+unused host gateway artifact export and host `project-build` compile. The
+Cooking worker remains at `2` vCPUs and the production project build remains
+the required proof. The trusted timing scripts are byte-identical to the
+baseline controller path; only the already-accepted CPU literal differs on
+main. The exact heads and one-file diff were revalidated before dispatch.
+Dispatch exactly one run with no retry or additional infrastructure work.
+
+TERMINAL FAILED HOST BUILD REMOVAL TRIAL: RUN 34727051946
+===========================================================
+The single host-removal trial reached the disposable VM and then failed in
+the workload. It is not a valid performance measurement and has no elapsed
+time saved or optimization acceptance. The final disposition is
+`FAILED/INCONCLUSIVE`, rather than a rejection or performance gain.
+
+Run: [34727051946](https://github.com/wimpheling/hephaestus/actions/runs/34727051946),
+attempt `1`, workflow `main` at controller SHA
+`c0bd1c61f85a6537feb3ee682d178fe92f4ad432`; selected PR #39 workload SHA
+`204bcee68f7d4718aafa4ebf85bcb1b65e53a02f`, repository ID `1312377552`.
+The fixed controls were the accepted CPU configuration: worker `vcpus=2`,
+memory `2048` MiB, image
+`hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d`, cache generation
+`1789079827867335`, `n2-standard-8`, `150 GB pd-balanced`,
+`europe-west1-d`, one VM, concurrency `1`, 45-minute provider DELETE and
+50-minute workflow timeout. PR #39 contained exactly 14 deletions removing
+the unused host gateway artifact export and host `project-build` compile;
+the production project build remained enabled.
+
+The workload failed in `libkrun-integration` at line `243`, exit code `101`,
+with test `bearer_push_starts_run_through_production_bootstrap` failed in the
+serial, runtime-log and test-output records. The workload gate failed with
+exit `1`; the browser gate failed with exit `3` because only the initial phase
+was reached (`1` passed, `0` failed/skipped/timed out) and post-operation was
+not reached. The evidence scan passed (`18` files, `678563` bytes), diagnostic
+collection completed with 10 available sources and one unavailable timing
+source, and upload/download/scan all passed. Cleanup verified VM
+`heph-kvm-smoke-34727051946-1` absent.
+
+The controller retained trusted timings totaling `1489294` ms:
+`preflight-quota=2356`, `preflight-cache=1694`, `vm-create=14530`,
+`vm-wait=1409968` (failed), `vm-delete=56976`,
+`cleanup-verification=1823` and `post-delete-download=1947`. The workload
+timing projection was unavailable because `database-tests` and
+`browser-post-operation` were missing after the failure. `production-project-build`
+was reached at `75769` ms; the intended host phase was absent, but the run
+cannot compare total or optimization phases because the workload and complete
+timing gates failed. Archive evidence was `26563` bytes with SHA-256
+`a2a4d4ce6309f6b1cc9a46c9e7ee3929c5463ff99d2f8cda470e1eefe744e4c0`.
+
+This run distinguishes passing evidence-scan/private collection/cleanup from
+the failed workload and incomplete browser/timing path. The bounded causal
+review identified the existing asynchronous assertion race at
+`examples/cooking/tests/updates.rs:640`: the assertion observed a delivery
+state before the separate mailbox-settlement transaction had persisted the
+expected `delivered` state after `cleaned_up+succeeded` with the correct
+revision. The recorded failure is therefore an orchestration race; the
+available production build, OCI phases and initial browser phase passed, and
+the evidence does not implicate removal of the host artifact/build. No code,
+PR #39 or instrumentation change is made here. Do not use this run for a
+performance comparison, and do not retry or dispatch further GCP work until
+the narrow local PostgreSQL/poll-fix reproduction and its required gate are
+complete. The rollback remains restoring the host build if a later valid
+experiment is authorized.
+
+
+PREPARED ISOLATION SEQUENCE AFTER COMMON WAIT FIX
+=================================================
+The host-removal failure is not an optimization rejection, but its workload
+abort prevents a valid host comparison. The narrow common wait fix at exact
+local revision `36e7035` has an actual PostgreSQL reproduction: the old path
+panics on the premature delivery assertion, while the new wait path then
+passes. Test names, assertions and deadline remain unchanged, and the timing
+instrumentation is frozen. This fix must be merged and pass its required
+quality gate before another GCP measurement.
+
+To isolate the host variable from that shared correctness fix, run the next
+sequence as two separate controlled measurements on the same newly merged
+`main`: first a fresh CPU2 plus host-build control using docs-only PR #20, then
+the host-only PR #39 candidate. The control retains the accepted CPU setting
+(`vcpus=2`) and the host `project-build`; PR #39 then removes only the host
+artifact export and host compile. Compare each run to the new control and keep
+the original valid baseline `34724176879`, accepted CPU trial `34725585641`
+and host failure `34727051946` as historical context. Do not conflate the
+common wait fix with host removal, and do not claim performance from the prior
+host-aborted run.
+
+Control preparation: PR #40 is merged on authoritative `main` at exact SHA
+`3939f48bc07fd36f366a2f61b9365a0b617045a2`. Its caller/ PostgreSQL reproduction,
+focused two-test check and full quality gate (`74275` checks, exit `0`) passed.
+The next control selects the exact open PR #20 ledger head after this entry as
+its workload source, with CPU2 and the host `project-build` both enabled. This
+fresh control measures the common wait-fix baseline before the unchanged PR
+#39 host-only trial; the instrumentation and trusted timing scripts remain
+byte-identical.
+
+Fixed GCP configuration remains the protected image
+`hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d`, immutable cache generation
+`1789079827867335`, `n2-standard-8`, `150 GB pd-balanced`,
+`europe-west1-d`, one VM, concurrency `1`, 45-minute provider DELETE and
+50-minute workflow timeout. Require the same production proof, browser,
+golden/PostgreSQL, scanner, marker, provenance, complete timing, gate and
+post-delete cleanup evidence for both runs. The control rollback is no code
+change; the host candidate rollback restores the host artifact export and
+compile. Await the exact merged `main` SHA and root's explicit dispatch
+instruction; no GCP dispatch or additional infrastructure work is authorized
+by this preparation entry.
+
+VALID POST-WAIT-FIX CPU2 + HOST-BUILD CONTROL: RUN 34729302087
+===============================================================
+The common wait fix was measured first with CPU2 and the host `project-build`
+enabled, isolating the later host-only comparison. Run
+[34729302087](https://github.com/wimpheling/hephaestus/actions/runs/34729302087)
+completed successfully with workflow `main` at controller SHA
+`3939f48bc07fd36f366a2f61b9365a0b617045a2`, selecting docs-only PR #20 exact
+workload head `736b64805e70d9bb34e5ab15106ca1d0f19cf33f`.
+
+The locked configuration was unchanged: image
+`hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d`, cache generation
+`1789079827867335`, `n2-standard-8`, `150 GB pd-balanced`,
+`europe-west1-d`, one VM, concurrency `1`, 45-minute provider DELETE and
+50-minute workflow timeout. CPU2 and host `project-build` were enabled, and
+production project build remained enabled. The job elapsed `26m23s`
+(`2026-09-13T00:57:44Z` to `01:24:07Z`). Trusted controller timings totaled
+`1552264` ms: `preflight-quota=3044`, `preflight-cache=1714`,
+`vm-create=12277`, `vm-wait=1477251`, `vm-delete=54253`,
+`cleanup-verification=1761` and `post-delete-download=1964`.
+
+Passed informational workload timings were `browser-setup=1689`,
+`dependency-setup=931`, host `project-build=12769`,
+`gateway-edge-ready=3071`, `runtime-guest-build=86739`,
+`oci-image-materialization=23412`, `gateway-services-ready=15072`,
+`runtime-worker-build=19283`, `golden-tests=1107116`, `database-tests=44920`,
+`gateway-readiness=344`, `production-project-build=81638`,
+`oci-builder=85750`, `oci-verifier=358534`, `browser-initial=93839` and
+`browser-post-operation=45062` ms. These workload spans overlap and are
+informational; the controller timings above are authoritative for lifecycle
+elapsed time.
+
+All required gates passed with exit code `0`: workload, browser validation and
+evidence scan were finalized and passed; collection was complete with 11
+available and zero missing sources; upload, download, scan, phase validation
+and acceptance passed. Browser validation reported 2 passed, 0 failed,
+skipped or timed out over initial and post-operation phases. The scanner
+checked 26 files and `1154293` bytes. The retained archive was `32194` bytes
+with SHA-256
+`582eceed7dc54806198308744f700b1c7394e1d0a5eb08b2e0092c5c8c5eedb9`.
+The owned VM `heph-kvm-smoke-34729302087-1` was verified absent after delete
+and during post-delete collection.
+
+The retained technical context contained 39 distinct passed Rust markers, no
+failed markers, and an exact set equality with the accepted baseline's 39
+markers. This is a marker inventory, not a test count. The control is the
+valid post-fix reference for the next PR #39 host-only measurement; no host
+dispatch or performance claim is made until root reviews this evidence.
+
+
+READY HOST-ONLY TRIAL AFTER POST-FIX CONTROL
+============================================
+The valid post-wait-fix CPU2 plus host-build control is run
+`34729302087` (job `26m23s`, trusted controller `1552264` ms). Execute one
+host-only comparison against that fresh control on the same authoritative
+controller `main` SHA `3939f48bc07fd36f366a2f61b9365a0b617045a2`. PR #39 is
+open at exact head `ca4669cce9a64029c15e0dad92d466ac0990190d`, based on that
+main, with exactly one file and 14 deleted lines in `examples/cooking/run.sh`:
+the unused host gateway artifact export and host `project-build` compile.
+The accepted CPU2 setting and the common wait fix remain unchanged; the
+production project build remains enabled as the correctness proof.
+
+Hypothesis and isolation: removing only the unused host compile should remove
+the control's measured host phase (`12769` ms) while preserving production,
+OCI, golden/PostgreSQL and browser behavior. Compare total elapsed time and
+all retained phases to the fresh control, with the original baseline and CPU
+trial as secondary historical references. A single pair may be smaller than
+run variance; do not inflate the result into a drastic claim. The prior host
+run `34727051946` is failed/inconclusive due the now-fixed mailbox settlement
+race and is not used as a performance comparison.
+
+Fixed configuration: image
+`hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d`, cache generation
+`1789079827867335`, worker `vcpus=2`, memory `2048` MiB,
+`n2-standard-8`, `150 GB pd-balanced`, `europe-west1-d`, one VM,
+concurrency `1`, 45-minute provider DELETE and 50-minute workflow timeout.
+Require complete trusted timing, workload, production proof, browser,
+golden/PostgreSQL, scanner, marker, provenance, gate, upload/download and
+post-delete VM absence evidence. Rollback is reverting PR #39 to restore the
+host export and compile while retaining accepted CPU2. No retry or further
+dispatch follows this run; classify only after root review.
+
+
+ACCEPTED HOST BUILD REMOVAL TRIAL: RUN 34730591477
+====================================================
+Result: ACCEPTED as a valid but modest single-pair measurement. Removing the
+unused host compile saved `14s` of job elapsed time (`0.88%`) and reduced the
+authoritative controller lifecycle sum by `9395` ms (`0.61%`). The result does
+not support a drastic-improvement claim, and one pair does not establish
+repeatability. The previous host trial `34727051946` remains
+`FAILED/INCONCLUSIVE` and is not included in this comparison.
+
+Run: [34730591477](https://github.com/wimpheling/hephaestus/actions/runs/34730591477),
+attempt `1`, workflow `main` at controller SHA
+`3939f48bc07fd36f366a2f61b9365a0b617045a2`; selected same-repository PR #39
+workload SHA `ca4669cce9a64029c15e0dad92d466ac0990190d`, repository ID
+`1312377552`. The fresh control was
+[34729302087](https://github.com/wimpheling/hephaestus/actions/runs/34729302087),
+attempt `1`, the same controller SHA, and PR #20 workload SHA
+`736b64805e70d9bb34e5ab15106ca1d0f19cf33f`. The candidate contains exactly
+the prepared 14-line deletion in `examples/cooking/run.sh`: the unused host
+gateway artifact export and host `project-build` compile. CPU2, memory,
+production project build, instrumentation and all other controls were fixed.
+
+The locked environment was unchanged: protected image
+`hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d`, immutable cache
+generation `1789079827867335` and SHA-256
+`0ed20efcc1aa019b79405d1eed626b13d4702019e9ceeba2bdde54e45ae29296`,
+`n2-standard-8`, `150 GB pd-balanced`, `europe-west1-d`, one VM,
+concurrency `1`, 45-minute provider DELETE and 50-minute workflow timeout.
+
+The candidate job elapsed `26m09s`
+(`2026-09-13T01:27:59Z` to `01:54:08Z`) versus the control's `26m23s`
+(`2026-09-13T00:57:44Z` to `01:24:07Z`): `14s` saved. Trusted controller
+timings were `1542869` ms versus `1552264` ms, a reduction of `9395` ms.
+The controller phase pairs (control -> candidate, delta in ms) were:
+`preflight-quota 3044 -> 3008 (-36)`, `preflight-cache 1714 -> 1655
+(-59)`, `vm-create 12277 -> 14228 (+1951)`, `vm-wait 1477251 -> 1466068
+(-11183)`, `vm-delete 54253 -> 54551 (+298)`, `cleanup-verification
+1761 -> 1046 (-715)` and `post-delete-download 1964 -> 2313 (+349)`.
+
+The workload phase pairs (control -> candidate, delta in ms) were:
+`browser-setup 1689 -> 1837 (+148)`, `dependency-setup 931 -> 931 (0)`,
+the removed host `project-build 12769 -> absent`,
+`gateway-edge-ready 3071 -> 2944 (-127)`, `runtime-guest-build 86739 ->
+88099 (+1360)`, `oci-image-materialization 23412 -> 23572 (+160)`,
+`gateway-services-ready 15072 -> 14537 (-535)`, `runtime-worker-build
+19283 -> 19577 (+294)`, `golden-tests 1107116 -> 1107979 (+863)`,
+`database-tests 44920 -> 45309 (+389)`, `gateway-readiness 344 -> 341
+(-3)`, `production-project-build 81638 -> 82676 (+1038)`, `oci-builder
+85750 -> 87131 (+1381)`, `oci-verifier 358534 -> 358328 (-206)`,
+`browser-initial 93839 -> 93102 (-737)` and `browser-post-operation
+45062 -> 44984 (-78)`. Workload spans are informational, overlap one
+another and must not be summed into total runtime. The absent host phase is
+the intended candidate behavior; no zero-valued phase was synthesized.
+
+Evidence quality was complete and matched the control: workload,
+evidence-scan and browser-validation gates were finalized and passed with
+exit code `0`; upload, authenticated download, archive/phase validation and
+gate acceptance passed; the source collection retained 11 available sources
+with zero missing, rejected, unavailable or truncated sources. Browser
+validation was complete with `2` passed, `0` failed, `0` skipped and `0`
+timed out across initial and post-operation phases. The credential scanner
+checked `26` files and `1153537` bytes. The private candidate archive was
+`32309` bytes with SHA-256
+`79e6aeb58cd66695f34dc41c95829088942dd13f50a8c294d0ec57626ee021fe` at
+`gs://hephaestus-508000-cooking-diagnostics/cooking/runs/34730591477/1/ca4669cce9a64029c15e0dad92d466ac0990190d.tar.gz`; the control archive
+was `32194` bytes with SHA-256
+`582eceed7dc54806198308744f700b1c7394e1d0a5eb08b2e0092c5c8c5eedb9`.
+The owned VM `heph-kvm-smoke-34730591477-1` was verified absent after
+deletion and before post-delete collection.
+
+The candidate retained 39 distinct passed Rust marker names, no failed
+markers, and the exact same marker set as the fresh control's 39. This is a
+marker inventory, not a test count. The candidate's producer-to-timing-
+collection-to-validation path is represented by the passed full workload,
+phase projection, collection, scan, gate and cleanup evidence; the timing
+instrumentation remains frozen. Accept the one-file candidate for root's
+integration decision with rollback to restore the host artifact export and
+compile if later review rejects the modest saving. Implementation commit:
+`ca4669cce9a64029c15e0dad92d466ac0990190d`; ledger result finalized by
+commit `495793af87d97cb25a7e27ba5ca4b5d2b07056bb`.
+
+Merge handoff: PR #39 was merged after the valid trial and final integrated
+quality gate, with merge commit
+`39b8032796637c6898b41c281754c38bb3be41ee` at
+`2026-09-13T01:59:25Z`. The merged change retains the accepted CPU2 setting,
+removes only the unused host gateway artifact export and host compile, and
+can be rolled back by reverting that merge commit.
+
+
+PREPARED OVERLAP TRIAL: INDEPENDENT COOKING BLOG PREPARATION
+=============================================================
+ID: overlap-independent-blog-preparation
+Hypothesis: starting the independent cooking-blog OCI preparation while the
+canonical, adversarial and optional update release preparations run in their
+existing serial order will reduce wall-clock Cooking time without changing
+release ordering, assertions, resource limits, evidence quality or cleanup.
+The canonical, adversarial and update branches remain serial; both branches
+are joined before instance setup. If either branch panics, the sibling is
+drained before the original panic is resumed.
+
+Candidate: draft [PR #42](https://github.com/wimpheling/hephaestus/pull/42),
+head `7a6ba94e55e3b2cc42f8960578d6a4ad54b1c0ae`, based on the merged host
+removal main `39b8032796637c6898b41c281754c38bb3be41ee` (the current PR base
+also contains the later docs-only main commit). The code change is confined
+to `crates/hephaestus-app/tests/golden.rs`: two new bounded lifecycle
+regression tests plus the joined preparation callsite. Existing production,
+canonical/adversarial/update assertions and timer names are preserved, as is
+the existing OCI worker configuration and `worker_concurrency=4`. The timing
+instrumentation is frozen; image, cache, VM, machine, disk, zone and workflow
+settings are unchanged.
+
+Primary locked reference: accepted host-removal run
+[34730591477](https://github.com/wimpheling/hephaestus/actions/runs/34730591477),
+workload SHA `ca4669cce9a64029c15e0dad92d466ac0990190d`, job `1569s`, trusted
+controller `1542869ms`, `golden-tests=1107979ms`,
+`production-project-build=82676ms`, `oci-builder=87131ms` and
+`oci-verifier=358328ms`. The measured canonical production phase is
+`82676ms` (`82.676s`); OCI builder plus verifier is `445459ms` (`445.459s`).
+These values bound the potential overlap context only: release-preparation
+spans are not separately timed, and actual scheduling or contention may erase
+some or all gain. No performance result is claimed from this preparation.
+
+The eventual one-pair GCP trial must keep the protected image
+`hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d`, immutable cache
+generation `1789079827867335` and SHA-256
+`0ed20efcc1aa019b79405d1eed626b13d4702019e9ceeba2bdde54e45ae29296`,
+`n2-standard-8`, `150 GB pd-balanced`, `europe-west1-d`, one VM,
+concurrency `1`, 45-minute provider DELETE and 50-minute workflow timeout.
+It must preserve all workload, browser, golden/PostgreSQL, scanner, marker,
+provenance, timing, gate, upload/download and VM-absence requirements. The
+trial baseline is the primary reference above; rollback is reverting
+`7a6ba94e55e3b2cc42f8960578d6a4ad54b1c0ae` to restore serial blog
+preparation. No GCP dispatch is part of this entry.
+
+Local producer/callsite evidence is retained at
+`/home/a/projects/hephaestus-worktrees/gcp-cooking-performance-evidence/overlap-preparation/EVIDENCE.md`.
+The fixture executes the extracted real callsite with real short child
+processes: successful concurrent progress and both panic orders passed. The
+candidate adds two regression tests; the prior workload marker inventory had
+39 distinct retained passed marker names. Marker inventories are not test
+counts; a future GCP result must preserve every existing marker/test and
+compare the candidate inventory explicitly. Focused preparation tests passed
+2/2 (session `63074`, `/tmp/heph-overlap-focused-final.log`), targeted Clippy
+passed (session `52609`, `/tmp/heph-overlap-clippy-final.log`), and formatting
+and diff checks passed. Full `cargo dev quality` and independent integration
+review have now completed: the full `cargo dev quality` gate passed in
+session `48642` (exit `0`, log `/tmp/heph-overlap-quality-7a6ba94.log`), and
+the independent Astra integration review approved the bounded scope and
+safety properties. No GCP dispatch was part of this preparation entry. This
+remains a pretrial record, not a performance result. Its single authorized
+trial is recorded below; no additional dispatch is part of this pretrial
+entry.
+
+Implementation commit: `7a6ba94e55e3b2cc42f8960578d6a4ad54b1c0ae`.
+
+
+VALID MEASURED OVERLAP TRIAL: RUN 34732597502
+===============================================
+Result: ACCEPTED as a valid single-pair performance measurement. The
+candidate job elapsed `1418s` (`23m38s`) versus the primary host-removal
+baseline's `1569s` (`26m09s`): `151s` saved (`9.62%`). Trusted controller
+lifecycle decreased from `1542869` ms to `1394357` ms: `148512` ms saved
+(`9.63%`). This is a material measured improvement, but one pair does not
+establish repeatability or justify promising the same saving on every run.
+No retry or next dispatch is recorded here.
+
+Run: [34732597502](https://github.com/wimpheling/hephaestus/actions/runs/34732597502),
+attempt `1`, selected PR #42 workload SHA
+`7a6ba94e55e3b2cc42f8960578d6a4ad54b1c0ae`. The trusted controller SHA was
+`1f0c828db5e57996022bcccf608e883e57ad2907`, a descendant of the planned
+`39b8032796637c6898b41c281754c38bb3be41ee` main. The intervening commit
+`1f0c828` changed only `AGENTS.md`, `README.md` and task/roadmap documents;
+workflow, scripts, frozen instrumentation, image, cache and GCP configuration
+were unchanged. The baseline was accepted run
+[34730591477](https://github.com/wimpheling/hephaestus/actions/runs/34730591477),
+workload SHA `ca4669cce9a64029c15e0dad92d466ac0990190d`, with the same
+locked configuration and host-build-removal mode.
+
+The locked configuration was unchanged: image
+`hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d`, cache generation
+`1789079827867335`, cache SHA-256
+`0ed20efcc1aa019b79405d1eed626b13d4702019e9ceeba2bdde54e45ae29296`,
+`n2-standard-8`, `150 GB pd-balanced`, `europe-west1-d`, one VM,
+concurrency `1`, 45-minute provider DELETE and 50-minute workflow timeout.
+
+Trusted controller phase pairs (baseline -> candidate, delta in ms) were:
+`preflight-quota 3008 -> 2124 (-884)`, `preflight-cache 1655 -> 1424
+(-231)`, `vm-create 14228 -> 12669 (-1559)`, `vm-wait 1466068 -> 1321424
+(-144644)`, `vm-delete 54551 -> 52488 (-2063)`, `cleanup-verification
+1046 -> 908 (-138)` and `post-delete-download 2313 -> 3320 (+1007)`. The
+controller timings are trusted lifecycle spans; the run's overall job
+elapsed time above is the paired wall-clock result.
+
+Informational workload phase pairs (baseline -> candidate, delta in ms) were:
+`browser-setup 1837 -> 1734 (-103)`, `dependency-setup 931 -> 928 (-3)`,
+`gateway-edge-ready 2944 -> 3032 (+88)`, `runtime-guest-build 88099 ->
+87505 (-594)`, `oci-image-materialization 23572 -> 23506 (-66)`,
+`gateway-services-ready 14537 -> 14923 (+386)`, `runtime-worker-build
+19577 -> 19496 (-81)`, `golden-tests 1107979 -> 966549 (-141430, 12.76%
+faster)`, `database-tests 45309 -> 45415 (+106)`, `gateway-readiness 341
+-> 342 (+1)`, `production-project-build 82676 -> 91190 (+8514)`, `oci-builder
+87131 -> 93001 (+5870)`, `oci-verifier 358328 -> 364207 (+5879)`,
+`browser-initial 93102 -> 98616 (+5514)` and `browser-post-operation
+44984 -> 43805 (-1179)`. The host `project-build` phase was already absent
+in the host-removal baseline and remains absent; no phase was synthesized.
+Workload spans overlap and are informational, so they are not additive. The
+production build was `8.51s` slower and OCI builder plus verifier was
+`11.749s` slower (`445459 -> 457208` ms); the overall job and trusted
+controller reductions remain the authoritative measured result.
+
+Correctness and evidence were complete: workload, evidence-scan and
+browser-validation gates were finalized with exit code `0`, all 41 retained
+phase records passed validation, collection retained 11 available sources
+with zero missing, rejected, unavailable or truncated sources, and upload,
+authenticated download, scan, phase validation and gate acceptance passed.
+Browser validation was complete with `2` passed, `0` failed, `0` skipped and
+`0` timed out. The credential scanner checked `26` files and `1153674` bytes.
+The private archive was `32039` bytes with SHA-256
+`82a4d45146ad35af7974b99a54a3a7303f81293948740ced37f78a99d0c29dc9` at
+`gs://hephaestus-508000-cooking-diagnostics/cooking/runs/34732597502/1/7a6ba94e55e3b2cc42f8960578d6a4ad54b1c0ae.tar.gz`. The owned VM
+`heph-kvm-smoke-34732597502-1` was verified absent after deletion and before
+post-delete collection.
+
+The candidate retained 41 distinct passed Rust marker names: the baseline's
+39-marker set plus exactly `cooking_preparation_overlaps_child_lifecycles`
+and `cooking_preparation_drains_child_before_resuming_either_panic`; no
+baseline marker was lost and no failed marker was retained. This is a marker
+inventory, not a test count. The producer-to-timing-to-collection-to-
+validation path passed with the frozen instrumentation. The result was
+accepted and merged after root's integration decision; rollback is reverting
+`7a6ba94e55e3b2cc42f8960578d6a4ad54b1c0ae` to restore serial blog
+preparation. No further GCP dispatch is implied by this ledger entry.
+
+Merge handoff: PR #42 was marked ready after its visible checks, full quality
+gate and independent review, then merged with commit
+`6e812d2e0e22c489541eb34fe8d85ce481970d81` at
+`2026-09-13T02:43:22Z`. The next source baseline for any future experiment is
+this merged main revision; no repeat run is implied by the single-pair result.
+
+
+POST-MERGE LOCAL VERIFIER STORAGE INVESTIGATION: NO CLOUD RESULT
+================================================================
+Scope review: after PR #42, a local verifier probe tested whether the pinned
+OCI verifier's apparent memory/storage sensitivity justified another GCP
+experiment. It does not establish a GCP cause, speedup ratio or accepted
+optimization, and it made no image, script, PR, gate or cloud change. The
+single-line 4 GiB candidate remains uncommitted.
+
+The pinned verifier image was
+`localhost/oci-verifier@sha256:1e1b9618333711c130598a55956c9051b898fb100a4270d584340aa29c4ef09c`
+with image ID
+`9418513a484c01a8642eb7efe25897d4b5c6b6ab2025308c02d59c2ebb397e53`,
+entrypoint SHA-256
+`9a3f6c489a2423f6cf62d9531d52ea44223f5f28b9ec993d5eeab15ac4d4fd82`, and
+the unchanged candidate image content was `197300037` bytes. With 2 GiB and
+an explicit tmpfs `/tmp`, Syft ran for `259.208s` and exited `137`; the full
+probe exited `1` after `260.336s`, showing severe local tmpfs/reclaim failure
+behavior. A 4 GiB tmpfs probe passed in `11.784s`,
+but that comparison changes both memory and storage and is nonrepresentative:
+the GCP guest uses disk-backed virtiofs `/tmp`, while the host `/tmp` was also
+tmpfs. Neither result is a GCP memory conclusion or performance measurement.
+
+The faithful local probe kept 2 GiB, 2 CPUs, the image, script and candidate
+unchanged, and used an all-btrfs storage path. It passed in `14.131s` with
+copy/stage `1.691s`, Syft `5.811s`, Trivy `2.016s` and umoci `4.098s`.
+Manifest validation matched the 4 GiB output with `277` package identities
+and `0` vulnerabilities. The memory peak reached the 2 GiB limit, but the
+probe recorded no OOM or reclaim kill (`oom=0`, `oom_kill=0`,
+`oom_group_kill=0`), with `358` file refaults; this is evidence of local
+pressure, not proof of a GCP OOM cause. Evidence is retained in
+`/home/a/.cache/heph-verifier-faithful-storage-q8lnwgb6/summary.json` and
+`/tmp/heph-verifier-local-hjdu2roi/summary.json` plus
+`/tmp/heph-verifier-local-hjdu2roi/counterprobe-audit.json`.
+
+The remaining precise question is whether the actual GCP/libkrun verifier
+path, observed at roughly `364s` in the accepted run, can reproduce the
+faithful local verifier behavior; the local container's roughly `14s` result
+does not prove correspondence to the current GCP input identity, and
+virtiofs behavior remains unreproduced. The smallest next experiment is a
+feasibility probe of the actual local libkrun verifier under the unchanged
+2 GiB envelope. It is separately owned by Luna; no cloud dispatch is
+justified until that identity and storage path are established.
+
+
+ACTUAL LOCAL LIBKRUN VERIFIER FEASIBILITY: HARNESS-LIMITED, NO GCP RESULT
+=========================================================================
+The smallest follow-up feasibility probe used the actual production verifier
+VM path locally under the unchanged `2` vCPU/`2048` MiB guest envelope, with an
+`8192` MiB host cgroup cap, network disabled, UID `10001`, and guest `/tmp` on
+`fuseblk`. The extracted `verifier_vm_spec` was unchanged and the pinned
+verifier image, entrypoint, script and candidate were retained; the probe was
+disposable and uncommitted. It passed in `259.460s` and destroyed the VM and
+cgroups successfully. Stage timings were copy `7.285s`, Syft `22.789s`, Trivy
+`3.606s` and Umoci `225.077s` (`86.75%` of elapsed time). This observes a
+large Umoci stage cost on that local guest filesystem, but does not establish
+that virtiofs caused it; it is not a GCP performance baseline or a claim of
+`221s` GCP savings.
+
+The same unchanged candidate and Podman all-btrfs probe previously passed in
+`14.131s`, with Umoci `4.098s`. Both local paths produced matching manifest
+validation, `277` package identities, `0` vulnerabilities and the expected
+rootfs manifest. The actual VM probe's peak host cgroup memory was
+`4260208640` bytes of the `8589934592` byte cap, with no `low`, `high`, `max`,
+OOM or PSI events and no quota/throttling signal. The rootfs census was `7739`
+regular files, `1297` directories, `827` symlinks and `488132610` regular-file
+bytes. Cleanup removed the VM runtime, VM cgroup, task cgroup parent and empty
+runtime parent. Evidence and exact command/provenance are retained in
+`/home/a/.cache/heph-real-verifier-wjf4cisl/summary.json` and its sibling
+`provenance.json`, `run-command.json` and `extracted-spec.rs` files.
+
+Superseding correction: the disposable harness did not run the complete
+production `prepare_guest_root` identity preparation. Therefore this local
+Umoci timing, and the earlier `61s` scratch comparison, are not production-
+equivalent evidence for a virtiofs, account or GCP cause. The measurements are
+retained as historical diagnostic timings only.
+
+The GCP input identity is still unproven, so the local `259.460s` result cannot
+be mapped to the accepted run's roughly `364s` GCP verifier phase or used to
+claim a GCP saving. The memory candidate remains held; no GCP dispatch is
+justified yet. The next bounded step is Astra's read-only design of a local
+counterprobe (timeboxed to `15` minutes) for the input identity and storage
+mapping question, with no instrumentation, image or cloud change.
+
+
+CORRECTED LOCAL EXT4 SCRATCH PROBE: REJECTED, NO CLOUD RESULT
+===============================================================
+A corrected local scratch-placement probe tested an ordinary ext4 boundary at
+the Umoci output path. The unchanged candidate, script, full Umoci arguments,
+VM limits and network-off operation were retained. The probe passed its
+correctness and cleanup checks, but is rejected as an optimization: full VM
+elapsed time was `81.388s` (`81.474s` including setup/VM cleanup), versus
+`77.143s` for the recent valid virtiofs unused-disk control; ext4 was therefore
+`4.245s` slower. Its stages were Umoci `59.261s` and final move `5.944s` (copy
+`3.405s`, Syft `9.929s`, Trivy `2.289s`). The candidate did not win, so the
+planned failed-copy fixture was not run and no production or image change was
+made.
+
+The first preseed-link scratch probe is explicitly invalid: the real script's
+cleanup removed the precreated output/bundle link before output preparation,
+so scratch placement was not exercised and no speed attribution is allowed.
+The recent valid virtiofs repeat recorded `77.143s`, Umoci `61.064s` and move
+`0.008s`, but it is a control only and does not establish an attributed gain.
+The corrected ext4 probe matched the reference tree's `9864` entries,
+including content, metadata, xattrs, owners, symlink targets and all `4`
+hardlink groups; manifest, package identity and vulnerability identity outputs
+also matched. The VM was destroyed before disk unlink and all cgroup/runtime
+cleanup checks passed. Evidence is retained in
+`/home/a/.cache/heph-scratch-corrected-ntgvpiv_/summary.json` and
+`/home/a/.cache/heph-scratch-verifier-t3fo13ky/summary.json`.
+
+These local scratch results do not establish a GCP cause or saving. The
+observed Umoci cost is recorded, while CPU-versus-wait interpretation remains
+pending Luna's separate existing-data analysis. No production, image or GCP
+change is justified by this rejected probe.
+
+
+LOCAL ACCOUNT-ONLY REAL-GUEST PROBE: SUPERSEDED HARNESS CORRECTION
+==================================================================
+An account-only diagnostic counterprobe initially tested whether the verifier's
+missing NSS records contributed to its local Umoci cost. Its harness ran as
+UID and GID `10001`, with no corresponding passwd/group records. A private
+clone added only fixed non-login records for that UID/GID:
+`heph-verifier:!:10001:10001:Hephaestus verifier:/nonexistent:/usr/sbin/nologin`
+and `heph-verifier:!:10001:`. Numeric UID/GID/group, pinned Go 1.22 tar cache
+state, image, script and candidate content were otherwise unchanged; the Go
+1.22 tar cache was a miss and was not cached by the probe.
+
+The one sequential profiled local pair changed full VM time from `76.180s` to
+`46.561s`, a local saving of `29.619s` (`38.9%`). Umoci changed from `59.629s`
+to `30.743s`; mtree changed from `42.119s` to `16.826s`; sampled CPU changed
+from `14.81s` to `9.06s`, and the `os/user` profile focus matched zero
+samples. The apparent local difference is a harness correction, not supported
+production mechanism evidence: measured candidate `7a6ba94` already adds these
+records in `scripts/run-libkrun-integration.sh` before the verifier root is
+used. Cache/order effects are also uncontrolled, so this is not a GCP
+performance measurement or accepted optimization.
+
+Correctness matched the reference: all `9864` tree entries matched content,
+metadata, xattrs, owners, symlink targets and all `4` hardlink groups;
+manifest, package identity and vulnerability identity outputs were identical.
+The VM, runtime, cgroup and task parents were cleaned, and private outputs
+were not published. Evidence is retained in
+`/home/a/.cache/heph-umoci-account-hj5a9l3v/summary.json`. No production,
+image, repository or GCP change was made. The identity-projection and image
+candidate are withdrawn. The next diagnostic must execute the complete
+production `prepare_guest_root` path with the current generated OCI input
+before any verifier-cost attribution; memory remains held and the ext4
+scratch candidate remains rejected.
+
+
+CURRENT-INPUT PRODUCTION OCI OPERATION: LOCAL EVIDENCE, NO GCP RESULT
+=====================================================================
+The complete current-input OCI operation passed locally using source revision
+`7a6ba94e55e3b2cc42f8960578d6a4ad54b1c0ae`, the current Dockerfile, vendor
+Hugo `9eff60e`, Python base `24b78e`, pinned tools and focused offline build
+provenance. It used the public `VmOciOperation::execute` path with freshly
+built runtime/worker/bootstrap artifacts, complete extracted materialization
+and `prepare_guest_root` functions, both guest payloads, the fixed
+`heph-agent` UID/GID `10001`, and no diagnostic tool wrappers. The resulting
+operation took `120.512s`: OCI builder `35.353s` and verifier `84.866s`.
+
+The sealed candidate outer manifest digest was
+`sha256:116128c0092d61c2439ba500f004a05fb37b6880e7b9b74001903673ac2d486d`,
+with `310260570` compressed layer bytes (`310.3 MB`), `16770` regular files,
+`1760` directories and `895` symlinks. Hugo mode `0555` input/output hashes
+matched the pinned values; the SBOM and scan validated `296` packages and `0`
+vulnerabilities. CAS hashes, sealing and manifest validation passed. Both VM
+cgroups and the operation scratch/runtime parents were removed successfully;
+private candidate and outputs were retained without publication.
+
+One initial launcher failed before provisioning because empty provider allowlist
+directories were absent. That failure was preserved and corrected before the
+single actual builder/verifier operation; no retry of the measured operation
+was made. The complete operation is representative of the current local
+production path and corrects the stale diagnostic harness-fidelity gap, but it
+is not a GCP performance measurement: exact byte equivalence to the retained
+GCP candidate is unavailable and no GCP saving is claimed. Evidence is
+retained in `/home/a/.cache/heph-current-oci-p_xchkk6/summary.json` and
+`build-provenance.json`.
+
+The memory candidate remains held, the scratch candidate remains rejected and
+the withdrawn identity candidate is not revived. Astra's next bounded step is
+a read-only review of toolchain packaging and test meaning; no image, cache,
+bootstrap or cloud promotion is approved by this local result.
+
+
+PREPARED PYTHON TEST-TREE REDUCTION TRIAL: PR #43
+===================================================
+ID: python-runtime-test-tree-removal
+Hypothesis: removing only the unused CPython regression-test tree from the
+Cooking runtime image may reduce OCI verifier and golden-workload time while
+preserving the Hugo checksum and mode, Python base, site validation, scanner
+identities, assertions, provenance and cleanup. The candidate is PR #43,
+`9b39eb489d8a87c8d71db6c6c9bb573e124f1891`, based on merged main
+`6e812d2e0e22c489541eb34fe8d85ce481970d81`.
+
+Controlled variable: one guarded Dockerfile operation checks that
+`/opt/python/lib/python3.13/test` exists and removes only that directory. The
+Dockerfile retains the Hugo checksum, `0555` mode, base image and Python/site
+validation. Independent Astra review conditionally approved the narrow
+hypothesis. The final formatting-only candidate passed quality session
+`18452`; the real `build.sh` and `check_site.py` fixture passed for both pages.
+
+Local evidence: the complete local OCI operation on the candidate was
+`105.346s` versus the current-input control's `120.512s`; this is a local
+timing and not a GCP saving claim. The tree reduction removed `4703` files and
+`224` directories; every retained file hash and symlink target was unchanged,
+and SBOM dependency identities, scanner database and scanner targets were
+identical. The runtime used for the local operation was `7a6ba94`; the measured
+OCI input was `a119299`; final candidate provenance is `9b39eb4`. The input is
+semantically the same RUN, but these runtime/input/candidate references remain
+distinct and are recorded separately.
+
+Primary locked GCP control: run
+`34732597502 <https://github.com/wimpheling/hephaestus/actions/runs/34732597502>`_
+with job `1418s`, trusted controller `1394357ms`, `golden-tests=966549ms`,
+`oci-builder=93001ms` and `oci-verifier=364207ms`, complete gates and cleanup,
+and the retained 41-marker set. Keep the image, cache, machine, zone, disk,
+concurrency, resources and frozen instrumentation unchanged. Acceptance would
+require complete workload, browser, golden, scanner, marker, provenance,
+timing, private evidence and post-delete cleanup, with no weakened test
+meaning. Rollback is reverting the Dockerfile-only commit. The single
+authorized GCP trial was run as `34738676749` and completed
+successfully, but acceptance is blocked by the marker inventory mismatch:
+40 candidate markers versus 41 control markers. Its workload and diagnostics
+were otherwise complete (browser `2/2`, 11/11 sources, all gates and cleanup),
+and its slower job time was `1485s` versus `1418s` control. No retry or merge
+is authorized from this result; rollback is reverting the Dockerfile-only
+commit while the precise marker discrepancy receives independent review.
+
+PR #43 TERMINAL TRIAL: PERFORMANCE ACCEPTANCE INCONCLUSIVE
+===================================
+The locked GCP trial `34738676749 <https://github.com/wimpheling/hephaestus/actions/runs/34738676749>`_ completed with workflow and cloud job success at exact workload head `9b39eb489d8a87c8d71db6c6c9bb573e124f1891`. The controller ran from `main` at `6e812d2e0e22c489541eb34fe8d85ce481970d81`; the control workload was `7a6ba94e55e3b2cc42f8960578d6a4ad54b1c0ae`. The source difference from the control was the Dockerfile-only guarded CPython test-tree removal; the other main drift was documentation-only. The locked image fingerprint was `f285fc2b8157f8053383fc98bcaec83d`, cache generation `1789079827867335`, and the machine/zone/disk/concurrency settings were unchanged.
+
+The candidate job elapsed `1485s` (`24m45s`) versus control `1418s` (`23m38s`): `+67s` (`+4.73%`). Trusted controller time was `1448925ms` versus `1394357ms`: `+54568ms` (`+3.91%`). Candidate controller phases were quota `3055ms`, cache `1772ms`, VM create `27212ms`, VM wait `1327327ms`, VM delete `85869ms`, cleanup verification `1758ms`, and post-delete download `1932ms`; every required controller phase passed. The controller increase decomposes to create `+14543ms`, delete `+33381ms` (`+47924ms` combined), and wait `+5903ms`, with the remaining `741ms` across quota/cache/cleanup/download. Workload timing is informational and spans overlap. Paired candidate/control phases were: `golden-tests 884033/966549ms` (`-82516ms`), `production-project-build 89028/91190ms` (`-2162ms`), `oci-builder 88689/93001ms` (`-4312ms`), `oci-verifier 322770/364207ms` (`-41437ms`), `browser-initial 93604/98616ms` (`-5012ms`), and `browser-post-operation 43354/43805ms` (`-451ms`). The combined OCI reduction was `45749ms` (`-10.01%`) in this one pair; it is not accepted or promoted because evidence completeness takes precedence over phase speed.
+
+The candidate passed workload, browser `2/2`, phase timing, provenance, evidence scan (`26` files and `1154680` bytes), upload/download, all three acceptance gates, and verified VM absence. The safe diagnostic projection contains `43` technical-context records versus `44` in control, below the projection's `50`-record cap; filtering or interleaving may explain the marker difference, but this is unresolved. The private archive was uploaded and verified by download at `gs://hephaestus-508000-cooking-diagnostics/cooking/runs/34738676749/1/9b39eb489d8a87c8d71db6c6c9bb573e124f1891.tar.gz`, `31961` bytes, SHA-256 `6ee50982cfa06cd3f3376483b10d46361793515803193d91f6145b98f3fa9ed0`; all `11/11` evidence sources were complete with no missing, truncated or unavailable source.
+
+The performance acceptance decision is inconclusive because the retained Rust marker inventory is unresolved: the candidate projection has `40` distinct passed Rust marker names while the control has `41`. The missing control marker is `cooking_confinement::tests::native_vm_logs_reject_split_encodings_without_joining_streams`; the candidate source still contains this test, but source presence does not prove that its pass marker was observed. Marker inventories are not test counts. The private raw archive is not locally accessible; the GCS URI and archive digest above are the provenance for the source needed to resolve this discrepancy. Treat the run as an operationally passing workload with no demonstrated end-to-end gain and no proven workload regression. Rollback remains reverting the Dockerfile-only commit; no merge, retry or additional dispatch follows without independent review.
+
+LOCAL CURRENT-INPUT PRESSURE DIAGNOSTIC: REJECT 4 GIB EXPERIMENT FOR NOW
+=======================================================================
+The private diagnostic at `/home/a/.cache/hp-lx9k_o05` exercised the actual
+current-input `VmOciOperation::execute` path with source revision
+`7a6ba94e55e3b2cc42f8960578d6a4ad54b1c0ae`, the original worker/bootstrap and
+the complete preparation path. Its only measurement instrumentation was an
+equal-length embedded worker-path replacement preserving the original worker
+bytes, plus a verifier entrypoint sampler reading guest `/proc`; all original
+tool commands, identities, directory-backed mounts, outputs and cleanup were
+retained. The measured operation passed with authoritative elapsed time
+`112.55043015s`. The phase sum was `112.386s` (`oci-builder=26.950s` and
+`oci-verifier=85.436s`); launcher wall time was `112.633882885s`, which also
+includes launch and teardown.
+
+The guest remained at `2` vCPUs and `2048` MiB. During `84.31s` of guest
+sampling, minimum `MemAvailable` was `1.537 GiB`, peak anonymous memory was
+`271.203 MiB`, and file refaults totaled `15`. Host verifier memory peaked at
+`5.389 GB` of the `8 GiB` worker cgroup ceiling. Host cgroup samples recorded
+no memory PSI, limit hit, OOM, direct reclaim, major-fault or throttling signal;
+background kswapd reclaimed `140416` pages without an observed stall. Guest
+PSI files and detailed reclaim/fault counters were unavailable, and must not be
+treated as zero pressure.
+
+The operation passed preparation fidelity, Hugo/input validation, SBOM and
+vulnerability checks (`296` packages, `0` vulnerabilities), and cleanup. The
+launch-only preflight failure is retained separately: delegated cgroup
+subtree controllers were missing and the launcher exited before VM creation;
+the setup was corrected before this measured operation and is not a candidate
+defect. The diagnostic does not establish GCP equivalence or a GCP saving, so
+the 4 GiB experiment remains rejected for now. The next packaging review is
+only under review; no new experiment is approved.
+
+
+LOCAL FULL COOKING LIFECYCLE: PR #45 CANDIDATE
+==============================================
+The Dockerfile-only compiler/development-toolchain removal candidate is PR #45
+at exact workload head
+`939e9a1e2bc4a1d6bae82f779645199878c1a713`. The real
+`examples/cooking/run.sh` completed once locally with run ID `9399001`, using
+the accepted pinned images, fixed deferred Cargo target, short disk-backed
+runtime roots and the unchanged Cooking source/tests. Session `54034` exited
+`0` after `386s` wall time. Preflight passed with delegated
+`cpu/io/memory/pids`; representative supervisor socket paths were at most 95
+bytes. The candidate Dockerfile SHA-256 was
+`54ce71e5c09a1ced1fa5b406103f70c3bb5a0e6e5b843071a54e6fb16683d0e4`.
+
+The local lifecycle passed the production project build (`28915ms`), OCI
+builder (`40906ms`) and verifier (`82234ms`), both browser phases
+(`53101ms` initial and `31447ms` post-operation), gateway readiness/services,
+golden tests (`35` passed, `0` failed, `1` ignored), and PostgreSQL tests
+(`6` passed, `0` failed). Credential scans passed for decoded VM logs
+(`4108` bytes), stored build logs (`2742` bytes), raw database state
+(`117` tables and `7759` rows), and retained NATS state (`5` streams and
+`2486` messages). Browser validation was `2/2`; lineage status was `ok`; the
+terminal reported runtime and cgroup cleanup verified, with no active worker
+processes and an empty short libkrun root after teardown.
+
+The required repository quality gate was run once on this exact clean head
+with `CARGO_TARGET_DIR=/home/a/.cache/heph-deferred-target`; session `14390`
+exited `0`. Its private log is
+`/home/a/.cache/heph-remove-dev-toolchain-cargo-quality-939e9a1-final.log`.
+The first launcher-only invocation with an unsupported `--manifest-path`
+argument exited `2` before the gate and is retained separately; it is not a
+quality result. Existing dependency advisories printed by the gate did not
+fail it.
+
+This full local run established candidate correctness and lifecycle evidence
+before the fixed paid pair; it was not a GCP speedup or input-equivalence
+claim. The candidate-first/control-second pair below used the locked image,
+machine, zone, cache, concurrency, resources and frozen instrumentation.
+
+
+PR #45 FIXED GCP TRIAL: HOLD PERFORMANCE PROMOTION
+===================================================
+The predeclared hypothesis was that removing the unused compiler and
+development toolchain from the Cooking-only Dockerfile would reduce avoidable
+image/build or OCI work while preserving all tests, browser assertions,
+evidence and cleanup. The predeclared pair ran candidate PR #45 first at exact
+head `939e9a1e2bc4a1d6bae82f779645199878c1a713`, then the frozen docs-only PR
+#20 control at exact head `127f57e3707b687d4083c365de5537014abe7098`, with the
+locked configuration and frozen instrumentation unchanged:
+`34746767593 <https://github.com/wimpheling/hephaestus/actions/runs/34746767593>`_
+and `34747950421 <https://github.com/wimpheling/hephaestus/actions/runs/34747950421>`_.
+Rollback is reverting the Dockerfile-only candidate commit; no retry or
+automatic merge follows this pair.
+
+The candidate job elapsed `1470s` versus the control's `1358s`, a candidate
+increase of `112s` (`8.25%`). Trusted controller time was `1442149ms` versus
+`1333101ms`, an increase of `109048ms`; `vm-wait` accounted for `98596ms` of
+that difference. The candidate's runtime phases were faster in this pair:
+`golden-tests` by `27834ms`, `oci-verifier` by `32098ms`, and runtime
+supervisor by `26831ms`, while controller and other phases were slower. The
+controller wait difference is not a measured boot or polling phase and has no
+causal attribution. These timings therefore establish no end-to-end gain,
+intrinsic regression or repeatable magnitude.
+
+Both runs passed their exact provenance checks, all `41` markers, browser
+`2/2`, all workload and collection gates, all `11` evidence sources, scans,
+private upload/download and VM absence cleanup. The candidate is operationally
+valid but held after independent review; faster selected runtime phases do not
+override the slower total job. Private run evidence is retained under
+`/tmp/heph-gcp-34746767593-artifacts` and
+`/tmp/heph-gcp-34747950421-artifacts`; terminal logs are
+`/tmp/heph-gcp-34746767593.log` and `/tmp/heph-gcp-34747950421.log`, with safe
+projections preserving the source and configuration identities.
+Do not promote PR #45 or claim a drastic improvement from this single pair.
+
+The local production-controller cancellation reproduction at
+`/home/a/.cache/heph-hard-cancel-fixture-open-phase2-6JOIYo` executed the
+unchanged controller trap, cleanup, post-delete download and timing projection
+against a stateful fake cloud transport. A SIGTERM during open `vm-wait`
+returned `143`, but the open phase was recorded `failed` because the handler
+closes it with status `1`; cleanup verified VM absence while a separate modeled
+guest lost unpublished diagnostics before download. This is not GitHub runner
+or GCP transport proof: the fake guest/storage path did not run startup
+finalization. Hard GitHub cancellation propagation and reliable `always()`
+post-cancel scheduling remain open, so this fixture does not justify a paid
+cancellation run or completion claim.
