@@ -279,7 +279,6 @@ run_cooking() {
     HEPHAESTUS_APP_UPDATE_ADMISSION_E2E=0 \
     HEPHAESTUS_APP_UPDATE_ADMISSION_RACE_E2E=0 \
     HEPHAESTUS_COOKING_SOURCE_ROOT="${cooking_root}" \
-    HEPHAESTUS_COOKING_GATEWAY_ARTIFACT="${cooking_root}/cooking-gateway/target/x86_64-unknown-linux-musl/release/cooking-gateway" \
     HEPHAESTUS_LIBKRUN_UBUNTU_IMAGE="${python_image}" \
     HEPHAESTUS_LIBKRUN_RUST_BUILDER_IMAGE="${rust_builder_image}" \
     HEPH_GCP_PHASE_TIMING_PATH="${phase_timing_path}" \
@@ -401,19 +400,6 @@ run_cooking() {
             "$1/preflight.sh"
             workload_detail_stage_pass preflight-command-checks
             workload_step_pass dependency-setup
-            cd -- "$2/cooking-gateway"
-            workload_step_start project-build
-            workload_detail_stage_start rustup-target
-            rust_target=x86_64-unknown-linux-musl
-            installed_rust_targets="$(rustup target list --installed)"
-            if ! grep -Fqx "$rust_target" <<<"$installed_rust_targets"; then
-                rustup target add "$rust_target"
-            fi
-            workload_detail_stage_pass rustup-target
-            workload_detail_stage_start cargo-build
-            cargo build --locked --offline --release --target x86_64-unknown-linux-musl
-            workload_detail_stage_pass cargo-build
-            workload_step_pass project-build
             cd -- "$3/.."
             workload_step_start gateway-e2e
             workload_detail_stage_start gateway-invocation
