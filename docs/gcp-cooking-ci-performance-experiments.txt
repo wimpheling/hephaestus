@@ -46,7 +46,10 @@ Current facts
   feasibility passed in `259.460s`, but GCP input identity is unproven. The
   corrected local ext4 scratch candidate was rejected (`81.388s` versus
   `77.143s` control); neither local result is a GCP performance measurement.
-  Optional profiling remains informational.
+- An account-only real-guest probe supports the missing-NSS-record hypothesis:
+  a local profiled pair changed `76.180s` to `46.561s`, saving `29.619s`
+  (`38.9%`). It is one sequential local pair with cache/order uncertainty,
+  not an accepted GCP optimization. Optional profiling remains informational.
 
 Implementation foundation (live and frozen)
 --------------------------------------------
@@ -126,6 +129,11 @@ CURRENT REJECTED AND HELD LOCAL RESULTS
   production, image or GCP change.
 - Optional profiling is informational and subordinate to the input-identity
   and storage-mapping question. No new cloud run is currently justified.
+- The account-only probe used a private clone with only fixed non-login
+  UID/GID `10001` passwd/group records; numeric UID/GID/group and all image,
+  script and candidate content stayed unchanged. It supports a narrow
+  mechanism hypothesis, but production design must separately choose a
+  reviewable identity projection or an image change.
 
 CHRONOLOGICAL EXPERIMENT RECORDS (HISTORICAL DETAIL)
 =====================================================
@@ -1601,3 +1609,34 @@ These local scratch results do not establish a GCP cause or saving. The
 observed Umoci cost is recorded, while CPU-versus-wait interpretation remains
 pending Luna's separate existing-data analysis. No production, image or GCP
 change is justified by this rejected probe.
+
+
+LOCAL ACCOUNT-ONLY REAL-GUEST PROBE: HYPOTHESIS SUPPORTED, NO GCP RESULT
+=========================================================================
+An account-only real-guest counterprobe tested whether the verifier's missing
+NSS records contributed to its local Umoci cost. The actual guest ran as UID
+and GID `10001`, with no corresponding passwd/group records. A private clone
+added only fixed non-login records for that UID/GID:
+`heph-verifier:!:10001:10001:Hephaestus verifier:/nonexistent:/usr/sbin/nologin`
+and `heph-verifier:!:10001:`. Numeric UID/GID/group, pinned Go 1.22 tar cache
+state, image, script and candidate content were otherwise unchanged; the Go
+1.22 tar cache was a miss and was not cached by the probe.
+
+The one sequential profiled local pair changed full VM time from `76.180s` to
+`46.561s`, a local saving of `29.619s` (`38.9%`). Umoci changed from `59.629s`
+to `30.743s`; mtree changed from `42.119s` to `16.826s`; sampled CPU changed
+from `14.81s` to `9.06s`, and the `os/user` profile focus matched zero
+samples. The result supports the missing-account lookup mechanism hypothesis,
+but cache/order effects are uncontrolled and this is not a GCP performance
+measurement or accepted optimization.
+
+Correctness matched the reference: all `9864` tree entries matched content,
+metadata, xattrs, owners, symlink targets and all `4` hardlink groups;
+manifest, package identity and vulnerability identity outputs were identical.
+The VM, runtime, cgroup and task parents were cleaned, and private outputs
+were not published. Evidence is retained in
+`/home/a/.cache/heph-umoci-account-hj5a9l3v/summary.json`. No production,
+image, repository or GCP change was made. The next decision is a separate
+production design review choosing between a narrow reviewable identity
+projection and an image change; memory remains held and the ext4 scratch
+candidate remains rejected.
