@@ -34,11 +34,12 @@ execution and is not a performance measurement. The corrected candidate fix is
 The corrected full GCP candidate run is recorded below; no repeatability or
 whole-job causal attribution is claimed.
 
-PR #49's short diagnostics remain failure audit only: the first finite probe
-exited `34`, and the second produced ordered workload exit codes `49`, `78`,
-`81` and `82`, proving the namespace routing remedy but not an errno or kernel
-cause. No-VM triage retrieved the archive but retained no stderr; the earlier
-triage used wrong SHA arguments. Historical CPU2, host-build-removal and PR #42
+PR #49 is closed as a diagnostic-only failure audit: the first finite probe
+exited `34`, and the second produced ordered stage-marker `exit_code` values
+`49`, `78`, `81` and `82`; only `49` was the overall workload exit code. This
+proves the namespace routing remedy but not an errno or kernel cause. No-VM
+triage retrieved the archive but retained no stderr; the earlier triage used
+wrong SHA arguments. Historical CPU2, host-build-removal and PR #42
 overlap results remain separate single-pair comparisons and are not additive.
 Instrumentation is frozen. Cancellation propagation is partial, fork execution
 is deferred, MVP-06 remains unchecked, and the broader goal remains open.
@@ -68,8 +69,9 @@ no causal performance claim. A same-input raw extraction/runtime-config
 validation remains a local hypothesis only; no host-16 or storage change is
 justified, and the protected image and instrumentation stay unchanged.
 
-PR #47 is the draft OCI verifier candidate at corrected head
-`2792a4ed46433ecad94864c6e6f0573ba0f0217d`. Its five real fixtures passed in
+PR #47 is merged with candidate head
+`2792a4ed46433ecad94864c6e6f0573ba0f0217d` (merge commit
+`d6aaf24863a6a5b4151fa50d3d3b92584f9adcc5`). Its five real fixtures passed in
 `4.863s`. The corrected local Cooking run passed with 35 golden tests, 1
 ignored, PostgreSQL 6, both browsers, scans and cleanup; evidence is retained
 at `/home/a/.cache/heph-oci-verifier-raw-unpack-full-2792a4e-run2`. The durable
@@ -98,6 +100,9 @@ control had 41 records (38 Rust markers plus 3 Cooking-result records), and
 all 38 control Rust markers were retained by the candidate. This is an
 accepted valid single-pair result; the full-job reduction is not attributed
 causally to every phase or treated as repeatable yet.
+The source comparison from `1d3c2b54` to `2792a4ed` contains no Rust or test
+source changes, so the projection-count difference is observational and is not
+evidence of added tests.
 PR #44's terminal trial run #34742470212 is operationally valid but held: its
 job was 1428s versus the 1418s control (+10s, +0.71%), with 41 markers, browser
 2/2, all gates and cleanup passing. The candidate's trusted controller was

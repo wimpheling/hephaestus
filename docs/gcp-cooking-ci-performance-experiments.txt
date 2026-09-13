@@ -242,10 +242,11 @@ CURRENT ACCEPTED RESULTS
   versus fresh control `34729302087` at `26m23s`, `14s` (`0.88%`) saved.
 - Overlap: PR #42 merged as `6e812d2e0e22c489541eb34fe8d85ce481970d81`;
   run `34732597502`, `23m38s` versus `26m09s`, `151s` (`9.62%`) saved.
-  This is the newest valid pair, with complete evidence and no repeatability
+  This is a historical valid pair, with complete evidence and no repeatability
   claim. Workload spans overlap and are not additive.
 - Raw OCI unpack: PR #47 fixed candidate `2792a4ed46433ecad94864c6e6f0573ba0f0217d`
-  is accepted as a valid single-pair result. Fresh control run
+  is merged at `d6aaf24863a6a5b4151fa50d3d3b92584f9adcc5` and accepted as a
+  valid single-pair result. Fresh control run
   `34752572980` took `1545s` (`1517043ms` controller); candidate run
   `34757091699` took `1252s` (`1226870ms` controller), saving `293s`
   (`18.9644%`) job time and `290173ms` (`19.1275%`) controller time. The
@@ -255,7 +256,9 @@ CURRENT ACCEPTED RESULTS
   frozen instrumentation, all gates, browser `2/2`, scans, 11/11 sources,
   timing validation, upload/download and VM absence. This is one accepted
   pair; repeatability and causal attribution of the whole-job reduction remain
-  unestablished.
+  unestablished. The source comparison from `1d3c2b54` to `2792a4ed` contains
+  no Rust or test source changes, so the projection-count difference is
+  observational and is not evidence of added tests.
 
 CURRENT REJECTED AND HELD LOCAL RESULTS
 =======================================
@@ -2186,8 +2189,8 @@ diagnostic and workload phase spans remain non-additive. Acceptance requires
 matching source/configuration provenance, all `41` markers, browser `2/2`, all
 gates, `11/11` evidence sources, scans and verified VM absence in both runs.
 No automatic retry, cherry-pick or selective rerun is allowed. Rollback is to
-leave PR #47 unmerged or revert all candidate changes if the predeclared pair
-does not demonstrate an accepted end-to-end result.
+revert all PR #47 candidate changes if rollback is required; the candidate is
+already merged and must be reverted rather than left unmerged.
 
 FINAL CURRENT HANDOFF: PR #47 FIXED PAIR
 =========================================
@@ -2214,7 +2217,9 @@ and 11/11 evidence sources. The candidate technical projection contained `44`
 records: `41` Rust test-result markers plus `3` Cooking-result records; the
 control contained `41` records: `38` Rust markers plus `3` Cooking-result
 records. All 38 control Rust markers were retained by the candidate. These are
-projection records, not test counts.
+projection records, not test counts. The source comparison from `1d3c2b54` to
+`2792a4ed` contains no Rust or test source changes, so this projection-count
+difference is observational and is not evidence of added tests.
 
 Candidate private evidence is retained at
 `/home/a/.cache/heph-gcp-candidate-34757091699-1789303689`; the uploaded
@@ -2234,10 +2239,10 @@ verifier-phase result, while whole-job causal attribution remains unestablished.
 Historical CPU2, host-build-removal and overlap results remain separate,
 non-additive single-pair measurements.
 
-PR #49 remains a diagnostic failure audit and must never merge: its ordered
+PR #49 is closed as a diagnostic failure audit and must never merge: its ordered
 stage marker exit codes were `49`, `78`, `81` and `82`, while only its first
 `49` was the overall workload exit code. The audit proves the namespace route
 remedy but not a specific errno or kernel mechanism. Hard GitHub cancellation
 proof remains partial; fork execution and MVP-06 remain open requirements, and
-no drastic or repeatability claim is made. Rollback remains leaving PR #47
-unmerged or reverting all candidate changes.
+no drastic or repeatability claim is made. Rollback is reverting all PR #47
+candidate changes if required.
