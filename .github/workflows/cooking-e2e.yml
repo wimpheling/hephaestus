@@ -7,7 +7,7 @@ on:
         description: 'Read quota, build or use the immutable runner image, inspect the Cooking cache, triage a retained private diagnostics bundle, run the diagnostic VM, run the disposable smoke VM, run GCP Cooking, or run legacy Cooking'
         required: true
         type: choice
-        options: [preflight, image-build, image-retire, cache-preflight, diagnostics-triage, diagnostic, smoke, gcp-cooking, cooking]
+        options: [preflight, image-build, image-retire, cache-preflight, diagnostics-triage, diagnostic, smoke, gcp-cooking, provider-metrics, cooking]
         default: preflight
       runner_image:
         description: 'Explicit immutable runner image name for diagnostic, smoke, GCP Cooking, or image retirement'
@@ -65,6 +65,16 @@ on:
         required: false
         type: string
         default: ''
+      metrics_run_id:
+        description: 'Successful completed Cooking E2E workflow run ID for provider-metrics'
+        required: false
+        type: string
+        default: ''
+      metrics_attempt:
+        description: 'Cooking E2E workflow run attempt for provider-metrics (normally 1)'
+        required: false
+        type: string
+        default: '1'
   pull_request:
   push:
     branches: [main]
@@ -78,7 +88,7 @@ concurrency:
 
 jobs:
   gcp-cloud:
-    if: ${{ github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && inputs.cloud_mode != 'cooking' }}
+    if: ${{ github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && inputs.cloud_mode != 'cooking' && inputs.cloud_mode != 'provider-metrics' }}
     runs-on: ubuntu-latest
     timeout-minutes: 50
     permissions:
@@ -248,6 +258,47 @@ jobs:
         with:
           name: gcp-diagnostics-manifest-${{ inputs.diagnostics_run_id || github.run_id }}-${{ inputs.diagnostics_attempt || github.run_attempt }}
           path: ${{ runner.temp }}/gcp-diagnostics-status.json
+          if-no-files-found: error
+          retention-days: 1
+
+  provider-metrics:
+    if: ${{ github.repository == 'wimpheling/hephaestus' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && inputs.cloud_mode == 'provider-metrics' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - id: auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093
+        with:
+          workload_identity_provider: projects/84572286146/locations/global/workloadIdentityPools/github-actions/providers/github
+          service_account: hephaestus-ci@hephaestus-508000.iam.gserviceaccount.com
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db
+        with:
+          version: '>= 390.0.0'
+      - name: Query allowlisted metrics without mutating GCE
+        id: query
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COOKING_RUN_ID: ${{ inputs.metrics_run_id }}
+          COOKING_ATTEMPT: ${{ inputs.metrics_attempt }}
+        run: |
+          set -Eeuo pipefail
+          python3 -B scripts/read_gcp_existing_metrics.py \
+            --run-id "$COOKING_RUN_ID" \
+            --attempt "$COOKING_ATTEMPT" \
+            --output "$RUNNER_TEMP/gcp-existing-metrics.json"
+      - name: Retain safe metric projection
+        if: ${{ always() && steps.query.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: gcp-existing-metrics-${{ inputs.metrics_run_id }}-${{ inputs.metrics_attempt }}
+          path: ${{ runner.temp }}/gcp-existing-metrics.json
           if-no-files-found: error
           retention-days: 1
 
