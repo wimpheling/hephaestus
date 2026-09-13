@@ -19,6 +19,75 @@ repo_root="$(cd -- "${script_dir}/.." && pwd -P)"
 readonly repo_root
 source "${repo_root}/scripts/shell-failure-diagnostics.sh"
 heph_shell_failure_init libkrun-integration libkrun
+# DIAGNOSTIC-ONLY PR: no runtime build, gateway, golden suite, or browser.
+# Keep the helper byte-identical to a2914d9; stage codes refer to that file.
+diag_root="$(mktemp -d "${TMPDIR:-/tmp}/verifier-diagnostic.XXXXXX")"
+cleanup_derivation_diagnostic() {
+    local status=$?
+    trap - EXIT
+    heph_shell_failure_begin_cleanup
+    if [[ -f "${diag_root}/output/container-id" ]]; then
+        cid="$(cat "${diag_root}/output/container-id")"
+        if [[ "$cid" =~ ^[0-9a-f]{64}$ ]]; then podman rm --force "$cid" >/dev/null 2>&1 || true; fi
+    fi
+    chmod -R u+w "${diag_root}" 2>/dev/null || true
+    rm -rf -- "${diag_root}"
+    exit "$status"
+}
+trap cleanup_derivation_diagnostic EXIT
+if timeout --kill-after=5s 90s python3 "${repo_root}/scripts/diagnose-verifier-derivation.py" \
+    --repo "${repo_root}" --local-root "${HEPHAESTUS_LOCAL_ROOT:-${repo_root}/.local/hephaestus}" \
+    --output "${diag_root}/output" >"${diag_root}/stdout" 2>"${diag_root}/stderr"; then
+    diagnostic_status=79
+else
+    diagnostic_status=$?
+fi
+# Each actual shell source line below identifies a fixed helper stage. Raw
+# paths, exceptions, subprocess output, and argument values never enter markers.
+case "$diagnostic_status" in
+    10) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # baseline-layout-directory
+    11) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # baseline-blob-directory
+    12) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # baseline-index-read
+    13) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # baseline-reference-count
+    14) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # baseline-outer-media-type
+    15) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # baseline-reference-digest
+    16) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # baseline-index-blob
+    17) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # baseline-platform-count
+    18) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # baseline-manifest-media-type
+    19) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # baseline-manifest-blob
+    20) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # baseline-config-blob
+    21) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # baseline-os-architecture
+    22) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # baseline-layer-integrity
+    25) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # source-file
+    26) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # source-size
+    27) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # source-revision
+    28) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # reference-format
+    29) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # baseline-tag
+    30) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # fresh-output
+    31) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # output-directory
+    32) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # podman-image-exists
+    33) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # direct-skopeo-copy
+    34) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # direct-skopeo-inspect
+    35) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # podman-tool-identity
+    36) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # tool-identity-format
+    37) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # script-hash
+    38) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # private-layout-copy
+    39) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # private-layout-permissions
+    40) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # script-tar
+    41) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # podman-umoci-add-layer
+    42) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # derived-image-validation
+    43) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # config-and-layer-contract
+    44) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # inserted-file-contract
+    45) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # baseline-blob-preservation
+    46) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # deterministic-descriptors
+    47) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # provenance-write
+    48) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # helper-cleanup
+    78) heph_shell_failure_emit preflight assertion-mismatch 78 "$LINENO" ;; # helper-passed-intentional-stop
+    124|137) heph_shell_failure_emit command timeout "$diagnostic_status" "$LINENO" ;;
+    *) diagnostic_status=79; heph_shell_failure_emit preflight assertion-mismatch 79 "$LINENO" ;; # unknown-fail-closed
+esac
+exit "$diagnostic_status"
+
 ubuntu_image="${HEPHAESTUS_LIBKRUN_UBUNTU_IMAGE:-${DEFAULT_UBUNTU_IMAGE}}"
 readonly ubuntu_image
 postgres_image="${HEPHAESTUS_POSTGRES_TEST_IMAGE:-${DEFAULT_POSTGRES_IMAGE}}"

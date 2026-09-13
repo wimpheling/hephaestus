@@ -19,6 +19,8 @@ fi
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 repo_root="$(cd -- "${script_dir}/../.." && pwd -P)"
+# Isolated diagnostic PR: use the actual trusted workload sandbox, then stop.
+exec "${repo_root}/scripts/run-libkrun-integration.sh"
 cooking_root="${HEPHAESTUS_COOKING_SOURCE_ROOT:-${script_dir}}"
 source "${repo_root}/scripts/shell-failure-diagnostics.sh"
 heph_shell_failure_init cooking-run cooking
