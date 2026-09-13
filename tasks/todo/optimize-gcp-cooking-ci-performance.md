@@ -43,7 +43,15 @@ diagnostic for the crash-build-hoist candidate passed cleanup and provenance,
 but intentionally skipped remaining scenarios and browser phases. It measured
 `R=61.899s`, `C=0.754s`, `B=139.442s`, with predicted overlap gain `0.754s`;
 this is below one second and is rejected without a GCP run, full quality gate
-or PR. PR #43
+or PR. PR #44's full local lifecycle run 3 then passed with 35 golden tests
+passed, one ignored, six PostgreSQL tests, both browser phases, credential
+scans, and VM/cgroup/container cleanup; total elapsed time was `268446ms`.
+The required quality gate session `58696` exited `0`. Independent review
+confirmed the initial Playwright interval was inside verifier execution and
+before initial blog publication, with both attachments prepared before browser
+execution. One locked GCP trial is planned against control run `34732597502`
+with frozen instrumentation and unchanged configuration; no GCP dispatch or
+performance result exists yet. PR #43
 (`9b39eb489d8a87c8d71db6c6c9bb573e124f1891`) was the authorized trial run `34738676749`. It is operationally passing, while performance acceptance is inconclusive: its workload and all collection gates passed, but its retained Rust marker inventory was 40 versus the control's 41. The job was 1485s versus 1418s
 control (+67s, +4.73%), so performance acceptance is inconclusive: there is
 no demonstrated end-to-end gain and no proven workload regression. No GCP

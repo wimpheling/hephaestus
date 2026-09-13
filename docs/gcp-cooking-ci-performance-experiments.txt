@@ -98,13 +98,25 @@ Current facts
   population and joins the independent release and blog preparation branches.
   Source push, manual attachments and browser configuration remain behind the
   final join; browser assertions, workload timers, cleanup and security/update
-  scenarios are unchanged. Focused fmt/compile, two join tests, four build
-  tests, Clippy and independent review passed, but the full real local lifecycle
-  is still running and repository quality/GCP validation have not run. The
-  hypothesis is bounded by up to `98.616s` of measured initial-browser slack
-  against independent OCI preparation, not a guaranteed gain. No GCP dispatch
-  or performance claim is made; rollback is reverting the two-file candidate
-  commit.
+  scenarios are unchanged. Full local lifecycle run 3 passed at
+  `/home/a/.cache/heph-overlap-initial-browser-a6bf87b9-run3`: total
+  `268446ms`, golden `35 passed/1 ignored/0 failed`, PostgreSQL `6 passed`,
+  browser initial `55353ms` and post-operation `29611ms`, OCI builder
+  `36145ms` and verifier `97354ms`, with credential scans and VM/cgroup/
+  container cleanup passed. Independent review confirmed initial Playwright
+  `06:07:28.632-06:07:43.965` ran inside verifier
+  `06:06:36.859-06:08:14.213` and before initial blog publication at source
+  line `549` (`06:08:16.260739`); line `825` is a later update. The causal
+  call order attaches both branches before browser execution, so the
+  Playwright `attachments[]` field is not used as proof. Full quality gate
+  session `58696` exited `0`, with log
+  `/home/a/.cache/heph-pr44-cargo-dev-quality.log`. One locked GCP trial is
+  planned against control run `34732597502` (`1418s`, controller
+  `1394357ms`) with frozen instrumentation and the same configuration;
+  expected evidence is 41 markers, browser `2/2`, all gates and cleanup. The
+  hypothesis is setup/initial-browser overlap with independent OCI preparation,
+  with no promised seconds or current GCP result. No GCP dispatch has occurred;
+  rollback is reverting the two-file candidate commit.
 - Candidate PR #43 removed only the guarded CPython
   `/opt/python/lib/python3.13/test` tree. Its authorized locked GCP trial,
   run `34738676749 <https://github.com/wimpheling/hephaestus/actions/runs/34738676749>`_,
