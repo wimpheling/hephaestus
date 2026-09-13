@@ -27,10 +27,25 @@ class DiagnosticLifecycle(unittest.TestCase):
                 podman.write_text("#!/usr/bin/env python3\nimport os,sys\na=sys.argv[1:]\nif '/usr/bin/umoci' in a:\n i=a.index('--entrypoint'); a=a[:i]+['--entrypoint','/bin/false',a[i+2]]\nos.execv(" + repr(shutil.which("podman")) + ", ['podman']+a)\n")
                 podman.chmod(0o755)
                 env["PATH"] = str(wrapper) + os.pathsep + env["PATH"]
+            if mode in ("inspect-command-error", "inspect-digest-mismatch"):
+                wrappers = root / "bin"
+                wrappers.mkdir()
+                workflow = dict(line.split("=", 1) for line in (Path(env["HEPHAESTUS_LOCAL_ROOT"]) / "repository-images/workflow.env").read_text().splitlines() if "=" in line)
+                alternative = "containers-storage:" + workflow["builder_vm_image"]
+                real = shutil.which("skopeo")
+                code = "#!/usr/bin/env python3\nimport os,sys\na=sys.argv[1:]\n"
+                code += "if os.geteuid()!=0 and a[0]=='inspect':\n a[-1]=" + repr("containers-storage:localhost/heph-nonexistent-inspection-fixture" if mode == "inspect-command-error" else alternative) + "\n"
+                code += "if os.geteuid()!=0 and a[0]=='copy':\n a[-2]='oci:/nonexistent-private-fixture-source'\n"
+                code += "os.execv(" + repr(real) + ", ['skopeo']+a)\n"
+                wrapper = wrappers / "skopeo"
+                wrapper.write_text(code)
+                wrapper.chmod(0o755)
+                env["PATH"] = str(wrappers) + os.pathsep + env["PATH"]
             result = subprocess.run([str(ROOT / "examples/cooking/run.sh")], env=env, capture_output=True, text=True, timeout=100)
             self.assertEqual(result.returncode, expected, result.stderr)
             markers = [line for line in result.stderr.splitlines() if line.startswith("HEPH_GCP_SHELL_FAILURE ")]
-            self.assertEqual(len(markers), 1, result.stderr)
+            expected_codes = {"success": [78, 80], "command": [41], "unknown": [79], "inspect-command-error": [49, 78, 81, 82], "inspect-digest-mismatch": [53, 78, 81, 82]}[mode]
+            self.assertEqual([int(dict(word.split("=", 1) for word in marker.split()[1:])["exit_code"]) for marker in markers], expected_codes, result.stderr)
             fields = dict(word.split("=", 1) for word in markers[0].split()[1:])
             self.assertEqual(int(fields["exit_code"]), expected)
             source_line = (ROOT / "scripts/run-libkrun-integration.sh").read_text().splitlines()[int(fields["line"]) - 1]
@@ -55,7 +70,8 @@ class DiagnosticLifecycle(unittest.TestCase):
             self.assertEqual(summary.returncode, 0, summary.stderr)
             value = json.loads(summary.stdout)
             matched = [entry for entry in value["technicalContext"] if entry.get("kind") == "shell-failure"]
-            self.assertEqual(len(matched), 1)
+            self.assertEqual(len(matched), len(expected_codes))
+            self.assertEqual([item["exit_code"] for item in matched], expected_codes)
             self.assertEqual(matched[0]["exit_code"], expected)
             self.assertEqual(str(matched[0]["line"]), fields["line"])
             self.assertNotIn("Traceback", summary.stdout)
@@ -67,6 +83,12 @@ class DiagnosticLifecycle(unittest.TestCase):
 
     def test_real_container_failure_identifies_add_layer(self):
         self.exercise("command", 41, "podman-umoci-add-layer")
+
+    def test_real_inspect_command_failure_and_namespace_remedy(self):
+        self.exercise("inspect-command-error", 49, "direct-command-error-unshare-wrapper-match")
+
+    def test_real_wrong_digest_and_namespace_remedy(self):
+        self.exercise("inspect-digest-mismatch", 53, "direct-digest-mismatch-unshare-wrapper-match")
 
     def test_unknown_failure_is_closed(self):
         self.exercise("unknown", 79, "unknown-fail-closed")

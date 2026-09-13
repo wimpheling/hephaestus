@@ -19,74 +19,6 @@ repo_root="$(cd -- "${script_dir}/.." && pwd -P)"
 readonly repo_root
 source "${repo_root}/scripts/shell-failure-diagnostics.sh"
 heph_shell_failure_init libkrun-integration libkrun
-# DIAGNOSTIC-ONLY PR: no runtime build, gateway, golden suite, or browser.
-# Keep the helper byte-identical to a2914d9; stage codes refer to that file.
-diag_root="$(mktemp -d "${TMPDIR:-/tmp}/verifier-diagnostic.XXXXXX")"
-cleanup_derivation_diagnostic() {
-    local status=$?
-    trap - EXIT
-    heph_shell_failure_begin_cleanup
-    if [[ -f "${diag_root}/output/container-id" ]]; then
-        cid="$(cat "${diag_root}/output/container-id")"
-        if [[ "$cid" =~ ^[0-9a-f]{64}$ ]]; then podman rm --force "$cid" >/dev/null 2>&1 || true; fi
-    fi
-    chmod -R u+w "${diag_root}" 2>/dev/null || true
-    rm -rf -- "${diag_root}"
-    exit "$status"
-}
-trap cleanup_derivation_diagnostic EXIT
-if timeout --kill-after=5s 90s python3 "${repo_root}/scripts/diagnose-verifier-derivation.py" \
-    --repo "${repo_root}" --local-root "${HEPHAESTUS_LOCAL_ROOT:-${repo_root}/.local/hephaestus}" \
-    --output "${diag_root}/output" >"${diag_root}/stdout" 2>"${diag_root}/stderr"; then
-    diagnostic_status=79
-else
-    diagnostic_status=$?
-fi
-# Each actual shell source line below identifies a fixed helper stage. Raw
-# paths, exceptions, subprocess output, and argument values never enter markers.
-case "$diagnostic_status" in
-    10) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # baseline-layout-directory
-    11) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # baseline-blob-directory
-    12) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # baseline-index-read
-    13) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # baseline-reference-count
-    14) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # baseline-outer-media-type
-    15) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # baseline-reference-digest
-    16) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # baseline-index-blob
-    17) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # baseline-platform-count
-    18) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # baseline-manifest-media-type
-    19) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # baseline-manifest-blob
-    20) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # baseline-config-blob
-    21) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # baseline-os-architecture
-    22) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # baseline-layer-integrity
-    25) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # source-file
-    26) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # source-size
-    27) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # source-revision
-    28) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # reference-format
-    29) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # baseline-tag
-    30) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # fresh-output
-    31) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # output-directory
-    32) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # podman-image-exists
-    33) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # direct-skopeo-copy
-    34) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # direct-skopeo-inspect
-    35) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # podman-tool-identity
-    36) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # tool-identity-format
-    37) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # script-hash
-    38) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # private-layout-copy
-    39) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # private-layout-permissions
-    40) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # script-tar
-    41) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # podman-umoci-add-layer
-    42) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # derived-image-validation
-    43) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # config-and-layer-contract
-    44) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # inserted-file-contract
-    45) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # baseline-blob-preservation
-    46) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # deterministic-descriptors
-    47) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # provenance-write
-    48) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # helper-cleanup
-    78) heph_shell_failure_emit preflight assertion-mismatch 78 "$LINENO" ;; # helper-passed-intentional-stop
-    124|137) heph_shell_failure_emit command timeout "$diagnostic_status" "$LINENO" ;;
-    *) diagnostic_status=79; heph_shell_failure_emit preflight assertion-mismatch 79 "$LINENO" ;; # unknown-fail-closed
-esac
-exit "$diagnostic_status"
 
 ubuntu_image="${HEPHAESTUS_LIBKRUN_UBUNTU_IMAGE:-${DEFAULT_UBUNTU_IMAGE}}"
 readonly ubuntu_image
@@ -831,6 +763,152 @@ trap 'interrupt TERM' TERM
 [[ "$(id -u)" -ne 0 ]] || die "the integration test must run as a non-root service account"
 [[ "$(uname -m)" == "x86_64" ]] ||
     die "the pinned fixture currently supports x86_64 only"
+
+# DIAGNOSTIC-ONLY PR: no runtime build, gateway, golden suite, or browser.
+# Keep the helper byte-identical to a2914d9; stage codes refer to that file.
+diag_root="$(mktemp -d "${TMPDIR:-/tmp}/verifier-diagnostic.XXXXXX")"
+cleanup_derivation_diagnostic() {
+    local status=$?
+    trap - EXIT
+    heph_shell_failure_begin_cleanup
+    if [[ -n "${container_name:-}" ]]; then podman rm --force "$container_name" >/dev/null 2>&1 || true; fi
+    if [[ "${diagnostic_image_owned:-false}" == true ]]; then podman rmi "$verifier_vm_image" >/dev/null 2>&1 || true; fi
+    if [[ -f "${diag_root}/output/container-id" ]]; then
+        cid="$(cat "${diag_root}/output/container-id")"
+        if [[ "$cid" =~ ^[0-9a-f]{64}$ ]]; then podman rm --force "$cid" >/dev/null 2>&1 || true; fi
+    fi
+    chmod -R u+w "${diag_root}" 2>/dev/null || true
+    rm -rf -- "${diag_root}"
+    exit "$status"
+}
+trap cleanup_derivation_diagnostic EXIT
+if timeout --kill-after=5s 90s python3 "${repo_root}/scripts/diagnose-verifier-derivation.py" \
+    --repo "${repo_root}" --local-root "${HEPHAESTUS_LOCAL_ROOT:-${repo_root}/.local/hephaestus}" \
+    --output "${diag_root}/output" >"${diag_root}/stdout" 2>"${diag_root}/stderr"; then
+    diagnostic_status=79
+else
+    diagnostic_status=$?
+fi
+# Each actual shell source line below identifies a fixed helper stage. Raw
+# paths, exceptions, subprocess output, and argument values never enter markers.
+emit_derivation_stage() {
+    local diagnostic_status="$1"
+    HEPH_SHELL_FAILURE_EMITTED=0
+case "$diagnostic_status" in
+    10) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # baseline-layout-directory
+    11) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # baseline-blob-directory
+    12) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # baseline-index-read
+    13) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # baseline-reference-count
+    14) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # baseline-outer-media-type
+    15) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # baseline-reference-digest
+    16) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # baseline-index-blob
+    17) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # baseline-platform-count
+    18) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # baseline-manifest-media-type
+    19) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # baseline-manifest-blob
+    20) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # baseline-config-blob
+    21) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # baseline-os-architecture
+    22) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # baseline-layer-integrity
+    25) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # source-file
+    26) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # source-size
+    27) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # source-revision
+    28) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # reference-format
+    29) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # baseline-tag
+    30) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # fresh-output
+    31) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # output-directory
+    32) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # podman-image-exists
+    33) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # direct-skopeo-copy
+    34) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # direct-skopeo-inspect
+    35) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # podman-tool-identity
+    36) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # tool-identity-format
+    37) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # script-hash
+    38) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # private-layout-copy
+    39) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # private-layout-permissions
+    40) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # script-tar
+    41) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # podman-umoci-add-layer
+    42) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # derived-image-validation
+    43) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # config-and-layer-contract
+    44) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # inserted-file-contract
+    45) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # baseline-blob-preservation
+    46) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # deterministic-descriptors
+    47) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # provenance-write
+    48) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # helper-cleanup
+    49) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # direct-command-error-unshare-wrapper-match
+    50) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # direct-command-error-unshare-leaf-match
+    51) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # direct-command-error-unshare-other-digest
+    52) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # direct-command-error-unshare-command-error
+    53) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # direct-digest-mismatch-unshare-wrapper-match
+    54) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # direct-digest-mismatch-unshare-leaf-match
+    55) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # direct-digest-mismatch-unshare-other-digest
+    56) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # direct-digest-mismatch-unshare-command-error
+    80) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # direct-materialization-passed-intentional-stop
+    81) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # direct-materialization-failed
+    82) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # namespace-materialization-passed-intentional-stop
+    83) heph_shell_failure_emit command command-failed "$diagnostic_status" "$LINENO" ;; # namespace-materialization-failed
+    78) heph_shell_failure_emit preflight assertion-mismatch 78 "$LINENO" ;; # helper-passed-intentional-stop
+    124|137) heph_shell_failure_emit command timeout "$diagnostic_status" "$LINENO" ;;
+    *) diagnostic_status=79; heph_shell_failure_emit preflight assertion-mismatch 79 "$LINENO" ;; # unknown-fail-closed
+esac
+}
+first_status="$diagnostic_status"
+diagnostic_stages=("$diagnostic_status")
+if [[ -f "${diag_root}/stages" && "$diagnostic_status" != 124 && "$diagnostic_status" != 137 ]]; then
+    mapfile -t diagnostic_stages <"${diag_root}/stages"
+    if (( ${#diagnostic_stages[@]} < 1 || ${#diagnostic_stages[@]} > 2 )); then diagnostic_stages=(79); fi
+fi
+for stage in "${diagnostic_stages[@]}"; do emit_derivation_stage "$stage"; done
+if [[ "${diagnostic_stages[-1]}" == 78 ]]; then
+    record="${diag_root}/output/derivation.json"
+    verifier_vm_image="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["reference"])' "$record")"
+    verifier_layout="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["layout"])' "$record")"
+    diagnostic_image_owned=false
+    if ! podman image exists "$verifier_vm_image"; then diagnostic_image_owned=true; fi
+    container_name="hephaestus-libkrun-oci-verifier-$$"
+    # Execute the actual production functions with their ordinary errexit
+    # semantics; suppress only duplicate generic markers from this diagnostic.
+    HEPH_SHELL_FAILURE_DISABLED=1
+    set +e
+    (
+        set -Eeuo pipefail
+        materialize_layout_image "$verifier_vm_image" "$verifier_layout" "${diag_root}/rootfs" oci-verifier
+        python3 - "$record" "${diag_root}/rootfs/usr/libexec/hephaestus/oci-verify" <<'PYHASH'
+import hashlib,json,pathlib,sys
+record=json.loads(pathlib.Path(sys.argv[1]).read_text())
+assert hashlib.sha256(pathlib.Path(sys.argv[2]).read_bytes()).hexdigest()==record["script_sha256"]
+PYHASH
+    ) >"${diag_root}/materialize-stdout" 2>"${diag_root}/materialize-stderr"
+    materialize_status=$?
+    set -e
+    HEPH_SHELL_FAILURE_DISABLED=0
+    if (( materialize_status == 0 )); then
+        emit_derivation_stage 80
+    else
+        emit_derivation_stage 81
+        # A namespace retry is allowed only after the identical inspect has
+        # actually demonstrated the expected wrapper digest in that namespace.
+        if [[ "${diagnostic_stages[0]}" == 49 || "${diagnostic_stages[0]}" == 53 ]]; then
+            chmod -R u+w "${diag_root}/rootfs" 2>/dev/null || true
+            rm -rf -- "${diag_root}/rootfs"
+            real_skopeo="$(command -v skopeo)"
+            HEPH_SHELL_FAILURE_DISABLED=1
+            set +e
+            (
+                set -Eeuo pipefail
+                skopeo() { podman unshare "$real_skopeo" "$@"; }
+                materialize_layout_image "$verifier_vm_image" "$verifier_layout" "${diag_root}/rootfs" oci-verifier
+                python3 - "$record" "${diag_root}/rootfs/usr/libexec/hephaestus/oci-verify" <<'PYHASH'
+import hashlib,json,pathlib,sys
+record=json.loads(pathlib.Path(sys.argv[1]).read_text())
+assert hashlib.sha256(pathlib.Path(sys.argv[2]).read_bytes()).hexdigest()==record["script_sha256"]
+PYHASH
+            ) >"${diag_root}/namespace-stdout" 2>"${diag_root}/namespace-stderr"
+            namespace_status=$?
+            set -e
+            HEPH_SHELL_FAILURE_DISABLED=0
+            if (( namespace_status == 0 )); then emit_derivation_stage 82; else emit_derivation_stage 83; fi
+        fi
+    fi
+fi
+exit "$first_status"
 
 for command in awk blkid cargo cat find grep head id install ldconfig mkfs.ext4 mktemp musl-gcc openssl podman python3 rustup sha256sum sort tar timeout truncate unshare; do
     require_command "${command}"

@@ -7,6 +7,7 @@ The shell emits them using its existing argument-free failure protocol.
 import argparse
 import hashlib
 import importlib.util
+import json
 from pathlib import Path
 import signal
 import subprocess
@@ -33,20 +34,61 @@ def classify(error, helper):
     return DERIVE_STAGES.get(derive, UNKNOWN)
 
 
+def compare_namespace(module, args, error, helper):
+    if isinstance(error, subprocess.CalledProcessError):
+        base_code = 49
+    elif type(error) is ValueError and str(error) == "imported baseline digest mismatch":
+        base_code = 53
+    else:
+        return [UNKNOWN]
+    original_command = module.command
+    try:
+        outer, _, _ = module.image(args.baseline_layout, args.baseline_reference.split("@", 1)[1])
+        wrapper = json.loads(module.blob(args.baseline_layout, outer).read_text())
+        leaf = wrapper["manifests"][0]["digest"]
+        inspected = original_command("podman", "unshare", "skopeo", "inspect", "--format", "{{.Digest}}", "containers-storage:" + args.baseline_reference)
+    except subprocess.CalledProcessError:
+        return [base_code + 3]
+    except Exception:
+        return [UNKNOWN]
+    if inspected != outer["digest"]:
+        return [base_code + (1 if inspected == leaf else 2)]
+    # Only after the actual namespace comparison succeeds, exercise the same
+    # complete helper with the production bootstrap's Skopeo namespace route.
+    def routed_command(*arguments):
+        if arguments[0] == "skopeo":
+            return original_command("podman", "unshare", *arguments)
+        return original_command(*arguments)
+    module.command = routed_command
+    try:
+        module.derive(args)
+        return [base_code, SUCCESS]
+    except Exception as followup:
+        return [base_code, classify(followup, helper)]
+    finally:
+        module.command = original_command
+
+
 def run(repo, output, local_root):
     helper = repo / "scripts/derive-cooking-verifier.py"
     try:
         if hashlib.sha256(helper.read_bytes()).hexdigest() != HELPER_SHA256:
-            return UNKNOWN
+            return [UNKNOWN]
         spec = importlib.util.spec_from_file_location("original_derivation", helper)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         workflow = dict(line.split("=", 1) for line in (local_root / "repository-images/workflow.env").read_text().splitlines() if "=" in line)
         args = SimpleNamespace(script=repo / "platform/builders/oci-verifier-ubuntu/oci-verify", source_revision=subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip(), baseline_reference=workflow["verifier_vm_image"], baseline_layout=Path(workflow["verifier_layout"]), output=output)
-        module.derive(args)
-        return SUCCESS
-    except Exception as error:
-        return classify(error, helper)
+        try:
+            module.derive(args)
+        except Exception as error:
+            stage = classify(error, helper)
+            if stage == 34:
+                return compare_namespace(module, args, error, helper)
+            return [stage]
+        return [SUCCESS]
+    except Exception:
+        return [UNKNOWN]
 
 
 def main():
@@ -58,7 +100,9 @@ def main():
         raise InterruptedError("fixture deadline")
     signal.signal(signal.SIGTERM, interrupted)
     signal.signal(signal.SIGINT, interrupted)
-    raise SystemExit(run(args.repo, args.output, args.local_root))
+    stages = run(args.repo, args.output, args.local_root)
+    args.output.parent.joinpath("stages").write_text("\n".join(map(str, stages)) + "\n")
+    raise SystemExit(stages[0])
 
 
 if __name__ == "__main__":
