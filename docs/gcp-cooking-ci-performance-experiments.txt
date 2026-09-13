@@ -1116,6 +1116,15 @@ and host failure `34727051946` as historical context. Do not conflate the
 common wait fix with host removal, and do not claim performance from the prior
 host-aborted run.
 
+Control preparation: PR #40 is merged on authoritative `main` at exact SHA
+`3939f48bc07fd36f366a2f61b9365a0b617045a2`. Its caller/ PostgreSQL reproduction,
+focused two-test check and full quality gate (`74275` checks, exit `0`) passed.
+The next control selects the exact open PR #20 ledger head after this entry as
+its workload source, with CPU2 and the host `project-build` both enabled. This
+fresh control measures the common wait-fix baseline before the unchanged PR
+#39 host-only trial; the instrumentation and trusted timing scripts remain
+byte-identical.
+
 Fixed GCP configuration remains the protected image
 `hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d`, immutable cache generation
 `1789079827867335`, `n2-standard-8`, `150 GB pd-balanced`,
