@@ -40,6 +40,31 @@ actual local libkrun probe is feasibility evidence only; earlier local probe
 input equivalence was incomplete, while this pair has exact GCP source
 provenance. Cancellation propagation is partial, fork execution is deferred,
 MVP-06 remains unchecked, and the broader goal remains open.
+
+PR #46 merged the read-only `provider-metrics` mode into the existing trusted
+Cooking workflow at main
+`853904782b2922e61171c5499256e037203e391b`; its required quality gate passed
+(exit `0`). Query run
+[`34750005856`](https://github.com/wimpheling/hephaestus/actions/runs/34750005856)
+read control `34747950421`, and query run
+[`34750105577`](https://github.com/wimpheling/hephaestus/actions/runs/34750105577)
+read candidate `34746767593`; both provider jobs passed and skipped VM
+creation. Safe projections are retained at
+`/home/a/.cache/heph-provider-metrics-34750005856/gcp-existing-metrics-34747950421-1/gcp-existing-metrics.json`
+and
+`/home/a/.cache/heph-provider-metrics-34750105577/gcp-existing-metrics-34746767593-1/gcp-existing-metrics.json`.
+The target controller SHA is `6e812d2`; trusted workload phase provenance is
+separate: candidate `939e9a1e` and control `127f57e3`. Candidate/control raw
+CPU means were `0.3497/0.4056` with peaks `0.8635/0.7563`; reserved cores
+were `8/8`. Disk coverage was candidate `08:06--08:28Z` (23 DELTA intervals)
+and control `08:34--08:55Z` (22 intervals), with aggregate read rates
+`0.891/0.979 MB/s` and `16.55/17.95 ops/s`, write rates
+`23.414/24.611 MB/s` and `127.82/130.30 ops/s`; write totals were
+`32.311/32.486 GB`. Existing UTC logs align only the VM-active windows, not
+individual monotonic workload phases, so these are resource observations with
+no causal performance claim. A same-input raw extraction/runtime-config
+validation remains a local hypothesis only; no host-16 or storage change is
+justified, and the protected image and instrumentation stay unchanged.
 PR #44's terminal trial run #34742470212 is operationally valid but held: its
 job was 1428s versus the 1418s control (+10s, +0.71%), with 41 markers, browser
 2/2, all gates and cleanup passing. The candidate's trusted controller was

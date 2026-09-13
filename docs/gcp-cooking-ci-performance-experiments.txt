@@ -2012,3 +2012,77 @@ or GCP transport proof: the fake guest/storage path did not run startup
 finalization. Hard GitHub cancellation propagation and reliable `always()`
 post-cancel scheduling remain open, so this fixture does not justify a paid
 cancellation run or completion claim.
+
+
+READ-ONLY PROVIDER METRICS QUERIES: PR #46
+==========================================
+PR #46 added the `provider-metrics` choice to the existing trusted
+`.github/workflows/cooking-e2e.yml` dispatch path and merged normally at
+`853904782b2922e61171c5499256e037203e391b`. Its required `cargo dev quality`
+gate passed at the exact PR head (exit `0`; log
+`/home/a/.cache/heph-pr46-cargo-dev-quality.log`). The mode uses the existing
+WIF provider and queries only an already completed run; it does not create or
+modify a VM. The provider query was run once for each member of the fixed
+PR #45 candidate/control pair:
+
+* Candidate query run
+  `34750105577 <https://github.com/wimpheling/hephaestus/actions/runs/34750105577>`_
+  queried candidate run
+  `34746767593 <https://github.com/wimpheling/hephaestus/actions/runs/34746767593>`_.
+  The safe projection is retained at
+  `/home/a/.cache/heph-provider-metrics-34750105577/gcp-existing-metrics-34746767593-1/gcp-existing-metrics.json`.
+* Control query run
+  `34750005856 <https://github.com/wimpheling/hephaestus/actions/runs/34750005856>`_
+  queried control run
+  `34747950421 <https://github.com/wimpheling/hephaestus/actions/runs/34747950421>`_.
+  The safe projection is retained at
+  `/home/a/.cache/heph-provider-metrics-34750005856/gcp-existing-metrics-34747950421-1/gcp-existing-metrics.json`.
+
+Both query jobs passed authentication, setup, bounded Monitoring reads and
+artifact retention; `gcp-cloud` and `cooking` were skipped. The query itself
+ran from merged main `8539047`. Each target projection reports controller
+source `6e812d2e0e22c489541eb34fe8d85ce481970d81`, while the trusted workload
+phase projections identify candidate workload `939e9a1e2bc4a1d6bae82f779645199878c1a713`
+and control workload `127f57e3707b687d4083c365de5537014abe7098`. These fields
+are kept separate: the provider query does not infer workload source binding
+from the controller SHA. Both target VMs used `europe-west1-d` and the locked
+runner image fingerprint `f285fc2b8157f8053383fc98bcaec83d`; the queried
+instance IDs were candidate `8666127186002700273` and control
+`7600431132828229933`.
+
+Candidate safe-series coverage was CPU/reserved-cores `08:06--08:29Z` (24
+gauge points) and disk `08:06--08:28Z` (23 DELTA intervals). Control coverage
+was CPU/reserved-cores `08:35--08:56Z` (21/22 gauge points) and disk
+`08:34--08:55Z` (22 DELTA intervals). Across those query windows, candidate
+versus control CPU utilization averaged `0.3497` versus `0.4056`, with peaks
+`0.8635` at `08:11Z` versus `0.7563` at `08:39Z`; reserved cores were `8` in
+every point. Candidate versus control disk totals and aggregate rates were:
+read `1,229,438,976` bytes / `0.891 MB/s` and `22,843` ops / `16.55 ops/s`
+versus `1,292,505,088` / `0.979 MB/s` and `23,691` / `17.95 ops/s`; write
+`32,310,854,144` bytes / `23.414 MB/s` and `176,385` ops / `127.82 ops/s`
+versus `32,485,908,992` / `24.611 MB/s` and `171,999` / `130.30 ops/s`.
+The largest raw per-minute candidate/control peaks were read `7.677/6.572
+MB/s`, read operations `175.75/149.77 ops/s`, write `68.232/63.205 MB/s`,
+and write operations `374.34/282.80 ops/s`.
+
+The existing UTC controller logs provide only the VM-active windows:
+candidate creation `08:05:03.237Z` through workload pass `08:27:40.369Z`,
+and control creation `08:33:13.938Z` through workload pass `08:54:12.804Z`.
+On complete DELTA intervals wholly inside those windows, candidate versus
+control aggregate rates were read `0.610/0.748 MB/s`, read operations
+`9.76/12.25 ops/s`, write `25.261/26.765 MB/s`, and write operations
+`137.79/140.80 ops/s`; CPU means over in-window gauge points were `0.3814`
+and `0.4197`, with eight reserved cores throughout. The workload phase
+projections are monotonic and have no UTC anchors, so these results cannot
+align samples to OCI, browser or golden phases. The observed disk totals and
+CPU/disk differences are resource observations only; they establish no
+causal storage, host-capacity or performance explanation, and no host-16 or
+storage candidate is justified by them.
+
+The next bounded verifier hypothesis remains pending local proof: after the
+same pinned raw extraction and runtime configuration, validate whether the
+unconsumed `mtree`/`umoci.json` output is the avoidable boundary. Incidental
+I/O failures would be a semantic caveat, and any nested-image or scanner-cache
+change would require a new derived locked comparison before a GCP trial. Keep
+the protected GCE image and frozen instrumentation unchanged; no paid verifier
+candidate is approved by these read-only queries.
