@@ -1,0 +1,59 @@
+name: Read Existing GCE Metrics
+
+on:
+  workflow_dispatch:
+    inputs:
+      cooking_run_id:
+        description: 'Successful completed Cooking E2E workflow run ID to inspect'
+        required: true
+        type: string
+      cooking_attempt:
+        description: 'Cooking E2E workflow run attempt (normally 1)'
+        required: false
+        default: '1'
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  read-existing-metrics:
+    if: ${{ github.repository == 'wimpheling/hephaestus' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - id: auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093
+        with:
+          workload_identity_provider: projects/84572286146/locations/global/workloadIdentityPools/github-actions/providers/github
+          service_account: hephaestus-ci@hephaestus-508000.iam.gserviceaccount.com
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db
+        with:
+          version: '>= 390.0.0'
+      - name: Query allowlisted metrics without mutating GCE
+        id: query
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COOKING_RUN_ID: ${{ inputs.cooking_run_id }}
+          COOKING_ATTEMPT: ${{ inputs.cooking_attempt }}
+        run: |
+          set -Eeuo pipefail
+          python3 -B scripts/read_gcp_existing_metrics.py \
+            --run-id "$COOKING_RUN_ID" \
+            --attempt "$COOKING_ATTEMPT" \
+            --output "$RUNNER_TEMP/gcp-existing-metrics.json"
+      - name: Retain safe metric projection
+        if: ${{ always() && steps.query.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: gcp-existing-metrics-${{ inputs.cooking_run_id }}-${{ inputs.cooking_attempt }}
+          path: ${{ runner.temp }}/gcp-existing-metrics.json
+          if-no-files-found: error
+          retention-days: 1
