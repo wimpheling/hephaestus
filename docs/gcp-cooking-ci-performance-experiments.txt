@@ -1184,3 +1184,36 @@ failed markers, and an exact set equality with the accepted baseline's 39
 markers. This is a marker inventory, not a test count. The control is the
 valid post-fix reference for the next PR #39 host-only measurement; no host
 dispatch or performance claim is made until root reviews this evidence.
+
+
+READY HOST-ONLY TRIAL AFTER POST-FIX CONTROL
+============================================
+The valid post-wait-fix CPU2 plus host-build control is run
+`34729302087` (job `26m23s`, trusted controller `1552264` ms). Execute one
+host-only comparison against that fresh control on the same authoritative
+controller `main` SHA `3939f48bc07fd36f366a2f61b9365a0b617045a2`. PR #39 is
+open at exact head `ca4669cce9a64029c15e0dad92d466ac0990190d`, based on that
+main, with exactly one file and 14 deleted lines in `examples/cooking/run.sh`:
+the unused host gateway artifact export and host `project-build` compile.
+The accepted CPU2 setting and the common wait fix remain unchanged; the
+production project build remains enabled as the correctness proof.
+
+Hypothesis and isolation: removing only the unused host compile should remove
+the control's measured host phase (`12769` ms) while preserving production,
+OCI, golden/PostgreSQL and browser behavior. Compare total elapsed time and
+all retained phases to the fresh control, with the original baseline and CPU
+trial as secondary historical references. A single pair may be smaller than
+run variance; do not inflate the result into a drastic claim. The prior host
+run `34727051946` is failed/inconclusive due the now-fixed mailbox settlement
+race and is not used as a performance comparison.
+
+Fixed configuration: image
+`hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d`, cache generation
+`1789079827867335`, worker `vcpus=2`, memory `2048` MiB,
+`n2-standard-8`, `150 GB pd-balanced`, `europe-west1-d`, one VM,
+concurrency `1`, 45-minute provider DELETE and 50-minute workflow timeout.
+Require complete trusted timing, workload, production proof, browser,
+golden/PostgreSQL, scanner, marker, provenance, gate, upload/download and
+post-delete VM absence evidence. Rollback is reverting PR #39 to restore the
+host export and compile while retaining accepted CPU2. No retry or further
+dispatch follows this run; classify only after root review.
