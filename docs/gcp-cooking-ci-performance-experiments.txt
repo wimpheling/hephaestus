@@ -2152,13 +2152,12 @@ is approved by this pair.
 
 PREDECLARED CONTROL-FIRST COMPARISON: PR #47 DERIVED IMAGE
 ===========================================================
-After the integrated local Cooking lifecycle and repository quality gate pass,
-run one fresh control-first comparison for the pushed PR #47 head
-`a2914d997630f82cd60e226088b884053140d48f`. The control is this docs-only
+The original predeclaration named `a2914d9`; after the proven execution-route
+fix, the fresh candidate must use
+`2792a4ed46433ecad94864c6e6f0573ba0f0217d`. The valid control is this docs-only
 handoff branch's exact final pushed head, recorded in the PR and dispatch
-evidence immediately before the pair; the candidate is `a2914d9`. Historical
-control run `34747950421` at `1358s` is context only and cannot substitute for
-the fresh control.
+evidence immediately before the pair. Historical control run `34747950421` at
+`1358s` is context only and cannot substitute for the fresh control.
 
 Locked configuration for both runs: trusted workflow source
 `853904782b2922e61171c5499256e037203e391b`, `n2-standard-8` with `32 GiB`
@@ -2176,3 +2175,44 @@ gates, `11/11` evidence sources, scans and verified VM absence in both runs.
 No automatic retry, cherry-pick or selective rerun is allowed. Rollback is to
 leave PR #47 unmerged or revert all candidate changes if the predeclared pair
 does not demonstrate an accepted end-to-end result.
+
+FINAL CURRENT HANDOFF: PR #47 CANDIDATE PENDING
+================================================
+The valid fresh control is run `34752572980` from exact docs-only head
+`1d3c2b54c7d1ab2ae7263f8b03ec56ab3cd99c39`: job elapsed `1545s`, controller
+elapsed `1517043ms`, with all `41` projection records, browser `2/2`, all
+gates, timing validation, `11/11` sources, scans, upload/download and VM
+absence passed. This is the current baseline for the pending candidate
+comparison.
+
+Candidate run `34753764390` used `a2914d9` and failed after `361s` before OCI,
+golden, database or browser execution. VM lifecycle, diagnostics download,
+scans and cleanup passed, but workload evidence was incomplete; this is not a
+performance measurement. No-VM triage with corrected inputs retrieved the
+private archive but retained no underlying stderr. The earlier triage with
+incorrect controller/workload SHA arguments remains a separate setup failure.
+
+PR #49 diagnostics remain an experiment-failure audit, not a workload result.
+The first finite probe exited `34`; the later probe produced ordered workload
+exit codes `49` (direct skopeo command error), `78` (helper success after
+routing), `81` (direct materialization failure), and `82` (namespace-routed
+materialization success with script hash). Cleanup, scans and upload/download
+passed. This proves the execution-route remedy under the actual sandbox, but
+not a specific errno or kernel mechanism because stderr was not retained. PR
+#49 is diagnostic-only and must never merge.
+
+Candidate head `2792a4ed46433ecad94864c6e6f0573ba0f0217d` contains the minimal
+skopeo namespace and production materialization-copy fix. Five real fixtures
+passed in `4.863s`; the full local Cooking lifecycle and durable repository
+quality gate both passed with exit `0`. The cache remains fixed, so no cache
+publication or repin is part of this step. The corrected full GCP candidate
+run remains pending; no candidate timing or gain is recorded yet.
+
+The predeclared hypothesis remains: omit unused `mtree`/`umoci.json` metadata
+while retaining rootfs and runtime-configuration validation, paying the
+private derivation cost in the existing materialization phase. Rollback is to
+leave PR #47 unmerged or revert all candidate changes. Historical CPU2,
+host-build-removal and overlap results remain separate, non-additive
+single-pair measurements. Hard GitHub cancellation proof remains partial; fork
+execution and MVP-06 remain open requirements, and no drastic or repeatable
+optimization claim is made.

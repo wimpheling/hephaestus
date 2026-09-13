@@ -20,26 +20,27 @@ The ledger currently records a valid cold-GCP baseline and accepted CPU,
 host-build-removal and overlap trials; broader optimization work remains in
 progress.
 
-Current handoff: the newest fixed candidate/control pair is PR #45 run
-[`34746767593`](https://github.com/wimpheling/hephaestus/actions/runs/34746767593)
-at `1470s` versus frozen docs-only control
-[`34747950421`](https://github.com/wimpheling/hephaestus/actions/runs/34747950421)
-at `1358s`, a `+112s` (`+8.25%`) candidate result. Both exact source heads,
-the locked image/configuration, frozen instrumentation, 41 markers, browser
-`2/2`, all gates, 11 evidence sources, scans and VM cleanup passed. Controller
-time was `1442149ms` versus `1333101ms` (`+109048ms`), mainly `vm-wait`
-(`+98596ms`); this is an observed pair result, not a causal boot or polling
-measurement. Independent review recommends holding PR #45: its faster runtime
-phases establish no end-to-end gain; the observed slowdown is not proven to be
-a code-caused regression, and repeatability remains unestablished.
-The CPU2, host-build-removal and PR #42 overlap results remain separate
-historical single-pair comparisons and are not additive. Instrumentation is
-frozen and live-proven through PR #38 and the accepted runs. The local memory
-candidate is held, the corrected ext4 scratch candidate is rejected, and the
-actual local libkrun probe is feasibility evidence only; earlier local probe
-input equivalence was incomplete, while this pair has exact GCP source
-provenance. Cancellation propagation is partial, fork execution is deferred,
-MVP-06 remains unchecked, and the broader goal remains open.
+Current handoff: the fresh control run
+[`34752572980`](https://github.com/wimpheling/hephaestus/actions/runs/34752572980)
+from exact docs-only head `1d3c2b54c7d1ab2ae7263f8b03ec56ab3cd99c39` is valid at
+`1545s` job elapsed and `1517043ms` controller elapsed. Its 41 projection
+records, browser `2/2`, all gates, timing validation, 11/11 sources, scans,
+upload/download and VM absence passed. Candidate run
+[`34753764390`](https://github.com/wimpheling/hephaestus/actions/runs/34753764390)
+at `a2914d9` failed after `361s` before OCI, golden, database or browser
+execution and is not a performance measurement. The corrected candidate fix is
+`2792a4ed46433ecad94864c6e6f0573ba0f0217d`; five real fixtures passed in
+`4.863s`, and full local Cooking plus the durable quality gate exited `0`.
+The corrected full GCP candidate dispatch is pending; no gain is claimed.
+
+PR #49's short diagnostics remain failure audit only: the first finite probe
+exited `34`, and the second produced ordered workload exit codes `49`, `78`,
+`81` and `82`, proving the namespace routing remedy but not an errno or kernel
+cause. No-VM triage retrieved the archive but retained no stderr; the earlier
+triage used wrong SHA arguments. Historical CPU2, host-build-removal and PR #42
+overlap results remain separate single-pair comparisons and are not additive.
+Instrumentation is frozen. Cancellation propagation is partial, fork execution
+is deferred, MVP-06 remains unchecked, and the broader goal remains open.
 
 PR #46 merged the read-only `provider-metrics` mode into the existing trusted
 Cooking workflow at main
@@ -66,46 +67,24 @@ no causal performance claim. A same-input raw extraction/runtime-config
 validation remains a local hypothesis only; no host-16 or storage change is
 justified, and the protected image and instrumentation stay unchanged.
 
-PR #47 is a draft local OCI verifier candidate. Its local candidate worktree
-now has commit `a2914d997630f82cd60e226088b884053140d48f`, which adds private
-checkout-derived verifier materialization and five focused real-CLI fixtures;
-those fixtures passed in `3.304s`, and the commit is pushed to PR #47.
-Host_result owns the full local Cooking validation using the original cached
-workflow; no GCP trial has run. The measured pair below predates this
-derivation commit and must not be attributed to it. The original
-candidate commit was
-`f8a928160d9398bf14b509a4455476d6becc9fff`, refreshed onto current main at
-`1fee77852ac7f0fd060bf453e27b510791770604`; that measured predecessor's diff
-remains only
-`platform/builders/oci-verifier-ubuntu/oci-verify`. Against the current input
-and Dockerfile SHA-256
-`86af387bcda2e9fe0687aa863e87b93649869c1ae4bf65f4ebccf646a64577cc`, the
-local baseline/candidate pair measured `122.325865874s`/`84.209289853s`
-(`-38.116576021s`, `31.16%`), with verifier `85.494s`/`47.509s` and builder
-`36.583s`/`36.361s`. Both passed with `296` packages and zero reported
-vulnerabilities. Evidence is retained at
-`/home/a/.cache/ovr-base-20260913T104216Z` and
-`/home/a/.cache/ovr-candidate-20260913T104216Z`; the quality gate exited `0`
-(`/tmp/oci-raw-unpack-quality-f8a9281.log`). An independent rootfs comparison
-found no differences outside the intentionally ignored
-`usr/libexec/hephaestus/oci-verify` path. Each side of the baseline comparison
-had `19,426` entries and each side of the derived comparison had `4,071`
-entries, checking file content, type, mode, UID, GID, size, symlink target,
-xattrs and hardlink groups; xattr errors were empty and hardlink groups
-matched. It did not check timestamps or device IDs, and the ignored verifier
-path is outside this equivalence claim. This remains
-local-only evidence: the full Cooking lifecycle and GCP saving remain
-unproven, while omitted `mtree`/`umoci.json` metadata and incidental
-I/O-failure semantics remain caveats. The cache stays fixed; Astra's committed
-unprivileged derived image runs inside the existing materialization phase,
-followed by integrated local Cooking validation and a new locked GCP
-comparison. Keep the existing cache, protected image and instrumentation
-unchanged.
+PR #47 is the draft OCI verifier candidate at corrected head
+`2792a4ed46433ecad94864c6e6f0573ba0f0217d`. Its five real fixtures passed in
+`4.863s`. The corrected local Cooking run passed with 35 golden tests, 1
+ignored, PostgreSQL 6, both browsers, scans and cleanup; evidence is retained
+at `/home/a/.cache/heph-oci-verifier-raw-unpack-full-2792a4e-run2`. The durable
+quality gate exited `0` at
+`/home/a/.cache/heph-oci-verifier-quality-2792a4e.status` with log
+`/home/a/.cache/heph-oci-verifier-quality-2792a4e-status.log`; no conflicting
+full local total is claimed. The local predecessor pair measured
+`122.325865874s`/`84.209289853s` (`31.16%`), but remains local-only and
+predates this fix. Rootfs comparison scope and omitted `mtree`/`umoci.json`
+semantics remain as previously recorded; the cache, protected image and
+instrumentation stay fixed.
 
 The next paid comparison is predeclared control-first after integrated local
 Cooking and repository quality pass: use this docs-only control branch's exact
 final pushed head, recorded immediately before dispatch, then candidate
-`a2914d997630f82cd60e226088b884053140d48f`. Both use trusted workflow source
+`2792a4ed46433ecad94864c6e6f0573ba0f0217d`. Both use trusted workflow source
 `853904782b2922e61171c5499256e037203e391b`, `n2-standard-8` with `32 GiB`
 host memory, `150 GB pd-balanced`, `europe-west1-d`, protected image
 `f285fc2b8157f8053383fc98bcaec83d`, the existing cache, and guest `2` vCPUs /
