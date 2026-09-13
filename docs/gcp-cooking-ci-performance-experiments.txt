@@ -2090,10 +2090,10 @@ candidate is approved by these read-only queries.
 
 LOCAL RAW OCI UNPACK PAIR: PR #47 CANDIDATE, PENDING FURTHER VALIDATION
 =======================================================================
-The local PR #47 candidate worktree now has commit
-`a2914d997630f82cd60e226088b884053140d48f`, which adds private
-checkout-derived verifier materialization and five focused real-CLI fixtures.
-Those fixtures passed in `3.304s`; the commit is not yet pushed to PR #47.
+PR #47 now points to candidate commit
+`a2914d997630f82cd60e226088b884053140d48f`, which adds private checkout-derived
+verifier materialization and five focused real-CLI fixtures. Those fixtures
+passed in `3.304s`.
 Full local Cooking validation using the original cached workflow is now owned
 by host_result; no GCP trial has run. The measured pair below predates this
 derivation commit and must not be attributed to it.
@@ -2149,3 +2149,30 @@ Before any paid trial, complete the full local Cooking lifecycle using the
 locked comparison while keeping the existing cache, protected GCE image and
 frozen instrumentation unchanged. No GCP performance claim or paid candidate
 is approved by this pair.
+
+PREDECLARED CONTROL-FIRST COMPARISON: PR #47 DERIVED IMAGE
+===========================================================
+After the integrated local Cooking lifecycle and repository quality gate pass,
+run one fresh control-first comparison for the pushed PR #47 head
+`a2914d997630f82cd60e226088b884053140d48f`. The control is this docs-only
+handoff branch's exact final pushed head, recorded in the PR and dispatch
+evidence immediately before the pair; the candidate is `a2914d9`. Historical
+control run `34747950421` at `1358s` is context only and cannot substitute for
+the fresh control.
+
+Locked configuration for both runs: trusted workflow source
+`853904782b2922e61171c5499256e037203e391b`, `n2-standard-8` with `32 GiB`
+host memory, `150 GB pd-balanced` in `europe-west1-d`, protected image
+`f285fc2b8157f8053383fc98bcaec83d`, the existing reviewed cache, and the
+unchanged guest envelope of `2` vCPUs and `2048 MiB`. Frozen instrumentation
+and all other workload inputs remain unchanged.
+
+Hypothesis: omitting unused verifier bundle metadata, after paying the private
+derived-image materialization cost, reduces verifier time and total job time.
+Primary outcome is controller and job elapsed time; phase timings are
+diagnostic and workload phase spans remain non-additive. Acceptance requires
+matching source/configuration provenance, all `41` markers, browser `2/2`, all
+gates, `11/11` evidence sources, scans and verified VM absence in both runs.
+No automatic retry, cherry-pick or selective rerun is allowed. Rollback is to
+leave PR #47 unmerged or revert all candidate changes if the predeclared pair
+does not demonstrate an accepted end-to-end result.

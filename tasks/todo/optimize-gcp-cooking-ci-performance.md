@@ -69,7 +69,7 @@ justified, and the protected image and instrumentation stay unchanged.
 PR #47 is a draft local OCI verifier candidate. Its local candidate worktree
 now has commit `a2914d997630f82cd60e226088b884053140d48f`, which adds private
 checkout-derived verifier materialization and five focused real-CLI fixtures;
-those fixtures passed in `3.304s`, but the commit is not yet pushed to PR #47.
+those fixtures passed in `3.304s`, and the commit is pushed to PR #47.
 Host_result owns the full local Cooking validation using the original cached
 workflow; no GCP trial has run. The measured pair below predates this
 derivation commit and must not be attributed to it. The original
@@ -101,6 +101,21 @@ unprivileged derived image runs inside the existing materialization phase,
 followed by integrated local Cooking validation and a new locked GCP
 comparison. Keep the existing cache, protected image and instrumentation
 unchanged.
+
+The next paid comparison is predeclared control-first after integrated local
+Cooking and repository quality pass: use this docs-only control branch's exact
+final pushed head, recorded immediately before dispatch, then candidate
+`a2914d997630f82cd60e226088b884053140d48f`. Both use trusted workflow source
+`853904782b2922e61171c5499256e037203e391b`, `n2-standard-8` with `32 GiB`
+host memory, `150 GB pd-balanced`, `europe-west1-d`, protected image
+`f285fc2b8157f8053383fc98bcaec83d`, the existing cache, and guest `2` vCPUs /
+`2048 MiB`. The hypothesis is that unused verifier metadata omission reduces
+verifier and total job time after derivation cost. Primary outcomes are job
+and controller elapsed time; phase timings are diagnostic. Require matching
+provenance, `41` markers, browser `2/2`, all gates, `11/11` sources, scans and
+VM absence. No automatic retry or cherry-pick; rollback leaves PR #47
+unmerged or reverts its candidate changes. Historical control run
+`34747950421` (`1358s`) is context only.
 PR #44's terminal trial run #34742470212 is operationally valid but held: its
 job was 1428s versus the 1418s control (+10s, +0.71%), with 41 markers, browser
 2/2, all gates and cleanup passing. The candidate's trusted controller was
