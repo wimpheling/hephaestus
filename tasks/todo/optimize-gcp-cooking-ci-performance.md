@@ -20,26 +20,89 @@ The ledger currently records a valid cold-GCP baseline and accepted CPU,
 host-build-removal and overlap trials; broader optimization work remains in
 progress.
 
-Current handoff: the newest fixed candidate/control pair is PR #45 run
-[`34746767593`](https://github.com/wimpheling/hephaestus/actions/runs/34746767593)
-at `1470s` versus frozen docs-only control
-[`34747950421`](https://github.com/wimpheling/hephaestus/actions/runs/34747950421)
-at `1358s`, a `+112s` (`+8.25%`) candidate result. Both exact source heads,
-the locked image/configuration, frozen instrumentation, 41 markers, browser
-`2/2`, all gates, 11 evidence sources, scans and VM cleanup passed. Controller
-time was `1442149ms` versus `1333101ms` (`+109048ms`), mainly `vm-wait`
-(`+98596ms`); this is an observed pair result, not a causal boot or polling
-measurement. Independent review recommends holding PR #45: its faster runtime
-phases establish no end-to-end gain; the observed slowdown is not proven to be
-a code-caused regression, and repeatability remains unestablished.
-The CPU2, host-build-removal and PR #42 overlap results remain separate
-historical single-pair comparisons and are not additive. Instrumentation is
-frozen and live-proven through PR #38 and the accepted runs. The local memory
-candidate is held, the corrected ext4 scratch candidate is rejected, and the
-actual local libkrun probe is feasibility evidence only; earlier local probe
-input equivalence was incomplete, while this pair has exact GCP source
-provenance. Cancellation propagation is partial, fork execution is deferred,
-MVP-06 remains unchecked, and the broader goal remains open.
+Current handoff: the fresh control run
+[`34752572980`](https://github.com/wimpheling/hephaestus/actions/runs/34752572980)
+from exact docs-only head `1d3c2b54c7d1ab2ae7263f8b03ec56ab3cd99c39` is valid at
+`1545s` job elapsed and `1517043ms` controller elapsed. Its 41 projection
+records, browser `2/2`, all gates, timing validation, 11/11 sources, scans,
+upload/download and VM absence passed. Candidate run
+[`34753764390`](https://github.com/wimpheling/hephaestus/actions/runs/34753764390)
+at `a2914d9` failed after `361s` before OCI, golden, database or browser
+execution and is not a performance measurement. The corrected candidate fix is
+`2792a4ed46433ecad94864c6e6f0573ba0f0217d`; five real fixtures passed in
+`4.863s`, and full local Cooking plus the durable quality gate exited `0`.
+The corrected full GCP candidate run is recorded below; no repeatability or
+whole-job causal attribution is claimed.
+
+PR #49 is closed as a diagnostic-only failure audit: the first finite probe
+exited `34`, and the second produced ordered stage-marker `exit_code` values
+`49`, `78`, `81` and `82`; only `49` was the overall workload exit code. This
+proves the namespace routing remedy but not an errno or kernel cause. No-VM
+triage retrieved the archive but retained no stderr; the earlier triage used
+wrong SHA arguments. Historical CPU2, host-build-removal and PR #42
+overlap results remain separate single-pair comparisons and are not additive.
+Instrumentation is frozen. Cancellation propagation is partial, fork execution
+is deferred, MVP-06 remains unchecked, and the broader goal remains open.
+
+PR #46 merged the read-only `provider-metrics` mode into the existing trusted
+Cooking workflow at main
+`853904782b2922e61171c5499256e037203e391b`; its required quality gate passed
+(exit `0`). Query run
+[`34750005856`](https://github.com/wimpheling/hephaestus/actions/runs/34750005856)
+read control `34747950421`, and query run
+[`34750105577`](https://github.com/wimpheling/hephaestus/actions/runs/34750105577)
+read candidate `34746767593`; both provider jobs passed and skipped VM
+creation. Safe projections are retained at
+`/home/a/.cache/heph-provider-metrics-34750005856/gcp-existing-metrics-34747950421-1/gcp-existing-metrics.json`
+and
+`/home/a/.cache/heph-provider-metrics-34750105577/gcp-existing-metrics-34746767593-1/gcp-existing-metrics.json`.
+The target controller SHA is `6e812d2`; trusted workload phase provenance is
+separate: candidate `939e9a1e` and control `127f57e3`. Candidate/control raw
+CPU means were `0.3497/0.4056` with peaks `0.8635/0.7563`; reserved cores
+were `8/8`. Disk coverage was candidate `08:06--08:28Z` (23 DELTA intervals)
+and control `08:34--08:55Z` (22 intervals), with aggregate read rates
+`0.891/0.979 MB/s` and `16.55/17.95 ops/s`, write rates
+`23.414/24.611 MB/s` and `127.82/130.30 ops/s`; write totals were
+`32.311/32.486 GB`. Existing UTC logs align only the VM-active windows, not
+individual monotonic workload phases, so these are resource observations with
+no causal performance claim. The accepted verifier experiment is recorded
+below; these provider metrics do not justify a host-16 or storage change. The
+protected image and instrumentation stay unchanged.
+
+PR #47 is merged with candidate head
+`2792a4ed46433ecad94864c6e6f0573ba0f0217d` (merge commit
+`d6aaf24863a6a5b4151fa50d3d3b92584f9adcc5`). Its five real fixtures passed in
+`4.863s`. The corrected local Cooking run passed with 35 golden tests, 1
+ignored, PostgreSQL 6, both browsers, scans and cleanup; evidence is retained
+at `/home/a/.cache/heph-oci-verifier-raw-unpack-full-2792a4e-run2`. The durable
+quality gate exited `0` at
+`/home/a/.cache/heph-oci-verifier-quality-2792a4e.status` with log
+`/home/a/.cache/heph-oci-verifier-quality-2792a4e-status.log`; no conflicting
+full local total is claimed. The local predecessor pair measured
+`122.325865874s`/`84.209289853s` (`31.16%`), but remains local-only and
+predates this fix. Rootfs comparison scope and omitted `mtree`/`umoci.json`
+semantics remain as previously recorded; the cache, protected image and
+instrumentation stay fixed.
+
+The predeclared control-first comparison has now completed with valid control
+run `34752572980` (`1545s`, `1517043ms` controller) followed by valid fixed
+candidate run `34757091699` (`1252s`, `1226870ms` controller). Both used exact
+heads `1d3c2b54` and `2792a4ed`, trusted workflow source `853904782`, the
+locked image/cache/machine/zone/disk configuration, and frozen
+instrumentation. Both passed all gates, scans, browser `2/2`, `11/11` sources,
+VM absence and timing validation. Candidate versus control saved `293s`
+(`18.9644%`) job time and `290173ms` (`19.1275%`) controller time. Candidate
+verifier was `184984ms` versus `436402ms` (`-251418ms`, `-57.611%`), while
+materialization was `28129ms` versus `25013ms` (`+3116ms`) and golden was
+`793183ms` versus `1052510ms` (`-259327ms`). The candidate projection had 44
+records (41 Rust test-result markers plus 3 Cooking-result records); the
+control had 41 records (38 Rust markers plus 3 Cooking-result records), and
+all 38 control Rust markers were retained by the candidate. This is an
+accepted valid single-pair result; the full-job reduction is not attributed
+causally to every phase or treated as repeatable yet.
+The source comparison from `1d3c2b54` to `2792a4ed` contains no Rust or test
+source changes, so the projection-count difference is observational and is not
+evidence of added tests.
 PR #44's terminal trial run #34742470212 is operationally valid but held: its
 job was 1428s versus the 1418s control (+10s, +0.71%), with 41 markers, browser
 2/2, all gates and cleanup passing. The candidate's trusted controller was

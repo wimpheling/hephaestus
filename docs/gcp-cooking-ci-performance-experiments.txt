@@ -242,8 +242,23 @@ CURRENT ACCEPTED RESULTS
   versus fresh control `34729302087` at `26m23s`, `14s` (`0.88%`) saved.
 - Overlap: PR #42 merged as `6e812d2e0e22c489541eb34fe8d85ce481970d81`;
   run `34732597502`, `23m38s` versus `26m09s`, `151s` (`9.62%`) saved.
-  This is the newest valid pair, with complete evidence and no repeatability
+  This is a historical valid pair, with complete evidence and no repeatability
   claim. Workload spans overlap and are not additive.
+- Raw OCI unpack: PR #47 fixed candidate `2792a4ed46433ecad94864c6e6f0573ba0f0217d`
+  is merged at `d6aaf24863a6a5b4151fa50d3d3b92584f9adcc5` and accepted as a
+  valid single-pair result. Fresh control run
+  `34752572980` took `1545s` (`1517043ms` controller); candidate run
+  `34757091699` took `1252s` (`1226870ms` controller), saving `293s`
+  (`18.9644%`) job time and `290173ms` (`19.1275%`) controller time. The
+  candidate projection had 44 records (41 Rust markers plus 3 Cooking records)
+  and the control had 41 (38 Rust markers plus 3 Cooking records); all 38
+  control Rust markers were retained. Both passed the locked configuration,
+  frozen instrumentation, all gates, browser `2/2`, scans, 11/11 sources,
+  timing validation, upload/download and VM absence. This is one accepted
+  pair; repeatability and causal attribution of the whole-job reduction remain
+  unestablished. The source comparison from `1d3c2b54` to `2792a4ed` contains
+  no Rust test-source changes, so the projection-count difference is
+  observational and is not evidence of added tests.
 
 CURRENT REJECTED AND HELD LOCAL RESULTS
 =======================================
@@ -2012,3 +2027,222 @@ or GCP transport proof: the fake guest/storage path did not run startup
 finalization. Hard GitHub cancellation propagation and reliable `always()`
 post-cancel scheduling remain open, so this fixture does not justify a paid
 cancellation run or completion claim.
+
+
+READ-ONLY PROVIDER METRICS QUERIES: PR #46
+==========================================
+PR #46 added the `provider-metrics` choice to the existing trusted
+`.github/workflows/cooking-e2e.yml` dispatch path and merged normally at
+`853904782b2922e61171c5499256e037203e391b`. Its required `cargo dev quality`
+gate passed at the exact PR head (exit `0`; log
+`/home/a/.cache/heph-pr46-cargo-dev-quality.log`). The mode uses the existing
+WIF provider and queries only an already completed run; it does not create or
+modify a VM. The provider query was run once for each member of the fixed
+PR #45 candidate/control pair:
+
+* Candidate query run
+  `34750105577 <https://github.com/wimpheling/hephaestus/actions/runs/34750105577>`_
+  queried candidate run
+  `34746767593 <https://github.com/wimpheling/hephaestus/actions/runs/34746767593>`_.
+  The safe projection is retained at
+  `/home/a/.cache/heph-provider-metrics-34750105577/gcp-existing-metrics-34746767593-1/gcp-existing-metrics.json`.
+* Control query run
+  `34750005856 <https://github.com/wimpheling/hephaestus/actions/runs/34750005856>`_
+  queried control run
+  `34747950421 <https://github.com/wimpheling/hephaestus/actions/runs/34747950421>`_.
+  The safe projection is retained at
+  `/home/a/.cache/heph-provider-metrics-34750005856/gcp-existing-metrics-34747950421-1/gcp-existing-metrics.json`.
+
+Both query jobs passed authentication, setup, bounded Monitoring reads and
+artifact retention; `gcp-cloud` and `cooking` were skipped. The query itself
+ran from merged main `8539047`. Each target projection reports controller
+source `6e812d2e0e22c489541eb34fe8d85ce481970d81`, while the trusted workload
+phase projections identify candidate workload `939e9a1e2bc4a1d6bae82f779645199878c1a713`
+and control workload `127f57e3707b687d4083c365de5537014abe7098`. These fields
+are kept separate: the provider query does not infer workload source binding
+from the controller SHA. Both target VMs used `europe-west1-d` and the locked
+runner image fingerprint `f285fc2b8157f8053383fc98bcaec83d`; the queried
+instance IDs were candidate `8666127186002700273` and control
+`7600431132828229933`.
+
+Candidate safe-series coverage was CPU/reserved-cores `08:06--08:29Z` (24
+gauge points) and disk `08:06--08:28Z` (23 DELTA intervals). Control coverage
+was CPU/reserved-cores `08:35--08:56Z` (21/22 gauge points) and disk
+`08:34--08:55Z` (22 DELTA intervals). Across those query windows, candidate
+versus control CPU utilization averaged `0.3497` versus `0.4056`, with peaks
+`0.8635` at `08:11Z` versus `0.7563` at `08:39Z`; reserved cores were `8` in
+every point. Candidate versus control disk totals and aggregate rates were:
+read `1,229,438,976` bytes / `0.891 MB/s` and `22,843` ops / `16.55 ops/s`
+versus `1,292,505,088` / `0.979 MB/s` and `23,691` / `17.95 ops/s`; write
+`32,310,854,144` bytes / `23.414 MB/s` and `176,385` ops / `127.82 ops/s`
+versus `32,485,908,992` / `24.611 MB/s` and `171,999` / `130.30 ops/s`.
+The largest raw per-minute candidate/control peaks were read `7.677/6.572
+MB/s`, read operations `175.75/149.77 ops/s`, write `68.232/63.205 MB/s`,
+and write operations `374.34/282.80 ops/s`.
+
+The existing UTC controller logs provide only the VM-active windows:
+candidate creation `08:05:03.237Z` through workload pass `08:27:40.369Z`,
+and control creation `08:33:13.938Z` through workload pass `08:54:12.804Z`.
+On complete DELTA intervals wholly inside those windows, candidate versus
+control aggregate rates were read `0.610/0.748 MB/s`, read operations
+`9.76/12.25 ops/s`, write `25.261/26.765 MB/s`, and write operations
+`137.79/140.80 ops/s`; CPU means over in-window gauge points were `0.3814`
+and `0.4197`, with eight reserved cores throughout. The workload phase
+projections are monotonic and have no UTC anchors, so these results cannot
+align samples to OCI, browser or golden phases. The observed disk totals and
+CPU/disk differences are resource observations only; they establish no
+causal storage, host-capacity or performance explanation, and no host-16 or
+storage candidate is justified by them.
+
+The next bounded verifier hypothesis remains pending local proof: after the
+same pinned raw extraction and runtime configuration, validate whether the
+unconsumed `mtree`/`umoci.json` output is the avoidable boundary. Incidental
+I/O failures would be a semantic caveat, and any nested-image or scanner-cache
+change would require a new derived locked comparison before a GCP trial. Keep
+the protected GCE image and frozen instrumentation unchanged; no paid verifier
+candidate is approved by these read-only queries.
+
+
+LOCAL RAW OCI UNPACK PAIR: PR #47 CANDIDATE, PENDING FURTHER VALIDATION
+=======================================================================
+PR #47 now points to candidate commit
+`a2914d997630f82cd60e226088b884053140d48f`, which adds private checkout-derived
+verifier materialization and five focused real-CLI fixtures. Those fixtures
+passed in `3.304s`.
+Full local Cooking validation using the original cached workflow is now owned
+by host_result; no GCP trial has run. The measured pair below predates this
+derivation commit and must not be attributed to it.
+
+The measured raw-unpack OCI verifier candidate was PR #47 at
+`https://github.com/wimpheling/hephaestus/pull/47`, with original candidate
+commit `f8a928160d9398bf14b509a4455476d6becc9fff` and refreshed branch tip
+`1fee77852ac7f0fd060bf453e27b510791770604` after merging current main. The
+refresh preserves the candidate bytes and leaves only
+`platform/builders/oci-verifier-ubuntu/oci-verify` in the diff against main.
+The candidate's local current-input pair used source revision
+`7a6ba94e55e3b2cc42f8960578d6a4ad54b1c0ae`, the current Dockerfile SHA-256
+`86af387bcda2e9fe0687aa863e87b93649869c1ae4bf65f4ebccf646a64577cc`, the
+pinned builder/verifier images, the unchanged 2-vCPU/2048-MiB guest envelope,
+and the existing worker/bootstrap. It did not use the PR #45 Dockerfile input.
+
+The actual local VmOciOperation baseline completed in `122.325865874s`; the
+raw-unpack/runtime-config candidate completed in `84.209289853s`, an observed
+reduction of `38.116576021s` (`31.16%`). The verifier phase decreased from
+`85.494s` to `47.509s` (`44.43%`), while the builder changed from `36.583s` to
+`36.361s`. Both operations passed the local verifier, with zero reported
+vulnerabilities and `296` packages. The candidate evidence is retained at
+`/home/a/.cache/ovr-candidate-20260913T104216Z`; baseline evidence is at
+`/home/a/.cache/ovr-base-20260913T104216Z`. The local focused guest failure
+classification fixtures passed, and the required quality gate passed at exit
+`0` with log `/tmp/oci-raw-unpack-quality-f8a9281.log`.
+
+This is a local measurement only and is not a GCP saving or full Cooking
+lifecycle result. An independent comparison of the baseline and candidate
+rootfs reports no differences outside the intentionally ignored
+`usr/libexec/hephaestus/oci-verify` path: each side of the baseline comparison
+had `19,426` entries and each side of the derived comparison had `4,071`
+entries. The comparison checked file content, type, mode, UID, GID, size,
+symlink target, xattrs and hardlink groups, with no xattr errors and equal
+hardlink-group results. It does not check timestamps or device IDs, and the
+ignored verifier path is outside this equivalence claim.
+Scanner dependency identity and zero-vulnerability results were independently
+checked. Raw/legacy runtime-config equivalence was validated separately. The
+full script escape fixture and mtree I/O-failure equivalence were not
+exercised. The candidate intentionally omits unused `mtree`/`umoci.json`
+metadata, so those outputs and any incidental I/O-failure semantics remain a
+caveat.
+
+The cache remains the fixed reviewed input; no new cache archive publication is
+needed for this private derivation step. Astra's unprivileged derived-image
+implementation is committed in `a2914d997630f82cd60e226088b884053140d48f` and
+runs inside the existing materialization phase. Delivery is still
+unproven until that image completes integrated local Cooking validation and a
+new locked GCP comparison; this local pair does not authorize either.
+
+Before any paid trial, complete the full local Cooking lifecycle using the
+`a2914d997630f82cd60e226088b884053140d48f` derived image, then establish a new
+locked comparison while keeping the existing cache, protected GCE image and
+frozen instrumentation unchanged. No GCP performance claim or paid candidate
+is approved by this pair.
+
+PREDECLARED CONTROL-FIRST COMPARISON: PR #47 DERIVED IMAGE
+===========================================================
+The original predeclaration named `a2914d9`; after the proven execution-route
+fix, the executed candidate used
+`2792a4ed46433ecad94864c6e6f0573ba0f0217d`. The valid control was this
+docs-only handoff branch's exact head
+`1d3c2b54c7d1ab2ae7263f8b03ec56ab3cd99c39`. Historical control run
+`34747950421` at `1358s` remains context only and was not substituted for the
+fresh control.
+
+Locked configuration for both runs: trusted workflow source
+`853904782b2922e61171c5499256e037203e391b`, `n2-standard-8` with `32 GiB`
+host memory, `150 GB pd-balanced` in `europe-west1-d`, protected image
+`f285fc2b8157f8053383fc98bcaec83d`, the existing reviewed cache, and the
+unchanged guest envelope of `2` vCPUs and `2048 MiB`. Frozen instrumentation
+and all other workload inputs remain unchanged.
+
+Hypothesis: omitting unused verifier bundle metadata, after paying the private
+derived-image materialization cost, reduces verifier time and total job time.
+Primary outcome is controller and job elapsed time; phase timings are
+diagnostic and workload phase spans remain non-additive. Acceptance requires
+matching source/configuration provenance, all `41` markers, browser `2/2`, all
+gates, `11/11` evidence sources, scans and verified VM absence in both runs.
+No automatic retry, cherry-pick or selective rerun is allowed. Rollback is to
+revert all PR #47 candidate changes if rollback is required; the candidate is
+already merged and must be reverted rather than left unmerged.
+
+FINAL CURRENT HANDOFF: PR #47 FIXED PAIR
+=========================================
+The predeclared fixed pair is terminal, valid and accepted as a single-pair
+performance result. Control run
+`34752572980 <https://github.com/wimpheling/hephaestus/actions/runs/34752572980>`_
+used exact control head
+`1d3c2b54c7d1ab2ae7263f8b03ec56ab3cd99c39`, trusted workflow source
+`853904782b2922e61171c5499256e037203e391b`, and the locked configuration. It
+completed in `1545s` with controller elapsed `1517043ms`.
+
+Candidate run
+`34757091699 <https://github.com/wimpheling/hephaestus/actions/runs/34757091699>`_
+used exact candidate head
+`2792a4ed46433ecad94864c6e6f0573ba0f0217d`, the same trusted workflow source,
+locked configuration and frozen instrumentation. It completed in `1252s`
+(`12:26:28Z`--`12:47:20Z`) versus the control's `1545s` (`-293s`, `18.9644%`).
+Controller elapsed was `1226870ms` versus `1517043ms` (`-290173ms`,
+`19.1275%`). Candidate verifier was `184984ms` versus `436402ms`
+(`-251418ms`, `-57.611%`); materialization was `28129ms` versus `25013ms`
+(`+3116ms`), and golden was `793183ms` versus `1052510ms` (`-259327ms`).
+Both runs passed all gates, scans, browser `2/2`, VM absence, timing validation
+and 11/11 evidence sources. The candidate technical projection contained `44`
+records: `41` Rust test-result markers plus `3` Cooking-result records; the
+control contained `41` records: `38` Rust markers plus `3` Cooking-result
+records. All 38 control Rust markers were retained by the candidate. These are
+projection records, not test counts. The source comparison from `1d3c2b54` to
+`2792a4ed` contains no Rust test-source changes, so this projection-count
+difference is observational and is not evidence of added tests.
+
+Candidate private evidence is retained at
+`/home/a/.cache/heph-gcp-candidate-34757091699-1789303689`; the uploaded
+archive is
+`gs://hephaestus-508000-cooking-diagnostics/cooking/runs/34757091699/1/2792a4ed46433ecad94864c6e6f0573ba0f0217d.tar.gz`
+with SHA-256
+`bc3b2448bb11fa7a775d6410073fbe407d424c1a1a5ae6db497f9ea4d32b1d67`.
+The safe GCP projection does not expose the local derived-image script hash
+`40dda...` or derived digest `9d501...`; matching exact checkout provenance and
+passed materialization hash validation support the identity only by inference.
+The local evidence retains those identities explicitly.
+
+The pair is an accepted valid single-pair observed improvement. The `293s` job
+reduction is not claimed as caused by every phase or as a repeatable magnitude.
+The verifier mechanism is supported by the local derivation and the GCP
+verifier-phase result, while whole-job causal attribution remains unestablished.
+Historical CPU2, host-build-removal and overlap results remain separate,
+non-additive single-pair measurements.
+
+PR #49 is closed as a diagnostic failure audit and must never merge: its ordered
+stage marker exit codes were `49`, `78`, `81` and `82`, while only its first
+`49` was the overall workload exit code. The audit proves the namespace route
+remedy but not a specific errno or kernel mechanism. Hard GitHub cancellation
+proof remains partial; fork execution and MVP-06 remain open requirements, and
+no drastic or repeatability claim is made. Rollback is reverting all PR #47
+candidate changes if required.
