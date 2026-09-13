@@ -28,11 +28,13 @@ Current facts
   one-day private diagnostics.
 - The newest valid GCP comparison is overlap run
   `34732597502 <https://github.com/wimpheling/hephaestus/actions/runs/34732597502>`_,
-  at `23m38s`, against locked baseline run
-  `34724176879 <https://github.com/wimpheling/hephaestus/actions/runs/34724176879>`_
-  at `26m32s`; it saved `151s` (`9.62%`) in one valid pair. Workload phase
-  spans overlap and are not additive, so this does not establish repeatability
-  or a drastic-improvement guarantee.
+  at `23m38s` (`1418s`), against host-removal control run
+  `34730591477 <https://github.com/wimpheling/hephaestus/actions/runs/34730591477>`_
+  at `26m09s` (`1569s`); it saved `151s` (`9.62%`) in one valid pair. The
+  original locked baseline `34724176879` was `1592s` and is historical context
+  for this later control sequence. Workload phase spans overlap and are not
+  additive, so this does not establish repeatability or a drastic-improvement
+  guarantee.
 - A historical pull-request run of about 9m32s used a warm self-hosted
   environment and is not a comparable cold-GCP baseline.
 - Accepted measured results are CPU2 through PR #37 (`25s`, `1.57%`) in run
@@ -61,13 +63,15 @@ Current facts
   closes the stale harness-fidelity gap for the current input, but local host
   timing is not GCP savings and exact byte equivalence to the retained GCP
   candidate is unavailable.
-- Prepared but unapproved candidate PR #43 removes only the guarded CPython
+- Candidate PR #43 removes only the guarded CPython
   `/opt/python/lib/python3.13/test` tree. Its local OCI operation was
   `105.346s` versus the current-input control's `120.512s`; this is local
   evidence only. Final quality passed in session `18452`, the site fixture
   passed for both pages, and independent review conditionally approved the
-  narrow hypothesis. Root integration review is complete, but no GCP trial
-  has been authorized or dispatched.
+  narrow hypothesis. The authorized GCP trial is active as run
+  `34738676749 <https://github.com/wimpheling/hephaestus/actions/runs/34738676749>`_
+  at exact head `9b39eb489d8a87c8d71db6c6c9bb573e124f1891`; terminal
+  measurement and acceptance are pending.
 
 Implementation foundation (live and frozen)
 --------------------------------------------
@@ -115,10 +119,10 @@ TO DO
    is retained.
 3. Keep fork execution deferred pending a separate trust-policy decision and
    keep MVP-06 unchecked; neither is part of this task.
-4. Keep the memory and scratch candidates held/rejected and approve no new
-   candidate. Astra's next step is a read-only review of toolchain packaging
-   and test meaning; no immediate GCP, image, cache or bootstrap promotion is
-   justified after the complete current-input local operation.
+4. Keep the memory and scratch candidates held/rejected and keep PR #43's
+   exact head frozen while run `34738676749` completes. Decide acceptance only
+   from complete workload, timing, provenance, evidence, gate and cleanup
+   results; do not retry or dispatch another run.
 5. Record any future bounded trial with exact provenance, complete gates,
    cleanup evidence, measurements, decision and rollback. Preserve frozen
    instrumentation and do not treat overlapping workload phases as additive.
@@ -159,9 +163,9 @@ CURRENT REJECTED AND HELD LOCAL RESULTS
   not an accepted GCP optimization: exact byte equivalence to the retained GCP
   candidate is unavailable, and no GCP saving is claimed. Memory remains held,
   scratch remains rejected, and no identity or toolchain candidate is approved.
-- PR #43 is a prepared draft only. Its exact head is
-  `9b39eb489d8a87c8d71db6c6c9bb573e124f1891`; no candidate acceptance or paid
-  run follows from the local timing until the separate trial decision.
+- PR #43 is the active paid trial at run `34738676749`, exact head
+  `9b39eb489d8a87c8d71db6c6c9bb573e124f1891`; it remains unaccepted pending
+  terminal evidence and the paired comparison.
 
 CHRONOLOGICAL EXPERIMENT RECORDS (HISTORICAL DETAIL)
 =====================================================

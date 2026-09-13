@@ -21,8 +21,9 @@ host-build-removal and overlap trials; broader optimization work remains in
 progress.
 
 Current handoff: the newest valid GCP pair is overlap run #34732597502 at
-23m38s versus the 26m32s locked baseline, saving 151s (9.62%) in one pair;
-overlapping workload spans are informational and non-additive. CPU2 and
+23m38s versus host-removal control #34730591477 at 26m09s, saving 151s
+(9.62%) in one pair; the original 26m32s baseline #34724176879 is historical
+context. Overlapping workload spans are informational and non-additive. CPU2 and
 host-build removal remain accepted modest single-pair results. Instrumentation
 is frozen and live-proven through PR #38 and the accepted runs. The local
 memory candidate is held, the corrected ext4 scratch candidate is rejected,
@@ -37,14 +38,15 @@ diagnostic harness omission; it is not production mechanism evidence. Withdraw
 the identity-projection and image-change candidate. A complete current-input
 production OCI operation then passed locally (builder 35.353s, verifier
 84.866s, execute 120.512s) with no wrappers; this is local evidence only and
-does not establish GCP savings. The next review is Astra's read-only
-toolchain-packaging and test-meaning review, with no candidate approved.
-Draft PR #43 (`9b39eb489d8a87c8d71db6c6c9bb573e124f1891`) is now prepared for
+does not establish GCP savings. Draft PR #43 (`9b39eb489d8a87c8d71db6c6c9bb573e124f1891`)
+is now the active authorized trial as run `34738676749`, with terminal
+measurement and acceptance pending; no retry or second dispatch is planned.
+It was prepared for
 the separately reviewed Python test-tree hypothesis. It removes only the
 guarded `/opt/python/lib/python3.13/test` directory; local OCI time was
 105.346s versus 120.512s, with quality session 18452 and the two-page site
-fixture passing. This remains unapproved local evidence pending the separate
-trial decision; no GCP dispatch is included.
+fixture passing. This remains unaccepted until the active run's complete
+evidence is validated.
 
 ## Working-tree implementation status
 
