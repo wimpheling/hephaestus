@@ -1217,3 +1217,83 @@ golden/PostgreSQL, scanner, marker, provenance, gate, upload/download and
 post-delete VM absence evidence. Rollback is reverting PR #39 to restore the
 host export and compile while retaining accepted CPU2. No retry or further
 dispatch follows this run; classify only after root review.
+
+
+ACCEPTED HOST BUILD REMOVAL TRIAL: RUN 34730591477
+====================================================
+Result: ACCEPTED as a valid but modest single-pair measurement. Removing the
+unused host compile saved `14s` of job elapsed time (`0.88%`) and reduced the
+authoritative controller lifecycle sum by `9395` ms (`0.61%`). The result does
+not support a drastic-improvement claim, and one pair does not establish
+repeatability. The previous host trial `34727051946` remains
+`FAILED/INCONCLUSIVE` and is not included in this comparison.
+
+Run: [34730591477](https://github.com/wimpheling/hephaestus/actions/runs/34730591477),
+attempt `1`, workflow `main` at controller SHA
+`3939f48bc07fd36f366a2f61b9365a0b617045a2`; selected same-repository PR #39
+workload SHA `ca4669cce9a64029c15e0dad92d466ac0990190d`, repository ID
+`1312377552`. The fresh control was
+[34729302087](https://github.com/wimpheling/hephaestus/actions/runs/34729302087),
+attempt `1`, the same controller SHA, and PR #20 workload SHA
+`736b64805e70d9bb34e5ab15106ca1d0f19cf33f`. The candidate contains exactly
+the prepared 14-line deletion in `examples/cooking/run.sh`: the unused host
+gateway artifact export and host `project-build` compile. CPU2, memory,
+production project build, instrumentation and all other controls were fixed.
+
+The locked environment was unchanged: protected image
+`hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d`, immutable cache
+generation `1789079827867335` and SHA-256
+`0ed20efcc1aa019b79405d1eed626b13d4702019e9ceeba2bdde54e45ae29296`,
+`n2-standard-8`, `150 GB pd-balanced`, `europe-west1-d`, one VM,
+concurrency `1`, 45-minute provider DELETE and 50-minute workflow timeout.
+
+The candidate job elapsed `26m09s`
+(`2026-09-13T01:27:59Z` to `01:54:08Z`) versus the control's `26m23s`
+(`2026-09-13T00:57:44Z` to `01:24:07Z`): `14s` saved. Trusted controller
+timings were `1542869` ms versus `1552264` ms, a reduction of `9395` ms.
+The controller phase pairs (control -> candidate, delta in ms) were:
+`preflight-quota 3044 -> 3008 (-36)`, `preflight-cache 1714 -> 1655
+(-59)`, `vm-create 12277 -> 14228 (+1951)`, `vm-wait 1477251 -> 1466068
+(-11183)`, `vm-delete 54253 -> 54551 (+298)`, `cleanup-verification
+1761 -> 1046 (-715)` and `post-delete-download 1964 -> 2313 (+349)`.
+
+The workload phase pairs (control -> candidate, delta in ms) were:
+`browser-setup 1689 -> 1837 (+148)`, `dependency-setup 931 -> 931 (0)`,
+the removed host `project-build 12769 -> absent`,
+`gateway-edge-ready 3071 -> 2944 (-127)`, `runtime-guest-build 86739 ->
+88099 (+1360)`, `oci-image-materialization 23412 -> 23572 (+160)`,
+`gateway-services-ready 15072 -> 14537 (-535)`, `runtime-worker-build
+19283 -> 19577 (+294)`, `golden-tests 1107116 -> 1107979 (+863)`,
+`database-tests 44920 -> 45309 (+389)`, `gateway-readiness 344 -> 341
+(-3)`, `production-project-build 81638 -> 82676 (+1038)`, `oci-builder
+85750 -> 87131 (+1381)`, `oci-verifier 358534 -> 358328 (-206)`,
+`browser-initial 93839 -> 93102 (-737)` and `browser-post-operation
+45062 -> 44984 (-78)`. Workload spans are informational, overlap one
+another and must not be summed into total runtime. The absent host phase is
+the intended candidate behavior; no zero-valued phase was synthesized.
+
+Evidence quality was complete and matched the control: workload,
+evidence-scan and browser-validation gates were finalized and passed with
+exit code `0`; upload, authenticated download, archive/phase validation and
+gate acceptance passed; the source collection retained 11 available sources
+with zero missing, rejected, unavailable or truncated sources. Browser
+validation was complete with `2` passed, `0` failed, `0` skipped and `0`
+timed out across initial and post-operation phases. The credential scanner
+checked `26` files and `1153537` bytes. The private candidate archive was
+`32309` bytes with SHA-256
+`79e6aeb58cd66695f34dc41c95829088942dd13f50a8c294d0ec57626ee021fe` at
+`gs://hephaestus-508000-cooking-diagnostics/cooking/runs/34730591477/1/ca4669cce9a64029c15e0dad92d466ac0990190d.tar.gz`; the control archive
+was `32194` bytes with SHA-256
+`582eceed7dc54806198308744f700b1c7394e1d0a5eb08b2e0092c5c8c5eedb9`.
+The owned VM `heph-kvm-smoke-34730591477-1` was verified absent after
+deletion and before post-delete collection.
+
+The candidate retained 39 distinct passed Rust marker names, no failed
+markers, and the exact same marker set as the fresh control's 39. This is a
+marker inventory, not a test count. The candidate's producer-to-timing-
+collection-to-validation path is represented by the passed full workload,
+phase projection, collection, scan, gate and cleanup evidence; the timing
+instrumentation remains frozen. Accept the one-file candidate for root's
+integration decision with rollback to restore the host artifact export and
+compile if later review rejects the modest saving. Implementation commit:
+`ca4669cce9a64029c15e0dad92d466ac0990190d`; ledger result commit: pending.
