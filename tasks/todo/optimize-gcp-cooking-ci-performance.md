@@ -20,6 +20,16 @@ The ledger currently records a valid cold-GCP baseline and accepted CPU,
 host-build-removal and overlap trials; broader optimization work remains in
 progress.
 
+Current handoff: the newest valid GCP pair is overlap run #34732597502 at
+23m38s versus the 26m32s locked baseline, saving 151s (9.62%) in one pair;
+overlapping workload spans are informational and non-additive. CPU2 and
+host-build removal remain accepted modest single-pair results. Instrumentation
+is frozen and live-proven through PR #38 and the accepted runs. The local
+memory candidate is held, the corrected ext4 scratch candidate is rejected,
+and the actual local libkrun probe is feasibility evidence only; GCP input
+identity remains unproven. Cancellation propagation is partial, fork execution
+is deferred, MVP-06 remains unchecked, and the broader goal remains open.
+
 ## Working-tree implementation status
 
 The trusted controller and instrumentation foundation are live on `main` and

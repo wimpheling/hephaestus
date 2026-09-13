@@ -26,18 +26,31 @@ Current facts
 - The current disposable path uses one paid VM, a 45-minute provider DELETE
   lifetime, a 50-minute workflow timeout, a protected prebuilt runner image and
   one-day private diagnostics.
-- The latest full disposable run measured about 26m11s total. The VM-running
-  through host-pass interval was about 24m07s; cleanup added about 85s before
-  verified absence. OCI builder time was about 105s and verifier time about
-  353s. The early roughly eight-minute interval remains unclassified until
-  safe phase instrumentation exists.
+- The newest valid GCP comparison is overlap run
+  `34732597502 <https://github.com/wimpheling/hephaestus/actions/runs/34732597502>`_,
+  at `23m38s`, against locked baseline run
+  `34724176879 <https://github.com/wimpheling/hephaestus/actions/runs/34724176879>`_
+  at `26m32s`; it saved `151s` (`9.62%`) in one valid pair. Workload phase
+  spans overlap and are not additive, so this does not establish repeatability
+  or a drastic-improvement guarantee.
 - A historical pull-request run of about 9m32s used a warm self-hosted
   environment and is not a comparable cold-GCP baseline.
-- No accepted or rejected performance experiment has been recorded.
+- Accepted measured results are CPU2 through PR #37 (`25s`, `1.57%`) in run
+  `34725585641 <https://github.com/wimpheling/hephaestus/actions/runs/34725585641>`_,
+  host-build removal through PR #39 (`14s`, `0.88%` versus fresh control) in
+  run `34730591477 <https://github.com/wimpheling/hephaestus/actions/runs/34730591477>`_,
+  and overlap through PR #42 (`151s`, `9.62%`) in run
+  `34732597502 <https://github.com/wimpheling/hephaestus/actions/runs/34732597502>`_.
+  All are single-pair results; overlap is the newest valid comparison.
+- The local verifier memory candidate remains held. Actual local libkrun
+  feasibility passed in `259.460s`, but GCP input identity is unproven. The
+  corrected local ext4 scratch candidate was rejected (`81.388s` versus
+  `77.143s` control); neither local result is a GCP performance measurement.
+  Optional profiling remains informational.
 
-Implementation foundation (unreleased)
----------------------------------------
-- The working branch adds a trusted `main` workflow controller for manually
+Implementation foundation (live and frozen)
+--------------------------------------------
+- `main` contains the trusted workflow controller for manually
   selected same-repository PRs. It requires the PR number, repository ID
   `1312377552`, and exact head SHA together; the controller validates the open
   PR through the GitHub API before VM creation and anchors labels, checkout and
@@ -52,51 +65,73 @@ Implementation foundation (unreleased)
   baked browser/Rust toolchain, a writable cargo cache, and checkout/evidence
   paths are exposed. The IPv4/IPv6 metadata guard is installed before PR
   npm/browser hooks and remains active through passt and the nested guest.
-  This boundary is source-reviewed and locally contract tested; it has no
-  live GCP proof yet.
+  This boundary is source-reviewed, locally contract tested and live-proven by
+  the valid baseline and subsequent accepted runs.
 - `scripts/gcp_phase_timing.py` records bounded start/end JSONL records using
   monotonic clocks and fixed phase, trust, provenance, cache and metric enums.
   Supervisor timings are authoritative for measurement; workload timings are
   explicitly informational. Trusted startup rereads the current supervisor
   records after archive, evidence scanning and upload to create the final
   private sidecar; post-delete download validates it only after VM absence and
-  retains the safe projection for one day. End-to-end GCP validation remains
-  pending; no performance improvement is claimed.
+  retains the safe projection for one day. End-to-end GCP validation passed in
+  the valid baseline and accepted runs; supervisor timings remain authoritative
+  and overlapping workload spans are not additive.
 - Root-side runtime commands reset `PATH` to root-owned system directories;
   the forge-writable cargo bin is passed only into workload units. PR units
   bind a private per-run runtime directory at `/run/user/10001` so host user
-  manager sockets are not exposed. This is locally contract tested and still
-  awaits live guest validation.
-- Local validation currently passes 230 focused tests covering provenance,
-  controller contracts, timing schema/projection, diagnostics, sidecars and
-  runner-image contracts, plus Bash syntax, Python compilation and diff
-  checks. The count includes an evolving working-tree diff and is not a
-  replacement for the unchanged full Cooking acceptance gate.
+  manager sockets are not exposed. This is locally contract tested and covered
+  by the live GCP evidence path.
+- PR #38 froze the instrumentation after its real lifecycle regression and
+  quality checks. Its producer-to-timing-to-collection-to-validation path has
+  live GCP proof; instrumentation scope is closed for this task.
 
 TO DO
 =====
-1. Define the trusted main-controller PR-SHA contract for reviewed
-   same-repository PRs, including operator approval, provenance checks and a
-   guest with no ADC, metadata credentials or service-account scopes for PR
-   code. Defer fork execution pending a separate trust-policy decision.
-2. Add and locally validate safe structured phase instrumentation for setup,
-   cache, OCI, build, gateway, browser, tests, scanning, upload, deletion and
-   post-delete checks.
-3. Establish the smallest justified cold-GCP baseline comparison with the
-   current image, cache and machine settings; add repeats only if observed
-   variance prevents a decision.
-4. Test the OCI verification hypothesis: measure whether verification work can
-   be bounded or reused while retaining full archive and checksum validation.
-5. Test cache/setup reuse and hit-rate hypotheses without exposing the private
-   cache or allowing PR code to write it.
-6. Test project-build and gateway-readiness hypotheses, including duplicate npm
-   or CI setup work, while retaining all required assertions and reports.
-7. Test cancellation and concurrency behavior for bounded cost and cleanup;
-   never add automatic paid retries.
-8. Record each trial's exact run link, baseline/candidate source and
-   image/cache identity, timings, cost proxy, correctness/security coverage,
-   result/reason and rollback decision before changing the ledger sections
-   below.
+1. Keep the accepted overlap implementation and locked paid path available
+   while the broader optimization goal remains open.
+2. Close the remaining GitHub hard-cancellation propagation evidence gap;
+   existing success, test-failure, timeout and workload-signal cleanup evidence
+   is retained.
+3. Keep fork execution deferred pending a separate trust-policy decision and
+   keep MVP-06 unchecked; neither is part of this task.
+4. Keep the local memory candidate held. Any profiling or counterprobe must
+   first establish input identity and storage mapping; no cloud dispatch is
+   justified by the current local results.
+5. Record any future bounded trial with exact provenance, complete gates,
+   cleanup evidence, measurements, decision and rollback. Preserve frozen
+   instrumentation and do not treat overlapping workload phases as additive.
+
+CURRENT ACCEPTED RESULTS
+========================
+- Locked baseline: run `34724176879`, `26m32s`, complete evidence.
+- CPU2: PR #37 merged as `c0bd1c61f85a6537feb3ee682d178fe92f4ad432`; run
+  `34725585641`, `26m07s`, `25s` (`1.57%`) saved in one pair.
+- Host-build removal: PR #39 merged as
+  `39b8032796637c6898b41c281754c38bb3be41ee`; run `34730591477`, `26m09s`
+  versus fresh control `34729302087` at `26m23s`, `14s` (`0.88%`) saved.
+- Overlap: PR #42 merged as `6e812d2e0e22c489541eb34fe8d85ce481970d81`;
+  run `34732597502`, `23m38s` versus `26m09s`, `151s` (`9.62%`) saved.
+  This is the newest valid pair, with complete evidence and no repeatability
+  claim. Workload spans overlap and are not additive.
+
+CURRENT REJECTED AND HELD LOCAL RESULTS
+=======================================
+- The local 2 GiB memory candidate remains held: actual libkrun feasibility
+  passed in `259.460s`, but GCP input identity remains unproven, so no GCP
+  saving or performance baseline is claimed.
+- The corrected ext4 scratch probe is rejected as a local optimization:
+  `81.388s` versus `77.143s` control. The earlier preseed-link scratch probe
+  is invalid because real cleanup removed the link before placement. These
+  probes produced matching correctness and cleanup evidence, but no
+  production, image or GCP change.
+- Optional profiling is informational and subordinate to the input-identity
+  and storage-mapping question. No new cloud run is currently justified.
+
+CHRONOLOGICAL EXPERIMENT RECORDS (HISTORICAL DETAIL)
+=====================================================
+The prepared attempts, lifecycle fixtures, baseline work and detailed result
+records below are retained as dated evidence. Historical preparation language
+does not override the current facts and result sections above.
 
 Pre-trial policy and bounded hypothesis register
 ================================================
