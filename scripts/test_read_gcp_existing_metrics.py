@@ -31,9 +31,20 @@ INSTANCE_ID = "1234567890123456789"
 class FixtureTransport:
     """Cloud and GitHub transport substitute; no GCE API is exposed."""
 
-    def __init__(self, *, malformed: bool = False, status: int = 200) -> None:
+    def __init__(
+        self,
+        *,
+        malformed: bool = False,
+        status: int = 200,
+        paginate: bool = False,
+        empty: bool = False,
+        partial: bool = False,
+    ) -> None:
         self.malformed = malformed
         self.status = status
+        self.paginate = paginate
+        self.empty = empty
+        self.partial = partial
         self.calls: list[tuple[str, str]] = []
 
     def get(self, url: str, headers: dict[str, str], timeout: float) -> tuple[int, bytes]:
@@ -63,29 +74,38 @@ class FixtureTransport:
             return 200, b'{"timeSeries":[{"resource":null}]}'
         query = parse_qs(parsed.query)
         metric = query["filter"][0].split('metric.type="', 1)[1].split('"', 1)[0]
+        if self.empty:
+            return 200, b"{}"
+        if self.partial:
+            return 200, b'{"executionErrors":[{"detail":"private detail"}]}'
         value: dict[str, object]
         if metric.endswith("reserved_cores"):
             value = {"int64Value": "8"}
         else:
             value = {"doubleValue": 0.25}
-        return 200, json.dumps(
-            {
-                "timeSeries": [
-                    {
-                        "resource": {
-                            "type": "gce_instance",
-                            "labels": {
-                                "project_id": "hephaestus-508000",
-                                "zone": "europe-west1-d",
-                                "instance_id": INSTANCE_ID,
-                            },
+        interval = {"endTime": "2026-09-13T08:45:00Z"}
+        if metric.startswith("compute.googleapis.com/instance/disk/"):
+            interval["startTime"] = "2026-09-13T08:44:00Z"
+        response = {
+            "timeSeries": [
+                {
+                    "metric": {"type": metric, "labels": {"instance_name": "heph-kvm-smoke-34747950421-1"}},
+                    "resource": {
+                        "type": "gce_instance",
+                        "labels": {
+                            "project_id": "hephaestus-508000",
+                            "zone": "europe-west1-d",
+                            "instance_id": INSTANCE_ID,
                         },
-                        "points": [
-                            {"interval": {"endTime": "2026-09-13T08:45:00Z"}, "value": value}
-                        ],
-                    }
-                ]
-            }
+                    },
+                    "points": [{"interval": interval, "value": value}],
+                }
+            ]
+        }
+        if self.paginate and "pageToken" not in query:
+            response["nextPageToken"] = "fixture-next-page"
+        return 200, json.dumps(
+            response
         ).encode()
 
 
@@ -156,6 +176,34 @@ class ReadExistingMetricsTests(unittest.TestCase):
         safe_json = json.dumps(result)
         self.assertNotIn("instance_name", safe_json)
         self.assertNotIn("private failure detail", safe_json)
+
+    def test_real_query_path_consumes_bounded_pagination(self) -> None:
+        transport = FixtureTransport(paginate=True)
+        with patch.dict("os.environ", {"GH_TOKEN": "github-fixture-token"}, clear=False):
+            result = QUERY.run(
+                arguments(Path("unused.json")), transport=transport, token="gcp-fixture-token"
+            )
+        monitoring_calls = [url for _method, url in transport.calls if "monitoring.googleapis.com" in url]
+        self.assertEqual(len(monitoring_calls), len(QUERY.METRICS) * 2)
+        self.assertEqual(
+            len(result["metrics"][0]["series"]), 2,
+        )
+
+    def test_empty_time_series_is_a_valid_no_data_result(self) -> None:
+        transport = FixtureTransport(empty=True)
+        with patch.dict("os.environ", {"GH_TOKEN": "github-fixture-token"}, clear=False):
+            result = QUERY.run(
+                arguments(Path("unused.json")), transport=transport, token="gcp-fixture-token"
+            )
+        self.assertTrue(all(metric["series"] == [] for metric in result["metrics"]))
+
+    def test_partial_monitoring_response_fails_closed(self) -> None:
+        transport = FixtureTransport(partial=True)
+        with patch.dict("os.environ", {"GH_TOKEN": "github-fixture-token"}, clear=False):
+            with self.assertRaisesRegex(QUERY.MetricsError, "execution errors"):
+                QUERY.run(
+                    arguments(Path("unused.json")), transport=transport, token="gcp-fixture-token"
+                )
 
     def test_malformed_monitoring_response_fails_closed(self) -> None:
         transport = FixtureTransport(malformed=True)

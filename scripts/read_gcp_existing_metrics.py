@@ -14,6 +14,7 @@ import argparse
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import json
+import math
 import os
 from pathlib import Path
 import subprocess
@@ -32,6 +33,9 @@ ZONE = "europe-west1-d"
 MAX_WINDOW = timedelta(hours=2)
 SAMPLE_MARGIN = timedelta(minutes=5)
 MAX_PAGES = 10
+MAX_RESPONSE_BYTES = 4 * 1024 * 1024
+MAX_SERIES = 100
+MAX_POINTS = 5000
 METRICS = (
     "compute.googleapis.com/instance/cpu/utilization",
     "compute.googleapis.com/instance/cpu/reserved_cores",
@@ -40,6 +44,14 @@ METRICS = (
     "compute.googleapis.com/instance/disk/write_bytes_count",
     "compute.googleapis.com/instance/disk/write_ops_count",
 )
+METRIC_KINDS = {
+    METRICS[0]: "GAUGE",
+    METRICS[1]: "GAUGE",
+    METRICS[2]: "DELTA",
+    METRICS[3]: "DELTA",
+    METRICS[4]: "DELTA",
+    METRICS[5]: "DELTA",
+}
 
 
 class MetricsError(Exception):
@@ -56,7 +68,10 @@ class UrllibTransport:
         request = Request(url, headers=dict(headers), method="GET")
         try:
             with urlopen(request, timeout=timeout) as response:
-                return int(response.status), response.read()
+                body = response.read(MAX_RESPONSE_BYTES + 1)
+                if len(body) > MAX_RESPONSE_BYTES:
+                    raise MetricsError("HTTP response exceeds size bound")
+                return int(response.status), body
         except HTTPError as error:
             # Do not read or report the error body: it can contain data outside
             # the safe output schema.
@@ -69,7 +84,7 @@ class UrllibTransport:
 class RunWindow:
     run_id: int
     attempt: int
-    source_sha: str
+    controller_sha: str
     created_at: str
     updated_at: str
     window_start: str
@@ -163,13 +178,13 @@ def _metadata_window(
         raise MetricsError("GitHub run repository mismatch")
     if metadata.get("status") != "completed" or metadata.get("conclusion") != "success":
         raise MetricsError("GitHub run is not a successful completed run")
-    head_sha = metadata.get("head_sha")
+    controller_sha = metadata.get("head_sha")
     if (
-        not isinstance(head_sha, str)
-        or len(head_sha) != 40
-        or any(c not in "0123456789abcdef" for c in head_sha.lower())
+        not isinstance(controller_sha, str)
+        or len(controller_sha) != 40
+        or any(c not in "0123456789abcdef" for c in controller_sha.lower())
     ):
-        raise MetricsError("GitHub run source SHA is invalid")
+        raise MetricsError("GitHub controller SHA is invalid")
     started = _parse_timestamp(
         metadata.get("run_started_at") or metadata.get("created_at"), "run_started_at"
     )
@@ -184,7 +199,7 @@ def _metadata_window(
     return RunWindow(
         run_id=run_id,
         attempt=attempt,
-        source_sha=head_sha,
+        controller_sha=controller_sha,
         created_at=_rfc3339(created),
         updated_at=_rfc3339(updated),
         window_start=_rfc3339(window_start),
@@ -242,7 +257,26 @@ def _number(value: Any, key: str) -> int | float:
         if key == "int64Value" and isinstance(value, str) and value.isascii() and value.isdecimal():
             return int(value)
         raise MetricsError("metric point value is not numeric")
+    if isinstance(value, float) and not math.isfinite(value):
+        raise MetricsError("metric point value is not finite")
     return value
+
+
+def _timestamp(value: Any, field: str, window: RunWindow) -> datetime:
+    if not isinstance(value, str) or len(value) > 64:
+        raise MetricsError(f"malformed Monitoring {field}")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        raise MetricsError(f"malformed Monitoring {field}") from None
+    if parsed.tzinfo is None:
+        raise MetricsError(f"malformed Monitoring {field}")
+    parsed = parsed.astimezone(timezone.utc)
+    start = _parse_timestamp(window.window_start, "window_start")
+    end = _parse_timestamp(window.window_end, "window_end")
+    if parsed < start or parsed > end:
+        raise MetricsError(f"Monitoring {field} is outside query window")
+    return parsed
 
 
 def _read_metric(
@@ -255,6 +289,7 @@ def _read_metric(
 ) -> dict[str, Any]:
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
     series: list[dict[str, Any]] = []
+    point_count = 0
     page_token: str | None = None
     for _page in range(MAX_PAGES):
         response = _get_json(
@@ -264,12 +299,28 @@ def _read_metric(
             timeout,
             "Monitoring",
         )
-        time_series = response.get("timeSeries")
+        execution_errors = response.get("executionErrors")
+        if execution_errors:
+            raise MetricsError("Monitoring response contains execution errors")
+        if response.get("unreachable"):
+            raise MetricsError("Monitoring response contains unreachable projects")
+        time_series = response.get("timeSeries", [])
         if not isinstance(time_series, list):
             raise MetricsError("malformed Monitoring response")
         for item in time_series:
+            if len(series) >= MAX_SERIES:
+                raise MetricsError("Monitoring series limit exceeded")
             if not isinstance(item, dict):
                 raise MetricsError("malformed Monitoring response")
+            metric_info = item.get("metric")
+            metric_labels = metric_info.get("labels") if isinstance(metric_info, dict) else None
+            if (
+                not isinstance(metric_info, dict)
+                or metric_info.get("type") != metric
+                or not isinstance(metric_labels, dict)
+                or metric_labels.get("instance_name") != window.vm_name
+            ):
+                raise MetricsError("malformed Monitoring metric identity")
             resource = item.get("resource")
             points = item.get("points")
             if not isinstance(resource, dict) or resource.get("type") != "gce_instance":
@@ -288,15 +339,26 @@ def _read_metric(
                 raise MetricsError("malformed Monitoring points")
             safe_points: list[dict[str, Any]] = []
             for point in points:
+                point_count += 1
+                if point_count > MAX_POINTS:
+                    raise MetricsError("Monitoring point limit exceeded")
                 if not isinstance(point, dict):
                     raise MetricsError("malformed Monitoring point")
                 interval = point.get("interval")
                 value = point.get("value")
                 if not isinstance(interval, dict) or not isinstance(value, dict):
                     raise MetricsError("malformed Monitoring point")
-                timestamp = interval.get("endTime")
-                if not isinstance(timestamp, str):
-                    raise MetricsError("malformed Monitoring timestamp")
+                end_time = _timestamp(interval.get("endTime"), "timestamp", window)
+                start_value = interval.get("startTime")
+                metric_kind = METRIC_KINDS[metric]
+                if metric_kind == "DELTA":
+                    if start_value is None:
+                        raise MetricsError("malformed Monitoring DELTA interval")
+                    start_time = _timestamp(start_value, "start timestamp", window)
+                    if start_time > end_time:
+                        raise MetricsError("malformed Monitoring DELTA interval")
+                elif start_value is not None:
+                    _timestamp(start_value, "start timestamp", window)
                 numeric_values = [
                     (key, candidate)
                     for key, candidate in value.items()
@@ -305,7 +367,15 @@ def _read_metric(
                 if len(numeric_values) != 1:
                     raise MetricsError("malformed Monitoring numeric value")
                 key, candidate = numeric_values[0]
-                safe_points.append({"timestamp": timestamp, "value": _number(candidate, key)})
+                projected = {
+                    "end_timestamp": end_time.isoformat(timespec="microseconds").replace("+00:00", "Z"),
+                    "value": _number(candidate, key),
+                }
+                if metric_kind == "DELTA":
+                    projected["start_timestamp"] = start_time.isoformat(timespec="microseconds").replace(
+                        "+00:00", "Z"
+                    )
+                safe_points.append(projected)
             series.append({"instance_id": int(instance_id), "points": safe_points})
         page_token_value = response.get("nextPageToken")
         if page_token_value is None or page_token_value == "":
@@ -315,7 +385,7 @@ def _read_metric(
         page_token = page_token_value
     else:
         raise MetricsError("Monitoring pagination limit exceeded")
-    return {"metric_type": metric, "series": series}
+    return {"metric_type": metric, "kind": METRIC_KINDS[metric], "series": series}
 
 
 def run(
@@ -356,7 +426,7 @@ def run(
             "run_attempt": window.attempt,
             "status": "completed",
             "conclusion": "success",
-            "source_sha": window.source_sha,
+            "controller_source_sha": window.controller_sha,
             "project_id": PROJECT_ID,
             "zone": ZONE,
             "vm_name": window.vm_name,
