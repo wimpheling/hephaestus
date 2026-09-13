@@ -1042,8 +1042,8 @@ TERMINAL FAILED HOST BUILD REMOVAL TRIAL: RUN 34727051946
 ===========================================================
 The single host-removal trial reached the disposable VM and then failed in
 the workload. It is not a valid performance measurement and has no elapsed
-time saved or optimization acceptance. The causal optimization review remains
-pending; do not mark host-build removal rejected solely from this aborted run.
+time saved or optimization acceptance. The final disposition is
+`FAILED/INCONCLUSIVE`, rather than a rejection or performance gain.
 
 Run: [34727051946](https://github.com/wimpheling/hephaestus/actions/runs/34727051946),
 attempt `1`, workflow `main` at controller SHA
@@ -1080,7 +1080,16 @@ timing gates failed. Archive evidence was `26563` bytes with SHA-256
 `a2a4d4ce6309f6b1cc9a46c9e7ee3929c5463ff99d2f8cda470e1eefe744e4c0`.
 
 This run distinguishes passing evidence-scan/private collection/cleanup from
-the failed workload and incomplete browser/timing path. No retry or further
-GCP dispatch is authorized by this entry; retain the precise failure for the
-separate causal review and use the rollback of restoring the host build if
-that review finds the removal causative.
+the failed workload and incomplete browser/timing path. The bounded causal
+review identified the existing asynchronous assertion race at
+`examples/cooking/tests/updates.rs:640`: the assertion observed a delivery
+state before the separate mailbox-settlement transaction had persisted the
+expected `delivered` state after `cleaned_up+succeeded` with the correct
+revision. The recorded failure is therefore an orchestration race; the
+available production build, OCI phases and initial browser phase passed, and
+the evidence does not implicate removal of the host artifact/build. No code,
+PR #39 or instrumentation change is made here. Do not use this run for a
+performance comparison, and do not retry or dispatch further GCP work until
+the narrow local PostgreSQL/poll-fix reproduction and its required gate are
+complete. The rollback remains restoring the host build if a later valid
+experiment is authorized.
