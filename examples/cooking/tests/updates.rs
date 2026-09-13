@@ -628,19 +628,19 @@ pub async fn assert_deferred_event_uses_revision(
         .fetch_optional(pool)
         .await
         .expect("deferred cooking event projection");
-        if let Some((disposition, Some(run_id), revision_id, run_state, outcome)) = row {
-            assert_eq!(revision_id, Some(candidate_revision_id));
-            assert_ne!(run_id, Uuid::nil());
+        if let Some((disposition, Some(run_id), revision_id, run_state, outcome)) = &row {
+            assert_eq!(*revision_id, Some(candidate_revision_id));
+            assert_ne!(*run_id, Uuid::nil());
             if run_state.as_deref() == Some("cleaned_up") {
                 assert_eq!(
                     outcome.as_deref(),
                     Some("succeeded"),
                     "deferred mailbox run reached terminal failure: disposition={disposition}"
                 );
-                assert_eq!(
-                    disposition, "delivered",
-                    "successful deferred mailbox run must have a terminal delivered disposition"
-                );
+            }
+            if row.as_ref().is_some_and(|projection| {
+                deferred_event_is_terminal_success(projection, candidate_revision_id)
+            }) {
                 return;
             }
             assert!(
@@ -1180,6 +1180,19 @@ mod deferred_event_tests {
 
         assert!(!deferred_event_is_terminal_success(
             &projection,
+            candidate_revision_id
+        ));
+        // Cleanup commits before the mailbox completion observer settles the
+        // delivery. This intermediate state must keep the real poll waiting.
+        let cleaned_projection: DeferredEventProjection = (
+            String::from("running"),
+            projection.1,
+            projection.2,
+            Some(String::from("cleaned_up")),
+            Some(String::from("succeeded")),
+        );
+        assert!(!deferred_event_is_terminal_success(
+            &cleaned_projection,
             candidate_revision_id
         ));
     }
