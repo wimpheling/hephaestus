@@ -272,7 +272,7 @@ fn cooking_oci_worker_config(
         mkfs_ext4: std::fs::canonicalize("/usr/sbin/mkfs.ext4")
             .expect("canonical mkfs.ext4 must be installed"),
         vm_resources: vm_trait::VmResources {
-            vcpus: 1,
+            vcpus: 2,
             // Buildah plus the libkrun VMM needs the worker's 8 GiB cgroup
             // ceiling for its backing pages; keep the declared guest budget
             // at the reviewed 2 GiB operation allocation.
