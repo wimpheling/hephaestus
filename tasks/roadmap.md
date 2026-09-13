@@ -1,16 +1,19 @@
 # Roadmap: From proven core to a usable Hephaestus distribution
 
-This is the product direction agreed on 2026-09-06, not an implementation task
-or a competing task-status tracker. Detailed execution and completion evidence
-belong in the task directories described in [README.md](README.md).
+This records the product direction agreed on 2026-09-06 and clarified on
+2026-09-13, not an implementation task or a competing task-status tracker.
+Detailed execution and completion evidence belong in the task directories
+described in [README.md](README.md).
 
 ## Product direction
 
-Ship one useful Hephaestus distribution backed by a reusable, harness-neutral
-core. Agents are owned as software projects: source, instructions, skills,
-custom tools, dependencies and harness code belong together. Users should start
-with a working assistant and be able to customize or replace it without
-rebuilding the platform around it.
+Ship a Heph distribution whose primary entry point is an agent UI that helps
+users administer their Heph instance and create, code, and run projects for
+them. The UI and its packaged assistant remain ordinary, replaceable released
+software over a reusable, harness-neutral core. Projects are ordinary software
+projects and may contain agents; the first starter distribution deliberately
+uses maintained templates while preserving a path to inspect, edit, test,
+replace, and release the implementation.
 
 Keep VM isolation, explicit authority, controlled releases and inspection as
 foundations. Minimalism should reduce the concepts users must manage, not
@@ -40,6 +43,11 @@ existing task remains the source of truth for detailed acceptance and tests.
 
 ## 2. Audit the existing interactive path
 
+MVP-06 is a useful precursor for this target: it exercises a release-owned
+interactive session, durable input/output, isolated execution, and reconnectable
+history. It does not by itself deliver the primary administration UI or the
+complete create/code/run project journey.
+
 - [ ] Jointly review the MVP-06 plan with the user before starting or resuming
   implementation. Confirm the intended scope, dependency order and acceptance
   evidence in [the MVP-06 task](in-progress/mvp-06-git-backed-session-chat-journey.md)
@@ -60,6 +68,11 @@ presupposed by this step. Do not add a second scheduler or delivery system when
 the existing mechanisms suffice.
 
 ## 3. Ship the first usable distribution
+
+- [ ] Deliver the [agent-led Heph distribution](todo/ship-agent-led-heph-distribution.md)
+  whose primary entry point is the agent UI described in the product direction;
+  retain trusted shell controls and human approval for grants, deployment, and
+  recovery.
 
 - [ ] **Default agent project**
   - [ ] Supply an ordinary, editable, replaceable Hephaestus project using

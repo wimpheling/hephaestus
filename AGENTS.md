@@ -1,5 +1,13 @@
 # Contributor Instructions
 
+## Product target
+
+The current product target is documented in the [product roadmap](tasks/roadmap.md):
+“Ship a Heph distribution whose primary entry point is an agent UI that helps
+users administer their Heph instance and create, code, and run projects for
+them.” Keep this target distinct from implementation status; task locations and
+historical records remain authoritative.
+
 ## Agent methodology
 
 - Use `gpt-6-astra` with `medium` reasoning effort only for the main thread's
