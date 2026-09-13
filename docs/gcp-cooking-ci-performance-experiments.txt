@@ -1296,4 +1296,5 @@ phase projection, collection, scan, gate and cleanup evidence; the timing
 instrumentation remains frozen. Accept the one-file candidate for root's
 integration decision with rollback to restore the host artifact export and
 compile if later review rejects the modest saving. Implementation commit:
-`ca4669cce9a64029c15e0dad92d466ac0990190d`; ledger result commit: pending.
+`ca4669cce9a64029c15e0dad92d466ac0990190d`; ledger result commit:
+`37a9121`.
