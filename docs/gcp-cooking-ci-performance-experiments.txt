@@ -1500,3 +1500,37 @@ virtiofs behavior remains unreproduced. The smallest next experiment is a
 feasibility probe of the actual local libkrun verifier under the unchanged
 2 GiB envelope. It is separately owned by Luna; no cloud dispatch is
 justified until that identity and storage path are established.
+
+
+ACTUAL LOCAL LIBKRUN VERIFIER FEASIBILITY: NO GCP PERFORMANCE RESULT
+=====================================================================
+The smallest follow-up feasibility probe used the actual production verifier
+VM path locally under the unchanged `2` vCPU/`2048` MiB guest envelope, with an
+`8192` MiB host cgroup cap, network disabled, UID `10001`, and guest `/tmp` on
+`fuseblk`. The extracted `verifier_vm_spec` was unchanged and the pinned
+verifier image, entrypoint, script and candidate were retained; the probe was
+disposable and uncommitted. It passed in `259.460s` and destroyed the VM and
+cgroups successfully. Stage timings were copy `7.285s`, Syft `22.789s`, Trivy
+`3.606s` and Umoci `225.077s` (`86.75%` of elapsed time). This identifies the
+local Umoci-over-virtiofs-like storage path as the current feasibility
+bottleneck; it is not a GCP performance baseline or a claim of `221s` GCP
+savings.
+
+The same unchanged candidate and Podman all-btrfs probe previously passed in
+`14.131s`, with Umoci `4.098s`. Both local paths produced matching manifest
+validation, `277` package identities, `0` vulnerabilities and the expected
+rootfs manifest. The actual VM probe's peak host cgroup memory was
+`4260208640` bytes of the `8589934592` byte cap, with no `low`, `high`, `max`,
+OOM or PSI events and no quota/throttling signal. The rootfs census was `7739`
+regular files, `1297` directories, `827` symlinks and `488132610` regular-file
+bytes. Cleanup removed the VM runtime, VM cgroup, task cgroup parent and empty
+runtime parent. Evidence and exact command/provenance are retained in
+`/home/a/.cache/heph-real-verifier-wjf4cisl/summary.json` and its sibling
+`provenance.json`, `run-command.json` and `extracted-spec.rs` files.
+
+The GCP input identity is still unproven, so the local `259.460s` result cannot
+be mapped to the accepted run's roughly `364s` GCP verifier phase or used to
+claim a GCP saving. The memory candidate remains held; no GCP dispatch is
+justified yet. The next bounded step is Astra's read-only design of a local
+counterprobe (timeboxed to `15` minutes) for the input identity and storage
+mapping question, with no instrumentation, image or cloud change.

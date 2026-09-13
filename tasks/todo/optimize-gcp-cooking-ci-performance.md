@@ -121,6 +121,30 @@ proven locally. The smallest next step is a local actual-libkrun feasibility
 probe under the unchanged 2 GiB envelope, separately owned by Luna. The goal
 remains open; no cloud dispatch or new candidate is justified by this probe.
 
+The actual local production verifier feasibility probe then passed in 259.460s
+under the unchanged 2 vCPU/2048 MiB guest, 8 GiB host cgroup cap, network-off,
+UID 10001 configuration, with guest `/tmp` on `fuseblk`. Its unchanged
+verifier VM specification, image, script and candidate were used; the
+disposable VM and cgroups were cleaned successfully. Copy took 7.285s, Syft
+22.789s, Trivy 3.606s and Umoci 225.077s (86.75%), identifying the local
+Umoci-over-virtiofs-like storage path as the feasibility bottleneck. The same
+candidate in the all-btrfs Podman probe used Umoci in 4.098s and completed in
+14.131s. Outputs matched: 277 package identities, zero vulnerabilities and
+the expected rootfs manifest. Host peak was 4.260 GB of 8 GiB, with no OOM,
+max, PSI or quota signal; rootfs census was 7,739 files, 1,297 directories,
+827 symlinks and 488 MB. Evidence is at
+`/home/a/.cache/heph-real-verifier-wjf4cisl/summary.json` with exact
+provenance and commands in its `provenance.json`, `run-command.json` and
+`extracted-spec.rs` siblings.
+
+This is a local feasibility result, not a GCP performance baseline: the GCP
+input identity remains unproven, so no 221-second GCP saving can be claimed
+from the local 259.460-second verifier result or its comparison with the
+14.131-second Podman path. The memory candidate remains held and no GCP
+dispatch is justified yet. The next bounded step is Astra's read-only,
+15-minute design for a local counterprobe covering input identity and storage
+mapping; instrumentation, image and cloud scope remain frozen.
+
 ## Locked constraints
 
 - [x] Keep the existing WIF provider, exact `cooking-e2e.yml@refs/heads/main`
