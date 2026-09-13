@@ -73,6 +73,26 @@ Current facts
   the required per-run installs, so this warm-local pair estimates about
   `2.19s` of duplicate work. The result is too small and too cache-dependent
   to justify implementation or a paid trial; it is not a GCP timing claim.
+- A private actual golden preparation-prefix diagnostic for the proposed
+  crash-build hoist completed with cleanup and provenance complete at
+  `/home/a/.cache/heph-crash-prefix-diagnostic`. It intentionally skipped the
+  remaining scenarios and browser phases, so it is not a full workload pass:
+  real prefix `R=61.899s`, candidate `C=0.754s`, baseline `B=139.442s`, with
+  conservative predicted overlap gain
+  `min(C,max(B-R,0))=0.754s`. A separate actual production build and OCI path
+  passed in session `39200` (`31.601s` build, `39.504s` builder,
+  `89.501s` verifier, `139.952s` quiescent, `139.957s` application shutdown,
+  exit `0`); these are prefix/operation timings and do not establish a full
+  Cooking workload result. The initial attempt's private Unix-socket path was
+  `126` bytes versus the `108`-byte limit and is retained as a setup failure;
+  correcting private temporary roots was not a candidate change. Because the
+  predicted gain is below one second, reject the crash-build-hoist candidate
+  without a GCP run, full quality gate or PR. The source-only candidate remains
+  held and uncommitted at
+  `/home/a/projects/hephaestus-worktrees/gcp-prebuild-crash-release` after
+  independent design review and local fmt/check. Evidence files are
+  `summary.json`, `run.sh`, `source.patch` and `provenance.json` in the
+  diagnostic directory.
 - Candidate PR #43 removed only the guarded CPython
   `/opt/python/lib/python3.13/test` tree. Its authorized locked GCP trial,
   run `34738676749 <https://github.com/wimpheling/hephaestus/actions/runs/34738676749>`_,
