@@ -46,10 +46,14 @@ Current facts
   feasibility passed in `259.460s`, but GCP input identity is unproven. The
   corrected local ext4 scratch candidate was rejected (`81.388s` versus
   `77.143s` control); neither local result is a GCP performance measurement.
-- An account-only real-guest probe supports the missing-NSS-record hypothesis:
-  a local profiled pair changed `76.180s` to `46.561s`, saving `29.619s`
-  (`38.9%`). It is one sequential local pair with cache/order uncertainty,
-  not an accepted GCP optimization. Optional profiling remains informational.
+- Critical correction: at measured candidate `7a6ba94`, production
+  `scripts/run-libkrun-integration.sh` already adds the fixed `heph-agent`
+  UID/GID `10001` records in `prepare_guest_root` (lines `232-238`) before
+  preparing the verifier root (line `829`) and exporting it (line `895`). The
+  account-only `76.180s -> 46.561s` local pair therefore corrected a diagnostic
+  harness omission, not production behavior. Withdraw its missing-NSS
+  optimization hypothesis, identity-projection candidate and image-change
+  implication. Optional profiling remains informational.
 
 Implementation foundation (live and frozen)
 --------------------------------------------
@@ -97,9 +101,10 @@ TO DO
    is retained.
 3. Keep fork execution deferred pending a separate trust-policy decision and
    keep MVP-06 unchecked; neither is part of this task.
-4. Keep the local memory candidate held. Any profiling or counterprobe must
-   first establish input identity and storage mapping; no cloud dispatch is
-   justified by the current local results.
+4. Keep the local memory candidate held. Any next diagnostic must execute the
+   complete production `prepare_guest_root` path and current generated OCI
+   input before attributing verifier cost; no immediate GCP, image, cache or
+   bootstrap promotion is justified.
 5. Record any future bounded trial with exact provenance, complete gates,
    cleanup evidence, measurements, decision and rollback. Preserve frozen
    instrumentation and do not treat overlapping workload phases as additive.
@@ -121,7 +126,9 @@ CURRENT REJECTED AND HELD LOCAL RESULTS
 =======================================
 - The local 2 GiB memory candidate remains held: actual libkrun feasibility
   passed in `259.460s`, but GCP input identity remains unproven, so no GCP
-  saving or performance baseline is claimed.
+  saving or performance baseline is claimed. Earlier local Umoci timings near
+  `225s` and `61s` are likewise harness-limited by omitted production identity
+  preparation and unproven input equivalence.
 - The corrected ext4 scratch probe is rejected as a local optimization:
   `81.388s` versus `77.143s` control. The earlier preseed-link scratch probe
   is invalid because real cleanup removed the link before placement. These
@@ -129,11 +136,11 @@ CURRENT REJECTED AND HELD LOCAL RESULTS
   production, image or GCP change.
 - Optional profiling is informational and subordinate to the input-identity
   and storage-mapping question. No new cloud run is currently justified.
-- The account-only probe used a private clone with only fixed non-login
-  UID/GID `10001` passwd/group records; numeric UID/GID/group and all image,
-  script and candidate content stayed unchanged. It supports a narrow
-  mechanism hypothesis, but production design must separately choose a
-  reviewable identity projection or an image change.
+- The account-only probe is superseded as a harness-correction-only result:
+  its private clone supplied records already present in production preparation.
+  It is not a supported production mechanism, optimization, GCP result or
+  design candidate. Do not add the reserved ID to the image; the Dockerfile's
+  collision check would reject that change.
 
 CHRONOLOGICAL EXPERIMENT RECORDS (HISTORICAL DETAIL)
 =====================================================
@@ -1545,8 +1552,8 @@ feasibility probe of the actual local libkrun verifier under the unchanged
 justified until that identity and storage path are established.
 
 
-ACTUAL LOCAL LIBKRUN VERIFIER FEASIBILITY: NO GCP PERFORMANCE RESULT
-=====================================================================
+ACTUAL LOCAL LIBKRUN VERIFIER FEASIBILITY: HARNESS-LIMITED, NO GCP RESULT
+=========================================================================
 The smallest follow-up feasibility probe used the actual production verifier
 VM path locally under the unchanged `2` vCPU/`2048` MiB guest envelope, with an
 `8192` MiB host cgroup cap, network disabled, UID `10001`, and guest `/tmp` on
@@ -1570,6 +1577,12 @@ bytes. Cleanup removed the VM runtime, VM cgroup, task cgroup parent and empty
 runtime parent. Evidence and exact command/provenance are retained in
 `/home/a/.cache/heph-real-verifier-wjf4cisl/summary.json` and its sibling
 `provenance.json`, `run-command.json` and `extracted-spec.rs` files.
+
+Superseding correction: the disposable harness did not run the complete
+production `prepare_guest_root` identity preparation. Therefore this local
+Umoci timing, and the earlier `61s` scratch comparison, are not production-
+equivalent evidence for a virtiofs, account or GCP cause. The measurements are
+retained as historical diagnostic timings only.
 
 The GCP input identity is still unproven, so the local `259.460s` result cannot
 be mapped to the accepted run's roughly `364s` GCP verifier phase or used to
@@ -1611,12 +1624,12 @@ pending Luna's separate existing-data analysis. No production, image or GCP
 change is justified by this rejected probe.
 
 
-LOCAL ACCOUNT-ONLY REAL-GUEST PROBE: HYPOTHESIS SUPPORTED, NO GCP RESULT
-=========================================================================
-An account-only real-guest counterprobe tested whether the verifier's missing
-NSS records contributed to its local Umoci cost. The actual guest ran as UID
-and GID `10001`, with no corresponding passwd/group records. A private clone
-added only fixed non-login records for that UID/GID:
+LOCAL ACCOUNT-ONLY REAL-GUEST PROBE: SUPERSEDED HARNESS CORRECTION
+==================================================================
+An account-only diagnostic counterprobe initially tested whether the verifier's
+missing NSS records contributed to its local Umoci cost. Its harness ran as
+UID and GID `10001`, with no corresponding passwd/group records. A private
+clone added only fixed non-login records for that UID/GID:
 `heph-verifier:!:10001:10001:Hephaestus verifier:/nonexistent:/usr/sbin/nologin`
 and `heph-verifier:!:10001:`. Numeric UID/GID/group, pinned Go 1.22 tar cache
 state, image, script and candidate content were otherwise unchanged; the Go
@@ -1626,9 +1639,11 @@ The one sequential profiled local pair changed full VM time from `76.180s` to
 `46.561s`, a local saving of `29.619s` (`38.9%`). Umoci changed from `59.629s`
 to `30.743s`; mtree changed from `42.119s` to `16.826s`; sampled CPU changed
 from `14.81s` to `9.06s`, and the `os/user` profile focus matched zero
-samples. The result supports the missing-account lookup mechanism hypothesis,
-but cache/order effects are uncontrolled and this is not a GCP performance
-measurement or accepted optimization.
+samples. The apparent local difference is a harness correction, not supported
+production mechanism evidence: measured candidate `7a6ba94` already adds these
+records in `scripts/run-libkrun-integration.sh` before the verifier root is
+used. Cache/order effects are also uncontrolled, so this is not a GCP
+performance measurement or accepted optimization.
 
 Correctness matched the reference: all `9864` tree entries matched content,
 metadata, xattrs, owners, symlink targets and all `4` hardlink groups;
@@ -1636,7 +1651,8 @@ manifest, package identity and vulnerability identity outputs were identical.
 The VM, runtime, cgroup and task parents were cleaned, and private outputs
 were not published. Evidence is retained in
 `/home/a/.cache/heph-umoci-account-hj5a9l3v/summary.json`. No production,
-image, repository or GCP change was made. The next decision is a separate
-production design review choosing between a narrow reviewable identity
-projection and an image change; memory remains held and the ext4 scratch
-candidate remains rejected.
+image, repository or GCP change was made. The identity-projection and image
+candidate are withdrawn. The next diagnostic must execute the complete
+production `prepare_guest_root` path with the current generated OCI input
+before any verifier-cost attribution; memory remains held and the ext4
+scratch candidate remains rejected.

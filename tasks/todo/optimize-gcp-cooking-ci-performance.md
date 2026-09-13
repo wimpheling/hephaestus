@@ -29,10 +29,12 @@ memory candidate is held, the corrected ext4 scratch candidate is rejected,
 and the actual local libkrun probe is feasibility evidence only; GCP input
 identity remains unproven. Cancellation propagation is partial, fork execution
 is deferred, MVP-06 remains unchecked, and the broader goal remains open.
-An account-only real-guest probe supports a missing-NSS-record hypothesis with
-one local profiled pair improving 76.180s to 46.561s (29.619s, 38.9%), but it
-is not a GCP result; production design remains a separate review choice
-between a narrow identity projection and an image change.
+Critical correction: at measured candidate `7a6ba94`, production
+`scripts/run-libkrun-integration.sh` already adds fixed `heph-agent` UID/GID
+10001 records in `prepare_guest_root` before preparing and exporting the
+verifier root. The account-only 76.180s to 46.561s local pair corrected a
+diagnostic harness omission; it is not production mechanism evidence. Withdraw
+the identity-projection and image-change candidate.
 
 ## Working-tree implementation status
 
@@ -155,10 +157,13 @@ provenance and commands in its `provenance.json`, `run-command.json` and
 This is a local feasibility result, not a GCP performance baseline: the GCP
 input identity remains unproven, so no 221-second GCP saving can be claimed
 from the local 259.460-second verifier result or its comparison with the
-14.131-second Podman path. The memory candidate remains held and no GCP
-dispatch is justified yet. The next bounded step is Astra's read-only,
-15-minute design for a local counterprobe covering input identity and storage
-mapping; instrumentation, image and cloud scope remain frozen.
+14.131-second Podman path. Earlier local Umoci timings near 225s and 61s are
+likewise harness-limited by omitted production identity preparation and
+unproven input equivalence. The memory candidate remains held and no GCP
+dispatch is justified yet. The next bounded step is to execute the complete
+production `prepare_guest_root` path with the current generated OCI input
+before attributing verifier cost; no immediate GCP, image, cache or bootstrap
+promotion is justified, and instrumentation remains frozen.
 
 The corrected local ext4 scratch probe is rejected as an optimization. It
 passed correctness and cleanup, but full VM elapsed time was 81.388s (81.474s
@@ -185,16 +190,17 @@ stage cost remains recorded, while CPU-versus-wait interpretation is pending
 Luna's separate existing-data analysis. No production, image or cloud change
 is justified; the broader goal remains open.
 
-An account-only real-guest probe supports a missing-NSS-record hypothesis:
-adding only fixed non-login passwd/group entries for the unchanged UID/GID
-10001 in a private clone changed one profiled local pair from 76.180s to
-46.561s (29.619s, 38.9% local). Umoci changed 59.629s to 30.743s and mtree
-42.119s to 16.826s; outputs and all 9,864 tree entries remained identical.
-This is one sequential local pair with cache/order uncertainty and is not a
-GCP optimization or performance measurement. The next step is Astra's
-separate production design review: choose a narrow reviewable identity
-projection or an image change. Memory remains held, scratch remains rejected,
-and instrumentation remains frozen. Evidence is at
+The account-only real-guest probe is superseded as harness-correction-only.
+Its private clone added fixed non-login passwd/group entries for UID/GID
+10001, changing one profiled local pair from 76.180s to 46.561s (29.619s,
+38.9% local), but production `prepare_guest_root` already adds those records.
+Its Umoci and mtree timings, identical outputs and 9,864-entry comparison are
+retained as historical diagnostic evidence only; cache/order effects remain
+uncontrolled. No GCP optimization, production design candidate or image
+change follows. The next diagnostic must execute the complete production
+`prepare_guest_root` path with the current generated OCI input before any
+verifier-cost attribution. Memory remains held, scratch remains rejected, and
+instrumentation remains frozen. Evidence is at
 `/home/a/.cache/heph-umoci-account-hj5a9l3v/summary.json`.
 
 ## Locked constraints
