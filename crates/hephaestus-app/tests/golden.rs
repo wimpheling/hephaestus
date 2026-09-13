@@ -60,6 +60,105 @@ use vm_trait::RootFilesystem;
 use volume_local::LocalVolumeConfig;
 use workspace_local::{LocalWorkspaceConfig, WorkspaceLimits};
 
+// Wait for both bounded preparation branches even if an assertion or an
+// expected-result check panics. Dropping the sibling could abandon published
+// production work; resume the original panic only after both futures settle.
+async fn join_cooking_preparation<A, B>(first: A, second: B) -> (A::Output, B::Output)
+where
+    A: std::future::Future,
+    B: std::future::Future,
+{
+    use futures_util::FutureExt as _;
+
+    let (first, second) = tokio::join!(
+        std::panic::AssertUnwindSafe(first).catch_unwind(),
+        std::panic::AssertUnwindSafe(second).catch_unwind(),
+    );
+    (
+        first.unwrap_or_else(|panic| std::panic::resume_unwind(panic)),
+        second.unwrap_or_else(|panic| std::panic::resume_unwind(panic)),
+    )
+}
+
+#[tokio::test]
+async fn cooking_preparation_overlaps_child_lifecycles() {
+    let root = tempfile::tempdir().expect("preparation lifecycle root");
+    let child = |own: &'static str, peer: &'static str| {
+        let root = root.path();
+        async move {
+            let status = Command::new("sh")
+                .args([
+                    "-eu", "-c",
+                    r#"touch "$1/$2"; while [ ! -f "$1/$3" ]; do sleep 0.01; done; touch "$1/$2-finished""#,
+                    "cooking-preparation", root.to_str().expect("fixture path"), own, peer,
+                ])
+                .kill_on_drop(true)
+                .status()
+                .await
+                .expect("preparation lifecycle child");
+            assert!(status.success());
+        }
+    };
+    // Each real child waits for the other to start. Serial polling deadlocks
+    // and hits this bounded fixture timeout instead of passing spuriously.
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        join_cooking_preparation(child("release", "blog"), child("blog", "release")),
+    )
+    .await
+    .expect("both preparation children must make progress");
+    assert!(root.path().join("release-finished").is_file());
+    assert!(root.path().join("blog-finished").is_file());
+}
+
+#[tokio::test]
+async fn cooking_preparation_drains_child_before_resuming_either_panic() {
+    use futures_util::FutureExt as _;
+
+    for first_panics in [true, false] {
+        let root = tempfile::tempdir().expect("preparation failure root");
+        let branch = |panics: bool| {
+            let root = root.path();
+            async move {
+                if panics {
+                    // Preserve a real unwind payload without printing an expected
+                    // fixture panic into the full Cooking workload diagnostics.
+                    std::panic::resume_unwind(Box::new("original preparation failure"));
+                }
+                let status = Command::new("sh")
+                    .args([
+                        "-eu",
+                        "-c",
+                        r#"sleep 0.02; touch "$1/finished""#,
+                        "cooking-preparation",
+                        root.to_str().expect("fixture path"),
+                    ])
+                    .kill_on_drop(true)
+                    .status()
+                    .await
+                    .expect("preparation cleanup child");
+                assert!(status.success());
+            }
+        };
+        let failure = tokio::time::timeout(
+            Duration::from_secs(5),
+            std::panic::AssertUnwindSafe(join_cooking_preparation(
+                branch(first_panics),
+                branch(!first_panics),
+            ))
+            .catch_unwind(),
+        )
+        .await
+        .expect("preparation failure drain deadline")
+        .expect_err("original failure must propagate");
+        assert_eq!(
+            failure.downcast_ref::<&str>(),
+            Some(&"original preparation failure"),
+        );
+        assert!(root.path().join("finished").is_file());
+    }
+}
+
 const WORKLOAD_PHASE_TIMING_EVENT: &str = "phase-timing";
 const WORKLOAD_PHASE_TIMING_MAX_MS: u128 = 45 * 60 * 1_000;
 
@@ -1022,109 +1121,6 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             } else {
                 None
             };
-        let builds = {
-            let production_project_build_timer =
-                WorkloadPhaseTimer::start("production-project-build", workload_phase_timing);
-            let result = cooking_builds::build_and_publish(cooking_builds::CookingBuildContext {
-                pool: &pool,
-                running: &running,
-                root: &root,
-                source_root: &source_root,
-                project_id: project.id,
-                repositories: &fixture_repository,
-                identity: cooking_builds::CookingIdentity {
-                    actor: &identity,
-                    git_token: &token,
-                    rpc_token: &rpc_token,
-                },
-                timeout: cooking_wait_timeout,
-            })
-            .await;
-            production_project_build_timer.finish(result.is_ok());
-            result.expect("real cooking source build and publish proof")
-        };
-        let adversarial_agent_build = cooking_builds::build_and_publish_adversarial_agent(
-            &cooking_builds::CookingBuildContext {
-                pool: &pool,
-                running: &running,
-                root: &root,
-                source_root: &source_root,
-                project_id: project.id,
-                repositories: &fixture_repository,
-                identity: cooking_builds::CookingIdentity {
-                    actor: &identity,
-                    git_token: &token,
-                    rpc_token: &rpc_token,
-                },
-                timeout: cooking_wait_timeout,
-            },
-            &builds.agent,
-        )
-        .await
-        .expect("publish adversarial cooking agent destination release");
-        assert_ne!(
-            adversarial_agent_build.release_id, builds.agent.release_id,
-            "the adversarial agent must use a distinct published release"
-        );
-        let adversarial_gateway_build = cooking_builds::build_and_publish_adversarial_gateway(
-            &cooking_builds::CookingBuildContext {
-                pool: &pool,
-                running: &running,
-                root: &root,
-                source_root: &source_root,
-                project_id: project.id,
-                repositories: &fixture_repository,
-                identity: cooking_builds::CookingIdentity {
-                    actor: &identity,
-                    git_token: &token,
-                    rpc_token: &rpc_token,
-                },
-                timeout: cooking_wait_timeout,
-            },
-            &builds.gateway,
-        )
-        .await
-        .expect("publish adversarial foreign-slot gateway release");
-        assert_eq!(
-            adversarial_gateway_build.repository_id, builds.gateway.repository_id,
-            "the adversarial release must remain in the canonical release family"
-        );
-        assert_ne!(
-            adversarial_gateway_build.release_id, builds.gateway.release_id,
-            "the adversarial probe must use a distinct published release"
-        );
-        for published in [&builds.gateway, &builds.agent, &adversarial_agent_build] {
-            assert_eq!(published.actor_id, user_id);
-            assert!(!published.repository_id.as_uuid().is_nil());
-            assert!(!published.source_commit.is_empty());
-            assert!(!published.build_request_id.is_nil());
-            assert!(!published.release_id.is_nil());
-            assert!(!published.release_agent_id.is_nil());
-            assert!(!published.version.is_empty());
-            assert!(!published.build_definition_hash.is_empty());
-            assert!(!published.configuration_hash.is_empty());
-            assert!(!published.manifest_hash.is_empty());
-            assert!(published.source_path.is_dir());
-            assert!(published.working_path.is_dir());
-        }
-        let blog_repository =
-            cooking_builds::create_cooking_blog_repository(&cooking_builds::CookingBuildContext {
-                pool: &pool,
-                running: &running,
-                root: &root,
-                source_root: &source_root,
-                project_id: project.id,
-                repositories: &fixture_repository,
-                identity: cooking_builds::CookingIdentity {
-                    actor: &identity,
-                    git_token: &token,
-                    rpc_token: &rpc_token,
-                },
-                timeout: cooking_wait_timeout,
-            })
-            .await
-            .expect("create and push separate cooking blog repository");
-        assert!(!blog_repository.source_commit.is_empty());
         let cooking_context = cooking_builds::CookingBuildContext {
             pool: &pool,
             running: &running,
@@ -1139,10 +1135,37 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             },
             timeout: cooking_wait_timeout,
         };
-        let update_builds = if env::var("HEPHAESTUS_COOKING_UPDATE_E2E").as_deref() == Ok("1") {
-            Some(
-                cooking_builds::build_and_publish_update_variants(
-                    cooking_builds::CookingBuildContext {
+        // These repositories share only their project: Python/Rust release builds
+        // do not consume the blog's Hugo image. Keep same-family release mutations
+        // serial while the independent OCI build and verification make progress.
+        let (prepared_releases, blog_repository) = Box::pin(join_cooking_preparation(
+            async {
+                let builds = {
+                    let production_project_build_timer = WorkloadPhaseTimer::start(
+                        "production-project-build",
+                        workload_phase_timing,
+                    );
+                    let result =
+                        cooking_builds::build_and_publish(cooking_builds::CookingBuildContext {
+                            pool: &pool,
+                            running: &running,
+                            root: &root,
+                            source_root: &source_root,
+                            project_id: project.id,
+                            repositories: &fixture_repository,
+                            identity: cooking_builds::CookingIdentity {
+                                actor: &identity,
+                                git_token: &token,
+                                rpc_token: &rpc_token,
+                            },
+                            timeout: cooking_wait_timeout,
+                        })
+                        .await;
+                    production_project_build_timer.finish(result.is_ok());
+                    result.expect("real cooking source build and publish proof")
+                };
+                let adversarial_agent_build = cooking_builds::build_and_publish_adversarial_agent(
+                    &cooking_builds::CookingBuildContext {
                         pool: &pool,
                         running: &running,
                         root: &root,
@@ -1159,11 +1182,112 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
                     &builds.agent,
                 )
                 .await
-                .expect("publish cooking update-hook variants"),
-            )
-        } else {
-            None
-        };
+                .expect("publish adversarial cooking agent destination release");
+                assert_ne!(
+                    adversarial_agent_build.release_id, builds.agent.release_id,
+                    "the adversarial agent must use a distinct published release"
+                );
+                let adversarial_gateway_build =
+                    cooking_builds::build_and_publish_adversarial_gateway(
+                        &cooking_builds::CookingBuildContext {
+                            pool: &pool,
+                            running: &running,
+                            root: &root,
+                            source_root: &source_root,
+                            project_id: project.id,
+                            repositories: &fixture_repository,
+                            identity: cooking_builds::CookingIdentity {
+                                actor: &identity,
+                                git_token: &token,
+                                rpc_token: &rpc_token,
+                            },
+                            timeout: cooking_wait_timeout,
+                        },
+                        &builds.gateway,
+                    )
+                    .await
+                    .expect("publish adversarial foreign-slot gateway release");
+                assert_eq!(
+                    adversarial_gateway_build.repository_id, builds.gateway.repository_id,
+                    "the adversarial release must remain in the canonical release family"
+                );
+                assert_ne!(
+                    adversarial_gateway_build.release_id, builds.gateway.release_id,
+                    "the adversarial probe must use a distinct published release"
+                );
+                for published in [&builds.gateway, &builds.agent, &adversarial_agent_build] {
+                    assert_eq!(published.actor_id, user_id);
+                    assert!(!published.repository_id.as_uuid().is_nil());
+                    assert!(!published.source_commit.is_empty());
+                    assert!(!published.build_request_id.is_nil());
+                    assert!(!published.release_id.is_nil());
+                    assert!(!published.release_agent_id.is_nil());
+                    assert!(!published.version.is_empty());
+                    assert!(!published.build_definition_hash.is_empty());
+                    assert!(!published.configuration_hash.is_empty());
+                    assert!(!published.manifest_hash.is_empty());
+                    assert!(published.source_path.is_dir());
+                    assert!(published.working_path.is_dir());
+                }
+                let update_builds =
+                    if env::var("HEPHAESTUS_COOKING_UPDATE_E2E").as_deref() == Ok("1") {
+                        Some(
+                            cooking_builds::build_and_publish_update_variants(
+                                cooking_builds::CookingBuildContext {
+                                    pool: &pool,
+                                    running: &running,
+                                    root: &root,
+                                    source_root: &source_root,
+                                    project_id: project.id,
+                                    repositories: &fixture_repository,
+                                    identity: cooking_builds::CookingIdentity {
+                                        actor: &identity,
+                                        git_token: &token,
+                                        rpc_token: &rpc_token,
+                                    },
+                                    timeout: cooking_wait_timeout,
+                                },
+                                &builds.agent,
+                            )
+                            .await
+                            .expect("publish cooking update-hook variants"),
+                        )
+                    } else {
+                        None
+                    };
+                (
+                    builds,
+                    adversarial_agent_build,
+                    adversarial_gateway_build,
+                    update_builds,
+                )
+            },
+            async {
+                let blog_repository = cooking_builds::create_cooking_blog_repository(
+                    &cooking_builds::CookingBuildContext {
+                        pool: &pool,
+                        running: &running,
+                        root: &root,
+                        source_root: &source_root,
+                        project_id: project.id,
+                        repositories: &fixture_repository,
+                        identity: cooking_builds::CookingIdentity {
+                            actor: &identity,
+                            git_token: &token,
+                            rpc_token: &rpc_token,
+                        },
+                        timeout: cooking_wait_timeout,
+                    },
+                )
+                .await
+                .expect("create and push separate cooking blog repository");
+                assert!(!blog_repository.source_commit.is_empty());
+                blog_repository
+            },
+        ))
+        .await;
+        let (builds, adversarial_agent_build, adversarial_gateway_build, update_builds) =
+            prepared_releases;
         cooking_builds::wait_for_cooking_build_quiescence(
             &pool,
             project.id,
