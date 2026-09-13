@@ -2086,3 +2086,44 @@ I/O failures would be a semantic caveat, and any nested-image or scanner-cache
 change would require a new derived locked comparison before a GCP trial. Keep
 the protected GCE image and frozen instrumentation unchanged; no paid verifier
 candidate is approved by these read-only queries.
+
+
+LOCAL RAW OCI UNPACK PAIR: PR #47 CANDIDATE, PENDING FURTHER VALIDATION
+=======================================================================
+The unchanged OCI verifier candidate is PR #47
+`https://github.com/wimpheling/hephaestus/pull/47`, with original candidate
+commit `f8a928160d9398bf14b509a4455476d6becc9fff` and refreshed branch tip
+`1fee77852ac7f0fd060bf453e27b510791770604` after merging current main. The
+refresh preserves the candidate bytes and leaves only
+`platform/builders/oci-verifier-ubuntu/oci-verify` in the diff against main.
+The candidate's local current-input pair used source revision
+`7a6ba94e55e3b2cc42f8960578d6a4ad54b1c0ae`, the current Dockerfile SHA-256
+`86af387bcda2e9fe0687aa863e87b93649869c1ae4bf65f4ebccf646a64577cc`, the
+pinned builder/verifier images, the unchanged 2-vCPU/2048-MiB guest envelope,
+and the existing worker/bootstrap. It did not use the PR #45 Dockerfile input.
+
+The actual local VmOciOperation baseline completed in `122.325865874s`; the
+raw-unpack/runtime-config candidate completed in `84.209289853s`, an observed
+reduction of `38.116576021s` (`31.16%`). The verifier phase decreased from
+`85.494s` to `47.509s` (`44.43%`), while the builder changed from `36.583s` to
+`36.361s`. Both operations passed the local verifier, with zero reported
+vulnerabilities and `296` packages. The candidate evidence is retained at
+`/home/a/.cache/ovr-candidate-20260913T104216Z`; baseline evidence is at
+`/home/a/.cache/ovr-base-20260913T104216Z`. The local focused guest failure
+classification fixtures passed, and the required quality gate passed at exit
+`0` with log `/tmp/oci-raw-unpack-quality-f8a9281.log`.
+
+This is a local measurement only and is not a GCP saving or full Cooking
+lifecycle result. The local result reports matching rootfs metadata/content,
+xattrs and hardlink groups, but the retained detailed comparison method still
+needs independent review; scanner dependency identity and zero-vulnerability
+results were independently checked. Raw/legacy runtime-config equivalence was
+validated separately. The full script escape fixture and mtree I/O-failure
+equivalence were not exercised. The candidate intentionally omits unused
+`mtree`/`umoci.json` metadata, so those outputs and any incidental I/O failure
+semantics remain a caveat.
+
+Before any paid trial, derive and validate the nested image and complete the
+full local Cooking lifecycle, then establish a new locked cache identity. Keep
+the protected GCE image and frozen instrumentation unchanged. No GCP
+performance claim or paid candidate is approved by this pair.
