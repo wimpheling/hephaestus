@@ -103,21 +103,32 @@ def arguments(output: Path) -> SimpleNamespace:
 
 
 class ReadExistingMetricsTests(unittest.TestCase):
-    def test_workflow_is_main_only_and_reuses_read_only_auth_contract(self) -> None:
-        workflow = (ROOT.parent / ".github/workflows/gcp-read-existing-metrics.yml").read_text(
+    def test_provider_metrics_route_reuses_trusted_workflow_without_vm_path(self) -> None:
+        workflow = (ROOT.parent / ".github/workflows/cooking-e2e.yml").read_text(
             encoding="utf-8"
         )
-        self.assertIn("github.repository == 'wimpheling/hephaestus'", workflow)
-        self.assertIn("github.ref == 'refs/heads/main'", workflow)
-        self.assertIn("actions: read", workflow)
-        self.assertIn("id-token: write", workflow)
+        self.assertIn("provider-metrics", workflow)
+        self.assertIn("metrics_run_id:", workflow)
+        self.assertIn("metrics_attempt:", workflow)
+        gcp_start = workflow.index("  gcp-cloud:")
+        provider_start = workflow.index("  provider-metrics:")
+        cooking_start = workflow.index("  cooking:")
+        gcp_job = workflow[gcp_start:provider_start]
+        provider_job = workflow[provider_start:cooking_start]
+        cooking_job = workflow[cooking_start:]
+        self.assertIn("inputs.cloud_mode != 'provider-metrics'", gcp_job)
         self.assertIn(
-            "projects/84572286146/locations/global/workloadIdentityPools/github-actions/providers/github",
-            workflow,
+            "github.repository == 'wimpheling/hephaestus' && github.ref == 'refs/heads/main'",
+            provider_job,
         )
-        self.assertIn("scripts/read_gcp_existing_metrics.py", workflow)
-        self.assertIn("actions/upload-artifact@v4", workflow)
-        self.assertNotIn("gcp-kvm-smoke.sh", workflow)
+        self.assertIn("inputs.cloud_mode == 'provider-metrics'", provider_job)
+        self.assertIn("actions: read", provider_job)
+        self.assertIn("id-token: write", provider_job)
+        self.assertIn("scripts/read_gcp_existing_metrics.py", provider_job)
+        self.assertNotIn("scripts/read_gcp_existing_metrics.py", gcp_job)
+        self.assertNotIn("scripts/read_gcp_existing_metrics.py", cooking_job)
+        self.assertNotIn("gcp-kvm-smoke.sh", provider_job)
+        self.assertNotIn("gcp-cooking-run.sh", provider_job)
 
     def test_real_query_path_projects_allowlisted_points_and_exact_filter(self) -> None:
         transport = FixtureTransport()
