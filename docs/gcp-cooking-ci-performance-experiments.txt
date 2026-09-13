@@ -93,6 +93,18 @@ Current facts
   independent design review and local fmt/check. Evidence files are
   `summary.json`, `run.sh`, `source.patch` and `provenance.json` in the
   diagnostic directory.
+- Prepared draft PR #44 (`a6bf87b9cf8a20d59a5afa2a784802ba9cd7308c`, branch
+  `perf/cooking-overlap-initial-browser`) splits blog-repository metadata from
+  population and joins the independent release and blog preparation branches.
+  Source push, manual attachments and browser configuration remain behind the
+  final join; browser assertions, workload timers, cleanup and security/update
+  scenarios are unchanged. Focused fmt/compile, two join tests, four build
+  tests, Clippy and independent review passed, but the full real local lifecycle
+  is still running and repository quality/GCP validation have not run. The
+  hypothesis is bounded by up to `98.616s` of measured initial-browser slack
+  against independent OCI preparation, not a guaranteed gain. No GCP dispatch
+  or performance claim is made; rollback is reverting the two-file candidate
+  commit.
 - Candidate PR #43 removed only the guarded CPython
   `/opt/python/lib/python3.13/test` tree. Its authorized locked GCP trial,
   run `34738676749 <https://github.com/wimpheling/hephaestus/actions/runs/34738676749>`_,
