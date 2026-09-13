@@ -50,6 +50,21 @@ Current facts
   `34732597502 <https://github.com/wimpheling/hephaestus/actions/runs/34732597502>`_.
   All are single-pair results; overlap is the newest accepted implementation
   comparison.
+- The adversarial-build overlap candidate at commit `9868b80` was rejected and
+  reverted by `43344cd` after its local candidate exited `101` before workload
+  markers (`34 passed`, `1 failed`, `1 ignored`). Its private evidence is
+  retained under
+  `/home/a/.cache/heph-private-adversarial-measurement/candidate-20260913-2792004`;
+  it is invalid for performance comparison. A likely shared-target baked
+  control manifest/bootstrap-path issue was observed, but the failing syscall
+  is unconfirmed. The separate local control passed (`35 passed`, `0 failed`,
+  `1 ignored`, `262.58s`, PostgreSQL `6`); its observed timings were agent
+  `0.703447353s`, gateway `32.392713710s`, releases `63.114675828s`, blog
+  `99.514120254s`, slack `36.399444426s` and outer `99.514143538s`. Control
+  evidence is retained under
+  `/home/a/.cache/heph-private-adversarial-measurement/control-20260913-2792003`.
+  No retry or GCP dispatch follows, and this failure is not a measured
+  regression.
 - The local verifier memory candidate remains held. Actual local libkrun
   feasibility passed in `259.460s`, but its earlier local probe input
   equivalence is incomplete. The corrected local ext4 scratch candidate was

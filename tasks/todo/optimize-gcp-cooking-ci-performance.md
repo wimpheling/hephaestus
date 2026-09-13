@@ -34,6 +34,21 @@ execution and is not a performance measurement. The corrected candidate fix is
 The corrected full GCP candidate run is recorded below; no repeatability or
 whole-job causal attribution is claimed.
 
+The separate adversarial-build overlap candidate at commit `9868b80` was
+reverted by `43344cd` after its local candidate exited `101` before workload
+markers (`34 passed`, `1 failed`, `1 ignored`). Its evidence is retained under
+`/home/a/.cache/heph-private-adversarial-measurement/candidate-20260913-2792004`;
+the run is invalid for performance comparison. A likely shared-target baked
+control manifest/bootstrap-path issue was observed, but the failing syscall is
+unconfirmed. The local control passed with 35 golden tests, 1 ignored,
+PostgreSQL 6, and `262.58s`; its measured preparation observations were agent
+`0.703447353s`, gateway `32.392713710s`, releases `63.114675828s`, blog
+`99.514120254s`, slack `36.399444426s`, and outer `99.514143538s`. Control
+evidence is retained under
+`/home/a/.cache/heph-private-adversarial-measurement/control-20260913-2792003`.
+No retry or GCP dispatch follows, and this failure is not a measured
+regression.
+
 PR #49 is closed as a diagnostic-only failure audit: the first finite probe
 exited `34`, and the second produced ordered stage-marker `exit_code` values
 `49`, `78`, `81` and `82`; only `49` was the overall workload exit code. This
@@ -100,8 +115,8 @@ control had 41 records (38 Rust markers plus 3 Cooking-result records), and
 all 38 control Rust markers were retained by the candidate. This is an
 accepted valid single-pair result; the full-job reduction is not attributed
 causally to every phase or treated as repeatable yet.
-The source comparison from `1d3c2b54` to `2792a4ed` contains no Rust or test
-source changes, so the projection-count difference is observational and is not
+The source comparison from `1d3c2b54` to `2792a4ed` contains no Rust test-source
+changes, so the projection-count difference is observational and is not
 evidence of added tests.
 PR #44's terminal trial run #34742470212 is operationally valid but held: its
 job was 1428s versus the 1418s control (+10s, +0.71%), with 41 markers, browser
