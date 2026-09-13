@@ -126,8 +126,9 @@ under the unchanged 2 vCPU/2048 MiB guest, 8 GiB host cgroup cap, network-off,
 UID 10001 configuration, with guest `/tmp` on `fuseblk`. Its unchanged
 verifier VM specification, image, script and candidate were used; the
 disposable VM and cgroups were cleaned successfully. Copy took 7.285s, Syft
-22.789s, Trivy 3.606s and Umoci 225.077s (86.75%), identifying the local
-Umoci-over-virtiofs-like storage path as the feasibility bottleneck. The same
+22.789s, Trivy 3.606s and Umoci 225.077s (86.75%), observing a large Umoci
+stage cost on that local guest filesystem without establishing virtiofs
+causality. The same
 candidate in the all-btrfs Podman probe used Umoci in 4.098s and completed in
 14.131s. Outputs matched: 277 package identities, zero vulnerabilities and
 the expected rootfs manifest. Host peak was 4.260 GB of 8 GiB, with no OOM,
@@ -144,6 +145,31 @@ from the local 259.460-second verifier result or its comparison with the
 dispatch is justified yet. The next bounded step is Astra's read-only,
 15-minute design for a local counterprobe covering input identity and storage
 mapping; instrumentation, image and cloud scope remain frozen.
+
+The corrected local ext4 scratch probe is rejected as an optimization. It
+passed correctness and cleanup, but full VM elapsed time was 81.388s (81.474s
+including setup/VM cleanup), 4.245s slower than the recent valid virtiofs
+unused-disk control at 77.143s. Its Umoci stage was 59.261s and final move
+5.944s (copy 3.405s, Syft 9.929s, Trivy 2.289s). Because the candidate did
+not win, the planned failed-copy fixture was not run; there was no production,
+image or GCP change.
+
+The first preseed-link scratch probe was invalid because the actual script
+cleanup removed the precreated output/bundle link before output preparation,
+so it did not exercise scratch placement and provides no speed attribution.
+The valid virtiofs repeat recorded 77.143s, Umoci 61.064s and move 0.008s, but
+is a control only. The corrected ext4 result matched all 9,864 reference tree
+entries, including content, metadata, xattrs, owners, symlinks and four
+hardlink groups; manifest, package identity and vulnerability identity outputs
+also matched. VM destruction preceded disk unlink and cgroup/runtime cleanup
+passed. Evidence is at
+`/home/a/.cache/heph-scratch-corrected-ntgvpiv_/summary.json` and
+`/home/a/.cache/heph-scratch-verifier-t3fo13ky/summary.json`.
+
+These local scratch results establish no GCP cause or saving. Observed Umoci
+stage cost remains recorded, while CPU-versus-wait interpretation is pending
+Luna's separate existing-data analysis. No production, image or cloud change
+is justified; the broader goal remains open.
 
 ## Locked constraints
 

@@ -1511,10 +1511,10 @@ VM path locally under the unchanged `2` vCPU/`2048` MiB guest envelope, with an
 verifier image, entrypoint, script and candidate were retained; the probe was
 disposable and uncommitted. It passed in `259.460s` and destroyed the VM and
 cgroups successfully. Stage timings were copy `7.285s`, Syft `22.789s`, Trivy
-`3.606s` and Umoci `225.077s` (`86.75%` of elapsed time). This identifies the
-local Umoci-over-virtiofs-like storage path as the current feasibility
-bottleneck; it is not a GCP performance baseline or a claim of `221s` GCP
-savings.
+`3.606s` and Umoci `225.077s` (`86.75%` of elapsed time). This observes a
+large Umoci stage cost on that local guest filesystem, but does not establish
+that virtiofs caused it; it is not a GCP performance baseline or a claim of
+`221s` GCP savings.
 
 The same unchanged candidate and Podman all-btrfs probe previously passed in
 `14.131s`, with Umoci `4.098s`. Both local paths produced matching manifest
@@ -1534,3 +1534,35 @@ claim a GCP saving. The memory candidate remains held; no GCP dispatch is
 justified yet. The next bounded step is Astra's read-only design of a local
 counterprobe (timeboxed to `15` minutes) for the input identity and storage
 mapping question, with no instrumentation, image or cloud change.
+
+
+CORRECTED LOCAL EXT4 SCRATCH PROBE: REJECTED, NO CLOUD RESULT
+===============================================================
+A corrected local scratch-placement probe tested an ordinary ext4 boundary at
+the Umoci output path. The unchanged candidate, script, full Umoci arguments,
+VM limits and network-off operation were retained. The probe passed its
+correctness and cleanup checks, but is rejected as an optimization: full VM
+elapsed time was `81.388s` (`81.474s` including setup/VM cleanup), versus
+`77.143s` for the recent valid virtiofs unused-disk control; ext4 was therefore
+`4.245s` slower. Its stages were Umoci `59.261s` and final move `5.944s` (copy
+`3.405s`, Syft `9.929s`, Trivy `2.289s`). The candidate did not win, so the
+planned failed-copy fixture was not run and no production or image change was
+made.
+
+The first preseed-link scratch probe is explicitly invalid: the real script's
+cleanup removed the precreated output/bundle link before output preparation,
+so scratch placement was not exercised and no speed attribution is allowed.
+The recent valid virtiofs repeat recorded `77.143s`, Umoci `61.064s` and move
+`0.008s`, but it is a control only and does not establish an attributed gain.
+The corrected ext4 probe matched the reference tree's `9864` entries,
+including content, metadata, xattrs, owners, symlink targets and all `4`
+hardlink groups; manifest, package identity and vulnerability identity outputs
+also matched. The VM was destroyed before disk unlink and all cgroup/runtime
+cleanup checks passed. Evidence is retained in
+`/home/a/.cache/heph-scratch-corrected-ntgvpiv_/summary.json` and
+`/home/a/.cache/heph-scratch-verifier-t3fo13ky/summary.json`.
+
+These local scratch results do not establish a GCP cause or saving. The
+observed Umoci cost is recorded, while CPU-versus-wait interpretation remains
+pending Luna's separate existing-data analysis. No production, image or GCP
+change is justified by this rejected probe.
