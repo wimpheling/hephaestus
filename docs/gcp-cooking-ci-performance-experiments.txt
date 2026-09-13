@@ -1363,6 +1363,10 @@ compare the candidate inventory explicitly. Focused preparation tests passed
 2/2 (session `63074`, `/tmp/heph-overlap-focused-final.log`), targeted Clippy
 passed (session `52609`, `/tmp/heph-overlap-clippy-final.log`), and formatting
 and diff checks passed. Full `cargo dev quality` and independent integration
-review remain pending. This is a pretrial record, not a performance result.
+review have now completed: the full `cargo dev quality` gate passed in
+session `48642` (exit `0`, log `/tmp/heph-overlap-quality-7a6ba94.log`), and
+the independent Astra integration review approved the bounded scope and
+safety properties. No GCP dispatch has occurred. This remains a pretrial
+record, not a performance result.
 
 Implementation commit: `7a6ba94e55e3b2cc42f8960578d6a4ad54b1c0ae`.
