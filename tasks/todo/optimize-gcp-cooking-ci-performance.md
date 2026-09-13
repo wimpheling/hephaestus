@@ -243,8 +243,9 @@ The locked GCP control is run #34732597502 (`1418s`, controller `1394357ms`,
 golden `966549ms`, OCI builder `93001ms`, verifier `364207ms`, complete gates,
 cleanup and 41 markers). Rollback is reverting the Dockerfile-only commit.
 The single paid trial was dispatched as run `34738676749` and completed
-successfully. It is not accepted because the complete candidate evidence
-retained 40 Rust markers versus 41 in control; all other gates passed. The
+successfully. Performance acceptance is inconclusive because the complete
+candidate evidence retained 40 Rust markers versus 41 in control; all other
+gates passed. The
 candidate job was `1485s` versus `1418s` control, trusted controller
 `1448925ms` versus `1394357ms`. Create/delete accounted for `+47924ms` of the
 controller increase and wait for `+5903ms`. The technical-context projection

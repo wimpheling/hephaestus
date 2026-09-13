@@ -67,8 +67,9 @@ Current facts
   `/opt/python/lib/python3.13/test` tree. Its authorized locked GCP trial,
   run `34738676749 <https://github.com/wimpheling/hephaestus/actions/runs/34738676749>`_,
   completed successfully at exact head
-  `9b39eb489d8a87c8d71db6c6c9bb573e124f1891`, but is **not accepted**: the
-  workload, browser, timing, private-evidence, scanner, gate and cleanup
+  `9b39eb489d8a87c8d71db6c6c9bb573e124f1891`; it is operationally passing,
+  while performance acceptance is **inconclusive**: the workload, browser,
+  timing, private-evidence, scanner, gate and cleanup
   checks passed, while the retained Rust marker inventory was 40 versus the
   control's 41 (the missing marker is
   `cooking_confinement::tests::native_vm_logs_reject_split_encodings_without_joining_streams`).
