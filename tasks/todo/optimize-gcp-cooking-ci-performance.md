@@ -65,9 +65,9 @@ and control `08:34--08:55Z` (22 intervals), with aggregate read rates
 `23.414/24.611 MB/s` and `127.82/130.30 ops/s`; write totals were
 `32.311/32.486 GB`. Existing UTC logs align only the VM-active windows, not
 individual monotonic workload phases, so these are resource observations with
-no causal performance claim. A same-input raw extraction/runtime-config
-validation remains a local hypothesis only; no host-16 or storage change is
-justified, and the protected image and instrumentation stay unchanged.
+no causal performance claim. The accepted verifier experiment is recorded
+below; these provider metrics do not justify a host-16 or storage change. The
+protected image and instrumentation stay unchanged.
 
 PR #47 is merged with candidate head
 `2792a4ed46433ecad94864c6e6f0573ba0f0217d` (merge commit

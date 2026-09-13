@@ -257,7 +257,7 @@ CURRENT ACCEPTED RESULTS
   timing validation, upload/download and VM absence. This is one accepted
   pair; repeatability and causal attribution of the whole-job reduction remain
   unestablished. The source comparison from `1d3c2b54` to `2792a4ed` contains
-  no Rust or test source changes, so the projection-count difference is
+  no Rust test-source changes, so the projection-count difference is
   observational and is not evidence of added tests.
 
 CURRENT REJECTED AND HELD LOCAL RESULTS
@@ -2218,7 +2218,7 @@ records: `41` Rust test-result markers plus `3` Cooking-result records; the
 control contained `41` records: `38` Rust markers plus `3` Cooking-result
 records. All 38 control Rust markers were retained by the candidate. These are
 projection records, not test counts. The source comparison from `1d3c2b54` to
-`2792a4ed` contains no Rust or test source changes, so this projection-count
+`2792a4ed` contains no Rust test-source changes, so this projection-count
 difference is observational and is not evidence of added tests.
 
 Candidate private evidence is retained at
