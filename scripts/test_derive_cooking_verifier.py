@@ -27,7 +27,7 @@ class DerivationLifecycle(unittest.TestCase):
             raise RuntimeError("rootless Podman is unavailable")
         cls.owned_baseline = status == 1
         if cls.owned_baseline:
-            subprocess.run(["skopeo", "copy", "--preserve-digests", "oci:" + str(cls.reviewed_layout), "containers-storage:" + cls.reviewed_reference], check=True, stdout=subprocess.DEVNULL)
+            subprocess.run(["podman", "unshare", "skopeo", "copy", "--preserve-digests", "oci:" + str(cls.reviewed_layout), "containers-storage:" + cls.reviewed_reference], check=True, stdout=subprocess.DEVNULL)
             cls.addClassCleanup(subprocess.run, ["podman", "rmi", cls.reviewed_reference], check=True, stdout=subprocess.DEVNULL)
 
     def setUp(self):
@@ -40,13 +40,22 @@ class DerivationLifecycle(unittest.TestCase):
         self.script = self.root / "oci-verify"
         self.script.write_text("#!/bin/sh\nprintf 'private fixture\\n'\n")
         self.revision = "1" * 40
+        # Deny direct Skopeo access while executing the real CLI in Podman's
+        # user namespace. This guards the GCP sandbox routing regression.
+        wrappers = self.root / "namespace-bin"
+        wrappers.mkdir()
+        wrapper = wrappers / "skopeo"
+        wrapper.write_text("#!/usr/bin/env python3\nimport os,sys\nif os.geteuid()!=0: sys.exit(97)\nos.execv(" + repr(shutil.which("skopeo")) + ", ['skopeo']+sys.argv[1:])\n")
+        wrapper.chmod(0o755)
+        self.namespace_env = dict(os.environ, PATH=str(wrappers) + os.pathsep + os.environ["PATH"])
+        self.assertEqual(subprocess.run(["skopeo", "--version"], env=self.namespace_env, check=False).returncode, 97)
 
     def tearDown(self):
         self.directory.cleanup()
 
     def run_helper(self, name, env=None, reference=None):
         output = self.root / name
-        result = subprocess.run(["python3", str(self.helper), "--baseline-reference", reference or self.reference, "--baseline-layout", str(self.layout), "--script", str(self.script), "--source-revision", self.revision, "--output", str(output)], capture_output=True, text=True, env=env)
+        result = subprocess.run(["python3", str(self.helper), "--baseline-reference", reference or self.reference, "--baseline-layout", str(self.layout), "--script", str(self.script), "--source-revision", self.revision, "--output", str(output)], capture_output=True, text=True, env=env or self.namespace_env)
         return result, output
 
     def test_derive_deterministic_and_real_mapping(self):
@@ -58,10 +67,20 @@ class DerivationLifecycle(unittest.TestCase):
         self.assertEqual(record["reference"], json.loads((other / "derivation.json").read_text())["reference"])
         self.assertTrue(record["derived"])
         self.assertFalse((output / "container-id").exists())
-        # Import and execute only fixed inspection commands, never the inserted
-        # script: this proves actual layer ownership/mode through Podman.
-        subprocess.run(["skopeo", "copy", "--preserve-digests", "oci:" + record["layout"], "containers-storage:" + record["reference"]], check=True, stdout=subprocess.DEVNULL)
+        # Exercise the actual production import/export functions with a fresh
+        # derived reference, so the otherwise-skipped import branch is covered.
+        source = self.helper.with_name("run-libkrun-integration.sh").read_text()
+        functions = source[source.index("materialize_image() {"):source.index("workflow_value() {")]
+        self.assertEqual(subprocess.run(["podman", "image", "exists", record["reference"]], check=False).returncode, 1)
+        destination = self.root / "materialized"
+        label = "namespace-fixture-" + uuid.uuid4().hex
+        shell = "set -Eeuo pipefail\ncontainer_name=''\ndie() { exit 1; }\n" + functions + """
+trap 'if [[ -n "$container_name" ]]; then podman rm -f "$container_name" >/dev/null; fi' EXIT
+materialize_layout_image "$1" "$2" "$3" "$4"
+"""
         try:
+            subprocess.run(["bash", "-c", shell, "fixture", record["reference"], record["layout"], str(destination), label], check=True, env=self.namespace_env)
+            self.assertEqual((destination / "usr/libexec/hephaestus/oci-verify").read_bytes(), self.script.read_bytes())
             actual = subprocess.check_output(["podman", "run", "--rm", "--pull", "never", "--network", "none", "--entrypoint", "/bin/sh", record["reference"], "-ec", "stat -c '%u:%g:%a' /usr/libexec/hephaestus/oci-verify; sha256sum /usr/libexec/hephaestus/oci-verify"], text=True).splitlines()
             self.assertEqual(actual[0], "0:0:555")
             self.assertEqual(actual[1].split()[0], hashlib.sha256(self.script.read_bytes()).hexdigest())

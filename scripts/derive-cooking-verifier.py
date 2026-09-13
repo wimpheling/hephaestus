@@ -109,10 +109,11 @@ def derive(args):
     try:
         exists = subprocess.run(["podman", "image", "exists", args.baseline_reference], check=False).returncode
         require(exists in (0, 1), "cannot inspect baseline image")
+        # Match the existing rootless store namespace, including sandboxed CI.
         if exists == 1:
             owned_image = True
-            command("skopeo", "copy", "--preserve-digests", f"oci:{args.baseline_layout}", f"containers-storage:{args.baseline_reference}")
-        require(command("skopeo", "inspect", "--format", "{{.Digest}}", "containers-storage:" + args.baseline_reference) == digest, "imported baseline digest mismatch")
+            command("podman", "unshare", "skopeo", "copy", "--preserve-digests", f"oci:{args.baseline_layout}", f"containers-storage:{args.baseline_reference}")
+        require(command("podman", "unshare", "skopeo", "inspect", "--format", "{{.Digest}}", "containers-storage:" + args.baseline_reference) == digest, "imported baseline digest mismatch")
         identity = podman("/bin/sh", "-ec", f"sha256sum /{TARGET} /usr/bin/umoci; /usr/bin/umoci --version").splitlines()
         require(len(identity) == 3 and all(re.fullmatch(r"[0-9a-f]{64}  /[^ ]+", line) for line in identity[:2]), "invalid baseline tool identity")
         script_hash = sha(source)

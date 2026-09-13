@@ -148,7 +148,7 @@ materialize_layout_image() {
     # disposable Podman store. This avoids depending on a registry pull for
     # the builder and verifier roots while preserving the exact digest.
     if ! podman image exists "${reference}"; then
-        skopeo copy "oci:${layout}" "containers-storage:${reference}" >/dev/null
+        podman unshare skopeo copy "oci:${layout}" "containers-storage:${reference}" >/dev/null
         case "${label}" in
             oci-builder) builder_image_loaded=true ;;
             oci-verifier) verifier_image_loaded=true ;;
