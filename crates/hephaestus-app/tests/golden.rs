@@ -1164,48 +1164,25 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
                     production_project_build_timer.finish(result.is_ok());
                     result.expect("real cooking source build and publish proof")
                 };
-                let adversarial_agent_build = cooking_builds::build_and_publish_adversarial_agent(
-                    &cooking_builds::CookingBuildContext {
-                        pool: &pool,
-                        running: &running,
-                        root: &root,
-                        source_root: &source_root,
-                        project_id: project.id,
-                        repositories: &fixture_repository,
-                        identity: cooking_builds::CookingIdentity {
-                            actor: &identity,
-                            git_token: &token,
-                            rpc_token: &rpc_token,
-                        },
-                        timeout: cooking_wait_timeout,
-                    },
-                    &builds.agent,
-                )
-                .await
-                .expect("publish adversarial cooking agent destination release");
+                let (adversarial_agent_build, adversarial_gateway_build) =
+                    join_cooking_preparation(
+                        cooking_builds::build_and_publish_adversarial_agent(
+                            &cooking_context,
+                            &builds.agent,
+                        ),
+                        cooking_builds::build_and_publish_adversarial_gateway(
+                            &cooking_context,
+                            &builds.gateway,
+                        ),
+                    )
+                    .await;
+                let adversarial_agent_build = adversarial_agent_build
+                    .expect("publish adversarial cooking agent destination release");
                 assert_ne!(
                     adversarial_agent_build.release_id, builds.agent.release_id,
                     "the adversarial agent must use a distinct published release"
                 );
-                let adversarial_gateway_build =
-                    cooking_builds::build_and_publish_adversarial_gateway(
-                        &cooking_builds::CookingBuildContext {
-                            pool: &pool,
-                            running: &running,
-                            root: &root,
-                            source_root: &source_root,
-                            project_id: project.id,
-                            repositories: &fixture_repository,
-                            identity: cooking_builds::CookingIdentity {
-                                actor: &identity,
-                                git_token: &token,
-                                rpc_token: &rpc_token,
-                            },
-                            timeout: cooking_wait_timeout,
-                        },
-                        &builds.gateway,
-                    )
-                    .await
+                let adversarial_gateway_build = adversarial_gateway_build
                     .expect("publish adversarial foreign-slot gateway release");
                 assert_eq!(
                     adversarial_gateway_build.repository_id, builds.gateway.repository_id,
