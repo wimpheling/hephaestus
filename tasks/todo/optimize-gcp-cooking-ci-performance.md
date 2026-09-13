@@ -30,6 +30,14 @@ memory candidate is held, the corrected ext4 scratch candidate is rejected,
 and the actual local libkrun probe is feasibility evidence only; GCP input
 identity remains unproven. Cancellation propagation is partial, fork execution
 is deferred, MVP-06 remains unchecked, and the broader goal remains open.
+PR #44's terminal trial run #34742470212 is operationally valid but held: its
+job was 1428s versus the 1418s control (+10s, +0.71%), with 41 markers, browser
+2/2, all gates and cleanup passing. The candidate's trusted controller was
+1399784ms versus 1394357ms (+5427ms); golden-tests, runtime supervisor and
+startup supervisor were faster, while OCI verifier, both browser phases and
+other phases were slower. The unrelated phase movement leaves contention
+plausible but unproven. No intrinsic regression or end-to-end gain is claimed,
+and no retry or automatic merge is planned.
 Critical correction: at measured candidate `7a6ba94`, production
 `scripts/run-libkrun-integration.sh` already adds fixed `heph-agent` UID/GID
 10001 records in `prepare_guest_root` before preparing and exporting the
@@ -49,9 +57,24 @@ scans, and VM/cgroup/container cleanup; total elapsed time was `268446ms`.
 The required quality gate session `58696` exited `0`. Independent review
 confirmed the initial Playwright interval was inside verifier execution and
 before initial blog publication, with both attachments prepared before browser
-execution. One locked GCP trial is planned against control run `34732597502`
-with frozen instrumentation and unchanged configuration; no GCP dispatch or
-performance result exists yet. PR #43
+execution. PR #44's locked GCP trial run
+[`34742470212`](https://github.com/wimpheling/hephaestus/actions/runs/34742470212)
+completed at exact candidate SHA `a6bf87b9cf8a20d59a5afa2a784802ba9cd7308c`.
+The job was `1428s` versus the locked control's `1418s` (`+10s`, `+0.71%`);
+trusted controller time was `1399784ms` versus `1394357ms` (`+5427ms`).
+Golden-tests decreased `17279ms`, runtime supervisor decreased `8093ms`, and
+startup supervisor decreased `7350ms`, while OCI verifier increased `59541ms`,
+browser initial increased `14574ms`, browser post-operation increased `5519ms`,
+and other phases also increased. The workload retained 41 markers, browser
+validation was `2/2`, all workload/collection gates passed, and VM cleanup was
+verified. This is a valid operational result but no end-to-end performance
+gain or intrinsic regression is established; contention is plausible but
+unproven because unrelated phases also slowed. Independent review recommends
+holding PR #44; no retry or automatic merge is planned. Private evidence is
+at `/tmp/heph-gcp-34742470212`, with archive
+`gs://hephaestus-508000-cooking-diagnostics/cooking/runs/34742470212/1/a6bf87b9cf8a20d59a5afa2a784802ba9cd7308c.tar.gz`
+and SHA-256 `375a64d695c5a60ae8ae63915ac2f1cd13d6d5b0d745fc1d4a2d9ed7cf109564`.
+PR #43
 (`9b39eb489d8a87c8d71db6c6c9bb573e124f1891`) was the authorized trial run `34738676749`. It is operationally passing, while performance acceptance is inconclusive: its workload and all collection gates passed, but its retained Rust marker inventory was 40 versus the control's 41. The job was 1485s versus 1418s
 control (+67s, +4.73%), so performance acceptance is inconclusive: there is
 no demonstrated end-to-end gain and no proven workload regression. No GCP
@@ -131,6 +154,25 @@ workload gates and passing diagnostic collection are reported separately from
 valid performance measurements; all workload spans remain informational and
 non-additive. The single overlap pair is material but does not establish
 repeatability or a drastic improvement guarantee.
+
+PR #44's initial-browser overlap trial is terminal and held. Candidate run
+[`34742470212`](https://github.com/wimpheling/hephaestus/actions/runs/34742470212)
+used exact source `a6bf87b9cf8a20d59a5afa2a784802ba9cd7308c` and the same frozen
+configuration and instrumentation as control run `34732597502`. The candidate
+job was `1428s` versus `1418s` (`+10s`, `+0.71%`), and trusted controller time
+was `1399784ms` versus `1394357ms` (`+5427ms`). Golden-tests decreased
+`17279ms`, runtime supervisor decreased `8093ms`, and startup supervisor
+decreased `7350ms`; OCI verifier increased `59541ms`, browser initial increased
+`14574ms`, browser post-operation increased `5519ms`, and other phases also
+increased. This valid measurement passed 41 markers, browser `2/2`, all
+workload and collection gates, and verified VM cleanup, but it demonstrates no
+end-to-end gain. Contention remains plausible but unproven because unrelated
+phases also slowed; no intrinsic regression is established. Independent review
+recommends holding PR #44, with no retry or automatic merge. Private evidence
+is at `/tmp/heph-gcp-34742470212`; the uploaded archive is
+`gs://hephaestus-508000-cooking-diagnostics/cooking/runs/34742470212/1/a6bf87b9cf8a20d59a5afa2a784802ba9cd7308c.tar.gz`
+with SHA-256
+`375a64d695c5a60ae8ae63915ac2f1cd13d6d5b0d745fc1d4a2d9ed7cf109564`.
 
 The CPU implementation was merged through PR #37 (merge
 `c0bd1c61f85a6537feb3ee682d178fe92f4ad432`), and the host-build-removal

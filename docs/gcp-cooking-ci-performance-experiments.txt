@@ -93,7 +93,7 @@ Current facts
   independent design review and local fmt/check. Evidence files are
   `summary.json`, `run.sh`, `source.patch` and `provenance.json` in the
   diagnostic directory.
-- Prepared draft PR #44 (`a6bf87b9cf8a20d59a5afa2a784802ba9cd7308c`, branch
+- PR #44 (`a6bf87b9cf8a20d59a5afa2a784802ba9cd7308c`, branch
   `perf/cooking-overlap-initial-browser`) splits blog-repository metadata from
   population and joins the independent release and blog preparation branches.
   Source push, manual attachments and browser configuration remain behind the
@@ -110,13 +110,25 @@ Current facts
   call order attaches both branches before browser execution, so the
   Playwright `attachments[]` field is not used as proof. Full quality gate
   session `58696` exited `0`, with log
-  `/home/a/.cache/heph-pr44-cargo-dev-quality.log`. One locked GCP trial is
-  planned against control run `34732597502` (`1418s`, controller
-  `1394357ms`) with frozen instrumentation and the same configuration;
-  expected evidence is 41 markers, browser `2/2`, all gates and cleanup. The
-  hypothesis is setup/initial-browser overlap with independent OCI preparation,
-  with no promised seconds or current GCP result. No GCP dispatch has occurred;
-  rollback is reverting the two-file candidate commit.
+  `/home/a/.cache/heph-pr44-cargo-dev-quality.log`.
+  The terminal locked GCP trial was run as
+  `34742470212 <https://github.com/wimpheling/hephaestus/actions/runs/34742470212>`_,
+  against control run `34732597502`, using the frozen instrumentation and
+  unchanged configuration. The candidate job was `1428s` versus `1418s`
+  (`+10s`, `+0.71%`); trusted controller time was `1399784ms` versus
+  `1394357ms` (`+5427ms`). Golden-tests decreased `17279ms`, runtime
+  supervisor decreased `8093ms`, and startup supervisor decreased `7350ms`,
+  while OCI verifier increased `59541ms`, browser initial increased `14574ms`,
+  browser post-operation increased `5519ms`, and other phases also increased.
+  The workload retained 41 markers, browser validation was `2/2`, all gates
+  passed, and VM cleanup was verified. This is a valid operational measurement
+  but demonstrates no end-to-end gain; contention is plausible but unproven
+  because unrelated phases also slowed, and no intrinsic regression is
+  established. Independent review recommends holding PR #44; no retry or
+  automatic merge is planned. Private evidence is at
+  `/tmp/heph-gcp-34742470212`. The archive is
+  `gs://hephaestus-508000-cooking-diagnostics/cooking/runs/34742470212/1/a6bf87b9cf8a20d59a5afa2a784802ba9cd7308c.tar.gz`,
+  SHA-256 `375a64d695c5a60ae8ae63915ac2f1cd13d6d5b0d745fc1d4a2d9ed7cf109564`.
 - Candidate PR #43 removed only the guarded CPython
   `/opt/python/lib/python3.13/test` tree. Its authorized locked GCP trial,
   run `34738676749 <https://github.com/wimpheling/hephaestus/actions/runs/34738676749>`_,
@@ -188,7 +200,11 @@ TO DO
    `34738676749` is terminal but not accepted because its complete evidence
    retained 40 Rust markers versus the control's 41. Preserve the exact
    evidence and do not retry, merge or dispatch another run until the marker
-   discrepancy has an independently reviewed explanation.
+   discrepancy has an independently reviewed explanation. PR #44 run
+   `34742470212` is also terminal and held: it passed its workload and
+   collection gates but showed no end-to-end gain (`1428s` versus `1418s`).
+   Do not automatically retry or merge it; any repeat requires a predefined
+   alternating control/candidate protocol.
 5. Record any future bounded trial with exact provenance, complete gates,
    cleanup evidence, measurements, decision and rollback. Preserve frozen
    instrumentation and do not treat overlapping workload phases as additive.
@@ -235,6 +251,19 @@ CURRENT REJECTED AND HELD LOCAL RESULTS
   trusted controller `1448925ms` versus `1394357ms` (`+54568ms`); its 40
   retained Rust markers versus 41 in the control are an acceptance blocker.
   Do not claim the local or phase-level speedups as a GCP optimization.
+- PR #44 trial run `34742470212` at exact head
+  `a6bf87b9cf8a20d59a5afa2a784802ba9cd7308c` is terminal, operationally valid
+  and held. It ran `1428s` versus the `1418s` control (`+10s`, `+0.71%`),
+  with trusted controller `1399784ms` versus `1394357ms` (`+5427ms`). It
+  retained 41 markers, browser validation `2/2`, all gates and cleanup passed.
+  Golden-tests, runtime supervisor and startup supervisor were faster, while
+  OCI verifier, both browser phases and other phases were slower. This valid
+  measurement demonstrates no end-to-end gain; contention is plausible but
+  unproven because unrelated phases also slowed, and no intrinsic regression
+  is established. Independent review recommends holding PR #44; no retry or
+  automatic merge is planned. Evidence is at `/tmp/heph-gcp-34742470212`,
+  with archive SHA-256
+  `375a64d695c5a60ae8ae63915ac2f1cd13d6d5b0d745fc1d4a2d9ed7cf109564`.
 
 CHRONOLOGICAL EXPERIMENT RECORDS (HISTORICAL DETAIL)
 =====================================================
