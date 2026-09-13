@@ -1037,3 +1037,50 @@ the required proof. The trusted timing scripts are byte-identical to the
 baseline controller path; only the already-accepted CPU literal differs on
 main. The exact heads and one-file diff were revalidated before dispatch.
 Dispatch exactly one run with no retry or additional infrastructure work.
+
+TERMINAL FAILED HOST BUILD REMOVAL TRIAL: RUN 34727051946
+===========================================================
+The single host-removal trial reached the disposable VM and then failed in
+the workload. It is not a valid performance measurement and has no elapsed
+time saved or optimization acceptance. The causal optimization review remains
+pending; do not mark host-build removal rejected solely from this aborted run.
+
+Run: [34727051946](https://github.com/wimpheling/hephaestus/actions/runs/34727051946),
+attempt `1`, workflow `main` at controller SHA
+`c0bd1c61f85a6537feb3ee682d178fe92f4ad432`; selected PR #39 workload SHA
+`204bcee68f7d4718aafa4ebf85bcb1b65e53a02f`, repository ID `1312377552`.
+The fixed controls were the accepted CPU configuration: worker `vcpus=2`,
+memory `2048` MiB, image
+`hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d`, cache generation
+`1789079827867335`, `n2-standard-8`, `150 GB pd-balanced`,
+`europe-west1-d`, one VM, concurrency `1`, 45-minute provider DELETE and
+50-minute workflow timeout. PR #39 contained exactly 14 deletions removing
+the unused host gateway artifact export and host `project-build` compile;
+the production project build remained enabled.
+
+The workload failed in `libkrun-integration` at line `243`, exit code `101`,
+with test `bearer_push_starts_run_through_production_bootstrap` failed in the
+serial, runtime-log and test-output records. The workload gate failed with
+exit `1`; the browser gate failed with exit `3` because only the initial phase
+was reached (`1` passed, `0` failed/skipped/timed out) and post-operation was
+not reached. The evidence scan passed (`18` files, `678563` bytes), diagnostic
+collection completed with 10 available sources and one unavailable timing
+source, and upload/download/scan all passed. Cleanup verified VM
+`heph-kvm-smoke-34727051946-1` absent.
+
+The controller retained trusted timings totaling `1489294` ms:
+`preflight-quota=2356`, `preflight-cache=1694`, `vm-create=14530`,
+`vm-wait=1409968` (failed), `vm-delete=56976`,
+`cleanup-verification=1823` and `post-delete-download=1947`. The workload
+timing projection was unavailable because `database-tests` and
+`browser-post-operation` were missing after the failure. `production-project-build`
+was reached at `75769` ms; the intended host phase was absent, but the run
+cannot compare total or optimization phases because the workload and complete
+timing gates failed. Archive evidence was `26563` bytes with SHA-256
+`a2a4d4ce6309f6b1cc9a46c9e7ee3929c5463ff99d2f8cda470e1eefe744e4c0`.
+
+This run distinguishes passing evidence-scan/private collection/cleanup from
+the failed workload and incomplete browser/timing path. No retry or further
+GCP dispatch is authorized by this entry; retain the precise failure for the
+separate causal review and use the rollback of restoring the host build if
+that review finds the removal causative.
