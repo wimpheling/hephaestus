@@ -244,6 +244,18 @@ CURRENT ACCEPTED RESULTS
   run `34732597502`, `23m38s` versus `26m09s`, `151s` (`9.62%`) saved.
   This is the newest valid pair, with complete evidence and no repeatability
   claim. Workload spans overlap and are not additive.
+- Raw OCI unpack: PR #47 fixed candidate `2792a4ed46433ecad94864c6e6f0573ba0f0217d`
+  is accepted as a valid single-pair result. Fresh control run
+  `34752572980` took `1545s` (`1517043ms` controller); candidate run
+  `34757091699` took `1252s` (`1226870ms` controller), saving `293s`
+  (`18.9644%`) job time and `290173ms` (`19.1275%`) controller time. The
+  candidate projection had 44 records (41 Rust markers plus 3 Cooking records)
+  and the control had 41 (38 Rust markers plus 3 Cooking records); all 38
+  control Rust markers were retained. Both passed the locked configuration,
+  frozen instrumentation, all gates, browser `2/2`, scans, 11/11 sources,
+  timing validation, upload/download and VM absence. This is one accepted
+  pair; repeatability and causal attribution of the whole-job reduction remain
+  unestablished.
 
 CURRENT REJECTED AND HELD LOCAL RESULTS
 =======================================
@@ -2153,11 +2165,12 @@ is approved by this pair.
 PREDECLARED CONTROL-FIRST COMPARISON: PR #47 DERIVED IMAGE
 ===========================================================
 The original predeclaration named `a2914d9`; after the proven execution-route
-fix, the fresh candidate must use
-`2792a4ed46433ecad94864c6e6f0573ba0f0217d`. The valid control is this docs-only
-handoff branch's exact final pushed head, recorded in the PR and dispatch
-evidence immediately before the pair. Historical control run `34747950421` at
-`1358s` is context only and cannot substitute for the fresh control.
+fix, the executed candidate used
+`2792a4ed46433ecad94864c6e6f0573ba0f0217d`. The valid control was this
+docs-only handoff branch's exact head
+`1d3c2b54c7d1ab2ae7263f8b03ec56ab3cd99c39`. Historical control run
+`34747950421` at `1358s` remains context only and was not substituted for the
+fresh control.
 
 Locked configuration for both runs: trusted workflow source
 `853904782b2922e61171c5499256e037203e391b`, `n2-standard-8` with `32 GiB`
@@ -2176,43 +2189,55 @@ No automatic retry, cherry-pick or selective rerun is allowed. Rollback is to
 leave PR #47 unmerged or revert all candidate changes if the predeclared pair
 does not demonstrate an accepted end-to-end result.
 
-FINAL CURRENT HANDOFF: PR #47 CANDIDATE PENDING
-================================================
-The valid fresh control is run `34752572980` from exact docs-only head
-`1d3c2b54c7d1ab2ae7263f8b03ec56ab3cd99c39`: job elapsed `1545s`, controller
-elapsed `1517043ms`, with all `41` projection records, browser `2/2`, all
-gates, timing validation, `11/11` sources, scans, upload/download and VM
-absence passed. This is the current baseline for the pending candidate
-comparison.
+FINAL CURRENT HANDOFF: PR #47 FIXED PAIR
+=========================================
+The predeclared fixed pair is terminal, valid and accepted as a single-pair
+performance result. Control run
+`34752572980 <https://github.com/wimpheling/hephaestus/actions/runs/34752572980>`_
+used exact control head
+`1d3c2b54c7d1ab2ae7263f8b03ec56ab3cd99c39`, trusted workflow source
+`853904782b2922e61171c5499256e037203e391b`, and the locked configuration. It
+completed in `1545s` with controller elapsed `1517043ms`.
 
-Candidate run `34753764390` used `a2914d9` and failed after `361s` before OCI,
-golden, database or browser execution. VM lifecycle, diagnostics download,
-scans and cleanup passed, but workload evidence was incomplete; this is not a
-performance measurement. No-VM triage with corrected inputs retrieved the
-private archive but retained no underlying stderr. The earlier triage with
-incorrect controller/workload SHA arguments remains a separate setup failure.
+Candidate run
+`34757091699 <https://github.com/wimpheling/hephaestus/actions/runs/34757091699>`_
+used exact candidate head
+`2792a4ed46433ecad94864c6e6f0573ba0f0217d`, the same trusted workflow source,
+locked configuration and frozen instrumentation. It completed in `1252s`
+(`12:26:28Z`--`12:47:20Z`) versus the control's `1545s` (`-293s`, `18.9644%`).
+Controller elapsed was `1226870ms` versus `1517043ms` (`-290173ms`,
+`19.1275%`). Candidate verifier was `184984ms` versus `436402ms`
+(`-251418ms`, `-57.611%`); materialization was `28129ms` versus `25013ms`
+(`+3116ms`), and golden was `793183ms` versus `1052510ms` (`-259327ms`).
+Both runs passed all gates, scans, browser `2/2`, VM absence, timing validation
+and 11/11 evidence sources. The candidate technical projection contained `44`
+records: `41` Rust test-result markers plus `3` Cooking-result records; the
+control contained `41` records: `38` Rust markers plus `3` Cooking-result
+records. All 38 control Rust markers were retained by the candidate. These are
+projection records, not test counts.
 
-PR #49 diagnostics remain an experiment-failure audit, not a workload result.
-The first finite probe exited `34`; the later probe produced ordered workload
-exit codes `49` (direct skopeo command error), `78` (helper success after
-routing), `81` (direct materialization failure), and `82` (namespace-routed
-materialization success with script hash). Cleanup, scans and upload/download
-passed. This proves the execution-route remedy under the actual sandbox, but
-not a specific errno or kernel mechanism because stderr was not retained. PR
-#49 is diagnostic-only and must never merge.
+Candidate private evidence is retained at
+`/home/a/.cache/heph-gcp-candidate-34757091699-1789303689`; the uploaded
+archive is
+`gs://hephaestus-508000-cooking-diagnostics/cooking/runs/34757091699/1/2792a4ed46433ecad94864c6e6f0573ba0f0217d.tar.gz`
+with SHA-256
+`bc3b2448bb11fa7a775d6410073fbe407d424c1a1a5ae6db497f9ea4d32b1d67`.
+The safe GCP projection does not expose the local derived-image script hash
+`40dda...` or derived digest `9d501...`; matching exact checkout provenance and
+passed materialization hash validation support the identity only by inference.
+The local evidence retains those identities explicitly.
 
-Candidate head `2792a4ed46433ecad94864c6e6f0573ba0f0217d` contains the minimal
-skopeo namespace and production materialization-copy fix. Five real fixtures
-passed in `4.863s`; the full local Cooking lifecycle and durable repository
-quality gate both passed with exit `0`. The cache remains fixed, so no cache
-publication or repin is part of this step. The corrected full GCP candidate
-run remains pending; no candidate timing or gain is recorded yet.
+The pair is an accepted valid single-pair observed improvement. The `293s` job
+reduction is not claimed as caused by every phase or as a repeatable magnitude.
+The verifier mechanism is supported by the local derivation and the GCP
+verifier-phase result, while whole-job causal attribution remains unestablished.
+Historical CPU2, host-build-removal and overlap results remain separate,
+non-additive single-pair measurements.
 
-The predeclared hypothesis remains: omit unused `mtree`/`umoci.json` metadata
-while retaining rootfs and runtime-configuration validation, paying the
-private derivation cost in the existing materialization phase. Rollback is to
-leave PR #47 unmerged or revert all candidate changes. Historical CPU2,
-host-build-removal and overlap results remain separate, non-additive
-single-pair measurements. Hard GitHub cancellation proof remains partial; fork
-execution and MVP-06 remain open requirements, and no drastic or repeatable
-optimization claim is made.
+PR #49 remains a diagnostic failure audit and must never merge: its ordered
+stage marker exit codes were `49`, `78`, `81` and `82`, while only its first
+`49` was the overall workload exit code. The audit proves the namespace route
+remedy but not a specific errno or kernel mechanism. Hard GitHub cancellation
+proof remains partial; fork execution and MVP-06 remain open requirements, and
+no drastic or repeatability claim is made. Rollback remains leaving PR #47
+unmerged or reverting all candidate changes.

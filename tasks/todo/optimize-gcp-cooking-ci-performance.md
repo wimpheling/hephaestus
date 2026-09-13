@@ -31,7 +31,8 @@ at `a2914d9` failed after `361s` before OCI, golden, database or browser
 execution and is not a performance measurement. The corrected candidate fix is
 `2792a4ed46433ecad94864c6e6f0573ba0f0217d`; five real fixtures passed in
 `4.863s`, and full local Cooking plus the durable quality gate exited `0`.
-The corrected full GCP candidate dispatch is pending; no gain is claimed.
+The corrected full GCP candidate run is recorded below; no repeatability or
+whole-job causal attribution is claimed.
 
 PR #49's short diagnostics remain failure audit only: the first finite probe
 exited `34`, and the second produced ordered workload exit codes `49`, `78`,
@@ -81,20 +82,22 @@ predates this fix. Rootfs comparison scope and omitted `mtree`/`umoci.json`
 semantics remain as previously recorded; the cache, protected image and
 instrumentation stay fixed.
 
-The next paid comparison is predeclared control-first after integrated local
-Cooking and repository quality pass: use this docs-only control branch's exact
-final pushed head, recorded immediately before dispatch, then candidate
-`2792a4ed46433ecad94864c6e6f0573ba0f0217d`. Both use trusted workflow source
-`853904782b2922e61171c5499256e037203e391b`, `n2-standard-8` with `32 GiB`
-host memory, `150 GB pd-balanced`, `europe-west1-d`, protected image
-`f285fc2b8157f8053383fc98bcaec83d`, the existing cache, and guest `2` vCPUs /
-`2048 MiB`. The hypothesis is that unused verifier metadata omission reduces
-verifier and total job time after derivation cost. Primary outcomes are job
-and controller elapsed time; phase timings are diagnostic. Require matching
-provenance, `41` markers, browser `2/2`, all gates, `11/11` sources, scans and
-VM absence. No automatic retry or cherry-pick; rollback leaves PR #47
-unmerged or reverts its candidate changes. Historical control run
-`34747950421` (`1358s`) is context only.
+The predeclared control-first comparison has now completed with valid control
+run `34752572980` (`1545s`, `1517043ms` controller) followed by valid fixed
+candidate run `34757091699` (`1252s`, `1226870ms` controller). Both used exact
+heads `1d3c2b54` and `2792a4ed`, trusted workflow source `853904782`, the
+locked image/cache/machine/zone/disk configuration, and frozen
+instrumentation. Both passed all gates, scans, browser `2/2`, `11/11` sources,
+VM absence and timing validation. Candidate versus control saved `293s`
+(`18.9644%`) job time and `290173ms` (`19.1275%`) controller time. Candidate
+verifier was `184984ms` versus `436402ms` (`-251418ms`, `-57.611%`), while
+materialization was `28129ms` versus `25013ms` (`+3116ms`) and golden was
+`793183ms` versus `1052510ms` (`-259327ms`). The candidate projection had 44
+records (41 Rust test-result markers plus 3 Cooking-result records); the
+control had 41 records (38 Rust markers plus 3 Cooking-result records), and
+all 38 control Rust markers were retained by the candidate. This is an
+accepted valid single-pair result; the full-job reduction is not attributed
+causally to every phase or treated as repeatable yet.
 PR #44's terminal trial run #34742470212 is operationally valid but held: its
 job was 1428s versus the 1418s control (+10s, +0.71%), with 41 markers, browser
 2/2, all gates and cleanup passing. The candidate's trusted controller was
