@@ -1093,3 +1093,37 @@ performance comparison, and do not retry or dispatch further GCP work until
 the narrow local PostgreSQL/poll-fix reproduction and its required gate are
 complete. The rollback remains restoring the host build if a later valid
 experiment is authorized.
+
+
+PREPARED ISOLATION SEQUENCE AFTER COMMON WAIT FIX
+=================================================
+The host-removal failure is not an optimization rejection, but its workload
+abort prevents a valid host comparison. The narrow common wait fix at exact
+local revision `36e7035` has an actual PostgreSQL reproduction: the old path
+panics on the premature delivery assertion, while the new wait path then
+passes. Test names, assertions and deadline remain unchanged, and the timing
+instrumentation is frozen. This fix must be merged and pass its required
+quality gate before another GCP measurement.
+
+To isolate the host variable from that shared correctness fix, run the next
+sequence as two separate controlled measurements on the same newly merged
+`main`: first a fresh CPU2 plus host-build control using docs-only PR #20, then
+the host-only PR #39 candidate. The control retains the accepted CPU setting
+(`vcpus=2`) and the host `project-build`; PR #39 then removes only the host
+artifact export and host compile. Compare each run to the new control and keep
+the original valid baseline `34724176879`, accepted CPU trial `34725585641`
+and host failure `34727051946` as historical context. Do not conflate the
+common wait fix with host removal, and do not claim performance from the prior
+host-aborted run.
+
+Fixed GCP configuration remains the protected image
+`hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d`, immutable cache generation
+`1789079827867335`, `n2-standard-8`, `150 GB pd-balanced`,
+`europe-west1-d`, one VM, concurrency `1`, 45-minute provider DELETE and
+50-minute workflow timeout. Require the same production proof, browser,
+golden/PostgreSQL, scanner, marker, provenance, complete timing, gate and
+post-delete cleanup evidence for both runs. The control rollback is no code
+change; the host candidate rollback restores the host artifact export and
+compile. Await the exact merged `main` SHA and root's explicit dispatch
+instruction; no GCP dispatch or additional infrastructure work is authorized
+by this preparation entry.
