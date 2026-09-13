@@ -36,15 +36,20 @@ whole-job causal attribution is claimed.
 
 The separate adversarial-build overlap candidate at commit `9868b80` was
 reverted by `43344cd` after its local candidate exited `101` before workload
-markers (`34 passed`, `1 failed`, `1 ignored`). Its evidence is retained under
+markers (`34 passed`, `1 failed`, `1 ignored`). Independently of that invalid
+candidate, the unchanged control made the expected value negligible: the
+maximum possible saving from overlapping the `0.703447353s` agent duration was
+about `0.703s`, already hidden by `36.399444426s` of blog slack. The ledger
+records this rejection on expected-value grounds as well as invalid evidence;
+it is the authority for the acceptance decision. Its evidence is retained under
 `/home/a/.cache/heph-private-adversarial-measurement/candidate-20260913-2792004`;
 the run is invalid for performance comparison. A likely shared-target baked
 control manifest/bootstrap-path issue was observed, but the failing syscall is
-unconfirmed. The local control passed with 35 golden tests, 1 ignored,
-PostgreSQL 6, and `262.58s`; its measured preparation observations were agent
-`0.703447353s`, gateway `32.392713710s`, releases `63.114675828s`, blog
-`99.514120254s`, slack `36.399444426s`, and outer `99.514143538s`. Control
-evidence is retained under
+unconfirmed. The local control's golden-test aggregate passed with 35 golden
+tests, 1 ignored, PostgreSQL 6, and `262.58s`; agent `0.703447353s` and
+gateway `32.392713710s` are durations, while releases `63.114675828s`, blog
+`99.514120254s`, slack `36.399444426s` and outer `99.514143538s` are elapsed
+offsets from preparation start. Control evidence is retained under
 `/home/a/.cache/heph-private-adversarial-measurement/control-20260913-2792003`.
 No retry or GCP dispatch follows, and this failure is not a measured
 regression.
