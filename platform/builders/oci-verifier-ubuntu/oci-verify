@@ -9,8 +9,50 @@ fail() {
     exit 1
 }
 
+if [ -L "$output" ] || { [ -e "$output" ] && [ ! -d "$output" ]; }; then
+    fail output-cleanup
+fi
+mkdir -p "$output" || fail output-prepare
 rm -rf "$output"/* || fail output-cleanup
-mkdir -p "$output/evidence" "$output/bundle" || fail output-prepare
+mkdir -p "$output/evidence" || fail output-prepare
+
+# Keep the raw unpack and generated runtime configuration in a fresh private
+# bundle until both commands have succeeded.  Raw unpack can leave a rootfs
+# with restrictive modes after a failed extraction, so the EXIT cleanup makes
+# its directories writable before removal.  It never follows a top-level
+# symlink supplied by a failed or malformed operation.
+bundle="$output/bundle"
+extracted_rootfs="$bundle/rootfs"
+runtime_config="$bundle/config.json"
+bundle_cleanup_active=1
+
+cleanup_bundle() {
+    if [ -L "$bundle" ]; then
+        return 1
+    fi
+    if [ -e "$bundle" ]; then
+        # Restore each directory before find descends into it.  Immediate
+        # execution is intentional: a restrictive nested directory may be
+        # unreachable if permission repair is deferred until traversal ends.
+        find -P "$bundle" -type d -exec chmod u+rwx {} \; 2>/dev/null || true
+        rm -rf -- "$bundle"
+    fi
+}
+
+cleanup_on_exit() {
+    status=$?
+    trap - EXIT
+    if [ "$bundle_cleanup_active" -eq 1 ] && ! cleanup_bundle; then
+        printf 'heph_oci_failure=bundle-cleanup\n' >&2
+        status=1
+    fi
+    exit "$status"
+}
+
+trap cleanup_on_exit EXIT
+
+[ ! -e "$bundle" ] && [ ! -L "$bundle" ] || fail output-prepare
+mkdir -m 0700 "$bundle" || fail output-prepare
 
 # The bootstrap clears ambient environment. Rootless Umoci still requires a
 # writable home and runtime directory, so create them in this disposable VM's
@@ -46,12 +88,21 @@ trivy image --input "$candidate" --offline-scan --skip-db-update --skip-java-db-
 candidate_tag=$(grep --only-matching --extended-regexp 'heph-sha256-[0-9a-f]{64}' \
     "$candidate/index.json" | sort --unique)
 [ "$(printf '%s\n' "$candidate_tag" | wc --lines)" -eq 1 ] || fail layout-reference
-umoci unpack --rootless --image "$candidate:$candidate_tag" "$output/bundle" || fail rootfs-export
-mv "$output/bundle/rootfs" "$output/rootfs" || fail rootfs-handoff
-# Umoci retains bundle metadata next to the exported rootfs. The bundle lives
-# under this fresh job-owned output root, so remove only that temporary
-# metadata after moving the verified rootfs into its durable handoff path.
-rm -rf -- "$output/bundle" || fail bundle-cleanup
+umoci raw unpack --rootless --image "$candidate:$candidate_tag" "$extracted_rootfs" || fail rootfs-export
+[ -d "$extracted_rootfs" ] && [ ! -L "$extracted_rootfs" ] || fail rootfs-handoff
+
+# Generate the OCI runtime configuration only after extraction.  The verifier
+# currently consumes the rootfs, scanners, and manifest digest; config.json is
+# deliberately temporary and must not become an alternate publication path.
+umoci raw runtime-config --rootless --image "$candidate:$candidate_tag" \
+    --rootfs "$extracted_rootfs" "$runtime_config" || fail rootfs-export
+
+[ ! -e "$output/rootfs" ] && [ ! -L "$output/rootfs" ] || fail rootfs-handoff
+mv "$extracted_rootfs" "$output/rootfs" || fail rootfs-handoff
+# Remove the temporary config and bundle metadata after the verified rootfs has
+# been handed off.  The EXIT trap repeats cleanup if this operation fails.
+cleanup_bundle || fail bundle-cleanup
+bundle_cleanup_active=0
 
 manifest=$(jq -er '.manifests[0].digest' "$candidate/index.json") || fail manifest-read
 printf '%s\n' "$manifest" >"$output/manifest-digest" || fail manifest-write
