@@ -1305,3 +1305,64 @@ quality gate, with merge commit
 `2026-09-13T01:59:25Z`. The merged change retains the accepted CPU2 setting,
 removes only the unused host gateway artifact export and host compile, and
 can be rolled back by reverting that merge commit.
+
+
+PREPARED OVERLAP TRIAL: INDEPENDENT COOKING BLOG PREPARATION
+=============================================================
+ID: overlap-independent-blog-preparation
+Hypothesis: starting the independent cooking-blog OCI preparation while the
+canonical, adversarial and optional update release preparations run in their
+existing serial order will reduce wall-clock Cooking time without changing
+release ordering, assertions, resource limits, evidence quality or cleanup.
+The canonical, adversarial and update branches remain serial; both branches
+are joined before instance setup. If either branch panics, the sibling is
+drained before the original panic is resumed.
+
+Candidate: draft [PR #42](https://github.com/wimpheling/hephaestus/pull/42),
+head `7a6ba94e55e3b2cc42f8960578d6a4ad54b1c0ae`, based on the merged host
+removal main `39b8032796637c6898b41c281754c38bb3be41ee` (the current PR base
+also contains the later docs-only main commit). The code change is confined
+to `crates/hephaestus-app/tests/golden.rs`: two new bounded lifecycle
+regression tests plus the joined preparation callsite. Existing production,
+canonical/adversarial/update assertions and timer names are preserved, as is
+the existing OCI worker configuration and `worker_concurrency=4`. The timing
+instrumentation is frozen; image, cache, VM, machine, disk, zone and workflow
+settings are unchanged.
+
+Primary locked reference: accepted host-removal run
+[34730591477](https://github.com/wimpheling/hephaestus/actions/runs/34730591477),
+workload SHA `ca4669cce9a64029c15e0dad92d466ac0990190d`, job `1569s`, trusted
+controller `1542869ms`, `golden-tests=1107979ms`,
+`production-project-build=82676ms`, `oci-builder=87131ms` and
+`oci-verifier=358328ms`. The measured canonical production phase is
+`82676ms` (`82.676s`); OCI builder plus verifier is `445459ms` (`445.459s`).
+These values bound the potential overlap context only: release-preparation
+spans are not separately timed, and actual scheduling or contention may erase
+some or all gain. No performance result is claimed from this preparation.
+
+The eventual one-pair GCP trial must keep the protected image
+`hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d`, immutable cache
+generation `1789079827867335` and SHA-256
+`0ed20efcc1aa019b79405d1eed626b13d4702019e9ceeba2bdde54e45ae29296`,
+`n2-standard-8`, `150 GB pd-balanced`, `europe-west1-d`, one VM,
+concurrency `1`, 45-minute provider DELETE and 50-minute workflow timeout.
+It must preserve all workload, browser, golden/PostgreSQL, scanner, marker,
+provenance, timing, gate, upload/download and VM-absence requirements. The
+trial baseline is the primary reference above; rollback is reverting
+`7a6ba94e55e3b2cc42f8960578d6a4ad54b1c0ae` to restore serial blog
+preparation. No GCP dispatch is part of this entry.
+
+Local producer/callsite evidence is retained at
+`/home/a/projects/hephaestus-worktrees/gcp-cooking-performance-evidence/overlap-preparation/EVIDENCE.md`.
+The fixture executes the extracted real callsite with real short child
+processes: successful concurrent progress and both panic orders passed. The
+candidate adds two regression tests; the prior workload marker inventory had
+39 distinct retained passed marker names. Marker inventories are not test
+counts; a future GCP result must preserve every existing marker/test and
+compare the candidate inventory explicitly. Focused preparation tests passed
+2/2 (session `63074`, `/tmp/heph-overlap-focused-final.log`), targeted Clippy
+passed (session `52609`, `/tmp/heph-overlap-clippy-final.log`), and formatting
+and diff checks passed. Full `cargo dev quality` and independent integration
+review remain pending. This is a pretrial record, not a performance result.
+
+Implementation commit: `7a6ba94e55e3b2cc42f8960578d6a4ad54b1c0ae`.
