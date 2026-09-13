@@ -46,8 +46,9 @@ optimization claim or merge follows. No retry or second dispatch is planned. It 
 the separately reviewed Python test-tree hypothesis. It removes only the
 guarded `/opt/python/lib/python3.13/test` directory; local OCI time was
 105.346s versus 120.512s, with quality session 18452 and the two-page site
-fixture passing. This remains unaccepted until the active run's complete
-evidence is validated.
+fixture passing. This remains unaccepted because the terminal run's marker
+projection discrepancy is unresolved; its other evidence is operationally
+passing.
 
 ## Working-tree implementation status
 

@@ -63,6 +63,16 @@ Current facts
   closes the stale harness-fidelity gap for the current input, but local host
   timing is not GCP savings and exact byte equivalence to the retained GCP
   candidate is unavailable.
+- The browser/npm reuse opportunity was measured locally with the real `npm ci`
+  commands in private cache directory
+  `/home/a/.cache/heph-browser-npm-ci-measurement`, using Node `v24.16.0` and
+  npm `11.15.0`. Playwright took `0.574s` for the first install and `0.547s`
+  for a full reinstall; web assets took `0.508s` and `0.549s`, with every
+  command exiting `0` and the locked trees installing 25 and 44 packages.
+  The current GCP path repeats Playwright three times and web assets once after
+  the required per-run installs, so this warm-local pair estimates about
+  `2.19s` of duplicate work. The result is too small and too cache-dependent
+  to justify implementation or a paid trial; it is not a GCP timing claim.
 - Candidate PR #43 removed only the guarded CPython
   `/opt/python/lib/python3.13/test` tree. Its authorized locked GCP trial,
   run `34738676749 <https://github.com/wimpheling/hephaestus/actions/runs/34738676749>`_,
