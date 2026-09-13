@@ -102,6 +102,25 @@ The overlap implementation was merged through PR #42 (merge
 comparison. Its next source baseline is the merged main revision; no repeat
 run has been claimed.
 
+Post-PR #42 local verifier investigation did not produce another accepted
+optimization or a GCP cause. Under the pinned verifier image and a 2 GiB
+explicit tmpfs `/tmp`, Syft ran 259.208s and exited 137, showing severe local
+tmpfs/reclaim failure behavior; a 4 GiB tmpfs probe passed in 11.784s but is nonrepresentative because it changes storage and
+memory, while GCP `/tmp` is disk-backed virtiofs and the host `/tmp` was also
+tmpfs. The faithful all-btrfs 2 GiB/2 CPU probe kept the image, script and
+197.3 MB candidate unchanged and passed in 14.131s (copy/stage 1.691s, Syft
+5.811s, Trivy 2.016s, umoci 4.098s), with 277 package identities and zero
+vulnerabilities matching the 4 GiB output. It recorded no OOM or reclaim kill;
+the result is not evidence of a GCP memory cause or speedup ratio. Evidence is
+at `/home/a/.cache/heph-verifier-faithful-storage-q8lnwgb6/summary.json` and
+`/tmp/heph-verifier-local-hjdu2roi/summary.json` plus
+`/tmp/heph-verifier-local-hjdu2roi/counterprobe-audit.json`. The remaining question is whether the actual
+libkrun verifier path at roughly 364s in GCP corresponds to the local 14s
+container path; the current input identity and virtiofs behavior are not
+proven locally. The smallest next step is a local actual-libkrun feasibility
+probe under the unchanged 2 GiB envelope, separately owned by Luna. The goal
+remains open; no cloud dispatch or new candidate is justified by this probe.
+
 ## Locked constraints
 
 - [x] Keep the existing WIF provider, exact `cooking-e2e.yml@refs/heads/main`

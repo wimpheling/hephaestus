@@ -1456,3 +1456,47 @@ gate and independent review, then merged with commit
 `6e812d2e0e22c489541eb34fe8d85ce481970d81` at
 `2026-09-13T02:43:22Z`. The next source baseline for any future experiment is
 this merged main revision; no repeat run is implied by the single-pair result.
+
+
+POST-MERGE LOCAL VERIFIER STORAGE INVESTIGATION: NO CLOUD RESULT
+================================================================
+Scope review: after PR #42, a local verifier probe tested whether the pinned
+OCI verifier's apparent memory/storage sensitivity justified another GCP
+experiment. It does not establish a GCP cause, speedup ratio or accepted
+optimization, and it made no image, script, PR, gate or cloud change. The
+single-line 4 GiB candidate remains uncommitted.
+
+The pinned verifier image was
+`localhost/oci-verifier@sha256:1e1b9618333711c130598a55956c9051b898fb100a4270d584340aa29c4ef09c`
+with image ID
+`9418513a484c01a8642eb7efe25897d4b5c6b6ab2025308c02d59c2ebb397e53`,
+entrypoint SHA-256
+`9a3f6c489a2423f6cf62d9531d52ea44223f5f28b9ec993d5eeab15ac4d4fd82`, and
+the unchanged candidate image content was `197300037` bytes. With 2 GiB and
+an explicit tmpfs `/tmp`, Syft ran for `259.208s` and exited `137`; the full
+probe exited `1` after `260.336s`, showing severe local tmpfs/reclaim failure
+behavior. A 4 GiB tmpfs probe passed in `11.784s`,
+but that comparison changes both memory and storage and is nonrepresentative:
+the GCP guest uses disk-backed virtiofs `/tmp`, while the host `/tmp` was also
+tmpfs. Neither result is a GCP memory conclusion or performance measurement.
+
+The faithful local probe kept 2 GiB, 2 CPUs, the image, script and candidate
+unchanged, and used an all-btrfs storage path. It passed in `14.131s` with
+copy/stage `1.691s`, Syft `5.811s`, Trivy `2.016s` and umoci `4.098s`.
+Manifest validation matched the 4 GiB output with `277` package identities
+and `0` vulnerabilities. The memory peak reached the 2 GiB limit, but the
+probe recorded no OOM or reclaim kill (`oom=0`, `oom_kill=0`,
+`oom_group_kill=0`), with `358` file refaults; this is evidence of local
+pressure, not proof of a GCP OOM cause. Evidence is retained in
+`/home/a/.cache/heph-verifier-faithful-storage-q8lnwgb6/summary.json` and
+`/tmp/heph-verifier-local-hjdu2roi/summary.json` plus
+`/tmp/heph-verifier-local-hjdu2roi/counterprobe-audit.json`.
+
+The remaining precise question is whether the actual GCP/libkrun verifier
+path, observed at roughly `364s` in the accepted run, can reproduce the
+faithful local verifier behavior; the local container's roughly `14s` result
+does not prove correspondence to the current GCP input identity, and
+virtiofs behavior remains unreproduced. The smallest next experiment is a
+feasibility probe of the actual local libkrun verifier under the unchanged
+2 GiB envelope. It is separately owned by Luna; no cloud dispatch is
+justified until that identity and storage path are established.
