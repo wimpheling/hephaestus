@@ -1027,6 +1027,13 @@ post-delete cleanup requirements unchanged.
 Acceptance requires a complete valid evidence path and the same passing gates;
 compare total elapsed time, the retained host phase, production build, OCI
 phases and golden tests. Rollback is to restore the host build while retaining
-the accepted CPU change. Do not dispatch until root supplies the exact
-integrated `main` SHA and PR #39 open head; dispatch exactly one run, with no
-retry or additional infrastructure work.
+the accepted CPU change. The accepted CPU change is integrated on trusted
+`main` at exact SHA `c0bd1c61f85a6537feb3ee682d178fe92f4ad432`. PR #39 is open
+at exact head `204bcee68f7d4718aafa4ebf85bcb1b65e53a02f`, based on that main,
+and its only change is 14 deleted lines in `examples/cooking/run.sh`: the
+unused host gateway artifact export and host `project-build` compile. The
+Cooking worker remains at `2` vCPUs and the production project build remains
+the required proof. The trusted timing scripts are byte-identical to the
+baseline controller path; only the already-accepted CPU literal differs on
+main. The exact heads and one-file diff were revalidated before dispatch.
+Dispatch exactly one run with no retry or additional infrastructure work.
