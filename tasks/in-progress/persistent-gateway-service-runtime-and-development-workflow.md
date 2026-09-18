@@ -39,10 +39,41 @@ Caddy deployment over an authenticated private channel. Released code never
 receives Caddy administration, a public listener, or unrestricted host
 networking authority.
 
-The exact guest transport (vsock, a private Unix socket bridge, or another
-bounded mechanism) must be selected with its framing, flow-control, timeout,
-and backpressure properties. It must not fall back to arbitrary guest TCP
-exposure.
+The selected guest transport is the dedicated per-VM vsock bridge described
+below. Its framing, flow-control, timeout, and backpressure properties are
+part of the reviewed contract, and it must not fall back to arbitrary guest
+TCP exposure.
+
+## Reviewed transport and declaration slice
+
+The reviewed transport is a dedicated per-VM guest-initiated vsock service
+bridge, separate from the existing control and broker channels. The guest
+bootstrap connects to a host-owned per-VM Unix socket on a fixed private vsock
+port, authenticates the bridge with a per-VM credential, and carries one raw
+full-duplex byte stream per host-side HTTP connection. The service command
+binds only the declared `127.0.0.1` loopback port; the VM remains in
+`NetworkMode::Disabled` and receives no `PortForward` or `passt` network.
+Per-connection socket backpressure, bounded connection counts, handshake and
+idle deadlines, and host-side drain provide the initial flow-control boundary.
+
+The first implementation slice adds only the typed `http.service.v1` gateway
+declaration: an exact loopback port from 1024 through 65535, a strict
+origin-form readiness path, and a strict origin-form health path. Platform
+code will choose timeout and concurrency policy. Service settings are required
+for `http.service.v1` and forbidden for stateless `http.v1`; the optional
+settings field is omitted from serialization when absent so existing stateless
+normalized hashes remain unchanged. Database installation, VM launch, Caddy
+forwarding, and runtime acceptance remain fail-closed until later slices.
+
+The initial service edge accepts bounded HTTP only. WebSockets, upgrades,
+trailers, and other unreviewed streaming behavior are rejected until a later
+transport/runtime decision. Service readiness will require a successful HTTP
+request to the declared readiness path; control-channel liveness is not service
+readiness. Each request continues to use fresh gateway invocation/session and
+secret leases, and the bridge credential is never a request bearer. The
+`http.service.v1` declaration does not accept the `http.v1` mailbox-publication
+sideband; a separate service event contract is required before publication can
+be enabled for a normal long-lived server.
 
 ## Sequencing and coordination
 
@@ -54,12 +85,20 @@ and MVP-06 work are explicitly out of scope until both phases are finished.
 Astra owns architecture, decomposition, contract review, integration, and
 commit coordination. Luna receives one bounded implementation, investigation,
 or verification slice at a time, with explicit file ownership and acceptance
-evidence. The exact guest transport and any other consequential cross-boundary
-decisions remain pending main-thread review until their evidence is available.
+evidence. The transport choice is reviewed above; remaining consequential
+cross-boundary decisions stay bounded to their implementation slices and
+require main-thread review before each integration step.
 
 ## Implementation checklist
 
 - [ ] **1. Service-mode release contract**
+  - [x] Add typed `http.service.v1` declaration/config validation and focused
+    tests while preserving stateless serialization; persistence and runtime
+    acceptance remain unchecked.
+    - Evidence: `cargo test -p gateway-domain -p agent-config`,
+      `cargo clippy -p gateway-domain -p agent-config --all-targets
+      --all-features`, `cargo fmt --all -- --check`, and `git diff --check`
+      pass for this declaration slice.
   - [ ] Inventory the existing stateless `http.v1` declaration and invocation
     path so service mode has an explicit compatibility boundary.
   - [ ] Define and validate the service-mode release configuration, command,

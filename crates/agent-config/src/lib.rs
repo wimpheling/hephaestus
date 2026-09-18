@@ -6,8 +6,8 @@ use capability_domain::{
 };
 use forge_domain::GitRef;
 use gateway_domain::{
-    Exposure, GatewayDeclaration, GatewayMailboxPublicationSlot, GatewayName, HttpMethod,
-    RouteIntent, RoutePath,
+    Exposure, GatewayDeclaration, GatewayMailboxPublicationSlot, GatewayName, GatewayServiceConfig,
+    HttpMethod, RouteIntent, RoutePath, ServiceProbePath,
 };
 use git_capability_domain::{
     BranchRefPolicy, BranchUpdatePolicy, ChangedPathGlob, GitCapabilityCeiling,
@@ -200,8 +200,12 @@ pub struct RepositoryGatewayConfig {
     pub name: String,
     /// Exact released agent key whose immutable runtime contract handles HTTP.
     pub agent_name: String,
-    /// Versioned handler contract. Only `http.v1` is currently supported.
+    /// Versioned handler contract (`http.v1` or `http.service.v1`).
     pub handler_contract: String,
+    /// Required only for the `http.service.v1` contract. Runtime wiring is
+    /// intentionally deferred until the service transport is integrated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service: Option<RepositoryGatewayServiceConfig>,
     /// Whether the future provider exposes the route publicly or through
     /// Hephaestus authentication.
     pub exposure: Exposure,
@@ -217,6 +221,28 @@ pub struct RepositoryGatewayConfig {
     /// only bind one explicit mailbox and producer identity at installation.
     #[serde(default)]
     pub mailbox_publication_slots: Vec<RepositoryGatewayMailboxPublicationSlot>,
+}
+
+/// Repository-declared settings for a long-lived HTTP gateway service.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RepositoryGatewayServiceConfig {
+    /// Exact TCP port on `127.0.0.1` inside the guest.
+    pub loopback_port: u16,
+    /// Origin path used to establish service readiness.
+    pub readiness_path: String,
+    /// Origin path used for ongoing service health checks.
+    pub health_path: String,
+}
+
+impl RepositoryGatewayServiceConfig {
+    fn to_declaration(&self) -> Result<GatewayServiceConfig, gateway_domain::GatewayError> {
+        GatewayServiceConfig::new(
+            self.loopback_port,
+            ServiceProbePath::parse(self.readiness_path.clone())?,
+            ServiceProbePath::parse(self.health_path.clone())?,
+        )
+    }
 }
 
 /// One repository-declared required mailbox publication slot for a gateway.
@@ -262,6 +288,11 @@ impl RepositoryGatewayConfig {
                 .as_str()
                 .to_owned(),
             handler_contract: self.handler_contract.clone(),
+            service: self
+                .service
+                .as_ref()
+                .map(RepositoryGatewayServiceConfig::to_declaration)
+                .transpose()?,
             exposure: self.exposure,
             routes,
             parameters: serde_json::to_value(&self.parameters)
@@ -1283,7 +1314,7 @@ fn validate_repository_gateways(config: &RepositoryGatewaysConfig) -> Vec<Diagno
                         &mut diagnostics,
                         "invalid_repository_gateway_declaration",
                         format!("gateways[{gateway_index}]"),
-                        "gateway declarations must use the supported HTTP contract with unique bounded routes and symbolic secret slots",
+                        "gateway declarations must use a supported HTTP contract with matching service settings, unique bounded routes, and symbolic secret slots",
                     );
                 }
             }
@@ -2559,6 +2590,66 @@ methods = ["GET", "POST"]
             reordered.diagnostics
         );
         assert_eq!(parsed.normalized_hash, reordered.normalized_hash);
+    }
+
+    #[test]
+    fn parses_typed_service_gateway_settings_and_rejects_mismatched_contracts() {
+        let service_manifest = r#"
+version = 1
+
+[[gateways]]
+name = "chat"
+agent_name = "chat-handler"
+handler_contract = "http.service.v1"
+exposure = "heph_authenticated"
+
+[[gateways.routes]]
+path = "/chat"
+methods = ["GET", "POST"]
+
+[gateways.service]
+loopback_port = 8080
+readiness_path = "/ready"
+health_path = "/health"
+"#;
+        let parsed = parse_repository_gateways(service_manifest.as_bytes());
+        assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+        let service = parsed
+            .config
+            .expect("valid service manifest")
+            .gateways
+            .pop()
+            .expect("service gateway")
+            .to_declaration()
+            .expect("typed service declaration");
+        assert_eq!(service.handler_contract, "http.service.v1");
+        let service = service.service.expect("service settings");
+        assert_eq!(service.loopback_port, 8080);
+        assert_eq!(service.readiness_path.as_str(), "/ready");
+        assert_eq!(service.health_path.as_str(), "/health");
+
+        let stateless_with_service = service_manifest.replace("http.service.v1", "http.v1");
+        let parsed = parse_repository_gateways(stateless_with_service.as_bytes());
+        assert!(parsed.config.is_none());
+        assert!(
+            parsed
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "invalid_repository_gateway_declaration")
+        );
+
+        let service_without_settings = service_manifest.replace(
+            "[gateways.service]\nloopback_port = 8080\nreadiness_path = \"/ready\"\nhealth_path = \"/health\"\n",
+            "",
+        );
+        let parsed = parse_repository_gateways(service_without_settings.as_bytes());
+        assert!(parsed.config.is_none());
+        assert!(
+            parsed
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "invalid_repository_gateway_declaration")
+        );
     }
 
     #[test]
