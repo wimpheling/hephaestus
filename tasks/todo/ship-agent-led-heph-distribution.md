@@ -151,7 +151,7 @@ arbitrary agents. It does not make a functioning assistant necessary for
 installation, recovery, grants, deployment approvals, or break-glass operation.
 
 It does not require persistent gateway service mode for batch project runs;
-that remains the separately scoped [persistent gateway runtime task](persistent-gateway-service-runtime-and-development-workflow.md).
+that remains the separately scoped [persistent gateway runtime task](../in-progress/persistent-gateway-service-runtime-and-development-workflow.md).
 
 ## Verification and completion evidence
 

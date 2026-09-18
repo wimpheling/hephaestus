@@ -52,7 +52,7 @@ Caddy admin access, custom domains, certificate lifecycle management, or a
 V8/WebAssembly/Unikraft runtime bakeoff.
 
 Persistent guest web servers and their local-development workflow are tracked
-separately in [Persistent gateway service runtime and development workflow](persistent-gateway-service-runtime-and-development-workflow.md).
+separately in [Persistent gateway service runtime and development workflow](../in-progress/persistent-gateway-service-runtime-and-development-workflow.md).
 
 ## Implementation status (2026-08-09)
 
