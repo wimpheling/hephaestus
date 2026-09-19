@@ -90,6 +90,56 @@ evidence. The transport choice is reviewed above; remaining consequential
 cross-boundary decisions stay bounded to their implementation slices and
 require main-thread review before each integration step.
 
+## Reviewed supervisor integration plan (implementation pending)
+
+The application will share one fresh daemon owner and one warm registry between
+request dispatch and supervision, using the configured stable volume host ID.
+The existing gateway reconciliation loop remains the scheduling owner alongside
+Caddy reconciliation. It will own and join service tasks; starting a VM or
+waiting for readiness must not block the Caddy reconciliation pass or API
+readiness.
+
+Each launch reserves capacity and persists its ownership claim before any
+materialization. Its parent owns preparation, the prepared-instance worker,
+lease renewal, and cleanup until all child work settles. Lease renewal runs
+through preparation and shutdown, with conservative monotonic deadlines derived
+from the start of each database operation. Lease loss unregisters the exact
+instance and requests shutdown; in-flight preparation must still settle so a
+late VM handle can be destroyed. Same-process cleanup failures retain the VM
+handle and capacity reservation for retry. Materialization is removed only
+after provider teardown is confirmed, and the durable row is marked cleaned
+only after both steps succeed.
+
+Startup registers an HTTP-ready worker before marking the durable instance
+ready and promoting the desired revision. An already-active revision being
+restored remains eligible while a different desired candidate is pending.
+Candidate failure preserves the previous active revision. The first policy is
+one warm serving instance per gateway, including while idle; no autoscaling or
+idle suspension. Platform defaults will allow eight serving gateways, two
+additional replacement/drain slots, at most two simultaneous preparations, and
+sixteen HTTP requests per instance. All live, starting, draining, and incompletely
+cleaned instances consume capacity. A gateway may have at most two concurrent
+instances, and a new replacement waits until the preceding drain is cleaned.
+Replacement slots are reserved so a full serving pool can still upgrade.
+
+The initial timing policy is a 30-second ownership lease renewed every five
+seconds, a 120-second startup/readiness budget, health checks every ten seconds
+with shutdown after three consecutive failures, and a 30-second drain budget.
+Probe and shutdown operations retain their independently bounded worker policy.
+These values must be validated against platform bounds and exposed in the
+supervisor policy rather than repeated as unrelated constants.
+
+Cutover drains the prior instance using durable accepted-invocation counts for
+its exact instance and fencing epoch, including requests accepted before their
+handler starts. At the drain deadline, the instance becomes stopping, is
+unregistered, and its remaining authority is terminalized through the existing
+completion path. Revocation and ownership loss stop dispatch immediately.
+Same-host daemon recovery fences expired claims and destroys/restarts their
+VMs; the provider has no reconnect/adopt API. Recovery and incomplete cleanup
+receive scheduling priority over new launches. Staging-tree cleanup requires
+materialization quiescence. Failure backoff, durable diagnostics, recovery
+integration, and real Caddy acceptance remain implementation requirements.
+
 ## Current implementation checkpoint
 
 The VM contract, standalone host broker, and host-side provider/worker/FFI
