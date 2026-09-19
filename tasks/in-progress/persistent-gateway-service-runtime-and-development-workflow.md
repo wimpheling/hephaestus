@@ -470,6 +470,19 @@ checks. This remains a cleanup
 driver only; scheduler, claim recovery, capacity release, and Caddy routing
 remain pending.
 
+The claim-resolution port now resolves an ambiguous non-cleaned service claim
+only after taking the same gateway-row lock used by new claims and issuing a
+fresh `READ COMMITTED` lookup. Missing gateways and cleaned rows resolve to an
+absence only after that barrier; expired claims and newer owner/fence epochs
+remain visible for recovery. Four real worker-role PostgreSQL tests passed
+against migration 0076, including commit and rollback lock barriers, expiry
+before recovery, cleaned-row exclusion, and nil-identity rejection; the
+in-test marker is retained in `/tmp/heph-claim-resolution-real-v8.log`.
+Strict `gateway-edge` and `gateway-postgres` Clippy with `-D warnings`, the
+101-test edge library baseline, formatting, and `git diff --check` pass in an
+isolated checkout at baseline `265d718`. Supervisor integration, claim
+recovery scheduling, Caddy routing, and release UI remain pending.
+
 - [x] Finish focused VM contract tests and workspace compatibility checks:
   `cargo test -p vm-trait`, `cargo test -p vm-libkrun --lib`,
   `cargo test -p vm-fake`, focused Clippy, `cargo check --workspace
@@ -896,6 +909,16 @@ check, strict Clippy, formatting, and 58 library tests passed.
   in `/tmp/heph-shutdown-focused-final-db-census.log`. The focused app tests,
   formatting, and clean-base strict app Clippy all passed. Full current-head
   workspace quality remains pending concurrent gateway work.
+
+- [x] Add bounded lifecycle diagnostics to the parent-owned service worker.
+  The worker subscribes to provider events before VM start and exposes a typed
+  watch snapshot containing lifecycle milestones, stdout/stderr byte counts,
+  lagged-event counts, and channel closure. Raw log bytes, request content,
+  credentials, and arbitrary metric labels are discarded; event lag or channel
+  closure does not fail the service or starve cancellation and cleanup. This
+  does not deliver application log chunks or complete the security/logging
+  checklist: project-scoped application logs remain an explicit opt-in contract
+  with app-owned redaction, bounded retention, and a later authorized stream.
 
 ## Non-goals
 

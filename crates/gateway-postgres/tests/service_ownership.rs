@@ -11,6 +11,8 @@ use sqlx::postgres::PgPoolOptions;
 use std::{env, sync::Arc, time::Duration};
 use uuid::Uuid;
 
+#[path = "service_ownership/claim_resolution.rs"]
+mod claim_resolution;
 #[path = "service_ownership/coordinator.rs"]
 mod coordinator;
 

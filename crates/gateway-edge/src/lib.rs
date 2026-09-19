@@ -18,6 +18,7 @@ use vm_trait::{PrivateHttpRequest, PrivateHttpResponse, PrivateMailboxPublicatio
 
 mod integration;
 mod service_capacity;
+mod service_claim_resolution;
 mod service_cleanup;
 mod service_cleanup_driver;
 mod service_coordinator;
@@ -35,6 +36,7 @@ mod service_registry;
 mod service_targets;
 
 pub use integration::caddy::LocalCaddyAdministration;
+pub use service_claim_resolution::GatewayServiceClaimResolutionStore;
 pub use service_capacity::{
     DEFAULT_SERVICE_DRAIN_TIMEOUT, DEFAULT_SERVICE_HEALTH_FAILURES,
     DEFAULT_SERVICE_HEALTH_INTERVAL, DEFAULT_SERVICE_MAX_REVISIONS_PER_GATEWAY,
