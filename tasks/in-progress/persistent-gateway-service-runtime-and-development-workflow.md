@@ -1125,6 +1125,21 @@ Evidence: `/tmp/heph-app-supervisor-full-real-pinned-final-20260919.log`,
 `/tmp/heph-app-supervisor-fmt-pinned-20260919.log`, and
 `/tmp/heph-app-supervisor-doc-pinned-final-20260919.log`.
 
+The supervisor drain-forwarding checkpoint is verified on clean `2f63d50` with
+only `service_supervisor.rs` overlaid. `GatewayServiceStartupHandle` now
+coalesces drain requests made before coordinator creation or while the job is
+ready, while cancellation and parent-owned futures remain independent. The
+accepted-count regression holds one invocation during drain, proves the job
+stays ready and pending, then releases the count and verifies cleanup. The
+isolated edge library passed 143 tests; strict Rust 1.88.0 edge Clippy,
+formatting, and workspace rustdoc passed. Actual daemon target selection and
+startup scheduling remain pending.
+
+Evidence: `/tmp/heph-drain-forward-isolated-edge-lib-20260919.log`,
+`/tmp/heph-drain-forward-isolated-clippy-20260919.log`,
+`/tmp/heph-drain-forward-isolated-fmt-20260919.log`, and
+`/tmp/heph-drain-forward-isolated-doc-20260919.log`.
+
 - [ ] Run `cargo fmt --all -- --check` after implementation changes.
 - [ ] Run `cargo clippy --workspace --all-targets --all-features`.
 - [ ] Run `cargo test --workspace --all-features`.

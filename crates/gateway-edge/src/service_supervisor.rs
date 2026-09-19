@@ -87,6 +87,7 @@ pub enum GatewayServiceSupervisorJobStatus {
 pub struct GatewayServiceStartupHandle {
     id: Uuid,
     cancellation: CancellationToken,
+    drain: watch::Sender<bool>,
     status: watch::Receiver<GatewayServiceSupervisorJobStatus>,
 }
 
@@ -100,6 +101,11 @@ impl GatewayServiceStartupHandle {
     /// Requests cancellation while preserving the supervisor-owned job.
     pub fn cancel(&self) {
         self.cancellation.cancel();
+    }
+
+    /// Requests graceful retirement of the service after accepted calls drain.
+    pub fn request_drain(&self) {
+        self.drain.send_replace(true);
     }
 
     /// Subscribes to lifecycle status changes.
@@ -274,6 +280,7 @@ impl GatewayServiceSupervisor {
             })?;
         let id = Uuid::new_v4();
         let cancellation = CancellationToken::new();
+        let (drain, drain_receiver) = watch::channel(false);
         let (status, status_receiver) = watch::channel(GatewayServiceSupervisorJobStatus::Claiming);
         self.records.insert(
             id,
@@ -301,10 +308,12 @@ impl GatewayServiceSupervisor {
             Arc::clone(&self.capacity),
             cancellation.clone(),
             status,
+            drain_receiver,
         )));
         Ok(GatewayServiceStartupHandle {
             id,
             cancellation,
+            drain,
             status: status_receiver,
         })
     }
@@ -961,6 +970,7 @@ async fn run_job(
     capacity: Arc<Mutex<GatewayServiceCapacity>>,
     cancellation: CancellationToken,
     status: watch::Sender<GatewayServiceSupervisorJobStatus>,
+    mut drain: watch::Receiver<bool>,
 ) -> JobCompletion {
     if cancellation.is_cancelled() || Instant::now() >= deadlines.startup_deadline {
         let status_value = if cancellation.is_cancelled() {
@@ -1100,6 +1110,10 @@ async fn run_job(
     let mut cancel_sent = false;
     let mut startup_finished = false;
     let mut status_open = true;
+    let mut drain_open = true;
+    if *drain.borrow() {
+        control.request_drain();
+    }
     let result = loop {
         tokio::select! {
             result = &mut run => break result,
@@ -1119,6 +1133,13 @@ async fn run_job(
             () = cancellation.cancelled(), if !cancel_sent => {
                 cancel_sent = true;
                 control.cancel();
+            }
+            changed = drain.changed(), if drain_open => {
+                match changed {
+                    Ok(()) if *drain.borrow() => control.request_drain(),
+                    Ok(()) => {}
+                    Err(_) => drain_open = false,
+                }
             }
         }
     };
@@ -1728,6 +1749,7 @@ mod tests {
     struct ReadyTargets {
         target: crate::GatewayServiceOwnedTarget,
         ownership: Arc<ReadyOwnership>,
+        accepted: Arc<AtomicUsize>,
     }
 
     #[async_trait]
@@ -1762,7 +1784,7 @@ mod tests {
             &self,
             _: crate::GatewayServiceInstanceKey,
         ) -> Result<u64, GatewayEdgeError> {
-            Ok(0)
+            Ok(self.accepted.load(Ordering::Relaxed) as u64)
         }
 
         async fn get_service_instance(
@@ -1844,6 +1866,7 @@ mod tests {
         GatewayServiceSupervisor,
         Arc<ReadyProvider>,
         GatewayServiceStartupRequest,
+        Arc<AtomicUsize>,
     ) {
         let gateway_id = Uuid::new_v4();
         let revision_id = Uuid::new_v4();
@@ -1924,6 +1947,7 @@ mod tests {
                 service,
             },
         };
+        let accepted = Arc::new(AtomicUsize::new(0));
         let policy = GatewayServiceSupervisorPolicy::default();
         let registry =
             GatewayServiceRegistry::new(8, policy.requests_per_instance).expect("registry");
@@ -1937,6 +1961,7 @@ mod tests {
             targets: Arc::new(ReadyTargets {
                 target,
                 ownership: Arc::clone(&ownership),
+                accepted: Arc::clone(&accepted),
             }),
             registry,
             service_authority: String::from("127.0.0.1:8080"),
@@ -1950,6 +1975,7 @@ mod tests {
                 revision_id,
                 intent: GatewayServiceStartupIntent::ActivateDesired,
             },
+            accepted,
         )
     }
 
@@ -2126,7 +2152,7 @@ mod tests {
 
     #[tokio::test]
     async fn coordinator_readiness_releases_startup_but_cleanup_failure_retains_vm() {
-        let (mut supervisor, provider, initial_request) = ready_supervisor(true);
+        let (mut supervisor, provider, initial_request, _accepted) = ready_supervisor(true);
         let handle = supervisor.start(initial_request).expect("reservation");
         wait_until_ready(&mut supervisor, &handle).await;
         let snapshot = supervisor.capacity_snapshot();
@@ -2154,7 +2180,7 @@ mod tests {
 
     #[tokio::test]
     async fn terminal_cleanup_can_retry_with_the_same_capacity_and_vm() {
-        let (mut supervisor, provider, initial_request) = ready_supervisor(true);
+        let (mut supervisor, provider, initial_request, _accepted) = ready_supervisor(true);
         let handle = supervisor.start(initial_request).expect("reservation");
         wait_until_ready(&mut supervisor, &handle).await;
         handle.cancel();
@@ -2198,7 +2224,7 @@ mod tests {
 
     #[tokio::test]
     async fn blocked_cleanup_retry_does_not_stop_other_startup_jobs() {
-        let (mut supervisor, provider, initial_request) = ready_supervisor(true);
+        let (mut supervisor, provider, initial_request, _accepted) = ready_supervisor(true);
         let handle = supervisor.start(initial_request).expect("reservation");
         wait_until_ready(&mut supervisor, &handle).await;
         handle.cancel();
@@ -2246,7 +2272,7 @@ mod tests {
 
     #[tokio::test]
     async fn coordinator_success_releases_live_capacity_after_cleanup() {
-        let (mut supervisor, _provider, request) = ready_supervisor(false);
+        let (mut supervisor, _provider, request, _accepted) = ready_supervisor(false);
         let handle = supervisor.start(request).expect("reservation");
         wait_until_ready(&mut supervisor, &handle).await;
         assert_eq!(supervisor.capacity_snapshot().live_instances, 1);
@@ -2261,6 +2287,50 @@ mod tests {
         assert!(!supervisor.has_pending_jobs());
         let shutdown = supervisor.shutdown().await;
         assert!(shutdown.unresolved.is_empty());
+    }
+
+    #[tokio::test]
+    async fn startup_handle_forwards_drain_to_ready_coordinator() {
+        let (mut supervisor, _provider, request, accepted) = ready_supervisor(false);
+        let handle = supervisor.start(request).expect("reservation");
+        wait_until_ready(&mut supervisor, &handle).await;
+
+        accepted.store(1, Ordering::Relaxed);
+        handle.request_drain();
+        let mut poll = Box::pin(supervisor.poll());
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), &mut poll)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            *handle.subscribe().borrow(),
+            GatewayServiceSupervisorJobStatus::Ready
+        );
+        accepted.store(0, Ordering::Relaxed);
+        let event = tokio::time::timeout(std::time::Duration::from_secs(5), &mut poll)
+            .await
+            .expect("bounded graceful drain")
+            .expect("drained service event");
+        drop(poll);
+        assert_eq!(event.status, GatewayServiceSupervisorJobStatus::Settled);
+        assert!(event.capacity_released);
+        assert_eq!(supervisor.capacity_snapshot().live_instances, 0);
+    }
+
+    #[tokio::test]
+    async fn startup_handle_retains_drain_requested_before_coordinator_creation() {
+        let (mut supervisor, _provider, request, _accepted) = ready_supervisor(false);
+        let handle = supervisor.start(request).expect("reservation");
+        handle.request_drain();
+
+        let event = tokio::time::timeout(std::time::Duration::from_secs(5), supervisor.poll())
+            .await
+            .expect("bounded pre-start drain")
+            .expect("drained service event");
+        assert_eq!(event.status, GatewayServiceSupervisorJobStatus::Settled);
+        assert!(event.capacity_released);
+        assert_eq!(supervisor.capacity_snapshot().live_instances, 0);
     }
 
     // `shutdown` consumes the supervisor after joining every owned future; the
@@ -2415,7 +2485,7 @@ mod tests {
             ResolutionCase::Expired,
             ResolutionCase::Unavailable,
         ] {
-            let (mut supervisor, provider, request) = ready_supervisor(false);
+            let (mut supervisor, provider, request, _accepted) = ready_supervisor(false);
             let known = supervisor
                 .context
                 .targets
@@ -2551,7 +2621,7 @@ mod tests {
 
     #[tokio::test]
     async fn exact_resolved_owned_claim_is_cleaned_before_capacity_release() {
-        let (mut supervisor, provider, request) = ready_supervisor(false);
+        let (mut supervisor, provider, request, _accepted) = ready_supervisor(false);
         let lease = supervisor
             .context
             .targets
