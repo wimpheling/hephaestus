@@ -676,8 +676,9 @@ check, strict Clippy, formatting, and 58 library tests passed.
   sixteen requests per instance. Reservations use unique exact tokens, remain
   counted through draining or cleanup failure, release startup allowance only
   after `finish_startup`, and release live capacity only through explicit
-  post-cleanup completion. Capacity tests passed eight cases; isolated
-  gateway-edge tests and strict Clippy passed on the committed checkpoint.
+  post-cleanup completion. Capacity tests passed eight cases, and
+  `CARGO_INCREMENTAL=0 cargo clippy -p gateway-edge --all-targets
+  --all-features -- -D warnings` passed after the committed checkpoint.
 
 - [x] Harden the durable event-watch integration fixture against unrelated
   unpublished outbox backlog. A real PostgreSQL/NATS run with 450 older

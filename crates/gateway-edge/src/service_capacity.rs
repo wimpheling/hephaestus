@@ -364,27 +364,35 @@ mod tests {
 
     #[test]
     fn invalid_policy_and_identity_fail_closed() {
-        let mut policy = GatewayServiceSupervisorPolicy::default();
-        policy.requests_per_instance = MAX_SERVICE_REQUEST_CAPACITY + 1;
+        let policy = GatewayServiceSupervisorPolicy {
+            requests_per_instance: MAX_SERVICE_REQUEST_CAPACITY + 1,
+            ..GatewayServiceSupervisorPolicy::default()
+        };
         assert_eq!(
             GatewayServiceCapacity::new(policy).unwrap_err(),
             GatewayServiceCapacityError::InvalidPolicy
         );
-        let mut policy = GatewayServiceSupervisorPolicy::default();
-        policy.health_failure_threshold = 4;
-        policy.health_interval = Duration::ZERO;
+        let policy = GatewayServiceSupervisorPolicy {
+            health_failure_threshold: 4,
+            health_interval: Duration::ZERO,
+            ..GatewayServiceSupervisorPolicy::default()
+        };
         assert_eq!(
             GatewayServiceCapacity::new(policy).unwrap_err(),
             GatewayServiceCapacityError::InvalidPolicy
         );
-        let mut policy = GatewayServiceSupervisorPolicy::default();
-        policy.replacement_capacity = 0;
+        let policy = GatewayServiceSupervisorPolicy {
+            replacement_capacity: 0,
+            ..GatewayServiceSupervisorPolicy::default()
+        };
         assert_eq!(
             GatewayServiceCapacity::new(policy).unwrap_err(),
             GatewayServiceCapacityError::InvalidPolicy
         );
-        let mut policy = GatewayServiceSupervisorPolicy::default();
-        policy.max_revisions_per_gateway = 1;
+        let policy = GatewayServiceSupervisorPolicy {
+            max_revisions_per_gateway: 1,
+            ..GatewayServiceSupervisorPolicy::default()
+        };
         assert_eq!(
             GatewayServiceCapacity::new(policy).unwrap_err(),
             GatewayServiceCapacityError::InvalidPolicy
