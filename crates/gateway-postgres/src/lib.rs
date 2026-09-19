@@ -52,9 +52,11 @@ use vm_trait::{
     RuntimeAuthorityBootstrap, VmId, VmMount, VmResources, VmSpec,
 };
 
+mod service_execution;
 mod service_ownership;
 mod service_targets;
 
+pub use service_execution::PostgresGatewayExecutionTargetResolver;
 pub use service_ownership::PostgresGatewayServiceOwnership;
 pub use service_targets::PostgresGatewayServiceTargets;
 

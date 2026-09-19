@@ -254,6 +254,29 @@ The resolver still owns launch selection and has not yet been wired to this
 adapter; supervisor startup, readiness promotion, teardown ordering, and Caddy
 routing remain pending.
 
+The gateway execution-target port now resolves an already accepted invocation
+to either explicit stateless `http.v1` execution or an exact fenced persistent
+service instance. The PostgreSQL adapter requires the immutable invocation,
+route, revision, gateway, owner, and fencing binding; accepts ready and
+draining instances after active-pointer cutover; requires a fresh unexpired
+instance lease, a published exact release, and an active host-mediated session;
+and rejects terminal sessions, revoked or expired inbound leases, revoked
+releases, and unavailable service targets without falling back to stateless
+execution. It returns the host-session expiry plus a remaining duration that
+deducts lookup latency, and releases the database query before HTTP execution.
+The direct invocation-fence mutation rejection is migration-75 schema
+evidence; the lookup tests separately cover same-host/wrong-daemon and
+wrong-host/same-daemon identity failures.
+
+Evidence: the exact worker-role disposable PostgreSQL run printed
+`REAL_POSTGRES_CONNECTED_AND_MIGRATED=1 max_migration=75` and passed 4
+aggregate tests covering identity, genuine session/instance/secret expiry,
+draining cutover, stateless routing, terminal and release revocation, and
+secret-lease revocation. The retained log is
+`/tmp/hephaestus-gateway-execution-strengthened.log`; strict targeted Clippy,
+owned-file formatting, and `git diff --check` pass. Exact-instance
+draining/recovery queries and full supervisor wiring remain pending.
+
 The edge now has a bounded warm-instance registry for supervisor-owned ready
 service VMs. Keys include the exact immutable service identity and positive
 `i64` fencing token; registration validates the deterministic VM ID, ready
