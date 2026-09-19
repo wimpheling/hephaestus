@@ -521,7 +521,8 @@ async fn exercise_external_gateway_service_warm_path(
     root: &Path,
     root_image: &Path,
 ) {
-    let mut daemon = spawn_external_golden_daemon(gateway, app_config, root, root_image).await;
+    let mut daemon =
+        spawn_external_golden_daemon(gateway, app_config, root, root_image, None).await;
     wait_for_external_daemon_health(&mut daemon).await;
     let first_instance_id = wait_for_gateway_service_ready(pool, fixture).await;
     let paths = gateway_service_resource_paths(first_instance_id);
@@ -538,40 +539,149 @@ async fn exercise_external_gateway_service_warm_path(
     let public_url = env::var("HEPHAESTUS_CADDY_TEST_PUBLIC_URL")
         .expect("joined Caddy public URL for external daemon proof");
     let first_proof = exercise_gateway_service_requests(&public_url).await;
-    daemon.graceful_shutdown().await;
-
-    tokio::time::timeout(Duration::from_secs(30), async {
-        loop {
-            let state: Option<String> = sqlx::query_scalar(
-                "SELECT state FROM gateway_service_instances
-                   WHERE id = $1 AND gateway_id = $2 AND revision_id = $3",
-            )
-            .bind(first_instance_id)
-            .bind(fixture.gateway_id)
-            .bind(fixture.revision_id)
-            .fetch_optional(pool)
-            .await
-            .expect("read externally stopped service state");
-            if state.as_deref() == Some("cleaned") {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-    })
-    .await
-    .expect("external daemon gracefully cleans persistent service");
-    assert!(!paths.0.exists(), "external service VM runtime is cleaned");
-    assert!(!paths.1.exists(), "external service cgroup is cleaned");
-    assert!(
-        !paths.2.exists(),
-        "external service materializer is cleaned"
-    );
+    let unclean_restart =
+        env::var("HEPHAESTUS_APP_GATEWAY_SERVICE_EXTERNAL_CRASH_E2E").as_deref() == Ok("1");
+    if unclean_restart {
+        exercise_external_gateway_service_unclean_restart(ExternalGatewayServiceUncleanRestart {
+            pool,
+            fixture,
+            gateway,
+            app_config,
+            root,
+            root_image,
+            daemon,
+            first_instance_id,
+            old_paths: paths,
+            first_proof: &first_proof,
+            public_url: &public_url,
+        })
+        .await;
+    } else {
+        daemon.graceful_shutdown().await;
+        wait_for_gateway_service_cleaned(pool, fixture, first_instance_id).await;
+        assert!(!paths.0.exists(), "external service VM runtime is cleaned");
+        assert!(!paths.1.exists(), "external service cgroup is cleaned");
+        assert!(
+            !paths.2.exists(),
+            "external service materializer is cleaned"
+        );
+    }
     assert!(!first_proof.startup_id.is_empty());
     eprintln!(
         "persistent-service-external-warm-evidence instance={first_instance_id} startup_id={}",
         first_proof.startup_id
     );
     eprintln!("persistent-service-external-warm-passed");
+}
+
+struct ExternalGatewayServiceUncleanRestart<'a> {
+    pool: &'a sqlx::PgPool,
+    fixture: &'a GatewayServiceGoldenFixture,
+    gateway: &'a GatewayEdgeConfig,
+    app_config: &'a AppConfig,
+    root: &'a Path,
+    root_image: &'a Path,
+    daemon: ExternalGoldenDaemon,
+    first_instance_id: uuid::Uuid,
+    old_paths: (PathBuf, PathBuf, PathBuf),
+    first_proof: &'a GatewayServiceRequestProof,
+    public_url: &'a str,
+}
+
+async fn exercise_external_gateway_service_unclean_restart(
+    request: ExternalGatewayServiceUncleanRestart<'_>,
+) {
+    let ExternalGatewayServiceUncleanRestart {
+        pool,
+        fixture,
+        gateway,
+        app_config,
+        root,
+        root_image,
+        daemon,
+        first_instance_id,
+        old_paths,
+        first_proof,
+        public_url,
+    } = request;
+    let old_ownership = read_gateway_service_ownership(pool, first_instance_id).await;
+    let db_now: OffsetDateTime = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(pool)
+        .await
+        .expect("read database clock before daemon crash");
+    assert!(
+        old_ownership.3 > db_now,
+        "service lease must be live before the daemon crash"
+    );
+    let exit_status = daemon.unclean_kill().await;
+    assert_eq!(
+        std::os::unix::process::ExitStatusExt::signal(&exit_status),
+        Some(9),
+        "external daemon must be terminated by SIGKILL"
+    );
+    eprintln!(
+        "persistent-service-unclean-daemon-kill old_instance={first_instance_id} old_fence={} old_lease_expires_at={}",
+        old_ownership.2, old_ownership.3
+    );
+    let old_resources_after_kill = (
+        old_paths.0.exists(),
+        old_paths.1.exists(),
+        old_paths.2.exists(),
+    );
+    eprintln!(
+        "persistent-service-unclean-daemon-residual-resources runtime={} cgroup={} materializer={}",
+        old_resources_after_kill.0, old_resources_after_kill.1, old_resources_after_kill.2
+    );
+    let recovery_started_at: OffsetDateTime = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(pool)
+        .await
+        .expect("read database clock before daemon restart");
+    let restart_log = root.join("external-hephaestusd-restart.log");
+    let mut restarted =
+        spawn_external_golden_daemon(gateway, app_config, root, root_image, Some(&restart_log))
+            .await;
+    wait_for_external_daemon_health(&mut restarted).await;
+    let replacement_instance_id = wait_for_gateway_service_boot_replacement(
+        pool,
+        fixture,
+        first_instance_id,
+        old_ownership,
+        old_paths,
+        recovery_started_at,
+    )
+    .await;
+    let replacement_paths = gateway_service_resource_paths(replacement_instance_id);
+    let replacement_proof = exercise_gateway_service_requests(public_url).await;
+    assert_ne!(
+        replacement_instance_id, first_instance_id,
+        "unclean daemon restart must claim a fresh service instance"
+    );
+    assert_ne!(
+        replacement_proof.startup_id, first_proof.startup_id,
+        "unclean daemon restart must start a fresh guest process"
+    );
+    assert!(
+        replacement_paths.0.is_dir(),
+        "replacement VM runtime must exist before final shutdown"
+    );
+    assert!(
+        replacement_paths.1.is_dir(),
+        "replacement cgroup must exist before final shutdown"
+    );
+    assert!(
+        replacement_paths.2.is_dir(),
+        "replacement materializer must exist before final shutdown"
+    );
+    eprintln!(
+        "persistent-service-unclean-daemon-recovered old_instance={first_instance_id} replacement_instance={replacement_instance_id} replacement_startup_id={}",
+        replacement_proof.startup_id
+    );
+    restarted.graceful_shutdown().await;
+    wait_for_gateway_service_cleaned(pool, fixture, replacement_instance_id).await;
+    assert!(!replacement_paths.0.exists());
+    assert!(!replacement_paths.1.exists());
+    assert!(!replacement_paths.2.exists());
+    eprintln!("persistent-service-unclean-daemon-recovery-passed");
 }
 
 struct ExternalGoldenDaemon {
@@ -607,6 +717,20 @@ impl ExternalGoldenDaemon {
             self.log_path.display()
         );
     }
+
+    async fn unclean_kill(mut self) -> std::process::ExitStatus {
+        let pid = self.child.id().expect("external daemon child PID");
+        let status = Command::new("kill")
+            .args(["-KILL", &pid.to_string()])
+            .status()
+            .await
+            .expect("send external daemon SIGKILL");
+        assert!(status.success(), "send external daemon SIGKILL succeeds");
+        tokio::time::timeout(Duration::from_secs(30), self.child.wait())
+            .await
+            .expect("external daemon SIGKILL wait timeout")
+            .expect("wait for external daemon SIGKILL")
+    }
 }
 
 // This fixture must spell out the production environment contract so the
@@ -617,6 +741,7 @@ async fn spawn_external_golden_daemon(
     app_config: &AppConfig,
     root: &Path,
     root_image: &Path,
+    log_path_override: Option<&Path>,
 ) -> ExternalGoldenDaemon {
     let http_listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -636,61 +761,78 @@ async fn spawn_external_golden_daemon(
     // The production loader treats the filename as the key reference; keep
     // the slash-free reference used by the in-process golden provider.
     let secret_key_path = secret_key_directory.join("golden-v1");
-    std::fs::write(&secret_key_path, [17_u8; 32]).expect("write external secret key");
-    std::fs::set_permissions(&secret_key_path, std::fs::Permissions::from_mode(0o400))
-        .expect("set external secret key mode");
+    if !secret_key_path.exists() {
+        std::fs::write(&secret_key_path, [17_u8; 32]).expect("write external secret key");
+        std::fs::set_permissions(&secret_key_path, std::fs::Permissions::from_mode(0o400))
+            .expect("set external secret key mode");
+    }
 
     let handoff_key_path = root.join("external-runtime-authority.key");
-    std::fs::write(&handoff_key_path, app_config.runtime_authority_handoff_key)
-        .expect("write external runtime authority key");
-    std::fs::set_permissions(&handoff_key_path, std::fs::Permissions::from_mode(0o400))
-        .expect("set external runtime authority key mode");
+    if !handoff_key_path.exists() {
+        std::fs::write(&handoff_key_path, app_config.runtime_authority_handoff_key)
+            .expect("write external runtime authority key");
+        std::fs::set_permissions(&handoff_key_path, std::fs::Permissions::from_mode(0o400))
+            .expect("set external runtime authority key mode");
+    }
     let callback_path = root.join("external-registry-callback-token");
-    std::fs::write(
-        &callback_path,
-        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-    )
-    .expect("write external registry callback token");
+    if !callback_path.exists() {
+        std::fs::write(
+            &callback_path,
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        )
+        .expect("write external registry callback token");
+    }
     let registry_key_path = root.join("external-registry-token-private.pem");
-    let registry_key_status = Command::new("openssl")
-        .args([
-            "genpkey",
-            "-algorithm",
-            "RSA",
-            "-pkeyopt",
-            "rsa_keygen_bits:2048",
-            "-out",
-            registry_key_path.to_str().expect("registry key path UTF-8"),
-        ])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .await
-        .expect("launch openssl for external registry key");
-    assert!(
-        registry_key_status.success(),
-        "generate external registry key"
-    );
-    std::fs::set_permissions(&registry_key_path, std::fs::Permissions::from_mode(0o400))
-        .expect("set external registry key mode");
+    if !registry_key_path.exists() {
+        let registry_key_status = Command::new("openssl")
+            .args([
+                "genpkey",
+                "-algorithm",
+                "RSA",
+                "-pkeyopt",
+                "rsa_keygen_bits:2048",
+                "-out",
+                registry_key_path.to_str().expect("registry key path UTF-8"),
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await
+            .expect("launch openssl for external registry key");
+        assert!(
+            registry_key_status.success(),
+            "generate external registry key"
+        );
+        std::fs::set_permissions(&registry_key_path, std::fs::Permissions::from_mode(0o400))
+            .expect("set external registry key mode");
+    }
 
     let root_manifest_path = root.join("external-root-image-manifest.json");
-    std::fs::write(
-        &root_manifest_path,
-        serde_json::json!({
-            "version": 1,
-            "roots": {
-                ROOT_IMAGE: { "kind": "directory", "path": root_image }
-            }
-        })
-        .to_string(),
-    )
-    .expect("write external root image manifest");
+    if !root_manifest_path.exists() {
+        std::fs::write(
+            &root_manifest_path,
+            serde_json::json!({
+                "version": 1,
+                "roots": {
+                    ROOT_IMAGE: { "kind": "directory", "path": root_image }
+                }
+            })
+            .to_string(),
+        )
+        .expect("write external root image manifest");
+    }
     let caddy_config_path = root.join("external-caddy-config.json");
-    std::fs::write(&caddy_config_path, &gateway.caddy_configuration_template)
-        .expect("write external Caddy configuration template");
-    let log_path = env::var_os("HEPHAESTUS_EXTERNAL_DAEMON_LOG")
-        .map_or_else(|| root.join("external-hephaestusd.log"), PathBuf::from);
+    if !caddy_config_path.exists() {
+        std::fs::write(&caddy_config_path, &gateway.caddy_configuration_template)
+            .expect("write external Caddy configuration template");
+    }
+    let log_path = log_path_override.map_or_else(
+        || {
+            env::var_os("HEPHAESTUS_EXTERNAL_DAEMON_LOG")
+                .map_or_else(|| root.join("external-hephaestusd.log"), PathBuf::from)
+        },
+        Path::to_path_buf,
+    );
     let log = OpenOptions::new()
         .create(true)
         .truncate(true)
@@ -898,6 +1040,232 @@ fn gateway_service_resource_paths(instance_id: uuid::Uuid) -> (PathBuf, PathBuf,
             .join("gateway-services")
             .join(instance_id.to_string()),
     )
+}
+
+type GatewayServiceOwnership = (String, uuid::Uuid, i64, OffsetDateTime);
+
+struct GatewayServiceRecoverySnapshot {
+    old_state: String,
+    old_host: String,
+    old_owner: uuid::Uuid,
+    old_fence: i64,
+    old_lease: OffsetDateTime,
+    old_cleaned_at: Option<OffsetDateTime>,
+    active_revision: Option<uuid::Uuid>,
+    candidate_count: i64,
+    candidate_id: Option<uuid::Uuid>,
+    candidate_state: Option<String>,
+    candidate_host: Option<String>,
+    candidate_owner: Option<uuid::Uuid>,
+    candidate_fence: Option<i64>,
+    candidate_created_at: Option<OffsetDateTime>,
+    db_now: OffsetDateTime,
+}
+
+const GATEWAY_SERVICE_RECOVERY_SNAPSHOT_QUERY: &str = r"
+    SELECT old.state AS old_state,
+           old.owner_host_id AS old_host,
+           old.owner_uuid AS old_owner,
+           old.fencing_token AS old_fence,
+           old.lease_expires_at AS old_lease,
+           old.cleaned_at AS old_cleaned_at,
+           gateway.active_revision_id AS active_revision,
+           (SELECT count(*)
+              FROM gateway_service_instances historical
+             WHERE historical.gateway_id = old.gateway_id
+               AND historical.revision_id = old.revision_id
+               AND historical.id <> old.id
+               AND historical.created_at >= $4) AS candidate_count,
+           candidate.id AS candidate_id,
+           candidate.state AS candidate_state,
+           candidate.owner_host_id AS candidate_host,
+           candidate.owner_uuid AS candidate_owner,
+           candidate.fencing_token AS candidate_fence,
+           candidate.created_at AS candidate_created_at,
+           clock_timestamp() AS db_now
+      FROM gateway_service_instances old
+      JOIN gateways gateway ON gateway.id = old.gateway_id
+ LEFT JOIN LATERAL (
+           SELECT id, state, owner_host_id, owner_uuid, fencing_token, created_at
+             FROM gateway_service_instances current_instance
+            WHERE current_instance.gateway_id = old.gateway_id
+              AND current_instance.revision_id = old.revision_id
+              AND current_instance.id <> old.id
+              AND current_instance.created_at >= $4
+              AND current_instance.state <> 'cleaned'
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+      ) candidate ON TRUE
+     WHERE old.id = $1
+       AND old.gateway_id = $2
+       AND old.revision_id = $3
+";
+
+async fn read_gateway_service_ownership(
+    pool: &sqlx::PgPool,
+    instance_id: uuid::Uuid,
+) -> GatewayServiceOwnership {
+    sqlx::query_as(
+        "SELECT owner_host_id, owner_uuid, fencing_token, lease_expires_at
+           FROM gateway_service_instances
+          WHERE id = $1",
+    )
+    .bind(instance_id)
+    .fetch_one(pool)
+    .await
+    .expect("read gateway service ownership")
+}
+
+async fn read_gateway_service_recovery_snapshot(
+    pool: &sqlx::PgPool,
+    fixture: &GatewayServiceGoldenFixture,
+    old_instance_id: uuid::Uuid,
+    recovery_started_at: OffsetDateTime,
+) -> GatewayServiceRecoverySnapshot {
+    let row = sqlx::query(GATEWAY_SERVICE_RECOVERY_SNAPSHOT_QUERY)
+        .bind(old_instance_id)
+        .bind(fixture.gateway_id)
+        .bind(fixture.revision_id)
+        .bind(recovery_started_at)
+        .fetch_one(pool)
+        .await
+        .expect("read coherent boot recovery snapshot");
+    GatewayServiceRecoverySnapshot {
+        old_state: row.get("old_state"),
+        old_host: row.get("old_host"),
+        old_owner: row.get("old_owner"),
+        old_fence: row.get("old_fence"),
+        old_lease: row.get("old_lease"),
+        old_cleaned_at: row.get("old_cleaned_at"),
+        active_revision: row.get("active_revision"),
+        candidate_count: row.get("candidate_count"),
+        candidate_id: row.get("candidate_id"),
+        candidate_state: row.get("candidate_state"),
+        candidate_host: row.get("candidate_host"),
+        candidate_owner: row.get("candidate_owner"),
+        candidate_fence: row.get("candidate_fence"),
+        candidate_created_at: row.get("candidate_created_at"),
+        db_now: row.get("db_now"),
+    }
+}
+
+async fn wait_for_gateway_service_cleaned(
+    pool: &sqlx::PgPool,
+    fixture: &GatewayServiceGoldenFixture,
+    instance_id: uuid::Uuid,
+) {
+    tokio::time::timeout(Duration::from_secs(120), async {
+        loop {
+            let state: Option<String> = sqlx::query_scalar(
+                "SELECT state FROM gateway_service_instances
+                   WHERE id = $1 AND gateway_id = $2 AND revision_id = $3",
+            )
+            .bind(instance_id)
+            .bind(fixture.gateway_id)
+            .bind(fixture.revision_id)
+            .fetch_optional(pool)
+            .await
+            .expect("read gateway service cleanup state");
+            if state.as_deref() == Some("cleaned") {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("gateway service reaches durable Cleaned state");
+}
+
+async fn wait_for_gateway_service_boot_replacement(
+    pool: &sqlx::PgPool,
+    fixture: &GatewayServiceGoldenFixture,
+    old_instance_id: uuid::Uuid,
+    old_ownership: GatewayServiceOwnership,
+    old_paths: (PathBuf, PathBuf, PathBuf),
+    recovery_started_at: OffsetDateTime,
+) -> uuid::Uuid {
+    tokio::time::timeout(Duration::from_secs(120), async {
+        let mut observed_unexpired_empty = false;
+        loop {
+            let snapshot = read_gateway_service_recovery_snapshot(
+                pool,
+                fixture,
+                old_instance_id,
+                recovery_started_at,
+            )
+            .await;
+
+            if snapshot.db_now < old_ownership.3 {
+                assert_eq!(
+                    snapshot.candidate_count, 0,
+                    "no replacement attempt may be admitted while the old lease is live"
+                );
+                observed_unexpired_empty = true;
+            }
+            if let Some(candidate_id) = snapshot.candidate_id {
+                assert!(
+                    snapshot.db_now >= old_ownership.3,
+                    "a replacement service must not be admitted before the old lease expires"
+                );
+                assert_eq!(
+                    snapshot.old_state, "cleaned",
+                    "old service must be durably cleaned before replacement admission"
+                );
+                assert!(
+                    snapshot.old_lease >= old_ownership.3,
+                    "recovery must renew the fenced old claim from the original lease"
+                );
+                assert_eq!(snapshot.old_host, old_ownership.0);
+                assert_eq!(
+                    snapshot.candidate_host.as_deref(),
+                    Some(snapshot.old_host.as_str())
+                );
+                assert_ne!(snapshot.old_owner, old_ownership.1);
+                assert!(snapshot.old_fence > old_ownership.2);
+                assert_eq!(snapshot.candidate_owner, Some(snapshot.old_owner));
+                assert_ne!(snapshot.candidate_owner, Some(old_ownership.1));
+                assert!(snapshot.candidate_fence.is_some_and(|fence| fence > 0));
+                assert!(
+                    snapshot
+                        .candidate_created_at
+                        .expect("candidate creation timestamp")
+                        >= old_ownership.3,
+                    "replacement creation must follow old lease expiry"
+                );
+                assert!(
+                    snapshot
+                        .candidate_created_at
+                        .expect("candidate creation timestamp")
+                        >= snapshot.old_cleaned_at.expect("old cleanup timestamp"),
+                    "replacement creation must follow old durable cleanup"
+                );
+                assert!(
+                    !old_paths.0.exists(),
+                    "old VM runtime must be gone before Ready"
+                );
+                assert!(
+                    !old_paths.1.exists(),
+                    "old cgroup must be gone before Ready"
+                );
+                assert!(
+                    !old_paths.2.exists(),
+                    "old materializer must be gone before Ready"
+                );
+                if snapshot.candidate_state.as_deref() == Some("ready")
+                    && snapshot.active_revision == Some(fixture.revision_id)
+                {
+                    assert!(
+                        observed_unexpired_empty,
+                        "must observe an unexpired window with no replacement rows"
+                    );
+                    return candidate_id;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("daemon boot recovery replaces the abandoned service")
 }
 
 type MailboxTimeoutEvidence = (
