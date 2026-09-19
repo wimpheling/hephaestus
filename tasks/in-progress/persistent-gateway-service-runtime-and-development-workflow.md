@@ -91,10 +91,13 @@ require main-thread review before each integration step.
 
 ## Current implementation checkpoint
 
-The first VM contract slice is being implemented on the feature branch and
-remains fail-closed until the bridge exists. It carries optional validated
+The first VM contract slice and the standalone host broker are being
+implemented on the feature branch and remain fail-closed until provider and
+guest integration exists. The contract carries optional validated
 private-service settings through the libkrun protocol while preserving the
-stateless `http.v1` gateway-handler flag. No vsock mapping, parent listener,
+stateless `http.v1` gateway-handler flag. The broker owns a private Unix
+listener, single-use challenge binding, bounded reservations, raw stream
+backpressure, and shutdown cleanup. No vsock mapping, provider wiring,
 release UI, or Caddy forwarding is included in this checkpoint.
 
 - [x] Finish focused VM contract tests and workspace compatibility checks:
@@ -103,6 +106,14 @@ release UI, or Caddy forwarding is included in this checkpoint.
   --all-targets --all-features`, `cargo fmt --all -- --check`, and
   `git diff --check` pass in this worktree.
 - [ ] Review and integrate the contract slice before starting bridge work.
+- [x] Implement and test the standalone host broker with real Unix sockets:
+  authenticated raw bidirectional I/O, redacted challenges, wrong/unknown and
+  replay rejection, pending cancellation and expiry, active-capacity bounds,
+  shutdown of pending and active connections, pending-read wakeup, and
+  incomplete-handshake cancellation. Evidence: `cargo test -p vm-libkrun
+  --lib service_transport::tests` (7 passed) and `cargo clippy -p vm-libkrun
+  --lib --tests --all-features` pass; no provider or guest integration is
+  claimed.
 
 ## Implementation checklist
 
@@ -119,8 +130,12 @@ release UI, or Caddy forwarding is included in this checkpoint.
   - [ ] Define and validate the service-mode release configuration, command,
     immutable revision binding, entrypoint, resource limits, and compatibility
     or migration behavior without changing stateless handlers.
-  - [ ] Persist and expose only the redacted service declaration data needed by
-    authorized runtime and routing components.
+  - [x] Persist typed service declaration fields through migration 0070 and
+    gateway install, project, and clone flows; runtime activation and
+    readiness remain unchecked.
+    - Evidence: disposable Postgres focused persistence test 1 and complete
+      gateway integration target 7 passed, with focused Clippy and formatting
+      checks passing.
 
 - [ ] **2. Guest listener and private transport**
   - [ ] Compare the candidate bounded transports and record the selected
