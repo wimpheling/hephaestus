@@ -1284,3 +1284,28 @@ golden compilation, strict targeted Clippy, and rustdoc; logs are
 `/tmp/heph-persistent-fixture-doc-f68257d.log`. The assertion proves only the
 initial warm service path: restart recovery, desired cutover, revocation/drain,
 adversarial behavior, and release UI remain pending.
+
+Graceful restart acceptance checkpoint (2026-09-19): on committed base
+`c9904ee`, the isolated overlay
+`/tmp/heph-persistent-restart-verify-20260919-v2` ran the joined command
+`HEPHAESTUS_APP_GATEWAY_SERVICE_E2E=1 scripts/run-gateway-libkrun-e2e.sh`.
+The real libkrun/Caddy golden proof recorded the first service instance
+`1b94d3b4-b2dd-43d9-a0d3-08e3af492d28`, startup ID
+`341-1789806313227606957`, and request count `2->3`; after graceful daemon
+shutdown, durable `cleaned` state, and runtime/cgroup/materializer absence, the
+same database/configuration restored the same immutable revision as new service
+instance `b7c0438d-ea53-4f4e-8f67-c246a77c25c0`, startup ID
+`342-1789806316737385297`, and request count `2->3`. Both public pairs used one
+stable process identity within each lifecycle, and Caddy restored the service
+route after restart. The run passed 35 golden tests with one ignored and the
+8-test gateway-postgres resolver suite; it emitted
+`persistent-service-e2e=passed` and
+`daemon golden E2E passed; runtime and cgroup cleanup verified`. Final pinned
+Rust 1.88 checks on the isolated overlay passed formatting, golden compilation,
+strict targeted Clippy, and rustdoc. Logs:
+`/tmp/heph-persistent-service-restart-e2e-20260919.log`,
+`/tmp/heph-persistent-restart-compile-final-isolated-20260919.log`,
+`/tmp/heph-persistent-restart-clippy-final-isolated-20260919.log`, and
+`/tmp/heph-persistent-restart-doc-final-isolated-20260919.log`. This proves
+graceful daemon restart and active-service restoration only; unclean crash,
+expired-boot recovery, cutover, revocation/drain, and release UI remain pending.

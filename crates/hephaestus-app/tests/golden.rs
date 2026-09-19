@@ -2611,7 +2611,8 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
     }
 
     if libkrun_e2e {
-        let (service_instance_id, service_resource_paths) = if gateway_caddy_e2e {
+        let mut running = running;
+        let (mut service_instance_id, mut service_resource_paths) = if gateway_caddy_e2e {
             let service_instance_id =
                 if let Some(service_fixture) = gateway_service_fixture.as_ref() {
                     Some(wait_for_gateway_service_ready(&pool, service_fixture).await)
@@ -2667,10 +2668,120 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
                     applied_config.contains("/gateway/service"),
                     "Caddy must contain the persistent service route before the public proof: {applied_config}"
                 );
-                exercise_gateway_service_requests(
+                let first_service_proof = exercise_gateway_service_requests(
                     &env::var("HEPHAESTUS_CADDY_TEST_PUBLIC_URL").expect("joined Caddy public URL"),
                 )
                 .await;
+                if gateway_service_e2e {
+                    let service_fixture = gateway_service_fixture
+                        .as_ref()
+                        .expect("persistent service fixture after first proof");
+                    let first_instance_id =
+                        service_instance_id.expect("persistent service instance after first proof");
+                    let first_resource_paths = service_resource_paths
+                        .as_ref()
+                        .expect("persistent service paths after first proof");
+                    running
+                        .shutdown()
+                        .await
+                        .expect("first persistent service daemon shutdown");
+                    let (provider_runtime, cgroup, materializer) = first_resource_paths;
+                    let first_state: Option<String> = sqlx::query_scalar(
+                        "SELECT state FROM gateway_service_instances
+                          WHERE id = $1 AND gateway_id = $2 AND revision_id = $3",
+                    )
+                    .bind(first_instance_id)
+                    .bind(service_fixture.gateway_id)
+                    .bind(service_fixture.revision_id)
+                    .fetch_optional(&pool)
+                    .await
+                    .expect("read first cleaned persistent-service instance");
+                    assert_eq!(
+                        first_state.as_deref(),
+                        Some("cleaned"),
+                        "first daemon shutdown must clean the restored service instance"
+                    );
+                    assert!(!provider_runtime.exists());
+                    assert!(!cgroup.exists());
+                    assert!(!materializer.exists());
+
+                    running = restart_application(app_config.clone()).await;
+                    let second_instance_id =
+                        wait_for_gateway_service_ready(&pool, service_fixture).await;
+                    assert_ne!(
+                        first_instance_id, second_instance_id,
+                        "graceful daemon restart must create a new service instance"
+                    );
+                    let second_revision_id: uuid::Uuid = sqlx::query_scalar(
+                        "SELECT revision_id FROM gateway_service_instances WHERE id = $1",
+                    )
+                    .bind(second_instance_id)
+                    .fetch_one(&pool)
+                    .await
+                    .expect("read restarted persistent-service revision");
+                    assert_eq!(
+                        second_revision_id, service_fixture.revision_id,
+                        "graceful restart must restore the same immutable service revision"
+                    );
+                    let second_resource_paths = {
+                        let vm_id = format!("gateway-service-{second_instance_id}");
+                        let provider_runtime_root = PathBuf::from(
+                            env::var("HEPHAESTUS_LIBKRUN_RUNTIME_ROOT")
+                                .expect("libkrun runtime root for restart cleanup assertion"),
+                        );
+                        let cgroup_root = PathBuf::from(
+                            env::var("HEPHAESTUS_LIBKRUN_CGROUP_ROOT")
+                                .expect("libkrun cgroup root for restart cleanup assertion"),
+                        );
+                        (
+                            provider_runtime_root.join(&vm_id),
+                            cgroup_root.join(&vm_id),
+                            root.join("run-runtime")
+                                .join("gateway-services")
+                                .join(second_instance_id.to_string()),
+                        )
+                    };
+                    let (provider_runtime, cgroup, materializer) = &second_resource_paths;
+                    assert!(
+                        provider_runtime.is_dir(),
+                        "restarted service VM runtime exists before shutdown"
+                    );
+                    assert!(
+                        cgroup.is_dir(),
+                        "restarted service VM cgroup exists before shutdown"
+                    );
+                    assert!(
+                        materializer.is_dir(),
+                        "restarted service materializer tree exists before shutdown"
+                    );
+                    let restarted_admin_url = env::var("HEPHAESTUS_CADDY_TEST_ADMIN_URL")
+                        .expect("joined Caddy admin URL");
+                    let restarted_config =
+                        wait_for_caddy_configuration(&restarted_admin_url, "/gateway/service")
+                            .await;
+                    assert!(
+                        restarted_config.contains("/gateway/service"),
+                        "Caddy must restore the persistent service route after daemon restart: {restarted_config}"
+                    );
+                    let second_service_proof = exercise_gateway_service_requests(
+                        &env::var("HEPHAESTUS_CADDY_TEST_PUBLIC_URL")
+                            .expect("joined Caddy public URL after restart"),
+                    )
+                    .await;
+                    assert_ne!(
+                        first_service_proof.startup_id, second_service_proof.startup_id,
+                        "restart must replace the guest startup identity"
+                    );
+                    println!(
+                        "persistent-service-restart old_instance={first_instance_id} new_instance={second_instance_id} old_startup_id={} new_startup_id={} old_pid={} new_pid={}",
+                        first_service_proof.startup_id,
+                        second_service_proof.startup_id,
+                        first_service_proof.pid,
+                        second_service_proof.pid,
+                    );
+                    service_instance_id = Some(second_instance_id);
+                    service_resource_paths = Some(second_resource_paths);
+                }
             }
             let public_url =
                 env::var("HEPHAESTUS_CADDY_TEST_PUBLIC_URL").expect("joined Caddy public URL");
@@ -3918,7 +4029,12 @@ async fn wait_for_gateway_service_ready(
 
 /// Sends two public requests through the real Caddy/daemon path and proves
 /// they reached one long-lived guest process rather than two per-request VMs.
-async fn exercise_gateway_service_requests(public_url: &str) {
+struct GatewayServiceRequestProof {
+    pid: u64,
+    startup_id: String,
+}
+
+async fn exercise_gateway_service_requests(public_url: &str) -> GatewayServiceRequestProof {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
         .build()
@@ -3979,6 +4095,10 @@ async fn exercise_gateway_service_requests(public_url: &str) {
     println!(
         "persistent-service-public identity_equal=true pid={first_pid} startup_id={first_startup} request_count={first_count}->{second_count}"
     );
+    GatewayServiceRequestProof {
+        pid: first_pid,
+        startup_id: first_startup.to_owned(),
+    }
 }
 
 /// Seeds immutable gateway route and host-only inbound secret authority.
