@@ -30,6 +30,7 @@ pub mod __buffa {
         reg.register_json_any(super::__GATEWAY_SERVICE_LOG_SCOPE_JSON_ANY);
         reg.register_json_any(super::__GATEWAY_SERVICE_LOG_RECORD_JSON_ANY);
         reg.register_json_any(super::__GATEWAY_SERVICE_LOG_METADATA_JSON_ANY);
+        reg.register_json_any(super::__GATEWAY_SERVICE_LOG_PROJECT_METADATA_JSON_ANY);
         reg.register_json_any(super::__GATEWAY_MAILBOX_BINDING_JSON_ANY);
         reg.register_json_any(super::__GATEWAY_MAILBOX_PUBLICATION_JSON_ANY);
         reg.register_json_any(super::__LIST_PROJECT_GATEWAYS_REQUEST_JSON_ANY);
@@ -45,6 +46,12 @@ pub mod __buffa {
         reg.register_json_any(super::__LIST_GATEWAY_INGRESS_RESPONSE_JSON_ANY);
         reg.register_json_any(super::__LIST_GATEWAY_SERVICE_LOGS_REQUEST_JSON_ANY);
         reg.register_json_any(super::__LIST_GATEWAY_SERVICE_LOGS_RESPONSE_JSON_ANY);
+        reg.register_json_any(
+            super::__GET_PROJECT_SERVICE_LOG_METADATA_REQUEST_JSON_ANY,
+        );
+        reg.register_json_any(
+            super::__GET_PROJECT_SERVICE_LOG_METADATA_RESPONSE_JSON_ANY,
+        );
         reg.register_json_any(super::__SET_GATEWAY_LIFECYCLE_REQUEST_JSON_ANY);
         reg.register_json_any(super::__SET_GATEWAY_LIFECYCLE_RESPONSE_JSON_ANY);
         reg.register_json_any(super::__CREATE_MAILBOX_BINDING_REQUEST_JSON_ANY);
@@ -89,6 +96,10 @@ pub use self::__buffa::view::GatewayServiceLogRecordOwnedView;
 pub use self::__buffa::view::GatewayServiceLogMetadataView;
 #[doc(inline)]
 pub use self::__buffa::view::GatewayServiceLogMetadataOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::GatewayServiceLogProjectMetadataView;
+#[doc(inline)]
+pub use self::__buffa::view::GatewayServiceLogProjectMetadataOwnedView;
 #[doc(inline)]
 pub use self::__buffa::view::GatewayMailboxBindingView;
 #[doc(inline)]
@@ -149,6 +160,14 @@ pub use self::__buffa::view::ListGatewayServiceLogsRequestOwnedView;
 pub use self::__buffa::view::ListGatewayServiceLogsResponseView;
 #[doc(inline)]
 pub use self::__buffa::view::ListGatewayServiceLogsResponseOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::GetProjectServiceLogMetadataRequestView;
+#[doc(inline)]
+pub use self::__buffa::view::GetProjectServiceLogMetadataRequestOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::GetProjectServiceLogMetadataResponseView;
+#[doc(inline)]
+pub use self::__buffa::view::GetProjectServiceLogMetadataResponseOwnedView;
 #[doc(inline)]
 pub use self::__buffa::view::SetGatewayLifecycleRequestView;
 #[doc(inline)]

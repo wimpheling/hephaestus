@@ -231,6 +231,19 @@ defmodule Hephaestus.Gateway.V1.GatewayServiceLogMetadata do
   )
 end
 
+defmodule Hephaestus.Gateway.V1.GatewayServiceLogProjectMetadata do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.gateway.v1.GatewayServiceLogProjectMetadata",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:usage_present, 1, type: :bool, json_name: "usagePresent")
+  field(:storage_dropped_chunks, 2, type: :uint64, json_name: "storageDroppedChunks")
+  field(:storage_dropped_bytes, 3, type: :uint64, json_name: "storageDroppedBytes")
+end
+
 defmodule Hephaestus.Gateway.V1.GatewayMailboxBinding do
   @moduledoc false
 
@@ -518,6 +531,28 @@ defmodule Hephaestus.Gateway.V1.ListGatewayServiceLogsResponse do
   field(:next_after, 4, type: Hephaestus.Common.V1.Cursor, json_name: "nextAfter")
 end
 
+defmodule Hephaestus.Gateway.V1.GetProjectServiceLogMetadataRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.gateway.v1.GetProjectServiceLogMetadataRequest",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:project_id, 1, type: Hephaestus.Common.V1.OpaqueId, json_name: "projectId")
+end
+
+defmodule Hephaestus.Gateway.V1.GetProjectServiceLogMetadataResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.gateway.v1.GetProjectServiceLogMetadataResponse",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:metadata, 1, type: Hephaestus.Gateway.V1.GatewayServiceLogProjectMetadata)
+end
+
 defmodule Hephaestus.Gateway.V1.SetGatewayLifecycleRequest do
   @moduledoc false
 
@@ -675,6 +710,12 @@ defmodule Hephaestus.Gateway.V1.GatewayService.Service do
     :ListGatewayServiceLogs,
     Hephaestus.Gateway.V1.ListGatewayServiceLogsRequest,
     Hephaestus.Gateway.V1.ListGatewayServiceLogsResponse
+  )
+
+  rpc(
+    :GetProjectServiceLogMetadata,
+    Hephaestus.Gateway.V1.GetProjectServiceLogMetadataRequest,
+    Hephaestus.Gateway.V1.GetProjectServiceLogMetadataResponse
   )
 
   rpc(

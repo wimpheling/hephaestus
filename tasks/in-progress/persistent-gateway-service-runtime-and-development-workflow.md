@@ -2060,3 +2060,21 @@ using `hephaestus_app` in
 in `/home/a/control-plane-app-pool-clippy-20260919.log`. Rust 1.88 formatting
 and diff checks passed. This corrects test expectations for the intentional
 column-scoped grant; it does not broaden database privileges.
+
+Project-loss RPC source checkpoint (2026-09-19):
+`GetProjectServiceLogMetadata` exposes the existing audited project reader
+through the generated gateway service, with `project.read`, its own mediator
+audience, query semantics, and 4 KiB request/response limits. The response
+distinguishes absent usage metadata from zero loss and documents that rejected
+submission counters may overcount retries and survive epoch GC. Exact-epoch
+log responses remain separate. Rust/Elixir generation and consistency checks
+passed; all 15 descriptor-policy tests and the metadata conversion test passed.
+Evidence is `/home/a/heph-project-metadata-check-generated.log`,
+`/home/a/heph-project-metadata-descriptor.log`, and
+`/home/a/heph-project-metadata-conversion.log`. Scoped proto Clippy, app-library
+Clippy, formatting and app/proto rustdoc passed; retained logs include
+`/home/a/heph-project-metadata-clippy-app-lib.log` and
+`/home/a/heph-project-metadata-doc.log`. Broader all-target Clippy reported
+test-only lints that remain a separate preflight fix. Real authenticated RPC
+checks are implemented in the golden source but have not yet been executed;
+this checkpoint does not claim their acceptance.

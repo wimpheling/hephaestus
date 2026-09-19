@@ -61,7 +61,7 @@ fn reflection_inventory_contains_every_application_service_and_method() {
             .iter()
             .map(|service| service.methods().len())
             .sum::<usize>(),
-        88
+        89
     );
 
     let reflector = connectrpc_reflection::Reflector::from_descriptor_pool(pool)
@@ -357,7 +357,52 @@ fn every_method_declares_auth_kind_limits_and_retry_policy() {
         }
     }
 
-    assert_eq!(methods, 88, "review the policy when adding an RPC method");
+    assert_eq!(methods, 89, "review the policy when adding an RPC method");
+}
+
+#[test]
+fn project_service_log_metadata_uses_project_read_and_a_bounded_shape() {
+    let pool = pool();
+    let service = pool
+        .service_by_name("hephaestus.gateway.v1.GatewayService")
+        .expect("gateway service");
+    let method = service
+        .methods()
+        .iter()
+        .find(|method| method.name() == "GetProjectServiceLogMetadata")
+        .expect("project service-log metadata method");
+    let qualified = format!("{}/{}", service.full_name(), method.name());
+    let authorization = method
+        .options()
+        .and_then(|options| options.extension(&AUTHORIZATION))
+        .expect("project service-log metadata authorization");
+    assert_eq!(authorization.permission, "project.read");
+    assert_eq!(authorization.audience, format!("/{qualified}"));
+
+    let request = pool.message(method.input());
+    assert!(message_field_is(
+        &pool,
+        request,
+        "project_id",
+        "hephaestus.common.v1.OpaqueId"
+    ));
+    let response = pool.message(method.output());
+    assert!(message_field_is(
+        &pool,
+        response,
+        "metadata",
+        "hephaestus.gateway.v1.GatewayServiceLogProjectMetadata"
+    ));
+    let metadata = pool
+        .message_by_name("hephaestus.gateway.v1.GatewayServiceLogProjectMetadata")
+        .expect("project service-log metadata message");
+    for field in [
+        "usage_present",
+        "storage_dropped_chunks",
+        "storage_dropped_bytes",
+    ] {
+        assert!(metadata.field_by_name(field).is_some(), "missing {field}");
+    }
 }
 
 #[test]

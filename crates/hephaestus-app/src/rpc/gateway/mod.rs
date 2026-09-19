@@ -2,6 +2,7 @@
 
 mod configure_gateway;
 mod install_release_gateways;
+mod project_metadata;
 mod service_log_cursor;
 mod service_logs;
 
@@ -25,7 +26,8 @@ use rpc_proto::{
             CreateMailboxBindingResponse, GatewayIngress, GatewayIngressOutcome, GatewayLifecycle,
             GatewayMailboxBinding, GatewayMailboxPublication, GatewayRevision, GatewayRoute,
             GatewayServiceDeclaration, GatewayServiceLogCaptureMode, GatewaySummary,
-            GetGatewayRequest, GetGatewayResponse, InstallReleaseGatewaysRequest,
+            GetGatewayRequest, GetGatewayResponse, GetProjectServiceLogMetadataRequest,
+            GetProjectServiceLogMetadataResponse, InstallReleaseGatewaysRequest,
             InstallReleaseGatewaysResponse, ListGatewayIngressRequest, ListGatewayIngressResponse,
             ListGatewayServiceLogsRequest, ListGatewayServiceLogsResponse,
             ListMailboxBindingsRequest, ListMailboxBindingsResponse,
@@ -162,6 +164,14 @@ impl GatewayService for GatewayRpc {
         message: ServiceRequest<'_, ListGatewayServiceLogsRequest>,
     ) -> ServiceResult<ListGatewayServiceLogsResponse> {
         service_logs::handle(self, ctx, message).await
+    }
+
+    async fn get_project_service_log_metadata(
+        &self,
+        ctx: RequestContext,
+        message: ServiceRequest<'_, GetProjectServiceLogMetadataRequest>,
+    ) -> ServiceResult<GetProjectServiceLogMetadataResponse> {
+        project_metadata::handle(self, ctx, message).await
     }
 
     async fn install_release_gateways(

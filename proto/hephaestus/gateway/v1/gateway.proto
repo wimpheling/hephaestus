@@ -47,6 +47,20 @@ service GatewayService {
     option (hephaestus.options.v1.max_request_bytes) = 8192;
     option (hephaestus.options.v1.max_response_bytes) = 1048576;
   }
+  // Returns project-wide service-log storage-loss counters. The project
+  // reader is authorized with project.read because the aggregate spans every
+  // gateway in the project and survives exact epoch retention cleanup.
+  rpc GetProjectServiceLogMetadata(GetProjectServiceLogMetadataRequest) returns (GetProjectServiceLogMetadataResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (hephaestus.options.v1.authorization) = {
+      permission: "project.read"
+      audience: "/hephaestus.gateway.v1.GatewayService/GetProjectServiceLogMetadata"
+      actor_source: ACTOR_SOURCE_MEDIATOR_JWT_METADATA
+    };
+    option (hephaestus.options.v1.operation_kind) = OPERATION_KIND_QUERY;
+    option (hephaestus.options.v1.max_request_bytes) = 4096;
+    option (hephaestus.options.v1.max_response_bytes) = 4096;
+  }
   // Installs the gateway declarations from one published release's exact
   // repository commit. The manifest is resolved by the service and is never
   // supplied by a caller.
@@ -265,6 +279,16 @@ message GatewayServiceLogMetadata {
   optional uint64 earliest_retained_sequence = 12;
 }
 
+// Project-wide service-log storage-cap loss counters for authorized
+// diagnostics. Rejected submissions can be retried after an ambiguous
+// commit, so these counters are approximate and may count one submission
+// more than once. They survive exact epoch payload and metadata cleanup.
+message GatewayServiceLogProjectMetadata {
+  bool usage_present = 1;
+  uint64 storage_dropped_chunks = 2;
+  uint64 storage_dropped_bytes = 3;
+}
+
 // Redacted immutable binding metadata. Neither mailbox event bodies nor
 // guest/runtime credentials are represented by this API.
 message GatewayMailboxBinding {
@@ -378,6 +402,12 @@ message ListGatewayServiceLogsResponse {
   repeated GatewayServiceLogRecord records = 2;
   bool history_incomplete = 3;
   hephaestus.common.v1.Cursor next_after = 4;
+}
+message GetProjectServiceLogMetadataRequest {
+  hephaestus.common.v1.OpaqueId project_id = 1;
+}
+message GetProjectServiceLogMetadataResponse {
+  GatewayServiceLogProjectMetadata metadata = 1;
 }
 message SetGatewayLifecycleRequest {
   hephaestus.common.v1.RequestContext context = 1;

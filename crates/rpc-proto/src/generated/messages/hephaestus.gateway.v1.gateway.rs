@@ -3051,6 +3051,187 @@ pub const __GATEWAY_SERVICE_LOG_METADATA_JSON_ANY: ::buffa::type_registry::JsonA
     from_json: ::buffa::type_registry::any_from_json::<GatewayServiceLogMetadata>,
     is_wkt: false,
 };
+/// Project-wide service-log storage-cap loss counters for authorized
+/// diagnostics. Rejected submissions can be retried after an ambiguous
+/// commit, so these counters are approximate and may count one submission
+/// more than once. They survive exact epoch payload and metadata cleanup.
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct GatewayServiceLogProjectMetadata {
+    /// Field 1: `usage_present`
+    #[serde(
+        rename = "usagePresent",
+        alias = "usage_present",
+        with = "::buffa::json_helpers::proto_bool",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_false"
+    )]
+    pub usage_present: bool,
+    /// Field 2: `storage_dropped_chunks`
+    #[serde(
+        rename = "storageDroppedChunks",
+        alias = "storage_dropped_chunks",
+        with = "::buffa::json_helpers::uint64",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_u64"
+    )]
+    pub storage_dropped_chunks: u64,
+    /// Field 3: `storage_dropped_bytes`
+    #[serde(
+        rename = "storageDroppedBytes",
+        alias = "storage_dropped_bytes",
+        with = "::buffa::json_helpers::uint64",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_u64"
+    )]
+    pub storage_dropped_bytes: u64,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for GatewayServiceLogProjectMetadata {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("GatewayServiceLogProjectMetadata")
+            .field("usage_present", &self.usage_present)
+            .field("storage_dropped_chunks", &self.storage_dropped_chunks)
+            .field("storage_dropped_bytes", &self.storage_dropped_bytes)
+            .finish()
+    }
+}
+impl GatewayServiceLogProjectMetadata {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.gateway.v1.GatewayServiceLogProjectMetadata";
+}
+::buffa::impl_default_instance!(GatewayServiceLogProjectMetadata);
+impl ::buffa::MessageName for GatewayServiceLogProjectMetadata {
+    const PACKAGE: &'static str = "hephaestus.gateway.v1";
+    const NAME: &'static str = "GatewayServiceLogProjectMetadata";
+    const FULL_NAME: &'static str = "hephaestus.gateway.v1.GatewayServiceLogProjectMetadata";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.gateway.v1.GatewayServiceLogProjectMetadata";
+}
+impl ::buffa::Message for GatewayServiceLogProjectMetadata {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, _cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if self.usage_present {
+            size += 1u32 + ::buffa::types::BOOL_ENCODED_LEN as u32;
+        }
+        if self.storage_dropped_chunks != 0u64 {
+            size
+                += 1u32
+                    + ::buffa::types::uint64_encoded_len(self.storage_dropped_chunks)
+                        as u32;
+        }
+        if self.storage_dropped_bytes != 0u64 {
+            size
+                += 1u32
+                    + ::buffa::types::uint64_encoded_len(self.storage_dropped_bytes)
+                        as u32;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        _cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if self.usage_present {
+            ::buffa::types::put_bool_field(1u32, self.usage_present, buf);
+        }
+        if self.storage_dropped_chunks != 0u64 {
+            ::buffa::types::put_uint64_field(2u32, self.storage_dropped_chunks, buf);
+        }
+        if self.storage_dropped_bytes != 0u64 {
+            ::buffa::types::put_uint64_field(3u32, self.storage_dropped_bytes, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.usage_present = ::buffa::types::decode_bool(buf)?;
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.storage_dropped_chunks = ::buffa::types::decode_uint64(buf)?;
+            }
+            3u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.storage_dropped_bytes = ::buffa::types::decode_uint64(buf)?;
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.usage_present = false;
+        self.storage_dropped_chunks = 0u64;
+        self.storage_dropped_bytes = 0u64;
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for GatewayServiceLogProjectMetadata {
+    const PROTO_FQN: &'static str = "hephaestus.gateway.v1.GatewayServiceLogProjectMetadata";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for GatewayServiceLogProjectMetadata {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __GATEWAY_SERVICE_LOG_PROJECT_METADATA_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/hephaestus.gateway.v1.GatewayServiceLogProjectMetadata",
+    to_json: ::buffa::type_registry::any_to_json::<GatewayServiceLogProjectMetadata>,
+    from_json: ::buffa::type_registry::any_from_json::<GatewayServiceLogProjectMetadata>,
+    is_wkt: false,
+};
 /// Redacted immutable binding metadata. Neither mailbox event bodies nor
 /// guest/runtime credentials are represented by this API.
 #[derive(Clone, PartialEq, Default)]
@@ -6539,6 +6720,277 @@ pub const __LIST_GATEWAY_SERVICE_LOGS_RESPONSE_JSON_ANY: ::buffa::type_registry:
     type_url: "type.googleapis.com/hephaestus.gateway.v1.ListGatewayServiceLogsResponse",
     to_json: ::buffa::type_registry::any_to_json::<ListGatewayServiceLogsResponse>,
     from_json: ::buffa::type_registry::any_from_json::<ListGatewayServiceLogsResponse>,
+    is_wkt: false,
+};
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct GetProjectServiceLogMetadataRequest {
+    /// Field 1: `project_id`
+    #[serde(
+        rename = "projectId",
+        alias = "project_id",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub project_id: ::buffa::MessageField<super::super::common::v1::OpaqueId>,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for GetProjectServiceLogMetadataRequest {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("GetProjectServiceLogMetadataRequest")
+            .field("project_id", &self.project_id)
+            .finish()
+    }
+}
+impl GetProjectServiceLogMetadataRequest {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.gateway.v1.GetProjectServiceLogMetadataRequest";
+}
+::buffa::impl_default_instance!(GetProjectServiceLogMetadataRequest);
+impl ::buffa::MessageName for GetProjectServiceLogMetadataRequest {
+    const PACKAGE: &'static str = "hephaestus.gateway.v1";
+    const NAME: &'static str = "GetProjectServiceLogMetadataRequest";
+    const FULL_NAME: &'static str = "hephaestus.gateway.v1.GetProjectServiceLogMetadataRequest";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.gateway.v1.GetProjectServiceLogMetadataRequest";
+}
+impl ::buffa::Message for GetProjectServiceLogMetadataRequest {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if self.project_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.project_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        __cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if self.project_id.is_set() {
+            ::buffa::types::put_len_delimited_header(1u32, __cache.consume_next(), buf);
+            self.project_id.write_to(__cache, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.project_id.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.project_id = ::buffa::MessageField::none();
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for GetProjectServiceLogMetadataRequest {
+    const PROTO_FQN: &'static str = "hephaestus.gateway.v1.GetProjectServiceLogMetadataRequest";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for GetProjectServiceLogMetadataRequest {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __GET_PROJECT_SERVICE_LOG_METADATA_REQUEST_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/hephaestus.gateway.v1.GetProjectServiceLogMetadataRequest",
+    to_json: ::buffa::type_registry::any_to_json::<GetProjectServiceLogMetadataRequest>,
+    from_json: ::buffa::type_registry::any_from_json::<
+        GetProjectServiceLogMetadataRequest,
+    >,
+    is_wkt: false,
+};
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct GetProjectServiceLogMetadataResponse {
+    /// Field 1: `metadata`
+    #[serde(
+        rename = "metadata",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub metadata: ::buffa::MessageField<GatewayServiceLogProjectMetadata>,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for GetProjectServiceLogMetadataResponse {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("GetProjectServiceLogMetadataResponse")
+            .field("metadata", &self.metadata)
+            .finish()
+    }
+}
+impl GetProjectServiceLogMetadataResponse {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.gateway.v1.GetProjectServiceLogMetadataResponse";
+}
+::buffa::impl_default_instance!(GetProjectServiceLogMetadataResponse);
+impl ::buffa::MessageName for GetProjectServiceLogMetadataResponse {
+    const PACKAGE: &'static str = "hephaestus.gateway.v1";
+    const NAME: &'static str = "GetProjectServiceLogMetadataResponse";
+    const FULL_NAME: &'static str = "hephaestus.gateway.v1.GetProjectServiceLogMetadataResponse";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.gateway.v1.GetProjectServiceLogMetadataResponse";
+}
+impl ::buffa::Message for GetProjectServiceLogMetadataResponse {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if self.metadata.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.metadata.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        __cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if self.metadata.is_set() {
+            ::buffa::types::put_len_delimited_header(1u32, __cache.consume_next(), buf);
+            self.metadata.write_to(__cache, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.metadata.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.metadata = ::buffa::MessageField::none();
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for GetProjectServiceLogMetadataResponse {
+    const PROTO_FQN: &'static str = "hephaestus.gateway.v1.GetProjectServiceLogMetadataResponse";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for GetProjectServiceLogMetadataResponse {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __GET_PROJECT_SERVICE_LOG_METADATA_RESPONSE_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/hephaestus.gateway.v1.GetProjectServiceLogMetadataResponse",
+    to_json: ::buffa::type_registry::any_to_json::<GetProjectServiceLogMetadataResponse>,
+    from_json: ::buffa::type_registry::any_from_json::<
+        GetProjectServiceLogMetadataResponse,
+    >,
     is_wkt: false,
 };
 #[derive(Clone, PartialEq, Default)]
