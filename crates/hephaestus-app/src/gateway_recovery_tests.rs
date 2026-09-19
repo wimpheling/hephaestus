@@ -1248,8 +1248,12 @@ async fn daemon_loop_restores_active_service_without_manual_start() {
     tokio::time::timeout(StdDuration::from_secs(10), caddy_started.notified())
         .await
         .expect("Caddy reconciliation starts and remains blocked");
-    let ready = wait_for_ready(&pool, fixture).await;
-    assert!(ready, "active service is restored by the target scan");
+    let ready_and_active = wait_for_ready_and_active(&pool, fixture).await;
+    assert!(
+        ready_and_active,
+        "active service is restored and promoted by the target scan: gateway={} revision={}",
+        fixture.gateway, fixture.revision,
+    );
     let active_revision: Option<Uuid> =
         sqlx::query_scalar("SELECT active_revision_id FROM gateways WHERE id = $1")
             .bind(fixture.gateway)
@@ -3259,6 +3263,35 @@ async fn wait_for_ready(pool: &sqlx::PgPool, fixture: Fixture) -> bool {
             .await
             .expect("read automatic startup state");
             if state.as_deref() == Some("ready") {
+                return true;
+            }
+            tokio::time::sleep(StdDuration::from_millis(50)).await;
+        }
+    })
+    .await
+    .unwrap_or(false)
+}
+
+async fn wait_for_ready_and_active(pool: &sqlx::PgPool, fixture: Fixture) -> bool {
+    tokio::time::timeout(StdDuration::from_secs(10), async {
+        loop {
+            let ready_and_active: bool = sqlx::query_scalar(
+                "SELECT EXISTS (
+                    SELECT 1
+                      FROM gateway_service_instances AS i
+                      JOIN gateways AS g ON g.id = i.gateway_id
+                     WHERE i.gateway_id = $1
+                       AND i.revision_id = $2
+                       AND i.state = 'ready'
+                       AND g.active_revision_id = $2
+                )",
+            )
+            .bind(fixture.gateway)
+            .bind(fixture.revision)
+            .fetch_one(pool)
+            .await
+            .expect("read restored service state and active revision");
+            if ready_and_active {
                 return true;
             }
             tokio::time::sleep(StdDuration::from_millis(50)).await;

@@ -1825,3 +1825,22 @@ descriptor tests, and workspace rustdoc have captured logs at `fmt-final.log`,
 `rustdoc-final.log` in that overlay. No mutable service configuration, runtime authority, credentials,
 leases, VM identity, or readiness state is exposed. Real service management
 and runtime wiring remain pending.
+
+Restoration observation-race checkpoint (2026-09-19): the active-service
+restoration test now waits for one SQL snapshot containing the exact gateway
+and revision, an instance in `ready`, and that gateway's matching
+`active_revision_id`; the predicate does not rely on fencing order across
+instances. The assertion includes the fixture gateway and revision in its
+bounded failure diagnostic. On clean `45a7f61` plus only this test overlay,
+the focused worker-role PostgreSQL test passed with migration 80 in
+`/home/a/heph-ready-promotion-race-focused-v3.log`; Rust 1.88 formatting and
+all-target/all-feature app Clippy passed in
+`/home/a/heph-ready-promotion-race-fmt-v3.log` and
+`/home/a/heph-ready-promotion-race-clippy-v3.log`. The full recovery module
+run recorded 14 passed and one unrelated teardown failure in
+`/home/a/heph-ready-promotion-race-full-recovery-v2.log`: an idle PostgreSQL
+client backend remained during isolated-database teardown. CI confirmed the
+restoration test itself passed; the same run separately failed the expired
+cleanup test because its global `DestroyGate` observed two different VM IDs
+(`/home/a/heph-ci-35445311169-failed.log`). That gate synchronization remains
+the next bounded test-only investigation and is not included here.
