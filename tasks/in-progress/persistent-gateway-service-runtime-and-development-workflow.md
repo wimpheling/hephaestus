@@ -1604,3 +1604,20 @@ and UI remain pending; this checkpoint exposes no service method yet. Logs are
 `/tmp/heph-proto-bd340cf-{fmt,clippy,descriptor,doc}.log`,
 `/tmp/heph-proto-check-generated.log`, and
 `/tmp/heph-proto-check-breaking.log`.
+
+Application-role pool checkpoint (2026-09-19):
+`control_plane_postgres::connect_app` now selects `hephaestus_app` on every
+new connection and fails closed if role selection fails. The isolated
+`3ff1b3e` overlay is `/tmp/heph-connect-app-3ff1b3e.zvT82C`; the owned source
+hashes are `lib.rs`
+`a56d46de635cb4603e43ae229c8c5668e1e970da8fef65e576ceeaab8667907f` and
+`tests/app_pool.rs`
+`cf4b2a31e7d1a93de849829c96f1976e11b88f37c1d6d036098132c8ac1b7577`. The
+real PostgreSQL test applied and observed migration 80, held two concurrent
+connections reporting `current_user=hephaestus_app`, and verified SQLSTATE
+42501 for an ungranted gateway column and the worker-only log usage table.
+Pinned Rust 1.88 formatting, strict crate Clippy, and rustdoc passed. The
+standalone real test log is
+`/tmp/heph-connect-app-isolated-realpg.log`; checks are
+`/tmp/heph-connect-app-isolated-{fmt,clippy,doc}.log`. The test skips only when
+`HEPHAESTUS_POSTGRES_TEST_URL` is unset. RPC wiring remains pending.
