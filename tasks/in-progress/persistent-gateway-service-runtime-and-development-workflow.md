@@ -1482,3 +1482,21 @@ External-daemon unclean-recovery checkpoint (2026-09-19): the exact
 `b4c25f6` base with only the golden fixture overlay at
 `/tmp/heph-unclean-sigkill-source-20260919` ran
 `HEPHAESTUS_APP_GATEWAY_SERVICE_E2E=1 HEPHAESTUS_APP_GATEWAY_SERVICE_EXTERNAL_E2E=1 HEPHAESTUS_APP_GATEWAY_SERVICE_EXTERNAL_CRASH_E2E=1 bash scripts/run-gateway-libkrun-e2e.sh` with the real external `hephaestusd`, PostgreSQL, NATS, libkrun, and Caddy path. The daemon reached `Ready`, served the warm pair, was terminated by SIGKILL, and the replacement daemon waited for the original DB-clock lease to expire, fenced and cleaned the old same-host instance and its VM/cgroup/materializer before admission. The proof records no post-crash instance row during the original live-lease window, validates candidate creation after both lease expiry and old `cleaned_at`, requires a fresh instance and startup identity, serves replacement requests with count `2->3`, then verifies final SIGINT cleanup. The joined run passed 35 golden tests and 8 gateway-postgres tests; evidence is `/tmp/heph-unclean-sigkill-joined-final-20260919.log`. Pinned Rust 1.88 checks passed: strict golden Clippy at `/tmp/heph-unclean-sigkill-clippy-final-20260919.log`, workspace formatting at `/tmp/heph-unclean-sigkill-fmt-final-20260919.log`, and workspace rustdoc at `/tmp/heph-unclean-sigkill-doc-final-20260919.log`. The shared and isolated golden source hashes are both `606f2e932a97090ec428ac475064fd6dbdca35bdae008ccef42ed657457bcb5e`. Current CI run `35436772998` for `e66bfc1` passes all three jobs. This proves external guest-service recovery after an unclean daemon exit only; broader boot reconciliation, cutover, revocation/drain, and release UI remain pending.
+
+
+Authorized service-log metadata reader checkpoint (2026-09-19): migration 80
+adds only application `SELECT(id, project_id)` on `gateways`; forced RLS,
+explicit project/gateway `CanRead` checks, and the existing composite foreign
+keys establish the exact instance/revision/project scope without exposing
+`gateway_revisions` or project usage counters to the application role. The
+PostgreSQL adapter returns empty metadata for a known instance without an
+epoch, preserves readable historical fences, rejects future or mismatched
+scopes, and commits authorization audits for denied and authorized-not-found
+results. The exact `e66bfc1` archive overlay is
+`/tmp/heph-reader-e66bfc1.mMYHbk`; pinned Rust 1.88 formatting, strict
+gateway-postgres Clippy, and workspace rustdoc passed. Fresh application-role
+metadata coverage passed with `max_migration=80`, and the eight-test
+gateway-postgres regression suite passed; logs are
+`/tmp/heph-reader-0080-isolated-{realpg,postgres-regression}.log`,
+`/tmp/heph-reader-0080-isolated-{fmt3,clippy3,doc3}.log`. Payload pagination,
+project-cap loss counters, RPC/protobuf exposure, and UI remain pending.

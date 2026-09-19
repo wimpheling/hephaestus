@@ -180,7 +180,7 @@ use workspace_local::{LocalWorkspaceConfig, LocalWorkspaceManager};
 use workspace_postgres::PgWorkspaceMetadataRepository;
 
 /// Ordered database migration expected by this application version.
-pub const EXPECTED_DATABASE_MIGRATION: i64 = 79;
+pub const EXPECTED_DATABASE_MIGRATION: i64 = 80;
 
 const GATEWAY_SERVICE_SERVING_CAPACITY: usize = 8;
 const GATEWAY_SERVICE_REPLACEMENT_CAPACITY: usize = 2;
