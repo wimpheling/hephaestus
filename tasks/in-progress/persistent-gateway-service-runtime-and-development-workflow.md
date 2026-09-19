@@ -513,6 +513,27 @@ transactions emit none. Real disposable PostgreSQL proof passed all 8
 promotion, lifecycle supervision, and service-instance recovery remain
 unchecked.
 
+- [x] Add migration 0075 durable service-invocation binding. New accepted
+  `http.service.v1` rows now lock gateway before instance, recheck the active
+  route/revision and published release, lock the unique ready instance, verify
+  its positive fencing token and unexpired lease with a fresh database clock,
+  and persist the immutable instance/fence target before authority issuance.
+  Stateless invocations retain null bindings. The migration terminalizes
+  pre-binding accepted service history through the existing cleanup function,
+  preserving rows while revoking their sessions and leases. Direct inserts,
+  stale fences, and target mutation are rejected by database constraints and
+  triggers. Worker-role PostgreSQL acceptance passed 7 tests, including held
+  gateway/release lock barriers, readiness/lease denial, stateless behavior,
+  and authority/target assertions; evidence:
+  `/tmp/heph-gateway-postgres-worker-acceptance-20260919.log`. Ownership then
+  target pagination passed 10 and 2 tests on the same disposable database;
+  evidence: `/tmp/heph-gateway-postgres-worker-20260919.log`. The runtime
+  authority fixture audit passed its service-session test after adding exact
+  service instance bindings; evidence:
+  `/tmp/heph-runtime-authority-postgres-20260919.log`. Warm request execution,
+  handler cutover, lifecycle supervision, Caddy exposure, and service recovery
+  remain unchecked.
+
 ## Non-goals
 
 This task does not replace MVP 03's bounded stateless invocation mode. It does

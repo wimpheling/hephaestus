@@ -6,7 +6,7 @@ use gateway_edge::{
 use gateway_postgres::PostgresGatewayServiceTargets;
 use serial_test::serial;
 use sqlx::postgres::PgPoolOptions;
-use std::{collections::HashSet, env};
+use std::{collections::HashSet, env, time::Duration};
 use uuid::Uuid;
 
 #[tokio::test(flavor = "multi_thread")]
@@ -53,23 +53,31 @@ async fn service_targets_preserve_serving_candidate_and_lifecycle_boundaries() {
     )
     .await;
 
-    let mut cursor = None;
-    let mut listed = Vec::new();
-    for _ in 0..MAX_SERVICE_TARGET_PAGE_SIZE {
-        let page = GatewayServiceTargetPage::new(cursor, 1).expect("bounded page");
-        assert!(page.limit <= MAX_SERVICE_TARGET_PAGE_SIZE);
-        let result = store
-            .list_service_targets(page)
-            .await
-            .expect("list service targets");
-        assert!(result.targets.len() <= 1);
-        listed.extend(result.targets);
-        let Some(next) = result.next_after else {
-            break;
-        };
-        assert_ne!(Some(next), cursor);
-        cursor = Some(next);
-    }
+    let listed = tokio::time::timeout(Duration::from_secs(30), async {
+        let mut cursor = None;
+        let mut listed = Vec::new();
+        loop {
+            let page = GatewayServiceTargetPage::new(cursor, 1).expect("bounded page");
+            assert!(page.limit <= MAX_SERVICE_TARGET_PAGE_SIZE);
+            let result = store
+                .list_service_targets(page)
+                .await
+                .expect("list service targets");
+            assert!(result.targets.len() <= 1);
+            listed.extend(result.targets);
+            let Some(next) = result.next_after else {
+                break;
+            };
+            assert_ne!(Some(next), cursor);
+            if let Some(previous) = cursor {
+                assert!(next > previous);
+            }
+            cursor = Some(next);
+        }
+        listed
+    })
+    .await
+    .expect("service target pagination completes");
     let listed_ids: HashSet<_> = listed.iter().map(|target| target.gateway_id).collect();
     assert!(listed_ids.contains(&serving_and_revoked.gateway));
     assert!(listed_ids.contains(&mixed.gateway));
@@ -174,6 +182,7 @@ struct Fixture {
     candidate_service: Uuid,
     stateless: Uuid,
     old_route: Uuid,
+    old_instance: Uuid,
 }
 
 async fn test_pool() -> Option<sqlx::PgPool> {
@@ -308,6 +317,22 @@ async fn seed_gateway(
     .execute(pool)
     .await
     .expect("service route");
+    let old_instance = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO gateway_service_instances
+            (id, gateway_id, revision_id, owner_host_id, owner_uuid,
+             fencing_token, vm_id, state, lease_expires_at, heartbeat_at)
+         VALUES ($1, $2, $3, 'target-host', $4, 1,
+                 $5, 'ready', now() + interval '10 minutes', now())",
+    )
+    .bind(old_instance)
+    .bind(gateway)
+    .bind(old_service)
+    .bind(owner)
+    .bind(format!("gateway-service-{old_instance}"))
+    .execute(pool)
+    .await
+    .expect("ready service instance");
     Fixture {
         project,
         gateway,
@@ -315,6 +340,7 @@ async fn seed_gateway(
         candidate_service,
         stateless,
         old_route,
+        old_instance,
     }
 }
 
@@ -462,8 +488,9 @@ async fn insert_accepted_invocation(pool: &sqlx::PgPool, fixture: &Fixture) {
     sqlx::query(
         "INSERT INTO gateway_invocations
             (id, gateway_id, gateway_revision_id, gateway_route_id, project_id,
-             request_id, outcome)
-         VALUES ($1, $2, $3, $4, $5, $6, 'accepted')",
+             request_id, outcome, service_instance_id,
+             service_instance_fencing_token)
+         VALUES ($1, $2, $3, $4, $5, $6, 'accepted', $7, $8)",
     )
     .bind(Uuid::new_v4())
     .bind(fixture.gateway)
@@ -471,6 +498,8 @@ async fn insert_accepted_invocation(pool: &sqlx::PgPool, fixture: &Fixture) {
     .bind(fixture.old_route)
     .bind(fixture.project)
     .bind(Uuid::new_v4())
+    .bind(fixture.old_instance)
+    .bind(1_i64)
     .execute(pool)
     .await
     .expect("accepted invocation");

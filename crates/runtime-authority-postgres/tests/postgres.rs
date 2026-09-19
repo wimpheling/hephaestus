@@ -69,6 +69,7 @@ struct Fixture {
     revision: Uuid,
     route: Uuid,
     invocation: Uuid,
+    service_instance: Option<Uuid>,
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -87,12 +88,12 @@ async fn gateway_host_mediated_sessions_are_distinct_and_lifecycle_bound() {
         .await
         .expect("apply runtime authority migrations");
     let migration_version: i64 =
-        sqlx::query_scalar("SELECT version FROM _sqlx_migrations WHERE version = 72")
+        sqlx::query_scalar("SELECT version FROM _sqlx_migrations WHERE version = 75")
             .fetch_one(&pool)
             .await
-            .expect("confirm migration 0072 applied to the connected database");
-    assert_eq!(migration_version, 72);
-    println!("REAL_POSTGRES_CONNECTED_AND_MIGRATED=1 migration=72");
+            .expect("confirm migration 0075 applied to the connected database");
+    assert_eq!(migration_version, 75);
+    println!("REAL_POSTGRES_CONNECTED_AND_MIGRATED=1 migration=75");
 
     let creates = Arc::new(AtomicUsize::new(0));
     let issuer = Arc::new(PgGatewayRuntimeAuthorityIssuer::new(
@@ -650,13 +651,36 @@ async fn seed_fixture(pool: &sqlx::PgPool, handler_contract: &str) -> Fixture {
         .execute(pool)
         .await
         .expect("gateway route");
-    sqlx::query("INSERT INTO gateway_invocations (id, gateway_id, gateway_revision_id, gateway_route_id, project_id, request_id, outcome) VALUES ($1, $2, $3, $4, $5, $6, 'accepted')")
+    let service_instance = if handler_contract == "http.service.v1" {
+        let instance = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO gateway_service_instances
+                (id, gateway_id, revision_id, owner_host_id, owner_uuid,
+                 fencing_token, vm_id, state, lease_expires_at, heartbeat_at)
+             VALUES ($1, $2, $3, 'runtime-authority-host', $4, 1,
+                     $5, 'ready', now() + interval '10 minutes', now())",
+        )
+        .bind(instance)
+        .bind(gateway)
+        .bind(revision)
+        .bind(owner)
+        .bind(format!("gateway-service-{instance}"))
+        .execute(pool)
+        .await
+        .expect("ready service instance");
+        Some(instance)
+    } else {
+        None
+    };
+    sqlx::query("INSERT INTO gateway_invocations (id, gateway_id, gateway_revision_id, gateway_route_id, project_id, request_id, outcome, service_instance_id, service_instance_fencing_token) VALUES ($1, $2, $3, $4, $5, $6, 'accepted', $7, $8)")
         .bind(invocation)
         .bind(gateway)
         .bind(revision)
         .bind(route)
         .bind(project)
         .bind(Uuid::new_v4())
+        .bind(service_instance)
+        .bind(service_instance.map(|_| 1_i64))
         .execute(pool)
         .await
         .expect("gateway invocation");
@@ -668,6 +692,7 @@ async fn seed_fixture(pool: &sqlx::PgPool, handler_contract: &str) -> Fixture {
         revision,
         route,
         invocation,
+        service_instance,
     }
 }
 
@@ -688,9 +713,10 @@ async fn seed_expired_host_sessions(
         let session = Uuid::new_v4();
         sqlx::query(
             "INSERT INTO gateway_invocations
-                (id, gateway_id, gateway_revision_id, gateway_route_id, project_id,
-                 request_id, outcome, accepted_at)
-             VALUES ($1, $2, $3, $4, $5, $6, 'accepted', $7)",
+                    (id, gateway_id, gateway_revision_id, gateway_route_id, project_id,
+                 request_id, outcome, accepted_at, service_instance_id,
+                 service_instance_fencing_token)
+             VALUES ($1, $2, $3, $4, $5, $6, 'accepted', $7, $8, $9)",
         )
         .bind(invocation)
         .bind(fixture.gateway)
@@ -699,6 +725,8 @@ async fn seed_expired_host_sessions(
         .bind(fixture.project)
         .bind(Uuid::new_v4())
         .bind(issued_at)
+        .bind(fixture.service_instance)
+        .bind(fixture.service_instance.map(|_| 1_i64))
         .execute(&mut *transaction)
         .await
         .expect("batched gateway invocation");

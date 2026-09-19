@@ -35,10 +35,17 @@ struct FailingIssuer;
 
 struct GhostIssuer;
 
+struct TestPools {
+    admin: sqlx::PgPool,
+    worker: sqlx::PgPool,
+}
+
 #[derive(Clone, Copy)]
 struct Fixture {
+    gateway: Uuid,
     revision: Uuid,
     route: Uuid,
+    service_instance: Option<Uuid>,
 }
 
 #[async_trait]
@@ -109,23 +116,25 @@ impl GatewayRuntimeAuthorityIssuer for GhostIssuer {
 #[tokio::test(flavor = "multi_thread")]
 #[serial]
 async fn gateway_acceptance_selects_service_and_guest_modes() {
-    let Some(pool) = test_pool().await else {
+    let Some(pools) = test_pool().await else {
         return;
     };
+    let admin = &pools.admin;
+    let worker = &pools.worker;
     let calls = Arc::new(Mutex::new(Vec::new()));
     let issuer = Arc::new(RecordingIssuer {
-        pool: pool.clone(),
+        pool: worker.clone(),
         calls: Arc::clone(&calls),
         entered: None,
         release: None,
     });
-    let authority = build_authority(pool.clone(), issuer);
-    let service = seed_fixture(&pool, "http.service.v1").await;
+    let authority = build_authority(worker.clone(), issuer);
+    let service = seed_fixture(admin, "http.service.v1").await;
     let service_invocation = authority
         .accepted(&route(&service, "service"), Uuid::new_v4())
         .await
         .expect("service acceptance");
-    let guest = seed_fixture(&pool, "http.v1").await;
+    let guest = seed_fixture(admin, "http.v1").await;
     let guest_invocation = authority
         .accepted(&route(&guest, "guest"), Uuid::new_v4())
         .await
@@ -141,12 +150,45 @@ async fn gateway_acceptance_selects_service_and_guest_modes() {
           WHERE session.invocation_id = $1",
     )
     .bind(service_invocation)
-    .fetch_one(&pool)
+    .fetch_one(admin)
     .await
     .expect("service session shape");
     assert_eq!(
         service_shape,
         ("host_mediated".into(), "active".into(), None)
+    );
+    let service_instance = service.service_instance.expect("service instance fixture");
+    let binding: (Uuid, i64) = sqlx::query_as(
+        "SELECT service_instance_id, service_instance_fencing_token
+           FROM gateway_invocations
+          WHERE id = $1",
+    )
+    .bind(service_invocation)
+    .fetch_one(admin)
+    .await
+    .expect("service invocation binding");
+    assert_eq!(binding, (service_instance, 1));
+    let other = seed_fixture(admin, "http.service.v1").await;
+    let cross_revision = sqlx::query(
+        "UPDATE gateway_invocations
+            SET service_instance_id = $2,
+                service_instance_fencing_token = 1
+          WHERE id = $1",
+    )
+    .bind(service_invocation)
+    .bind(other.service_instance.expect("other service instance"))
+    .execute(admin)
+    .await;
+    assert!(cross_revision.is_err());
+    assert!(
+        insert_service_invocation(admin, &service, None, None)
+            .await
+            .is_err()
+    );
+    assert!(
+        insert_service_invocation(admin, &service, Some(service_instance), Some(99))
+            .await
+            .is_err()
     );
     let guest_shape: (String, String, Option<Vec<u8>>) = sqlx::query_as(
         "SELECT session.admission_mode, session.status, session.credential_hash
@@ -154,7 +196,7 @@ async fn gateway_acceptance_selects_service_and_guest_modes() {
           WHERE session.invocation_id = $1",
     )
     .bind(guest_invocation)
-    .fetch_one(&pool)
+    .fetch_one(admin)
     .await
     .expect("guest session shape");
     assert_eq!(guest_shape.0, "guest_handoff");
@@ -164,12 +206,61 @@ async fn gateway_acceptance_selects_service_and_guest_modes() {
 
 #[tokio::test(flavor = "multi_thread")]
 #[serial]
-async fn gateway_service_requires_runtime_issuer_but_stateless_does_not() {
-    let Some(pool) = test_pool().await else {
+async fn gateway_acceptance_rechecks_route_after_waiting_for_gateway_lock() {
+    let Some(pools) = test_pool().await else {
         return;
     };
-    let authority = PostgresGatewayEdgeAuthority::new(pool.clone(), limits());
-    let service = seed_fixture(&pool, "http.service.v1").await;
+    let admin = &pools.admin;
+    let worker = &pools.worker;
+    let fixture = seed_fixture(admin, "http.service.v1").await;
+    let mut lock = admin.begin().await.expect("gateway lock transaction");
+    sqlx::query("SELECT id FROM gateways WHERE id = $1 FOR UPDATE")
+        .bind(fixture.gateway)
+        .execute(&mut *lock)
+        .await
+        .expect("hold gateway lock");
+
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let authority = build_authority(
+        worker.clone(),
+        Arc::new(RecordingIssuer {
+            pool: worker.clone(),
+            calls: Arc::clone(&calls),
+            entered: None,
+            release: None,
+        }),
+    );
+    let accepted = tokio::spawn(async move {
+        authority
+            .accepted(&route(&fixture, "locked"), Uuid::new_v4())
+            .await
+    });
+    wait_for_gateway_lock(admin).await;
+    sqlx::query(
+        "UPDATE gateways
+            SET active_revision_id = NULL
+          WHERE id = $1",
+    )
+    .bind(fixture.gateway)
+    .execute(&mut *lock)
+    .await
+    .expect("switch active revision while holding lock");
+    lock.commit().await.expect("commit active switch");
+    assert!(accepted.await.expect("acceptance join").is_err());
+    assert_eq!(invocation_count(admin, fixture.route).await, 0);
+    assert!(calls.lock().expect("recording issuer mutex").is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn gateway_service_requires_runtime_issuer_but_stateless_does_not() {
+    let Some(pools) = test_pool().await else {
+        return;
+    };
+    let admin = &pools.admin;
+    let worker = &pools.worker;
+    let authority = PostgresGatewayEdgeAuthority::new(worker.clone(), limits());
+    let service = seed_fixture(admin, "http.service.v1").await;
     assert!(
         authority
             .accepted(&route(&service, "missing-issuer"), Uuid::new_v4())
@@ -177,26 +268,26 @@ async fn gateway_service_requires_runtime_issuer_but_stateless_does_not() {
             .is_err()
     );
     assert_eq!(
-        invocation_outcome(&pool, service.route).await,
+        invocation_outcome(admin, service.route).await,
         Some("rejected")
     );
 
-    let stateless = seed_fixture(&pool, "http.v1").await;
+    let stateless = seed_fixture(admin, "http.v1").await;
     let invocation = authority
         .accepted(&route(&stateless, "no-issuer"), Uuid::new_v4())
         .await
         .expect("stateless acceptance without runtime issuer");
     assert_eq!(
-        invocation_outcome(&pool, stateless.route).await,
+        invocation_outcome(admin, stateless.route).await,
         Some("accepted")
     );
-    assert_eq!(session_count(&pool, invocation).await, 0);
+    assert_eq!(session_count(admin, invocation).await, 0);
 
-    let overflow = seed_fixture(&pool, "http.service.v1").await;
-    let overflow_authority = PostgresGatewayEdgeAuthority::new(pool.clone(), limits())
+    let overflow = seed_fixture(admin, "http.service.v1").await;
+    let overflow_authority = PostgresGatewayEdgeAuthority::new(worker.clone(), limits())
         .with_runtime_authority(
             Arc::new(RecordingIssuer {
-                pool: pool.clone(),
+                pool: worker.clone(),
                 calls: Arc::new(Mutex::new(Vec::new())),
                 entered: None,
                 release: None,
@@ -211,15 +302,15 @@ async fn gateway_service_requires_runtime_issuer_but_stateless_does_not() {
             .is_err()
     );
     assert_eq!(
-        invocation_outcome(&pool, overflow.route).await,
+        invocation_outcome(admin, overflow.route).await,
         Some("rejected")
     );
 
-    let date_overflow = seed_fixture(&pool, "http.service.v1").await;
-    let date_overflow_authority = PostgresGatewayEdgeAuthority::new(pool.clone(), limits())
+    let date_overflow = seed_fixture(admin, "http.service.v1").await;
+    let date_overflow_authority = PostgresGatewayEdgeAuthority::new(worker.clone(), limits())
         .with_runtime_authority(
             Arc::new(RecordingIssuer {
-                pool: pool.clone(),
+                pool: worker.clone(),
                 calls: Arc::new(Mutex::new(Vec::new())),
                 entered: None,
                 release: None,
@@ -234,19 +325,127 @@ async fn gateway_service_requires_runtime_issuer_but_stateless_does_not() {
             .is_err()
     );
     assert_eq!(
-        invocation_outcome(&pool, date_overflow.route).await,
+        invocation_outcome(admin, date_overflow.route).await,
         Some("rejected")
     );
 }
 
 #[tokio::test(flavor = "multi_thread")]
 #[serial]
-async fn gateway_acceptance_failures_terminally_reject_invocations() {
-    let Some(pool) = test_pool().await else {
+async fn gateway_service_acceptance_requires_a_live_ready_instance() {
+    let Some(pools) = test_pool().await else {
         return;
     };
-    let failed = seed_fixture(&pool, "http.service.v1").await;
-    let authority = build_authority(pool.clone(), Arc::new(FailingIssuer));
+    let admin = &pools.admin;
+    let worker = &pools.worker;
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let authority = build_authority(
+        worker.clone(),
+        Arc::new(RecordingIssuer {
+            pool: worker.clone(),
+            calls: Arc::clone(&calls),
+            entered: None,
+            release: None,
+        }),
+    );
+
+    let draining = seed_fixture(admin, "http.service.v1").await;
+    sqlx::query(
+        "UPDATE gateway_service_instances
+            SET state = 'draining'
+          WHERE id = $1",
+    )
+    .bind(draining.service_instance.expect("draining instance"))
+    .execute(admin)
+    .await
+    .expect("drain service instance");
+    assert!(
+        authority
+            .accepted(&route(&draining, "draining"), Uuid::new_v4())
+            .await
+            .is_err()
+    );
+    assert_eq!(invocation_count(admin, draining.route).await, 0);
+
+    let expired = seed_fixture_with_expiry(admin, "http.service.v1", false).await;
+    assert!(
+        authority
+            .accepted(&route(&expired, "expired"), Uuid::new_v4())
+            .await
+            .is_err()
+    );
+    assert_eq!(invocation_count(admin, expired.route).await, 0);
+
+    let missing = seed_fixture(admin, "http.service.v1").await;
+    sqlx::query("DELETE FROM gateway_service_instances WHERE id = $1")
+        .bind(missing.service_instance.expect("missing instance"))
+        .execute(admin)
+        .await
+        .expect("remove service instance");
+    assert!(
+        authority
+            .accepted(&route(&missing, "missing"), Uuid::new_v4())
+            .await
+            .is_err()
+    );
+    assert_eq!(invocation_count(admin, missing.route).await, 0);
+    assert!(calls.lock().expect("recording issuer mutex").is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn gateway_service_acceptance_rechecks_expiry_after_waiting_for_release_lock() {
+    let Some(pools) = test_pool().await else {
+        return;
+    };
+    let admin = &pools.admin;
+    let worker = &pools.worker;
+    let fixture = seed_fixture_with_lease(admin, "http.service.v1", 1).await;
+    let release_id: Uuid =
+        sqlx::query_scalar("SELECT release_id FROM gateway_revisions WHERE id = $1")
+            .bind(fixture.revision)
+            .fetch_one(admin)
+            .await
+            .expect("service release");
+    let mut release_lock = admin.begin().await.expect("release lock transaction");
+    sqlx::query("SELECT id FROM releases WHERE id = $1 FOR UPDATE")
+        .bind(release_id)
+        .execute(&mut *release_lock)
+        .await
+        .expect("hold release lock");
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let authority = build_authority(
+        worker.clone(),
+        Arc::new(RecordingIssuer {
+            pool: worker.clone(),
+            calls: Arc::clone(&calls),
+            entered: None,
+            release: None,
+        }),
+    );
+    let accepted = tokio::spawn(async move {
+        authority
+            .accepted(&route(&fixture, "release-locked"), Uuid::new_v4())
+            .await
+    });
+    wait_for_gateway_lock(admin).await;
+    tokio::time::sleep(Duration::from_millis(1_100)).await;
+    release_lock.commit().await.expect("release release lock");
+    assert!(accepted.await.expect("acceptance join").is_err());
+    assert_eq!(invocation_count(admin, fixture.route).await, 0);
+    assert!(calls.lock().expect("recording issuer mutex").is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn gateway_acceptance_failures_terminally_reject_invocations() {
+    let Some(pools) = test_pool().await else {
+        return;
+    };
+    let admin = &pools.admin;
+    let worker = &pools.worker;
+    let failed = seed_fixture(admin, "http.service.v1").await;
+    let authority = build_authority(worker.clone(), Arc::new(FailingIssuer));
     assert!(
         authority
             .accepted(&route(&failed, "failed"), Uuid::new_v4())
@@ -254,39 +453,41 @@ async fn gateway_acceptance_failures_terminally_reject_invocations() {
             .is_err()
     );
     assert_eq!(
-        invocation_outcome(&pool, failed.route).await,
+        invocation_outcome(admin, failed.route).await,
         Some("rejected")
     );
 
-    let ghost = seed_fixture(&pool, "http.service.v1").await;
-    let authority = build_authority(pool.clone(), Arc::new(GhostIssuer));
+    let ghost = seed_fixture(admin, "http.service.v1").await;
+    let authority = build_authority(worker.clone(), Arc::new(GhostIssuer));
     assert!(
         authority
             .accepted(&route(&ghost, "ghost"), Uuid::new_v4())
             .await
             .is_err()
     );
-    let invocation = latest_invocation(&pool, ghost.route).await;
+    let invocation = latest_invocation(admin, ghost.route).await;
     assert_eq!(
-        invocation_outcome(&pool, ghost.route).await,
+        invocation_outcome(admin, ghost.route).await,
         Some("rejected")
     );
-    assert_eq!(session_count(&pool, invocation).await, 0);
+    assert_eq!(session_count(admin, invocation).await, 0);
 }
 
 #[tokio::test(flavor = "multi_thread")]
 #[serial]
 async fn gateway_acceptance_completion_race_leaves_no_active_session_or_lease() {
-    let Some(pool) = test_pool().await else {
+    let Some(pools) = test_pool().await else {
         return;
     };
-    let fixture = seed_fixture(&pool, "http.service.v1").await;
+    let admin = &pools.admin;
+    let worker = &pools.worker;
+    let fixture = seed_fixture(admin, "http.service.v1").await;
     let entered = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
     let authority = Arc::new(build_authority(
-        pool.clone(),
+        worker.clone(),
         Arc::new(RecordingIssuer {
-            pool: pool.clone(),
+            pool: worker.clone(),
             calls: Arc::new(Mutex::new(Vec::new())),
             entered: Some(Arc::clone(&entered)),
             release: Some(Arc::clone(&release)),
@@ -300,42 +501,80 @@ async fn gateway_acceptance_completion_race_leaves_no_active_session_or_lease() 
             .await
     });
     entered.notified().await;
-    let invocation = latest_invocation(&pool, fixture.route).await;
+    let invocation = latest_invocation(admin, fixture.route).await;
     assert!(
         sqlx::query_scalar::<_, bool>("SELECT gateway_invocation_complete($1, 'timed_out')")
             .bind(invocation)
-            .fetch_one(&pool)
+            .fetch_one(admin)
             .await
             .expect("terminal cleanup query")
     );
     release.notify_one();
     assert!(accepted_task.await.expect("acceptance task join").is_err());
     assert_ne!(
-        session_status(&pool, invocation).await.as_deref(),
+        session_status(admin, invocation).await.as_deref(),
         Some("active")
     );
-    assert_eq!(active_lease_count(&pool, invocation).await, 0);
+    assert_eq!(active_lease_count(admin, invocation).await, 0);
 }
 
-async fn test_pool() -> Option<sqlx::PgPool> {
+async fn test_pool() -> Option<TestPools> {
     let database_url = env::var("HEPHAESTUS_POSTGRES_TEST_URL").ok()?;
-    let pool = PgPoolOptions::new()
+    let admin = PgPoolOptions::new()
         .max_connections(8)
         .connect(&database_url)
         .await
         .expect("connect real PostgreSQL");
     sqlx::migrate!("../../migrations")
-        .run(&pool)
+        .run(&admin)
         .await
         .expect("apply gateway migrations");
     let version: i64 =
-        sqlx::query_scalar("SELECT version FROM _sqlx_migrations WHERE version = 72")
-            .fetch_one(&pool)
+        sqlx::query_scalar("SELECT version FROM _sqlx_migrations WHERE version = 75")
+            .fetch_one(&admin)
             .await
-            .expect("migration 72");
-    assert_eq!(version, 72);
-    println!("REAL_POSTGRES_CONNECTED_AND_MIGRATED=1 migration=72");
-    Some(pool)
+            .expect("migration 75");
+    assert_eq!(version, 75);
+    println!("REAL_POSTGRES_CONNECTED_AND_MIGRATED=1 migration=75");
+    let worker = PgPoolOptions::new()
+        .max_connections(8)
+        .after_connect(|connection, _metadata| {
+            Box::pin(async move {
+                sqlx::query("SET ROLE hephaestus_worker")
+                    .execute(&mut *connection)
+                    .await?;
+                sqlx::query("SET application_name = 'gateway-acceptance-worker'")
+                    .execute(&mut *connection)
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect(&database_url)
+        .await
+        .expect("connect worker PostgreSQL pool");
+    Some(TestPools { admin, worker })
+}
+
+async fn wait_for_gateway_lock(admin: &sqlx::PgPool) {
+    for _ in 0..200 {
+        let waiting: bool = sqlx::query_scalar(
+            "SELECT EXISTS(
+                 SELECT 1
+                   FROM pg_stat_activity
+                  WHERE application_name = 'gateway-acceptance-worker'
+                    AND wait_event_type = 'Lock'
+                    AND state = 'active'
+             )",
+        )
+        .fetch_one(admin)
+        .await
+        .expect("inspect acceptance lock wait");
+        if waiting {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("worker acceptance did not wait on the held gateway lock");
 }
 
 fn build_authority(
@@ -451,6 +690,37 @@ fn ghost_session(request: GatewayRuntimeSessionRequest) -> StoredRuntimeSession 
 }
 
 async fn seed_fixture(pool: &sqlx::PgPool, contract: &str) -> Fixture {
+    seed_fixture_with_timing(pool, contract, true, 600).await
+}
+
+async fn seed_fixture_with_lease(
+    pool: &sqlx::PgPool,
+    contract: &str,
+    lease_seconds: i64,
+) -> Fixture {
+    seed_fixture_with_timing(pool, contract, true, lease_seconds).await
+}
+
+// This real-PostgreSQL fixture deliberately builds the release, agent,
+// revision, route, and leased instance graph in one place.
+#[allow(clippy::too_many_lines)]
+async fn seed_fixture_with_expiry(
+    pool: &sqlx::PgPool,
+    contract: &str,
+    lease_live: bool,
+) -> Fixture {
+    seed_fixture_with_timing(pool, contract, lease_live, 600).await
+}
+
+// This real-PostgreSQL fixture deliberately builds the release, agent,
+// revision, route, and leased instance graph in one place.
+#[allow(clippy::too_many_lines)]
+async fn seed_fixture_with_timing(
+    pool: &sqlx::PgPool,
+    contract: &str,
+    lease_live: bool,
+    lease_seconds: i64,
+) -> Fixture {
     let owner = Uuid::new_v4();
     let organization = Uuid::new_v4();
     let project = Uuid::new_v4();
@@ -458,6 +728,10 @@ async fn seed_fixture(pool: &sqlx::PgPool, contract: &str) -> Fixture {
     let gateway = Uuid::new_v4();
     let revision = Uuid::new_v4();
     let route = Uuid::new_v4();
+    let release = Uuid::new_v4();
+    let build_request = Uuid::new_v4();
+    let agent_family = Uuid::new_v4();
+    let release_agent = Uuid::new_v4();
     sqlx::query("INSERT INTO users (id, display_name) VALUES ($1, 'acceptance owner')")
         .bind(owner)
         .execute(pool)
@@ -497,6 +771,69 @@ async fn seed_fixture(pool: &sqlx::PgPool, contract: &str) -> Fixture {
     .await
     .expect("gateway");
     let service = contract == "http.service.v1";
+    if service {
+        let source_commit = format!("{:040x}", release.as_u128());
+        sqlx::query(
+            "INSERT INTO build_requests
+                (id, repository_id, source_commit, source_ref,
+                 build_definition_hash, state, created_by)
+             VALUES ($1, $2, $3, 'refs/heads/main', $4, 'succeeded', $5)",
+        )
+        .bind(build_request)
+        .bind(repository)
+        .bind(&source_commit)
+        .bind([4_u8; 32].as_slice())
+        .bind(owner)
+        .execute(pool)
+        .await
+        .expect("build request");
+        sqlx::query(
+            "INSERT INTO releases
+                (id, repository_id, version, source_commit, source_ref,
+                 build_request_id, build_definition_hash, configuration,
+                 configuration_hash, manifest_hash, state,
+                 publication_actor_id, published_at)
+             VALUES ($1, $2, $3, $4, 'refs/heads/main', $5, $6, '{}',
+                     $7, $8, 'published', $9, now())",
+        )
+        .bind(release)
+        .bind(repository)
+        .bind(format!("acceptance-{}", release.simple()))
+        .bind(&source_commit)
+        .bind(build_request)
+        .bind([4_u8; 32].as_slice())
+        .bind([5_u8; 32].as_slice())
+        .bind([6_u8; 32].as_slice())
+        .bind(owner)
+        .execute(pool)
+        .await
+        .expect("published release");
+        sqlx::query(
+            "INSERT INTO agent_families (id, repository_id, agent_key)
+             VALUES ($1, $2, $3)",
+        )
+        .bind(agent_family)
+        .bind(repository)
+        .bind(format!("acceptance-agent-{}", release.simple()))
+        .execute(pool)
+        .await
+        .expect("agent family");
+        sqlx::query(
+            "INSERT INTO release_agents
+                (id, release_id, family_id, agent_key, display_name,
+                 runtime_contract, runtime_contract_hash, parameter_schema,
+                 secret_slot_schema, requires_state)
+             VALUES ($1, $2, $3, 'acceptance-service', 'Acceptance service',
+                     '{}', $4, '[]', '[]', false)",
+        )
+        .bind(release_agent)
+        .bind(release)
+        .bind(agent_family)
+        .bind([7_u8; 32].as_slice())
+        .execute(pool)
+        .await
+        .expect("release agent");
+    }
     let columns = if service {
         "18080, '/ready', '/health'"
     } else {
@@ -504,16 +841,25 @@ async fn seed_fixture(pool: &sqlx::PgPool, contract: &str) -> Fixture {
     };
     let revision_sql = format!(
         "INSERT INTO gateway_revisions
-            (id, gateway_id, project_id, repository_id, handler_contract, exposure,
+            (id, gateway_id, project_id, repository_id, release_id,
+             release_agent_id, release_agent_key, handler_contract, exposure,
              parameters, secret_slots, service_loopback_port, service_readiness_path,
              service_health_path, normalized_hash, created_by)
-         VALUES ($1, $2, $3, $4, $5, 'public', '{{}}', '{{}}', {columns}, $6, $7)"
+         VALUES ($1, $2, $3, $4, $5,
+                 $6, $7, $8, 'public', '{{}}', '{{}}', {columns}, $9, $10)"
     );
     sqlx::query(&revision_sql)
         .bind(revision)
         .bind(gateway)
         .bind(project)
         .bind(repository)
+        .bind(if service { Some(release) } else { None })
+        .bind(if service { Some(release_agent) } else { None })
+        .bind(if service {
+            Some("acceptance-service")
+        } else {
+            None
+        })
         .bind(contract)
         .bind([9_u8; 32].as_slice())
         .bind(owner)
@@ -539,7 +885,46 @@ async fn seed_fixture(pool: &sqlx::PgPool, contract: &str) -> Fixture {
     .execute(pool)
     .await
     .expect("route");
-    Fixture { revision, route }
+    let service_instance = if service {
+        let instance = Uuid::new_v4();
+        let instance_times = if lease_live {
+            (
+                format!("now() + interval '{lease_seconds} seconds'"),
+                String::from("now()"),
+            )
+        } else {
+            (
+                String::from("now() - interval '1 minute'"),
+                String::from("now() - interval '10 minutes'"),
+            )
+        };
+        let instance_sql = format!(
+            "INSERT INTO gateway_service_instances
+                (id, gateway_id, revision_id, owner_host_id, owner_uuid,
+                 fencing_token, vm_id, state, lease_expires_at, heartbeat_at)
+             VALUES ($1, $2, $3, 'acceptance-host', $4, 1,
+                     $5, 'ready', {}, {})",
+            instance_times.0, instance_times.1
+        );
+        sqlx::query(&instance_sql)
+            .bind(instance)
+            .bind(gateway)
+            .bind(revision)
+            .bind(owner)
+            .bind(format!("gateway-service-{instance}"))
+            .execute(pool)
+            .await
+            .expect("ready service instance");
+        Some(instance)
+    } else {
+        None
+    };
+    Fixture {
+        gateway,
+        revision,
+        route,
+        service_instance,
+    }
 }
 
 async fn latest_invocation(pool: &sqlx::PgPool, route: Uuid) -> Uuid {
@@ -551,6 +936,35 @@ async fn latest_invocation(pool: &sqlx::PgPool, route: Uuid) -> Uuid {
     .fetch_one(pool)
     .await
     .expect("latest invocation")
+}
+
+async fn insert_service_invocation(
+    pool: &sqlx::PgPool,
+    fixture: &Fixture,
+    instance_id: Option<Uuid>,
+    fencing_token: Option<i64>,
+) -> Result<sqlx::postgres::PgQueryResult, sqlx::Error> {
+    let project_id: Uuid = sqlx::query_scalar("SELECT project_id FROM gateways WHERE id = $1")
+        .bind(fixture.gateway)
+        .fetch_one(pool)
+        .await?;
+    sqlx::query(
+        "INSERT INTO gateway_invocations
+            (id, gateway_id, gateway_revision_id, gateway_route_id, project_id,
+             request_id, outcome, service_instance_id,
+             service_instance_fencing_token)
+         VALUES ($1, $2, $3, $4, $5, $6, 'accepted', $7, $8)",
+    )
+    .bind(Uuid::new_v4())
+    .bind(fixture.gateway)
+    .bind(fixture.revision)
+    .bind(fixture.route)
+    .bind(project_id)
+    .bind(Uuid::new_v4())
+    .bind(instance_id)
+    .bind(fencing_token)
+    .execute(pool)
+    .await
 }
 
 async fn invocation_outcome(pool: &sqlx::PgPool, route: Uuid) -> Option<&'static str> {
@@ -566,6 +980,14 @@ async fn invocation_outcome(pool: &sqlx::PgPool, route: Uuid) -> Option<&'static
         "rejected" => Some("rejected"),
         _ => None,
     }
+}
+
+async fn invocation_count(pool: &sqlx::PgPool, route: Uuid) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM gateway_invocations WHERE gateway_route_id = $1")
+        .bind(route)
+        .fetch_one(pool)
+        .await
+        .expect("invocation count")
 }
 
 async fn session_count(pool: &sqlx::PgPool, invocation: Uuid) -> i64 {
