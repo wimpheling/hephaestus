@@ -1242,6 +1242,23 @@ Clippy, formatting, and workspace rustdoc. Logs:
 writer wiring, durable retention/maintenance, and authorized readers remain
 pending.
 
+Lifecycle writer checkpoint (2026-09-19): the coordinator and supervisor now accept an
+optional parent-owned `GatewayServiceLogWriterConfig` and drive the immutable writer
+alongside the worker without detached tasks. Worker teardown completes before the
+deadline-bound final flush, and durable `cleaned` follows flush acknowledgement or the
+bounded deadline; logging failures remain non-fatal and emit only redacted identity,
+count, and loss metadata. Coordinator tests cover application capture while Ready with
+health and lease activity, disabled capture with zero store calls, blocked final flush
+ordering, and stale-fence termination. Exact overlay base `b26f880` plus the four
+gateway-edge lifecycle files passed 168 gateway-edge tests, pinned Rust 1.88.0 strict
+all-target Clippy, formatting, and workspace rustdoc. Logs:
+`/tmp/heph-service-log-lifecycle-edge-tests-final3-isolated-20260919.log`,
+`/tmp/heph-service-log-lifecycle-edge-clippy-final3-isolated-20260919.log`,
+`/tmp/heph-service-log-lifecycle-fmt-final3-isolated-20260919.log`, and
+`/tmp/heph-service-log-lifecycle-doc-final3-isolated-20260919.log`. The production app
+has not yet attached the PostgreSQL log store; retention/maintenance and authorized
+readers/RPC remain pending.
+
 Fixture acceptance checkpoint (2026-09-19): the committed startup base
 `f68257d` was archived into
 `/tmp/heph-persistent-fixture-verify-20260919`; only

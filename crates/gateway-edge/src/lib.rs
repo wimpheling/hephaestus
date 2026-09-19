@@ -65,7 +65,7 @@ pub use service_cleanup_driver::{
 pub use service_coordinator::{
     GatewayServiceCoordinator, GatewayServiceCoordinatorControl, GatewayServiceCoordinatorError,
     GatewayServiceCoordinatorFailure, GatewayServiceCoordinatorFailureReason,
-    GatewayServiceCoordinatorStatus, GatewayServiceStartupIntent,
+    GatewayServiceCoordinatorStatus, GatewayServiceLogWriterConfig, GatewayServiceStartupIntent,
 };
 pub use service_diagnostics::{ServiceDiagnosticsSnapshot, ServiceLifecycleEvidence};
 pub use service_execution::{
@@ -95,8 +95,9 @@ pub use service_lease::{
     GatewayServiceLeaseRunResult, GatewayServiceLeaseStatus,
 };
 pub use service_log_writer::{
-    ServiceLogWriter, ServiceLogWriterError, ServiceLogWriterFlush, ServiceLogWriterPolicy,
-    ServiceLogWriterPoll,
+    DEFAULT_SERVICE_LOG_APPEND_TIMEOUT, DEFAULT_SERVICE_LOG_FINAL_FLUSH_TIMEOUT,
+    DEFAULT_SERVICE_LOG_MAX_RETRY_INTERVAL, DEFAULT_SERVICE_LOG_RETRY_INTERVAL, ServiceLogWriter,
+    ServiceLogWriterError, ServiceLogWriterFlush, ServiceLogWriterPolicy, ServiceLogWriterPoll,
 };
 pub use service_logs::{
     GatewayServiceLogAppendBatch, GatewayServiceLogAppendOutcome, GatewayServiceLogStore,

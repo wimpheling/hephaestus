@@ -16,19 +16,42 @@ use tokio_util::sync::CancellationToken;
 use vm_trait::{VmInstance, VmProvider};
 
 use crate::{
-    GatewayEdgeError, GatewayServiceFailure, GatewayServiceFailureCode, GatewayServiceFailureStore,
-    GatewayServiceFailureStoreError, GatewayServiceIdentity, GatewayServiceInstanceKey,
-    GatewayServiceInstanceLease, GatewayServiceInstanceState, GatewayServiceLaunchRequest,
-    GatewayServiceLaunchResolver, GatewayServiceLeaseControl, GatewayServiceLeaseMonitor,
-    GatewayServiceLeaseRunResult, GatewayServiceLeaseStatus, GatewayServiceOwner,
+    DEFAULT_SERVICE_LOG_FINAL_FLUSH_TIMEOUT, GatewayEdgeError, GatewayServiceFailure,
+    GatewayServiceFailureCode, GatewayServiceFailureStore, GatewayServiceFailureStoreError,
+    GatewayServiceIdentity, GatewayServiceInstanceKey, GatewayServiceInstanceLease,
+    GatewayServiceInstanceState, GatewayServiceLaunchRequest, GatewayServiceLaunchResolver,
+    GatewayServiceLeaseControl, GatewayServiceLeaseMonitor, GatewayServiceLeaseRunResult,
+    GatewayServiceLeaseStatus, GatewayServiceLogStore, GatewayServiceOwner,
     GatewayServiceOwnership, GatewayServiceOwnershipError, GatewayServiceRegistry,
     GatewayServiceSupervisorPolicy, GatewayServiceTargetStore, PreparedGatewayService,
-    ServiceInstanceError, ServiceInstanceHandle, ServiceInstancePolicy, ServicePreparationFailure,
-    ServiceWorkerState, new_service_instance, new_service_preparation,
+    ServiceInstanceError, ServiceInstanceHandle, ServiceInstancePolicy, ServiceLogWriter,
+    ServiceLogWriterPolicy, ServiceLogWriterPoll, ServicePreparationFailure, ServiceWorkerState,
+    new_service_instance, new_service_preparation,
 };
 
 type MonitorFuture = Pin<Box<dyn Future<Output = GatewayServiceLeaseRunResult> + Send>>;
 type WorkerFuture = Pin<Box<dyn Future<Output = Result<(), ServiceInstanceError>> + Send>>;
+type LogWriter = ServiceLogWriter<dyn GatewayServiceLogStore>;
+
+/// Optional parent-owned durable application-log writer configuration.
+#[derive(Clone)]
+pub struct GatewayServiceLogWriterConfig {
+    /// Worker-authorized durable append port.
+    pub store: Arc<dyn GatewayServiceLogStore>,
+    /// Bounded append and retry policy.
+    pub policy: ServiceLogWriterPolicy,
+}
+
+impl GatewayServiceLogWriterConfig {
+    /// Creates an optional writer configuration for application-log services.
+    #[must_use]
+    pub const fn new(
+        store: Arc<dyn GatewayServiceLogStore>,
+        policy: ServiceLogWriterPolicy,
+    ) -> Self {
+        Self { store, policy }
+    }
+}
 
 /// Durable intent for one claimed service instance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -184,6 +207,7 @@ pub struct GatewayServiceCoordinator {
     startup_deadline: Instant,
     lease_control: GatewayServiceLeaseControl,
     lease_monitor: Option<GatewayServiceLeaseMonitor<dyn GatewayServiceOwnership>>,
+    log_writer: Option<GatewayServiceLogWriterConfig>,
     cancellation: CancellationToken,
     drain: watch::Sender<bool>,
     drain_requested: watch::Receiver<bool>,
@@ -271,6 +295,7 @@ impl GatewayServiceCoordinator {
                 startup_deadline,
                 lease_control,
                 lease_monitor: Some(lease_monitor),
+                log_writer: None,
                 cancellation,
                 drain,
                 drain_requested,
@@ -278,6 +303,13 @@ impl GatewayServiceCoordinator {
             },
             control,
         ))
+    }
+
+    /// Attaches an optional parent-owned durable application-log writer.
+    #[must_use]
+    pub fn with_log_writer(mut self, config: GatewayServiceLogWriterConfig) -> Self {
+        self.log_writer = Some(config);
+        self
     }
 
     /// Runs startup, readiness, registration, promotion, and explicit cleanup.
@@ -467,7 +499,32 @@ impl GatewayServiceCoordinator {
                 )
                 .await;
         };
+        let log_writer = match (self.log_writer.clone(), worker_handle.service_logs()) {
+            (Some(config), Some(buffer)) => {
+                if let Ok(writer) = ServiceLogWriter::new(
+                    buffer,
+                    config.store,
+                    lease.clone(),
+                    self.owner.clone(),
+                    config.policy,
+                ) {
+                    Some(writer)
+                } else {
+                    tracing::warn!(
+                        gateway_id = %lease.identity.gateway_id,
+                        revision_id = %lease.identity.revision_id,
+                        instance_id = %lease.identity.instance_id,
+                        "disabled invalid service log writer"
+                    );
+                    None
+                }
+            }
+            _ => None,
+        };
         let mut worker: WorkerFuture = Box::pin(worker.run());
+        if let Some(log_writer) = log_writer {
+            worker = Box::pin(drive_worker_with_logs(worker, log_writer));
+        }
         self.set_status(GatewayServiceCoordinatorStatus::Probing);
         let mut worker_result = None;
         loop {
@@ -1489,6 +1546,79 @@ impl GatewayServiceCoordinator {
     }
 }
 
+enum WorkerLogStep {
+    Worker(Result<(), ServiceInstanceError>),
+    Log(ServiceLogWriterPoll),
+}
+
+async fn select_worker_or_log(worker: &mut WorkerFuture, writer: &mut LogWriter) -> WorkerLogStep {
+    tokio::select! {
+        result = worker.as_mut() => WorkerLogStep::Worker(result),
+        poll = writer.poll() => WorkerLogStep::Log(poll),
+    }
+}
+
+async fn finish_worker_with_logs(
+    mut writer: Option<LogWriter>,
+    result: Result<(), ServiceInstanceError>,
+) -> Result<(), ServiceInstanceError> {
+    if let Some(mut writer) = writer.take() {
+        let identity = writer.lease().identity;
+        writer.shutdown();
+        let deadline = Instant::now()
+            .checked_add(DEFAULT_SERVICE_LOG_FINAL_FLUSH_TIMEOUT)
+            .unwrap_or_else(Instant::now);
+        report_log_flush(identity, writer.final_flush(deadline).await);
+    }
+    result
+}
+
+/// Drives one worker and its optional writer without detaching a lifecycle
+/// task. The parent coordinator remains responsible for lease/cancellation
+/// signals while this future is selected alongside them.
+async fn drive_worker_with_logs(
+    mut worker: WorkerFuture,
+    mut writer: LogWriter,
+) -> Result<(), ServiceInstanceError> {
+    let mut next_poll = Box::pin(time::sleep(Duration::ZERO));
+    loop {
+        tokio::select! {
+            result = &mut worker => return finish_worker_with_logs(Some(writer), result).await,
+            () = &mut next_poll => {
+                match select_worker_or_log(&mut worker, &mut writer).await {
+                    WorkerLogStep::Worker(result) => {
+                        return finish_worker_with_logs(Some(writer), result).await;
+                    }
+                    WorkerLogStep::Log(ServiceLogWriterPoll::Terminated { .. }) => {
+                        let result = worker.await;
+                        return finish_worker_with_logs(Some(writer), result).await;
+                    }
+                    WorkerLogStep::Log(_) => {
+                        next_poll.as_mut().reset(Instant::now() + Duration::from_millis(250));
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn report_log_flush(identity: GatewayServiceIdentity, flush: crate::ServiceLogWriterFlush) {
+    if !flush.complete {
+        tracing::warn!(
+            gateway_id = %identity.gateway_id,
+            revision_id = %identity.revision_id,
+            instance_id = %identity.instance_id,
+            unflushed_chunks = flush.unflushed_chunks,
+            unflushed_bytes = flush.unflushed_bytes,
+            loss_chunks = flush.unflushed_loss.total_chunks(),
+            loss_bytes = flush.unflushed_loss.total_bytes(),
+            provider_lagged_events = flush.unflushed_loss.provider_lagged_events,
+            terminal = flush.terminal_error.is_some(),
+            "service log writer flush incomplete"
+        );
+    }
+}
+
 type FailureReason = GatewayServiceCoordinatorFailureReason;
 
 const DRAIN_POLL_INTERVAL: Duration = Duration::from_millis(50);
@@ -2253,12 +2383,33 @@ mod tests {
     }
 
     // The fixture deliberately assembles the complete parent-owned lifecycle.
-    #[allow(clippy::too_many_lines)]
     async fn start_drain_fixture(
         count: Arc<MockCountState>,
         drain_conflict: bool,
         drain_blocked: bool,
         drain_timeout: Duration,
+    ) -> DrainFixture {
+        start_drain_fixture_with_logs(
+            count,
+            drain_conflict,
+            drain_blocked,
+            drain_timeout,
+            false,
+            None,
+            Duration::from_secs(10),
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_lines)]
+    async fn start_drain_fixture_with_logs(
+        count: Arc<MockCountState>,
+        drain_conflict: bool,
+        drain_blocked: bool,
+        drain_timeout: Duration,
+        log_capture: bool,
+        log_store: Option<Arc<dyn GatewayServiceLogStore>>,
+        health_interval: Duration,
     ) -> DrainFixture {
         let identity = identity();
         let owner =
@@ -2284,8 +2435,14 @@ mod tests {
             .expect("connection mutex")
             .push_back(Box::new(client));
         tokio::spawn(respond(peer));
+        let mut service_launch = launch(identity);
+        if log_capture {
+            service_launch.service = service_launch
+                .service
+                .with_log_capture_mode(gateway_domain::ServiceLogCaptureMode::Application);
+        }
         let resolver = Arc::new(MockResolver {
-            launch: launch(identity),
+            launch: service_launch,
             started: Notify::new(),
             release: Notify::new(),
             cleanups: AtomicUsize::new(0),
@@ -2332,6 +2489,7 @@ mod tests {
             "service.test",
             GatewayServiceSupervisorPolicy {
                 drain_timeout,
+                health_interval,
                 lease: GatewayServiceLeasePolicy {
                     lease_duration: Duration::from_secs(30),
                     renewal_interval: Duration::from_millis(10),
@@ -2346,6 +2504,14 @@ mod tests {
             },
         )
         .expect("coordinator");
+        let coordinator = if let Some(store) = log_store {
+            coordinator.with_log_writer(GatewayServiceLogWriterConfig::new(
+                store,
+                ServiceLogWriterPolicy::default(),
+            ))
+        } else {
+            coordinator
+        };
         let mut status = control.subscribe();
         let task = tokio::spawn(coordinator.run());
         resolver.started.notified().await;
@@ -2371,6 +2537,310 @@ mod tests {
             registry,
             key,
         }
+    }
+
+    #[tokio::test]
+    // Keep the fixture-owned VM and coordinator control alive until the
+    // joined task has completed its durable cleanup transition.
+    #[allow(clippy::significant_drop_tightening)]
+    async fn lifecycle_log_writer_flushes_after_vm_teardown_before_mark_cleaned() {
+        let store = Arc::new(LifecycleLogStore {
+            append_started: Notify::new(),
+            release: Notify::new(),
+            blocked: AtomicBool::new(true),
+            calls: AtomicUsize::new(0),
+            records: AtomicUsize::new(0),
+            responses: Mutex::new(VecDeque::new()),
+            leases: Mutex::new(Vec::new()),
+            events: Mutex::new(Vec::new()),
+        });
+        let store_port: Arc<dyn GatewayServiceLogStore> = store.clone();
+        let fixture = start_drain_fixture_with_logs(
+            default_count_state(),
+            false,
+            false,
+            Duration::from_secs(2),
+            true,
+            Some(store_port),
+            Duration::from_secs(10),
+        )
+        .await;
+        let _ = fixture.vm.events.send(VmEvent::Log {
+            stream: vm_trait::LogStream::Stdout,
+            bytes: b"lifecycle log".to_vec(),
+        });
+        fixture.control.request_drain();
+        timeout(Duration::from_secs(1), store.append_started.notified())
+            .await
+            .expect("durable append started");
+        assert_eq!(fixture.vm.destroys.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            fixture
+                .ownership
+                .events
+                .lock()
+                .expect("ownership events")
+                .last()
+                .copied(),
+            Some("stopping")
+        );
+        store.blocked.store(false, Ordering::Relaxed);
+        store.release.notify_waiters();
+        assert!(fixture.task.await.expect("coordinator join").is_ok());
+        assert!(store.calls.load(Ordering::Relaxed) >= 1);
+        assert!(store.records.load(Ordering::Relaxed) >= 1);
+        assert_eq!(
+            fixture
+                .ownership
+                .events
+                .lock()
+                .expect("ownership events")
+                .last()
+                .copied(),
+            Some("cleaned")
+        );
+    }
+
+    #[tokio::test]
+    // Keep the fixture-owned VM and coordinator control alive until the
+    // joined task has completed its durable cleanup transition.
+    #[allow(clippy::significant_drop_tightening)]
+    async fn application_writer_flushes_while_ready_health_and_lease_renewal_continue() {
+        let store = Arc::new(LifecycleLogStore {
+            append_started: Notify::new(),
+            release: Notify::new(),
+            blocked: AtomicBool::new(false),
+            calls: AtomicUsize::new(0),
+            records: AtomicUsize::new(0),
+            responses: Mutex::new(VecDeque::new()),
+            leases: Mutex::new(Vec::new()),
+            events: Mutex::new(Vec::new()),
+        });
+        let store_port: Arc<dyn GatewayServiceLogStore> = store.clone();
+        let fixture = start_drain_fixture_with_logs(
+            default_count_state(),
+            false,
+            false,
+            Duration::from_secs(2),
+            true,
+            Some(store_port),
+            Duration::from_millis(10),
+        )
+        .await;
+        for _ in 0..32 {
+            let (client, peer) = tokio::io::duplex(4096);
+            fixture
+                .vm
+                .connections
+                .lock()
+                .expect("health connections")
+                .push_back(Box::new(client));
+            tokio::spawn(respond(peer));
+        }
+        let _ = fixture.vm.events.send(VmEvent::Log {
+            stream: vm_trait::LogStream::Stdout,
+            bytes: b"ready log".to_vec(),
+        });
+        timeout(Duration::from_secs(1), store.append_started.notified())
+            .await
+            .expect("ready append");
+        assert_eq!(
+            *fixture.status.borrow(),
+            GatewayServiceCoordinatorStatus::Ready
+        );
+        assert!(store.records.load(Ordering::Relaxed) >= 1);
+
+        store.blocked.store(true, Ordering::Relaxed);
+        let _ = fixture.vm.events.send(VmEvent::Log {
+            stream: vm_trait::LogStream::Stderr,
+            bytes: b"blocked log".to_vec(),
+        });
+        timeout(Duration::from_secs(2), store.append_started.notified())
+            .await
+            .expect("blocked append");
+        let opens_at_blocked_append = fixture.vm.opens.load(Ordering::Relaxed);
+        let renewals_at_blocked_append = fixture.ownership.renewals.load(Ordering::Relaxed);
+        timeout(Duration::from_secs(1), async {
+            while fixture.vm.opens.load(Ordering::Relaxed) <= opens_at_blocked_append
+                || fixture.ownership.renewals.load(Ordering::Relaxed) <= renewals_at_blocked_append
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("health and lease activity while append is blocked");
+        assert_eq!(
+            *fixture.status.borrow(),
+            GatewayServiceCoordinatorStatus::Ready
+        );
+
+        store.blocked.store(false, Ordering::Relaxed);
+        store.release.notify_waiters();
+        fixture.control.request_drain();
+        assert!(fixture.task.await.expect("coordinator join").is_ok());
+        assert!(store.calls.load(Ordering::Relaxed) >= 2);
+        assert!(store.records.load(Ordering::Relaxed) >= 2);
+    }
+
+    #[tokio::test]
+    // Keep the fixture-owned VM and coordinator control alive until the
+    // joined task has completed its durable cleanup transition.
+    #[allow(clippy::significant_drop_tightening)]
+    async fn disabled_capture_never_calls_configured_log_store() {
+        let store = Arc::new(LifecycleLogStore {
+            append_started: Notify::new(),
+            release: Notify::new(),
+            blocked: AtomicBool::new(false),
+            calls: AtomicUsize::new(0),
+            records: AtomicUsize::new(0),
+            responses: Mutex::new(VecDeque::new()),
+            leases: Mutex::new(Vec::new()),
+            events: Mutex::new(Vec::new()),
+        });
+        let store_port: Arc<dyn GatewayServiceLogStore> = store.clone();
+        let fixture = start_drain_fixture_with_logs(
+            default_count_state(),
+            false,
+            false,
+            Duration::from_secs(2),
+            false,
+            Some(store_port),
+            Duration::from_secs(10),
+        )
+        .await;
+        let _ = fixture.vm.events.send(VmEvent::Log {
+            stream: vm_trait::LogStream::Stdout,
+            bytes: b"disabled log".to_vec(),
+        });
+        fixture.control.request_drain();
+        assert!(fixture.task.await.expect("coordinator join").is_ok());
+        assert_eq!(store.calls.load(Ordering::Relaxed), 0);
+        assert_eq!(store.records.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    // Keep the fixture-owned VM and coordinator control alive until the
+    // joined task has completed its durable cleanup transition.
+    #[allow(clippy::significant_drop_tightening)]
+    async fn blocked_final_flush_delays_cleaned_but_not_vm_destroy() {
+        let store = Arc::new(LifecycleLogStore {
+            append_started: Notify::new(),
+            release: Notify::new(),
+            blocked: AtomicBool::new(true),
+            calls: AtomicUsize::new(0),
+            records: AtomicUsize::new(0),
+            responses: Mutex::new(VecDeque::new()),
+            leases: Mutex::new(Vec::new()),
+            events: Mutex::new(Vec::new()),
+        });
+        let store_port: Arc<dyn GatewayServiceLogStore> = store.clone();
+        let fixture = start_drain_fixture_with_logs(
+            default_count_state(),
+            false,
+            false,
+            Duration::from_secs(2),
+            true,
+            Some(store_port),
+            Duration::from_secs(10),
+        )
+        .await;
+        let _ = fixture.vm.events.send(VmEvent::Log {
+            stream: vm_trait::LogStream::Stdout,
+            bytes: b"flush deadline".to_vec(),
+        });
+        let flush_started = std::time::Instant::now();
+        fixture.control.request_drain();
+        timeout(Duration::from_secs(1), store.append_started.notified())
+            .await
+            .expect("blocked append");
+        assert_eq!(fixture.vm.destroys.load(Ordering::Relaxed), 1);
+        let mut task = fixture.task;
+        assert!(
+            timeout(Duration::from_millis(500), &mut task)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            fixture
+                .ownership
+                .events
+                .lock()
+                .expect("ownership events")
+                .last()
+                .copied(),
+            Some("stopping")
+        );
+        assert!(
+            timeout(Duration::from_secs(4), &mut task)
+                .await
+                .expect("bounded final flush")
+                .expect("coordinator join")
+                .is_ok()
+        );
+        assert!(flush_started.elapsed() >= Duration::from_millis(1_500));
+        assert_eq!(
+            fixture
+                .ownership
+                .events
+                .lock()
+                .expect("ownership events")
+                .last()
+                .copied(),
+            Some("cleaned")
+        );
+    }
+
+    #[tokio::test]
+    // Keep the fixture-owned VM and coordinator control alive until the
+    // joined task has completed its durable cleanup transition.
+    #[allow(clippy::significant_drop_tightening)]
+    async fn stale_log_lease_stops_appends_without_rebinding_fence() {
+        let store = Arc::new(LifecycleLogStore {
+            append_started: Notify::new(),
+            release: Notify::new(),
+            blocked: AtomicBool::new(false),
+            calls: AtomicUsize::new(0),
+            records: AtomicUsize::new(0),
+            responses: Mutex::new(VecDeque::from([Err(
+                crate::GatewayServiceLogStoreError::StaleLease,
+            )])),
+            leases: Mutex::new(Vec::new()),
+            events: Mutex::new(Vec::new()),
+        });
+        let store_port: Arc<dyn GatewayServiceLogStore> = store.clone();
+        let fixture = start_drain_fixture_with_logs(
+            default_count_state(),
+            false,
+            false,
+            Duration::from_secs(2),
+            true,
+            Some(store_port),
+            Duration::from_secs(10),
+        )
+        .await;
+        let _ = fixture.vm.events.send(VmEvent::Log {
+            stream: vm_trait::LogStream::Stdout,
+            bytes: b"stale lease".to_vec(),
+        });
+        timeout(Duration::from_secs(1), store.append_started.notified())
+            .await
+            .expect("stale append");
+        tokio::task::yield_now().await;
+        for _ in 0..3 {
+            let _ = fixture.vm.events.send(VmEvent::Log {
+                stream: vm_trait::LogStream::Stdout,
+                bytes: b"after stale".to_vec(),
+            });
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(store.calls.load(Ordering::Relaxed), 1);
+        assert_eq!(store.records.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            store.leases.lock().expect("log store leases").as_slice(),
+            &[(fixture.key.identity, fixture.key.fencing_token)]
+        );
+        fixture.control.request_drain();
+        assert!(fixture.task.await.expect("coordinator join").is_ok());
     }
 
     fn drain_request() -> GatewayRequest {
@@ -4130,5 +4600,123 @@ mod tests {
         );
         assert_eq!(vm.destroys.load(Ordering::Relaxed), 1);
         assert_eq!(resolver.cleanups.load(Ordering::Relaxed), 1);
+    }
+
+    struct LifecycleLogStore {
+        append_started: Notify,
+        release: Notify,
+        blocked: AtomicBool,
+        calls: AtomicUsize,
+        records: AtomicUsize,
+        responses: Mutex<
+            VecDeque<
+                Result<crate::GatewayServiceLogAppendOutcome, crate::GatewayServiceLogStoreError>,
+            >,
+        >,
+        leases: Mutex<Vec<(GatewayServiceIdentity, i64)>>,
+        events: Mutex<Vec<&'static str>>,
+    }
+
+    #[async_trait]
+    impl GatewayServiceLogStore for LifecycleLogStore {
+        async fn append_batch(
+            &self,
+            lease: &GatewayServiceInstanceLease,
+            _: &GatewayServiceOwner,
+            batch: crate::GatewayServiceLogAppendBatch,
+        ) -> Result<crate::GatewayServiceLogAppendOutcome, crate::GatewayServiceLogStoreError>
+        {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            self.records
+                .fetch_add(batch.records.len(), Ordering::Relaxed);
+            self.leases
+                .lock()
+                .expect("log store leases")
+                .push((lease.identity, lease.fencing_token));
+            self.append_started.notify_one();
+            if self.blocked.load(Ordering::Relaxed) {
+                self.release.notified().await;
+            }
+            self.events
+                .lock()
+                .expect("log store events")
+                .push("log-flush");
+            self.responses
+                .lock()
+                .expect("log store responses")
+                .pop_front()
+                .unwrap_or_else(|| Ok(crate::GatewayServiceLogAppendOutcome::default()))
+        }
+    }
+
+    #[tokio::test]
+    async fn lifecycle_writer_does_not_starve_worker_and_flushes_after_teardown() {
+        let identity = identity();
+        let owner = GatewayServiceOwner::new("writer-test-host", Uuid::new_v4()).expect("owner");
+        let lease = lease(&owner, identity);
+        let store = Arc::new(LifecycleLogStore {
+            append_started: Notify::new(),
+            release: Notify::new(),
+            blocked: AtomicBool::new(true),
+            calls: AtomicUsize::new(0),
+            records: AtomicUsize::new(0),
+            responses: Mutex::new(VecDeque::new()),
+            leases: Mutex::new(Vec::new()),
+            events: Mutex::new(Vec::new()),
+        });
+        let store_port: Arc<dyn GatewayServiceLogStore> = store.clone();
+        let buffer = crate::ServiceLogBufferHandle::new();
+        buffer.try_record(
+            vm_trait::LogStream::Stdout,
+            ::time::OffsetDateTime::UNIX_EPOCH,
+            b"ready-service-log",
+        );
+        let writer = ServiceLogWriter::new(
+            buffer,
+            store_port,
+            lease,
+            owner,
+            ServiceLogWriterPolicy::default(),
+        )
+        .expect("writer");
+        let worker_events = Arc::clone(&store);
+        let worker: WorkerFuture = Box::pin(async move {
+            worker_events.append_started.notified().await;
+            worker_events
+                .events
+                .lock()
+                .expect("worker events")
+                .push("destroyed");
+            worker_events.blocked.store(false, Ordering::Relaxed);
+            worker_events.release.notify_waiters();
+            Ok(())
+        });
+
+        timeout(
+            Duration::from_secs(1),
+            drive_worker_with_logs(worker, writer),
+        )
+        .await
+        .expect("worker and bounded log flush")
+        .expect("worker result");
+        assert!(store.calls.load(Ordering::Relaxed) >= 1);
+        assert!(store.records.load(Ordering::Relaxed) >= 1);
+        assert_eq!(
+            store
+                .events
+                .lock()
+                .expect("log store events")
+                .first()
+                .copied(),
+            Some("destroyed")
+        );
+        assert!(
+            store
+                .events
+                .lock()
+                .expect("log store events")
+                .iter()
+                .all(|event| *event == "destroyed" || *event == "log-flush")
+        );
     }
 }

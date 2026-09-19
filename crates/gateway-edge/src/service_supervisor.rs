@@ -23,9 +23,9 @@ use crate::{
     GatewayServiceCleanupDriverPolicy, GatewayServiceCoordinator, GatewayServiceCoordinatorFailure,
     GatewayServiceCoordinatorFailureReason, GatewayServiceCoordinatorStatus, GatewayServiceFailure,
     GatewayServiceFailureStore, GatewayServiceInstanceLease, GatewayServiceLaunchResolver,
-    GatewayServiceOwner, GatewayServiceOwnership, GatewayServiceOwnershipError,
-    GatewayServiceRegistry, GatewayServiceStartupIntent, GatewayServiceSupervisorPolicy,
-    GatewayServiceTargetStore,
+    GatewayServiceLogWriterConfig, GatewayServiceOwner, GatewayServiceOwnership,
+    GatewayServiceOwnershipError, GatewayServiceRegistry, GatewayServiceStartupIntent,
+    GatewayServiceSupervisorPolicy, GatewayServiceTargetStore,
 };
 
 /// Validated immutable dependencies shared by all startup jobs.
@@ -183,6 +183,7 @@ pub enum GatewayServiceSupervisorError {
 /// Parent-owned bounded set of concurrent startup jobs.
 pub struct GatewayServiceSupervisor {
     context: Arc<GatewayServiceSupervisorContext>,
+    log_writer: Option<GatewayServiceLogWriterConfig>,
     capacity: Arc<Mutex<GatewayServiceCapacity>>,
     jobs: Vec<Pin<Box<dyn Future<Output = JobCompletion> + Send>>>,
     cleanup_jobs: Vec<Pin<Box<dyn Future<Output = CleanupCompletion> + Send>>>,
@@ -223,12 +224,20 @@ impl GatewayServiceSupervisor {
             .map_err(GatewayServiceSupervisorError::Capacity)?;
         Ok(Self {
             context: Arc::new(context),
+            log_writer: None,
             capacity: Arc::new(Mutex::new(capacity)),
             jobs: Vec::new(),
             cleanup_jobs: Vec::new(),
             claim_resolution_jobs: Vec::new(),
             records: HashMap::new(),
         })
+    }
+
+    /// Attaches an optional worker-owned durable application-log writer.
+    #[must_use]
+    pub fn with_log_writer(mut self, config: GatewayServiceLogWriterConfig) -> Self {
+        self.log_writer = Some(config);
+        self
     }
 
     /// Starts one bounded job after reserving capacity before claim.
@@ -305,6 +314,7 @@ impl GatewayServiceSupervisor {
                 startup_deadline,
             },
             Arc::clone(&self.context),
+            self.log_writer.clone(),
             Arc::clone(&self.capacity),
             cancellation.clone(),
             status,
@@ -967,6 +977,7 @@ async fn run_job(
     token: GatewayServiceCapacityToken,
     deadlines: StartupDeadlines,
     context: Arc<GatewayServiceSupervisorContext>,
+    log_writer: Option<GatewayServiceLogWriterConfig>,
     capacity: Arc<Mutex<GatewayServiceCapacity>>,
     cancellation: CancellationToken,
     status: watch::Sender<GatewayServiceSupervisorJobStatus>,
@@ -1106,7 +1117,14 @@ async fn run_job(
     };
     let coordinator_status = control.subscribe();
     let mut coordinator_status = coordinator_status;
-    let mut run = Box::pin(coordinator.run());
+    let mut run = Box::pin(
+        (if let Some(config) = log_writer {
+            coordinator.with_log_writer(config)
+        } else {
+            coordinator
+        })
+        .run(),
+    );
     let mut cancel_sent = false;
     let mut startup_finished = false;
     let mut status_open = true;

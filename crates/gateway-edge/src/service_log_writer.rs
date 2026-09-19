@@ -18,6 +18,14 @@ use crate::{
 
 const MAX_APPEND_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_RETRY_INTERVAL: Duration = Duration::from_secs(60);
+/// Default timeout for one durable append.
+pub const DEFAULT_SERVICE_LOG_APPEND_TIMEOUT: Duration = Duration::from_secs(2);
+/// Default initial delay between unavailable appends.
+pub const DEFAULT_SERVICE_LOG_RETRY_INTERVAL: Duration = Duration::from_millis(250);
+/// Default maximum delay between unavailable appends.
+pub const DEFAULT_SERVICE_LOG_MAX_RETRY_INTERVAL: Duration = Duration::from_secs(5);
+/// Default deadline for the final worker log flush.
+pub const DEFAULT_SERVICE_LOG_FINAL_FLUSH_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Retry and database wait bounds for one parent-owned log writer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,6 +63,16 @@ impl ServiceLogWriterPolicy {
             return Err(ServiceLogWriterError::InvalidPolicy);
         }
         Ok(())
+    }
+}
+
+impl Default for ServiceLogWriterPolicy {
+    fn default() -> Self {
+        Self::new(
+            DEFAULT_SERVICE_LOG_APPEND_TIMEOUT,
+            DEFAULT_SERVICE_LOG_RETRY_INTERVAL,
+            DEFAULT_SERVICE_LOG_MAX_RETRY_INTERVAL,
+        )
     }
 }
 
