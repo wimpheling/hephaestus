@@ -17,6 +17,7 @@ use uuid::Uuid;
 use vm_trait::{PrivateHttpRequest, PrivateHttpResponse, PrivateMailboxPublication, VmInstance};
 
 mod integration;
+mod service_capacity;
 mod service_execution;
 mod service_handler;
 mod service_http;
@@ -30,6 +31,14 @@ mod service_registry;
 mod service_targets;
 
 pub use integration::caddy::LocalCaddyAdministration;
+pub use service_capacity::{
+    DEFAULT_SERVICE_DRAIN_TIMEOUT, DEFAULT_SERVICE_HEALTH_FAILURES,
+    DEFAULT_SERVICE_HEALTH_INTERVAL, DEFAULT_SERVICE_MAX_REVISIONS_PER_GATEWAY,
+    DEFAULT_SERVICE_MAX_STARTUPS, DEFAULT_SERVICE_REPLACEMENT_CAPACITY,
+    DEFAULT_SERVICE_REQUEST_CAPACITY, DEFAULT_SERVICE_SERVING_CAPACITY, GatewayServiceCapacity,
+    GatewayServiceCapacityError, GatewayServiceCapacitySnapshot, GatewayServiceCapacityToken,
+    GatewayServiceSupervisorPolicy,
+};
 pub use service_execution::{
     GatewayExecutionTarget, GatewayExecutionTargetError, GatewayExecutionTargetResolver,
     GatewayServiceAuthorityBudget,

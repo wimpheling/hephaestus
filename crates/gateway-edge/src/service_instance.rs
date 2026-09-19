@@ -41,7 +41,7 @@ pub enum ServiceWorkerState {
 }
 
 /// Bounded lifecycle policy selected by the platform.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ServiceInstancePolicy {
     /// Total time allowed for VM start and readiness.
     pub startup_timeout: Duration,
@@ -70,7 +70,7 @@ impl ServiceInstancePolicy {
         }
     }
 
-    fn validate(self) -> Result<(), ServiceInstanceError> {
+    pub(crate) fn validate(self) -> Result<(), ServiceInstanceError> {
         if self.startup_timeout.is_zero()
             || self.startup_timeout > MAX_STARTUP_TIMEOUT
             || self.probe_interval.is_zero()

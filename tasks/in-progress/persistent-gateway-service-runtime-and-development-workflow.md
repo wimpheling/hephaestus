@@ -670,6 +670,15 @@ check, strict Clippy, formatting, and 58 library tests passed.
   Full edge verification passed 65 unit tests plus the Caddy ingress test and
   strict all-target Clippy. Supervisor reaction to lease loss remains pending.
 
+- [x] Add supervisor policy and explicit persistent-service capacity accounting.
+  The validated defaults reserve eight serving gateways plus two replacement
+  slots, allow two revisions per gateway, two simultaneous startups, and
+  sixteen requests per instance. Reservations use unique exact tokens, remain
+  counted through draining or cleanup failure, release startup allowance only
+  after `finish_startup`, and release live capacity only through explicit
+  post-cleanup completion. Capacity tests passed eight cases; isolated
+  gateway-edge tests and strict Clippy passed on the committed checkpoint.
+
 ## Non-goals
 
 This task does not replace MVP 03's bounded stateless invocation mode. It does
