@@ -2138,3 +2138,26 @@ stderr sentinel test passed. A diagnostic retry should set
 `HEPHAESTUS_LIBKRUN_DIAGNOSTICS_DIR`, `HEPH_GCP_PHASE_TIMING_PATH`, and
 `HEPHAESTUS_EXTERNAL_DAEMON_LOG` to dedicated `/home/a` paths before rerun;
 candidate acceptance remains pending.
+
+Real third-revision capacity checkpoint (2026-09-19): the owned external
+daemon/Caddy/libkrun test passed 35 golden tests (one ignored) and eight
+PostgreSQL tests in
+`/home/a/heph-candidate-capacity-real-vm-20260919-v3.log`, emitting
+`REAL_GATEWAY_SERVICE_CANDIDATE_CAPACITY_E2E=1`. It observed A draining with
+its accepted request unresolved, B ready/active, and no historical C instance
+rows, then continued consistent-snapshot checks through A cleanup. After A
+was durably cleaned and its paths were gone, C became ready/active and served
+a distinct stable startup identity. B subsequently cleaned up; shutdown
+removed C's runtime, cgroup and materializer paths too. Instances were
+A `8e88e175-f00b-45c0-a627-1b049d601280`,
+B `efc6501d-81a6-444c-ac95-4e4970558be0`, and
+C `1d230bcf-0c2a-44a3-bf92-b7a2e008ea97`.
+Golden compilation and strict golden Clippy passed in
+`/home/a/heph-candidate-capacity-golden-compile-20260919-v2.log` and
+`/home/a/heph-candidate-capacity-golden-clippy-20260919-v2.log`.
+The earlier readable diagnostic run reached C promotion but failed an
+overly synchronous B-state assertion. Promotion commits the new active
+revision before paced reconciliation drains B, so the corrected test requires
+bounded eventual B cleanup; the A/C admission invariant was not relaxed.
+Failure evidence remains in
+`/home/a/heph-candidate-capacity-real-vm-20260919-diagnostic.log`.
