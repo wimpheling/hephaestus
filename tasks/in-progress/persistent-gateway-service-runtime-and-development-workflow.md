@@ -103,12 +103,14 @@ single-use challenge over the control channel, and libkrun maps the guest
 service vsock port to the per-VM Unix socket without passt or IP networking.
 The guest now validates service mode before launch, brings up only `lo`,
 injects the declared loopback endpoint, and bridges bounded authenticated raw
-connections with cancellation and half-close handling. The second real-VM
-attempt reached guest isolation, HTTP readiness, health, identity,
-delayed-response concurrency, and capacity checks, but active-connection
-cleanup still fails at private-service reservation expiry. Full transport
-teardown acceptance, Caddy forwarding, lifecycle, and release UI remain
-unchecked.
+connections with cancellation and half-close handling. Admission has separate
+bounded pending and active slots, and one setup deadline covers scheduling,
+admission, vsock connection, loopback connection, and handshake; forwarding
+uses a separate bounded idle-I/O policy. The fourth real-VM attempt passed the
+private transport, loopback HTTP readiness/health/identity, delayed-response
+concurrency, capacity teardown and reopen, destroy, graceful shutdown, and
+runtime/cgroup cleanup scenarios. HTTP readiness supervision, Caddy forwarding,
+managed lifecycle recovery, and release UI remain unchecked.
 
 - [x] Finish focused VM contract tests and workspace compatibility checks:
   `cargo test -p vm-trait`, `cargo test -p vm-libkrun --lib`,
@@ -147,12 +149,16 @@ unchecked.
 - [x] Implement the guest-side bridge slice: validate service settings and
   service-only authority exclusions, enable guest loopback via ioctl, inject
   `HEPH_SERVICE_HOST`/`HEPH_SERVICE_PORT`, authenticate on the dedicated vsock,
-  enforce the declared connection cap, forward both directions with half-close
-  semantics, and close active connections on cancellation, control EOF, or child
-  exit. Evidence: `cargo test -p vm-libkrun --bin heph-init` (14 passed),
-  focused guest-binary Clippy, formatting, and `cargo check -p vm-libkrun
-  --bin heph-init` pass. Total-deadline review and full real VM transport
-  acceptance remain unchecked.
+  enforce bounded pending and active connection caps, forward both directions
+  with half-close semantics, and close active connections on cancellation,
+  control EOF, or child exit. One total setup deadline covers pending admission
+  and connection setup. Evidence: `cargo test -p vm-libkrun --bin heph-init`
+  (15 passed), focused guest-binary Clippy, the exact musl guest build, and
+  formatting pass. `scripts/run-libkrun-integration.sh` passed once in
+  `/tmp/heph-libkrun-integration-20260919-attempt4.log` (1 test, 7.26s),
+  including private transport capacity teardown/reopen and cleanup. HTTP
+  readiness supervision, Caddy forwarding, managed lifecycle recovery, and
+  release UI remain unchecked.
 
 ## Implementation checklist
 
@@ -182,8 +188,10 @@ unchecked.
     for main-thread review.
   - [x] Implement guest loopback ownership and authenticated host-to-guest
     forwarding on the reviewed transport; reject arbitrary guest TCP exposure
-    and unauthorized host access. Focused guest tests pass; total-deadline
-    review and real VM transport acceptance remain unchecked.
+    and unauthorized host access. The bridge has bounded pending and active
+    slots and one total admission/setup deadline. Focused guest tests and the
+    fourth real-VM transport acceptance pass; HTTP readiness supervision and
+    lifecycle behavior remain unchecked.
   - [ ] Implement readiness, health, request, connection, response-size, and
     in-flight resource limits with deterministic timeout and cancellation
     semantics.

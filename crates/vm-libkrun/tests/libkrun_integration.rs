@@ -22,9 +22,9 @@ use vm_conformance::ProviderHarness;
 use vm_libkrun::{LibkrunConfig, LibkrunProvider};
 use vm_trait::{
     DiskFormat, GuestCommand, LogStream, NetworkMode, PortForward, PortProtocol,
-    PrivateHttpRequest, RUNTIME_AUTHORITY_CREDENTIAL_BYTES, RootFilesystem,
-    RuntimeAuthorityBootstrap, StopMode, VmDisk, VmError, VmEvent, VmId, VmMount, VmProvider,
-    VmResources, VmSpec,
+    PrivateHttpRequest, PrivateHttpServiceSpec, RUNTIME_AUTHORITY_CREDENTIAL_BYTES, RootFilesystem,
+    RuntimeAuthorityBootstrap, StopMode, VmDisk, VmError, VmEvent, VmId, VmInstance, VmMount,
+    VmProvider, VmResources, VmSpec,
 };
 
 const ENABLE_FLAG: &str = "HEPHAESTUS_LIBKRUN_INTEGRATION";
@@ -306,6 +306,97 @@ async fn boots_and_exercises_guest_runtime_without_privilege_escalation() {
     assert!(!runtime_root.join(&gateway_id).exists());
     assert!(!cgroup_root_for_assertion.join(&gateway_id).exists());
     assert!(!cgroup_root_for_assertion.join(&persisted_id).exists());
+
+    let service_spec = private_service_spec(rootfs.clone());
+    assert!(service_spec.runtime_authority.is_none());
+    assert!(matches!(service_spec.network, NetworkMode::Disabled));
+    assert!(
+        !service_spec
+            .labels
+            .contains_key("hephaestus.gateway.handler-contract")
+    );
+    let service = provider
+        .provision(service_spec)
+        .await
+        .expect("provision persistent private service VM");
+    let service_id = service.id().0.clone();
+    let mut service_events = service.subscribe_events();
+    service
+        .start()
+        .await
+        .expect("start persistent private service VM");
+    wait_for_service_isolation(&mut service_events).await;
+
+    let ready = poll_private_service(&service, "/readyz").await;
+    assert_eq!(ready.0, 200, "service readiness response: {ready:?}");
+    assert_eq!(ready.1, b"ready");
+    assert_eq!(
+        poll_private_service(&service, "/healthz").await,
+        (200, b"healthy".to_vec())
+    );
+
+    let identity_one = parse_service_identity(&poll_private_service(&service, "/identity").await);
+    let identity_two = parse_service_identity(&poll_private_service(&service, "/identity").await);
+    assert_eq!(identity_one["pid"], identity_two["pid"]);
+    assert_eq!(identity_one["startup_id"], identity_two["startup_id"]);
+
+    let delayed_vm = Arc::clone(&service);
+    let delayed =
+        tokio::spawn(async move { private_service_request(&delayed_vm, "/delay/1500").await });
+    wait_for_log(&mut service_events, "private-service-delay=started").await;
+    let health = tokio::time::timeout(
+        Duration::from_secs(1),
+        private_service_request(&service, "/healthz"),
+    )
+    .await
+    .expect("health request did not complete while delayed request was active")
+    .expect("concurrent health response");
+    assert_eq!(health, (200, b"healthy".to_vec()));
+    assert!(
+        !delayed.is_finished(),
+        "delayed request completed too early"
+    );
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(5), delayed)
+            .await
+            .expect("delayed service response timeout")
+            .expect("delayed service task")
+            .expect("delayed service response")
+            .0,
+        200
+    );
+
+    let held_one = service
+        .open_private_service_connection()
+        .await
+        .expect("first service capacity connection");
+    let held_two = service
+        .open_private_service_connection()
+        .await
+        .expect("second service capacity connection");
+    assert!(matches!(
+        service.open_private_service_connection().await,
+        Err(VmError::Unavailable { .. })
+    ));
+    drop(held_one);
+    drop(held_two);
+
+    let active = service
+        .open_private_service_connection()
+        .await
+        .expect("active service connection before destroy");
+    service
+        .destroy()
+        .await
+        .expect("destroy persistent service VM");
+    let mut active = active;
+    let mut closed = [0_u8; 1];
+    let close_result = tokio::time::timeout(Duration::from_secs(5), active.read(&mut closed))
+        .await
+        .expect("destroy closes active service stream");
+    assert!(matches!(close_result, Err(_) | Ok(0)));
+    assert!(!runtime_root.join(&service_id).exists());
+    assert!(!cgroup_root_for_assertion.join(&service_id).exists());
 
     let graceful = provider
         .provision(long_running_spec(rootfs_for_graceful_test, "graceful"))
@@ -785,6 +876,125 @@ fn private_http_spec(rootfs: PathBuf) -> VmSpec {
     }
 }
 
+fn private_service_spec(rootfs: PathBuf) -> VmSpec {
+    VmSpec {
+        id: VmId(format!(
+            "integration-private-service-{}",
+            std::process::id()
+        )),
+        root: RootFilesystem::Directory { host_path: rootfs },
+        disks: Vec::new(),
+        mounts: Vec::new(),
+        resources: VmResources {
+            vcpus: 1,
+            memory_mib: 512,
+        },
+        network: NetworkMode::Disabled,
+        private_http_service: Some(PrivateHttpServiceSpec {
+            loopback_port: 8080,
+            max_connections: 2,
+            connect_timeout: Duration::from_secs(2),
+        }),
+        command: GuestCommand {
+            program: "/usr/libexec/hephaestus/integration-check".to_owned(),
+            args: vec!["--serve-service".to_owned()],
+            env: BTreeMap::from([
+                (
+                    String::from("HEPH_SERVICE_STARTUP_DELAY_MS"),
+                    String::from("250"),
+                ),
+                (
+                    String::from("HEPH_SERVICE_ISOLATION_CHECK"),
+                    String::from("1"),
+                ),
+            ]),
+            working_dir: Some(PathBuf::from("/")),
+        },
+        runtime_authority: None,
+        labels: BTreeMap::new(),
+    }
+}
+
+async fn poll_private_service(vm: &Arc<dyn VmInstance>, path: &str) -> (u16, Vec<u8>) {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            match private_service_request(vm, path).await {
+                Ok(response) if response.0 == 200 => return response,
+                Ok(_) | Err(_) => tokio::time::sleep(Duration::from_millis(50)).await,
+            }
+        }
+    })
+    .await
+    .expect("private service readiness polling timeout")
+}
+
+async fn private_service_request(
+    vm: &Arc<dyn VmInstance>,
+    path: &str,
+) -> io::Result<(u16, Vec<u8>)> {
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        private_service_request_inner(vm, path),
+    )
+    .await
+    .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "private service request timeout"))?
+}
+
+async fn private_service_request_inner(
+    vm: &Arc<dyn VmInstance>,
+    path: &str,
+) -> io::Result<(u16, Vec<u8>)> {
+    const MAX_SERVICE_RESPONSE_BYTES: usize = 64 * 1024;
+    let mut stream = vm
+        .open_private_service_connection()
+        .await
+        .map_err(|error| io::Error::other(error.to_string()))?;
+    stream
+        .write_all(
+            format!("GET {path} HTTP/1.1\r\nHost: guest\r\nConnection: close\r\n\r\n").as_bytes(),
+        )
+        .await?;
+    let mut response = Vec::new();
+    let mut limited = stream.take((MAX_SERVICE_RESPONSE_BYTES + 1) as u64);
+    limited.read_to_end(&mut response).await?;
+    if response.len() > MAX_SERVICE_RESPONSE_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "private service response exceeds test limit",
+        ));
+    }
+    let header_end = response
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "service response has no headers",
+            )
+        })?;
+    let status = std::str::from_utf8(&response[..header_end])
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "service response is not UTF-8"))?
+        .lines()
+        .next()
+        .and_then(|line| line.split_ascii_whitespace().nth(1))
+        .ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidData, "service response has no status")
+        })?
+        .parse::<u16>()
+        .map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "service response status is invalid",
+            )
+        })?;
+    Ok((status, response[header_end + 4..].to_vec()))
+}
+
+fn parse_service_identity(response: &(u16, Vec<u8>)) -> serde_json::Value {
+    assert_eq!(response.0, 200);
+    serde_json::from_slice(&response.1).expect("service identity JSON")
+}
+
 async fn collect_logs_until_exit(events: &mut tokio::sync::broadcast::Receiver<VmEvent>) -> String {
     tokio::time::timeout(Duration::from_secs(30), async {
         let mut logs = String::new();
@@ -862,6 +1072,29 @@ async fn wait_for_log(events: &mut tokio::sync::broadcast::Receiver<VmEvent>, ex
     })
     .await
     .expect("guest log marker timeout");
+}
+
+async fn wait_for_service_isolation(events: &mut tokio::sync::broadcast::Receiver<VmEvent>) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let mut started = false;
+        loop {
+            match events.recv().await.expect("service guest event") {
+                VmEvent::Started { ingress } => {
+                    assert!(ingress.is_empty(), "private service received ingress");
+                    started = true;
+                }
+                VmEvent::Log { bytes, .. }
+                    if String::from_utf8_lossy(&bytes).contains("private-service-isolation=ok") =>
+                {
+                    assert!(started, "service isolation marker preceded VM start event");
+                    return;
+                }
+                _ => {}
+            }
+        }
+    })
+    .await
+    .expect("service isolation marker timeout");
 }
 
 fn sqlite_previous_rows(markers: &str) -> u64 {

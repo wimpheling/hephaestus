@@ -34,6 +34,9 @@ const SERVICE_MAX_BODY_BYTES: usize = 16 * 1024;
 const SERVICE_MAX_DELAY_MS: u64 = 5_000;
 const SERVICE_IO_TIMEOUT: Duration = Duration::from_secs(5);
 const SERVICE_CRASH_EXIT_CODE: i32 = 42;
+const SERVICE_ISOLATION_CHECK_ENV: &str = "HEPH_SERVICE_ISOLATION_CHECK";
+const RUNTIME_AUTHORITY_ENV: &str = "HEPH_RUNTIME_AUTHORITY_PATH";
+const RUNTIME_AUTHORITY_FILE: &str = "/run/hephaestus-authority/session.json";
 use vm_libkrun::protocol::{
     PrivateHttpRequestMessage, PrivateHttpResponseMessage, PrivateMailboxPublicationMessage,
 };
@@ -379,6 +382,9 @@ fn serve_http() -> io::Result<()> {
 /// bounded request count. That keeps later transport tests deterministic while
 /// still proving concurrent requests reach one persistent process.
 fn serve_service() -> io::Result<()> {
+    if std::env::var(SERVICE_ISOLATION_CHECK_ENV).as_deref() == Ok("1") {
+        verify_private_service_isolation()?;
+    }
     let port = service_port()?;
     let startup_delay = service_delay_from_env("HEPH_SERVICE_STARTUP_DELAY_MS")?;
     let request_delay = service_delay_from_env("HEPH_SERVICE_REQUEST_DELAY_MS")?;
@@ -439,6 +445,24 @@ fn serve_service() -> io::Result<()> {
     }
 }
 
+fn verify_private_service_isolation() -> io::Result<()> {
+    if std::env::var_os(RUNTIME_AUTHORITY_ENV).is_some() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "private service received a runtime authority environment path",
+        ));
+    }
+    if Path::new(RUNTIME_AUTHORITY_FILE).exists() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "private service found a runtime authority file",
+        ));
+    }
+    expect_network_disabled().map_err(|error| io::Error::other(error.to_string()))?;
+    println!("private-service-isolation=ok");
+    Ok(())
+}
+
 fn serve_service_connection(
     mut stream: TcpStream,
     startup_id: &str,
@@ -470,6 +494,7 @@ fn serve_service_connection(
         }
     };
     if !delay.is_zero() {
+        eprintln!("private-service-delay=started target={target}");
         thread::sleep(delay);
     }
     let path = target

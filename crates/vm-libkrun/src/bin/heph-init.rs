@@ -25,6 +25,9 @@ use vm_libkrun::protocol::{
 };
 use zeroize::Zeroizing;
 
+#[path = "heph-init/service.rs"]
+mod service;
+
 const CONTROL_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const PLATFORM_OCI_BUILDER_ENV: &str = "HEPH_PLATFORM_OCI_BUILDER";
 const PLATFORM_OCI_BUILDER_PROGRAM: &str = "/usr/libexec/hephaestus/oci-build";
@@ -70,10 +73,17 @@ fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if version != PROTOCOL_VERSION {
         return Err(format!("unsupported host protocol version {version}").into());
     }
-    if private_http_service.is_some() {
+    let service_config = private_http_service
+        .as_ref()
+        .map(service::ServiceConfig::try_from)
+        .transpose()
+        .inspect_err(|error| {
+            send_guest_error(&mut control, "private-http-service", error);
+        })?;
+    if service_config.is_some() && (gateway_handler || runtime_authority.is_some()) {
         let error = io::Error::new(
-            io::ErrorKind::Unsupported,
-            "private HTTP service transport is not implemented",
+            io::ErrorKind::InvalidInput,
+            "private HTTP services cannot use gateway handlers or runtime authority",
         );
         send_guest_error(&mut control, "private-http-service", &error);
         return Err(error.into());
@@ -83,10 +93,14 @@ fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // at `/run/hephaestus`. A read-only nested virtiofs mount can otherwise
     // make its parent unsuitable for creating the sibling authority directory
     // on some libkrun/FUSE combinations.
-    let runtime_authority_ack = runtime_authority
-        .as_deref()
-        .map(|authority| persist_runtime_authority(authority, &command))
-        .transpose()?;
+    let runtime_authority_ack = if service_config.is_some() {
+        None
+    } else {
+        runtime_authority
+            .as_deref()
+            .map(|authority| persist_runtime_authority(authority, &command))
+            .transpose()?
+    };
 
     for mount in mounts {
         if let Err(error) = mount_virtiofs(&mount.tag, &mount.guest_path, mount.read_only) {
@@ -158,6 +172,12 @@ fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     {
         provision_guest_open_files()?;
     }
+    if service_config.is_some() {
+        if let Err(error) = service::bring_up_loopback() {
+            send_guest_error(&mut control, "private-http-service-loopback", &error);
+            return Err(error.into());
+        }
+    }
     let mut child = Command::new(&command.program);
     child
         .args(&command.args)
@@ -171,6 +191,11 @@ fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if let Some(config) = service_config.as_ref() {
+        child
+            .env(service::SERVICE_HOST_ENV, service::SERVICE_HOST)
+            .env(service::SERVICE_PORT_ENV, config.loopback_port.to_string());
+    }
     if !platform_oci_operation.runs_as_root() {
         child.uid(AGENT_UID).gid(AGENT_GID);
     }
@@ -208,11 +233,23 @@ fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .ok_or("command stderr pipe is unavailable")?;
     let stdout_thread = pump_logs(stdout, GuestLogStream::Stdout, Arc::clone(&writer));
     let stderr_thread = pump_logs(stderr, GuestLogStream::Stderr, Arc::clone(&writer));
-    let control_thread = handle_host_messages(control, Arc::clone(&writer), child.id());
+    let service_supervisor = service_config.map(service::ServiceSupervisor::new);
+    let control_thread = handle_host_messages(
+        control,
+        Arc::clone(&writer),
+        child.id(),
+        service_supervisor.clone(),
+    );
 
     let status = wait_command(&mut child)?;
+    if let Some(supervisor) = service_supervisor.as_ref() {
+        supervisor.cancel();
+    }
     join_log_thread(stdout_thread)?;
     join_log_thread(stderr_thread)?;
+    if let Some(supervisor) = service_supervisor {
+        supervisor.join_all();
+    }
     let (code, signal) = exit_parts(status);
     if let Some(path) = mounted_state {
         unmount(&path)?;
@@ -796,18 +833,31 @@ fn handle_host_messages(
     mut control: File,
     writer: Arc<Mutex<File>>,
     child_pid: u32,
+    service_supervisor: Option<service::ServiceSupervisor>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         while let Ok(message) = read_frame::<HostMessage>(&mut control) {
             match message {
                 HostMessage::Cancel { .. } => {
+                    if let Some(supervisor) = service_supervisor.as_ref() {
+                        supervisor.cancel();
+                    }
                     let _signal_result = signal_process(child_pid, libc::SIGTERM);
                 }
                 HostMessage::HealthPing { nonce } => {
                     let _write_result = write_message(&writer, &GuestMessage::Health { nonce });
                 }
+                HostMessage::OpenPrivateServiceConnection { connection } => {
+                    if let Some(supervisor) = service_supervisor.as_ref() {
+                        supervisor.open(connection);
+                    }
+                }
                 _ => {}
             }
+        }
+        if let Some(supervisor) = service_supervisor {
+            supervisor.cancel();
+            let _signal_result = signal_process(child_pid, libc::SIGTERM);
         }
     })
 }
@@ -897,13 +947,32 @@ mod vsock {
         io,
         mem::size_of,
         os::fd::{AsRawFd, FromRawFd, OwnedFd},
+        sync::atomic::{AtomicBool, Ordering},
+        time::Duration,
     };
 
     pub fn connect_host(port: u32) -> io::Result<File> {
+        connect_host_with_timeout(port, Duration::from_secs(30))
+    }
+
+    pub fn connect_host_with_timeout(port: u32, timeout: Duration) -> io::Result<File> {
+        connect_host_with_cancel(port, timeout, &AtomicBool::new(false))
+    }
+
+    pub fn connect_host_with_cancel(
+        port: u32,
+        timeout: Duration,
+        cancelled: &AtomicBool,
+    ) -> io::Result<File> {
         // SAFETY: `socket` has no pointer arguments. The returned descriptor is
         // immediately placed in `OwnedFd` to ensure it is closed on errors.
-        let raw_fd =
-            unsafe { libc::socket(libc::AF_VSOCK, libc::SOCK_STREAM | libc::SOCK_CLOEXEC, 0) };
+        let raw_fd = unsafe {
+            libc::socket(
+                libc::AF_VSOCK,
+                libc::SOCK_STREAM | libc::SOCK_CLOEXEC | libc::SOCK_NONBLOCK,
+                0,
+            )
+        };
         if raw_fd < 0 {
             return Err(io::Error::last_os_error());
         }
@@ -928,11 +997,73 @@ mod vsock {
                 length,
             )
         };
-        if result == 0 {
-            Ok(File::from(socket))
-        } else {
-            Err(io::Error::last_os_error())
+        if result != 0 {
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() != Some(libc::EINPROGRESS) {
+                return Err(error);
+            }
+            let deadline = std::time::Instant::now() + timeout;
+            let mut poll = libc::pollfd {
+                fd: socket.as_raw_fd(),
+                events: libc::POLLOUT,
+                revents: 0,
+            };
+            loop {
+                if cancelled.load(Ordering::Acquire) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::Interrupted,
+                        "service connection cancelled",
+                    ));
+                }
+                let Some(remaining) = deadline.checked_duration_since(std::time::Instant::now())
+                else {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "vsock connect timed out",
+                    ));
+                };
+                let milliseconds =
+                    i32::try_from(remaining.as_millis().min(50).min(i32::MAX as u128))
+                        .expect("poll timeout fits i32");
+                let ready = unsafe { libc::poll(&raw mut poll, 1, milliseconds) };
+                if ready > 0 {
+                    break;
+                }
+                if ready < 0 {
+                    let error = io::Error::last_os_error();
+                    if error.kind() != io::ErrorKind::Interrupted {
+                        return Err(error);
+                    }
+                }
+            }
+            let mut socket_error = 0_i32;
+            let mut length = libc::socklen_t::try_from(size_of::<i32>())
+                .expect("socket option length fits socklen_t");
+            if unsafe {
+                libc::getsockopt(
+                    socket.as_raw_fd(),
+                    libc::SOL_SOCKET,
+                    libc::SO_ERROR,
+                    (&raw mut socket_error).cast(),
+                    &raw mut length,
+                )
+            } < 0
+            {
+                return Err(io::Error::last_os_error());
+            }
+            if socket_error != 0 {
+                return Err(io::Error::from_raw_os_error(socket_error));
+            }
         }
+        let flags = unsafe { libc::fcntl(socket.as_raw_fd(), libc::F_GETFL) };
+        if flags < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        if unsafe { libc::fcntl(socket.as_raw_fd(), libc::F_SETFL, flags & !libc::O_NONBLOCK) } < 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(File::from(socket))
     }
 }
 
