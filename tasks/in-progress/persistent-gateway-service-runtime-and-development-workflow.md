@@ -49,8 +49,9 @@ TCP exposure.
 The reviewed transport is a dedicated per-VM guest-initiated vsock service
 bridge, separate from the existing control and broker channels. The guest
 bootstrap connects to a host-owned per-VM Unix socket on a fixed private vsock
-port, authenticates the bridge with a per-VM credential, and carries one raw
-full-duplex byte stream per host-side HTTP connection. The service command
+port, authenticates each connection with its single-use challenge bound to
+that per-VM socket, and carries one raw full-duplex byte stream per host-side
+HTTP connection. The service command
 binds only the declared `127.0.0.1` loopback port; the VM remains in
 `NetworkMode::Disabled` and receives no `PortForward` or `passt` network.
 Per-connection socket backpressure, bounded connection counts, handshake and
@@ -70,7 +71,7 @@ trailers, and other unreviewed streaming behavior are rejected until a later
 transport/runtime decision. Service readiness will require a successful HTTP
 request to the declared readiness path; control-channel liveness is not service
 readiness. Each request continues to use fresh gateway invocation/session and
-secret leases, and the bridge credential is never a request bearer. The
+secret leases, and the bridge challenge is never a request bearer. The
 `http.service.v1` declaration does not accept the `http.v1` mailbox-publication
 sideband; a separate service event contract is required before publication can
 be enabled for a normal long-lived server.
@@ -102,8 +103,11 @@ single-use challenge over the control channel, and libkrun maps the guest
 service vsock port to the per-VM Unix socket without passt or IP networking.
 The guest now validates service mode before launch, brings up only `lo`,
 injects the declared loopback endpoint, and bridges bounded authenticated raw
-connections with cancellation and half-close handling. Real VM transport
-acceptance, HTTP readiness, Caddy forwarding, and release UI remain
+connections with cancellation and half-close handling. The second real-VM
+attempt reached guest isolation, HTTP readiness, health, identity,
+delayed-response concurrency, and capacity checks, but active-connection
+cleanup still fails at private-service reservation expiry. Full transport
+teardown acceptance, Caddy forwarding, lifecycle, and release UI remain
 unchecked.
 
 - [x] Finish focused VM contract tests and workspace compatibility checks:
@@ -111,7 +115,8 @@ unchecked.
   `cargo test -p vm-fake`, focused Clippy, `cargo check --workspace
   --all-targets --all-features`, `cargo fmt --all -- --check`, and
   `git diff --check` pass in this worktree.
-- [ ] Review and integrate the contract slice before starting bridge work.
+- [x] Review and integrate the contract slice before starting bridge work;
+  the reviewed contract is present in the committed VM schema checkpoint.
 - [x] Implement and test the standalone host broker with real Unix sockets:
   authenticated raw bidirectional I/O, redacted challenges, wrong/unknown and
   replay rejection, pending cancellation and expiry, active-capacity bounds,
@@ -124,11 +129,11 @@ unchecked.
   bounded control semaphore keeps timed-out sends from interrupting a worker
   frame, and capacity acquisition fails fast so the declared connect timeout
   is one total operation deadline. Evidence: `cargo test -p vm-libkrun --lib`
-  (71 passed),
+  (72 passed),
   `cargo clippy -p vm-libkrun --all-targets --all-features`,
   `cargo check --workspace --all-targets --all-features`, formatting, and
   `git diff --check` pass; `cargo doc --workspace --all-features --no-deps`
-  exited 0 with no warnings. Guest service mode remains fail-closed.
+  exited 0 with no warnings.
 - [x] Verify provider-level cancellation and lifecycle ownership: blocked
   worker control sends remain bounded by the service semaphore, timed-out
   offers release broker capacity, and worker exit closes an active provider
@@ -144,9 +149,10 @@ unchecked.
   `HEPH_SERVICE_HOST`/`HEPH_SERVICE_PORT`, authenticate on the dedicated vsock,
   enforce the declared connection cap, forward both directions with half-close
   semantics, and close active connections on cancellation, control EOF, or child
-  exit. Evidence: `cargo test -p vm-libkrun --bin heph-init` (10 passed),
+  exit. Evidence: `cargo test -p vm-libkrun --bin heph-init` (14 passed),
   focused guest-binary Clippy, formatting, and `cargo check -p vm-libkrun
-  --bin heph-init` pass. Real VM acceptance remains unchecked.
+  --bin heph-init` pass. Total-deadline review and full real VM transport
+  acceptance remain unchecked.
 
 ## Implementation checklist
 
@@ -176,7 +182,8 @@ unchecked.
     for main-thread review.
   - [x] Implement guest loopback ownership and authenticated host-to-guest
     forwarding on the reviewed transport; reject arbitrary guest TCP exposure
-    and unauthorized host access. Real VM acceptance remains unchecked.
+    and unauthorized host access. Focused guest tests pass; total-deadline
+    review and real VM transport acceptance remain unchecked.
   - [ ] Implement readiness, health, request, connection, response-size, and
     in-flight resource limits with deterministic timeout and cancellation
     semantics.
