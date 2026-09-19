@@ -425,6 +425,18 @@ are retained at `/tmp/heph-libkrun-integration-20260919-replacement-worker-final
 This proves prepared-worker crash diagnostics and same-service replacement;
 daemon/global restart recovery and Caddy acceptance remain outside this slice.
 
+The gateway edge now has a parent-owned retryable physical-cleanup helper for
+one exact service identity. It retains the same VM handle after a failed or
+timed-out destroy, uses deterministic orphan cleanup when no handle survives,
+and retries only materializer cleanup after provider teardown is confirmed.
+Four focused tests cover retained-handle retry, orphan-ID and materializer
+identity scope, materializer-only retry, exact input rejection, and bounded
+pending destroy. In isolated checkpoint `3c02378` with only this helper
+applied, the focused tests and strict gateway-edge all-target/all-feature
+Clippy passed; formatting and `git diff --check` passed. This is a physical
+cleanup primitive only; durable cleanup state, capacity release, and
+supervisor scheduling remain the caller's responsibility.
+
 - [x] Finish focused VM contract tests and workspace compatibility checks:
   `cargo test -p vm-trait`, `cargo test -p vm-libkrun --lib`,
   `cargo test -p vm-fake`, focused Clippy, `cargo check --workspace

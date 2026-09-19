@@ -20,7 +20,8 @@ use crate::{
 
 const COMMAND_CAPACITY: usize = 8;
 const MAX_STARTUP_TIMEOUT: Duration = Duration::from_secs(300);
-const MAX_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(60);
+/// Maximum duration for one VM stop, destroy, or cleanup operation.
+pub const MAX_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_PROBE_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Observable state of the in-memory lifecycle worker.

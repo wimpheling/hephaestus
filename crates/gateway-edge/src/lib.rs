@@ -18,6 +18,7 @@ use vm_trait::{PrivateHttpRequest, PrivateHttpResponse, PrivateMailboxPublicatio
 
 mod integration;
 mod service_capacity;
+mod service_cleanup;
 mod service_coordinator;
 mod service_execution;
 mod service_failure;
@@ -41,6 +42,7 @@ pub use service_capacity::{
     GatewayServiceCapacityError, GatewayServiceCapacitySnapshot, GatewayServiceCapacityToken,
     GatewayServiceSupervisorPolicy,
 };
+pub use service_cleanup::{GatewayServiceCleanup, GatewayServiceCleanupError};
 pub use service_coordinator::{
     GatewayServiceCoordinator, GatewayServiceCoordinatorControl, GatewayServiceCoordinatorError,
     GatewayServiceCoordinatorFailure, GatewayServiceCoordinatorFailureReason,
