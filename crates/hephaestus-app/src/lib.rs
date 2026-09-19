@@ -47,7 +47,8 @@ use futures_util::StreamExt;
 use gateway_edge::{
     GatewayDispatcher, GatewayInboundSecretResolver, GatewayLimits, GatewayProvider,
     GatewayRequest, GatewayRequestDispatcher, GatewayRuntimeLauncher, GatewayRuntimeService,
-    GatewayScheme, LocalCaddyAdministration, LocalCaddyConfigurationTemplate,
+    GatewayScheme, GatewayServiceArtifact, GatewayServiceArtifactKind, GatewayServiceIdentity,
+    GatewayServiceMaterializer, LocalCaddyAdministration, LocalCaddyConfigurationTemplate,
     LocalCaddyGatewayProvider, PrivateHttpVmGatewayHandler, TrustedRequestMetadata,
     UNTRUSTED_FORWARDING_HEADERS,
 };
@@ -118,7 +119,8 @@ use run_orchestrator::{
 };
 use run_postgres::PgRunRepository;
 use run_runtime_local::{
-    LocalGatewayReleaseRuntime, LocalRunRuntimeConfig, LocalRunRuntimeManager,
+    GatewayServiceIdentity as LocalGatewayServiceIdentity, LocalGatewayReleaseRuntime,
+    LocalRunRuntimeConfig, LocalRunRuntimeManager,
 };
 use runtime_authority::{
     GatewayRuntimeAuthorityIssuer, RuntimeHandoffStore, RuntimeSessionIssuer,
@@ -670,6 +672,52 @@ impl GatewayReleaseMaterializer for LocalGatewayReleaseMaterializer {
     fn destroy(&self, invocation_id: Uuid) -> Result<(), gateway_edge::GatewayEdgeError> {
         self.runtime
             .destroy(invocation_id)
+            .map_err(|_| gateway_edge::GatewayEdgeError::HandlerUnavailable)
+    }
+}
+
+impl GatewayServiceMaterializer for LocalGatewayReleaseMaterializer {
+    fn prepare_service(
+        &self,
+        identity: GatewayServiceIdentity,
+        artifacts: &[GatewayServiceArtifact],
+        parameters: &serde_json::Value,
+    ) -> Result<Vec<VmMount>, gateway_edge::GatewayEdgeError> {
+        let identity = LocalGatewayServiceIdentity {
+            instance_id: identity.instance_id,
+            gateway_id: identity.gateway_id,
+            revision_id: identity.revision_id,
+        };
+        let artifacts = artifacts
+            .iter()
+            .map(|artifact| RunRuntimeArtifact {
+                path: artifact.path.clone(),
+                kind: match artifact.kind {
+                    GatewayServiceArtifactKind::Executable => RunRuntimeArtifactKind::Executable,
+                    GatewayServiceArtifactKind::File => RunRuntimeArtifactKind::File,
+                    GatewayServiceArtifactKind::Manifest => RunRuntimeArtifactKind::Manifest,
+                },
+                mode: artifact.mode,
+                content_hash: artifact.content_hash,
+                size_bytes: artifact.size_bytes,
+                storage_key: artifact.storage_key,
+            })
+            .collect::<Vec<_>>();
+        self.runtime
+            .prepare_service(identity, &artifacts, parameters)
+            .map_err(|_| gateway_edge::GatewayEdgeError::HandlerUnavailable)
+    }
+
+    fn destroy_service(
+        &self,
+        identity: GatewayServiceIdentity,
+    ) -> Result<(), gateway_edge::GatewayEdgeError> {
+        self.runtime
+            .destroy_service(LocalGatewayServiceIdentity {
+                instance_id: identity.instance_id,
+                gateway_id: identity.gateway_id,
+                revision_id: identity.revision_id,
+            })
             .map_err(|_| gateway_edge::GatewayEdgeError::HandlerUnavailable)
     }
 }
@@ -3744,15 +3792,40 @@ pub enum AppError {
 #[cfg(test)]
 mod tests {
     use super::{
-        BuildExecutionError, MaterializedRoot, OciImageReference, OciWorkerError, RuntimePolicy,
-        StoredNetworkAccess, build_delivery_requires_redelivery, deterministic_update_hook_run_id,
-        guest_environment, refresh_image_filesystem_cache, validate_runtime_policy,
-        write_oci_manifest_if_dirty,
+        BuildExecutionError, GatewayServiceArtifact, GatewayServiceArtifactKind,
+        GatewayServiceIdentity, GatewayServiceMaterializer, LocalGatewayReleaseMaterializer,
+        LocalRunRuntimeConfig, LocalRunRuntimeManager, MaterializedRoot, OciImageReference,
+        OciWorkerError, RuntimePolicy, StoredNetworkAccess, build_delivery_requires_redelivery,
+        deterministic_update_hook_run_id, guest_environment, refresh_image_filesystem_cache,
+        validate_runtime_policy, write_oci_manifest_if_dirty,
     };
-    use run_domain::RunKind;
+    use async_trait::async_trait;
+    use gateway_edge::GatewayEdgeError;
+    use run_domain::{Run, RunKind};
+    use run_orchestrator::{RunRuntimeCatalog, RunRuntimeCatalogError};
+    use runtime_types::RunId;
+    use sha2::{Digest, Sha256};
+    use std::path::PathBuf;
+    use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use uuid::Uuid;
     use vm_trait::{VmError, VmResources};
+
+    struct EmptyRunRuntimeCatalog;
+
+    #[async_trait]
+    impl RunRuntimeCatalog for EmptyRunRuntimeCatalog {
+        async fn load_runtime(
+            &self,
+            _run: &Run,
+        ) -> Result<run_orchestrator::RunRuntimeInput, RunRuntimeCatalogError> {
+            Err(RunRuntimeCatalogError::Unavailable)
+        }
+
+        async fn run_is_live(&self, _run_id: RunId) -> Result<bool, RunRuntimeCatalogError> {
+            Ok(false)
+        }
+    }
 
     fn policy() -> RuntimePolicy {
         RuntimePolicy {
@@ -3762,6 +3835,71 @@ mod tests {
             allow_broker_only: true,
             allow_egress: false,
         }
+    }
+
+    #[test]
+    fn app_materializer_bridges_service_identity_and_exact_cleanup() {
+        let fixture = tempfile::tempdir().expect("temporary materializer roots");
+        let runtime_root = fixture.path().join("runtime");
+        let store_root = fixture.path().join("store");
+        let key = Uuid::new_v4();
+        let bytes = b"persistent service executable";
+        std::fs::create_dir(&store_root).expect("store root");
+        std::fs::write(store_root.join(key.simple().to_string()), bytes).expect("store object");
+        let manager = LocalRunRuntimeManager::initialize(
+            Arc::new(EmptyRunRuntimeCatalog),
+            LocalRunRuntimeConfig {
+                runtime_root: runtime_root.clone(),
+                release_artifact_root: store_root,
+            },
+        )
+        .expect("initialize runtime");
+        let materializer = LocalGatewayReleaseMaterializer {
+            runtime: manager.gateway_release_runtime(),
+        };
+        let identity = GatewayServiceIdentity {
+            instance_id: Uuid::new_v4(),
+            gateway_id: Uuid::new_v4(),
+            revision_id: Uuid::new_v4(),
+        };
+        let mounts = materializer
+            .prepare_service(
+                identity,
+                &[GatewayServiceArtifact {
+                    path: String::from("bin/server"),
+                    kind: GatewayServiceArtifactKind::Executable,
+                    mode: 0o555,
+                    content_hash: Sha256::digest(bytes).into(),
+                    size_bytes: u64::try_from(bytes.len()).expect("artifact length"),
+                    storage_key: key,
+                }],
+                &serde_json::json!({"port": 8080}),
+            )
+            .expect("materialize service");
+        assert_eq!(mounts.len(), 2);
+        assert!(mounts.iter().all(|mount| mount.read_only));
+        assert_eq!(mounts[0].guest_path, PathBuf::from("/release"));
+        assert_eq!(mounts[1].guest_path, PathBuf::from("/run/hephaestus"));
+
+        let wrong_identity = GatewayServiceIdentity {
+            gateway_id: Uuid::new_v4(),
+            ..identity
+        };
+        assert!(matches!(
+            materializer.destroy_service(wrong_identity),
+            Err(GatewayEdgeError::HandlerUnavailable)
+        ));
+        assert!(runtime_service_path(&runtime_root, identity.instance_id).exists());
+        materializer
+            .destroy_service(identity)
+            .expect("destroy exact service identity");
+        assert!(!runtime_service_path(&runtime_root, identity.instance_id).exists());
+    }
+
+    fn runtime_service_path(runtime_root: &std::path::Path, instance_id: Uuid) -> PathBuf {
+        runtime_root
+            .join("gateway-services")
+            .join(instance_id.to_string())
     }
 
     #[test]

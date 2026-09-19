@@ -217,6 +217,16 @@ Clippy, formatting, and `git diff --check` pass. This is a read-side port and
 adapter only; supervisor CAS/readiness promotion, request draining policy, and
 application wiring remain pending.
 
+The application composition root now adapts the edge service materializer to
+the local immutable service runtime. It preserves the exact instance, gateway,
+and revision identity, maps every verified artifact field, and exposes only
+the sealed `/release` and `/run/hephaestus` mounts; cleanup rejects an identity
+mismatch and maps runtime failures to a redacted edge error. Evidence: the
+temporary-files app test passed with strict app Clippy and formatting checks.
+The resolver still owns launch selection and has not yet been wired to this
+adapter; supervisor startup, readiness promotion, teardown ordering, and Caddy
+routing remain pending.
+
 The prepared-instance worker now owns one already-provisioned VM from start
 through readiness, bounded health checks, exit, shutdown, and cleanup. It uses
 one startup deadline covering VM start and HTTP readiness, publishes `Ready`
