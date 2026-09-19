@@ -88,7 +88,10 @@ pub use service_lease::{
     GatewayServiceLeaseRunResult, GatewayServiceLeaseStatus,
 };
 pub use service_logs::{
-    MAX_SERVICE_LOG_CHUNK_BYTES, MAX_SERVICE_LOG_QUEUE_BYTES, MAX_SERVICE_LOG_QUEUE_CHUNKS,
+    GatewayServiceLogAppendBatch, GatewayServiceLogAppendOutcome, GatewayServiceLogStore,
+    GatewayServiceLogStoreError, MAX_SERVICE_LOG_CHUNK_BYTES, MAX_SERVICE_LOG_INSTANCE_BYTES,
+    MAX_SERVICE_LOG_INSTANCE_CHUNKS, MAX_SERVICE_LOG_PROJECT_BYTES, MAX_SERVICE_LOG_PROJECT_CHUNKS,
+    MAX_SERVICE_LOG_PROJECT_EPOCHS, MAX_SERVICE_LOG_QUEUE_BYTES, MAX_SERVICE_LOG_QUEUE_CHUNKS,
     ServiceLogBufferHandle, ServiceLogBufferSnapshot, ServiceLogLoss, ServiceLogRecord,
 };
 pub use service_ownership::{

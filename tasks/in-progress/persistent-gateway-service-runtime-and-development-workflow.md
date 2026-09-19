@@ -1143,3 +1143,20 @@ Evidence: `/tmp/heph-app-supervisor-full-real-pinned-final-20260919.log`,
   restart/recovery, and failure evidence.
 - [ ] Record security/adversarial results and stateless MVP-03 regression
   evidence.
+
+Append checkpoint (2026-09-19): migration 0078 and the worker-only PostgreSQL
+append adapter now persist opt-in application service logs with exact
+instance/fencing identity, quota and epoch metadata, ordered sequence
+watermarks, duplicate replay handling, and explicit producer/provider/storage
+loss counters. The adapter uses the quota -> gateway -> instance -> epoch lock
+order, validates the fresh lease and capture mode, and keeps payloads behind
+project RLS. Metadata-cap counters are rejected-submission totals: an
+ambiguous commit followed by retry can count the same bytes again because no
+epoch watermark exists for a rejected batch; `Capacity` is terminal for an
+acknowledged batch while `Unavailable` remains ambiguous. Real PostgreSQL
+coverage passed two append tests after migration 0078 with
+`REAL_POSTGRES_CONNECTED_AND_MIGRATED=1 max_migration=78`; pinned Rust 1.88.0
+edge/PostgreSQL all-target Clippy, the focused batch contract test, formatting,
+and workspace rustdoc also passed. Durable writer/flush integration,
+maintenance/eviction, authorized readers/RPC, and app/supervisor integration
+remain pending.

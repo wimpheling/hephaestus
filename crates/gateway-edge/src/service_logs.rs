@@ -9,8 +9,11 @@ use std::{
     },
 };
 
+use async_trait::async_trait;
 use time::OffsetDateTime;
 use vm_trait::LogStream;
+
+use crate::{GatewayServiceInstanceLease, GatewayServiceOwner};
 
 /// Maximum bytes accepted from one provider log event.
 pub const MAX_SERVICE_LOG_CHUNK_BYTES: usize = 64 * 1024;
@@ -18,6 +21,16 @@ pub const MAX_SERVICE_LOG_CHUNK_BYTES: usize = 64 * 1024;
 pub const MAX_SERVICE_LOG_QUEUE_CHUNKS: usize = 64;
 /// Maximum bytes retained before a database writer drains the queue.
 pub const MAX_SERVICE_LOG_QUEUE_BYTES: usize = 4 * 1024 * 1024;
+/// Maximum retained log bytes for one instance across all fencing epochs.
+pub const MAX_SERVICE_LOG_INSTANCE_BYTES: u64 = 4 * 1024 * 1024;
+/// Maximum retained log chunks for one instance across all fencing epochs.
+pub const MAX_SERVICE_LOG_INSTANCE_CHUNKS: u64 = 4096;
+/// Maximum retained log bytes for one project.
+pub const MAX_SERVICE_LOG_PROJECT_BYTES: u64 = 64 * 1024 * 1024;
+/// Maximum retained log chunks for one project.
+pub const MAX_SERVICE_LOG_PROJECT_CHUNKS: u64 = 65_536;
+/// Maximum retained fencing epochs represented in one project's log metadata.
+pub const MAX_SERVICE_LOG_PROJECT_EPOCHS: u32 = 128;
 
 /// One bounded application log chunk observed from the guest.
 #[derive(Clone)]
@@ -101,6 +114,117 @@ pub struct ServiceLogBufferSnapshot {
     /// Explicitly accounted dropped chunks and bytes. Provider lag counts are
     /// separate because skipped event kinds and byte lengths are unknown.
     pub loss: ServiceLogLoss,
+}
+
+/// A bounded batch handed from one worker-owned queue to durable storage.
+#[derive(Debug, Clone, Default)]
+pub struct GatewayServiceLogAppendBatch {
+    /// Queued application chunks, in the order observed by the worker.
+    pub records: Vec<ServiceLogRecord>,
+    /// Producer-side losses observed while collecting this batch.
+    pub loss: ServiceLogLoss,
+}
+
+impl GatewayServiceLogAppendBatch {
+    /// Constructs a batch and rejects values that cannot be stored safely.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GatewayServiceLogStoreError::InvalidArgument`] when a batch
+    /// exceeds the queue bound, contains an oversized chunk, or is not in
+    /// strictly increasing sequence order.
+    pub fn new(
+        records: Vec<ServiceLogRecord>,
+        loss: ServiceLogLoss,
+    ) -> Result<Self, GatewayServiceLogStoreError> {
+        let batch = Self { records, loss };
+        batch.validate()?;
+        Ok(batch)
+    }
+
+    /// Validates an already-owned batch without copying its records.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GatewayServiceLogStoreError::InvalidArgument`] when a batch
+    /// exceeds the queue bound, contains an oversized chunk, or is not in
+    /// strictly increasing sequence order.
+    pub fn validate(&self) -> Result<(), GatewayServiceLogStoreError> {
+        let records = &self.records;
+        if records.len() > MAX_SERVICE_LOG_QUEUE_CHUNKS
+            || records.iter().any(|record| {
+                !matches!(record.stream, LogStream::Stdout | LogStream::Stderr)
+                    || record.bytes.len() > MAX_SERVICE_LOG_CHUNK_BYTES
+                    || record.sequence > i64::MAX as u64
+            })
+        {
+            return Err(GatewayServiceLogStoreError::InvalidArgument);
+        }
+        if records
+            .windows(2)
+            .any(|window| window[0].sequence >= window[1].sequence)
+        {
+            return Err(GatewayServiceLogStoreError::InvalidArgument);
+        }
+        Ok(())
+    }
+}
+
+/// Durable counters returned after one append transaction.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GatewayServiceLogAppendOutcome {
+    /// Chunks inserted during this call.
+    pub accepted_chunks: u32,
+    /// Retained rows already present with identical content.
+    pub duplicate_chunks: u32,
+    /// New chunks rejected by durable capacity bounds.
+    pub storage_dropped_chunks: u32,
+    /// Highest worker sequence durably acknowledged, including dropped or
+    /// previously evicted sequences.
+    pub acknowledged_through: Option<u64>,
+    /// Current retained bytes for the exact instance.
+    pub retained_instance_bytes: u64,
+    /// Current retained chunks for the exact instance.
+    pub retained_instance_chunks: u64,
+}
+
+/// Safe failures for a worker log append. Raw SQL/provider details stay out of
+/// the caller-visible contract.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum GatewayServiceLogStoreError {
+    /// The caller supplied malformed identity, owner, sequence, or payload.
+    #[error("invalid gateway service log append argument")]
+    InvalidArgument,
+    /// The durable instance is no longer owned by this worker/fence.
+    #[error("gateway service log append lease is stale")]
+    StaleLease,
+    /// The immutable revision is not opted into application log capture.
+    #[error("gateway service log capture is disabled")]
+    Disabled,
+    /// A durable identity or retained payload conflicts with this append.
+    #[error("gateway service log append conflicts with durable state")]
+    Conflict,
+    /// The bounded durable metadata or quota could not accept a new epoch.
+    /// This is terminal for the batch: the caller must discard it after
+    /// recording the reported loss and must not retry it under this epoch.
+    #[error("gateway service log append capacity is exhausted")]
+    Capacity,
+    /// Storage could not complete the bounded transaction.
+    #[error("gateway service log storage is unavailable")]
+    Unavailable,
+}
+
+/// Worker-owned durable append port. Implementations must derive project and
+/// revision policy from the durable identity rather than caller assertions.
+#[async_trait]
+pub trait GatewayServiceLogStore: Send + Sync {
+    /// Appends one bounded queue batch for the exact current lease.
+    async fn append_batch(
+        &self,
+        lease: &GatewayServiceInstanceLease,
+        owner: &GatewayServiceOwner,
+        batch: GatewayServiceLogAppendBatch,
+    ) -> Result<GatewayServiceLogAppendOutcome, GatewayServiceLogStoreError>;
 }
 
 #[derive(Default)]
@@ -283,6 +407,57 @@ impl ServiceLogBufferHandle {
 impl Default for ServiceLogBufferHandle {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod append_tests {
+    use super::*;
+
+    fn record(sequence: u64) -> ServiceLogRecord {
+        ServiceLogRecord {
+            sequence,
+            stream: LogStream::Stdout,
+            observed_at: OffsetDateTime::UNIX_EPOCH,
+            bytes: b"line".to_vec(),
+        }
+    }
+
+    #[test]
+    fn append_batch_requires_strictly_ordered_bounded_records() {
+        assert!(
+            GatewayServiceLogAppendBatch::new(
+                vec![record(0), record(1)],
+                ServiceLogLoss::default()
+            )
+            .is_ok()
+        );
+        assert!(
+            GatewayServiceLogAppendBatch::new(
+                vec![record(1), record(1)],
+                ServiceLogLoss::default()
+            )
+            .is_err()
+        );
+        assert!(
+            GatewayServiceLogAppendBatch::new(
+                vec![record(2), record(1)],
+                ServiceLogLoss::default()
+            )
+            .is_err()
+        );
+        assert!(
+            GatewayServiceLogAppendBatch::new(
+                vec![ServiceLogRecord {
+                    sequence: 0,
+                    stream: LogStream::Stdout,
+                    observed_at: OffsetDateTime::UNIX_EPOCH,
+                    bytes: vec![0; MAX_SERVICE_LOG_CHUNK_BYTES + 1],
+                }],
+                ServiceLogLoss::default()
+            )
+            .is_err()
+        );
     }
 }
 
