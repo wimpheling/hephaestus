@@ -360,6 +360,45 @@ impl GatewayServiceOwnership for PostgresGatewayServiceOwnership {
 
 #[async_trait]
 impl GatewayServiceExpiredClaimRecovery for PostgresGatewayServiceOwnership {
+    async fn resolve_exact_instance(
+        &self,
+        identity: GatewayServiceIdentity,
+    ) -> Result<Option<GatewayServiceInstanceLease>, GatewayServiceOwnershipError> {
+        validate_identity(identity.gateway_id, identity.revision_id)?;
+        if identity.instance_id.is_nil() {
+            return Err(GatewayServiceOwnershipError::InvalidArgument);
+        }
+        let mut transaction = self.pool.begin().await.map_err(|error| storage(&error))?;
+        // Serialize this read with claim and takeover mutations. In particular,
+        // an empty result is authoritative only after the gateway lock is held.
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
+            .execute(&mut *transaction)
+            .await
+            .map_err(|error| storage(&error))?;
+        lock_gateway(&mut transaction, identity.gateway_id).await?;
+        let row = sqlx::query_as::<_, ServiceInstanceRow>(
+            "SELECT id, gateway_id, revision_id, owner_host_id, owner_uuid,
+                    fencing_token, vm_id, state, lease_expires_at, heartbeat_at
+               FROM gateway_service_instances
+              WHERE id = $1 AND gateway_id = $2 AND revision_id = $3",
+        )
+        .bind(identity.instance_id)
+        .bind(identity.gateway_id)
+        .bind(identity.revision_id)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|error| storage(&error))?;
+        transaction
+            .commit()
+            .await
+            .map_err(|error| storage(&error))?;
+        let lease = row.map(ServiceInstanceRow::into_lease).transpose()?;
+        if let Some(lease) = &lease {
+            validate_lease(lease)?;
+        }
+        Ok(lease)
+    }
+
     async fn claim_expired_instance(
         &self,
         previous: &GatewayServiceInstanceLease,

@@ -740,6 +740,13 @@ mod tests {
 
     #[async_trait]
     impl GatewayServiceExpiredClaimRecovery for TestExactRecovery {
+        async fn resolve_exact_instance(
+            &self,
+            _: crate::GatewayServiceIdentity,
+        ) -> Result<Option<GatewayServiceInstanceLease>, GatewayServiceOwnershipError> {
+            Ok(None)
+        }
+
         async fn claim_expired_instance(
             &self,
             _: &GatewayServiceInstanceLease,
