@@ -159,32 +159,89 @@ The managed service is ready only after the daemon's service supervisor has
 materialized the exact revision, started the service VM, observed the declared
 readiness endpoint, and completed the durable readiness/promotion transition.
 The public request should then go through the configured Caddy authority to
-`/service` or `/service/identity`; probing the guest loopback address from the
-host is not an equivalent test. A managed test should also assert that two
-identity requests return the same `startup_id`, and that shutdown removes the
-service resources.
+`/gateway/service` or `/gateway/service/identity`; these preserve the guest
+declaration's `/service` and `/service/identity` paths under the gateway
+authority. Probing the guest loopback address from the host is not an
+equivalent test. A managed test should also assert that two identity requests
+return the same `startup_id`, and that shutdown removes the service resources.
+
+### Source-built Cooking service proof
+
+The joined local harness has an opt-in proof for this exact source-built path.
+It pushes the `examples/cooking/cooking-service` source through the production
+Git/build flow, publishes the immutable release, installs its gateway
+declaration, configures the release-owned revision, starts the service through
+the daemon, sends requests through Caddy, checks the stable PID and
+`startup_id`, and verifies cleanup of the VM, cgroup, and materializer paths.
+The declaration's guest and build network profiles remain `disabled`; the
+service has no workspace or state volume.
+
+Prepare the local Cooking fixture and its pinned image/tool setup using the
+repository's [Cooking CI runbook](gcp-cooking-ci.md). Source that local runner
+profile without printing its values, then run from the repository root. The
+profile supplies the immutable image and tool prerequisites; the command below
+only selects the disposable project root, source root, Cargo settings, and
+proof mode:
+
+```sh
+source /path/to/your/mvp05-cooking-runner.env
+export HEPHAESTUS_LOCAL_ROOT="$PWD/.local/hephaestus"
+export HEPHAESTUS_COOKING_SOURCE_ROOT="$PWD/examples/cooking"
+export HEPHAESTUS_APP_COOKING_SERVICE_BUILD_PROOF=1
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$PWD/target}"
+export CARGO_INCREMENTAL=0
+export CARGO_BUILD_JOBS=2
+unset HEPHAESTUS_POSTGRES_TEST_URL HEPHAESTUS_NATS_TEST_URL
+unset HEPHAESTUS_APP_GATEWAY_SERVICE_E2E
+unset HEPHAESTUS_APP_GATEWAY_SERVICE_EXTERNAL_E2E
+unset HEPHAESTUS_APP_GATEWAY_SERVICE_REVOCATION_E2E
+unset HEPHAESTUS_APP_GATEWAY_SERVICE_CUTOVER_E2E
+unset HEPHAESTUS_APP_GATEWAY_SERVICE_CANDIDATE_CAPACITY_E2E
+unset HEPHAESTUS_APP_GATEWAY_SERVICE_FAILED_CANDIDATE_E2E
+unset HEPHAESTUS_APP_GATEWAY_SERVICE_ROLLBACK_E2E
+unset HEPHAESTUS_APP_GATEWAY_SERVICE_LOG_RPC_E2E
+unset HEPHAESTUS_APP_GATEWAY_SERVICE_LOG_GUEST_E2E
+examples/cooking/run.sh
+```
+
+`examples/cooking/run.sh` supplies `HEPHAESTUS_APP_COOKING_E2E=1`,
+`HEPHAESTUS_APP_COOKING_BUILD_PROOF=1`,
+`HEPHAESTUS_COOKING_UPDATE_E2E=1`, and the browser/Caddy/libkrun fixture
+boundary. The published service proof is an explicit opt-in and cannot be
+combined with seeded gateway service, service-log RPC, guest-log, cutover,
+rollback, or candidate-capacity modes. Leave PostgreSQL and NATS URLs unset so
+the joined harness owns its disposable services. An absolute
+`CARGO_TARGET_DIR` is recommended for a shared cache; the integration wrapper
+resolves and exports relative values against the repository root and passes the
+guest bootstrap from that resolved target.
+
+The successful proof emits `REAL_COOKING_SERVICE_BUILD_PROOF=1`. It checks the
+production source build and publication, release-owned install/configure,
+the declared readiness transition through the service supervisor, Caddy
+requests to `/gateway/service` and `/gateway/service/identity`, same-process
+identity, and the asserted disabled runtime network contract. It does not use
+a guest egress probe. It also checks removal of runtime, cgroup, and
+materializer resources. The seeded gateway-service modes remain useful for
+their separate runtime scenarios, but they do not prove this source-built
+publication path. This proof also does not claim that every persistent-service
+feature or the full service-log acceptance surface is complete.
 
 Platform-level private-service transport, host bridge, Caddy adapter, and
 daemon lifecycle proofs are present in the repository's focused and real-VM
-tests. The published cooking-service workflow still needs its own end-to-end
-acceptance across build, publish, install, configure, readiness, Caddy
-request, identity, and cleanup. The existing broad cooking acceptance covers
-the ordinary cooking application path and does not by itself close that
-published persistent-service acceptance.
+tests. The source-built Cooking service proof is now a verified local path; the
+broader persistent-service and service-log acceptance surfaces remain
+separate.
 
 ## Current limits and next acceptance work
 
-The following are deliberately separate from a native smoke:
+The following remain deliberately separate from a native smoke and from the
+source-built Cooking service proof:
 
-* run the cooking source through its isolated build and release publication;
-* install its `http.service.v1` declaration and configure the exact revision;
-* start it through the daemon's managed service path rather than manually
-  running the binary;
-* let the service supervisor poll the private guest readiness and health
-  paths, then make Caddy requests only to the declared `/service` and
-  `/service/identity` routes;
-* verify same-process identity, disabled guest ingress, no runtime bearer, and
-  complete VM, materialization, registry, and durable-row cleanup.
+* broader persistent-service lifecycle and cutover scenarios;
+* service-log writer and RPC acceptance beyond the separate seeded and guest
+  service-log proofs;
+* deployment outside the disposable local Cooking fixture and its pinned
+  runner prerequisites.
 
 Use the existing real-stack harness after its required KVM, Podman, pinned
 image, PostgreSQL, NATS, and Caddy prerequisites are available. Preserve its

@@ -2182,3 +2182,14 @@ rustdoc, direct rustfmt, shell syntax and diff checks passed in
 `/home/a/heph-published-golden-clippy-20260919-v2.log`,
 `/home/a/heph-published-app-doc-20260919.log`, and
 `/home/a/heph-published-cooking-service-doc-20260919.log`.
+
+Published Cooking workflow documentation checkpoint (2026-09-19):
+`docs/persistent-gateway-services.md` now documents the verified source-built
+Cooking service proof, its `HEPHAESTUS_APP_COOKING_SERVICE_BUILD_PROOF=1`
+opt-in, profile and pinned-fixture prerequisites by reference, disposable
+PostgreSQL/NATS ownership, shared `CARGO_TARGET_DIR` behavior, Caddy routes,
+stable identity, network-disabled contract, cleanup, and the limits that keep
+seeded runtime scenarios separate. The matching sample README points to the
+canonical command and explicitly does not claim overall persistent-service
+completion. Local link/anchor checks, shell syntax checks for the harness, and
+`git diff --check` passed; no Cargo or VM command was run for this docs task.
