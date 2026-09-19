@@ -527,6 +527,10 @@ fn serve_service_connection(
             );
             write_service_response(&mut stream, 200, "application/json", body.as_bytes())
         }
+        "/gateway/service/log" => {
+            emit_service_log_markers()?;
+            write_service_response(&mut stream, 200, "text/plain", b"log-emitted")
+        }
         "/crash" | "/gateway/service/crash" => {
             if let Err(error) = write_service_response(&mut stream, 503, "text/plain", b"crashing")
             {
@@ -539,6 +543,17 @@ fn serve_service_connection(
         }
         _ => write_service_response(&mut stream, 404, "text/plain", b"not found"),
     }
+}
+
+fn emit_service_log_markers() -> io::Result<()> {
+    let mut stdout = io::stdout().lock();
+    stdout.write_all(b"service-log-stdout=ordinary\n")?;
+    stdout.flush()?;
+    drop(stdout);
+
+    let mut stderr = io::stderr().lock();
+    stderr.write_all(b"service-log-stderr=ordinary\n")?;
+    stderr.flush()
 }
 
 fn service_port() -> io::Result<u16> {

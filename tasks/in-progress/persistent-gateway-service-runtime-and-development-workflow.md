@@ -2105,3 +2105,22 @@ lookups now honor the resolved/exported `CARGO_TARGET_DIR`; log-RPC modes also
 select `test-fixtures` before Cargo's argument separator. Shell syntax and
 diff checks passed. The original failed log is preserved at
 `/home/a/heph-project-metadata-real-vm-20260919.log`.
+
+Actual guest-output acceptance checkpoint (2026-09-19): the real Caddy/libkrun
+guest-log mode passed 35 golden tests (one ignored) and eight PostgreSQL tests
+with migration 81 in `/home/a/heph-guest-log-real-vm-20260919.log`. Its marker
+was `REAL_GATEWAY_SERVICE_LOG_GUEST_E2E=1` for instance
+`42ebbb38-0ce2-4733-9af8-044b09c1e77f`, fencing token 1, with
+`retained_after_shutdown=true`. A public request made the real guest emit
+ordinary stdout/stderr markers; the authenticated generated client read them
+with one-record pages under the full project/gateway/revision/instance/fence
+scope. The test checked ordered unique sequences, per-stream reconstruction,
+unique markers, durable epoch metadata, cleaned instance and removed runtime,
+cgroup and materializer paths. Post-shutdown SQL verified retained output;
+this does not claim RPC availability after daemon shutdown or actual output
+emitted during stopping. No log rows were seeded in this mode. Focused guest
+binary Clippy, vm-libkrun rustdoc and Cargo-aware formatting passed in
+`/home/a/hephaestus-vm-libkrun-heph-integration-check-clippy-20260919.log`,
+`/home/a/hephaestus-vm-libkrun-rustdoc-20260919.log`,
+`/home/a/hephaestus-vm-libkrun-rustfmt-20260919.log`, and
+`/home/a/hephaestus-app-golden-rustfmt-20260919.log`.

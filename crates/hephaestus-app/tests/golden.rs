@@ -13,6 +13,8 @@ use connectrpc::{
 use forge_domain::{GitRef, OrganizationId, ProjectId};
 use forge_postgres::PgForgeRepository;
 use forge_service::{CreateRepository, GitStorage};
+#[cfg(feature = "test-fixtures")]
+use gateway_edge::MAX_SERVICE_LOG_INSTANCE_CHUNKS;
 use hephaestus_app::{
     AppConfig, GatewayEdgeConfig, HephaestusApp, OciBuilderWorkerConfig, OidcConfig,
     RegistryConfig, RunEventKind, VmBackendConfig,
@@ -2567,6 +2569,8 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
         env::var("HEPHAESTUS_APP_GATEWAY_SERVICE_ROLLBACK_E2E").as_deref() == Ok("1");
     let gateway_service_log_rpc_e2e =
         env::var("HEPHAESTUS_APP_GATEWAY_SERVICE_LOG_RPC_E2E").as_deref() == Ok("1");
+    let gateway_service_log_guest_e2e =
+        env::var("HEPHAESTUS_APP_GATEWAY_SERVICE_LOG_GUEST_E2E").as_deref() == Ok("1");
     assert!(
         !cooking::enabled() || gateway_caddy_e2e,
         "cooking requires the joined Caddy/libkrun fixture"
@@ -2599,10 +2603,38 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
         !gateway_service_log_rpc_e2e || gateway_service_e2e,
         "the service-log RPC proof requires the persistent-service fixture"
     );
+    assert!(
+        !gateway_service_log_guest_e2e || gateway_service_e2e,
+        "the guest service-log proof requires the persistent-service fixture"
+    );
+    assert!(
+        !gateway_service_log_guest_e2e || (gateway_caddy_e2e && libkrun_e2e),
+        "the guest service-log proof requires the real Caddy/libkrun fixture"
+    );
+    assert!(
+        !gateway_service_log_guest_e2e || !gateway_service_log_rpc_e2e,
+        "the guest service-log proof cannot combine with seeded service-log RPC rows"
+    );
+    assert!(
+        !gateway_service_log_guest_e2e || !gateway_service_external_e2e,
+        "the guest service-log proof cannot use the external daemon early-return path"
+    );
+    assert!(
+        !gateway_service_log_guest_e2e
+            || (!gateway_service_cutover_e2e
+                && !gateway_service_failed_candidate_e2e
+                && !gateway_service_rollback_e2e),
+        "the guest service-log proof requires the initial persistent service revision"
+    );
     #[cfg(not(feature = "test-fixtures"))]
     assert!(
         !gateway_service_log_rpc_e2e,
         "the service-log RPC proof requires --features test-fixtures"
+    );
+    #[cfg(not(feature = "test-fixtures"))]
+    assert!(
+        !gateway_service_log_guest_e2e,
+        "the guest service-log proof requires --features test-fixtures"
     );
     assert!(
         !gateway_service_e2e || !cooking_build_proof,
@@ -2776,6 +2808,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
                 repository.id.as_uuid(),
                 seeded_instance.release,
                 service_agent,
+                gateway_service_log_guest_e2e,
             )
             .await,
         )
@@ -4693,6 +4726,59 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
                 )
                 .await;
                 #[cfg(feature = "test-fixtures")]
+                if gateway_service_log_guest_e2e {
+                    let service_fixture = gateway_service_fixture
+                        .as_ref()
+                        .expect("persistent service fixture for guest log proof");
+                    let first_instance_id = service_instance_id
+                        .expect("persistent service instance for guest log proof");
+                    let first_resource_paths = service_resource_paths
+                        .as_ref()
+                        .expect("persistent service paths for guest log proof");
+                    let public_url = env::var("HEPHAESTUS_CADDY_TEST_PUBLIC_URL")
+                        .expect("joined Caddy public URL for guest log proof");
+                    let guest_log_proof = exercise_gateway_service_guest_log(
+                        &pool,
+                        &running,
+                        service_fixture,
+                        first_instance_id,
+                        project.id.as_uuid(),
+                        user_id,
+                        &public_url,
+                    )
+                    .await;
+                    running
+                        .shutdown()
+                        .await
+                        .expect("guest service-log daemon shutdown");
+                    let first_state: Option<String> = sqlx::query_scalar(
+                        "SELECT state FROM gateway_service_instances
+                          WHERE id = $1 AND gateway_id = $2 AND revision_id = $3",
+                    )
+                    .bind(first_instance_id)
+                    .bind(service_fixture.gateway_id)
+                    .bind(service_fixture.revision_id)
+                    .fetch_optional(&pool)
+                    .await
+                    .expect("read cleaned guest service-log instance");
+                    assert_eq!(
+                        first_state.as_deref(),
+                        Some("cleaned"),
+                        "guest service-log daemon shutdown must clean the service instance"
+                    );
+                    let (provider_runtime, cgroup, materializer) = first_resource_paths;
+                    assert!(!provider_runtime.exists());
+                    assert!(!cgroup.exists());
+                    assert!(!materializer.exists());
+                    assert_guest_gateway_service_log_retained(&pool, &guest_log_proof).await;
+                    cleanup_streams(&nats_url).await;
+                    println!(
+                        "REAL_GATEWAY_SERVICE_LOG_GUEST_E2E=1 instance={first_instance_id} fence={} retained_after_shutdown=true",
+                        guest_log_proof.fencing_token
+                    );
+                    return;
+                }
+                #[cfg(feature = "test-fixtures")]
                 let app_pool_probe = if gateway_service_log_rpc_e2e {
                     Some(
                         exercise_gateway_service_log_rpc(
@@ -6075,6 +6161,7 @@ async fn seed_gateway_service_route(
     repository_id: uuid::Uuid,
     release_id: uuid::Uuid,
     release_agent_id: uuid::Uuid,
+    capture_application_logs: bool,
 ) -> GatewayServiceGoldenFixture {
     let gateway_id = uuid::Uuid::new_v4();
     let revision_id = uuid::Uuid::new_v4();
@@ -6097,9 +6184,9 @@ async fn seed_gateway_service_route(
            (id, gateway_id, project_id, repository_id, release_id, release_agent_id,
             release_agent_key, handler_contract, exposure, parameters, secret_slots,
             mailbox_slots, normalized_hash, created_by, service_loopback_port,
-            service_readiness_path, service_health_path)
+            service_readiness_path, service_health_path, service_log_capture_mode)
          VALUES ($1, $2, $3, $4, $5, $6, 'golden-service', 'http.service.v1',
-                 'public', '{}'::jsonb, '{}', '{}', $7, $8, 8080, '/readyz', '/healthz')",
+                 'public', '{}'::jsonb, '{}', '{}', $7, $8, 8080, '/readyz', '/healthz', $9)",
     )
     .bind(revision_id)
     .bind(gateway_id)
@@ -6109,6 +6196,11 @@ async fn seed_gateway_service_route(
     .bind(release_agent_id)
     .bind([12_u8; 32].as_slice())
     .bind(actor.as_uuid())
+    .bind(if capture_application_logs {
+        "application"
+    } else {
+        "disabled"
+    })
     .execute(pool)
     .await
     .expect("seed service gateway revision");
@@ -6116,6 +6208,7 @@ async fn seed_gateway_service_route(
         (service_route_id, "/service"),
         (identity_route_id, "/service/identity"),
         (uuid::Uuid::new_v4(), "/service/crash"),
+        (uuid::Uuid::new_v4(), "/service/log"),
     ] {
         sqlx::query(
             "INSERT INTO gateway_routes
@@ -6542,10 +6635,312 @@ async fn exercise_gateway_service_requests(public_url: &str) -> GatewayServiceRe
     }
 }
 
+/// Invokes the real Caddy service endpoint, then reads its application-owned
+/// output through the authenticated gateway RPC until both streams are whole.
+#[cfg(feature = "test-fixtures")]
+#[derive(Debug)]
+struct GatewayServiceGuestLogProof {
+    project_id: uuid::Uuid,
+    gateway_id: uuid::Uuid,
+    revision_id: uuid::Uuid,
+    instance_id: uuid::Uuid,
+    fencing_token: i64,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
+#[cfg(feature = "test-fixtures")]
+const GUEST_SERVICE_LOG_STDOUT_MARKER: &[u8] = b"service-log-stdout=ordinary\n";
+#[cfg(feature = "test-fixtures")]
+const GUEST_SERVICE_LOG_STDERR_MARKER: &[u8] = b"service-log-stderr=ordinary\n";
+
+#[cfg(feature = "test-fixtures")]
+// This helper keeps the public request, paged RPC read, and stream assertions
+// together so the proof cannot accidentally return before the durable records
+// are visible.
+#[allow(clippy::cognitive_complexity, clippy::too_many_lines)]
+#[allow(clippy::too_many_arguments)]
+async fn exercise_gateway_service_guest_log(
+    pool: &sqlx::PgPool,
+    running: &hephaestus_app::RunningHephaestus,
+    fixture: &GatewayServiceGoldenFixture,
+    instance_id: uuid::Uuid,
+    project_id: uuid::Uuid,
+    owner_id: UserId,
+    public_url: &str,
+) -> GatewayServiceGuestLogProof {
+    let fencing_token: i64 = sqlx::query_scalar(
+        "SELECT fencing_token FROM gateway_service_instances
+          WHERE id = $1 AND gateway_id = $2 AND revision_id = $3",
+    )
+    .bind(instance_id)
+    .bind(fixture.gateway_id)
+    .bind(fixture.revision_id)
+    .fetch_one(pool)
+    .await
+    .expect("read guest service-log fencing token");
+    assert!(fencing_token > 0);
+
+    let response = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .expect("guest service-log HTTP client")
+        .get(format!("{public_url}/gateway/service/log"))
+        .send()
+        .await
+        .expect("invoke public guest service-log endpoint");
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .expect("guest service-log content type");
+    assert!(
+        content_type.starts_with("text/plain"),
+        "guest service-log endpoint must return text/plain: {content_type}"
+    );
+    let body = response
+        .bytes()
+        .await
+        .expect("read guest service-log endpoint body");
+    assert_eq!(body.as_ref(), b"log-emitted");
+
+    let scope = GatewayServiceLogScope {
+        project_id: opaque_id(project_id).into(),
+        gateway_id: opaque_id(fixture.gateway_id).into(),
+        revision_id: opaque_id(fixture.revision_id).into(),
+        instance_id: opaque_id(instance_id).into(),
+        fencing_token: u64::try_from(fencing_token).expect("positive fencing token"),
+        ..Default::default()
+    };
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let uri: axum::http::Uri = format!("http://{}", running.http_addr())
+        .parse()
+        .expect("guest service-log RPC URI");
+    let connection = tokio::time::timeout(
+        deadline.saturating_duration_since(Instant::now()),
+        Http2Connection::connect_plaintext(uri.clone()),
+    )
+    .await
+    .expect("guest service-log RPC connection deadline")
+    .expect("guest service-log RPC connection")
+    .shared(4);
+    let client = GatewayServiceClient::new(
+        connection,
+        ClientConfig::new(uri).with_protocol(Protocol::Connect),
+    );
+
+    let max_epoch_records = usize::try_from(MAX_SERVICE_LOG_INSTANCE_CHUNKS)
+        .expect("service-log epoch chunk quota fits usize");
+    loop {
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for guest service-log markers"
+        );
+        let mut after = None;
+        let mut records = Vec::new();
+        let mut metadata = None;
+        let mut history_incomplete = false;
+        let mut page_count = 0_usize;
+        loop {
+            page_count = page_count
+                .checked_add(1)
+                .expect("guest service-log page count overflow");
+            assert!(
+                page_count <= max_epoch_records,
+                "guest service-log pagination exceeded the production epoch chunk quota"
+            );
+            let request = ListGatewayServiceLogsRequest {
+                scope: scope.clone().into(),
+                limit: 1,
+                after: after
+                    .clone()
+                    .map(|value| Cursor {
+                        value,
+                        ..Default::default()
+                    })
+                    .into(),
+                ..Default::default()
+            };
+            let token = service_log_rpc_token(&owner_id.as_uuid(), "ListGatewayServiceLogs");
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            let response = tokio::time::timeout(
+                remaining,
+                client.list_gateway_service_logs_with_options(
+                    request,
+                    CallOptions::default().with_header("authorization", format!("Bearer {token}")),
+                ),
+            )
+            .await
+            .expect("guest service-log RPC deadline")
+            .expect("authorized guest service-log RPC page")
+            .into_owned();
+            if metadata.is_none() {
+                metadata = response.metadata.as_option().cloned();
+            }
+            history_incomplete |= response.history_incomplete;
+            records.extend(response.records);
+            assert!(
+                records.len() <= max_epoch_records,
+                "guest service-log records exceeded the production epoch chunk quota"
+            );
+            let next_after = response
+                .next_after
+                .as_option()
+                .map(|cursor| cursor.value.clone());
+            assert!(
+                !(after.is_some() && next_after == after),
+                "guest service-log RPC cursor did not advance"
+            );
+            after = next_after;
+            if after.is_none() {
+                break;
+            }
+        }
+
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let mut previous_sequence = None;
+        for record in &records {
+            if let Some(previous_sequence) = previous_sequence {
+                assert!(
+                    record.sequence > previous_sequence,
+                    "guest service-log sequences must increase: {previous_sequence} then {}",
+                    record.sequence
+                );
+            }
+            previous_sequence = Some(record.sequence);
+            if record.stream == GatewayServiceLogStream::Stdout {
+                stdout.extend_from_slice(&record.contents);
+            } else if record.stream == GatewayServiceLogStream::Stderr {
+                stderr.extend_from_slice(&record.contents);
+            } else {
+                panic!("guest service-log RPC returned an unexpected stream");
+            }
+        }
+
+        if metadata.as_ref().is_some_and(|metadata| {
+            metadata.epoch_present
+                && metadata.acknowledged_through.is_some()
+                && !history_incomplete
+                && marker_count(&stdout, GUEST_SERVICE_LOG_STDOUT_MARKER) == 1
+                && marker_count(&stderr, GUEST_SERVICE_LOG_STDERR_MARKER) == 1
+        }) {
+            assert!(
+                !records.is_empty(),
+                "guest service-log RPC returned no records"
+            );
+            return GatewayServiceGuestLogProof {
+                project_id,
+                gateway_id: fixture.gateway_id,
+                revision_id: fixture.revision_id,
+                instance_id,
+                fencing_token,
+                stdout,
+                stderr,
+            };
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for guest service-log markers"
+        );
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        tokio::time::sleep(Duration::from_millis(100).min(remaining)).await;
+    }
+}
+
+#[cfg(feature = "test-fixtures")]
+fn marker_count(bytes: &[u8], marker: &[u8]) -> usize {
+    bytes
+        .windows(marker.len())
+        .filter(|window| *window == marker)
+        .count()
+}
+
+#[cfg(feature = "test-fixtures")]
+async fn assert_guest_gateway_service_log_retained(
+    pool: &sqlx::PgPool,
+    proof: &GatewayServiceGuestLogProof,
+) {
+    let epoch: (i64, i64, i64) = sqlx::query_as(
+        "SELECT fencing_token, acknowledged_through, retained_chunks
+           FROM gateway_service_log_epochs
+          WHERE instance_id = $1 AND gateway_id = $2 AND revision_id = $3
+            AND project_id = $4 AND fencing_token = $5",
+    )
+    .bind(proof.instance_id)
+    .bind(proof.gateway_id)
+    .bind(proof.revision_id)
+    .bind(proof.project_id)
+    .bind(proof.fencing_token)
+    .fetch_one(pool)
+    .await
+    .expect("read retained guest service-log epoch");
+    assert_eq!(epoch.0, proof.fencing_token);
+    assert!(epoch.1 >= 0);
+
+    let rows: Vec<(i64, String, Vec<u8>)> = sqlx::query_as(
+        "SELECT sequence, stream, bytes
+           FROM gateway_service_log_chunks
+          WHERE instance_id = $1 AND gateway_id = $2 AND revision_id = $3
+            AND project_id = $4 AND fencing_token = $5
+          ORDER BY sequence",
+    )
+    .bind(proof.instance_id)
+    .bind(proof.gateway_id)
+    .bind(proof.revision_id)
+    .bind(proof.project_id)
+    .bind(proof.fencing_token)
+    .fetch_all(pool)
+    .await
+    .expect("read retained guest service-log chunks");
+    assert!(
+        !rows.is_empty(),
+        "guest service-log chunks were not retained"
+    );
+    assert_eq!(
+        usize::try_from(epoch.2).expect("retained chunk count fits usize"),
+        rows.len()
+    );
+
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let mut previous_sequence = None;
+    for (sequence, stream, bytes) in rows {
+        if let Some(previous_sequence) = previous_sequence {
+            assert!(sequence > previous_sequence);
+        }
+        previous_sequence = Some(sequence);
+        match stream.as_str() {
+            "stdout" => stdout.extend_from_slice(&bytes),
+            "stderr" => stderr.extend_from_slice(&bytes),
+            other => panic!("unexpected retained guest service-log stream: {other}"),
+        }
+    }
+    assert!(
+        stdout.starts_with(&proof.stdout),
+        "pre-shutdown stdout must remain retained in stream order"
+    );
+    assert!(
+        stderr.starts_with(&proof.stderr),
+        "pre-shutdown stderr must remain retained in stream order"
+    );
+    assert_eq!(
+        marker_count(&stdout, GUEST_SERVICE_LOG_STDOUT_MARKER),
+        1,
+        "retained stdout marker must remain unique"
+    );
+    assert_eq!(
+        marker_count(&stderr, GUEST_SERVICE_LOG_STDERR_MARKER),
+        1,
+        "retained stderr marker must remain unique"
+    );
+}
+
+#[cfg(feature = "test-fixtures")]
 /// Exercises the generated gateway RPC against the running daemon, including
 /// mediator authentication and the app-role reader behind the router. This is
 /// opt-in because it requires the real PostgreSQL/libkrun golden environment.
-#[cfg(feature = "test-fixtures")]
 // Keep this end-to-end fixture together so its auth, role, paging, and denial
 // assertions describe one production bootstrap boundary.
 #[allow(
