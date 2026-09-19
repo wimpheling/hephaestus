@@ -61,7 +61,24 @@ impl GatewayServiceOwnership for PostgresGatewayServiceOwnership {
         if eligible.is_none() {
             return Err(GatewayServiceOwnershipError::Conflict);
         }
+        let retry_at = sqlx::query_as::<_, RetryStateRow>(
+            "SELECT next_retry_at
+               FROM gateway_service_retry_state
+              WHERE gateway_id = $1 AND revision_id = $2
+              FOR UPDATE",
+        )
+        .bind(gateway_id)
+        .bind(revision_id)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|error| storage(&error))?;
         let now = database_now(&mut transaction).await?;
+        if retry_at
+            .and_then(|row| row.next_retry_at)
+            .is_some_and(|retry_at| retry_at > now)
+        {
+            return Err(GatewayServiceOwnershipError::Conflict);
+        }
         let expires_at = now
             .checked_add(lease_duration)
             .ok_or(GatewayServiceOwnershipError::InvalidArgument)?;
@@ -232,9 +249,17 @@ impl GatewayServiceOwnership for PostgresGatewayServiceOwnership {
         lease: &GatewayServiceInstanceLease,
         owner: &GatewayServiceOwner,
     ) -> Result<GatewayServiceInstanceLease, GatewayServiceOwnershipError> {
-        transition_state(&self.pool, lease, owner, "provisioning", "starting", false)
-            .await?
-            .into_lease()
+        transition_state(
+            &self.pool,
+            lease,
+            owner,
+            "provisioning",
+            "starting",
+            false,
+            false,
+        )
+        .await?
+        .into_lease()
     }
 
     async fn mark_ready(
@@ -242,7 +267,7 @@ impl GatewayServiceOwnership for PostgresGatewayServiceOwnership {
         lease: &GatewayServiceInstanceLease,
         owner: &GatewayServiceOwner,
     ) -> Result<GatewayServiceInstanceLease, GatewayServiceOwnershipError> {
-        transition_state(&self.pool, lease, owner, "starting", "ready", false)
+        transition_state(&self.pool, lease, owner, "starting", "ready", false, true)
             .await?
             .into_lease()
     }
@@ -252,7 +277,7 @@ impl GatewayServiceOwnership for PostgresGatewayServiceOwnership {
         lease: &GatewayServiceInstanceLease,
         owner: &GatewayServiceOwner,
     ) -> Result<GatewayServiceInstanceLease, GatewayServiceOwnershipError> {
-        transition_state(&self.pool, lease, owner, "ready", "draining", true)
+        transition_state(&self.pool, lease, owner, "ready", "draining", true, false)
             .await?
             .into_lease()
     }
@@ -377,6 +402,7 @@ async fn transition_state(
     expected_state: &str,
     next_state: &str,
     reject_active: bool,
+    reset_retry: bool,
 ) -> Result<ServiceInstanceRow, GatewayServiceOwnershipError> {
     validate_lease(lease)?;
     owner.validate()?;
@@ -393,6 +419,20 @@ async fn transition_state(
         return Err(GatewayServiceOwnershipError::Conflict);
     }
     let row = persist_state(&mut transaction, current.id, next_state, now).await?;
+    if reset_retry {
+        sqlx::query(
+            "UPDATE gateway_service_retry_state
+                SET failure_streak = 0, next_retry_at = NULL, updated_at = now()
+              WHERE gateway_id = $1 AND revision_id = $2",
+        )
+        .bind(current.gateway_id)
+        .bind(current.revision_id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|error| storage(&error))?;
+        let fresh_now = database_now(&mut transaction).await?;
+        ensure_current_lease(&current, lease, owner, fresh_now)?;
+    }
     transaction
         .commit()
         .await
@@ -464,6 +504,11 @@ struct GatewayStateRow {
     lifecycle: String,
     active_revision_id: Option<Uuid>,
     desired_revision_id: Option<Uuid>,
+}
+
+#[derive(Debug, FromRow)]
+struct RetryStateRow {
+    next_retry_at: Option<OffsetDateTime>,
 }
 
 async fn database_now(

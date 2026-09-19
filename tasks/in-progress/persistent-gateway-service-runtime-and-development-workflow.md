@@ -690,6 +690,17 @@ check, strict Clippy, formatting, and 58 library tests passed.
   checks remain unchanged. The focused test passed against the real services
   and app Clippy passed on the committed checkpoint.
 
+- [x] Add durable service failure recording and retry backoff. Failure reports
+  use bounded redacted categories and optional provider exit values; the first
+  report for an exact live owner is write-once, updates a revision-scoped
+  exponential backoff, and never stores raw logs. Claim and readiness paths
+  lock the gateway and retry state in order, recheck the database clock after
+  lock waits, and fail closed on stale owners. Real worker-role PostgreSQL
+  evidence passed four focused failure tests and all 14 ownership tests
+  against migration 0076; strict targeted gateway-postgres Clippy passed.
+  Logs: `/tmp/hephaestus-gateway-failure-worker.log` and
+  `/tmp/hephaestus-gateway-ownership-worker.log`.
+
 ## Non-goals
 
 This task does not replace MVP 03's bounded stateless invocation mode. It does

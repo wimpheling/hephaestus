@@ -19,6 +19,7 @@ use vm_trait::{PrivateHttpRequest, PrivateHttpResponse, PrivateMailboxPublicatio
 mod integration;
 mod service_capacity;
 mod service_execution;
+mod service_failure;
 mod service_handler;
 mod service_http;
 mod service_instance;
@@ -42,6 +43,10 @@ pub use service_capacity::{
 pub use service_execution::{
     GatewayExecutionTarget, GatewayExecutionTargetError, GatewayExecutionTargetResolver,
     GatewayServiceAuthorityBudget,
+};
+pub use service_failure::{
+    GatewayServiceFailure, GatewayServiceFailureCode, GatewayServiceFailureStore,
+    GatewayServiceFailureStoreError,
 };
 pub use service_handler::GatewayServiceHandler;
 pub use service_http::{ServiceHttpPolicy, exchange as exchange_private_service_http};
