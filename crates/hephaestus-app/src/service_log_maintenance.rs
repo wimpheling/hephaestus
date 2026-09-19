@@ -277,7 +277,7 @@ mod tests {
                 .expect("fake cursor lock")
                 .push(page.after);
             if self.hang {
-                pending().await
+                pending::<()>().await;
             }
             self.pages
                 .lock()
@@ -312,7 +312,7 @@ mod tests {
                 .expect("fake maintenance lock")
                 .push(project_id);
             if self.hang {
-                pending().await
+                pending::<()>().await;
             }
             self.reports
                 .lock()

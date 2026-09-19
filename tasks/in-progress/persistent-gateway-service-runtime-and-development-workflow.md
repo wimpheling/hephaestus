@@ -2078,3 +2078,13 @@ Clippy, formatting and app/proto rustdoc passed; retained logs include
 test-only lints that remain a separate preflight fix. Real authenticated RPC
 checks are implemented in the golden source but have not yet been executed;
 this checkpoint does not claim their acceptance.
+
+Real-stack preflight checkpoint (2026-09-19): golden compilation with
+`test-fixtures` passed in
+`/home/a/hephaestus-app-golden-compile-20260919-v2.log`, and strict all-target
+app Clippy passed in `/home/a/hephaestus-app-all-target-clippy-20260919-v3.log`.
+The scheduler test futures now explicitly return unit and terminate with
+semicolons, satisfying the test-target lint without changing behavior. Golden
+panic-only branches were likewise rewritten as equivalent assertions in the
+pending acceptance source. Formatting and diff checks passed. These preflight
+checks are not real VM/Caddy acceptance evidence.
