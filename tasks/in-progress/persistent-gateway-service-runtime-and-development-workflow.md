@@ -1432,3 +1432,22 @@ Clippy, formatting, and affected-crate rustdoc pass. Logs are
 `/tmp/heph-retention-isolated-doc-20260919.log`. Application writer
 attachment, periodic maintenance scheduling, authorized readers/RPC, and UI
 remain pending; this checkpoint does not claim those integrations.
+
+Committed cutover verification at `98ba5c3`: [CI run
+35435015740](https://github.com/wimpheling/hephaestus/actions/runs/35435015740)
+passes Rust/authorization, cooking applications, and live browser review.
+
+Committed retention verification at `32d857d`: [CI run
+35435401903](https://github.com/wimpheling/hephaestus/actions/runs/35435401903)
+passes Rust/authorization, cooking applications, and live browser review.
+
+The bounded authorized service-log read contract is now defined in the edge
+layer: exact project/gateway/revision/instance/fence scope, scope-bound
+sequence cursors, 1--100 record pages with a fixed 512 KiB payload budget,
+redacted debug output, and explicit epoch loss/retention metadata and history
+incompleteness. The pinned Rust 1.88 isolated overlay at
+`/tmp/heph-read-contract-b4c25f6.KIipk6` ran all 172 gateway-edge library
+tests, strict all-target/all-feature Clippy, formatting, and rustdoc; logs are
+`/tmp/heph-read-contract-b4c25f6-{edge-tests,clippy,fmt,doc}.log`. PostgreSQL
+reader authorization, adapter queries, RPC/protobuf exposure, and project
+usage loss visibility remain pending.

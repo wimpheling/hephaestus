@@ -14,7 +14,7 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 use vm_trait::LogStream;
 
-use crate::{GatewayServiceInstanceLease, GatewayServiceOwner};
+use crate::{GatewayEdgeError, GatewayServiceInstanceLease, GatewayServiceOwner};
 
 /// Maximum bytes accepted from one provider log event.
 pub const MAX_SERVICE_LOG_CHUNK_BYTES: usize = 64 * 1024;
@@ -36,6 +36,236 @@ pub const MAX_SERVICE_LOG_MAINTENANCE_CHUNKS: usize = 256;
 pub const MAX_SERVICE_LOG_MAINTENANCE_EPOCHS: usize = 32;
 /// Maximum retained fencing epochs represented in one project's log metadata.
 pub const MAX_SERVICE_LOG_PROJECT_EPOCHS: u32 = 128;
+/// Maximum number of records returned by one authorized log page.
+pub const MAX_SERVICE_LOG_READ_PAGE_RECORDS: u16 = 100;
+/// Maximum payload bytes returned by one authorized log page.
+pub const MAX_SERVICE_LOG_READ_PAGE_BYTES: usize = 512 * 1024;
+
+/// Exact durable scope of one service log fencing epoch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct GatewayServiceLogReadScope {
+    /// Owning project identity.
+    pub project_id: Uuid,
+    /// Gateway identity.
+    pub gateway_id: Uuid,
+    /// Immutable gateway revision identity.
+    pub revision_id: Uuid,
+    /// Durable service instance identity.
+    pub instance_id: Uuid,
+    /// Positive fencing epoch of the instance.
+    pub fencing_token: i64,
+}
+
+impl GatewayServiceLogReadScope {
+    /// Creates an exact, non-nil service log scope.
+    ///
+    /// # Errors
+    ///
+    /// Returns a contract error when an identity is nil or the fencing token
+    /// is not positive.
+    pub fn new(
+        project_id: Uuid,
+        gateway_id: Uuid,
+        revision_id: Uuid,
+        instance_id: Uuid,
+        fencing_token: i64,
+    ) -> Result<Self, GatewayEdgeError> {
+        let scope = Self {
+            project_id,
+            gateway_id,
+            revision_id,
+            instance_id,
+            fencing_token,
+        };
+        scope.validate()?;
+        Ok(scope)
+    }
+
+    /// Validates a scope assembled by an internal caller.
+    ///
+    /// # Errors
+    ///
+    /// Returns a contract error when an identity is nil or the fencing token
+    /// is not positive.
+    pub const fn validate(self) -> Result<(), GatewayEdgeError> {
+        if self.project_id.is_nil()
+            || self.gateway_id.is_nil()
+            || self.revision_id.is_nil()
+            || self.instance_id.is_nil()
+            || self.fencing_token <= 0
+        {
+            return Err(GatewayEdgeError::Contract(
+                "invalid gateway service log read scope",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Scope-bound sequence cursor for an exact service log fencing epoch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct GatewayServiceLogReadCursor {
+    scope: GatewayServiceLogReadScope,
+    sequence: u64,
+}
+
+impl GatewayServiceLogReadCursor {
+    /// Creates a cursor for one exact scope and sequence.
+    ///
+    /// # Errors
+    ///
+    /// Returns a contract error when the scope is invalid or the sequence
+    /// cannot be represented by the `PostgreSQL` `bigint` sequence column.
+    pub fn new(scope: GatewayServiceLogReadScope, sequence: u64) -> Result<Self, GatewayEdgeError> {
+        scope.validate()?;
+        if sequence > i64::MAX as u64 {
+            return Err(GatewayEdgeError::Contract(
+                "gateway service log cursor sequence is too large",
+            ));
+        }
+        Ok(Self { scope, sequence })
+    }
+
+    /// Returns the exact scope bound into this cursor.
+    #[must_use]
+    pub const fn scope(self) -> GatewayServiceLogReadScope {
+        self.scope
+    }
+
+    /// Returns the exclusive sequence position.
+    #[must_use]
+    pub const fn sequence(self) -> u64 {
+        self.sequence
+    }
+}
+
+/// Bounded authorized read request for one exact service log epoch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GatewayServiceLogReadRequest {
+    /// Exact project/gateway/revision/instance/fence scope.
+    pub scope: GatewayServiceLogReadScope,
+    /// Maximum number of records requested.
+    pub limit: u16,
+    /// Exclusive sequence cursor, when resuming a page.
+    pub after: Option<GatewayServiceLogReadCursor>,
+}
+
+impl GatewayServiceLogReadRequest {
+    /// Creates a bounded scope-bound read request.
+    ///
+    /// # Errors
+    ///
+    /// Returns a contract error for malformed scope, page size, or a cursor
+    /// bound to another scope.
+    pub fn new(
+        scope: GatewayServiceLogReadScope,
+        limit: u16,
+        after: Option<GatewayServiceLogReadCursor>,
+    ) -> Result<Self, GatewayEdgeError> {
+        let request = Self {
+            scope,
+            limit,
+            after,
+        };
+        request.validate()?;
+        Ok(request)
+    }
+
+    /// Validates a request assembled by an internal caller.
+    ///
+    /// # Errors
+    ///
+    /// Returns a contract error for malformed scope, page size, or a cursor
+    /// bound to another scope.
+    pub fn validate(self) -> Result<(), GatewayEdgeError> {
+        self.scope.validate()?;
+        if self.limit == 0 || self.limit > MAX_SERVICE_LOG_READ_PAGE_RECORDS {
+            return Err(GatewayEdgeError::Contract(
+                "invalid gateway service log read page",
+            ));
+        }
+        if self
+            .after
+            .is_some_and(|cursor| cursor.scope() != self.scope)
+        {
+            return Err(GatewayEdgeError::Contract(
+                "gateway service log cursor scope mismatch",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// One authorized service log payload returned by a reader.
+#[derive(Clone)]
+pub struct GatewayServiceLogReadRecord {
+    /// Monotonic worker sequence within the exact fencing epoch.
+    pub sequence: u64,
+    /// Guest output stream.
+    pub stream: LogStream,
+    /// Host time at which the provider observed the chunk.
+    pub observed_at: OffsetDateTime,
+    /// Time at which the platform stored the chunk.
+    pub stored_at: OffsetDateTime,
+    /// Application-owned bytes. These are intentionally excluded from debug.
+    pub bytes: Vec<u8>,
+}
+
+impl fmt::Debug for GatewayServiceLogReadRecord {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("GatewayServiceLogReadRecord")
+            .field("sequence", &self.sequence)
+            .field("stream", &self.stream)
+            .field("observed_at", &self.observed_at)
+            .field("stored_at", &self.stored_at)
+            .field("byte_len", &self.bytes.len())
+            .finish()
+    }
+}
+
+/// Durable loss and retention metadata for one exact log epoch.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GatewayServiceLogReadMetadata {
+    /// Whether the exact epoch exists in durable metadata.
+    pub epoch_present: bool,
+    /// Highest sequence acknowledged, including evicted or dropped records.
+    pub acknowledged_through: Option<u64>,
+    /// Current retained payload bytes and rows.
+    pub retained_bytes: u64,
+    /// Current retained payload row count.
+    pub retained_chunks: u64,
+    /// Producer, provider, storage, and retention loss counters.
+    pub producer_dropped_chunks: u64,
+    /// Bytes reported lost by the producer.
+    pub producer_dropped_bytes: u64,
+    /// Provider events skipped before the collector received them.
+    pub provider_lagged_events: u64,
+    /// Chunks rejected by durable storage capacity.
+    pub storage_dropped_chunks: u64,
+    /// Bytes rejected by durable storage capacity.
+    pub storage_dropped_bytes: u64,
+    /// Payload rows removed by retention maintenance.
+    pub evicted_chunks: u64,
+    /// Bytes removed by retention maintenance.
+    pub evicted_bytes: u64,
+    /// Lowest retained sequence, when at least one payload remains.
+    pub earliest_retained_sequence: Option<u64>,
+}
+
+/// Bounded page returned by an authorized service log reader.
+#[derive(Debug, Clone)]
+pub struct GatewayServiceLogReadPage {
+    /// Payload rows in increasing sequence order.
+    pub records: Vec<GatewayServiceLogReadRecord>,
+    /// Durable loss and retention metadata for the requested epoch.
+    pub metadata: GatewayServiceLogReadMetadata,
+    /// Whether the requested cursor precedes retained payload history.
+    /// This does not identify the exact cause or byte count of the gap.
+    pub history_incomplete: bool,
+    /// Scope-bound cursor for the next page, when more rows exist.
+    pub next_after: Option<GatewayServiceLogReadCursor>,
+}
 
 /// One bounded application log chunk observed from the guest.
 #[derive(Clone)]
@@ -604,5 +834,110 @@ mod tests {
         buffer.inner.lock().expect("queue lock").next_sequence = u64::MAX;
         buffer.try_record(LogStream::Stdout, OffsetDateTime::UNIX_EPOCH, b"late");
         assert_eq!(buffer.snapshot().loss.sequence_exhausted_chunks, 1);
+    }
+}
+
+#[cfg(test)]
+mod read_contract_tests {
+    use super::*;
+
+    fn scope(offset: u128) -> GatewayServiceLogReadScope {
+        GatewayServiceLogReadScope::new(
+            Uuid::from_u128(offset + 1),
+            Uuid::from_u128(offset + 2),
+            Uuid::from_u128(offset + 3),
+            Uuid::from_u128(offset + 4),
+            7,
+        )
+        .expect("valid read scope")
+    }
+
+    #[test]
+    fn read_request_bounds_page_and_binds_cursor_to_all_scope_fields() {
+        let read_scope = scope(10);
+        let cursor = GatewayServiceLogReadCursor::new(read_scope, 42).expect("valid cursor");
+        assert!(GatewayServiceLogReadRequest::new(read_scope, 1, Some(cursor)).is_ok());
+        assert!(
+            GatewayServiceLogReadRequest::new(read_scope, MAX_SERVICE_LOG_READ_PAGE_RECORDS, None)
+                .is_ok()
+        );
+        assert!(GatewayServiceLogReadRequest::new(read_scope, 0, None).is_err());
+        assert!(
+            GatewayServiceLogReadRequest::new(
+                read_scope,
+                MAX_SERVICE_LOG_READ_PAGE_RECORDS + 1,
+                None
+            )
+            .is_err()
+        );
+        assert!(GatewayServiceLogReadRequest::new(scope(20), 10, Some(cursor)).is_err());
+        assert!(GatewayServiceLogReadCursor::new(read_scope, u64::MAX).is_err());
+        let mut assembled = GatewayServiceLogReadRequest::new(read_scope, 10, None)
+            .expect("valid assembled request");
+        assembled.limit = 0;
+        assert!(assembled.validate().is_err());
+    }
+
+    #[test]
+    fn read_scope_rejects_nil_identity_and_nonpositive_fence() {
+        let valid = scope(30);
+        assert!(
+            GatewayServiceLogReadScope::new(
+                Uuid::nil(),
+                valid.gateway_id,
+                valid.revision_id,
+                valid.instance_id,
+                valid.fencing_token,
+            )
+            .is_err()
+        );
+        assert!(
+            GatewayServiceLogReadScope::new(
+                valid.project_id,
+                valid.gateway_id,
+                valid.revision_id,
+                valid.instance_id,
+                0,
+            )
+            .is_err()
+        );
+        assert!(
+            GatewayServiceLogReadScope::new(
+                valid.project_id,
+                valid.gateway_id,
+                valid.revision_id,
+                valid.instance_id,
+                -1,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn read_record_debug_redacts_application_bytes() {
+        let record = GatewayServiceLogReadRecord {
+            sequence: 3,
+            stream: LogStream::Stderr,
+            observed_at: OffsetDateTime::UNIX_EPOCH,
+            stored_at: OffsetDateTime::UNIX_EPOCH,
+            bytes: b"application-secret-like-value".to_vec(),
+        };
+        let debug = format!("{record:?}");
+        assert!(debug.contains("byte_len"));
+        assert!(!debug.contains("application-secret-like-value"));
+    }
+
+    #[test]
+    fn empty_epoch_metadata_is_distinct_from_history_gap() {
+        let metadata = GatewayServiceLogReadMetadata::default();
+        assert!(!metadata.epoch_present);
+        assert_eq!(metadata.earliest_retained_sequence, None);
+        let page = GatewayServiceLogReadPage {
+            records: Vec::new(),
+            metadata,
+            history_incomplete: false,
+            next_after: None,
+        };
+        assert!(!page.history_incomplete);
     }
 }

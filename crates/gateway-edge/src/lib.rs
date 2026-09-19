@@ -102,12 +102,15 @@ pub use service_log_writer::{
 pub use service_logs::{
     GatewayServiceLogAppendBatch, GatewayServiceLogAppendOutcome, GatewayServiceLogMaintenance,
     GatewayServiceLogMaintenanceError, GatewayServiceLogMaintenancePolicy,
-    GatewayServiceLogMaintenanceReport, GatewayServiceLogStore, GatewayServiceLogStoreError,
+    GatewayServiceLogMaintenanceReport, GatewayServiceLogReadCursor, GatewayServiceLogReadMetadata,
+    GatewayServiceLogReadPage, GatewayServiceLogReadRecord, GatewayServiceLogReadRequest,
+    GatewayServiceLogReadScope, GatewayServiceLogStore, GatewayServiceLogStoreError,
     MAX_SERVICE_LOG_CHUNK_BYTES, MAX_SERVICE_LOG_INSTANCE_BYTES, MAX_SERVICE_LOG_INSTANCE_CHUNKS,
     MAX_SERVICE_LOG_MAINTENANCE_CHUNKS, MAX_SERVICE_LOG_MAINTENANCE_EPOCHS,
     MAX_SERVICE_LOG_PROJECT_BYTES, MAX_SERVICE_LOG_PROJECT_CHUNKS, MAX_SERVICE_LOG_PROJECT_EPOCHS,
-    MAX_SERVICE_LOG_QUEUE_BYTES, MAX_SERVICE_LOG_QUEUE_CHUNKS, ServiceLogBufferHandle,
-    ServiceLogBufferSnapshot, ServiceLogLoss, ServiceLogRecord,
+    MAX_SERVICE_LOG_QUEUE_BYTES, MAX_SERVICE_LOG_QUEUE_CHUNKS, MAX_SERVICE_LOG_READ_PAGE_BYTES,
+    MAX_SERVICE_LOG_READ_PAGE_RECORDS, ServiceLogBufferHandle, ServiceLogBufferSnapshot,
+    ServiceLogLoss, ServiceLogRecord,
 };
 pub use service_ownership::{
     GatewayServiceInstanceLease, GatewayServiceInstanceState, GatewayServiceOwner,
