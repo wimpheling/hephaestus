@@ -99,6 +99,10 @@ async fn service_targets_preserve_serving_candidate_and_lifecycle_boundaries() {
         .as_ref()
         .expect("published serving service");
     assert_eq!(active.revision_id, serving_and_revoked.old_service);
+    assert_eq!(
+        active.service.log_capture_mode,
+        gateway_domain::ServiceLogCaptureMode::Application
+    );
     assert_eq!(active.release_state.as_deref(), Some("published"));
     assert!(active.publication_eligible);
     let candidate = serving
@@ -106,6 +110,10 @@ async fn service_targets_preserve_serving_candidate_and_lifecycle_boundaries() {
         .as_ref()
         .expect("revoked desired service");
     assert_eq!(candidate.revision_id, serving_and_revoked.candidate_service);
+    assert_eq!(
+        candidate.service.log_capture_mode,
+        gateway_domain::ServiceLogCaptureMode::Application
+    );
     assert_eq!(candidate.release_state.as_deref(), Some("revoked"));
     assert!(!candidate.publication_eligible);
 
@@ -122,6 +130,15 @@ async fn service_targets_preserve_serving_candidate_and_lifecycle_boundaries() {
             .revision_id,
         mixed.candidate_service
     );
+    assert_eq!(
+        mixed_target
+            .desired_service_revision
+            .as_ref()
+            .expect("mixed desired service")
+            .service
+            .log_capture_mode,
+        gateway_domain::ServiceLogCaptureMode::Application
+    );
 
     let paused_target = store
         .get_service_target(paused.gateway, paused.old_service)
@@ -130,6 +147,10 @@ async fn service_targets_preserve_serving_candidate_and_lifecycle_boundaries() {
         .expect("paused target exists");
     assert_eq!(paused_target.lifecycle, "paused");
     assert_eq!(paused_target.revision.revision_id, paused.old_service);
+    assert_eq!(
+        paused_target.revision.service.log_capture_mode,
+        gateway_domain::ServiceLogCaptureMode::Application
+    );
     assert_eq!(
         paused_target.desired_service_revision_id,
         Some(paused.candidate_service)
@@ -807,13 +828,15 @@ async fn insert_revision(
             (id, gateway_id, project_id, repository_id, release_id, release_agent_id,
              release_agent_key, handler_contract, exposure, parameters,
              service_loopback_port, service_readiness_path, service_health_path,
-             normalized_hash, created_by)
+             service_log_capture_mode, normalized_hash, created_by)
          VALUES ($1, $2, $3, $4, $5,
                  CASE WHEN $5 IS NULL THEN NULL ELSE
                      (SELECT id FROM release_agents WHERE release_id = $5 LIMIT 1)
                  END,
                  CASE WHEN $5 IS NULL THEN NULL ELSE 'target-service' END,
-                 $6, 'public', '{}', $7, $8, $9, $10, $11)",
+                 $6, 'public', '{}', $7, $8, $9,
+                 CASE WHEN $6 = 'http.service.v1' THEN 'application' ELSE 'disabled' END,
+                 $10, $11)",
     )
     .bind(revision)
     .bind(gateway)

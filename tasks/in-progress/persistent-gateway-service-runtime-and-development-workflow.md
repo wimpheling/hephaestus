@@ -997,6 +997,21 @@ check, strict Clippy, formatting, and 58 library tests passed.
   `cargo clippy -p gateway-edge --all-targets --all-features -- -D warnings`
   passed in `/tmp/heph-retry-check-20260919-clippy.log`.
 
+- [x] Add the default-off, release-scoped application log policy to the typed
+  service declaration and immutable revision storage. The `disabled` default
+  is omitted from normalized JSON/TOML serialization, preserving the frozen
+  pre-change service hash; explicit `application` changes the hash. Migration
+  0077 persists the closed policy, rejects unknown values, keeps stateless
+  revisions disabled, and carries the value through install, configure-copy,
+  management reads, worker target reads, and worker launch resolution. Real
+  PostgreSQL evidence passed 8 gateway tests and 4 worker target tests with
+  migration marker 77; evidence is retained in
+  `/tmp/heph-storage-real-20260919.log` and
+  `/tmp/heph-storage-targets-final-20260919.log` using isolated overlay base
+  `5f0f460ef402105f6fec9b551e07ab51782c2a3d`.
+  Application capture, bounded retention, authorized scoped reading, and RPC
+  exposure remain pending; lifecycle diagnostics remain content-free.
+
 ## Non-goals
 
 This task does not replace MVP 03's bounded stateless invocation mode. It does

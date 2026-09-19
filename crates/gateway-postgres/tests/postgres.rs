@@ -431,9 +431,16 @@ async fn gateway_service_declaration_round_trips_and_rejects_invalid_shapes() {
         .expect("apply gateway service migrations");
     let fixture = seed_fixture(&pool).await;
 
-    let stateless: (String, Option<i32>, Option<String>, Option<String>, Vec<u8>) = sqlx::query_as(
+    let stateless: (
+        String,
+        Option<i32>,
+        Option<String>,
+        Option<String>,
+        String,
+        Vec<u8>,
+    ) = sqlx::query_as(
         "SELECT handler_contract, service_loopback_port, service_readiness_path,
-                    service_health_path, normalized_hash
+                    service_health_path, service_log_capture_mode, normalized_hash
              FROM gateway_revisions WHERE id = $1",
     )
     .bind(fixture.revision)
@@ -444,7 +451,8 @@ async fn gateway_service_declaration_round_trips_and_rejects_invalid_shapes() {
     assert_eq!(stateless.1, None);
     assert_eq!(stateless.2, None);
     assert_eq!(stateless.3, None);
-    assert_eq!(stateless.4, vec![9_u8; 32]);
+    assert_eq!(stateless.4, "disabled");
+    assert_eq!(stateless.5, vec![9_u8; 32]);
 
     let app_pool = PgPoolOptions::new()
         .max_connections(6)
@@ -481,6 +489,7 @@ exposure = "public"
 loopback_port = 18080
 readiness_path = "/ready"
 health_path = "/health"
+log_capture_mode = "application"
 
 [[gateways.routes]]
 path = "/service"
@@ -520,9 +529,9 @@ methods = ["GET"]
     .await
     .expect("load stateless activation state");
     assert_eq!(stateless_state, (Some(fixture.revision), None));
-    let persisted: (String, Option<i32>, Option<String>, Option<String>) = sqlx::query_as(
+    let persisted: (String, Option<i32>, Option<String>, Option<String>, String) = sqlx::query_as(
         "SELECT handler_contract, service_loopback_port, service_readiness_path,
-                service_health_path
+                service_health_path, service_log_capture_mode
          FROM gateway_revisions WHERE id = $1",
     )
     .bind(installed.gateways[0].revision_id.as_uuid())
@@ -536,6 +545,7 @@ methods = ["GET"]
             Some(18080),
             Some("/ready".to_owned()),
             Some("/health".to_owned()),
+            "application".to_owned(),
         )
     );
 
@@ -555,6 +565,10 @@ methods = ["GET"]
     assert_eq!(service.loopback_port, 18080);
     assert_eq!(service.readiness_path.as_str(), "/ready");
     assert_eq!(service.health_path.as_str(), "/health");
+    assert_eq!(
+        service.log_capture_mode,
+        gateway_domain::ServiceLogCaptureMode::Application
+    );
 
     let outbox_before_desired_change: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM product_event_outbox outbox
@@ -587,6 +601,13 @@ methods = ["GET"]
     .expect("load pending service replacement state");
     assert_eq!(pending_state.0, None);
     assert_eq!(pending_state.1, Some(configured.revision_id));
+    let configured_mode: String =
+        sqlx::query_scalar("SELECT service_log_capture_mode FROM gateway_revisions WHERE id = $1")
+            .bind(configured.revision_id)
+            .fetch_one(&pool)
+            .await
+            .expect("load configured service log mode");
+    assert_eq!(configured_mode, "application");
     let outbox_after_desired_change: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM product_event_outbox outbox
            JOIN application_events event ON event.id = outbox.event_id
@@ -759,9 +780,9 @@ methods = ["GET"]
             None
         )
     );
-    let cloned: (String, Option<i32>, Option<String>, Option<String>) = sqlx::query_as(
+    let cloned: (String, Option<i32>, Option<String>, Option<String>, String) = sqlx::query_as(
         "SELECT handler_contract, service_loopback_port, service_readiness_path,
-                service_health_path
+                service_health_path, service_log_capture_mode
          FROM gateway_revisions WHERE id = $1",
     )
     .bind(configured.revision_id)
@@ -858,6 +879,47 @@ methods = ["GET"]
             .expect("rollback invalid shape transaction");
     }
 
+    for (handler_contract, log_capture_mode, port, readiness, health) in [
+        (
+            "http.service.v1",
+            "future",
+            Some(18080_i32),
+            Some("/ready".to_owned()),
+            Some("/health".to_owned()),
+        ),
+        ("http.v1", "application", None, None, None),
+    ] {
+        let mut transaction = pool.begin().await.expect("begin invalid mode transaction");
+        let result = sqlx::query(
+            "INSERT INTO gateway_revisions
+                (id, gateway_id, project_id, repository_id, handler_contract,
+                 exposure, parameters, service_loopback_port, service_readiness_path,
+                 service_health_path, service_log_capture_mode, normalized_hash, created_by)
+             VALUES ($1, $2, $3, $4, $5, 'public', '{}', $6, $7, $8, $9, $10, $11)",
+        )
+        .bind(Uuid::new_v4())
+        .bind(fixture.gateway)
+        .bind(fixture.project)
+        .bind(fixture.repository)
+        .bind(handler_contract)
+        .bind(port)
+        .bind(readiness)
+        .bind(health)
+        .bind(log_capture_mode)
+        .bind(Sha256::digest(Uuid::new_v4().as_bytes()).as_slice())
+        .bind(fixture.owner)
+        .execute(&mut *transaction)
+        .await;
+        assert!(
+            result.is_err(),
+            "invalid log capture mode shape must be rejected"
+        );
+        transaction
+            .rollback()
+            .await
+            .expect("rollback invalid mode transaction");
+    }
+
     let invalid_desired =
         sqlx::query("UPDATE gateways SET desired_service_revision_id = $2 WHERE id = $1")
             .bind(installed.gateways[0].gateway_id.as_uuid())
@@ -886,8 +948,13 @@ async fn gateway_service_launch_resolves_exact_published_revision_without_runtim
         .run(&pool)
         .await
         .expect("apply gateway service resolver migrations");
+    let max_migration: i64 = sqlx::query_scalar("SELECT max(version) FROM _sqlx_migrations")
+        .fetch_one(&pool)
+        .await
+        .expect("read migration marker");
+    assert!(max_migration >= 77, "migration 0077 must be applied");
     println!(
-        "REAL_POSTGRES_CONNECTED_AND_MIGRATED=1 max_migration=73 service_launch_resolver=connected"
+        "REAL_POSTGRES_CONNECTED_AND_MIGRATED=1 max_migration={max_migration} service_launch_resolver=connected"
     );
     let fixture = seed_fixture(&pool).await;
     println!("REAL_POSTGRES_SERVICE_RESOLVER_FIXTURE=seeded");
@@ -912,7 +979,7 @@ async fn gateway_service_launch_resolves_exact_published_revision_without_runtim
         .execute(&pool)
         .await
         .expect("service release agent");
-    sqlx::query("INSERT INTO gateway_revisions (id, gateway_id, project_id, repository_id, release_id, release_agent_id, release_agent_key, handler_contract, exposure, parameters, service_loopback_port, service_readiness_path, service_health_path, normalized_hash, created_by) VALUES ($1, $2, $3, $4, $5, $6, 'service-agent', 'http.service.v1', 'public', $7, 18081, '/ready', '/health', $8, $9)")
+    sqlx::query("INSERT INTO gateway_revisions (id, gateway_id, project_id, repository_id, release_id, release_agent_id, release_agent_key, handler_contract, exposure, parameters, service_loopback_port, service_readiness_path, service_health_path, service_log_capture_mode, normalized_hash, created_by) VALUES ($1, $2, $3, $4, $5, $6, 'service-agent', 'http.service.v1', 'public', $7, 18081, '/ready', '/health', 'application', $8, $9)")
         .bind(service_revision)
         .bind(fixture.gateway)
         .bind(fixture.project)
@@ -941,9 +1008,22 @@ async fn gateway_service_launch_resolves_exact_published_revision_without_runtim
     .fetch_one(&pool)
     .await
     .expect("count runtime rows before resolution");
+    let worker_pool = PgPoolOptions::new()
+        .max_connections(6)
+        .after_connect(|connection, _| {
+            Box::pin(async move {
+                sqlx::query("SET ROLE hephaestus_worker")
+                    .execute(connection)
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect(&database_url)
+        .await
+        .expect("connect service resolver worker role");
     let materializer = Arc::new(RecordingServiceMaterializer::default());
     let resolver = PostgresGatewayServiceLaunchResolver::new(
-        pool.clone(),
+        worker_pool,
         BTreeMap::from([(
             String::from("service-root"),
             RootFilesystem::Directory {
@@ -966,6 +1046,10 @@ async fn gateway_service_launch_resolves_exact_published_revision_without_runtim
     assert_eq!(launch.service.loopback_port, 18081);
     assert_eq!(launch.service.readiness_path.as_str(), "/ready");
     assert_eq!(launch.service.health_path.as_str(), "/health");
+    assert_eq!(
+        launch.service.log_capture_mode,
+        gateway_domain::ServiceLogCaptureMode::Application
+    );
     assert!(matches!(launch.spec.network, NetworkMode::Disabled));
     assert!(launch.spec.runtime_authority.is_none());
     assert_eq!(

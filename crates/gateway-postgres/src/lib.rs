@@ -13,7 +13,7 @@ use authz_postgres::{PostgresMelangeAuthorizer, audit_decision, begin_actor_tran
 use forge_domain::{ProjectId, RepositoryId};
 use gateway_domain::{
     Exposure, GatewayDeclaration, GatewayId, GatewayRevisionId, GatewayServiceConfig, HttpMethod,
-    ServiceProbePath,
+    ServiceLogCaptureMode, ServiceProbePath,
 };
 use gateway_edge::{
     GatewayConfigRevision, GatewayDesiredConfiguration, GatewayEdgeError, GatewayInvocationOutcome,
@@ -1146,6 +1146,7 @@ impl GatewayServiceLaunchResolver for PostgresGatewayServiceLaunchResolver {
                     revision.release_id, revision.handler_contract,
                     revision.service_loopback_port,
                     revision.service_readiness_path, revision.service_health_path,
+                    revision.service_log_capture_mode,
                     revision.parameters, agent.runtime_contract
                FROM gateway_revisions AS revision
                JOIN release_agents AS agent
@@ -1188,8 +1189,11 @@ impl GatewayServiceLaunchResolver for PostgresGatewayServiceLaunchResolver {
                 .ok_or(GatewayEdgeError::HandlerUnavailable)?,
         )
         .map_err(|_| GatewayEdgeError::HandlerUnavailable)?;
+        let log_capture_mode = ServiceLogCaptureMode::from_name(&row.service_log_capture_mode)
+            .ok_or(GatewayEdgeError::HandlerUnavailable)?;
         let service = GatewayServiceConfig::new(loopback_port, readiness_path, health_path)
-            .map_err(|_| GatewayEdgeError::HandlerUnavailable)?;
+            .map_err(|_| GatewayEdgeError::HandlerUnavailable)?
+            .with_log_capture_mode(log_capture_mode);
         let contract: GatewayRuntimeContract = serde_json::from_value(row.runtime_contract)
             .map_err(|_| GatewayEdgeError::HandlerUnavailable)?;
         if contract.requires_state
@@ -1524,6 +1528,7 @@ struct GatewayServiceLaunchRow {
     service_loopback_port: Option<i32>,
     service_readiness_path: Option<String>,
     service_health_path: Option<String>,
+    service_log_capture_mode: String,
     parameters: serde_json::Value,
     runtime_contract: serde_json::Value,
 }
@@ -2060,6 +2065,7 @@ impl PostgresGatewayManagement {
         let revisions = sqlx::query_as::<_, GatewayRevisionRow>(
             "SELECT id, release_id, release_agent_id, handler_contract,
                     service_loopback_port, service_readiness_path, service_health_path,
+                    service_log_capture_mode,
                     exposure, secret_slots, mailbox_slots, created_at
              FROM gateway_revisions WHERE gateway_id = $1 ORDER BY created_at DESC, id DESC",
         )
@@ -2346,7 +2352,8 @@ impl PostgresGatewayManagement {
                     revision.release_id, revision.release_agent_id, revision.release_agent_key,
                     revision.handler_contract,
                     revision.service_loopback_port, revision.service_readiness_path,
-                    revision.service_health_path, revision.exposure, revision.secret_slots,
+                    revision.service_health_path, revision.service_log_capture_mode,
+                    revision.exposure, revision.secret_slots,
                     revision.mailbox_slots,
                     agent.parameter_schema, release.state AS release_state
              FROM gateways AS gateway
@@ -2539,8 +2546,8 @@ impl PostgresGatewayManagement {
                (id, gateway_id, project_id, repository_id, release_id, release_agent_id,
                 release_agent_key, handler_contract, exposure, parameters, secret_slots,
                 mailbox_slots, service_loopback_port, service_readiness_path,
-                service_health_path, normalized_hash, created_by)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)",
+                service_health_path, service_log_capture_mode, normalized_hash, created_by)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)",
         )
         .bind(revision_id)
         .bind(command.gateway_id)
@@ -2560,6 +2567,7 @@ impl PostgresGatewayManagement {
         .bind(current.service_loopback_port)
         .bind(&current.service_readiness_path)
         .bind(&current.service_health_path)
+        .bind(&current.service_log_capture_mode)
         .bind(revision_hash.as_slice())
         .bind(identity.user_id.as_uuid())
         .execute(&mut *tx)
@@ -2939,6 +2947,7 @@ struct ConfigureRevisionRow {
     service_loopback_port: Option<i32>,
     service_readiness_path: Option<String>,
     service_health_path: Option<String>,
+    service_log_capture_mode: String,
     exposure: String,
     secret_slots: Vec<String>,
     mailbox_slots: Vec<String>,
@@ -3061,6 +3070,7 @@ struct GatewayRevisionRow {
     service_loopback_port: Option<i32>,
     service_readiness_path: Option<String>,
     service_health_path: Option<String>,
+    service_log_capture_mode: String,
     exposure: String,
     secret_slots: Vec<String>,
     mailbox_slots: Vec<String>,
@@ -3073,6 +3083,7 @@ impl GatewayRevisionRow {
             self.service_loopback_port,
             self.service_readiness_path.clone(),
             self.service_health_path.clone(),
+            &self.service_log_capture_mode,
         )
     }
 }
@@ -3081,9 +3092,12 @@ fn service_config_from_columns(
     loopback_port: Option<i32>,
     readiness_path: Option<String>,
     health_path: Option<String>,
+    log_capture_mode: &str,
 ) -> Result<Option<GatewayServiceConfig>, GatewayManagementError> {
+    let log_capture_mode = ServiceLogCaptureMode::from_name(log_capture_mode)
+        .ok_or(GatewayManagementError::Unavailable)?;
     match (loopback_port, readiness_path, health_path) {
-        (None, None, None) => Ok(None),
+        (None, None, None) if log_capture_mode.is_disabled() => Ok(None),
         (Some(port), Some(readiness), Some(health)) => {
             let port = u16::try_from(port).map_err(|_| GatewayManagementError::Unavailable)?;
             let readiness = ServiceProbePath::parse(readiness)
@@ -3091,6 +3105,7 @@ fn service_config_from_columns(
             let health =
                 ServiceProbePath::parse(health).map_err(|_| GatewayManagementError::Unavailable)?;
             GatewayServiceConfig::new(port, readiness, health)
+                .map(|service| service.with_log_capture_mode(log_capture_mode))
                 .map(Some)
                 .map_err(|_| GatewayManagementError::Unavailable)
         }
@@ -3759,8 +3774,8 @@ async fn install_declaration(
             (id, gateway_id, project_id, repository_id, release_id, release_agent_id,
              release_agent_key, handler_contract, exposure, parameters, secret_slots,
              mailbox_slots, service_loopback_port, service_readiness_path,
-             service_health_path, normalized_hash, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+             service_health_path, service_log_capture_mode, normalized_hash, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
          ON CONFLICT (gateway_id, normalized_hash) DO NOTHING
          RETURNING id",
     )
@@ -3799,6 +3814,15 @@ async fn install_declaration(
             .service
             .as_ref()
             .map(|service| service.health_path.as_str()),
+    )
+    .bind(
+        declaration
+            .service
+            .as_ref()
+            .map_or(ServiceLogCaptureMode::Disabled, |service| {
+                service.log_capture_mode
+            })
+            .as_str(),
     )
     .bind(normalized_hash.as_slice())
     .bind(identity.user_id.as_uuid())

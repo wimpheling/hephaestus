@@ -7,7 +7,7 @@ use capability_domain::{
 use forge_domain::GitRef;
 use gateway_domain::{
     Exposure, GatewayDeclaration, GatewayMailboxPublicationSlot, GatewayName, GatewayServiceConfig,
-    HttpMethod, RouteIntent, RoutePath, ServiceProbePath,
+    HttpMethod, RouteIntent, RoutePath, ServiceLogCaptureMode, ServiceProbePath,
 };
 use git_capability_domain::{
     BranchRefPolicy, BranchUpdatePolicy, ChangedPathGlob, GitCapabilityCeiling,
@@ -233,15 +233,19 @@ pub struct RepositoryGatewayServiceConfig {
     pub readiness_path: String,
     /// Origin path used for ongoing service health checks.
     pub health_path: String,
+    /// Optional project-scoped application log capture policy.
+    #[serde(default, skip_serializing_if = "ServiceLogCaptureMode::is_disabled")]
+    pub log_capture_mode: ServiceLogCaptureMode,
 }
 
 impl RepositoryGatewayServiceConfig {
     fn to_declaration(&self) -> Result<GatewayServiceConfig, gateway_domain::GatewayError> {
-        GatewayServiceConfig::new(
+        Ok(GatewayServiceConfig::new(
             self.loopback_port,
             ServiceProbePath::parse(self.readiness_path.clone())?,
             ServiceProbePath::parse(self.health_path.clone())?,
-        )
+        )?
+        .with_log_capture_mode(self.log_capture_mode))
     }
 }
 
@@ -1911,6 +1915,7 @@ mod tests {
         parse_repository_oci_images,
     };
     use forge_domain::GitRef;
+    use gateway_domain::ServiceLogCaptureMode;
 
     const VALID: &str = r#"
 version = 2
@@ -2627,6 +2632,53 @@ health_path = "/health"
         assert_eq!(service.loopback_port, 8080);
         assert_eq!(service.readiness_path.as_str(), "/ready");
         assert_eq!(service.health_path.as_str(), "/health");
+        assert_eq!(service.log_capture_mode, ServiceLogCaptureMode::Disabled);
+
+        let disabled_manifest = service_manifest.replace(
+            "[gateways.service]\n",
+            "[gateways.service]\nlog_capture_mode = \"disabled\"\n",
+        );
+        let disabled = parse_repository_gateways(disabled_manifest.as_bytes());
+        assert_eq!(parsed.normalized_hash, disabled.normalized_hash);
+
+        let application_manifest = service_manifest.replace(
+            "[gateways.service]\n",
+            "[gateways.service]\nlog_capture_mode = \"application\"\n",
+        );
+        let application = parse_repository_gateways(application_manifest.as_bytes());
+        assert!(
+            application.diagnostics.is_empty(),
+            "{:?}",
+            application.diagnostics
+        );
+        let application_service = application
+            .config
+            .expect("application logging manifest")
+            .gateways
+            .pop()
+            .expect("application logging gateway")
+            .to_declaration()
+            .expect("application logging declaration")
+            .service
+            .expect("application logging service");
+        assert_eq!(
+            application_service.log_capture_mode,
+            ServiceLogCaptureMode::Application
+        );
+        assert_ne!(parsed.normalized_hash, application.normalized_hash);
+
+        let unknown_mode_manifest = service_manifest.replace(
+            "[gateways.service]\n",
+            "[gateways.service]\nlog_capture_mode = \"future\"\n",
+        );
+        let unknown_mode = parse_repository_gateways(unknown_mode_manifest.as_bytes());
+        assert!(unknown_mode.config.is_none());
+        assert!(
+            unknown_mode
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "invalid_toml")
+        );
 
         let stateless_with_service = service_manifest.replace("http.service.v1", "http.v1");
         let parsed = parse_repository_gateways(stateless_with_service.as_bytes());

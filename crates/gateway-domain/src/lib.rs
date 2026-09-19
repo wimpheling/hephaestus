@@ -334,6 +334,47 @@ impl RouteIntent {
     }
 }
 
+/// Whether a long-lived service opts into project-scoped application logs.
+///
+/// Lifecycle diagnostics remain content-free, and this setting does not claim
+/// to redact application-owned output.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ServiceLogCaptureMode {
+    /// Do not capture application stdout or stderr.
+    #[default]
+    Disabled,
+    /// Opt into the bounded project-scoped application log stream.
+    Application,
+}
+
+impl ServiceLogCaptureMode {
+    /// Returns the stable storage and manifest spelling of this mode.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Disabled => "disabled",
+            Self::Application => "application",
+        }
+    }
+
+    /// Parses the closed storage and manifest spelling of this mode.
+    #[must_use]
+    pub fn from_name(value: &str) -> Option<Self> {
+        match value {
+            "disabled" => Some(Self::Disabled),
+            "application" => Some(Self::Application),
+            _ => None,
+        }
+    }
+
+    /// Returns whether application log capture is disabled.
+    #[must_use]
+    pub const fn is_disabled(&self) -> bool {
+        matches!(self, Self::Disabled)
+    }
+}
+
 /// Typed configuration for the initial long-lived HTTP service contract.
 ///
 /// The port is guest-loopback only. Readiness and health paths use the same
@@ -349,6 +390,9 @@ pub struct GatewayServiceConfig {
     pub readiness_path: ServiceProbePath,
     /// Origin path used for ongoing service health checks.
     pub health_path: ServiceProbePath,
+    /// Optional project-scoped application log capture policy.
+    #[serde(default, skip_serializing_if = "ServiceLogCaptureMode::is_disabled")]
+    pub log_capture_mode: ServiceLogCaptureMode,
 }
 
 impl GatewayServiceConfig {
@@ -367,9 +411,17 @@ impl GatewayServiceConfig {
             loopback_port,
             readiness_path,
             health_path,
+            log_capture_mode: ServiceLogCaptureMode::Disabled,
         };
         configuration.validate()?;
         Ok(configuration)
+    }
+
+    /// Selects the declaration's application log capture policy.
+    #[must_use]
+    pub const fn with_log_capture_mode(mut self, mode: ServiceLogCaptureMode) -> Self {
+        self.log_capture_mode = mode;
+        self
     }
 
     /// Validates an already constructed service configuration.
@@ -712,6 +764,73 @@ mod tests {
                 .unwrap()
                 .contains("service")
         );
+    }
+
+    #[test]
+    fn service_log_capture_default_preserves_legacy_hash_and_opt_in_changes_it() {
+        let service = GatewayServiceConfig::new(
+            8080,
+            ServiceProbePath::parse("/ready").unwrap(),
+            ServiceProbePath::parse("/health").unwrap(),
+        )
+        .unwrap();
+        let declaration = GatewayDeclaration {
+            name: GatewayName::parse("service").unwrap(),
+            agent_name: String::from("service-handler"),
+            handler_contract: HTTP_SERVICE_HANDLER_CONTRACT_V1.into(),
+            service: Some(service),
+            exposure: Exposure::Public,
+            routes: vec![
+                RouteIntent::new(RoutePath::parse("/service").unwrap(), [HttpMethod::Get]).unwrap(),
+            ],
+            parameters: serde_json::json!({}),
+            secret_slots: vec![],
+            mailbox_publication_slots: vec![],
+        };
+        let omitted_json = serde_json::to_vec(&declaration).unwrap();
+        let omitted_hash = declaration.validate().unwrap();
+        let frozen_json = br#"{"name":"service","agent_name":"service-handler","handler_contract":"http.service.v1","service":{"loopback_port":8080,"readiness_path":"/ready","health_path":"/health"},"exposure":"public","routes":[{"path":"/service","methods":["GET"]}],"parameters":{},"secret_slots":[],"mailbox_publication_slots":[]}"#;
+        let frozen_hash: [u8; 32] = [
+            0x76, 0x72, 0xda, 0x47, 0x84, 0x24, 0xac, 0x3c, 0xe3, 0x3b, 0x1b, 0xc1, 0x99, 0x51,
+            0xa9, 0x49, 0x70, 0x88, 0x43, 0xf6, 0x38, 0x2d, 0x42, 0x74, 0xcf, 0xe9, 0x19, 0xe9,
+            0x1d, 0xcf, 0xe1, 0xc8,
+        ];
+        assert_eq!(omitted_json, frozen_json);
+        assert_eq!(omitted_hash, frozen_hash);
+
+        let mut explicit_disabled = declaration.clone();
+        explicit_disabled.service.as_mut().unwrap().log_capture_mode =
+            ServiceLogCaptureMode::Disabled;
+        assert_eq!(omitted_hash, explicit_disabled.validate().unwrap());
+        assert_eq!(
+            omitted_json,
+            serde_json::to_vec(&explicit_disabled).unwrap()
+        );
+        assert!(
+            !String::from_utf8(omitted_json)
+                .unwrap()
+                .contains("log_capture_mode")
+        );
+
+        let mut application = declaration;
+        application.service.as_mut().unwrap().log_capture_mode = ServiceLogCaptureMode::Application;
+        assert_ne!(omitted_hash, application.validate().unwrap());
+        assert!(
+            serde_json::to_string(&application)
+                .unwrap()
+                .contains("application")
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_service_log_capture_mode() {
+        let source = r#"{
+            "loopback_port": 8080,
+            "readiness_path": "/ready",
+            "health_path": "/health",
+            "log_capture_mode": "future"
+        }"#;
+        assert!(serde_json::from_str::<GatewayServiceConfig>(source).is_err());
     }
 
     #[test]

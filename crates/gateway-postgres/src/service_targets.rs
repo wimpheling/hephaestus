@@ -2,7 +2,7 @@
 
 use crate::service_ownership::ServiceInstanceRow;
 use async_trait::async_trait;
-use gateway_domain::{GatewayServiceConfig, ServiceProbePath};
+use gateway_domain::{GatewayServiceConfig, ServiceLogCaptureMode, ServiceProbePath};
 use gateway_edge::{
     GatewayEdgeError, GatewayServiceIdentity, GatewayServiceInstanceKey,
     GatewayServiceInstanceLease, GatewayServiceInstancePage, GatewayServiceInstancePageResult,
@@ -45,12 +45,14 @@ impl GatewayServiceTargetStore for PostgresGatewayServiceTargets {
                     active_revision.service_loopback_port AS active_service_loopback_port,
                     active_revision.service_readiness_path AS active_service_readiness_path,
                     active_revision.service_health_path AS active_service_health_path,
+                    active_revision.service_log_capture_mode AS active_service_log_capture_mode,
                     desired_revision.id AS desired_service_revision_row_id,
                     desired_revision.release_id AS desired_release_id,
                     desired_release.state AS desired_release_state,
                     desired_revision.service_loopback_port AS desired_service_loopback_port,
                     desired_revision.service_readiness_path AS desired_service_readiness_path,
-                    desired_revision.service_health_path AS desired_service_health_path
+                    desired_revision.service_health_path AS desired_service_health_path,
+                    desired_revision.service_log_capture_mode AS desired_service_log_capture_mode
                FROM gateways AS gateway
                LEFT JOIN gateway_revisions AS active_revision
                  ON active_revision.id = gateway.active_revision_id
@@ -113,7 +115,8 @@ impl GatewayServiceTargetStore for PostgresGatewayServiceTargets {
                     release.state AS release_state,
                     revision.service_loopback_port,
                     revision.service_readiness_path,
-                    revision.service_health_path
+                    revision.service_health_path,
+                    revision.service_log_capture_mode
                FROM gateways AS gateway
                JOIN gateway_revisions AS revision
                  ON revision.gateway_id = gateway.id
@@ -277,12 +280,14 @@ struct ServiceTargetRow {
     active_service_loopback_port: Option<i32>,
     active_service_readiness_path: Option<String>,
     active_service_health_path: Option<String>,
+    active_service_log_capture_mode: Option<String>,
     desired_service_revision_row_id: Option<Uuid>,
     desired_release_id: Option<Uuid>,
     desired_release_state: Option<String>,
     desired_service_loopback_port: Option<i32>,
     desired_service_readiness_path: Option<String>,
     desired_service_health_path: Option<String>,
+    desired_service_log_capture_mode: Option<String>,
 }
 
 impl ServiceTargetRow {
@@ -299,6 +304,7 @@ impl ServiceTargetRow {
                 self.active_service_loopback_port,
                 self.active_service_readiness_path,
                 self.active_service_health_path,
+                self.active_service_log_capture_mode.as_deref(),
             )?,
             desired_service_revision: service_revision(
                 self.desired_service_revision_row_id,
@@ -307,6 +313,7 @@ impl ServiceTargetRow {
                 self.desired_service_loopback_port,
                 self.desired_service_readiness_path,
                 self.desired_service_health_path,
+                self.desired_service_log_capture_mode.as_deref(),
             )?,
         })
     }
@@ -324,6 +331,7 @@ struct OwnedServiceTargetRow {
     service_loopback_port: Option<i32>,
     service_readiness_path: Option<String>,
     service_health_path: Option<String>,
+    service_log_capture_mode: String,
 }
 
 impl OwnedServiceTargetRow {
@@ -335,6 +343,7 @@ impl OwnedServiceTargetRow {
             self.service_loopback_port,
             self.service_readiness_path,
             self.service_health_path,
+            Some(self.service_log_capture_mode.as_str()),
         )?
         .ok_or(GatewayEdgeError::Unavailable)?;
         Ok(GatewayServiceOwnedTarget {
@@ -354,6 +363,7 @@ fn service_revision(
     loopback_port: Option<i32>,
     readiness_path: Option<String>,
     health_path: Option<String>,
+    log_capture_mode: Option<&str>,
 ) -> Result<Option<GatewayServiceRevisionTarget>, GatewayEdgeError> {
     let Some(revision_id) = revision_id else {
         return Ok(None);
@@ -366,8 +376,12 @@ fn service_revision(
             .map_err(|_| GatewayEdgeError::Unavailable)?;
     let health_path = ServiceProbePath::parse(health_path.ok_or(GatewayEdgeError::Unavailable)?)
         .map_err(|_| GatewayEdgeError::Unavailable)?;
+    let log_capture_mode =
+        ServiceLogCaptureMode::from_name(log_capture_mode.ok_or(GatewayEdgeError::Unavailable)?)
+            .ok_or(GatewayEdgeError::Unavailable)?;
     let service = GatewayServiceConfig::new(loopback_port, readiness_path, health_path)
-        .map_err(|_| GatewayEdgeError::Unavailable)?;
+        .map_err(|_| GatewayEdgeError::Unavailable)?
+        .with_log_capture_mode(log_capture_mode);
     let publication_eligible = release_state.as_deref() == Some("published");
     Ok(Some(GatewayServiceRevisionTarget {
         revision_id,
