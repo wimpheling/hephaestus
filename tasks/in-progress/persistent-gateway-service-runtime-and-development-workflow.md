@@ -679,6 +679,16 @@ check, strict Clippy, formatting, and 58 library tests passed.
   post-cleanup completion. Capacity tests passed eight cases; isolated
   gateway-edge tests and strict Clippy passed on the committed checkpoint.
 
+- [x] Harden the durable event-watch integration fixture against unrelated
+  unpublished outbox backlog. A real PostgreSQL/NATS run with 450 older
+  unpublished rows reproduced the original 5-second typed-event timeout;
+  targeted publication now repeats bounded batches until the exact fixture
+  rows are published, rejects missing or dead-lettered targets, and uses a
+  30-second overall publication bound. The existing 5-second event receive
+  assertion and disconnect/replay, duplicate-wake, Connect, and revocation
+  checks remain unchanged. The focused test passed against the real services
+  and app Clippy passed on the committed checkpoint.
+
 ## Non-goals
 
 This task does not replace MVP 03's bounded stateless invocation mode. It does

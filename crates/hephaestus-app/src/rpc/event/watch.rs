@@ -548,12 +548,13 @@ mod tests {
         let barrier_cursor = barrier.committed_cursor;
         drop(receiver);
 
-        mutate_organization(&pool, user_id, organization_id, "one").await;
-        mutate_organization(&pool, user_id, organization_id, "two").await;
-        publisher
-            .publish_pending(100)
-            .await
-            .expect("publish disconnected changes");
+        let first_request = mutate_organization(&pool, user_id, organization_id, "one").await;
+        let second_request = mutate_organization(&pool, user_id, organization_id, "two").await;
+        let disconnected_events = vec![
+            product_event_id(&pool, first_request).await,
+            product_event_id(&pool, second_request).await,
+        ];
+        publish_events_until_published(&pool, &publisher, &disconnected_events).await;
 
         let restarted_application =
             EventApplication::new(pool.clone(), Arc::new(NatsEventWakeups::new(nats.clone())));
@@ -611,11 +612,9 @@ mod tests {
                 .is_err(),
             "duplicate wakeups must not duplicate a durable event"
         );
-        mutate_organization(&pool, user_id, organization_id, "three").await;
-        publisher
-            .publish_pending(100)
-            .await
-            .expect("publish post-duplicate event");
+        let third_request = mutate_organization(&pool, user_id, organization_id, "three").await;
+        let third_event = product_event_id(&pool, third_request).await;
+        publish_events_until_published(&pool, &publisher, &[third_event]).await;
         let unique = duplicate_safe
             .recv()
             .await
@@ -703,10 +702,12 @@ mod tests {
         .execute(&pool)
         .await
         .expect("revoke membership");
-        publisher
-            .publish_pending(100)
-            .await
-            .expect("publish revocation");
+        let revocation_events = unpublished_scope_event_ids(&pool, organization_id).await;
+        assert!(
+            !revocation_events.is_empty(),
+            "membership revocation event exists"
+        );
+        publish_events_until_published(&pool, &publisher, &revocation_events).await;
         // The membership deletion races a read that began while the watch was
         // still authorized. That read may deliver its already-committed event;
         // the next authorization check must then terminate with revocation.
@@ -726,6 +727,73 @@ mod tests {
         .await
         .expect("event watch must observe revocation");
         assert!(matches!(terminal.delivery, Delivery::Revoked(_)));
+    }
+
+    const TARGET_PUBLICATION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+    async fn product_event_id(pool: &sqlx::PgPool, request: Uuid) -> Uuid {
+        sqlx::query_scalar(
+            "SELECT id FROM application_events
+               WHERE request_id = $1 AND aggregate_type = 'organization'
+               ORDER BY cursor DESC LIMIT 1",
+        )
+        .bind(request)
+        .fetch_one(pool)
+        .await
+        .expect("product event id")
+    }
+
+    async fn unpublished_scope_event_ids(pool: &sqlx::PgPool, scope_id: Uuid) -> Vec<Uuid> {
+        sqlx::query_scalar(
+            "SELECT event.id FROM product_event_outbox outbox
+               JOIN application_events event ON event.id = outbox.event_id
+              WHERE event.scope_kind = 'organization' AND event.scope_id = $1
+                AND outbox.published_at IS NULL
+                AND outbox.dead_lettered_at IS NULL
+              ORDER BY event.cursor",
+        )
+        .bind(scope_id)
+        .fetch_all(pool)
+        .await
+        .expect("unpublished scope event ids")
+    }
+
+    async fn publish_events_until_published(
+        pool: &sqlx::PgPool,
+        publisher: &crate::event_adapter::EventPublisher,
+        event_ids: &[Uuid],
+    ) {
+        assert!(!event_ids.is_empty(), "publication target is nonempty");
+        tokio::time::timeout(TARGET_PUBLICATION_TIMEOUT, async {
+            loop {
+                let (found, published, dead_lettered): (i64, i64, i64) = sqlx::query_as(
+                    "SELECT count(*),
+                            count(*) FILTER (WHERE published_at IS NOT NULL),
+                            count(*) FILTER (WHERE dead_lettered_at IS NOT NULL)
+                       FROM product_event_outbox
+                      WHERE event_id = ANY($1)",
+                )
+                .bind(event_ids.to_vec())
+                .fetch_one(pool)
+                .await
+                .expect("publication target status");
+                assert_eq!(
+                    found,
+                    i64::try_from(event_ids.len()).expect("event target count fits in i64"),
+                    "all publication targets have outbox rows"
+                );
+                assert_eq!(dead_lettered, 0, "publication targets were dead-lettered");
+                if published == found {
+                    return;
+                }
+                publisher
+                    .publish_pending(100)
+                    .await
+                    .expect("publish targeted events");
+            }
+        })
+        .await
+        .expect("targeted product events published before bounded timeout");
     }
 
     async fn mutate_organization(
@@ -871,10 +939,7 @@ mod tests {
         .fetch_one(pool)
         .await
         .expect("Connect event id");
-        publisher
-            .publish_pending(100)
-            .await
-            .expect("publish Connect event");
+        publish_events_until_published(pool, publisher, &[expected_event_id]).await;
 
         let decoded = tokio::time::timeout(Duration::from_secs(5), async {
             loop {
