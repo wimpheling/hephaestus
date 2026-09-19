@@ -1,6 +1,9 @@
 //! Real `PostgreSQL` proof for daemon-owned service invocation recovery.
 
-use super::{gateway_reconciliation_loop, gateway_reconciliation_loop_with_boot};
+use super::{
+    gateway_reconciliation_loop, gateway_reconciliation_loop_with_boot,
+    gateway_reconciliation_loop_with_context,
+};
 use async_trait::async_trait;
 use bytes::Bytes;
 use gateway_domain::{GatewayServiceConfig, ServiceProbePath};
@@ -11,14 +14,15 @@ use gateway_edge::{
     GatewayServiceClaimResolutionStore, GatewayServiceCleanupDriverPolicy,
     GatewayServiceInstanceLease, GatewayServiceInstancePage, GatewayServiceInstancePageResult,
     GatewayServiceLaunch, GatewayServiceLaunchRequest, GatewayServiceLaunchResolver,
-    GatewayServiceOwnedTarget, GatewayServiceOwner, GatewayServiceOwnership,
-    GatewayServiceOwnershipError, GatewayServiceRegistry, GatewayServiceSupervisor,
-    GatewayServiceSupervisorContext, GatewayServiceSupervisorPolicy, GatewayServiceTargetPage,
-    GatewayServiceTargetPageResult, GatewayServiceTargetStore,
+    GatewayServiceLogStore, GatewayServiceLogWriterConfig, GatewayServiceOwnedTarget,
+    GatewayServiceOwner, GatewayServiceOwnership, GatewayServiceOwnershipError,
+    GatewayServiceRegistry, GatewayServiceSupervisor, GatewayServiceSupervisorContext,
+    GatewayServiceSupervisorPolicy, GatewayServiceTargetPage, GatewayServiceTargetPageResult,
+    GatewayServiceTargetStore, ServiceLogWriterPolicy,
 };
 use gateway_postgres::{
     PostgresGatewayEdgeAuthority, PostgresGatewayServiceFailureStore,
-    PostgresGatewayServiceOwnership, PostgresGatewayServiceTargets,
+    PostgresGatewayServiceLogStore, PostgresGatewayServiceOwnership, PostgresGatewayServiceTargets,
 };
 use http::{HeaderMap, StatusCode};
 use serial_test::serial;
@@ -79,6 +83,8 @@ struct ServiceTransportProvider {
     provisioned: Arc<AtomicUsize>,
     destroyed: Arc<AtomicUsize>,
     destroy_gate: Option<Arc<DestroyGate>>,
+    event_sender: Arc<Mutex<Option<tokio::sync::broadcast::Sender<VmEvent>>>>,
+    inject_events: bool,
 }
 
 #[derive(Clone)]
@@ -133,6 +139,7 @@ struct ServiceTransportVm {
     inner: Arc<dyn VmInstance>,
     destroyed: Arc<AtomicUsize>,
     destroy_gate: Option<Arc<DestroyGate>>,
+    events: Option<tokio::sync::broadcast::Sender<VmEvent>>,
 }
 
 #[async_trait]
@@ -144,10 +151,18 @@ impl VmProvider for ServiceTransportProvider {
     async fn provision(&self, spec: VmSpec) -> Result<Arc<dyn VmInstance>, VmError> {
         self.provisioned.fetch_add(1, Ordering::AcqRel);
         let inner = self.inner.provision(spec).await?;
+        let events = if self.inject_events {
+            let (events, _) = tokio::sync::broadcast::channel(64);
+            *self.event_sender.lock().expect("service event sender") = Some(events.clone());
+            Some(events)
+        } else {
+            None
+        };
         Ok(Arc::new(ServiceTransportVm {
             inner,
             destroyed: Arc::clone(&self.destroyed),
             destroy_gate: self.destroy_gate.clone(),
+            events,
         }))
     }
 
@@ -169,11 +184,25 @@ impl VmInstance for ServiceTransportVm {
     }
 
     async fn start(&self) -> Result<(), VmError> {
-        self.inner.start().await
+        let result = self.inner.start().await;
+        if let (Ok(()), Some(events)) = (&result, &self.events) {
+            let _ = events.send(VmEvent::Started {
+                ingress: Vec::new(),
+            });
+            let _ = events.send(VmEvent::Ready);
+        }
+        result
     }
 
     async fn stop(&self, mode: StopMode) -> Result<(), VmError> {
-        self.inner.stop(mode).await
+        let result = self.inner.stop(mode).await;
+        if let (Ok(()), Some(events)) = (&result, &self.events) {
+            let _ = events.send(VmEvent::Log {
+                stream: vm_trait::LogStream::Stderr,
+                bytes: b"application-final-event".to_vec(),
+            });
+        }
+        result
     }
 
     async fn wait(&self) -> Result<vm_trait::VmExit, VmError> {
@@ -214,7 +243,10 @@ impl VmInstance for ServiceTransportVm {
     }
 
     fn subscribe_events(&self) -> tokio::sync::broadcast::Receiver<VmEvent> {
-        self.inner.subscribe_events()
+        self.events.as_ref().map_or_else(
+            || self.inner.subscribe_events(),
+            tokio::sync::broadcast::Sender::subscribe,
+        )
     }
 
     async fn destroy(&self) -> Result<(), VmError> {
@@ -260,6 +292,8 @@ impl VmInstance for ServiceTransportVm {
 }
 
 struct NoopLaunchResolver;
+
+struct ApplicationLogLaunchResolver;
 
 struct RecordingLaunchResolver {
     cleanup_calls: Arc<AtomicUsize>,
@@ -735,6 +769,27 @@ impl GatewayServiceLaunchResolver for NoopLaunchResolver {
 }
 
 #[async_trait]
+impl GatewayServiceLaunchResolver for ApplicationLogLaunchResolver {
+    async fn resolve_service_launch(
+        &self,
+        request: GatewayServiceLaunchRequest,
+    ) -> Result<GatewayServiceLaunch, GatewayEdgeError> {
+        let mut launch = NoopLaunchResolver.resolve_service_launch(request).await?;
+        launch.service = launch
+            .service
+            .with_log_capture_mode(gateway_domain::ServiceLogCaptureMode::Application);
+        Ok(launch)
+    }
+
+    async fn cleanup_service_launch(
+        &self,
+        identity: gateway_edge::GatewayServiceIdentity,
+    ) -> Result<(), GatewayEdgeError> {
+        NoopLaunchResolver.cleanup_service_launch(identity).await
+    }
+}
+
+#[async_trait]
 impl GatewayServiceLaunchResolver for RecordingLaunchResolver {
     async fn resolve_service_launch(
         &self,
@@ -798,6 +853,239 @@ impl GatewayProvider for RecoveryProvider {
             invocation_id: Uuid::new_v4(),
         }
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn production_service_log_writer_persists_vm_events_and_respects_disabled_mode() {
+    let Some(database) = isolated_startup_database().await else {
+        return;
+    };
+    let pool = database.control.clone();
+    let worker = database.worker.clone();
+    let application = seed_application_log_fixture(&pool, "http.service.v1").await;
+    let store: Arc<dyn GatewayServiceLogStore> =
+        Arc::new(PostgresGatewayServiceLogStore::new(worker.clone()));
+    let writer = GatewayServiceLogWriterConfig::new(store, ServiceLogWriterPolicy::default());
+    let (
+        application_task,
+        application_cancellation,
+        application_caddy_started,
+        application_caddy_release,
+        _application_destroyed,
+        _application_provisioned,
+        application_events,
+    ) = spawn_automatic_start_with_worker_config(
+        &pool,
+        &worker,
+        application,
+        false,
+        false,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Some(Arc::new(ApplicationLogLaunchResolver)),
+        None,
+        Some(writer.clone()),
+    )
+    .await;
+    tokio::time::timeout(
+        StdDuration::from_secs(10),
+        application_caddy_started.notified(),
+    )
+    .await
+    .expect("application reconciliation starts");
+    application_caddy_release.notify_one();
+    assert!(wait_for_ready(&pool, application).await);
+    let application_instance: (Uuid, i64) = sqlx::query_as(
+        "SELECT id, fencing_token
+           FROM gateway_service_instances
+          WHERE gateway_id = $1 AND revision_id = $2 AND state = 'ready'
+          ORDER BY created_at DESC
+          LIMIT 1",
+    )
+    .bind(application.gateway)
+    .bind(application.revision)
+    .fetch_one(&pool)
+    .await
+    .expect("read application instance lease");
+    let application_sender = tokio::time::timeout(StdDuration::from_secs(5), async {
+        loop {
+            let sender = application_events
+                .lock()
+                .expect("application event sender")
+                .clone();
+            if let Some(sender) = sender {
+                break sender;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("application VM event subscriber");
+    application_sender
+        .send(VmEvent::Log {
+            stream: vm_trait::LogStream::Stdout,
+            bytes: b"application-ready-event".to_vec(),
+        })
+        .expect("application event subscriber remains active");
+    tokio::time::timeout(StdDuration::from_secs(10), async {
+        loop {
+            let count: i64 = sqlx::query_scalar(
+                "SELECT count(*)
+                   FROM gateway_service_log_chunks
+                  WHERE instance_id = $1 AND fencing_token = $2",
+            )
+            .bind(application_instance.0)
+            .bind(application_instance.1)
+            .fetch_one(&pool)
+            .await
+            .expect("read application log chunks");
+            if count > 0 {
+                break;
+            }
+            tokio::time::sleep(StdDuration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("application event persisted before shutdown");
+    application_cancellation.cancel();
+    tokio::time::timeout(StdDuration::from_secs(10), application_task)
+        .await
+        .expect("application reconciliation shutdown")
+        .expect("application reconciliation task");
+    let (application_epoch_count, application_cleaned): (i64, String) = sqlx::query_as(
+        "SELECT
+                (SELECT count(*) FROM gateway_service_log_epochs
+                  WHERE instance_id = $1 AND fencing_token = $2),
+                (SELECT state FROM gateway_service_instances WHERE id = $1)",
+    )
+    .bind(application_instance.0)
+    .bind(application_instance.1)
+    .fetch_one(&pool)
+    .await
+    .expect("read final application log state");
+    assert_eq!(application_epoch_count, 1);
+    let application_rows: Vec<(i64, String, Vec<u8>)> = sqlx::query_as(
+        "SELECT sequence, stream, bytes
+           FROM gateway_service_log_chunks
+          WHERE instance_id = $1 AND fencing_token = $2
+          ORDER BY sequence",
+    )
+    .bind(application_instance.0)
+    .bind(application_instance.1)
+    .fetch_all(&pool)
+    .await
+    .expect("read ordered application log chunks");
+    assert_eq!(application_rows.len(), 2);
+    assert!(application_rows[0].0 < application_rows[1].0);
+    assert_eq!(application_rows[0].1, "stdout");
+    assert_eq!(application_rows[0].2, b"application-ready-event");
+    assert_eq!(application_rows[1].1, "stderr");
+    assert_eq!(application_rows[1].2, b"application-final-event");
+    assert_eq!(application_cleaned, "cleaned");
+    application_caddy_release.notify_one();
+    clear_service_log_fixture(&pool, application).await;
+    cleanup_startup_fixture(&pool, application).await;
+    drop_isolated_startup_database(database).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn production_service_log_writer_skips_disabled_vm_events() {
+    let Some(database) = isolated_startup_database().await else {
+        return;
+    };
+    let pool = database.control.clone();
+    let worker = database.worker.clone();
+    let disabled = seed_fixture(&pool, "http.service.v1").await;
+    let disabled_store: Arc<dyn GatewayServiceLogStore> =
+        Arc::new(PostgresGatewayServiceLogStore::new(worker.clone()));
+    let disabled_writer =
+        GatewayServiceLogWriterConfig::new(disabled_store, ServiceLogWriterPolicy::default());
+    let (
+        disabled_task,
+        disabled_cancellation,
+        disabled_caddy_started,
+        disabled_caddy_release,
+        _disabled_destroyed,
+        _disabled_provisioned,
+        disabled_events,
+    ) = spawn_automatic_start_with_worker_config(
+        &pool,
+        &worker,
+        disabled,
+        false,
+        false,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Some(disabled_writer),
+    )
+    .await;
+    tokio::time::timeout(
+        StdDuration::from_secs(10),
+        disabled_caddy_started.notified(),
+    )
+    .await
+    .expect("disabled reconciliation starts");
+    disabled_caddy_release.notify_one();
+    assert!(wait_for_ready(&pool, disabled).await);
+    let disabled_instance: Uuid = sqlx::query_scalar(
+        "SELECT id
+           FROM gateway_service_instances
+          WHERE gateway_id = $1 AND revision_id = $2 AND state = 'ready'
+          ORDER BY created_at DESC
+          LIMIT 1",
+    )
+    .bind(disabled.gateway)
+    .bind(disabled.revision)
+    .fetch_one(&pool)
+    .await
+    .expect("read disabled instance");
+    let disabled_sender = tokio::time::timeout(StdDuration::from_secs(5), async {
+        loop {
+            let sender = disabled_events
+                .lock()
+                .expect("disabled event sender")
+                .clone();
+            if let Some(sender) = sender {
+                break sender;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("disabled VM event subscriber");
+    disabled_sender
+        .send(VmEvent::Log {
+            stream: vm_trait::LogStream::Stdout,
+            bytes: b"disabled-event".to_vec(),
+        })
+        .expect("disabled event subscriber remains active");
+    disabled_cancellation.cancel();
+    tokio::time::timeout(StdDuration::from_secs(10), disabled_task)
+        .await
+        .expect("disabled reconciliation shutdown")
+        .expect("disabled reconciliation task");
+    let disabled_epochs: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM gateway_service_log_epochs WHERE instance_id = $1",
+    )
+    .bind(disabled_instance)
+    .fetch_one(&pool)
+    .await
+    .expect("read disabled log epochs");
+    assert_eq!(disabled_epochs, 0);
+    disabled_caddy_release.notify_one();
+    clear_service_log_fixture(&pool, disabled).await;
+    cleanup_startup_fixture(&pool, disabled).await;
+    drop_isolated_startup_database(database).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1080,6 +1368,8 @@ async fn daemon_loop_polls_service_supervisor_while_caddy_reconcile_is_blocked()
         provisioned: Arc::new(AtomicUsize::new(0)),
         destroyed: Arc::clone(&destroyed),
         destroy_gate: None,
+        event_sender: Arc::new(Mutex::new(None)),
+        inject_events: false,
     });
     let policy = GatewayServiceSupervisorPolicy::default();
     let owner = GatewayServiceOwner::new(host_id, Uuid::new_v4()).expect("test supervisor owner");
@@ -1108,7 +1398,7 @@ async fn daemon_loop_polls_service_supervisor_while_caddy_reconcile_is_blocked()
         targets: targets.clone(),
         failure_store,
         resolver,
-        provider,
+        provider: provider.clone(),
     })
     .expect("construct test boot recovery");
     let caddy_started = Arc::new(tokio::sync::Notify::new());
@@ -3084,7 +3374,7 @@ async fn boot_gate_holds_startup_for_unexpired_owned_inventory() {
 // be tested without a public startup seam.
 // This fixture wires each production port explicitly so tests cannot hide
 // lifecycle dependencies behind a public test-only seam.
-#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+#[allow(clippy::too_many_arguments)]
 async fn spawn_automatic_start_with_worker(
     pool: &sqlx::PgPool,
     worker: &sqlx::PgPool,
@@ -3105,6 +3395,63 @@ async fn spawn_automatic_start_with_worker(
     Arc<tokio::sync::Notify>,
     Arc<AtomicUsize>,
     Arc<AtomicUsize>,
+) {
+    let (task, cancellation, caddy_started, caddy_release, destroyed, provisioned, _) =
+        spawn_automatic_start_with_worker_config(
+            pool,
+            worker,
+            fixture,
+            restore_active,
+            retain_inventory,
+            desired_revision,
+            fail_revision,
+            ownership_override,
+            target_override,
+            destroy_gate,
+            resolver_override,
+            claim_resolution_override,
+            None,
+        )
+        .await;
+    (
+        task,
+        cancellation,
+        caddy_started,
+        caddy_release,
+        destroyed,
+        provisioned,
+    )
+}
+
+// This helper deliberately moves the supervisor context into the parent loop
+// future so its cleanup handles remain live until that loop settles.
+#[allow(
+    clippy::significant_drop_tightening,
+    clippy::too_many_arguments,
+    clippy::too_many_lines
+)]
+async fn spawn_automatic_start_with_worker_config(
+    pool: &sqlx::PgPool,
+    worker: &sqlx::PgPool,
+    fixture: Fixture,
+    restore_active: bool,
+    retain_inventory: bool,
+    desired_revision: Option<Uuid>,
+    fail_revision: Option<Uuid>,
+    ownership_override: Option<Arc<dyn GatewayServiceOwnership>>,
+    target_override: Option<Arc<dyn GatewayServiceTargetStore>>,
+    destroy_gate: Option<Arc<DestroyGate>>,
+    resolver_override: Option<Arc<dyn GatewayServiceLaunchResolver>>,
+    claim_resolution_override: Option<Arc<dyn GatewayServiceClaimResolutionStore>>,
+    log_writer: Option<GatewayServiceLogWriterConfig>,
+) -> (
+    tokio::task::JoinHandle<()>,
+    CancellationToken,
+    Arc<tokio::sync::Notify>,
+    Arc<tokio::sync::Notify>,
+    Arc<AtomicUsize>,
+    Arc<AtomicUsize>,
+    Arc<Mutex<Option<tokio::sync::broadcast::Sender<VmEvent>>>>,
 ) {
     let host_id = format!("recovery-test-{}", fixture.gateway.simple());
     sqlx::query(
@@ -3193,6 +3540,8 @@ async fn spawn_automatic_start_with_worker(
         provisioned: Arc::clone(&provisioned),
         destroyed: Arc::clone(&destroyed),
         destroy_gate,
+        event_sender: Arc::new(Mutex::new(None)),
+        inject_events: log_writer.is_some(),
     });
     let mut policy = GatewayServiceSupervisorPolicy::default();
     if short_cleanup_lease {
@@ -3232,7 +3581,7 @@ async fn spawn_automatic_start_with_worker(
         targets: targets.clone(),
         failure_store,
         resolver,
-        provider,
+        provider: provider.clone(),
     })
     .expect("automatic startup boot gate");
     let caddy_started = Arc::new(tokio::sync::Notify::new());
@@ -3243,15 +3592,17 @@ async fn spawn_automatic_start_with_worker(
         reconciles: Arc::new(AtomicUsize::new(0)),
     });
     let cancellation = CancellationToken::new();
-    let task = tokio::spawn(gateway_reconciliation_loop_with_boot(
+    let event_sender = Arc::clone(&provider.event_sender);
+    let task = tokio::spawn(gateway_reconciliation_loop_with_context(
         make_authority(pool.clone()),
         make_authority(recovery_pool),
-        GatewayServiceSupervisor::new(supervisor_context).expect("automatic startup supervisor"),
-        Some(boot),
+        supervisor_context,
+        boot,
         Some(claim_resolution),
         use_postgres_recovery.then(|| {
             postgres_ownership.clone() as Arc<dyn gateway_edge::GatewayServiceExpiredClaimRecovery>
         }),
+        log_writer,
         targets,
         caddy,
         cancellation.clone(),
@@ -3263,6 +3614,7 @@ async fn spawn_automatic_start_with_worker(
         caddy_release,
         destroyed,
         provisioned,
+        event_sender,
     )
 }
 
@@ -3342,6 +3694,35 @@ async fn cleanup_startup_fixture(pool: &sqlx::PgPool, fixture: Fixture) {
     .expect("remove automatic startup inventory");
 }
 
+async fn clear_service_log_fixture(pool: &sqlx::PgPool, fixture: Fixture) {
+    sqlx::query(
+        "DELETE FROM gateway_service_log_chunks
+          WHERE gateway_id = $1 AND revision_id = $2",
+    )
+    .bind(fixture.gateway)
+    .bind(fixture.revision)
+    .execute(pool)
+    .await
+    .expect("clear service log chunks");
+    sqlx::query(
+        "DELETE FROM gateway_service_log_epochs
+          WHERE gateway_id = $1 AND revision_id = $2",
+    )
+    .bind(fixture.gateway)
+    .bind(fixture.revision)
+    .execute(pool)
+    .await
+    .expect("clear service log epochs");
+    sqlx::query(
+        "DELETE FROM gateway_service_log_project_usage
+          WHERE project_id = (SELECT project_id FROM gateways WHERE id = $1)",
+    )
+    .bind(fixture.gateway)
+    .execute(pool)
+    .await
+    .expect("clear service log project usage");
+}
+
 const fn make_authority(pool: sqlx::PgPool) -> PostgresGatewayEdgeAuthority {
     PostgresGatewayEdgeAuthority::new(
         pool,
@@ -3376,6 +3757,8 @@ fn test_supervisor_context_with_destroy_counter(
             provisioned: Arc::new(AtomicUsize::new(0)),
             destroyed: Arc::clone(&destroyed),
             destroy_gate: None,
+            event_sender: Arc::new(Mutex::new(None)),
+            inject_events: false,
         }),
         targets: Arc::new(PostgresGatewayServiceTargets::new(pool)),
         registry: GatewayServiceRegistry::new(10, 16).expect("test service registry"),
@@ -3549,11 +3932,25 @@ async fn seed_fixture(pool: &sqlx::PgPool, contract: &str) -> Fixture {
     seed_fixture_with_lease(pool, contract, false).await
 }
 
+async fn seed_application_log_fixture(pool: &sqlx::PgPool, contract: &str) -> Fixture {
+    seed_fixture_with_capture_mode(pool, contract, false, "application").await
+}
+
 #[allow(clippy::too_many_lines)]
 async fn seed_fixture_with_lease(
     pool: &sqlx::PgPool,
     contract: &str,
     expired_instance: bool,
+) -> Fixture {
+    seed_fixture_with_capture_mode(pool, contract, expired_instance, "disabled").await
+}
+
+#[allow(clippy::too_many_lines)]
+async fn seed_fixture_with_capture_mode(
+    pool: &sqlx::PgPool,
+    contract: &str,
+    expired_instance: bool,
+    capture_mode: &str,
 ) -> Fixture {
     let owner = Uuid::new_v4();
     let organization = Uuid::new_v4();
@@ -3679,9 +4076,9 @@ async fn seed_fixture_with_lease(
             (id, gateway_id, project_id, repository_id, release_id,
              release_agent_id, release_agent_key, handler_contract, exposure,
              parameters, secret_slots, service_loopback_port, service_readiness_path,
-             service_health_path, normalized_hash, created_by)
+            service_health_path, service_log_capture_mode, normalized_hash, created_by)
          VALUES ($1, $2, $3, $4, $5,
-                 $6, $7, $8, 'public', '{{}}', {slots}, {columns}, $9, $10)"
+                 $6, $7, $8, 'public', '{{}}', {slots}, {columns}, $9, $10, $11)"
     );
     sqlx::query(&revision_sql)
         .bind(revision)
@@ -3696,6 +4093,7 @@ async fn seed_fixture_with_lease(
             None
         })
         .bind(contract)
+        .bind(if service { capture_mode } else { "disabled" })
         .bind([9_u8; 32].as_slice())
         .bind(owner)
         .execute(pool)

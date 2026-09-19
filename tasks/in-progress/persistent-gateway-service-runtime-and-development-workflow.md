@@ -1880,3 +1880,30 @@ prior real maintenance family is recorded in `postgres-tests-real.log`, and
 the final enumeration-only rerun is `postgres-enumeration-real-final.log`. No migration,
 scheduler, writer attachment, or RPC wiring is included; the earlier URL-unset
 test run is not acceptance evidence.
+
+Production service-log writer attachment checkpoint (2026-09-19): on base
+`0b7a5e4a5fec0821c27265b582a479e1281bad85`, the application now constructs
+`PostgresGatewayServiceLogStore` from the worker-role gateway pool and attaches
+the existing bounded `GatewayServiceLogWriterConfig` through the production
+reconciliation composition. The real PostgreSQL tests exercise synthetic VM
+events through that production path, with per-test migrated databases and
+`hephaestus_worker` markers. The final full recovery module passed 17 tests in
+74.10 seconds, including the application-capture and disabled-capture cases;
+the focused rerun passed both writer tests. Evidence is
+`/home/a/heph-app-gateway-recovery-full-logwriter-v4.log` and
+`/home/a/heph-app-log-writer-focused-v4.log`. The initial shared-fixture run
+passed 15 and failed 2 readiness assertions; moving these two tests to isolated
+databases resolved the fixture contamination. The application test verifies
+one epoch and exact ordered stdout/stderr payloads, including the final stop
+event, before durable cleanup. Rust 1.88 formatting, strict app all-target and
+all-feature Clippy, and app rustdoc passed in
+`/home/a/heph-app-service-log-fmt-v5.log`,
+`/home/a/heph-app-service-log-clippy-v5.log`, and
+`/home/a/heph-app-service-log-doc-v3.log`. The final shared hashes are
+`lib.rs=a946132ed36c8b8aade93cc2649c1b72986c8b4c70221986895891725dc117d1`
+and
+`gateway_recovery_tests.rs=f25a513f4e8613f034d0874220278a2e6b6f674f2a30ea1a47947a5ddee3c79c`.
+Default fake-provider event behavior remains unchanged, and no detached tasks
+were introduced. This proves synthetic VM-event persistence through the
+production reconciliation path; actual libkrun guest output through the
+gateway RPC remains pending.

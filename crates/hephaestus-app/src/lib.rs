@@ -50,12 +50,13 @@ use gateway_edge::{
     GatewayScheme, GatewayServiceArtifact, GatewayServiceArtifactKind, GatewayServiceBootRecovery,
     GatewayServiceBootRecoveryContext, GatewayServiceClaimResolutionStore,
     GatewayServiceCleanupDriverPolicy, GatewayServiceExpiredClaimRecovery, GatewayServiceHandler,
-    GatewayServiceIdentity, GatewayServiceMaterializer, GatewayServiceOwnedTarget,
-    GatewayServiceOwner, GatewayServiceRegistry, GatewayServiceStartupIntent,
-    GatewayServiceStartupRequest, GatewayServiceSupervisor, GatewayServiceSupervisorContext,
-    GatewayServiceSupervisorJobStatus, GatewayServiceSupervisorPolicy, GatewayServiceTargetPage,
-    GatewayServiceTargetPageResult, LocalCaddyAdministration, LocalCaddyConfigurationTemplate,
-    LocalCaddyGatewayProvider, PrivateHttpVmGatewayHandler, TrustedRequestMetadata,
+    GatewayServiceIdentity, GatewayServiceLogStore, GatewayServiceLogWriterConfig,
+    GatewayServiceMaterializer, GatewayServiceOwnedTarget, GatewayServiceOwner,
+    GatewayServiceRegistry, GatewayServiceStartupIntent, GatewayServiceStartupRequest,
+    GatewayServiceSupervisor, GatewayServiceSupervisorContext, GatewayServiceSupervisorJobStatus,
+    GatewayServiceSupervisorPolicy, GatewayServiceTargetPage, GatewayServiceTargetPageResult,
+    LocalCaddyAdministration, LocalCaddyConfigurationTemplate, LocalCaddyGatewayProvider,
+    PrivateHttpVmGatewayHandler, ServiceLogWriterPolicy, TrustedRequestMetadata,
     UNTRUSTED_FORWARDING_HEADERS,
 };
 use gateway_postgres::{
@@ -63,7 +64,7 @@ use gateway_postgres::{
     PostgresGatewayEdgeAuthority, PostgresGatewayExecutionTargetResolver,
     PostgresGatewayMailboxPublisher, PostgresGatewayReleaseResolver,
     PostgresGatewayServiceFailureStore, PostgresGatewayServiceLaunchResolver,
-    PostgresGatewayServiceOwnership, PostgresGatewayServiceTargets,
+    PostgresGatewayServiceLogStore, PostgresGatewayServiceOwnership, PostgresGatewayServiceTargets,
 };
 use git_http::{
     CompositeGitAuthenticator, GitAuthenticator, GitHttpLimits, GitHttpService,
@@ -629,6 +630,7 @@ struct GatewayEdgeRuntime {
     service_claim_resolution: Arc<dyn GatewayServiceClaimResolutionStore>,
     service_expired_claim_recovery: Arc<dyn GatewayServiceExpiredClaimRecovery>,
     service_boot_context: GatewayServiceBootRecoveryContext,
+    service_log_writer: GatewayServiceLogWriterConfig,
     provider: Arc<dyn gateway_edge::GatewayProvider>,
     dispatcher: Arc<dyn GatewayRequestDispatcher>,
     dispatcher_listen: SocketAddr,
@@ -1354,6 +1356,13 @@ impl HephaestusApp {
             let service_failure_store = Arc::new(PostgresGatewayServiceFailureStore::new(
                 gateway_authority_pool.clone(),
             ));
+            let service_log_store: Arc<dyn GatewayServiceLogStore> = Arc::new(
+                PostgresGatewayServiceLogStore::new(gateway_authority_pool.clone()),
+            );
+            let service_log_writer = GatewayServiceLogWriterConfig::new(
+                service_log_store,
+                ServiceLogWriterPolicy::default(),
+            );
             let service_launch_resolver = Arc::new(
                 PostgresGatewayServiceLaunchResolver::new(
                     gateway_authority_pool.clone(),
@@ -1452,6 +1461,7 @@ impl HephaestusApp {
                 service_claim_resolution,
                 service_expired_claim_recovery,
                 service_boot_context,
+                service_log_writer,
                 provider,
                 dispatcher,
                 dispatcher_listen: gateway.dispatcher_listen,
@@ -1802,6 +1812,7 @@ impl HephaestusApp {
             let service_claim_resolution = Arc::clone(&gateway.service_claim_resolution);
             let service_expired_claim_recovery =
                 Arc::clone(&gateway.service_expired_claim_recovery);
+            let service_log_writer = gateway.service_log_writer;
             let service_targets = Arc::clone(&gateway.service_supervisor_context.targets);
             let gateway_provider = Arc::clone(&gateway.provider);
             tasks.push(tokio::spawn(async move {
@@ -1812,6 +1823,7 @@ impl HephaestusApp {
                     service_boot_recovery,
                     Some(service_claim_resolution),
                     Some(service_expired_claim_recovery),
+                    Some(service_log_writer),
                     service_targets,
                     gateway_provider,
                     gateway_reconcile_cancel,
@@ -2257,7 +2269,9 @@ fn clone_service_supervisor_context(
 /// passes apply revision cutovers promptly; a bounded forced pass repairs a
 /// Caddy process which restarted after this daemon observed the same revision.
 // Keep separately owned adapters explicit at this daemon composition boundary.
-#[allow(clippy::too_many_arguments)]
+// The supervisor owns cancellation and cleanup handles until the parent loop
+// finishes; keeping it in this named binding makes that lifetime explicit.
+#[allow(clippy::significant_drop_tightening, clippy::too_many_arguments)]
 async fn gateway_reconciliation_loop_with_context(
     authority: PostgresGatewayEdgeAuthority,
     recovery_authority: PostgresGatewayEdgeAuthority,
@@ -2265,14 +2279,20 @@ async fn gateway_reconciliation_loop_with_context(
     boot_recovery: GatewayServiceBootRecovery,
     service_claim_resolution: Option<Arc<dyn GatewayServiceClaimResolutionStore>>,
     service_expired_claim_recovery: Option<Arc<dyn GatewayServiceExpiredClaimRecovery>>,
+    service_log_writer: Option<GatewayServiceLogWriterConfig>,
     service_targets: Arc<dyn gateway_edge::GatewayServiceTargetStore>,
     provider: Arc<dyn GatewayProvider>,
     cancellation: CancellationToken,
 ) {
+    let mut service_supervisor =
+        GatewayServiceSupervisor::new(supervisor_context).expect("validated service supervisor");
+    if let Some(writer) = service_log_writer {
+        service_supervisor = service_supervisor.with_log_writer(writer);
+    }
     gateway_reconciliation_loop_with_boot(
         authority,
         recovery_authority,
-        GatewayServiceSupervisor::new(supervisor_context).expect("validated service supervisor"),
+        service_supervisor,
         Some(boot_recovery),
         service_claim_resolution,
         service_expired_claim_recovery,
