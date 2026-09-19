@@ -11,12 +11,29 @@ use std::{
     os::fd::FromRawFd,
     os::unix::fs::{MetadataExt, PermissionsExt},
     path::Path,
+    process,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+        mpsc,
+    },
+    thread,
     time::Duration,
 };
 
 const BROKERED_E2E_RULE_ID: &str = "00000000-0000-0000-0000-000000000002";
 const BROKERED_E2E_PLACEHOLDER: &str = "heph-placeholder:v1:00000000-0000-0000-0000-000000000002";
 const BROKERED_E2E_CREDENTIAL_PATH: &str = "/run/hephaestus-secrets/.runtime-credential";
+const SERVICE_DEFAULT_PORT: u16 = 8080;
+const SERVICE_MAX_REQUESTS: usize = 128;
+const SERVICE_MAX_CONNECTIONS: usize = 4;
+const SERVICE_MAX_REQUEST_BYTES: usize = 16 * 1024;
+const SERVICE_MAX_HEADER_COUNT: usize = 32;
+const SERVICE_MAX_HEADER_LINE_BYTES: usize = 4 * 1024;
+const SERVICE_MAX_BODY_BYTES: usize = 16 * 1024;
+const SERVICE_MAX_DELAY_MS: u64 = 5_000;
+const SERVICE_IO_TIMEOUT: Duration = Duration::from_secs(5);
+const SERVICE_CRASH_EXIT_CODE: i32 = 42;
 use vm_libkrun::protocol::{
     PrivateHttpRequestMessage, PrivateHttpResponseMessage, PrivateMailboxPublicationMessage,
 };
@@ -39,6 +56,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             return private_http_brokered_mailbox_handler().map_err(Into::into);
         }
         Some("--serve-http") => return serve_http().map_err(Into::into),
+        Some("--serve-service") => return serve_service().map_err(Into::into),
         Some("--expect-network-disabled") => return expect_network_disabled(),
         Some("--expect-broker-only") => return expect_broker_only(),
         Some("--brokered-https-e2e") => return brokered_https_e2e(),
@@ -353,6 +371,339 @@ fn serve_http() -> io::Result<()> {
     // command's final exit tears down virtio-net.
     std::thread::sleep(Duration::from_millis(100));
     Ok(())
+}
+
+/// Minimal long-lived service fixture for the private guest-loopback bridge.
+///
+/// The fixture uses a fixed worker pool and bounded queue, then stops after a
+/// bounded request count. That keeps later transport tests deterministic while
+/// still proving concurrent requests reach one persistent process.
+fn serve_service() -> io::Result<()> {
+    let port = service_port()?;
+    let startup_delay = service_delay_from_env("HEPH_SERVICE_STARTUP_DELAY_MS")?;
+    let request_delay = service_delay_from_env("HEPH_SERVICE_REQUEST_DELAY_MS")?;
+    if !startup_delay.is_zero() {
+        std::thread::sleep(startup_delay);
+    }
+    let listener = TcpListener::bind(("127.0.0.1", port))?;
+    let startup_id = Arc::new(service_startup_id()?);
+    println!(
+        "service=ready pid={} startup_id={} port={port}",
+        process::id(),
+        startup_id
+    );
+    let request_count = Arc::new(AtomicUsize::new(0));
+    let (sender, receiver) = mpsc::sync_channel(SERVICE_MAX_CONNECTIONS);
+    let receiver = Arc::new(Mutex::new(receiver));
+    for worker_number in 0..SERVICE_MAX_CONNECTIONS {
+        let receiver = Arc::clone(&receiver);
+        let startup_id = Arc::clone(&startup_id);
+        thread::Builder::new()
+            .name(format!("service-worker-{worker_number}"))
+            .spawn(move || {
+                loop {
+                    let job = receiver
+                        .lock()
+                        .expect("service worker queue mutex is not poisoned")
+                        .recv();
+                    let Ok((stream, request_number)) = job else {
+                        break;
+                    };
+                    if let Err(error) = serve_service_connection(
+                        stream,
+                        startup_id.as_str(),
+                        request_number,
+                        request_delay,
+                    ) {
+                        eprintln!("service connection failed: {error}");
+                    }
+                }
+            })
+            .map_err(io::Error::other)?;
+    }
+    loop {
+        let (stream, _) = match listener.accept() {
+            Ok(connection) => connection,
+            Err(error) => {
+                eprintln!("service accept failed: {error}");
+                continue;
+            }
+        };
+        let request_number = request_count.fetch_add(1, Ordering::Relaxed) + 1;
+        if request_number > SERVICE_MAX_REQUESTS {
+            return Err(io::Error::other("service fixture request limit reached"));
+        }
+        if sender.send((stream, request_number)).is_err() {
+            return Err(io::Error::other("service worker queue closed"));
+        }
+    }
+}
+
+fn serve_service_connection(
+    mut stream: TcpStream,
+    startup_id: &str,
+    request_number: usize,
+    request_delay: Duration,
+) -> io::Result<()> {
+    let target = match read_service_target(&mut stream) {
+        Ok(target) => target,
+        Err(error) => {
+            if let Err(response_error) =
+                write_service_response(&mut stream, 400, "text/plain", b"bad request")
+            {
+                eprintln!("service malformed-request response failed: {response_error}");
+            }
+            eprintln!("service request rejected: {error}");
+            return Ok(());
+        }
+    };
+    let delay = match service_delay_for_target(&target, request_delay) {
+        Ok(delay) => delay,
+        Err(error) => {
+            if let Err(response_error) =
+                write_service_response(&mut stream, 400, "text/plain", b"bad delay")
+            {
+                eprintln!("service bad-delay response failed: {response_error}");
+            }
+            eprintln!("service delay rejected: {error}");
+            return Ok(());
+        }
+    };
+    if !delay.is_zero() {
+        thread::sleep(delay);
+    }
+    let path = target
+        .split_once('?')
+        .map_or(target.as_str(), |(path, _)| path);
+    match path {
+        "/readyz" => write_service_response(&mut stream, 200, "text/plain", b"ready"),
+        "/healthz" => write_service_response(&mut stream, 200, "text/plain", b"healthy"),
+        "/identity" => {
+            let body = format!(
+                r#"{{"pid":{},"startup_id":"{}","request_count":{request_number}}}"#,
+                process::id(),
+                startup_id
+            );
+            write_service_response(&mut stream, 200, "application/json", body.as_bytes())
+        }
+        "/crash" => {
+            if let Err(error) = write_service_response(&mut stream, 503, "text/plain", b"crashing")
+            {
+                eprintln!("service crash response failed: {error}");
+            }
+            process::exit(SERVICE_CRASH_EXIT_CODE);
+        }
+        _ if path.starts_with("/delay/") => {
+            write_service_response(&mut stream, 200, "text/plain", b"delayed")
+        }
+        _ => write_service_response(&mut stream, 404, "text/plain", b"not found"),
+    }
+}
+
+fn service_port() -> io::Result<u16> {
+    let value =
+        std::env::var("HEPH_SERVICE_PORT").unwrap_or_else(|_| SERVICE_DEFAULT_PORT.to_string());
+    let port = value.parse::<u16>().map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("HEPH_SERVICE_PORT is invalid: {error}"),
+        )
+    })?;
+    if port < 1024 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "HEPH_SERVICE_PORT must be between 1024 and 65535",
+        ));
+    }
+    Ok(port)
+}
+
+fn service_delay_from_env(name: &str) -> io::Result<Duration> {
+    let Some(value) = std::env::var_os(name) else {
+        return Ok(Duration::ZERO);
+    };
+    let milliseconds = value
+        .to_str()
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{name} must be valid UTF-8 milliseconds"),
+            )
+        })?
+        .parse::<u64>()
+        .map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{name} is invalid: {error}"),
+            )
+        })?;
+    if milliseconds > SERVICE_MAX_DELAY_MS {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{name} exceeds {SERVICE_MAX_DELAY_MS}ms"),
+        ));
+    }
+    Ok(Duration::from_millis(milliseconds))
+}
+
+fn service_delay_for_target(target: &str, default: Duration) -> io::Result<Duration> {
+    let path = target.split_once('?').map_or(target, |(path, _)| path);
+    let Some(value) = path.strip_prefix("/delay/") else {
+        return Ok(default);
+    };
+    let milliseconds = value.parse::<u64>().map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("service delay path is invalid: {error}"),
+        )
+    })?;
+    if milliseconds > SERVICE_MAX_DELAY_MS {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("service delay exceeds {SERVICE_MAX_DELAY_MS}ms"),
+        ));
+    }
+    Ok(Duration::from_millis(milliseconds))
+}
+
+fn service_startup_id() -> io::Result<String> {
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(io::Error::other)?
+        .as_nanos();
+    Ok(format!("{}-{timestamp}", process::id()))
+}
+
+fn read_service_target(stream: &mut TcpStream) -> io::Result<String> {
+    stream.set_read_timeout(Some(SERVICE_IO_TIMEOUT))?;
+    let mut request = Vec::with_capacity(1_024);
+    let header_end = loop {
+        let mut chunk = [0_u8; 1_024];
+        let read = stream.read(&mut chunk)?;
+        if read == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "service request ended before headers",
+            ));
+        }
+        request.extend_from_slice(&chunk[..read]);
+        if request.len() > SERVICE_MAX_REQUEST_BYTES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "service request exceeds size limit",
+            ));
+        }
+        if let Some(position) = request.windows(4).position(|window| window == b"\r\n\r\n") {
+            break position + 4;
+        }
+    };
+    if request.len() > header_end {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "service fixture does not accept request bodies",
+        ));
+    }
+    let headers = std::str::from_utf8(&request[..header_end])
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "service request is not UTF-8"))?;
+    let mut lines = headers.split("\r\n");
+    let request_line = lines.next().ok_or_else(|| {
+        io::Error::new(io::ErrorKind::InvalidData, "service request line missing")
+    })?;
+    let mut parts = request_line.split_ascii_whitespace();
+    let method = parts.next();
+    let target = parts.next();
+    let version = parts.next();
+    if method != Some("GET")
+        || target.is_none_or(|target| !target.starts_with('/'))
+        || !matches!(version, Some("HTTP/1.0" | "HTTP/1.1"))
+        || parts.next().is_some()
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "service request line is unsupported",
+        ));
+    }
+    let mut header_count = 0_usize;
+    for line in lines {
+        if line.is_empty() {
+            break;
+        }
+        if line.len() > SERVICE_MAX_HEADER_LINE_BYTES || line.split_once(':').is_none() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "service request header is invalid",
+            ));
+        }
+        header_count += 1;
+        if header_count > SERVICE_MAX_HEADER_COUNT {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "service request has too many headers",
+            ));
+        }
+        let (name, value) = line.split_once(':').expect("header was checked above");
+        if name.eq_ignore_ascii_case("upgrade")
+            || name.eq_ignore_ascii_case("transfer-encoding")
+            || (name.eq_ignore_ascii_case("connection")
+                && value
+                    .split(',')
+                    .any(|token| token.trim().eq_ignore_ascii_case("upgrade")))
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "service fixture does not accept protocol upgrades",
+            ));
+        }
+        if name.eq_ignore_ascii_case("content-length") {
+            let length = value.trim().parse::<usize>().map_err(|error| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("service content length is invalid: {error}"),
+                )
+            })?;
+            if length > SERVICE_MAX_BODY_BYTES || length != 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "service fixture accepts only empty GET bodies",
+                ));
+            }
+        }
+    }
+    Ok(target.expect("target was checked above").to_owned())
+}
+
+fn write_service_response(
+    stream: &mut TcpStream,
+    status: u16,
+    content_type: &str,
+    body: &[u8],
+) -> io::Result<()> {
+    let reason = match status {
+        200 => "OK",
+        400 => "Bad Request",
+        404 => "Not Found",
+        503 => "Service Unavailable",
+        _ => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "unsupported fixture status",
+            ));
+        }
+    };
+    if body.len() > SERVICE_MAX_BODY_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "service response exceeds size limit",
+        ));
+    }
+    write!(
+        stream,
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    )?;
+    stream.write_all(body)?;
+    stream.flush()?;
+    stream.shutdown(Shutdown::Write)
 }
 
 fn expect_network_disabled() -> Result<(), Box<dyn std::error::Error>> {
