@@ -569,6 +569,21 @@ unchecked.
   produced in the current worktree. Application header substitution remains
   host-mediated and no platform bearer or mailbox authority is synthesized.
 
+The parent-owned preparation boundary now resolves the exact claimed service
+identity, validates the returned launch and deterministic VM ID, materializes
+and provisions a stopped VM, and returns the launch together with its VM Arc
+for the prepared-instance worker. Its cancellation handle requests
+cancellation without dropping an in-flight resolver or provider future; late
+provision success destroys the VM before exact materialization cleanup.
+Provider orphan confirmation precedes materialization removal after a
+provision error, and failures retain the VM Arc or materialization ownership
+needed for same-process retry. Evidence: six focused preparation tests and
+the full 59-test `gateway-edge` library suite passed; strict all-target
+gateway-edge Clippy with `CARGO_INCREMENTAL=0`, formatting, and `git diff
+--check` passed. The parent must retain and join the preparation future and
+maintain its ownership heartbeat; supervisor integration and forced-shutdown
+ledger recovery remain pending.
+
 ## Non-goals
 
 This task does not replace MVP 03's bounded stateless invocation mode. It does
