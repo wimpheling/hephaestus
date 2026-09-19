@@ -394,6 +394,10 @@ suite pass; strict all-target/all-feature gateway-edge Clippy, package checks,
 and `git diff --check` pass. Global supervision, health/drain policy,
 durable failure-store reporting, Caddy routing, and release UI integration
 remain pending.
+The coordinator ownership integration run used disposable PostgreSQL after
+migration 0076, printed `REAL_POSTGRES_CONNECTED_AND_MIGRATED=1
+max_migration=76`, and passed 16 real ownership/coordinator tests; the
+retained log is `/tmp/hephaestus-gateway-ownership-coordinator-full.log`.
 
 - [x] Finish focused VM contract tests and workspace compatibility checks:
   `cargo test -p vm-trait`, `cargo test -p vm-libkrun --lib`,

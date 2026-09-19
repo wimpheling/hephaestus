@@ -11,6 +11,9 @@ use sqlx::postgres::PgPoolOptions;
 use std::{env, sync::Arc, time::Duration};
 use uuid::Uuid;
 
+#[path = "service_ownership/coordinator.rs"]
+mod coordinator;
+
 #[tokio::test(flavor = "multi_thread")]
 #[serial]
 async fn ownership_claims_one_live_service_and_fences_stale_owner() {
@@ -758,9 +761,11 @@ async fn service_failure_is_idempotent_and_backoff_survives_restart() {
     .execute(&pool)
     .await
     .expect_err("non-exit failure metadata shape must be rejected");
-    assert!(invalid_shape
-        .to_string()
-        .contains("gateway_service_instance_exit_failure_check"));
+    assert!(
+        invalid_shape
+            .to_string()
+            .contains("gateway_service_instance_exit_failure_check")
+    );
     failures
         .record_failure(&claim, &owner, startup)
         .await
@@ -780,16 +785,18 @@ async fn service_failure_is_idempotent_and_backoff_survives_restart() {
     assert_eq!(recorded.0, "startup");
     assert_eq!(recorded.1, 1);
     assert!(recorded.2.is_some());
-    assert!(sqlx::query(
-        "UPDATE gateway_service_retry_state
+    assert!(
+        sqlx::query(
+            "UPDATE gateway_service_retry_state
             SET next_retry_at = NULL
           WHERE gateway_id = $1 AND revision_id = $2",
-    )
-    .bind(fixture.gateway)
-    .bind(fixture.revision)
-    .execute(&pool)
-    .await
-    .is_err());
+        )
+        .bind(fixture.gateway)
+        .bind(fixture.revision)
+        .execute(&pool)
+        .await
+        .is_err()
+    );
 
     let duplicate =
         GatewayServiceFailure::new(GatewayServiceFailureCode::UnexpectedExit, Some(17), None)
