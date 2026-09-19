@@ -21,6 +21,12 @@ cargo build --manifest-path examples/cooking/cooking-service/Cargo.toml \
   --locked --offline --release
 ```
 
+The host CI and repository quality gate use these locked, offline Cargo
+commands; they do not invoke the guest-only `build.sh` toolchain. The release
+artifact is attached for deployment with `Manual` `trigger_policy`. The
+top-level `[triggers]` section is currently parser-only and does not schedule
+runs; `[build].triggers` is used when matching build requests.
+
 For a local smoke request, run the binary in one terminal and use `curl` from
 another:
 

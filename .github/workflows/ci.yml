@@ -72,6 +72,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.88"
+          components: clippy,rustfmt
       - uses: Swatinem/rust-cache@v2
       - name: Install musl toolchain
         run: sudo apt-get update && sudo apt-get install -y musl-tools
@@ -81,6 +82,14 @@ jobs:
         working-directory: examples/cooking/cooking-gateway
         run: |
           cargo test --locked --offline --all-features
+          cargo build --locked --offline --release --target x86_64-unknown-linux-musl
+      - name: Check cooking service
+        working-directory: examples/cooking/cooking-service
+        run: |
+          cargo fmt --check
+          cargo clippy --locked --offline --all-targets --all-features -- -D warnings
+          cargo test --locked --offline --all-features
+          cargo doc --locked --offline --all-features --no-deps
           cargo build --locked --offline --release --target x86_64-unknown-linux-musl
       - name: Test cooking agent, deterministic relay and Hugo output
         working-directory: examples/cooking/cooking-agent

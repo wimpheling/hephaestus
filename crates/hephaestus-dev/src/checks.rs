@@ -9,6 +9,7 @@ mod architecture;
 
 const UI_CHECKS: &str = "mix hephaestus.architecture --family ui && mix test test/mix/tasks/hephaestus_architecture_test.exs test/hephaestus_web_web/components test/hephaestus_web_web/design_system";
 const QUALITY_FAMILIES: [&str; 5] = ["protobuf", "architecture", "rust", "phoenix", "ui"];
+const COOKING_SERVICE_MANIFEST: &str = "examples/cooking/cooking-service/Cargo.toml";
 
 pub fn run(context: &DevContext, command: CheckCommand) -> Result<()> {
     match command {
@@ -85,7 +86,52 @@ fn rust(context: &DevContext) -> Result<()> {
     phase("Rust tests");
     cargo(root, &["test", "--workspace", "--all-features"])?;
     phase("Rust documentation");
-    cargo(root, &["doc", "--workspace", "--all-features", "--no-deps"])
+    cargo(root, &["doc", "--workspace", "--all-features", "--no-deps"])?;
+    cooking_service(context)
+}
+
+fn cooking_service(context: &DevContext) -> Result<()> {
+    let root = &context.repository_root;
+    let manifest = root.join(COOKING_SERVICE_MANIFEST);
+    if !manifest.is_file() {
+        return Err(DevError::Invalid(format!(
+            "cooking service manifest is missing at {}",
+            manifest.display()
+        )));
+    }
+
+    phase("Cooking service formatting");
+    cargo_manifest(root, &manifest, "fmt", &["--", "--check"])?;
+    phase("Cooking service Clippy");
+    cargo_manifest(
+        root,
+        &manifest,
+        "clippy",
+        &[
+            "--locked",
+            "--offline",
+            "--all-targets",
+            "--all-features",
+            "--",
+            "-D",
+            "warnings",
+        ],
+    )?;
+    phase("Cooking service tests");
+    cargo_manifest(
+        root,
+        &manifest,
+        "test",
+        &["--locked", "--offline", "--all-features"],
+    )?;
+    phase("Cooking service documentation");
+    cargo_manifest(
+        root,
+        &manifest,
+        "doc",
+        &["--locked", "--offline", "--all-features", "--no-deps"],
+    )?;
+    Ok(())
 }
 
 fn phoenix(context: &DevContext) -> Result<()> {
@@ -118,6 +164,22 @@ fn full(context: &DevContext) -> Result<()> {
 
 fn cargo(root: &Path, arguments: &[&str]) -> Result<()> {
     run_process(Command::new("cargo").args(arguments).current_dir(root))
+}
+
+fn cargo_manifest(
+    root: &Path,
+    manifest: &Path,
+    subcommand: &str,
+    arguments: &[&str],
+) -> Result<()> {
+    run_process(
+        Command::new("cargo")
+            .arg(subcommand)
+            .arg("--manifest-path")
+            .arg(manifest)
+            .args(arguments)
+            .current_dir(root),
+    )
 }
 
 fn require_mix_project(web: &Path) -> Result<()> {
