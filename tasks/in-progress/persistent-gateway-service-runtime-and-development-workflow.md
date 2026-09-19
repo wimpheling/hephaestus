@@ -1662,3 +1662,24 @@ follow-up work.
 Serialized exact-instance resolution checkpoint (2026-09-19): the expired-claim recovery port now exposes a read-only `resolve_exact_instance` operation for the complete instance/gateway/revision identity. The PostgreSQL adapter validates the identity, explicitly sets `READ COMMITTED`, acquires the same gateway `FOR UPDATE` barrier used by claim/takeover mutations, reads the exact row without filtering lifecycle state, and validates the decoded lease before returning it. `Cleaned` rows remain observable for ambiguous takeover or cleanup acknowledgements; wrong identities and missing rows resolve as exact absence, while malformed identity is rejected. The isolated overlay is based on `b6a38dd829739e098aff0b3580d0bf7fcd4013e5` at `/home/a/.cache/heph-exact-resolver-overlay-20260919`, with dedicated target `/home/a/.cache/heph-exact-resolver-target`. Owned source hashes match the overlay: `service_expired_claim_recovery.rs` `376469e921bbd9222bb4730a5c65c87d84b4e945cb9bf55e36c842508bb63ba3`, `service_boot_recovery.rs` `834ebf4b6b7e6b682a3f2a94ed37746f8adf32ed08ed7763d4657fbbf7f90a0`, `service_ownership.rs` `eafe493206a93c67ddf435c5b6dc73886feeea428baa2cd9cac470ff2e7d8697`, and `expired_takeover.rs` `3f9978d2eb3237447c3caa7e2da9e69abbe3a5913ed8f1b4d8487b6c16ab40fd`.
 
 The worker-role PostgreSQL suite passed all 8 expired-takeover tests, including exact cleaned/absence lookup and two gateway-lock barrier phases. The test observed the resolver blocked by the holder PID before separately committing a staged takeover and rolling back a newer epoch; the final log with `REAL_POSTGRES_CONNECTED_AND_MIGRATED=1 max_migration=80` is `/tmp/heph-exact-resolver-isolated-realpg-20260919.log`. The full isolated gateway-edge library passed 172 tests in `/tmp/heph-exact-resolver-isolated-edge-20260919.log`. Pinned Rust 1.88 formatting, strict all-target/all-feature Clippy for `gateway-edge` and `gateway-postgres`, and workspace rustdoc passed in `/tmp/heph-exact-resolver-isolated-fmt-20260919.log`, `/tmp/heph-exact-resolver-isolated-clippy-20260919.log`, and `/tmp/heph-exact-resolver-isolated-doc-20260919.log`. Supervisor use of exact resolution for expired owned cleanup and serialized lost-takeover handling remains pending.
+
+
+Isolated-service teardown synchronization checkpoint (2026-09-19): the CI
+failure at `9bf2a61` (`SQLSTATE 55006`, one session still using the generated
+startup database) was not reproduced in the focused or concurrent 74-test
+runs, so its underlying surviving-task cause remains unproven. The test
+fixture now closes its control and worker pools, then waits up to two seconds
+for `pg_stat_activity` to show no sessions for that exact generated database.
+It records only PID, application name, state, and backend type on timeout; it
+never force-terminates a session or hides a live task. The clean source archive
+is based on `50ea7f`, at `/home/a/.cache/heph-teardown-src-50ea7f.8qqNgl`, with
+dedicated target `/home/a/.cache/heph-teardown-target-50ea7f`. The shared and
+verified recovery-test source hash is
+`b5585f23c8de401c75c108ad37bd4e0e25e27ad1ba2648b0e17b7c290f473ed1`.
+The focused revoked-active test passed with migration 80 and worker role in
+`/tmp/heph-revoked-active-teardown-focused-v4.log`; the concurrent full app
+suite passed 74/74 in `/tmp/heph-revoked-active-teardown-full-v1.log`.
+Pinned Rust 1.88 formatting, strict app Clippy, and workspace rustdoc passed
+in `/tmp/heph-revoked-active-teardown-fmt-v3.log`,
+`/tmp/heph-revoked-active-teardown-clippy-v2.log`, and
+`/tmp/heph-revoked-active-teardown-doc-v1.log`.

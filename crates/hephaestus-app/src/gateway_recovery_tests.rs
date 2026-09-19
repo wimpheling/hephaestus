@@ -3265,6 +3265,48 @@ async fn isolated_startup_database() -> Option<IsolatedStartupDatabase> {
 async fn drop_isolated_startup_database(database: IsolatedStartupDatabase) {
     database.control.close().await;
     database.worker.close().await;
+    // PostgreSQL can process pool connection termination asynchronously. Wait
+    // briefly for the exact database to become session-free instead of
+    // force-terminating a surviving task during fixture teardown.
+    let deadline = tokio::time::Instant::now() + StdDuration::from_secs(2);
+    let mut last_sessions = Vec::new();
+    loop {
+        let sessions: Vec<(i32, String, String, String)> = match tokio::time::timeout_at(
+            deadline,
+            sqlx::query_as(
+                "SELECT pid, coalesce(application_name, ''), coalesce(state, ''),
+                        coalesce(backend_type, '')
+                   FROM pg_stat_activity
+                  WHERE datname = $1 AND pid <> pg_backend_pid()",
+            )
+            .bind(&database.name)
+            .fetch_all(&database.admin),
+        )
+        .await
+        {
+            Ok(Ok(sessions)) => sessions,
+            Ok(Err(error)) => panic!(
+                "inspect isolated startup database sessions failed before teardown deadline: {error}; last sessions: {last_sessions:?}"
+            ),
+            Err(error) => panic!(
+                "isolated startup database session inspection timed out: {error}; last sessions: {last_sessions:?}"
+            ),
+        };
+        if sessions.is_empty() {
+            break;
+        }
+        last_sessions = sessions;
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "isolated startup database still has sessions after pool shutdown: {last_sessions:?}"
+        );
+        tokio::select! {
+            () = tokio::time::sleep_until(deadline) => {
+                panic!("isolated startup database still has sessions after pool shutdown: {last_sessions:?}");
+            }
+            () = tokio::time::sleep(StdDuration::from_millis(25)) => {}
+        }
+    }
     sqlx::query(&format!("DROP DATABASE IF EXISTS {}", database.name))
         .execute(&database.admin)
         .await
