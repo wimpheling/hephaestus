@@ -2,9 +2,10 @@
 
 use async_trait::async_trait;
 use gateway_edge::{
-    GatewayServiceClaimResolutionStore, GatewayServiceIdentity, GatewayServiceInstanceLease,
-    GatewayServiceInstanceState, GatewayServiceOwner, GatewayServiceOwnership,
-    GatewayServiceOwnershipError, MAX_SERVICE_OWNERSHIP_BATCH, MAX_SERVICE_OWNERSHIP_LEASE,
+    GatewayServiceClaimResolutionStore, GatewayServiceExpiredClaimRecovery, GatewayServiceIdentity,
+    GatewayServiceInstanceLease, GatewayServiceInstanceState, GatewayServiceOwner,
+    GatewayServiceOwnership, GatewayServiceOwnershipError, MAX_SERVICE_OWNERSHIP_BATCH,
+    MAX_SERVICE_OWNERSHIP_LEASE,
 };
 use sqlx::{FromRow, PgPool};
 use std::time::Duration;
@@ -358,6 +359,67 @@ impl GatewayServiceOwnership for PostgresGatewayServiceOwnership {
 }
 
 #[async_trait]
+impl GatewayServiceExpiredClaimRecovery for PostgresGatewayServiceOwnership {
+    async fn claim_expired_instance(
+        &self,
+        identity: GatewayServiceIdentity,
+        owner: &GatewayServiceOwner,
+        lease_duration: Duration,
+    ) -> Result<GatewayServiceInstanceLease, GatewayServiceOwnershipError> {
+        validate_identity(identity.gateway_id, identity.revision_id)?;
+        owner.validate()?;
+        let lease_duration = checked_lease_duration(lease_duration)?;
+        if identity.instance_id.is_nil() {
+            return Err(GatewayServiceOwnershipError::InvalidArgument);
+        }
+        let mut transaction = self.pool.begin().await.map_err(|error| storage(&error))?;
+        // Recovery follows the aggregate lock order used by every ownership
+        // mutation: gateway first, then the exact instance row.
+        lock_gateway(&mut transaction, identity.gateway_id).await?;
+        let current = lock_exact_instance(&mut transaction, identity).await?;
+        let now = database_now(&mut transaction).await?;
+        if current.owner_host_id != owner.host_id
+            || current.state == "cleaned"
+            || current.lease_expires_at > now
+        {
+            return Err(GatewayServiceOwnershipError::StaleLease);
+        }
+        let fencing_token = current
+            .fencing_token
+            .checked_add(1)
+            .ok_or(GatewayServiceOwnershipError::Unavailable)?;
+        let expires_at = now
+            .checked_add(lease_duration)
+            .ok_or(GatewayServiceOwnershipError::InvalidArgument)?;
+        let row = sqlx::query_as::<_, ServiceInstanceRow>(
+            "UPDATE gateway_service_instances
+                SET owner_uuid = $2, fencing_token = $3,
+                    state = 'stopping', heartbeat_at = $4,
+                    lease_expires_at = $5, updated_at = now()
+              WHERE id = $1
+             RETURNING id, gateway_id, revision_id, owner_host_id,
+                       owner_uuid, fencing_token, vm_id, state,
+                       lease_expires_at, heartbeat_at",
+        )
+        .bind(current.id)
+        .bind(owner.owner_uuid)
+        .bind(fencing_token)
+        .bind(now)
+        .bind(expires_at)
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(|error| storage(&error))?;
+        let lease = row.into_lease()?;
+        validate_lease(&lease)?;
+        transaction
+            .commit()
+            .await
+            .map_err(|error| storage(&error))?;
+        Ok(lease)
+    }
+}
+
+#[async_trait]
 impl GatewayServiceClaimResolutionStore for PostgresGatewayServiceOwnership {
     async fn resolve_revision_claim(
         &self,
@@ -544,6 +606,26 @@ async fn lock_instance(
           FOR UPDATE",
     )
     .bind(instance_id)
+    .fetch_optional(&mut **transaction)
+    .await
+    .map_err(|error| storage(&error))?
+    .ok_or(GatewayServiceOwnershipError::StaleLease)
+}
+
+async fn lock_exact_instance(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    identity: GatewayServiceIdentity,
+) -> Result<ServiceInstanceRow, GatewayServiceOwnershipError> {
+    sqlx::query_as::<_, ServiceInstanceRow>(
+        "SELECT id, gateway_id, revision_id, owner_host_id, owner_uuid,
+                fencing_token, vm_id, state, lease_expires_at, heartbeat_at
+           FROM gateway_service_instances
+          WHERE id = $1 AND gateway_id = $2 AND revision_id = $3
+          FOR UPDATE",
+    )
+    .bind(identity.instance_id)
+    .bind(identity.gateway_id)
+    .bind(identity.revision_id)
     .fetch_optional(&mut **transaction)
     .await
     .map_err(|error| storage(&error))?

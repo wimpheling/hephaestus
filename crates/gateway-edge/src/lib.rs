@@ -24,6 +24,7 @@ mod service_cleanup_driver;
 mod service_coordinator;
 pub(crate) mod service_diagnostics;
 mod service_execution;
+mod service_expired_claim_recovery;
 mod service_failure;
 mod service_handler;
 mod service_http;
@@ -64,6 +65,7 @@ pub use service_execution::{
     GatewayExecutionTarget, GatewayExecutionTargetError, GatewayExecutionTargetResolver,
     GatewayServiceAuthorityBudget,
 };
+pub use service_expired_claim_recovery::GatewayServiceExpiredClaimRecovery;
 pub use service_failure::{
     GatewayServiceFailure, GatewayServiceFailureCode, GatewayServiceFailureStore,
     GatewayServiceFailureStoreError,

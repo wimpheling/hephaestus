@@ -1015,6 +1015,21 @@ check, strict Clippy, formatting, and 58 library tests passed.
   `/tmp/heph-reconcile-check-20260919-fmt.log`. Application polling,
   inventory-based recovery, and global scheduling remain pending.
 
+- [x] Add exact same-host takeover for one expired service instance. The new
+  recovery port and PostgreSQL adapter lock gateway then the exact
+  `(instance_id, gateway_id, revision_id)` row, re-read `clock_timestamp()`
+  after both locks, reject live/cleaned/foreign/mismatched rows, and return a
+  validated `Stopping` lease with a new fencing epoch and daemon owner. The
+  real worker-role suite covers live rejection, foreign host and wrong scope,
+  an expired cleaned row, successful fencing, and competing takeovers with one
+  winner. Evidence used committed base `2d5b8ae` plus only the takeover
+  overlay; four tests passed against migration 0077 with the connected marker
+  in `/tmp/heph-exact-takeover-isolated-real-final-20260919.log`. Broad
+  gateway-edge/gateway-postgres all-target/all-feature Clippy passed in
+  `/tmp/heph-exact-takeover-isolated-broad-clippy.log`, and isolated workspace
+  formatting passed. The boot gate that pages inventory and drives this port
+  remains pending.
+
 - [x] Add the default-off, release-scoped application log policy to the typed
   service declaration and immutable revision storage. The `disabled` default
   is omitted from normalized JSON/TOML serialization, preserving the frozen

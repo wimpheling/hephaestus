@@ -15,6 +15,8 @@ use uuid::Uuid;
 mod claim_resolution;
 #[path = "service_ownership/coordinator.rs"]
 mod coordinator;
+#[path = "service_ownership/expired_takeover.rs"]
+mod expired_takeover;
 
 #[tokio::test(flavor = "multi_thread")]
 #[serial]
