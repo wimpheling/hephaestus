@@ -133,9 +133,24 @@ service revision, so a serving instance can remain live while a replacement is
 pending. Renewal and state transitions lock the instance before reading
 `clock_timestamp()`; bounded same-host recovery fences expired rows, including
 same-daemon recovery after a database stall. Non-cleaned failed rows retain
-their unique gateway/revision reservation until cleanup is recorded. Readiness
-promotion, revision cutover, supervisor scheduling, VM materialization wiring,
-and orphan cleanup remain pending.
+their unique gateway/revision reservation until cleanup is recorded.
+Supervisor scheduling, VM materialization wiring, request draining, and orphan
+cleanup remain pending.
+
+The ownership adapter now provides fenced `provisioning -> starting -> ready -> draining`
+transitions and readiness-gated promotion. Every mutation locks the gateway
+aggregate before the exact instance, validates the owner/fence and a fresh
+database clock after lock waits, and rejects draining the enabled active
+revision. Promotion additionally locks and rechecks the exact release
+publication row, updates only the active pointer while preserving the desired
+tip, and is idempotent when the candidate is already active. The release
+revocation path updates only the release row, so it cannot form an inverse lock
+cycle with promotion's gateway -> instance -> release order; a concurrent
+revocation is observed through the publication recheck.
+
+Readiness promotion and revision cutover are now covered at the ownership port;
+supervisor scheduling, VM materialization wiring, request draining, and orphan
+cleanup remain pending.
 
 Evidence: the exact disposable PostgreSQL run used
 `HEPHAESTUS_POSTGRES_TEST_URL` and printed
@@ -144,6 +159,18 @@ ownership suite passed 5 tests in 3.50s. The retained log is
 `/tmp/hephaestus-gateway-ownership-final-v3.log`. Targeted `gateway-edge` and
 `gateway-postgres` Clippy runs with `-D warnings`, focused formatting, and
 `git diff --check` pass.
+
+Evidence for the lifecycle/promotion slice: the worker-role disposable
+PostgreSQL run printed `REAL_POSTGRES_CONNECTED_AND_MIGRATED=1
+max_migration=75` and passed 10 ownership tests in 6.76s. The lock-barrier
+cases prove renewal and promotion recheck lease expiry after waiting on the
+instance or release row; the suite also covers initial pending promotion,
+old-active cutover, superseded and revoked candidates, legal transition
+states, stale/fenced leases, drain protection, idempotent promotion, and
+rollback without an outbox event. The retained log is
+`/tmp/hephaestus-gateway-ownership-promotion-barrier.log`. `gateway-edge`
+and the `gateway-postgres` ownership target pass strict Clippy with
+`-D warnings`; focused formatting and `git diff --check` also pass.
 
 The immutable service launch resolver now selects only a published
 `http.service.v1` revision by the host-owned gateway/revision identity and

@@ -182,6 +182,35 @@ pub trait GatewayServiceOwnership: Send + Sync {
         owner: &GatewayServiceOwner,
     ) -> Result<GatewayServiceInstanceLease, GatewayServiceOwnershipError>;
 
+    /// Moves an exact provisioning claim into startup ownership.
+    async fn mark_starting(
+        &self,
+        lease: &GatewayServiceInstanceLease,
+        owner: &GatewayServiceOwner,
+    ) -> Result<GatewayServiceInstanceLease, GatewayServiceOwnershipError>;
+
+    /// Marks an exact starting claim ready after the caller's readiness probe.
+    async fn mark_ready(
+        &self,
+        lease: &GatewayServiceInstanceLease,
+        owner: &GatewayServiceOwner,
+    ) -> Result<GatewayServiceInstanceLease, GatewayServiceOwnershipError>;
+
+    /// Moves an exact ready non-serving claim into draining.
+    async fn mark_draining(
+        &self,
+        lease: &GatewayServiceInstanceLease,
+        owner: &GatewayServiceOwner,
+    ) -> Result<GatewayServiceInstanceLease, GatewayServiceOwnershipError>;
+
+    /// Atomically promotes an exact ready candidate to the desired serving
+    /// revision, returning the previous active revision when one existed.
+    async fn promote_ready(
+        &self,
+        lease: &GatewayServiceInstanceLease,
+        owner: &GatewayServiceOwner,
+    ) -> Result<Option<Uuid>, GatewayServiceOwnershipError>;
+
     /// Marks an exact stopping claim cleaned after provider/materializer
     /// cleanup has completed successfully.
     async fn mark_cleaned(

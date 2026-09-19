@@ -17,7 +17,7 @@ async fn ownership_claims_one_live_service_and_fences_stale_owner() {
         return;
     };
     let fixture = seed_fixture(&pool, "http.service.v1").await;
-    let ownership = Arc::new(PostgresGatewayServiceOwnership::new(pool.clone()));
+    let ownership = Arc::new(worker_ownership().await);
     let first = GatewayServiceOwner::new("ownership-host", Uuid::new_v4()).expect("owner");
     let second = GatewayServiceOwner::new("ownership-host", Uuid::new_v4()).expect("owner");
     let (left, right) = tokio::join!(
@@ -85,7 +85,7 @@ async fn ownership_requires_exact_service_revision_and_host() {
     .await
     .expect("pending service revision");
     let stateless = seed_fixture(&pool, "http.v1").await;
-    let ownership = PostgresGatewayServiceOwnership::new(pool.clone());
+    let ownership = worker_ownership().await;
     let owner = GatewayServiceOwner::new("ownership-host", Uuid::new_v4()).expect("owner");
     let mut invalid_owner = owner.clone();
     invalid_owner.host_id = "ownership host".to_owned();
@@ -176,7 +176,7 @@ async fn ownership_renewal_checks_expiry_after_waiting_for_instance_lock() {
         return;
     };
     let fixture = seed_fixture(&pool, "http.service.v1").await;
-    let ownership = PostgresGatewayServiceOwnership::new(pool.clone());
+    let ownership = worker_ownership().await;
     let owner = GatewayServiceOwner::new("lock-host", Uuid::new_v4()).expect("owner");
     let claim = ownership
         .claim_new(
@@ -203,6 +203,7 @@ async fn ownership_renewal_checks_expiry_after_waiting_for_instance_lock() {
                 .await
         }
     });
+    wait_for_lock(&pool, "gateway_service_instances").await;
     tokio::time::sleep(Duration::from_millis(60)).await;
     blocker.commit().await.expect("release instance lock");
     assert!(matches!(
@@ -213,11 +214,402 @@ async fn ownership_renewal_checks_expiry_after_waiting_for_instance_lock() {
 
 #[tokio::test(flavor = "multi_thread")]
 #[serial]
+async fn ownership_transitions_and_promotes_pending_service() {
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let fixture = seed_fixture(&pool, "http.service.v1").await;
+    let candidate = seed_service_revision(&pool, fixture.gateway).await;
+    sqlx::query(
+        "UPDATE gateways
+            SET active_revision_id = NULL, desired_service_revision_id = $2
+          WHERE id = $1",
+    )
+    .bind(fixture.gateway)
+    .bind(candidate)
+    .execute(&pool)
+    .await
+    .expect("pending candidate pointers");
+    let before_events: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM application_events
+          WHERE aggregate_type = 'gateway' AND aggregate_id = $1",
+    )
+    .bind(fixture.gateway)
+    .fetch_one(&pool)
+    .await
+    .expect("promotion event baseline");
+    let ownership = worker_ownership().await;
+    let owner = GatewayServiceOwner::new("promotion-host", Uuid::new_v4()).expect("owner");
+    let claim = ownership
+        .claim_new(fixture.gateway, candidate, &owner, Duration::from_secs(30))
+        .await
+        .expect("candidate claim");
+    assert!(matches!(
+        ownership.mark_ready(&claim, &owner).await,
+        Err(GatewayServiceOwnershipError::Conflict)
+    ));
+    let starting = ownership
+        .mark_starting(&claim, &owner)
+        .await
+        .expect("starting transition");
+    assert!(matches!(
+        ownership.mark_starting(&starting, &owner).await,
+        Err(GatewayServiceOwnershipError::Conflict)
+    ));
+    let ready = ownership
+        .mark_ready(&starting, &owner)
+        .await
+        .expect("ready transition");
+    assert_eq!(ready.state, GatewayServiceInstanceState::Ready);
+    let previous = ownership
+        .promote_ready(&ready, &owner)
+        .await
+        .expect("promote initial candidate");
+    assert_eq!(previous, None);
+    let pointers: (Option<Uuid>, Option<Uuid>) = sqlx::query_as(
+        "SELECT active_revision_id, desired_service_revision_id
+           FROM gateways WHERE id = $1",
+    )
+    .bind(fixture.gateway)
+    .fetch_one(&pool)
+    .await
+    .expect("promoted pointers");
+    assert_eq!(pointers, (Some(candidate), Some(candidate)));
+    let after_events: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM application_events
+          WHERE aggregate_type = 'gateway' AND aggregate_id = $1",
+    )
+    .bind(fixture.gateway)
+    .fetch_one(&pool)
+    .await
+    .expect("promotion event count");
+    assert_eq!(after_events, before_events + 1);
+    assert_eq!(
+        ownership
+            .promote_ready(&ready, &owner)
+            .await
+            .expect("idempotent promotion retry"),
+        Some(candidate)
+    );
+    let retry_events: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM application_events
+          WHERE aggregate_type = 'gateway' AND aggregate_id = $1",
+    )
+    .bind(fixture.gateway)
+    .fetch_one(&pool)
+    .await
+    .expect("idempotent event count");
+    assert_eq!(retry_events, after_events);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn ownership_old_active_drains_only_after_candidate_promotion() {
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let fixture = seed_fixture(&pool, "http.service.v1").await;
+    let candidate = seed_service_revision(&pool, fixture.gateway).await;
+    sqlx::query("UPDATE gateways SET desired_service_revision_id = $2 WHERE id = $1")
+        .bind(fixture.gateway)
+        .bind(candidate)
+        .execute(&pool)
+        .await
+        .expect("desired candidate");
+    let ownership = worker_ownership().await;
+    let owner = GatewayServiceOwner::new("cutover-host", Uuid::new_v4()).expect("owner");
+    let old = ownership
+        .claim_new(
+            fixture.gateway,
+            fixture.revision,
+            &owner,
+            Duration::from_secs(30),
+        )
+        .await
+        .expect("old claim");
+    let old = ownership
+        .mark_ready(
+            &ownership
+                .mark_starting(&old, &owner)
+                .await
+                .expect("old starting"),
+            &owner,
+        )
+        .await
+        .expect("old ready");
+    let candidate_claim = ownership
+        .claim_new(fixture.gateway, candidate, &owner, Duration::from_secs(30))
+        .await
+        .expect("candidate claim");
+    let candidate_ready = ownership
+        .mark_ready(
+            &ownership
+                .mark_starting(&candidate_claim, &owner)
+                .await
+                .expect("candidate starting"),
+            &owner,
+        )
+        .await
+        .expect("candidate ready");
+    assert!(matches!(
+        ownership.mark_draining(&old, &owner).await,
+        Err(GatewayServiceOwnershipError::Conflict)
+    ));
+    assert_eq!(
+        ownership
+            .promote_ready(&candidate_ready, &owner)
+            .await
+            .expect("candidate cutover"),
+        Some(fixture.revision)
+    );
+    ownership
+        .mark_draining(&old, &owner)
+        .await
+        .expect("old revision drain after cutover");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn ownership_promotion_rejects_superseded_or_revoked_candidates() {
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let fixture = seed_fixture(&pool, "http.service.v1").await;
+    let first_candidate = seed_service_revision(&pool, fixture.gateway).await;
+    let second_candidate = seed_service_revision(&pool, fixture.gateway).await;
+    sqlx::query("UPDATE gateways SET desired_service_revision_id = $2 WHERE id = $1")
+        .bind(fixture.gateway)
+        .bind(first_candidate)
+        .execute(&pool)
+        .await
+        .expect("first desired candidate");
+    let ownership = worker_ownership().await;
+    let owner = GatewayServiceOwner::new("supersede-host", Uuid::new_v4()).expect("owner");
+    let first = ownership
+        .claim_new(
+            fixture.gateway,
+            first_candidate,
+            &owner,
+            Duration::from_secs(30),
+        )
+        .await
+        .expect("first candidate claim");
+    let first = ownership
+        .mark_ready(
+            &ownership
+                .mark_starting(&first, &owner)
+                .await
+                .expect("first candidate starting"),
+            &owner,
+        )
+        .await
+        .expect("first candidate ready");
+    sqlx::query("UPDATE gateways SET lifecycle = 'paused' WHERE id = $1")
+        .bind(fixture.gateway)
+        .execute(&pool)
+        .await
+        .expect("pause gateway");
+    assert!(matches!(
+        ownership.promote_ready(&first, &owner).await,
+        Err(GatewayServiceOwnershipError::Conflict)
+    ));
+    sqlx::query("UPDATE gateways SET lifecycle = 'enabled' WHERE id = $1")
+        .bind(fixture.gateway)
+        .execute(&pool)
+        .await
+        .expect("enable gateway");
+    sqlx::query("UPDATE gateways SET desired_service_revision_id = $2 WHERE id = $1")
+        .bind(fixture.gateway)
+        .bind(second_candidate)
+        .execute(&pool)
+        .await
+        .expect("superseding desired candidate");
+    let before_superseded_events: i64 = gateway_event_count(&pool, fixture.gateway).await;
+    assert!(matches!(
+        ownership.promote_ready(&first, &owner).await,
+        Err(GatewayServiceOwnershipError::Conflict)
+    ));
+    assert_eq!(
+        gateway_event_count(&pool, fixture.gateway).await,
+        before_superseded_events
+    );
+    assert_eq!(
+        active_pointer(&pool, fixture.gateway).await,
+        Some(fixture.revision)
+    );
+
+    let second = ownership
+        .claim_new(
+            fixture.gateway,
+            second_candidate,
+            &owner,
+            Duration::from_secs(30),
+        )
+        .await
+        .expect("second candidate claim");
+    let second = ownership
+        .mark_ready(
+            &ownership
+                .mark_starting(&second, &owner)
+                .await
+                .expect("second candidate starting"),
+            &owner,
+        )
+        .await
+        .expect("second candidate ready");
+    let release: Uuid =
+        sqlx::query_scalar("SELECT release_id FROM gateway_revisions WHERE id = $1")
+            .bind(second_candidate)
+            .fetch_one(&pool)
+            .await
+            .expect("candidate release");
+    sqlx::query("UPDATE releases SET state = 'revoked', revoked_at = now() WHERE id = $1")
+        .bind(release)
+        .execute(&pool)
+        .await
+        .expect("revoke candidate release");
+    let before_revoked_events: i64 = gateway_event_count(&pool, fixture.gateway).await;
+    assert!(matches!(
+        ownership.promote_ready(&second, &owner).await,
+        Err(GatewayServiceOwnershipError::Conflict)
+    ));
+    assert_eq!(
+        gateway_event_count(&pool, fixture.gateway).await,
+        before_revoked_events
+    );
+    assert_eq!(
+        active_pointer(&pool, fixture.gateway).await,
+        Some(fixture.revision)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn ownership_promotion_rechecks_expiry_after_instance_lock() {
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let fixture = seed_fixture(&pool, "http.service.v1").await;
+    let candidate = seed_service_revision(&pool, fixture.gateway).await;
+    sqlx::query("UPDATE gateways SET desired_service_revision_id = $2 WHERE id = $1")
+        .bind(fixture.gateway)
+        .bind(candidate)
+        .execute(&pool)
+        .await
+        .expect("desired candidate");
+    let ownership = worker_ownership().await;
+    let owner = GatewayServiceOwner::new("promotion-lock-host", Uuid::new_v4()).expect("owner");
+    let claim = ownership
+        .claim_new(fixture.gateway, candidate, &owner, Duration::from_secs(1))
+        .await
+        .expect("candidate claim");
+    let ready = ownership
+        .mark_ready(
+            &ownership
+                .mark_starting(&claim, &owner)
+                .await
+                .expect("candidate starting"),
+            &owner,
+        )
+        .await
+        .expect("candidate ready");
+    let mut blocker = pool.begin().await.expect("blocker transaction");
+    sqlx::query("SELECT id FROM gateway_service_instances WHERE id = $1 FOR UPDATE")
+        .bind(ready.identity.instance_id)
+        .execute(&mut *blocker)
+        .await
+        .expect("lock candidate instance");
+    let promotion = tokio::spawn({
+        let ownership = ownership.clone();
+        let ready = ready.clone();
+        let owner = owner.clone();
+        async move { ownership.promote_ready(&ready, &owner).await }
+    });
+    wait_for_lock(&pool, "gateway_service_instances").await;
+    tokio::time::sleep(Duration::from_millis(1_100)).await;
+    blocker.commit().await.expect("release candidate lock");
+    assert!(matches!(
+        promotion.await.expect("promotion task"),
+        Err(GatewayServiceOwnershipError::StaleLease)
+    ));
+    let active: Option<Uuid> =
+        sqlx::query_scalar("SELECT active_revision_id FROM gateways WHERE id = $1")
+            .bind(fixture.gateway)
+            .fetch_one(&pool)
+            .await
+            .expect("active pointer");
+    assert_eq!(active, Some(fixture.revision));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn ownership_promotion_rechecks_expiry_after_release_lock() {
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let fixture = seed_fixture(&pool, "http.service.v1").await;
+    let candidate = seed_service_revision(&pool, fixture.gateway).await;
+    sqlx::query("UPDATE gateways SET desired_service_revision_id = $2 WHERE id = $1")
+        .bind(fixture.gateway)
+        .bind(candidate)
+        .execute(&pool)
+        .await
+        .expect("desired candidate");
+    let release: Uuid =
+        sqlx::query_scalar("SELECT release_id FROM gateway_revisions WHERE id = $1")
+            .bind(candidate)
+            .fetch_one(&pool)
+            .await
+            .expect("candidate release");
+    let ownership = worker_ownership().await;
+    let owner =
+        GatewayServiceOwner::new("promotion-release-lock-host", Uuid::new_v4()).expect("owner");
+    let claim = ownership
+        .claim_new(fixture.gateway, candidate, &owner, Duration::from_secs(1))
+        .await
+        .expect("candidate claim");
+    let ready = ownership
+        .mark_ready(
+            &ownership
+                .mark_starting(&claim, &owner)
+                .await
+                .expect("candidate starting"),
+            &owner,
+        )
+        .await
+        .expect("candidate ready");
+    let mut blocker = pool.begin().await.expect("release blocker transaction");
+    sqlx::query("SELECT id FROM releases WHERE id = $1 FOR UPDATE")
+        .bind(release)
+        .execute(&mut *blocker)
+        .await
+        .expect("lock candidate release");
+    let promotion = tokio::spawn({
+        let ownership = ownership.clone();
+        let ready = ready.clone();
+        let owner = owner.clone();
+        async move { ownership.promote_ready(&ready, &owner).await }
+    });
+    wait_for_lock(&pool, "releases AS release").await;
+    tokio::time::sleep(Duration::from_millis(1_100)).await;
+    blocker.commit().await.expect("release candidate lock");
+    assert!(matches!(
+        promotion.await.expect("promotion task"),
+        Err(GatewayServiceOwnershipError::StaleLease)
+    ));
+    assert_eq!(
+        active_pointer(&pool, fixture.gateway).await,
+        Some(fixture.revision)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
 async fn ownership_cleanup_failure_keeps_live_uniqueness_and_batch_is_bounded() {
     let Some(pool) = test_pool().await else {
         return;
     };
-    let ownership = PostgresGatewayServiceOwnership::new(pool.clone());
+    let ownership = worker_ownership().await;
     let owner = GatewayServiceOwner::new("batch-host", Uuid::new_v4()).expect("owner");
     let mut fixtures = Vec::with_capacity(MAX_SERVICE_OWNERSHIP_BATCH + 2);
     for _ in 0..MAX_SERVICE_OWNERSHIP_BATCH + 2 {
@@ -294,7 +686,7 @@ async fn ownership_sql_trigger_rejects_identity_and_fence_bypass() {
         return;
     };
     let fixture = seed_fixture(&pool, "http.service.v1").await;
-    let ownership = PostgresGatewayServiceOwnership::new(pool.clone());
+    let ownership = worker_ownership().await;
     let owner = GatewayServiceOwner::new("trigger-host", Uuid::new_v4()).expect("owner");
     let claim = ownership
         .claim_new(
@@ -360,6 +752,55 @@ async fn test_pool() -> Option<sqlx::PgPool> {
     assert!(max_version >= 74);
     println!("REAL_POSTGRES_CONNECTED_AND_MIGRATED=1 max_migration={max_version}");
     Some(pool)
+}
+
+async fn worker_ownership() -> PostgresGatewayServiceOwnership {
+    let database_url =
+        env::var("HEPHAESTUS_POSTGRES_TEST_URL").expect("worker ownership test database URL");
+    let pool = PgPoolOptions::new()
+        .max_connections(8)
+        .after_connect(|connection, _metadata| {
+            Box::pin(async move {
+                sqlx::query("SET ROLE hephaestus_worker")
+                    .execute(&mut *connection)
+                    .await?;
+                sqlx::query("SET application_name = 'gateway-ownership-test'")
+                    .execute(&mut *connection)
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect(&database_url)
+        .await
+        .expect("connect worker PostgreSQL pool");
+    PostgresGatewayServiceOwnership::new(pool)
+}
+
+async fn wait_for_lock(pool: &sqlx::PgPool, query_fragment: &str) {
+    let pattern = format!("%{query_fragment}%");
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let waiting: bool = sqlx::query_scalar(
+                "SELECT EXISTS (
+                     SELECT 1 FROM pg_stat_activity
+                      WHERE application_name = 'gateway-ownership-test'
+                        AND state = 'active'
+                        AND wait_event_type = 'Lock'
+                        AND query LIKE $1
+                 )",
+            )
+            .bind(&pattern)
+            .fetch_one(pool)
+            .await
+            .expect("inspect PostgreSQL lock wait");
+            if waiting {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("ownership operation reached expected lock wait");
 }
 
 async fn seed_fixture(pool: &sqlx::PgPool, contract: &str) -> Fixture {
@@ -443,22 +884,123 @@ async fn seed_fixture(pool: &sqlx::PgPool, contract: &str) -> Fixture {
 
 async fn seed_service_revision(pool: &sqlx::PgPool, gateway: Uuid) -> Uuid {
     let revision = Uuid::new_v4();
+    let (repository, owner): (Uuid, Uuid) =
+        sqlx::query_as("SELECT repository_id, created_by FROM gateways WHERE id = $1")
+            .bind(gateway)
+            .fetch_one(pool)
+            .await
+            .expect("gateway coordinates");
+    let release = insert_published_release(pool, repository, owner).await;
+    let mut revision_hash = [8_u8; 32];
+    revision_hash[..16].copy_from_slice(revision.as_bytes());
     let query = "INSERT INTO gateway_revisions
-            (id, gateway_id, project_id, repository_id, handler_contract, exposure,
-             parameters, secret_slots, service_loopback_port, service_readiness_path,
-             service_health_path, normalized_hash, created_by)
-         SELECT $2, gateway.id, gateway.project_id, gateway.repository_id,
-                'http.service.v1', 'public', '{}', '{hook}', 18081, '/ready',
-                '/health', $3, gateway.created_by
+            (id, gateway_id, project_id, repository_id, release_id,
+             release_agent_id, release_agent_key, handler_contract, exposure,
+             parameters, secret_slots, service_loopback_port,
+             service_readiness_path, service_health_path, normalized_hash,
+             created_by)
+         SELECT $2, gateway.id, gateway.project_id, gateway.repository_id, $3,
+                (SELECT id FROM release_agents WHERE release_id = $3 LIMIT 1),
+                'ownership-service', 'http.service.v1', 'public', '{}',
+                '{hook}', 18081, '/ready', '/health', $4, gateway.created_by
            FROM gateways AS gateway
           WHERE gateway.id = $1";
     let result = sqlx::query(query)
         .bind(gateway)
         .bind(revision)
-        .bind([8_u8; 32].as_slice())
+        .bind(release)
+        .bind(revision_hash.as_slice())
         .execute(pool)
         .await
         .expect("replacement service revision");
     assert_eq!(result.rows_affected(), 1);
     revision
+}
+
+async fn gateway_event_count(pool: &sqlx::PgPool, gateway: Uuid) -> i64 {
+    sqlx::query_scalar(
+        "SELECT count(*) FROM application_events
+          WHERE aggregate_type = 'gateway' AND aggregate_id = $1",
+    )
+    .bind(gateway)
+    .fetch_one(pool)
+    .await
+    .expect("gateway event count")
+}
+
+async fn active_pointer(pool: &sqlx::PgPool, gateway: Uuid) -> Option<Uuid> {
+    sqlx::query_scalar("SELECT active_revision_id FROM gateways WHERE id = $1")
+        .bind(gateway)
+        .fetch_one(pool)
+        .await
+        .expect("active gateway pointer")
+}
+
+async fn insert_published_release(pool: &sqlx::PgPool, repository: Uuid, owner: Uuid) -> Uuid {
+    let release = Uuid::new_v4();
+    let build = Uuid::new_v4();
+    let source_commit = format!("00000000{}", release.simple());
+    sqlx::query(
+        "INSERT INTO build_requests
+            (id, repository_id, source_commit, source_ref,
+             build_definition_hash, state, created_by)
+         VALUES ($1, $2, $3, 'refs/heads/main', $4, 'succeeded', $5)",
+    )
+    .bind(build)
+    .bind(repository)
+    .bind(&source_commit)
+    .bind([4_u8; 32].as_slice())
+    .bind(owner)
+    .execute(pool)
+    .await
+    .expect("build request");
+    sqlx::query(
+        "INSERT INTO releases
+            (id, repository_id, version, source_commit, source_ref,
+             build_request_id, build_definition_hash, configuration,
+             configuration_hash, manifest_hash, state, publication_actor_id,
+             published_at)
+         VALUES ($1, $2, $3, $4, 'refs/heads/main', $5, $6, '{}', $7, $8,
+                 'published', $9, now())",
+    )
+    .bind(release)
+    .bind(repository)
+    .bind(format!("ownership-release-{release}"))
+    .bind(&source_commit)
+    .bind(build)
+    .bind([4_u8; 32].as_slice())
+    .bind([5_u8; 32].as_slice())
+    .bind([6_u8; 32].as_slice())
+    .bind(owner)
+    .execute(pool)
+    .await
+    .expect("published release");
+    let family = Uuid::new_v4();
+    let agent = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO agent_families (id, repository_id, agent_key)
+         VALUES ($1, $2, $3)",
+    )
+    .bind(family)
+    .bind(repository)
+    .bind(format!("ownership-agent-{release}"))
+    .execute(pool)
+    .await
+    .expect("agent family");
+    sqlx::query(
+        "INSERT INTO release_agents
+            (id, release_id, family_id, agent_key, display_name,
+             runtime_contract, runtime_contract_hash, parameter_schema,
+             secret_slot_schema, requires_state)
+         VALUES ($1, $2, $3, 'ownership-service', 'Ownership service', '{}',
+                 $4, '[]', '[]', false)",
+    )
+    .bind(agent)
+    .bind(release)
+    .bind(family)
+    .bind([7_u8; 32].as_slice())
+    .execute(pool)
+    .await
+    .expect("release agent");
+    release
 }

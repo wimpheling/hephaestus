@@ -102,6 +102,7 @@ impl GatewayServiceOwnership for PostgresGatewayServiceOwnership {
         owner.validate()?;
         let lease_duration = checked_lease_duration(lease_duration)?;
         let mut transaction = self.pool.begin().await.map_err(|error| storage(&error))?;
+        lock_gateway(&mut transaction, lease.identity.gateway_id).await?;
         let current = lock_instance(&mut transaction, lease.identity.instance_id).await?;
         let now = database_now(&mut transaction).await?;
         ensure_current_lease(&current, lease, owner, now)?;
@@ -226,6 +227,101 @@ impl GatewayServiceOwnership for PostgresGatewayServiceOwnership {
             .into_lease()
     }
 
+    async fn mark_starting(
+        &self,
+        lease: &GatewayServiceInstanceLease,
+        owner: &GatewayServiceOwner,
+    ) -> Result<GatewayServiceInstanceLease, GatewayServiceOwnershipError> {
+        transition_state(&self.pool, lease, owner, "provisioning", "starting", false)
+            .await?
+            .into_lease()
+    }
+
+    async fn mark_ready(
+        &self,
+        lease: &GatewayServiceInstanceLease,
+        owner: &GatewayServiceOwner,
+    ) -> Result<GatewayServiceInstanceLease, GatewayServiceOwnershipError> {
+        transition_state(&self.pool, lease, owner, "starting", "ready", false)
+            .await?
+            .into_lease()
+    }
+
+    async fn mark_draining(
+        &self,
+        lease: &GatewayServiceInstanceLease,
+        owner: &GatewayServiceOwner,
+    ) -> Result<GatewayServiceInstanceLease, GatewayServiceOwnershipError> {
+        transition_state(&self.pool, lease, owner, "ready", "draining", true)
+            .await?
+            .into_lease()
+    }
+
+    async fn promote_ready(
+        &self,
+        lease: &GatewayServiceInstanceLease,
+        owner: &GatewayServiceOwner,
+    ) -> Result<Option<Uuid>, GatewayServiceOwnershipError> {
+        validate_lease(lease)?;
+        owner.validate()?;
+        let mut transaction = self.pool.begin().await.map_err(|error| storage(&error))?;
+        let gateway = lock_gateway(&mut transaction, lease.identity.gateway_id).await?;
+        let current = lock_instance(&mut transaction, lease.identity.instance_id).await?;
+        if current.state != "ready" {
+            return Err(GatewayServiceOwnershipError::Conflict);
+        }
+        if gateway.lifecycle != "enabled"
+            || gateway.desired_revision_id != Some(lease.identity.revision_id)
+        {
+            return Err(GatewayServiceOwnershipError::Conflict);
+        }
+        let publication = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (
+                 SELECT 1
+                   FROM gateway_revisions AS revision
+                   JOIN releases AS release
+                     ON release.id = revision.release_id
+                    AND release.repository_id = revision.repository_id
+                  WHERE revision.id = $1
+                    AND revision.gateway_id = $2
+                    AND revision.handler_contract = 'http.service.v1'
+                    AND release.state = 'published'
+                  FOR UPDATE OF release
+             )",
+        )
+        .bind(lease.identity.revision_id)
+        .bind(lease.identity.gateway_id)
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(|error| storage(&error))?;
+        if !publication {
+            return Err(GatewayServiceOwnershipError::Conflict);
+        }
+        // The release row may have been locked behind a concurrent revoke.
+        // Read the clock only after that wait, while the instance remains
+        // locked, so an expired owner cannot promote a stale candidate.
+        let now = database_now(&mut transaction).await?;
+        ensure_current_lease(&current, lease, owner, now)?;
+        let previous = gateway.active_revision_id;
+        if previous != Some(lease.identity.revision_id) {
+            sqlx::query(
+                "UPDATE gateways
+                    SET active_revision_id = $2, updated_at = now()
+                  WHERE id = $1",
+            )
+            .bind(lease.identity.gateway_id)
+            .bind(lease.identity.revision_id)
+            .execute(&mut *transaction)
+            .await
+            .map_err(|error| storage(&error))?;
+        }
+        transaction
+            .commit()
+            .await
+            .map_err(|error| storage(&error))?;
+        Ok(previous)
+    }
+
     async fn mark_cleaned(
         &self,
         lease: &GatewayServiceInstanceLease,
@@ -245,6 +341,7 @@ async fn update_state(
     validate_lease(lease)?;
     owner.validate()?;
     let mut transaction = pool.begin().await.map_err(|error| storage(&error))?;
+    lock_gateway(&mut transaction, lease.identity.gateway_id).await?;
     let current = lock_instance(&mut transaction, lease.identity.instance_id).await?;
     let now = database_now(&mut transaction).await?;
     ensure_current_lease(&current, lease, owner, now)?;
@@ -273,6 +370,77 @@ async fn update_state(
     Ok(row)
 }
 
+async fn transition_state(
+    pool: &PgPool,
+    lease: &GatewayServiceInstanceLease,
+    owner: &GatewayServiceOwner,
+    expected_state: &str,
+    next_state: &str,
+    reject_active: bool,
+) -> Result<ServiceInstanceRow, GatewayServiceOwnershipError> {
+    validate_lease(lease)?;
+    owner.validate()?;
+    let mut transaction = pool.begin().await.map_err(|error| storage(&error))?;
+    let gateway = lock_gateway(&mut transaction, lease.identity.gateway_id).await?;
+    let current = lock_instance(&mut transaction, lease.identity.instance_id).await?;
+    let now = database_now(&mut transaction).await?;
+    ensure_current_lease(&current, lease, owner, now)?;
+    if current.state != expected_state
+        || (reject_active
+            && gateway.lifecycle == "enabled"
+            && gateway.active_revision_id == Some(lease.identity.revision_id))
+    {
+        return Err(GatewayServiceOwnershipError::Conflict);
+    }
+    let row = persist_state(&mut transaction, current.id, next_state, now).await?;
+    transaction
+        .commit()
+        .await
+        .map_err(|error| storage(&error))?;
+    Ok(row)
+}
+
+async fn persist_state(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    instance_id: Uuid,
+    state: &str,
+    now: OffsetDateTime,
+) -> Result<ServiceInstanceRow, GatewayServiceOwnershipError> {
+    sqlx::query_as::<_, ServiceInstanceRow>(
+        "UPDATE gateway_service_instances
+            SET state = $2,
+                cleaned_at = CASE WHEN $2 = 'cleaned' THEN $3 ELSE cleaned_at END,
+                updated_at = now()
+          WHERE id = $1
+         RETURNING id, gateway_id, revision_id, owner_host_id, owner_uuid,
+                   fencing_token, vm_id, state, lease_expires_at, heartbeat_at",
+    )
+    .bind(instance_id)
+    .bind(state)
+    .bind(now)
+    .fetch_one(&mut **transaction)
+    .await
+    .map_err(|error| storage(&error))
+}
+
+async fn lock_gateway(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    gateway_id: Uuid,
+) -> Result<GatewayStateRow, GatewayServiceOwnershipError> {
+    sqlx::query_as::<_, GatewayStateRow>(
+        "SELECT lifecycle, active_revision_id,
+                desired_service_revision_id AS desired_revision_id
+           FROM gateways
+          WHERE id = $1
+          FOR UPDATE",
+    )
+    .bind(gateway_id)
+    .fetch_optional(&mut **transaction)
+    .await
+    .map_err(|error| storage(&error))?
+    .ok_or(GatewayServiceOwnershipError::StaleLease)
+}
+
 async fn lock_instance(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     instance_id: Uuid,
@@ -289,6 +457,13 @@ async fn lock_instance(
     .await
     .map_err(|error| storage(&error))?
     .ok_or(GatewayServiceOwnershipError::StaleLease)
+}
+
+#[derive(Debug, FromRow)]
+struct GatewayStateRow {
+    lifecycle: String,
+    active_revision_id: Option<Uuid>,
+    desired_revision_id: Option<Uuid>,
 }
 
 async fn database_now(
