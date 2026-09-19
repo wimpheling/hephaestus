@@ -8,12 +8,13 @@ use gateway_edge::{
     GatewayConfigRevision, GatewayDesiredConfiguration, GatewayEdgeError, GatewayLimits,
     GatewayProvider, GatewayProviderResponse, GatewayRequest, GatewayResponse,
     GatewayServiceBootRecovery, GatewayServiceBootRecoveryContext,
-    GatewayServiceCleanupDriverPolicy, GatewayServiceInstanceLease, GatewayServiceInstancePage,
-    GatewayServiceInstancePageResult, GatewayServiceLaunch, GatewayServiceLaunchRequest,
-    GatewayServiceLaunchResolver, GatewayServiceOwnedTarget, GatewayServiceOwner,
-    GatewayServiceOwnership, GatewayServiceOwnershipError, GatewayServiceRegistry,
-    GatewayServiceSupervisor, GatewayServiceSupervisorContext, GatewayServiceSupervisorPolicy,
-    GatewayServiceTargetPage, GatewayServiceTargetPageResult, GatewayServiceTargetStore,
+    GatewayServiceClaimResolutionStore, GatewayServiceCleanupDriverPolicy,
+    GatewayServiceInstanceLease, GatewayServiceInstancePage, GatewayServiceInstancePageResult,
+    GatewayServiceLaunch, GatewayServiceLaunchRequest, GatewayServiceLaunchResolver,
+    GatewayServiceOwnedTarget, GatewayServiceOwner, GatewayServiceOwnership,
+    GatewayServiceOwnershipError, GatewayServiceRegistry, GatewayServiceSupervisor,
+    GatewayServiceSupervisorContext, GatewayServiceSupervisorPolicy, GatewayServiceTargetPage,
+    GatewayServiceTargetPageResult, GatewayServiceTargetStore,
 };
 use gateway_postgres::{
     PostgresGatewayEdgeAuthority, PostgresGatewayServiceFailureStore,
@@ -239,6 +240,11 @@ struct FailLaunchResolver {
 #[derive(Clone)]
 struct ObservingOwnership {
     inner: Arc<PostgresGatewayServiceOwnership>,
+    claim_ack_lost_revision: Arc<Mutex<Option<Uuid>>>,
+    claim_ack_lost_consumed: Arc<tokio::sync::Notify>,
+    claim_absent: Arc<AtomicBool>,
+    claim_resolution_returned: Arc<tokio::sync::Notify>,
+    claim_attempts: Arc<Mutex<BTreeMap<Uuid, usize>>>,
     draining_entered: Arc<tokio::sync::Notify>,
     draining_returned: Arc<tokio::sync::Notify>,
     draining_error: Arc<Mutex<Option<GatewayServiceOwnershipError>>>,
@@ -248,10 +254,43 @@ impl ObservingOwnership {
     fn new(pool: sqlx::PgPool) -> Self {
         Self {
             inner: Arc::new(PostgresGatewayServiceOwnership::new(pool)),
+            claim_ack_lost_revision: Arc::new(Mutex::new(None)),
+            claim_ack_lost_consumed: Arc::new(tokio::sync::Notify::new()),
+            claim_absent: Arc::new(AtomicBool::new(false)),
+            claim_resolution_returned: Arc::new(tokio::sync::Notify::new()),
+            claim_attempts: Arc::new(Mutex::new(BTreeMap::new())),
             draining_entered: Arc::new(tokio::sync::Notify::new()),
             draining_returned: Arc::new(tokio::sync::Notify::new()),
             draining_error: Arc::new(Mutex::new(None)),
         }
+    }
+
+    fn lose_claim_ack_for_revision(&self, revision_id: Uuid) {
+        *self
+            .claim_ack_lost_revision
+            .lock()
+            .expect("claim acknowledgement fault lock") = Some(revision_id);
+    }
+
+    fn claim_ack_lost_consumed(&self) -> Arc<tokio::sync::Notify> {
+        Arc::clone(&self.claim_ack_lost_consumed)
+    }
+
+    fn confirm_next_claim_absent(&self) {
+        self.claim_absent.store(true, Ordering::Release);
+    }
+
+    fn claim_resolution_returned(&self) -> Arc<tokio::sync::Notify> {
+        Arc::clone(&self.claim_resolution_returned)
+    }
+
+    fn claim_attempts(&self, revision_id: Uuid) -> usize {
+        self.claim_attempts
+            .lock()
+            .expect("claim attempt lock")
+            .get(&revision_id)
+            .copied()
+            .unwrap_or(0)
     }
 }
 
@@ -264,9 +303,36 @@ impl GatewayServiceOwnership for ObservingOwnership {
         owner: &GatewayServiceOwner,
         lease_duration: StdDuration,
     ) -> Result<GatewayServiceInstanceLease, GatewayServiceOwnershipError> {
-        self.inner
+        self.claim_attempts
+            .lock()
+            .expect("claim attempt lock")
+            .entry(revision_id)
+            .and_modify(|attempts| *attempts += 1)
+            .or_insert(1);
+        if self.claim_absent.swap(false, Ordering::AcqRel) {
+            return Err(GatewayServiceOwnershipError::Unavailable);
+        }
+        let lease = self
+            .inner
             .claim_new(gateway_id, revision_id, owner, lease_duration)
-            .await
+            .await?;
+        let lose_ack_for_revision = {
+            let mut configured = self
+                .claim_ack_lost_revision
+                .lock()
+                .expect("claim acknowledgement fault lock");
+            if configured.as_ref() == Some(&revision_id) {
+                configured.take();
+                true
+            } else {
+                false
+            }
+        };
+        if lose_ack_for_revision {
+            self.claim_ack_lost_consumed.notify_one();
+            return Err(GatewayServiceOwnershipError::Unavailable);
+        }
+        Ok(lease)
     }
 
     async fn renew(
@@ -338,6 +404,52 @@ impl GatewayServiceOwnership for ObservingOwnership {
         owner: &GatewayServiceOwner,
     ) -> Result<(), GatewayServiceOwnershipError> {
         self.inner.mark_cleaned(lease, owner).await
+    }
+}
+
+#[async_trait]
+impl GatewayServiceClaimResolutionStore for ObservingOwnership {
+    async fn resolve_revision_claim(
+        &self,
+        gateway_id: Uuid,
+        revision_id: Uuid,
+    ) -> Result<Option<GatewayServiceInstanceLease>, GatewayServiceOwnershipError> {
+        let result = self
+            .inner
+            .resolve_revision_claim(gateway_id, revision_id)
+            .await;
+        if result.as_ref().is_ok_and(Option::is_none) {
+            self.claim_resolution_returned.notify_one();
+        }
+        result
+    }
+}
+
+#[derive(Clone)]
+struct BlockingClaimResolution {
+    inner: Arc<PostgresGatewayServiceOwnership>,
+    entered: Arc<tokio::sync::Notify>,
+    proceed: tokio::sync::watch::Receiver<bool>,
+}
+
+#[async_trait]
+impl GatewayServiceClaimResolutionStore for BlockingClaimResolution {
+    async fn resolve_revision_claim(
+        &self,
+        gateway_id: Uuid,
+        revision_id: Uuid,
+    ) -> Result<Option<GatewayServiceInstanceLease>, GatewayServiceOwnershipError> {
+        self.entered.notify_one();
+        let mut proceed = self.proceed.clone();
+        while !*proceed.borrow() {
+            proceed
+                .changed()
+                .await
+                .map_err(|_| GatewayServiceOwnershipError::Unavailable)?;
+        }
+        self.inner
+            .resolve_revision_claim(gateway_id, revision_id)
+            .await
     }
 }
 
@@ -980,6 +1092,7 @@ async fn daemon_loop_polls_service_supervisor_while_caddy_reconcile_is_blocked()
         make_authority(recovery_pool),
         supervisor,
         Some(boot),
+        None,
         targets,
         caddy,
         cancellation.clone(),
@@ -1097,8 +1210,9 @@ async fn daemon_loop_restores_active_service_without_manual_start() {
             &pool,
             &database.worker,
             fixture,
-            true,
             false,
+            false,
+            None,
             None,
             None,
             None,
@@ -1132,6 +1246,524 @@ async fn daemon_loop_restores_active_service_without_manual_start() {
 
 #[tokio::test(flavor = "multi_thread")]
 #[serial]
+async fn daemon_loop_resolves_lost_claim_before_replacement_admission() {
+    let Some(database) = isolated_startup_database().await else {
+        return;
+    };
+    let pool = database.control.clone();
+    let fixture = seed_fixture(&pool, "http.service.v1").await;
+    let desired_revision = seed_service_candidate(&pool, fixture).await;
+    let replacement_revision = seed_service_candidate(&pool, fixture).await;
+    let desired = Fixture {
+        revision: desired_revision,
+        ..fixture
+    };
+    let replacement = Fixture {
+        revision: replacement_revision,
+        ..fixture
+    };
+    let observing_ownership = Arc::new(ObservingOwnership::new(database.worker.clone()));
+    observing_ownership.lose_claim_ack_for_revision(desired_revision);
+    let (task, cancellation, caddy_started, caddy_release, destroyed, provisioned) =
+        spawn_automatic_start_with_worker(
+            &pool,
+            &database.worker,
+            fixture,
+            false,
+            false,
+            Some(desired_revision),
+            None,
+            Some(observing_ownership.clone() as Arc<dyn GatewayServiceOwnership>),
+            None,
+            None,
+            None,
+            Some(observing_ownership.clone() as Arc<dyn GatewayServiceClaimResolutionStore>),
+        )
+        .await;
+    tokio::time::timeout(StdDuration::from_secs(10), caddy_started.notified())
+        .await
+        .expect("Caddy reconciliation starts while claim resolution is pending");
+
+    tokio::time::timeout(StdDuration::from_secs(15), async {
+        loop {
+            let state: Option<String> = sqlx::query_scalar(
+                "SELECT state
+                   FROM gateway_service_instances
+                  WHERE gateway_id = $1 AND revision_id = $2
+                  ORDER BY fencing_token DESC LIMIT 1",
+            )
+            .bind(fixture.gateway)
+            .bind(desired_revision)
+            .fetch_optional(&pool)
+            .await
+            .expect("read resolved lost-claim state");
+            if state.as_deref() == Some("cleaned") {
+                break;
+            }
+            tokio::time::sleep(StdDuration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("committed lost claim is resolved and cleaned");
+
+    sqlx::query(
+        "UPDATE gateways
+            SET desired_service_revision_id = $2
+          WHERE id = $1",
+    )
+    .bind(fixture.gateway)
+    .bind(replacement_revision)
+    .execute(&pool)
+    .await
+    .expect("select replacement after claim cleanup");
+    tokio::time::timeout(StdDuration::from_secs(15), async {
+        loop {
+            let active: Option<Uuid> =
+                sqlx::query_scalar("SELECT active_revision_id FROM gateways WHERE id = $1")
+                    .bind(fixture.gateway)
+                    .fetch_one(&pool)
+                    .await
+                    .expect("read replacement active revision");
+            if active == Some(replacement_revision) && wait_for_ready(&pool, replacement).await {
+                break;
+            }
+            tokio::time::sleep(StdDuration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("replacement is admitted after the resolved claim releases capacity");
+    assert!(
+        provisioned.load(Ordering::Acquire) >= 1,
+        "replacement admission provisions a VM after lost-claim recovery"
+    );
+
+    cancellation.cancel();
+    tokio::time::timeout(StdDuration::from_secs(10), task)
+        .await
+        .expect("lost-claim reconciliation joins")
+        .expect("lost-claim reconciliation task");
+    caddy_release.notify_one();
+    assert!(destroyed.load(Ordering::Acquire) >= 1);
+    cleanup_startup_fixture(&pool, desired).await;
+    cleanup_startup_fixture(&pool, replacement).await;
+    cleanup_startup_fixture(&pool, fixture).await;
+    drop_isolated_startup_database(database).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn daemon_loop_confirms_absent_claim_before_next_candidate() {
+    let Some(database) = isolated_startup_database().await else {
+        return;
+    };
+    let pool = database.control.clone();
+    let fixture = seed_fixture(&pool, "http.service.v1").await;
+    let absent_revision = seed_service_candidate(&pool, fixture).await;
+    let replacement_revision = seed_service_candidate(&pool, fixture).await;
+    let absent = Fixture {
+        revision: absent_revision,
+        ..fixture
+    };
+    let replacement = Fixture {
+        revision: replacement_revision,
+        ..fixture
+    };
+    let observing_ownership = Arc::new(ObservingOwnership::new(database.worker.clone()));
+    observing_ownership.confirm_next_claim_absent();
+    let absence_returned = observing_ownership.claim_resolution_returned();
+    let (task, cancellation, caddy_started, caddy_release, destroyed, provisioned) =
+        spawn_automatic_start_with_worker(
+            &pool,
+            &database.worker,
+            fixture,
+            false,
+            false,
+            Some(absent_revision),
+            None,
+            Some(observing_ownership.clone() as Arc<dyn GatewayServiceOwnership>),
+            None,
+            None,
+            None,
+            Some(observing_ownership.clone() as Arc<dyn GatewayServiceClaimResolutionStore>),
+        )
+        .await;
+    tokio::time::timeout(StdDuration::from_secs(10), caddy_started.notified())
+        .await
+        .expect("Caddy reconciliation starts while absent claim is resolved");
+    tokio::time::timeout(StdDuration::from_secs(10), absence_returned.notified())
+        .await
+        .expect("serialized claim resolution returns confirmed absence");
+    sqlx::query(
+        "UPDATE gateways
+            SET desired_service_revision_id = $2
+          WHERE id = $1",
+    )
+    .bind(fixture.gateway)
+    .bind(replacement_revision)
+    .execute(&pool)
+    .await
+    .expect("select candidate after confirmed absence");
+    let absent_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM gateway_service_instances
+          WHERE gateway_id = $1 AND revision_id = $2",
+    )
+    .bind(fixture.gateway)
+    .bind(absent_revision)
+    .fetch_one(&pool)
+    .await
+    .expect("read confirmed absent claim");
+    assert_eq!(absent_count, 0, "rolled-back claim leaves no durable row");
+    tokio::time::timeout(StdDuration::from_secs(15), async {
+        loop {
+            let (active, ready_count): (Option<Uuid>, i64) = sqlx::query_as(
+                "SELECT g.active_revision_id,
+                        count(i.id) FILTER (WHERE i.state = 'ready')
+                   FROM gateways AS g
+                   LEFT JOIN gateway_service_instances AS i
+                     ON i.gateway_id = g.id AND i.revision_id = $2
+                  WHERE g.id = $1
+                  GROUP BY g.active_revision_id",
+            )
+            .bind(fixture.gateway)
+            .bind(replacement_revision)
+            .fetch_one(&pool)
+            .await
+            .expect("read admitted replacement readiness");
+            if active == Some(replacement_revision) && ready_count > 0 {
+                break;
+            }
+            tokio::time::sleep(StdDuration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("next candidate starts after absent claim releases capacity");
+    assert_eq!(provisioned.load(Ordering::Acquire), 1);
+
+    cancellation.cancel();
+    tokio::time::timeout(StdDuration::from_secs(10), task)
+        .await
+        .expect("absent-claim reconciliation joins")
+        .expect("absent-claim reconciliation task");
+    caddy_release.notify_one();
+    assert!(destroyed.load(Ordering::Acquire) >= 1);
+    cleanup_startup_fixture(&pool, absent).await;
+    cleanup_startup_fixture(&pool, replacement).await;
+    cleanup_startup_fixture(&pool, fixture).await;
+    drop_isolated_startup_database(database).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn daemon_loop_keeps_healthy_service_progressing_while_claim_resolution_is_locked() {
+    let Some(database) = isolated_startup_database().await else {
+        return;
+    };
+    let pool = database.control.clone();
+    let fixture = seed_fixture(&pool, "http.service.v1").await;
+    let desired_revision = seed_service_candidate(&pool, fixture).await;
+    let replacement_revision = seed_service_candidate(&pool, fixture).await;
+    let desired = Fixture {
+        revision: desired_revision,
+        ..fixture
+    };
+    let replacement = Fixture {
+        revision: replacement_revision,
+        ..fixture
+    };
+    let healthy = seed_fixture(&pool, "http.service.v1").await;
+    sqlx::query(
+        "DELETE FROM gateway_service_instances
+          WHERE gateway_id = $1 AND revision_id = $2",
+    )
+    .bind(healthy.gateway)
+    .bind(healthy.revision)
+    .execute(&pool)
+    .await
+    .expect("remove seeded healthy inventory before restore");
+    sqlx::query(
+        "UPDATE gateways
+            SET active_revision_id = $2, desired_service_revision_id = NULL
+          WHERE id = $1",
+    )
+    .bind(healthy.gateway)
+    .bind(healthy.revision)
+    .execute(&pool)
+    .await
+    .expect("seed unrelated healthy service target");
+    let observing_ownership = Arc::new(ObservingOwnership::new(database.worker.clone()));
+    observing_ownership.lose_claim_ack_for_revision(desired_revision);
+    let claim_fault_consumed = observing_ownership.claim_ack_lost_consumed();
+    let database_url = env::var("HEPHAESTUS_POSTGRES_TEST_URL")
+        .expect("test database URL for claim-resolution observer");
+    let claim_options = PgConnectOptions::from_str(&database_url)
+        .expect("parse claim-resolution database URL")
+        .database(&database.name);
+    let claim_pool =
+        worker_pool_for_options_named(claim_options, "gateway-claim-resolution-test").await;
+    let claim_entered = Arc::new(tokio::sync::Notify::new());
+    let (claim_proceed, claim_proceed_rx) = tokio::sync::watch::channel(false);
+    let blocking_claim = Arc::new(BlockingClaimResolution {
+        inner: Arc::new(PostgresGatewayServiceOwnership::new(claim_pool.clone())),
+        entered: Arc::clone(&claim_entered),
+        proceed: claim_proceed_rx,
+    });
+    let observing_targets = Arc::new(ObservingTargets::new(
+        database.worker.clone(),
+        replacement_revision,
+    ));
+    let (task, cancellation, caddy_started, caddy_release, destroyed, provisioned) =
+        spawn_automatic_start_with_worker(
+            &pool,
+            &database.worker,
+            fixture,
+            true,
+            false,
+            Some(desired_revision),
+            None,
+            Some(observing_ownership.clone() as Arc<dyn GatewayServiceOwnership>),
+            Some(observing_targets.clone() as Arc<dyn GatewayServiceTargetStore>),
+            None,
+            None,
+            Some(blocking_claim as Arc<dyn GatewayServiceClaimResolutionStore>),
+        )
+        .await;
+    tokio::time::timeout(StdDuration::from_secs(10), caddy_started.notified())
+        .await
+        .expect("Caddy reconciliation starts while claim resolution is pending");
+    assert!(
+        wait_for_ready(&pool, fixture).await,
+        "active service is ready"
+    );
+    assert!(
+        wait_for_ready(&pool, healthy).await,
+        "unrelated healthy service is ready"
+    );
+    let provisioned_before_replacement = provisioned.load(Ordering::Acquire);
+    let active_instance: Uuid = sqlx::query_scalar(
+        "SELECT id FROM gateway_service_instances
+          WHERE gateway_id = $1 AND revision_id = $2 AND state = 'ready'
+          ORDER BY fencing_token DESC LIMIT 1",
+    )
+    .bind(healthy.gateway)
+    .bind(healthy.revision)
+    .fetch_one(&pool)
+    .await
+    .expect("read healthy active instance");
+
+    tokio::time::timeout(StdDuration::from_secs(15), claim_fault_consumed.notified())
+        .await
+        .expect("desired claim acknowledgement is deliberately lost");
+    let lost_claim: (Uuid, i64) = sqlx::query_as(
+        "SELECT id, fencing_token
+           FROM gateway_service_instances
+          WHERE gateway_id = $1 AND revision_id = $2
+          ORDER BY fencing_token DESC LIMIT 1",
+    )
+    .bind(fixture.gateway)
+    .bind(desired_revision)
+    .fetch_one(&pool)
+    .await
+    .expect("capture committed lost claim identity and fence");
+    tokio::time::timeout(StdDuration::from_secs(15), claim_entered.notified())
+        .await
+        .expect("claim resolution attempt starts");
+    sqlx::query(
+        "UPDATE gateways
+            SET desired_service_revision_id = $2
+          WHERE id = $1",
+    )
+    .bind(fixture.gateway)
+    .bind(replacement_revision)
+    .execute(&pool)
+    .await
+    .expect("select replacement while lost claim remains unresolved");
+    let mut gateway_lock = pool.begin().await.expect("begin gateway lock");
+    let holder_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *gateway_lock)
+        .await
+        .expect("read gateway lock backend");
+    sqlx::query("SELECT id FROM gateways WHERE id = $1 FOR UPDATE")
+        .bind(fixture.gateway)
+        .fetch_one(&mut *gateway_lock)
+        .await
+        .expect("hold gateway claim-resolution barrier");
+    claim_proceed
+        .send(true)
+        .expect("open persistent claim-resolution gate");
+    tokio::time::timeout(StdDuration::from_secs(10), async {
+        loop {
+            let blocked: bool = sqlx::query_scalar(
+                "SELECT EXISTS (
+                    SELECT 1
+                      FROM pg_stat_activity AS waiting
+                     WHERE waiting.application_name = 'gateway-claim-resolution-test'
+                       AND $1 = ANY(pg_blocking_pids(waiting.pid))
+                )",
+            )
+            .bind(holder_pid)
+            .fetch_one(&pool)
+            .await
+            .expect("observe blocked claim resolver");
+            if blocked {
+                break;
+            }
+            tokio::time::sleep(StdDuration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("claim resolution is blocked by the gateway row lock");
+
+    let scans_before_replacement = observing_targets.observed_scans.load(Ordering::Acquire);
+    let claim_attempts_before_replacement =
+        observing_ownership.claim_attempts(replacement_revision);
+    assert_eq!(
+        claim_attempts_before_replacement, 0,
+        "replacement must not be claimed before the blocked-resolution observation"
+    );
+    tokio::time::timeout(StdDuration::from_secs(10), async {
+        while observing_targets.observed_scans.load(Ordering::Acquire)
+            < scans_before_replacement.saturating_add(2)
+        {
+            observing_targets.observed.notified().await;
+        }
+    })
+    .await
+    .expect("two target scans complete while claim resolution remains blocked");
+    let replacement_instances: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM gateway_service_instances
+          WHERE gateway_id = $1 AND revision_id = $2",
+    )
+    .bind(fixture.gateway)
+    .bind(replacement_revision)
+    .fetch_one(&pool)
+    .await
+    .expect("read blocked replacement instances");
+    assert_eq!(replacement_instances, 0);
+    assert_eq!(
+        observing_ownership.claim_attempts(replacement_revision),
+        0,
+        "replacement claim_new is not attempted while the lost claim retains capacity"
+    );
+    assert_eq!(
+        provisioned.load(Ordering::Acquire),
+        provisioned_before_replacement,
+        "replacement does not provision while the lost claim retains capacity"
+    );
+
+    let heartbeat_before: OffsetDateTime =
+        sqlx::query_scalar("SELECT heartbeat_at FROM gateway_service_instances WHERE id = $1")
+            .bind(active_instance)
+            .fetch_one(&pool)
+            .await
+            .expect("read healthy heartbeat after blocker observed");
+    let caddy_second = caddy_started.notified();
+    caddy_release.notify_one();
+    tokio::time::timeout(StdDuration::from_secs(10), caddy_second)
+        .await
+        .expect("Caddy makes progress while claim resolution is blocked");
+    tokio::time::timeout(StdDuration::from_secs(15), async {
+        loop {
+            let heartbeat: OffsetDateTime = sqlx::query_scalar(
+                "SELECT heartbeat_at FROM gateway_service_instances WHERE id = $1",
+            )
+            .bind(active_instance)
+            .fetch_one(&pool)
+            .await
+            .expect("read renewed healthy heartbeat");
+            if heartbeat > heartbeat_before {
+                break;
+            }
+            tokio::time::sleep(StdDuration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("healthy lease renews while claim resolution is blocked");
+    drop(gateway_lock);
+
+    let claim_cleaned_at: OffsetDateTime =
+        tokio::time::timeout(StdDuration::from_secs(15), async {
+            loop {
+                let row: Option<(String, Option<OffsetDateTime>, i64)> = sqlx::query_as(
+                    "SELECT state, cleaned_at, fencing_token
+                   FROM gateway_service_instances
+                  WHERE id = $1",
+                )
+                .bind(lost_claim.0)
+                .fetch_optional(&pool)
+                .await
+                .expect("read resolved claim cleanup state");
+                if let Some((state, Some(cleaned_at), fencing_token)) = row
+                    && state == "cleaned"
+                {
+                    assert_eq!(fencing_token, lost_claim.1);
+                    break cleaned_at;
+                }
+                tokio::time::sleep(StdDuration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("blocked claim resolves and cleans after lock release");
+    tokio::time::timeout(StdDuration::from_secs(15), async {
+        loop {
+            let (active, ready_count): (Option<Uuid>, i64) = sqlx::query_as(
+                "SELECT g.active_revision_id,
+                        count(i.id) FILTER (WHERE i.state = 'ready')
+                   FROM gateways AS g
+                   LEFT JOIN gateway_service_instances AS i
+                     ON i.gateway_id = g.id AND i.revision_id = $2
+                  WHERE g.id = $1
+                  GROUP BY g.active_revision_id",
+            )
+            .bind(fixture.gateway)
+            .bind(replacement_revision)
+            .fetch_one(&pool)
+            .await
+            .expect("read admitted replacement readiness");
+            if active == Some(replacement_revision) && ready_count > 0 {
+                break;
+            }
+            tokio::time::sleep(StdDuration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("replacement starts after the retained claim is cleaned");
+    let replacement_created_at: OffsetDateTime = sqlx::query_scalar(
+        "SELECT min(created_at) FROM gateway_service_instances
+          WHERE gateway_id = $1 AND revision_id = $2
+        ",
+    )
+    .bind(fixture.gateway)
+    .bind(replacement_revision)
+    .fetch_one(&pool)
+    .await
+    .expect("read replacement creation time");
+    assert!(
+        replacement_created_at >= claim_cleaned_at,
+        "replacement must be created after the lost claim is durably cleaned"
+    );
+    assert!(
+        observing_ownership.claim_attempts(replacement_revision)
+            > claim_attempts_before_replacement,
+        "replacement claim_new occurs only after cleanup releases capacity"
+    );
+
+    cancellation.cancel();
+    tokio::time::timeout(StdDuration::from_secs(10), task)
+        .await
+        .expect("blocked claim loop joins")
+        .expect("blocked claim loop task");
+    caddy_release.notify_one();
+    assert!(destroyed.load(Ordering::Acquire) >= 1);
+    claim_pool.close().await;
+    cleanup_startup_fixture(&pool, desired).await;
+    cleanup_startup_fixture(&pool, replacement).await;
+    cleanup_startup_fixture(&pool, healthy).await;
+    cleanup_startup_fixture(&pool, fixture).await;
+    drop_isolated_startup_database(database).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
 async fn daemon_loop_failed_desired_service_preserves_active_revision() {
     let Some(database) = isolated_startup_database().await else {
         return;
@@ -1153,6 +1785,7 @@ async fn daemon_loop_failed_desired_service_preserves_active_revision() {
             false,
             Some(desired_revision),
             Some(desired_revision),
+            None,
             None,
             None,
             None,
@@ -1248,6 +1881,7 @@ async fn daemon_loop_promotes_desired_service_then_drains_previous_revision() {
             None,
             Some(observing_targets.clone() as Arc<dyn GatewayServiceTargetStore>),
             Some(destroy_gate.clone()),
+            None,
             None,
         )
         .await;
@@ -1492,6 +2126,7 @@ async fn daemon_loop_retries_retained_cleanup_before_admitting_next_revision() {
             Some(observing_targets.clone() as Arc<dyn GatewayServiceTargetStore>),
             Some(destroy_gate.clone()),
             Some(resolver),
+            None,
         )
         .await;
     tokio::time::timeout(StdDuration::from_secs(10), caddy_started.notified())
@@ -1774,6 +2409,7 @@ async fn daemon_loop_fairly_refreshes_other_jobs_while_one_target_lookup_times_o
             Some(targets.clone() as Arc<dyn GatewayServiceTargetStore>),
             None,
             None,
+            None,
         )
         .await;
     tokio::time::timeout(StdDuration::from_secs(10), caddy_started.notified())
@@ -1950,6 +2586,7 @@ async fn daemon_loop_starts_valid_desired_service_after_revoked_active_cleans() 
             None,
             None,
             None,
+            None,
         )
         .await;
     tokio::time::timeout(StdDuration::from_secs(10), caddy_started.notified())
@@ -2028,6 +2665,7 @@ async fn daemon_loop_retries_drain_after_observed_stale_target_conflict() {
             None,
             None,
             Some(observing_ownership.clone() as Arc<dyn GatewayServiceOwnership>),
+            None,
             None,
             None,
             None,
@@ -2247,6 +2885,7 @@ async fn boot_gate_holds_startup_for_unexpired_owned_inventory() {
             None,
             None,
             None,
+            None,
         )
         .await;
     tokio::time::timeout(StdDuration::from_secs(10), caddy_started.notified())
@@ -2310,6 +2949,7 @@ async fn spawn_automatic_start_with_worker(
     target_override: Option<Arc<dyn GatewayServiceTargetStore>>,
     destroy_gate: Option<Arc<DestroyGate>>,
     resolver_override: Option<Arc<dyn GatewayServiceLaunchResolver>>,
+    claim_resolution_override: Option<Arc<dyn GatewayServiceClaimResolutionStore>>,
 ) -> (
     tokio::task::JoinHandle<()>,
     CancellationToken,
@@ -2393,15 +3033,23 @@ async fn spawn_automatic_start_with_worker(
     let postgres_targets = Arc::new(PostgresGatewayServiceTargets::new(recovery_pool.clone()));
     let targets: Arc<dyn GatewayServiceTargetStore> =
         target_override.unwrap_or_else(|| postgres_targets.clone());
+    let limited_registry = claim_resolution_override.is_some();
+    let claim_resolution: Arc<dyn GatewayServiceClaimResolutionStore> =
+        claim_resolution_override.unwrap_or_else(|| postgres_ownership.clone());
     let provider = Arc::new(ServiceTransportProvider {
         inner: FakeProvider::new(),
         provisioned: Arc::clone(&provisioned),
         destroyed: Arc::clone(&destroyed),
         destroy_gate,
     });
-    let policy = GatewayServiceSupervisorPolicy::default();
+    let mut policy = GatewayServiceSupervisorPolicy::default();
+    if limited_registry {
+        policy.serving_gateway_capacity = 2;
+        policy.replacement_capacity = 1;
+    }
     let owner =
         GatewayServiceOwner::new(host_id.clone(), Uuid::new_v4()).expect("automatic startup owner");
+    let registry_capacity = if limited_registry { 3 } else { 10 };
     let supervisor_context = GatewayServiceSupervisorContext {
         owner: owner.clone(),
         policy,
@@ -2410,7 +3058,8 @@ async fn spawn_automatic_start_with_worker(
         resolver: resolver.clone(),
         provider: provider.clone(),
         targets: targets.clone(),
-        registry: GatewayServiceRegistry::new(10, 16).expect("automatic startup registry"),
+        registry: GatewayServiceRegistry::new(registry_capacity, 16)
+            .expect("automatic startup registry"),
         service_authority: String::from("127.0.0.1:8080"),
     };
     let boot = GatewayServiceBootRecovery::new(GatewayServiceBootRecoveryContext {
@@ -2441,6 +3090,7 @@ async fn spawn_automatic_start_with_worker(
         make_authority(recovery_pool),
         GatewayServiceSupervisor::new(supervisor_context).expect("automatic startup supervisor"),
         Some(boot),
+        Some(claim_resolution),
         targets,
         caddy,
         cancellation.clone(),
@@ -2629,14 +3279,22 @@ async fn worker_pool() -> sqlx::PgPool {
 }
 
 async fn worker_pool_for_options(options: PgConnectOptions) -> sqlx::PgPool {
+    worker_pool_for_options_named(options, "gateway-recovery-test").await
+}
+
+async fn worker_pool_for_options_named(
+    options: PgConnectOptions,
+    application_name: &'static str,
+) -> sqlx::PgPool {
     let pool = PgPoolOptions::new()
         .max_connections(8)
-        .after_connect(|connection, _metadata| {
+        .after_connect(move |connection, _metadata| {
             Box::pin(async move {
                 sqlx::query("SET ROLE hephaestus_worker")
                     .execute(&mut *connection)
                     .await?;
-                sqlx::query("SET application_name = 'gateway-recovery-test'")
+                sqlx::query("SELECT set_config('application_name', $1, false)")
+                    .bind(application_name)
                     .execute(&mut *connection)
                     .await?;
                 Ok(())

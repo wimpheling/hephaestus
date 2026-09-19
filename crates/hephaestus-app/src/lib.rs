@@ -48,14 +48,14 @@ use gateway_edge::{
     GatewayDispatcher, GatewayInboundSecretResolver, GatewayLimits, GatewayProvider,
     GatewayRequest, GatewayRequestDispatcher, GatewayRuntimeLauncher, GatewayRuntimeService,
     GatewayScheme, GatewayServiceArtifact, GatewayServiceArtifactKind, GatewayServiceBootRecovery,
-    GatewayServiceBootRecoveryContext, GatewayServiceCleanupDriverPolicy, GatewayServiceHandler,
-    GatewayServiceIdentity, GatewayServiceMaterializer, GatewayServiceOwnedTarget,
-    GatewayServiceOwner, GatewayServiceRegistry, GatewayServiceStartupIntent,
-    GatewayServiceStartupRequest, GatewayServiceSupervisor, GatewayServiceSupervisorContext,
-    GatewayServiceSupervisorJobStatus, GatewayServiceSupervisorPolicy, GatewayServiceTargetPage,
-    GatewayServiceTargetPageResult, LocalCaddyAdministration, LocalCaddyConfigurationTemplate,
-    LocalCaddyGatewayProvider, PrivateHttpVmGatewayHandler, TrustedRequestMetadata,
-    UNTRUSTED_FORWARDING_HEADERS,
+    GatewayServiceBootRecoveryContext, GatewayServiceClaimResolutionStore,
+    GatewayServiceCleanupDriverPolicy, GatewayServiceHandler, GatewayServiceIdentity,
+    GatewayServiceMaterializer, GatewayServiceOwnedTarget, GatewayServiceOwner,
+    GatewayServiceRegistry, GatewayServiceStartupIntent, GatewayServiceStartupRequest,
+    GatewayServiceSupervisor, GatewayServiceSupervisorContext, GatewayServiceSupervisorJobStatus,
+    GatewayServiceSupervisorPolicy, GatewayServiceTargetPage, GatewayServiceTargetPageResult,
+    LocalCaddyAdministration, LocalCaddyConfigurationTemplate, LocalCaddyGatewayProvider,
+    PrivateHttpVmGatewayHandler, TrustedRequestMetadata, UNTRUSTED_FORWARDING_HEADERS,
 };
 use gateway_postgres::{
     GatewayReleaseArtifact, GatewayReleaseArtifactKind, GatewayReleaseMaterializer,
@@ -624,6 +624,7 @@ struct GatewayEdgeRuntime {
     authority: PostgresGatewayEdgeAuthority,
     recovery_authority: PostgresGatewayEdgeAuthority,
     service_supervisor_context: Arc<GatewayServiceSupervisorContext>,
+    service_claim_resolution: Arc<dyn GatewayServiceClaimResolutionStore>,
     service_boot_context: GatewayServiceBootRecoveryContext,
     provider: Arc<dyn gateway_edge::GatewayProvider>,
     dispatcher: Arc<dyn GatewayRequestDispatcher>,
@@ -1340,6 +1341,8 @@ impl HephaestusApp {
             let service_ownership = Arc::new(PostgresGatewayServiceOwnership::new(
                 gateway_authority_pool.clone(),
             ));
+            let service_claim_resolution: Arc<dyn GatewayServiceClaimResolutionStore> =
+                service_ownership.clone();
             let service_failure_store = Arc::new(PostgresGatewayServiceFailureStore::new(
                 gateway_authority_pool.clone(),
             ));
@@ -1438,6 +1441,7 @@ impl HephaestusApp {
                 authority,
                 recovery_authority,
                 service_supervisor_context,
+                service_claim_resolution,
                 service_boot_context,
                 provider,
                 dispatcher,
@@ -1784,6 +1788,7 @@ impl HephaestusApp {
             let service_boot_recovery =
                 GatewayServiceBootRecovery::new(gateway.service_boot_context)
                     .map_err(component("gateway service boot recovery"))?;
+            let service_claim_resolution = Arc::clone(&gateway.service_claim_resolution);
             let service_targets = Arc::clone(&gateway.service_supervisor_context.targets);
             let gateway_provider = Arc::clone(&gateway.provider);
             tasks.push(tokio::spawn(async move {
@@ -1792,6 +1797,7 @@ impl HephaestusApp {
                     gateway_recovery_authority,
                     service_supervisor_context,
                     service_boot_recovery,
+                    Some(service_claim_resolution),
                     service_targets,
                     gateway_provider,
                     gateway_reconcile_cancel,
@@ -2235,11 +2241,14 @@ fn clone_service_supervisor_context(
 /// Reconstructs Caddy exclusively from authoritative route records. Ordinary
 /// passes apply revision cutovers promptly; a bounded forced pass repairs a
 /// Caddy process which restarted after this daemon observed the same revision.
+// Keep separately owned adapters explicit at this daemon composition boundary.
+#[allow(clippy::too_many_arguments)]
 async fn gateway_reconciliation_loop_with_context(
     authority: PostgresGatewayEdgeAuthority,
     recovery_authority: PostgresGatewayEdgeAuthority,
     supervisor_context: GatewayServiceSupervisorContext,
     boot_recovery: GatewayServiceBootRecovery,
+    service_claim_resolution: Option<Arc<dyn GatewayServiceClaimResolutionStore>>,
     service_targets: Arc<dyn gateway_edge::GatewayServiceTargetStore>,
     provider: Arc<dyn GatewayProvider>,
     cancellation: CancellationToken,
@@ -2249,6 +2258,7 @@ async fn gateway_reconciliation_loop_with_context(
         recovery_authority,
         GatewayServiceSupervisor::new(supervisor_context).expect("validated service supervisor"),
         Some(boot_recovery),
+        service_claim_resolution,
         service_targets,
         provider,
         cancellation,
@@ -2290,6 +2300,7 @@ async fn gateway_reconciliation_loop_with_supervisor(
         recovery_authority,
         GatewayServiceSupervisor::new(supervisor_context).expect("validated service supervisor"),
         None,
+        None,
         targets,
         provider,
         cancellation,
@@ -2299,12 +2310,19 @@ async fn gateway_reconciliation_loop_with_supervisor(
 
 // The single select set is deliberate: it keeps Caddy, recovery, service
 // jobs, and shutdown under one parent-owned polling boundary.
-#[allow(clippy::cognitive_complexity, clippy::too_many_lines)]
+// The loop receives separately owned adapters so each parent-polled subsystem
+// keeps its cancellation and lifetime boundary explicit.
+#[allow(
+    clippy::cognitive_complexity,
+    clippy::too_many_arguments,
+    clippy::too_many_lines
+)]
 async fn gateway_reconciliation_loop_with_boot(
     authority: PostgresGatewayEdgeAuthority,
     recovery_authority: PostgresGatewayEdgeAuthority,
     mut service_supervisor: GatewayServiceSupervisor,
     mut boot_recovery: Option<GatewayServiceBootRecovery>,
+    service_claim_resolution: Option<Arc<dyn GatewayServiceClaimResolutionStore>>,
     service_targets: Arc<dyn gateway_edge::GatewayServiceTargetStore>,
     provider: Arc<dyn GatewayProvider>,
     cancellation: CancellationToken,
@@ -2483,6 +2501,7 @@ async fn gateway_reconciliation_loop_with_boot(
                             &mut service_supervisor,
                             &mut tracked_jobs,
                             &mut cleanup_retry_cursor,
+                            service_claim_resolution.as_ref(),
                         );
                         reconcile_service_target_page(
                             &mut service_supervisor,
@@ -2587,6 +2606,7 @@ async fn gateway_reconciliation_loop_with_boot(
                     &mut service_supervisor,
                     &mut tracked_jobs,
                     &mut cleanup_retry_cursor,
+                    service_claim_resolution.as_ref(),
                 );
             }
         }
@@ -2696,6 +2716,7 @@ fn schedule_one_cleanup_retry(
     supervisor: &mut GatewayServiceSupervisor,
     tracked_jobs: &mut HashMap<Uuid, TrackedServiceJob>,
     cursor: &mut Option<Uuid>,
+    claim_resolution: Option<&Arc<dyn GatewayServiceClaimResolutionStore>>,
 ) -> bool {
     let pending = tracked_jobs
         .values()
@@ -2740,9 +2761,41 @@ fn schedule_one_cleanup_retry(
                 return true;
             }
             Err(gateway_edge::GatewayServiceSupervisorError::RetryNotEligible) => {
-                // The supervisor retains the job and its capacity.  Clear the
-                // due marker until a completion event makes it eligible again.
-                job.cleanup_retry_due = None;
+                // A claim acknowledgement may have been lost before the
+                // coordinator returned. Resolve it behind the serialized
+                // gateway barrier instead of silently stranding its capacity.
+                let resolved = claim_resolution.is_some_and(|resolver| {
+                    match supervisor.reconcile_claim(candidate, Arc::clone(resolver)) {
+                        Ok(()) => true,
+                        Err(gateway_edge::GatewayServiceSupervisorError::RetryAlreadyInFlight) => {
+                            job.cleanup_retry_due = now.checked_add(job.cleanup_retry_backoff);
+                            false
+                        }
+                        Err(
+                            gateway_edge::GatewayServiceSupervisorError::RetryNotFound
+                            | gateway_edge::GatewayServiceSupervisorError::RetryNotEligible,
+                        ) => {
+                            job.cleanup_retry_due = None;
+                            false
+                        }
+                        Err(error) => {
+                            tracing::debug!(
+                                job_id = %candidate,
+                                %error,
+                                "gateway service claim reconciliation was not scheduled"
+                            );
+                            job.cleanup_retry_due = now.checked_add(job.cleanup_retry_backoff);
+                            false
+                        }
+                    }
+                });
+                if resolved {
+                    job.cleanup_retry_due = None;
+                    return true;
+                }
+                if claim_resolution.is_none() {
+                    job.cleanup_retry_due = None;
+                }
             }
             Err(gateway_edge::GatewayServiceSupervisorError::RetryNotFound) => {
                 job.cleanup_retry_due = None;

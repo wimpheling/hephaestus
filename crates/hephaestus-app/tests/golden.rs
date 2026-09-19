@@ -3094,7 +3094,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             .shutdown()
             .await
             .expect("build-proof daemon restart shutdown");
-        let running = restart_application(app_config.clone()).await;
+        let running = Box::pin(restart_application(app_config.clone())).await;
         let adversarial_url = format!(
             "{}/gateway/cooking/telegram",
             env::var("HEPHAESTUS_CADDY_TEST_PUBLIC_URL").expect("public Caddy URL")
@@ -3344,7 +3344,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             .shutdown()
             .await
             .expect("cooking daemon graceful restart shutdown");
-        let restarted = restart_application(app_config).await;
+        let restarted = Box::pin(restart_application(app_config)).await;
         let crash_fixture = GatewayGoldenFixture {
             mailbox_id: mailbox_domain::MailboxId::from_uuid(crash_instance.instance.mailbox_id),
             grant_id: crash_gateway.grant_id,
@@ -4022,7 +4022,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             .shutdown()
             .await
             .expect("cooking daemon startup recovery shutdown");
-        let running = restart_application(app_config.clone()).await;
+        let running = Box::pin(restart_application(app_config.clone())).await;
         let checkpoint =
             cooking::exercise_initial(&pool, &gateway_edge.as_ref().expect("cooking gateway").1)
                 .await;
@@ -4030,7 +4030,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             .shutdown()
             .await
             .expect("cooking daemon graceful restart shutdown");
-        let restarted = restart_application(app_config).await;
+        let restarted = Box::pin(restart_application(app_config)).await;
         let _ = cooking::exercise_follow_up(
             &pool,
             &restarted,
@@ -4151,7 +4151,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
                     assert!(!cgroup.exists());
                     assert!(!materializer.exists());
 
-                    running = restart_application(app_config.clone()).await;
+                    running = Box::pin(restart_application(app_config.clone())).await;
                     let second_instance_id =
                         wait_for_gateway_service_ready(&pool, service_fixture).await;
                     assert_ne!(

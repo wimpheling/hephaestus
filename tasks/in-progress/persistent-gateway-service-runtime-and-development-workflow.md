@@ -1626,3 +1626,34 @@ standalone real test log is
 Exact expired-claim CAS checkpoint (2026-09-19): the existing takeover port now receives the complete prior lease as its compare-and-swap witness. Under the existing gateway-to-instance locks and a fresh database clock, the PostgreSQL adapter compares the full instance/gateway/revision identity, prior owner host and UUID, fencing token, and deterministic VM ID before advancing exactly one fencing epoch and assigning the recovering owner. Boot recovery passes its inventory lease through this boundary; same-daemon expiry recovery remains supported without permitting a stale process to adopt a newer same-host epoch. The isolated overlay is based on `9bf2a615f103548b59f253e69c0ecf1f01d0cb74` at `/tmp/heph-expired-cas-verify-20260919`; the four owned source hashes match the shared worktree: `service_expired_claim_recovery.rs` `e72cd707b7fe5dc85905923972e0ef4d319c292be5fe831f8402474549c3c9e4`, `service_boot_recovery.rs` `24123f3b834c25396cb04002f032baf2f2f8c95beae796a885cdfa697c4e2848`, `service_ownership.rs` `ddbb64a228652dfcb2aab1538fed588223fe3a0020d30b35b12677d3db852d19`, and `expired_takeover.rs` `c1bb26f31c2e01317ebef430be42cf7af32af4e0b99b96b81b5d7e3ee880d37d`.
 
 The isolated worker-role PostgreSQL takeover suite passed 6 tests with `REAL_POSTGRES_CONNECTED_AND_MIGRATED=1 max_migration=80` in `/tmp/heph-expired-cas-isolated-realpg-20260919.log`; the full isolated gateway-edge library suite passed 172 tests in `/tmp/heph-expired-cas-isolated-edge-full-20260919.log`. Final pinned Rust 1.88 formatting and strict all-target/all-feature Clippy for `gateway-edge` and `gateway-postgres` passed in `/tmp/heph-expired-cas-fmt-final2-20260919.log` and `/tmp/heph-expired-cas-clippy-final2-20260919.log`. Supervisor expired-owned cleanup recovery and serialized lost-takeover resolution remain pending.
+
+
+Daemon ambiguous-claim scheduling checkpoint (2026-09-19): the parent-owned
+reconciliation loop now falls back from an ineligible cleanup retry to the
+worker-role serialized claim-resolution store. It distinguishes a committed
+lost acknowledgement from a confirmed absent claim, preserves the exact
+instance/fencing witness, and keeps healthy service heartbeats and Caddy
+progressing while a resolver is blocked behind the gateway row lock. The
+blocked real PostgreSQL test observes the resolver backend itself blocked by
+that lock, completes two target scans after selecting a replacement, and
+proves replacement C has zero `claim_new` attempts, zero instances, and no
+provisioning until B is durably `Cleaned`; C is admitted only afterward. The
+focused blocked and lost-claim tests passed with migration 80 and the
+`hephaestus_worker` role in `/tmp/heph-claim-blocked-realpg-v20.log` and
+`/tmp/heph-claim-lost-final-v3.log`. The isolated overlay is
+`/tmp/heph-claim-final-v1.Zpzw8p`, based on `d044142`; the three owned source
+hashes match the shared worktree: app `lib.rs`
+`e19dd9f82a70cbae9ab2ffcd8f8cf07f498ff520be5ba3d3e97410e2bc07ab41`, recovery
+tests `46ee52bbd489df9ef3bdae4f782a88af3c055183f92f9ca5005004e5b9011d42`, and
+`golden.rs`
+`f71a7669befa8ae5de42612b63d941d785e7ea31f8b232562661ac0e39da2f20`.
+The full app library passed 74/74 real-Postgres tests in
+`/tmp/heph-claim-final-app-lib-v4.log`; the real PostgreSQL/NATS golden target
+passed 35 tests with one ignored in `/tmp/heph-claim-final-golden-v1.log`.
+Pinned Rust 1.88 strict app Clippy, workspace formatting, and workspace
+rustdoc passed in `/tmp/heph-claim-final-clippy-v4.log`,
+`/tmp/heph-claim-final-fmt-v4.log`, and `/tmp/heph-claim-final-doc-v1.log`.
+The five golden restart call sites are boxed to keep the expanded daemon
+future below the strict `large_futures` threshold. Claim ambiguity resolution,
+cleanup retry ownership after process loss, and release UI remain separate
+follow-up work.
