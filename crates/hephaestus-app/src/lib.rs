@@ -3432,6 +3432,7 @@ impl VmSpecFactory for PgAgentVmSpecFactory {
                 working_dir: Some(working_directory.into()),
             },
             runtime_authority: None,
+            private_http_service: None,
             labels,
         })
     }

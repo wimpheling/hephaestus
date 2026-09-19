@@ -752,6 +752,7 @@ impl VmSpecFactory for TestSpecFactory {
                 working_dir: None,
             },
             runtime_authority: None,
+            private_http_service: None,
             labels: BTreeMap::new(),
         })
     }

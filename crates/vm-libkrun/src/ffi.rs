@@ -693,6 +693,7 @@ mod tests {
                 working_dir: Some(Path::new("/").to_path_buf()),
             },
             runtime_authority: None,
+            private_http_service: None,
             labels: BTreeMap::new(),
         }
     }

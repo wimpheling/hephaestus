@@ -6,6 +6,7 @@ use http::{HeaderMap, Method, StatusCode};
 use std::{
     collections::BTreeMap, error::Error, net::IpAddr, path::PathBuf, sync::Arc, time::Duration,
 };
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
@@ -42,6 +43,9 @@ pub struct VmSpec {
     pub resources: VmResources,
     /// Guest network connectivity.
     pub network: NetworkMode,
+    /// Optional long-lived HTTP service exposed only through the provider's
+    /// private host-to-guest transport.
+    pub private_http_service: Option<PrivateHttpServiceSpec>,
     /// The initial command run inside the guest.
     pub command: GuestCommand,
     /// Sensitive one-run authority delivered through the authenticated guest
@@ -262,6 +266,26 @@ pub struct GuestCommand {
     /// Absolute working directory inside the guest.
     pub working_dir: Option<PathBuf>,
 }
+
+/// Configuration for a long-lived HTTP server bound to the guest loopback
+/// interface.
+#[derive(Debug, Clone)]
+pub struct PrivateHttpServiceSpec {
+    /// Guest loopback TCP port on which the released server listens.
+    pub loopback_port: u16,
+    /// Maximum number of provider-managed service connections in flight.
+    pub max_connections: u32,
+    /// Maximum time allowed to connect to the guest loopback server.
+    pub connect_timeout: Duration,
+}
+
+/// Provider-neutral full-duplex stream for a private HTTP service connection.
+pub trait PrivateServiceConnection: AsyncRead + AsyncWrite + Unpin + Send + 'static {}
+
+impl<T> PrivateServiceConnection for T where T: AsyncRead + AsyncWrite + Unpin + Send + 'static {}
+
+/// Owned provider-neutral private service stream.
+pub type BoxedPrivateServiceConnection = Box<dyn PrivateServiceConnection>;
 
 /// One complete host-to-guest request on the VM's private control transport.
 ///
@@ -562,6 +586,17 @@ pub trait VmInstance: Send + Sync + 'static {
     ) -> Result<PrivateHttpResponse, VmError> {
         Err(VmError::Unsupported {
             feature: "private HTTP handler transport".to_owned(),
+            provider: "unspecified".to_owned(),
+        })
+    }
+
+    /// Opens one full-duplex connection to a declared long-lived guest HTTP
+    /// service. Providers without the private service transport fail closed.
+    async fn open_private_service_connection(
+        &self,
+    ) -> Result<BoxedPrivateServiceConnection, VmError> {
+        Err(VmError::Unsupported {
+            feature: "private HTTP service transport".to_owned(),
             provider: "unspecified".to_owned(),
         })
     }

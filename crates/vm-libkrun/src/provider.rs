@@ -1765,6 +1765,7 @@ mod tests {
                 working_dir: Some(PathBuf::from("/")),
             },
             runtime_authority: None,
+            private_http_service: None,
             labels: BTreeMap::new(),
         }
     }

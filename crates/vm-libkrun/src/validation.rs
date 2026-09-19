@@ -28,9 +28,17 @@ pub struct PreparedSpec {
     pub vcpus: u8,
     pub memory_mib: u32,
     pub network: PreparedNetwork,
+    pub private_http_service: Option<PreparedPrivateHttpService>,
     pub command: PreparedCommand,
     pub runtime_authority: Option<PreparedRuntimeAuthority>,
     pub labels: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PreparedPrivateHttpService {
+    pub loopback_port: u16,
+    pub max_connections: u32,
+    pub connect_timeout_ms: u64,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -278,6 +286,8 @@ pub fn prepare_spec(config: &LibkrunConfig, spec: &VmSpec) -> Result<PreparedSpe
         })
         .transpose()?;
 
+    let private_http_service = validate_private_http_service(spec)?;
+
     let mut mount_tags = HashSet::new();
     let mut mounts = Vec::with_capacity(spec.mounts.len());
     for (index, mount) in spec.mounts.iter().enumerate() {
@@ -377,6 +387,7 @@ pub fn prepare_spec(config: &LibkrunConfig, spec: &VmSpec) -> Result<PreparedSpe
         vcpus: spec.resources.vcpus,
         memory_mib: spec.resources.memory_mib,
         network,
+        private_http_service,
         command: PreparedCommand {
             program: spec.command.program.clone(),
             args: spec.command.args.clone(),
@@ -386,6 +397,68 @@ pub fn prepare_spec(config: &LibkrunConfig, spec: &VmSpec) -> Result<PreparedSpe
         runtime_authority,
         labels: spec.labels.clone(),
     })
+}
+
+fn validate_private_http_service(
+    spec: &VmSpec,
+) -> Result<Option<PreparedPrivateHttpService>, VmError> {
+    let Some(service) = spec.private_http_service.as_ref() else {
+        return Ok(None);
+    };
+
+    if !(1024..=u16::MAX).contains(&service.loopback_port) {
+        return invalid(
+            "private_http_service.loopback_port",
+            "must be between 1024 and 65535",
+        );
+    }
+    if !(1..=64).contains(&service.max_connections) {
+        return invalid(
+            "private_http_service.max_connections",
+            "must be between 1 and 64",
+        );
+    }
+    let connect_timeout_ms =
+        u64::try_from(service.connect_timeout.as_millis()).map_err(|_| VmError::InvalidSpec {
+            field: "private_http_service.connect_timeout".to_owned(),
+            reason: "must be representable as milliseconds".to_owned(),
+        })?;
+    if service.connect_timeout != std::time::Duration::from_millis(connect_timeout_ms)
+        || !(1..=30_000).contains(&connect_timeout_ms)
+    {
+        return invalid(
+            "private_http_service.connect_timeout",
+            "must be a whole duration between 1ms and 30s",
+        );
+    }
+    if spec.runtime_authority.is_some() {
+        return invalid(
+            "runtime_authority",
+            "service mode cannot receive runtime authority",
+        );
+    }
+    if spec
+        .labels
+        .get(crate::protocol::GATEWAY_HANDLER_CONTRACT_LABEL)
+        .is_some_and(|value| value == crate::protocol::GATEWAY_HANDLER_CONTRACT_V1)
+    {
+        return invalid(
+            "private_http_service",
+            "service mode cannot combine with the stateless gateway handler",
+        );
+    }
+    if !matches!(spec.network, NetworkMode::Disabled) {
+        return invalid(
+            "network",
+            "initial service mode requires disabled guest networking",
+        );
+    }
+
+    Ok(Some(PreparedPrivateHttpService {
+        loopback_port: service.loopback_port,
+        max_connections: service.max_connections,
+        connect_timeout_ms,
+    }))
 }
 
 fn validate_state_volume_labels(spec: &VmSpec, disks: &[PreparedDisk]) -> Result<(), VmError> {
@@ -617,11 +690,12 @@ mod tests {
         net::{IpAddr, Ipv4Addr},
         os::unix::fs::{PermissionsExt, symlink},
         path::PathBuf,
+        time::Duration,
     };
     use tempfile::TempDir;
     use vm_trait::{
-        DiskFormat, GuestCommand, NetworkMode, PortForward, PortProtocol, RootFilesystem, VmDisk,
-        VmError, VmId, VmMount, VmResources, VmSpec,
+        DiskFormat, GuestCommand, NetworkMode, PortForward, PortProtocol, PrivateHttpServiceSpec,
+        RootFilesystem, VmDisk, VmError, VmId, VmMount, VmResources, VmSpec,
     };
 
     #[test]
@@ -710,6 +784,114 @@ mod tests {
         fixture.config.broker_socket_path = Some(PathBuf::from("/run/hephaestus/broker.sock"));
         let prepared = prepare_spec(&fixture.config, &spec).expect("broker transport");
         assert!(matches!(prepared.network, PreparedNetwork::BrokerOnly));
+    }
+
+    #[test]
+    fn private_http_service_is_prepared_with_bounded_wire_values() {
+        let fixture = Fixture::new();
+        let mut spec = fixture.spec();
+        spec.private_http_service = Some(PrivateHttpServiceSpec {
+            loopback_port: 8080,
+            max_connections: 4,
+            connect_timeout: Duration::from_millis(250),
+        });
+
+        let prepared = prepare_spec(&fixture.config, &spec).expect("valid service specification");
+        let service = prepared
+            .private_http_service
+            .expect("prepared service configuration");
+        assert_eq!(service.loopback_port, 8080);
+        assert_eq!(service.max_connections, 4);
+        assert_eq!(service.connect_timeout_ms, 250);
+    }
+
+    #[test]
+    fn private_http_service_rejects_invalid_bounds_and_authority() {
+        let fixture = Fixture::new();
+        let invalid_specs = [
+            (
+                "port",
+                PrivateHttpServiceSpec {
+                    loopback_port: 80,
+                    max_connections: 1,
+                    connect_timeout: Duration::from_secs(1),
+                },
+            ),
+            (
+                "connections",
+                PrivateHttpServiceSpec {
+                    loopback_port: 8080,
+                    max_connections: 65,
+                    connect_timeout: Duration::from_secs(1),
+                },
+            ),
+            (
+                "timeout",
+                PrivateHttpServiceSpec {
+                    loopback_port: 8080,
+                    max_connections: 1,
+                    connect_timeout: Duration::from_millis(30_001),
+                },
+            ),
+            (
+                "precision",
+                PrivateHttpServiceSpec {
+                    loopback_port: 8080,
+                    max_connections: 1,
+                    connect_timeout: Duration::from_nanos(1),
+                },
+            ),
+        ];
+        for (expected, service) in invalid_specs {
+            let mut spec = fixture.spec();
+            spec.private_http_service = Some(service);
+            let error = prepare_spec(&fixture.config, &spec).expect_err(expected);
+            assert!(matches!(error, VmError::InvalidSpec { .. }), "{expected}");
+        }
+
+        let mut authority = fixture.spec();
+        authority.private_http_service = Some(PrivateHttpServiceSpec {
+            loopback_port: 8080,
+            max_connections: 1,
+            connect_timeout: Duration::from_secs(1),
+        });
+        authority.runtime_authority = Some(vm_trait::RuntimeAuthorityBootstrap::new(
+            uuid::Uuid::nil(),
+            1,
+            [0xA5; vm_trait::RUNTIME_AUTHORITY_CREDENTIAL_BYTES],
+        ));
+        assert_invalid_field(
+            prepare_spec(&fixture.config, &authority),
+            "runtime_authority",
+        );
+    }
+
+    #[test]
+    fn private_http_service_requires_disabled_network_and_no_handler_label() {
+        let fixture = Fixture::new();
+        let service = PrivateHttpServiceSpec {
+            loopback_port: 8080,
+            max_connections: 1,
+            connect_timeout: Duration::from_secs(1),
+        };
+
+        let mut network = fixture.spec();
+        network.private_http_service = Some(service.clone());
+        network.network = NetworkMode::UserMode {
+            ingress: Vec::new(),
+        };
+        assert_invalid_field(prepare_spec(&fixture.config, &network), "network");
+
+        let mut handler = fixture.spec();
+        handler.private_http_service = Some(service);
+        handler.labels.insert(
+            crate::protocol::GATEWAY_HANDLER_CONTRACT_LABEL.to_owned(),
+            crate::protocol::GATEWAY_HANDLER_CONTRACT_V1.to_owned(),
+        );
+        assert_invalid_field(
+            prepare_spec(&fixture.config, &handler),
+            "private_http_service",
+        );
     }
 
     #[test]
@@ -1055,6 +1237,7 @@ mod tests {
                     working_dir: Some(PathBuf::from("/")),
                 },
                 runtime_authority: None,
+                private_http_service: None,
                 labels: BTreeMap::new(),
             }
         }

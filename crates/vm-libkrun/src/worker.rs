@@ -7,7 +7,8 @@ use crate::{
         GuestCommandMessage, GuestLogStream, GuestMessage, GuestMount, GuestStateVolume,
         HostMessage, MAX_LOG_CHUNK_SIZE, MAX_METRIC_LABELS, MAX_METRIC_TEXT_SIZE,
         MAX_PRIVATE_HTTP_BODY_BYTES, MAX_PRIVATE_HTTP_HEADERS, MAX_RESULT_MESSAGE_SIZE,
-        PROTOCOL_VERSION, RUNTIME_AUTHORITY_PATH_ENV, RuntimeAuthorityMessage,
+        PROTOCOL_VERSION, PrivateHttpServiceMessage, RUNTIME_AUTHORITY_PATH_ENV,
+        RuntimeAuthorityMessage,
     },
     validation::{PreparedForward, PreparedSpec},
 };
@@ -475,6 +476,14 @@ fn handle_guest(
         .labels
         .get(GATEWAY_HANDLER_CONTRACT_LABEL)
         .is_some_and(|value| value == GATEWAY_HANDLER_CONTRACT_V1);
+    let private_http_service =
+        spec.private_http_service
+            .as_ref()
+            .map(|service| PrivateHttpServiceMessage {
+                loopback_port: service.loopback_port,
+                max_connections: service.max_connections,
+                connect_timeout_ms: service.connect_timeout_ms,
+            });
     let expected_authority_ack = runtime_authority
         .as_ref()
         .map(|authority| (authority.session_id, authority.generation));
@@ -487,6 +496,7 @@ fn handle_guest(
             state_volume,
             runtime_authority,
             gateway_handler,
+            private_http_service,
         },
     )?;
 

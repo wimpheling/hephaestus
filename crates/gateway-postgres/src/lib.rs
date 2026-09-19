@@ -908,6 +908,7 @@ impl GatewayReleaseResolver for PostgresGatewayReleaseResolver {
                 generation.get(),
                 *credential.expose(),
             )),
+            private_http_service: None,
             labels: BTreeMap::from([
                 (String::from("hephaestus.kind"), String::from("gateway")),
                 (

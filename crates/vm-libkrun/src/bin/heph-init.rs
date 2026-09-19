@@ -62,12 +62,21 @@ fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         state_volume,
         runtime_authority,
         gateway_handler,
+        private_http_service,
     } = read_frame(&mut control)?
     else {
         return Err("host did not send the start command".into());
     };
     if version != PROTOCOL_VERSION {
         return Err(format!("unsupported host protocol version {version}").into());
+    }
+    if private_http_service.is_some() {
+        let error = io::Error::new(
+            io::ErrorKind::Unsupported,
+            "private HTTP service transport is not implemented",
+        );
+        send_guest_error(&mut control, "private-http-service", &error);
+        return Err(error.into());
     }
 
     // Persist the authority before mounting the immutable runtime control tree

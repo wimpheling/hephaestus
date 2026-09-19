@@ -89,6 +89,21 @@ evidence. The transport choice is reviewed above; remaining consequential
 cross-boundary decisions stay bounded to their implementation slices and
 require main-thread review before each integration step.
 
+## Current implementation checkpoint
+
+The first VM contract slice is being implemented on the feature branch and
+remains fail-closed until the bridge exists. It carries optional validated
+private-service settings through the libkrun protocol while preserving the
+stateless `http.v1` gateway-handler flag. No vsock mapping, parent listener,
+release UI, or Caddy forwarding is included in this checkpoint.
+
+- [x] Finish focused VM contract tests and workspace compatibility checks:
+  `cargo test -p vm-trait`, `cargo test -p vm-libkrun --lib`,
+  `cargo test -p vm-fake`, focused Clippy, `cargo check --workspace
+  --all-targets --all-features`, `cargo fmt --all -- --check`, and
+  `git diff --check` pass in this worktree.
+- [ ] Review and integrate the contract slice before starting bridge work.
+
 ## Implementation checklist
 
 - [ ] **1. Service-mode release contract**

@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, path::PathBuf};
 
 /// Current host-to-guest protocol version.
-pub const PROTOCOL_VERSION: u16 = 7;
+pub const PROTOCOL_VERSION: u16 = 8;
 /// Maximum private HTTP body carried by the authenticated control protocol.
 pub const MAX_PRIVATE_HTTP_BODY_BYTES: usize = 1_048_576;
 /// Maximum private HTTP headers carried by one request or response.
@@ -40,6 +40,17 @@ pub const MAX_GATEWAY_HANDLER_OUTPUT_BYTES: usize =
 pub const GATEWAY_HANDLER_CONTRACT_LABEL: &str = "hephaestus.gateway.handler-contract";
 /// The only gateway handler contract understood by this protocol version.
 pub const GATEWAY_HANDLER_CONTRACT_V1: &str = "http.v1";
+
+/// Wire representation of a declared long-lived private HTTP service.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrivateHttpServiceMessage {
+    /// Guest loopback TCP port on which the released server listens.
+    pub loopback_port: u16,
+    /// Maximum number of provider-managed service connections in flight.
+    pub max_connections: u32,
+    /// Maximum time allowed to connect to the guest loopback server.
+    pub connect_timeout_ms: u64,
+}
 
 /// `AF_VSOCK` port used by `heph-init` to connect to the host worker.
 pub const GUEST_VSOCK_PORT: u32 = 19_000;
@@ -89,6 +100,9 @@ pub enum HostMessage {
         runtime_authority: Option<Box<RuntimeAuthorityMessage>>,
         /// Whether `command` is a one-request private HTTP gateway handler.
         gateway_handler: bool,
+        /// Optional long-lived private HTTP service declaration.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        private_http_service: Option<PrivateHttpServiceMessage>,
     },
     /// Requests graceful cancellation.
     Cancel {

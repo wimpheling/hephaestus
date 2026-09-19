@@ -592,6 +592,7 @@ fn state_probe_spec(
             working_dir: Some(PathBuf::from("/")),
         },
         runtime_authority: None,
+        private_http_service: None,
         labels: BTreeMap::from([
             ("test".to_owned(), id.to_owned()),
             (
@@ -638,6 +639,7 @@ impl ProviderHarness for LibkrunHarness {
                 working_dir: Some(PathBuf::from("/")),
             },
             runtime_authority: None,
+            private_http_service: None,
             labels: BTreeMap::from([("test".to_owned(), "conformance".to_owned())]),
         }
     }
@@ -719,6 +721,7 @@ fn integration_spec(
             working_dir: Some(PathBuf::from("/workspace")),
         },
         runtime_authority: None,
+        private_http_service: None,
         labels: BTreeMap::from([
             ("test".to_owned(), "hardware".to_owned()),
             (
@@ -751,6 +754,7 @@ fn mode_spec(rootfs: PathBuf, id: &str, argument: &str, network: NetworkMode) ->
             working_dir: Some(PathBuf::from("/")),
         },
         runtime_authority: None,
+        private_http_service: None,
         labels: BTreeMap::from([("test".to_owned(), id.to_owned())]),
     }
 }
@@ -773,6 +777,7 @@ fn private_http_spec(rootfs: PathBuf) -> VmSpec {
             working_dir: Some(PathBuf::from("/")),
         },
         runtime_authority: None,
+        private_http_service: None,
         labels: BTreeMap::from([(
             "hephaestus.gateway.handler-contract".to_owned(),
             "http.v1".to_owned(),
@@ -929,6 +934,7 @@ fn long_running_spec(rootfs: PathBuf, kind: &str) -> VmSpec {
             working_dir: Some(PathBuf::from("/")),
         },
         runtime_authority: None,
+        private_http_service: None,
         labels: BTreeMap::from([("test".to_owned(), kind.to_owned())]),
     }
 }
