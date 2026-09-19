@@ -27,8 +27,8 @@ async fn connect_app_sets_role_on_two_connections_and_denies_worker_paths() {
     .expect("read migration marker")
     .expect("migration marker must exist");
     assert!(
-        max_migration >= 80,
-        "expected migration 80, got {max_migration}"
+        max_migration >= 81,
+        "expected migration 81, got {max_migration}"
     );
 
     let pool = connect_app(&database_url, 2)
@@ -64,12 +64,25 @@ async fn connect_app_sets_role_on_two_connections_and_denies_worker_paths() {
         .expect("gateway column denial must be a database error");
     assert_eq!(database_error.code().as_deref(), Some("42501"));
 
-    let denied_worker_table =
-        sqlx::query("SELECT project_id FROM gateway_service_log_project_usage LIMIT 0")
-            .execute(&pool)
-            .await
-            .expect_err("application role must not read worker-only quota state");
-    let database_error = denied_worker_table
+    let visible_usage_rows = sqlx::query(
+        "SELECT project_id, storage_dropped_chunks, storage_dropped_bytes
+           FROM gateway_service_log_project_usage LIMIT 1",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("application role may read actor-scoped project usage columns");
+    assert!(
+        visible_usage_rows.is_empty(),
+        "an actor-less application session must see no project usage rows"
+    );
+    let denied_worker_columns = sqlx::query(
+        "SELECT retained_bytes, retained_chunks, retained_epochs
+           FROM gateway_service_log_project_usage LIMIT 0",
+    )
+    .execute(&pool)
+    .await
+    .expect_err("application role must not read ungranted retained usage columns");
+    let database_error = denied_worker_columns
         .as_database_error()
         .expect("worker table denial must be a database error");
     assert_eq!(database_error.code().as_deref(), Some("42501"));

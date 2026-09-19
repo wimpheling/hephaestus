@@ -2048,3 +2048,15 @@ app rustdoc with `RUSTDOCFLAGS=-Dwarnings` passed in
 `/home/a/hephaestus-app-service-log-retention-rustdoc-20260919.log`; Rust 1.88
 formatting and `git diff --check` passed. RPC/proto generation and application
 RPC exposure remain pending separate integration work.
+
+Migration 81 CI regression checkpoint (2026-09-19): CI run 35471382179
+passed Cooking and browser jobs but failed the control-plane app-pool test's
+obsolete assumption that every project-usage SELECT is forbidden. The test
+now checks that the three granted metadata columns reveal no rows without an
+actor and that retained-storage columns still return SQLSTATE 42501. The
+focused real PostgreSQL run passed with migration 81 and both connections
+using `hephaestus_app` in
+`/home/a/control-plane-app-pool-realpg-20260919-v2.log`; strict Clippy passed
+in `/home/a/control-plane-app-pool-clippy-20260919.log`. Rust 1.88 formatting
+and diff checks passed. This corrects test expectations for the intentional
+column-scoped grant; it does not broaden database privileges.
