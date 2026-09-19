@@ -1762,3 +1762,21 @@ strict app/rpc-proto Clippy, default golden compilation, 77 app unit tests,
 the hash comparison is `/home/a/heph-gateway-rpc-sha256-manifest.txt`.
 The rows are transactionally fixture-seeded for endpoint acceptance; production
 guest-log writer attachment, durable retention, and UI remain pending.
+
+Outbox diagnostics CI-lint correction checkpoint (2026-09-19): the three
+focused diagnostics tests now explicitly drop their `MutexGuard` values after
+assertions, satisfying `significant_drop_tightening` without a lint exception.
+The isolated patch is exactly three lines on base `c129494` at
+`/tmp/heph-outbox-ci-fix-6133b69`; the exact workspace command
+`cargo +1.88.0 clippy --workspace --all-targets --all-features` passed in
+`/tmp/heph-outbox-ci-fix-workspace-clippy.log`. The repository CI workflow
+explicitly installs toolchain `1.88` before its Clippy step in
+`.github/workflows/ci.yml`; the failed CI log records the same workspace
+command but does not itself print a compiler version. Focused tests, package
+Clippy, and formatting passed in `/tmp/heph-outbox-ci-fix-focused.log`,
+`/tmp/heph-outbox-ci-fix-clippy.log`, and `/tmp/heph-outbox-ci-fix-fmt.log`.
+The two subsequent populated PostgreSQL/NATS reruns passed without the
+shutdown warning: `/tmp/heph-outbox-golden-repro-6133b69.log` (35 passed, one
+ignored) and `/tmp/heph-outbox-full-app-lib-golden-6133b69.log` (76 app tests,
+then 35 golden tests, one ignored). The recurring CI shutdown cause remains
+unproven.

@@ -4927,6 +4927,7 @@ mod tests {
         let diagnostics = diagnostics.lock().expect("flush diagnostics mutex");
         assert!(diagnostics.deadline_expired_before_pass);
         assert_eq!(diagnostics.passes, 1);
+        drop(diagnostics);
     }
 
     #[tokio::test]
@@ -4979,6 +4980,7 @@ mod tests {
             None
         );
         assert_eq!(diagnostics.failure_kind, Some("deadline-during-publisher"));
+        drop(diagnostics);
     }
 
     #[tokio::test]
@@ -5006,6 +5008,7 @@ mod tests {
             diagnostics.last_phase.map(|phase| phase.publisher.name()),
             Some("product-event")
         );
+        drop(diagnostics);
     }
 
     #[test]
