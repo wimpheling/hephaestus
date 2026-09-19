@@ -5,6 +5,7 @@ use std::{
     future::{self, Future},
     pin::Pin,
     sync::Arc,
+    time::Duration,
 };
 
 use tokio::{
@@ -15,7 +16,7 @@ use tokio_util::sync::CancellationToken;
 use vm_trait::{VmInstance, VmProvider};
 
 use crate::{
-    GatewayServiceFailure, GatewayServiceFailureCode, GatewayServiceFailureStore,
+    GatewayEdgeError, GatewayServiceFailure, GatewayServiceFailureCode, GatewayServiceFailureStore,
     GatewayServiceFailureStoreError, GatewayServiceIdentity, GatewayServiceInstanceKey,
     GatewayServiceInstanceLease, GatewayServiceInstanceState, GatewayServiceLaunchRequest,
     GatewayServiceLaunchResolver, GatewayServiceLeaseControl, GatewayServiceLeaseMonitor,
@@ -49,6 +50,8 @@ pub enum GatewayServiceCoordinatorStatus {
     Probing,
     /// Exact fenced VM is registered and serving.
     Ready,
+    /// Durable ownership is draining while accepted calls finish.
+    Draining,
     /// Cleanup is stopping the worker and durable claim.
     Stopping,
     /// Physical and durable cleanup completed.
@@ -60,6 +63,7 @@ pub enum GatewayServiceCoordinatorStatus {
 /// Cancellation and status control for one coordinator.
 pub struct GatewayServiceCoordinatorControl {
     cancellation: CancellationToken,
+    drain: watch::Sender<bool>,
     status: watch::Sender<GatewayServiceCoordinatorStatus>,
 }
 
@@ -67,6 +71,11 @@ impl GatewayServiceCoordinatorControl {
     /// Requests shutdown; the run future still settles owned work.
     pub fn cancel(&self) {
         self.cancellation.cancel();
+    }
+
+    /// Coalesces a parent request to retire the ready service instance.
+    pub fn request_drain(&self) {
+        self.drain.send_replace(true);
     }
 
     /// Subscribes to coordinator lifecycle state.
@@ -103,6 +112,10 @@ pub enum GatewayServiceCoordinatorFailureReason {
     Health,
     /// Provider or materializer cleanup was not confirmed.
     CleanupIncomplete,
+    /// All accepted invocations drained before retirement.
+    Drained,
+    /// The bounded drain grace period elapsed before retirement.
+    DrainDeadline,
 }
 
 /// Failure retaining the latest lease and any live cleanup ownership.
@@ -172,6 +185,8 @@ pub struct GatewayServiceCoordinator {
     lease_control: GatewayServiceLeaseControl,
     lease_monitor: Option<GatewayServiceLeaseMonitor<dyn GatewayServiceOwnership>>,
     cancellation: CancellationToken,
+    drain: watch::Sender<bool>,
+    drain_requested: watch::Receiver<bool>,
     status: watch::Sender<GatewayServiceCoordinatorStatus>,
 }
 
@@ -233,9 +248,11 @@ impl GatewayServiceCoordinator {
         )
         .map_err(|_| GatewayServiceCoordinatorError::InvalidLeasePolicy)?;
         let cancellation = CancellationToken::new();
+        let (drain, drain_requested) = watch::channel(false);
         let (status, _) = watch::channel(GatewayServiceCoordinatorStatus::Preparing);
         let control = GatewayServiceCoordinatorControl {
             cancellation: cancellation.clone(),
+            drain: drain.clone(),
             status: status.clone(),
         };
         Ok((
@@ -255,6 +272,8 @@ impl GatewayServiceCoordinator {
                 lease_control,
                 lease_monitor: Some(lease_monitor),
                 cancellation,
+                drain,
+                drain_requested,
                 status,
             },
             control,
@@ -281,8 +300,14 @@ impl GatewayServiceCoordinator {
         let mut monitor: MonitorFuture = Box::pin(monitor.run());
         let mut monitor_done = false;
         let mut status = self.lease_control.subscribe();
+        let mut drain_requested = self.drain_requested.clone();
         let result = self
-            .run_inner(&mut monitor, &mut monitor_done, &mut status)
+            .run_inner(
+                &mut monitor,
+                &mut monitor_done,
+                &mut status,
+                &mut drain_requested,
+            )
             .await;
         self.lease_control.stop();
         if !monitor_done {
@@ -299,6 +324,7 @@ impl GatewayServiceCoordinator {
         monitor: &mut MonitorFuture,
         monitor_done: &mut bool,
         lease_status: &mut watch::Receiver<GatewayServiceLeaseStatus>,
+        drain_requested: &mut watch::Receiver<bool>,
     ) -> Result<(), GatewayServiceCoordinatorFailure> {
         self.set_status(GatewayServiceCoordinatorStatus::Preparing);
         let (preparation_handle, preparation) = new_service_preparation(
@@ -634,12 +660,34 @@ impl GatewayServiceCoordinator {
         let mut health_timer = Box::pin(time::sleep(self.supervisor_policy.health_interval));
         let mut health_failures = 0_u32;
         loop {
+            if *drain_requested.borrow() {
+                self.drain.send_replace(false);
+                match self
+                    .drain_and_settle(
+                        monitor,
+                        monitor_done,
+                        lease_status,
+                        &mut worker,
+                        &mut worker_state,
+                        &mut worker_result,
+                        &worker_handle,
+                        vm.clone(),
+                        key,
+                        lease.clone(),
+                    )
+                    .await
+                {
+                    DrainOutcome::Conflict => {}
+                    DrainOutcome::Settled(result) => return *result,
+                }
+            }
             tokio::select! {
                 result = &mut worker => { worker_result = Some(result); return self.settle_worker(monitor, monitor_done, lease_status, &lease, &worker_handle, &mut worker, &mut worker_result, vm, Some(key), FailureReason::Runtime).await; }
                 () = self.cancellation.cancelled() => return self.settle_worker(monitor, monitor_done, lease_status, &lease, &worker_handle, &mut worker, &mut worker_result, vm, Some(key), FailureReason::Cancelled).await,
                 signal = monitor_signal(monitor, *monitor_done) => { let _ = signal; *monitor_done = true; return self.settle_worker(monitor, monitor_done, lease_status, &lease, &worker_handle, &mut worker, &mut worker_result, vm, Some(key), FailureReason::LeaseLost).await; }
                 changed = lease_status.changed() => if changed.is_err() || !lease_active(lease_status) { return self.settle_worker(monitor, monitor_done, lease_status, &lease, &worker_handle, &mut worker, &mut worker_result, vm, Some(key), FailureReason::LeaseLost).await; },
                 changed = worker_state.changed() => if changed.is_err() || *worker_state.borrow() != ServiceWorkerState::Ready { return self.settle_worker(monitor, monitor_done, lease_status, &lease, &worker_handle, &mut worker, &mut worker_result, vm, Some(key), FailureReason::Runtime).await; },
+                changed = drain_requested.changed() => if changed.is_err() { return self.settle_worker(monitor, monitor_done, lease_status, &lease, &worker_handle, &mut worker, &mut worker_result, vm, Some(key), FailureReason::Runtime).await; },
                 () = &mut health_timer => {
                     match self.await_health(monitor, monitor_done, lease_status, &mut worker, &mut worker_state, &mut worker_result, &worker_handle).await {
                         Ok(true) => health_failures = 0,
@@ -653,6 +701,283 @@ impl GatewayServiceCoordinator {
                     }
                     health_timer.as_mut().reset(Instant::now() + self.supervisor_policy.health_interval);
                 },
+            }
+        }
+    }
+
+    // This state machine deliberately carries every live owner through the
+    // drain transition, count query, and teardown boundary.
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+    async fn drain_and_settle(
+        &self,
+        monitor: &mut MonitorFuture,
+        monitor_done: &mut bool,
+        status: &mut watch::Receiver<GatewayServiceLeaseStatus>,
+        worker: &mut WorkerFuture,
+        worker_state: &mut watch::Receiver<ServiceWorkerState>,
+        worker_result: &mut Option<Result<(), ServiceInstanceError>>,
+        worker_handle: &ServiceInstanceHandle,
+        vm: Arc<dyn VmInstance>,
+        key: GatewayServiceInstanceKey,
+        lease: GatewayServiceInstanceLease,
+    ) -> DrainOutcome {
+        // The grace period covers the fenced state transition and every later
+        // invocation-count wait; it must start before any durable I/O.
+        let drain_deadline = Instant::now()
+            .checked_add(self.supervisor_policy.drain_timeout)
+            .unwrap_or_else(Instant::now);
+        let current = current_lease(status).unwrap_or_else(|| lease.clone());
+        let draining = self
+            .transition_draining(
+                monitor,
+                monitor_done,
+                status,
+                worker,
+                worker_state,
+                worker_result,
+                self.ownership.mark_draining(&current, &self.owner),
+                drain_deadline,
+            )
+            .await;
+        let lease = match draining {
+            Ok(DrainTransition::Started(lease)) => lease,
+            Ok(DrainTransition::Conflict) => return DrainOutcome::Conflict,
+            Ok(DrainTransition::Deadline) => {
+                return DrainOutcome::Settled(Box::new(
+                    self.settle_worker(
+                        monitor,
+                        monitor_done,
+                        status,
+                        &current,
+                        worker_handle,
+                        worker,
+                        worker_result,
+                        vm,
+                        Some(key),
+                        FailureReason::DrainDeadline,
+                    )
+                    .await,
+                ));
+            }
+            Err(reason) => {
+                return DrainOutcome::Settled(Box::new(
+                    self.settle_worker(
+                        monitor,
+                        monitor_done,
+                        status,
+                        &lease,
+                        worker_handle,
+                        worker,
+                        worker_result,
+                        vm,
+                        Some(key),
+                        reason,
+                    )
+                    .await,
+                ));
+            }
+        };
+        self.set_status(GatewayServiceCoordinatorStatus::Draining);
+        loop {
+            match self
+                .drain_count(
+                    monitor,
+                    monitor_done,
+                    status,
+                    worker,
+                    worker_state,
+                    worker_result,
+                    key,
+                    drain_deadline,
+                )
+                .await
+            {
+                Ok(DrainCount::Zero) => {
+                    return DrainOutcome::Settled(Box::new(
+                        self.settle_worker(
+                            monitor,
+                            monitor_done,
+                            status,
+                            &lease,
+                            worker_handle,
+                            worker,
+                            worker_result,
+                            vm,
+                            Some(key),
+                            FailureReason::Drained,
+                        )
+                        .await,
+                    ));
+                }
+                Ok(DrainCount::Active | DrainCount::Unavailable) => {
+                    if Instant::now() >= drain_deadline {
+                        return DrainOutcome::Settled(Box::new(
+                            self.settle_worker(
+                                monitor,
+                                monitor_done,
+                                status,
+                                &lease,
+                                worker_handle,
+                                worker,
+                                worker_result,
+                                vm,
+                                Some(key),
+                                FailureReason::DrainDeadline,
+                            )
+                            .await,
+                        ));
+                    }
+                    let wake = Instant::now()
+                        .checked_add(DRAIN_POLL_INTERVAL)
+                        .unwrap_or(drain_deadline)
+                        .min(drain_deadline);
+                    if let Err(reason) = self
+                        .wait_drain_poll(monitor, monitor_done, status, worker, worker_result, wake)
+                        .await
+                    {
+                        return DrainOutcome::Settled(Box::new(
+                            self.settle_worker(
+                                monitor,
+                                monitor_done,
+                                status,
+                                &lease,
+                                worker_handle,
+                                worker,
+                                worker_result,
+                                vm,
+                                Some(key),
+                                reason,
+                            )
+                            .await,
+                        ));
+                    }
+                }
+                Err(reason) => {
+                    return DrainOutcome::Settled(Box::new(
+                        self.settle_worker(
+                            monitor,
+                            monitor_done,
+                            status,
+                            &lease,
+                            worker_handle,
+                            worker,
+                            worker_result,
+                            vm,
+                            Some(key),
+                            reason,
+                        )
+                        .await,
+                    ));
+                }
+            }
+        }
+    }
+
+    // These explicit ports keep the worker, lease, and DB wait in one select
+    // boundary; splitting them would make cancellation ownership implicit.
+    #[allow(clippy::too_many_arguments)]
+    async fn transition_draining<T, F>(
+        &self,
+        monitor: &mut MonitorFuture,
+        monitor_done: &mut bool,
+        status: &mut watch::Receiver<GatewayServiceLeaseStatus>,
+        worker: &mut WorkerFuture,
+        worker_state: &mut watch::Receiver<ServiceWorkerState>,
+        worker_result: &mut Option<Result<(), ServiceInstanceError>>,
+        operation: F,
+        drain_deadline: Instant,
+    ) -> Result<DrainTransition<T>, FailureReason>
+    where
+        F: Future<Output = Result<T, GatewayServiceOwnershipError>>,
+    {
+        let Some(lease_deadline) = current_deadline(status) else {
+            return Err(FailureReason::LeaseLost);
+        };
+        let deadline = lease_deadline.min(drain_deadline);
+        if deadline <= Instant::now() {
+            return Ok(DrainTransition::Deadline);
+        }
+        let mut operation = Box::pin(time::timeout_at(deadline, operation));
+        loop {
+            tokio::select! {
+                result = &mut operation => match result {
+                    Ok(Ok(value)) => return Ok(DrainTransition::Started(value)),
+                    Ok(Err(GatewayServiceOwnershipError::Conflict)) => return Ok(DrainTransition::Conflict),
+                    Ok(Err(_)) => return Err(FailureReason::Ownership),
+                    Err(_) if deadline == drain_deadline => {
+                        return Err(FailureReason::DrainDeadline);
+                    }
+                    Err(_) => return Err(FailureReason::LeaseLost),
+                },
+                result = &mut *worker => { *worker_result = Some(result); return Err(FailureReason::Runtime); },
+                changed = worker_state.changed() => if changed.is_err() || *worker_state.borrow() != ServiceWorkerState::Ready { return Err(FailureReason::Runtime); },
+                signal = monitor_signal(monitor, *monitor_done) => { let _ = signal; *monitor_done = true; return Err(FailureReason::LeaseLost); },
+                changed = status.changed() => if changed.is_err() || !lease_active(status) { return Err(FailureReason::LeaseLost); },
+                () = self.cancellation.cancelled() => return Err(FailureReason::Cancelled),
+            }
+        }
+    }
+
+    // The count query shares every live lifecycle signal with the worker.
+    #[allow(clippy::too_many_arguments)]
+    async fn drain_count(
+        &self,
+        monitor: &mut MonitorFuture,
+        monitor_done: &mut bool,
+        status: &mut watch::Receiver<GatewayServiceLeaseStatus>,
+        worker: &mut WorkerFuture,
+        worker_state: &mut watch::Receiver<ServiceWorkerState>,
+        worker_result: &mut Option<Result<(), ServiceInstanceError>>,
+        key: GatewayServiceInstanceKey,
+        drain_deadline: Instant,
+    ) -> Result<DrainCount, FailureReason> {
+        let Some(lease_deadline) = current_deadline(status) else {
+            return Err(FailureReason::LeaseLost);
+        };
+        let deadline = lease_deadline.min(drain_deadline);
+        let mut operation = Box::pin(time::timeout_at(
+            deadline,
+            self.targets
+                .count_accepted_service_invocations_for_instance(key),
+        ));
+        loop {
+            tokio::select! {
+                result = &mut operation => match result {
+                    Ok(Ok(0)) => return Ok(DrainCount::Zero),
+                    Ok(Ok(_)) => return Ok(DrainCount::Active),
+                    Ok(Err(GatewayEdgeError::Unavailable)) => return Ok(DrainCount::Unavailable),
+                    Ok(Err(_)) => return Err(FailureReason::Ownership),
+                    Err(_) if Instant::now() >= drain_deadline => return Ok(DrainCount::Active),
+                    Err(_) => return Err(FailureReason::LeaseLost),
+                },
+                result = &mut *worker => { *worker_result = Some(result); return Err(FailureReason::Runtime); },
+                changed = worker_state.changed() => if changed.is_err() || *worker_state.borrow() != ServiceWorkerState::Ready { return Err(FailureReason::Runtime); },
+                signal = monitor_signal(monitor, *monitor_done) => { let _ = signal; *monitor_done = true; return Err(FailureReason::LeaseLost); },
+                changed = status.changed() => if changed.is_err() || !lease_active(status) { return Err(FailureReason::LeaseLost); },
+                () = self.cancellation.cancelled() => return Err(FailureReason::Cancelled),
+            }
+        }
+    }
+
+    // The bounded poll must continue observing lease and worker termination.
+    #[allow(clippy::too_many_arguments)]
+    async fn wait_drain_poll(
+        &self,
+        monitor: &mut MonitorFuture,
+        monitor_done: &mut bool,
+        status: &mut watch::Receiver<GatewayServiceLeaseStatus>,
+        worker: &mut WorkerFuture,
+        worker_result: &mut Option<Result<(), ServiceInstanceError>>,
+        wake: Instant,
+    ) -> Result<(), FailureReason> {
+        let mut timer = Box::pin(time::sleep_until(wake));
+        loop {
+            tokio::select! {
+                () = &mut timer => return Ok(()),
+                result = &mut *worker => { *worker_result = Some(result); return Err(FailureReason::Runtime); },
+                signal = monitor_signal(monitor, *monitor_done) => { let _ = signal; *monitor_done = true; return Err(FailureReason::LeaseLost); },
+                changed = status.changed() => if changed.is_err() || !lease_active(status) { return Err(FailureReason::LeaseLost); },
+                () = self.cancellation.cancelled() => return Err(FailureReason::Cancelled),
             }
         }
     }
@@ -977,7 +1302,10 @@ impl GatewayServiceCoordinator {
             return Err(self.failure(latest, reason, vm, false, true, false));
         }
         self.set_status(GatewayServiceCoordinatorStatus::Stopped);
-        if reason == FailureReason::Cancelled {
+        if matches!(
+            reason,
+            FailureReason::Cancelled | FailureReason::Drained | FailureReason::DrainDeadline
+        ) {
             Ok(())
         } else {
             let latest = current_lease(status).unwrap_or(stopping);
@@ -1163,6 +1491,25 @@ impl GatewayServiceCoordinator {
 
 type FailureReason = GatewayServiceCoordinatorFailureReason;
 
+const DRAIN_POLL_INTERVAL: Duration = Duration::from_millis(50);
+
+enum DrainTransition<T> {
+    Started(T),
+    Conflict,
+    Deadline,
+}
+
+enum DrainCount {
+    Zero,
+    Active,
+    Unavailable,
+}
+
+enum DrainOutcome {
+    Conflict,
+    Settled(Box<Result<(), GatewayServiceCoordinatorFailure>>),
+}
+
 fn failure_for_reason(reason: FailureReason) -> Option<GatewayServiceFailure> {
     let code = match reason {
         FailureReason::Preparation => GatewayServiceFailureCode::Preparation,
@@ -1173,7 +1520,9 @@ fn failure_for_reason(reason: FailureReason) -> Option<GatewayServiceFailure> {
         | FailureReason::Ownership
         | FailureReason::Cancelled
         | FailureReason::LeaseLost
-        | FailureReason::TargetUnavailable => return None,
+        | FailureReason::TargetUnavailable
+        | FailureReason::Drained
+        | FailureReason::DrainDeadline => return None,
     };
     GatewayServiceFailure::new(code, None, None).ok()
 }
@@ -1274,8 +1623,9 @@ fn current_deadline(status: &watch::Receiver<GatewayServiceLeaseStatus>) -> Opti
 mod tests {
     use super::*;
     use crate::{
-        GatewayEdgeError, GatewayServiceFailure, GatewayServiceFailureStoreError,
-        GatewayServiceLaunch, GatewayServiceLeasePolicy, ServiceInstancePolicy,
+        GatewayEdgeError, GatewayLimits, GatewayRequest, GatewayScheme, GatewayServiceFailure,
+        GatewayServiceFailureStoreError, GatewayServiceLaunch, GatewayServiceLeasePolicy,
+        ServiceHttpPolicy, ServiceInstancePolicy, TrustedRequestMetadata,
     };
     use async_trait::async_trait;
     use gateway_domain::{GatewayServiceConfig, ServiceProbePath};
@@ -1440,6 +1790,10 @@ mod tests {
         renewals: AtomicUsize,
         renew_fails: AtomicBool,
         stopping_fails: AtomicBool,
+        drain_conflict: AtomicBool,
+        drain_blocked: AtomicBool,
+        drain_started: Notify,
+        drain_release: Notify,
         promote_fails: AtomicBool,
         promote_started: Notify,
         promote_release: Notify,
@@ -1554,7 +1908,17 @@ mod tests {
             lease: &GatewayServiceInstanceLease,
             _: &GatewayServiceOwner,
         ) -> Result<GatewayServiceInstanceLease, GatewayServiceOwnershipError> {
-            Ok(lease.clone())
+            self.events.lock().expect("events").push("draining");
+            if self.drain_conflict.load(Ordering::Relaxed) {
+                return Err(GatewayServiceOwnershipError::Conflict);
+            }
+            self.drain_started.notify_one();
+            if self.drain_blocked.load(Ordering::Relaxed) {
+                self.drain_release.notified().await;
+            }
+            let mut lease = lease.clone();
+            lease.state = GatewayServiceInstanceState::Draining;
+            Ok(lease)
         }
 
         async fn promote_ready(
@@ -1583,8 +1947,25 @@ mod tests {
         }
     }
 
+    struct MockCountState {
+        responses: Mutex<VecDeque<Result<u64, GatewayEdgeError>>>,
+        started: Notify,
+        release: Notify,
+        blocked: AtomicBool,
+    }
+
+    fn default_count_state() -> Arc<MockCountState> {
+        Arc::new(MockCountState {
+            responses: Mutex::new(VecDeque::new()),
+            started: Notify::new(),
+            release: Notify::new(),
+            blocked: AtomicBool::new(false),
+        })
+    }
+
     struct MockTargets {
         target: Option<crate::GatewayServiceOwnedTarget>,
+        count: Arc<MockCountState>,
     }
 
     #[async_trait]
@@ -1626,7 +2007,16 @@ mod tests {
             &self,
             _: GatewayServiceInstanceKey,
         ) -> Result<u64, GatewayEdgeError> {
-            Ok(0)
+            self.count.started.notify_one();
+            if self.count.blocked.load(Ordering::Relaxed) {
+                self.count.release.notified().await;
+            }
+            self.count
+                .responses
+                .lock()
+                .expect("count responses")
+                .pop_front()
+                .unwrap_or(Ok(0))
         }
 
         async fn list_service_instances(
@@ -1851,6 +2241,340 @@ mod tests {
         replied.notify_one();
     }
 
+    struct DrainFixture {
+        control: GatewayServiceCoordinatorControl,
+        task: tokio::task::JoinHandle<Result<(), GatewayServiceCoordinatorFailure>>,
+        status: watch::Receiver<GatewayServiceCoordinatorStatus>,
+        vm: Arc<MockVm>,
+        ownership: Arc<MockOwnership>,
+        targets: Arc<MockTargets>,
+        registry: GatewayServiceRegistry,
+        key: GatewayServiceInstanceKey,
+    }
+
+    // The fixture deliberately assembles the complete parent-owned lifecycle.
+    #[allow(clippy::too_many_lines)]
+    async fn start_drain_fixture(
+        count: Arc<MockCountState>,
+        drain_conflict: bool,
+        drain_blocked: bool,
+        drain_timeout: Duration,
+    ) -> DrainFixture {
+        let identity = identity();
+        let owner =
+            GatewayServiceOwner::new("coordinator-drain-host", Uuid::new_v4()).expect("owner");
+        let (events, _) = broadcast::channel(2);
+        let vm = Arc::new(MockVm {
+            id: VmId(format!("gateway-service-{}", identity.instance_id)),
+            events,
+            connections: Mutex::new(VecDeque::new()),
+            starts: AtomicUsize::new(0),
+            destroys: AtomicUsize::new(0),
+            destroy_started: Notify::new(),
+            destroy_release: Notify::new(),
+            destroy_blocked: AtomicBool::new(false),
+            destroy_fails: AtomicBool::new(false),
+            wait_exit: Notify::new(),
+            should_exit: AtomicBool::new(false),
+            opens: AtomicUsize::new(0),
+        });
+        let (client, peer) = tokio::io::duplex(4096);
+        vm.connections
+            .lock()
+            .expect("connection mutex")
+            .push_back(Box::new(client));
+        tokio::spawn(respond(peer));
+        let resolver = Arc::new(MockResolver {
+            launch: launch(identity),
+            started: Notify::new(),
+            release: Notify::new(),
+            cleanups: AtomicUsize::new(0),
+        });
+        let provider = Arc::new(MockProvider {
+            provisions: AtomicUsize::new(0),
+            vm: Some(vm.clone()),
+            started: Notify::new(),
+            release: Notify::new(),
+            blocked: AtomicBool::new(false),
+        });
+        let ownership = Arc::new(MockOwnership {
+            events: Mutex::new(Vec::new()),
+            renewals: AtomicUsize::new(0),
+            renew_fails: AtomicBool::new(false),
+            stopping_fails: AtomicBool::new(false),
+            drain_conflict: AtomicBool::new(drain_conflict),
+            drain_blocked: AtomicBool::new(drain_blocked),
+            drain_started: Notify::new(),
+            drain_release: Notify::new(),
+            promote_fails: AtomicBool::new(false),
+            promote_started: Notify::new(),
+            promote_release: Notify::new(),
+            promote_blocked: AtomicBool::new(false),
+        });
+        let targets = Arc::new(MockTargets {
+            target: None,
+            count,
+        });
+        let registry = GatewayServiceRegistry::new(1, 1).expect("registry");
+        let now = Instant::now();
+        let (coordinator, control) = GatewayServiceCoordinator::new(
+            lease(&owner, identity),
+            owner,
+            now + Duration::from_secs(30),
+            now + Duration::from_secs(10),
+            GatewayServiceStartupIntent::ActivateDesired,
+            ownership.clone(),
+            failure_store(),
+            resolver.clone(),
+            provider,
+            targets.clone(),
+            registry.clone(),
+            "service.test",
+            GatewayServiceSupervisorPolicy {
+                drain_timeout,
+                lease: GatewayServiceLeasePolicy {
+                    lease_duration: Duration::from_secs(30),
+                    renewal_interval: Duration::from_millis(10),
+                },
+                instance: ServiceInstancePolicy::new(
+                    Duration::from_secs(2),
+                    Duration::from_millis(1),
+                    Duration::from_secs(1),
+                    Duration::from_secs(1),
+                ),
+                ..GatewayServiceSupervisorPolicy::default()
+            },
+        )
+        .expect("coordinator");
+        let mut status = control.subscribe();
+        let task = tokio::spawn(coordinator.run());
+        resolver.started.notified().await;
+        resolver.release.notify_one();
+        timeout(Duration::from_secs(2), async {
+            while *status.borrow() != GatewayServiceCoordinatorStatus::Ready {
+                status.changed().await.expect("coordinator status");
+            }
+        })
+        .await
+        .expect("ready");
+        let key = GatewayServiceInstanceKey {
+            identity,
+            fencing_token: 1,
+        };
+        DrainFixture {
+            control,
+            task,
+            status,
+            vm,
+            ownership,
+            targets,
+            registry,
+            key,
+        }
+    }
+
+    fn drain_request() -> GatewayRequest {
+        GatewayRequest {
+            method: http::Method::GET,
+            path_and_query: String::from("/drain-check"),
+            headers: http::HeaderMap::new(),
+            body: bytes::Bytes::new(),
+            trusted: TrustedRequestMetadata {
+                scheme: GatewayScheme::Http,
+                authority: String::from("service.test"),
+                client_address: "127.0.0.1".parse().expect("client address"),
+                request_id: Uuid::new_v4(),
+            },
+        }
+    }
+
+    fn drain_http_policy() -> ServiceHttpPolicy {
+        ServiceHttpPolicy::from_gateway_limits(GatewayLimits {
+            max_request_body_bytes: 1024,
+            max_response_body_bytes: 1024,
+            max_request_headers: 16,
+            max_response_headers: 16,
+            max_path_and_query_bytes: 256,
+            execution_timeout: Duration::from_secs(1),
+        })
+    }
+
+    #[tokio::test]
+    // The fixture owns control and VM resources until the coordinator task joins.
+    #[allow(clippy::significant_drop_tightening)]
+    async fn drain_keeps_registry_dispatch_until_accepted_count_reaches_zero() {
+        let count = default_count_state();
+        count.responses.lock().expect("count responses").extend([
+            Err(GatewayEdgeError::Unavailable),
+            Ok(1),
+            Ok(0),
+        ]);
+        let fixture =
+            start_drain_fixture(count.clone(), false, false, Duration::from_secs(2)).await;
+        fixture.control.request_drain();
+        let mut status = fixture.status;
+        timeout(Duration::from_secs(1), async {
+            while *status.borrow() != GatewayServiceCoordinatorStatus::Draining {
+                status.changed().await.expect("draining status");
+            }
+        })
+        .await
+        .expect("draining");
+        count.started.notified().await;
+        let (client, peer) = tokio::io::duplex(4096);
+        fixture
+            .vm
+            .connections
+            .lock()
+            .expect("connections")
+            .push_back(Box::new(client));
+        tokio::spawn(respond(peer));
+        let response = fixture
+            .registry
+            .exchange(fixture.key, drain_request(), drain_http_policy())
+            .await
+            .expect("accepted call remains dispatchable while draining");
+        assert_eq!(response.status, http::StatusCode::OK);
+        assert!(fixture.task.await.expect("coordinator join").is_ok());
+        assert_eq!(fixture.vm.destroys.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            fixture
+                .targets
+                .count
+                .responses
+                .lock()
+                .expect("responses")
+                .len(),
+            0
+        );
+        assert_eq!(
+            fixture.ownership.events.lock().expect("events").as_slice(),
+            [
+                "starting", "ready", "promote", "draining", "stopping", "cleaned"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    // The fixture owns control and VM resources until the coordinator task joins.
+    #[allow(clippy::significant_drop_tightening)]
+    async fn drain_conflict_consumes_request_without_spinning_or_leaving_ready() {
+        let count = default_count_state();
+        let fixture = start_drain_fixture(count.clone(), true, false, Duration::from_secs(1)).await;
+        fixture.control.request_drain();
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert_eq!(
+            *fixture.status.borrow(),
+            GatewayServiceCoordinatorStatus::Ready
+        );
+        assert!(count.responses.lock().expect("count responses").is_empty());
+        assert_eq!(
+            fixture
+                .ownership
+                .events
+                .lock()
+                .expect("events")
+                .iter()
+                .filter(|event| **event == "draining")
+                .count(),
+            1
+        );
+        fixture
+            .ownership
+            .drain_conflict
+            .store(false, Ordering::Relaxed);
+        fixture.control.request_drain();
+        timeout(Duration::from_secs(1), async {
+            while *fixture.status.borrow() != GatewayServiceCoordinatorStatus::Stopped {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("second drain retires instance");
+        assert!(fixture.task.await.expect("coordinator join").is_ok());
+    }
+
+    #[tokio::test]
+    // The fixture owns control and VM resources until the coordinator task joins.
+    #[allow(clippy::significant_drop_tightening)]
+    async fn drain_deadline_retires_without_failure_backoff() {
+        let count = default_count_state();
+        count.blocked.store(true, Ordering::Relaxed);
+        let fixture =
+            start_drain_fixture(count.clone(), false, false, Duration::from_millis(40)).await;
+        fixture.control.request_drain();
+        count.started.notified().await;
+        assert!(fixture.task.await.expect("coordinator join").is_ok());
+        assert!(
+            fixture
+                .targets
+                .count
+                .responses
+                .lock()
+                .expect("count responses")
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::significant_drop_tightening)]
+    // The fixture retains the coordinator control and VM until its joined task
+    // proves the blocked durable transition settled within the total budget.
+    async fn drain_deadline_includes_mark_draining_transition() {
+        let count = default_count_state();
+        let fixture = start_drain_fixture(count, false, true, Duration::from_millis(40)).await;
+        fixture.control.request_drain();
+        fixture.ownership.drain_started.notified().await;
+        assert!(
+            timeout(Duration::from_secs(1), fixture.task)
+                .await
+                .expect("mark draining deadline")
+                .expect("coordinator join")
+                .is_ok()
+        );
+        assert_eq!(fixture.vm.destroys.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    // The fixture owns control and VM resources until the coordinator task joins.
+    #[allow(clippy::significant_drop_tightening)]
+    async fn lease_loss_during_blocked_drain_count_still_cleans() {
+        let count = default_count_state();
+        count.blocked.store(true, Ordering::Relaxed);
+        let fixture =
+            start_drain_fixture(count.clone(), false, false, Duration::from_secs(2)).await;
+        fixture.control.request_drain();
+        count.started.notified().await;
+        fixture.ownership.renew_fails.store(true, Ordering::Relaxed);
+        let result = timeout(Duration::from_secs(1), fixture.task)
+            .await
+            .expect("lease loss cleanup")
+            .expect("coordinator join");
+        assert!(result.is_err());
+        assert_eq!(fixture.vm.destroys.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    #[allow(clippy::significant_drop_tightening)]
+    // The blocked count future remains owned while cancellation drives normal
+    // teardown, so the VM cannot be abandoned by the parent request.
+    async fn cancellation_during_blocked_drain_count_still_cleans() {
+        let count = default_count_state();
+        count.blocked.store(true, Ordering::Relaxed);
+        let fixture = start_drain_fixture(count, false, false, Duration::from_secs(2)).await;
+        fixture.control.request_drain();
+        fixture.targets.count.started.notified().await;
+        fixture.control.cancel();
+        assert!(
+            timeout(Duration::from_secs(1), fixture.task)
+                .await
+                .expect("cancellation cleanup")
+                .expect("coordinator join")
+                .is_ok()
+        );
+        assert_eq!(fixture.vm.destroys.load(Ordering::Relaxed), 1);
+    }
+
     async fn respond_status_after_gate(
         mut peer: DuplexStream,
         status: u16,
@@ -1908,6 +2632,10 @@ mod tests {
             renewals: AtomicUsize::new(0),
             renew_fails: AtomicBool::new(false),
             stopping_fails: AtomicBool::new(false),
+            drain_conflict: AtomicBool::new(false),
+            drain_blocked: AtomicBool::new(false),
+            drain_started: Notify::new(),
+            drain_release: Notify::new(),
             promote_fails: AtomicBool::new(false),
             promote_started: Notify::new(),
             promote_release: Notify::new(),
@@ -1925,7 +2653,10 @@ mod tests {
             failures.clone(),
             resolver.clone(),
             provider.clone(),
-            Arc::new(MockTargets { target: None }),
+            Arc::new(MockTargets {
+                target: None,
+                count: default_count_state(),
+            }),
             GatewayServiceRegistry::new(1, 1).expect("registry"),
             "service.test",
             supervisor_policy(
@@ -1967,6 +2698,9 @@ mod tests {
     }
 
     #[tokio::test]
+    // The test keeps the full startup, dispatch, and cleanup ordering in one
+    // scenario; the added drain controls push it just over Clippy's line bound.
+    #[allow(clippy::too_many_lines)]
     async fn readiness_registers_promotes_and_explicit_shutdown_cleans() {
         let identity = identity();
         let owner =
@@ -2010,6 +2744,10 @@ mod tests {
             renewals: AtomicUsize::new(0),
             renew_fails: AtomicBool::new(false),
             stopping_fails: AtomicBool::new(false),
+            drain_conflict: AtomicBool::new(false),
+            drain_blocked: AtomicBool::new(false),
+            drain_started: Notify::new(),
+            drain_release: Notify::new(),
             promote_fails: AtomicBool::new(false),
             promote_started: Notify::new(),
             promote_release: Notify::new(),
@@ -2027,7 +2765,10 @@ mod tests {
             failures.clone(),
             resolver.clone(),
             provider.clone(),
-            Arc::new(MockTargets { target: None }),
+            Arc::new(MockTargets {
+                target: None,
+                count: default_count_state(),
+            }),
             GatewayServiceRegistry::new(1, 1).expect("registry"),
             "service.test",
             supervisor_policy(
@@ -2109,6 +2850,10 @@ mod tests {
             renewals: AtomicUsize::new(0),
             renew_fails: AtomicBool::new(false),
             stopping_fails: AtomicBool::new(false),
+            drain_conflict: AtomicBool::new(false),
+            drain_blocked: AtomicBool::new(false),
+            drain_started: Notify::new(),
+            drain_release: Notify::new(),
             promote_fails: AtomicBool::new(false),
             promote_started: Notify::new(),
             promote_release: Notify::new(),
@@ -2128,7 +2873,10 @@ mod tests {
             failures.clone(),
             resolver.clone(),
             provider,
-            Arc::new(MockTargets { target: None }),
+            Arc::new(MockTargets {
+                target: None,
+                count: default_count_state(),
+            }),
             GatewayServiceRegistry::new(1, 1).expect("registry"),
             "service.test",
             supervisor_policy(
@@ -2214,6 +2962,10 @@ mod tests {
             renewals: AtomicUsize::new(0),
             renew_fails: AtomicBool::new(false),
             stopping_fails: AtomicBool::new(false),
+            drain_conflict: AtomicBool::new(false),
+            drain_blocked: AtomicBool::new(false),
+            drain_started: Notify::new(),
+            drain_release: Notify::new(),
             promote_fails: AtomicBool::new(true),
             promote_started: Notify::new(),
             promote_release: Notify::new(),
@@ -2230,7 +2982,10 @@ mod tests {
             failure_store(),
             resolver.clone(),
             provider,
-            Arc::new(MockTargets { target: None }),
+            Arc::new(MockTargets {
+                target: None,
+                count: default_count_state(),
+            }),
             GatewayServiceRegistry::new(1, 1).expect("registry"),
             "service.test",
             supervisor_policy(
@@ -2312,6 +3067,10 @@ mod tests {
             renewals: AtomicUsize::new(0),
             renew_fails: AtomicBool::new(false),
             stopping_fails: AtomicBool::new(false),
+            drain_conflict: AtomicBool::new(false),
+            drain_blocked: AtomicBool::new(false),
+            drain_started: Notify::new(),
+            drain_release: Notify::new(),
             promote_fails: AtomicBool::new(false),
             promote_started: Notify::new(),
             promote_release: Notify::new(),
@@ -2329,7 +3088,10 @@ mod tests {
             failures.clone(),
             resolver.clone(),
             provider,
-            Arc::new(MockTargets { target: None }),
+            Arc::new(MockTargets {
+                target: None,
+                count: default_count_state(),
+            }),
             GatewayServiceRegistry::new(1, 1).expect("registry"),
             "service.test",
             supervisor_policy(
@@ -2424,6 +3186,10 @@ mod tests {
             renewals: AtomicUsize::new(0),
             renew_fails: AtomicBool::new(false),
             stopping_fails: AtomicBool::new(false),
+            drain_conflict: AtomicBool::new(false),
+            drain_blocked: AtomicBool::new(false),
+            drain_started: Notify::new(),
+            drain_release: Notify::new(),
             promote_fails: AtomicBool::new(false),
             promote_started: Notify::new(),
             promote_release: Notify::new(),
@@ -2444,7 +3210,10 @@ mod tests {
             failures.clone(),
             resolver.clone(),
             provider,
-            Arc::new(MockTargets { target: None }),
+            Arc::new(MockTargets {
+                target: None,
+                count: default_count_state(),
+            }),
             GatewayServiceRegistry::new(1, 1).expect("registry"),
             "service.test",
             supervisor_policy(
@@ -2528,6 +3297,10 @@ mod tests {
             renewals: AtomicUsize::new(0),
             renew_fails: AtomicBool::new(false),
             stopping_fails: AtomicBool::new(false),
+            drain_conflict: AtomicBool::new(false),
+            drain_blocked: AtomicBool::new(false),
+            drain_started: Notify::new(),
+            drain_release: Notify::new(),
             promote_fails: AtomicBool::new(false),
             promote_started: Notify::new(),
             promote_release: Notify::new(),
@@ -2544,7 +3317,10 @@ mod tests {
             failure_store(),
             resolver.clone(),
             provider.clone(),
-            Arc::new(MockTargets { target: None }),
+            Arc::new(MockTargets {
+                target: None,
+                count: default_count_state(),
+            }),
             GatewayServiceRegistry::new(1, 1).expect("registry"),
             "service.test",
             supervisor_policy(
@@ -2627,6 +3403,10 @@ mod tests {
             renewals: AtomicUsize::new(0),
             renew_fails: AtomicBool::new(false),
             stopping_fails: AtomicBool::new(false),
+            drain_conflict: AtomicBool::new(false),
+            drain_blocked: AtomicBool::new(false),
+            drain_started: Notify::new(),
+            drain_release: Notify::new(),
             promote_fails: AtomicBool::new(false),
             promote_started: Notify::new(),
             promote_release: Notify::new(),
@@ -2643,7 +3423,10 @@ mod tests {
             failure_store(),
             resolver.clone(),
             provider,
-            Arc::new(MockTargets { target: None }),
+            Arc::new(MockTargets {
+                target: None,
+                count: default_count_state(),
+            }),
             GatewayServiceRegistry::new(1, 1).expect("registry"),
             "service.test",
             supervisor_policy(
@@ -2720,6 +3503,10 @@ mod tests {
             renewals: AtomicUsize::new(0),
             renew_fails: AtomicBool::new(false),
             stopping_fails: AtomicBool::new(false),
+            drain_conflict: AtomicBool::new(false),
+            drain_blocked: AtomicBool::new(false),
+            drain_started: Notify::new(),
+            drain_release: Notify::new(),
             promote_fails: AtomicBool::new(false),
             promote_started: Notify::new(),
             promote_release: Notify::new(),
@@ -2738,6 +3525,7 @@ mod tests {
             provider,
             Arc::new(MockTargets {
                 target: Some(restore_target(identity, Uuid::from_u128(5))),
+                count: default_count_state(),
             }),
             GatewayServiceRegistry::new(1, 1).expect("registry"),
             "service.test",
@@ -2815,6 +3603,10 @@ mod tests {
             renewals: AtomicUsize::new(0),
             renew_fails: AtomicBool::new(false),
             stopping_fails: AtomicBool::new(false),
+            drain_conflict: AtomicBool::new(false),
+            drain_blocked: AtomicBool::new(false),
+            drain_started: Notify::new(),
+            drain_release: Notify::new(),
             promote_fails: AtomicBool::new(false),
             promote_started: Notify::new(),
             promote_release: Notify::new(),
@@ -2970,6 +3762,10 @@ mod tests {
             renewals: AtomicUsize::new(0),
             renew_fails: AtomicBool::new(false),
             stopping_fails: AtomicBool::new(false),
+            drain_conflict: AtomicBool::new(false),
+            drain_blocked: AtomicBool::new(false),
+            drain_started: Notify::new(),
+            drain_release: Notify::new(),
             promote_fails: AtomicBool::new(false),
             promote_started: Notify::new(),
             promote_release: Notify::new(),
@@ -2988,7 +3784,10 @@ mod tests {
             failures.clone(),
             resolver.clone(),
             provider,
-            Arc::new(MockTargets { target: None }),
+            Arc::new(MockTargets {
+                target: None,
+                count: default_count_state(),
+            }),
             GatewayServiceRegistry::new(1, 1).expect("registry"),
             "service.test",
             supervisor_policy_with_health(
@@ -3136,6 +3935,10 @@ mod tests {
             renewals: AtomicUsize::new(0),
             renew_fails: AtomicBool::new(false),
             stopping_fails: AtomicBool::new(false),
+            drain_conflict: AtomicBool::new(false),
+            drain_blocked: AtomicBool::new(false),
+            drain_started: Notify::new(),
+            drain_release: Notify::new(),
             promote_fails: AtomicBool::new(false),
             promote_started: Notify::new(),
             promote_release: Notify::new(),
@@ -3152,7 +3955,10 @@ mod tests {
             failure_store(),
             resolver.clone(),
             provider,
-            Arc::new(MockTargets { target: None }),
+            Arc::new(MockTargets {
+                target: None,
+                count: default_count_state(),
+            }),
             GatewayServiceRegistry::new(1, 1).expect("registry"),
             "service.test",
             supervisor_policy_with_health(
@@ -3253,6 +4059,10 @@ mod tests {
             renewals: AtomicUsize::new(0),
             renew_fails: AtomicBool::new(false),
             stopping_fails: AtomicBool::new(false),
+            drain_conflict: AtomicBool::new(false),
+            drain_blocked: AtomicBool::new(false),
+            drain_started: Notify::new(),
+            drain_release: Notify::new(),
             promote_fails: AtomicBool::new(false),
             promote_started: Notify::new(),
             promote_release: Notify::new(),
@@ -3269,7 +4079,10 @@ mod tests {
             failure_store(),
             resolver.clone(),
             provider,
-            Arc::new(MockTargets { target: None }),
+            Arc::new(MockTargets {
+                target: None,
+                count: default_count_state(),
+            }),
             GatewayServiceRegistry::new(1, 1).expect("registry"),
             "service.test",
             supervisor_policy_with_health(

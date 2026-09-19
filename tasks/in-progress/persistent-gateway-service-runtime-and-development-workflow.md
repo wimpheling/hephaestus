@@ -122,6 +122,25 @@ cleaned instances consume capacity. A gateway may have at most two concurrent
 instances, and a new replacement waits until the preceding drain is cleaned.
 Replacement slots are reserved so a full serving pool can still upgrade.
 
+Startup bookkeeping owns claim futures as well as coordinator futures. It
+captures both the lease deadline and total startup deadline before starting a
+claim, and cancellation still waits for that claim to settle. A late claim is
+retained for cleanup without provisioning a VM. An unavailable claim response
+may hide a committed row, so its capacity reservation remains quarantined until
+authoritative host inventory and a serialized database claim-resolution barrier
+resolve that uncertainty. Only a definite claim rejection or confirmed physical
+and durable cleanup releases live capacity.
+The startup allowance is released once readiness is reached or the startup
+operation has settled, independently of the retained live reservation.
+
+The application must continuously poll the parent-owned job collection while
+Caddy reconciliation is in progress. Cancelling an individual polling wait
+must not drop a claim, coordinator, or retained cleanup responsibility. Shutdown
+cancels and settles the owned jobs and preserves unresolved resources for the
+existing recovery contract; it must not rely on dropping a task set to abort
+provisioning. These bookkeeping and application integration requirements remain
+pending until their implementation and acceptance checks are complete.
+
 The initial timing policy is a 30-second ownership lease renewed every five
 seconds, a 120-second startup/readiness budget, health checks every ten seconds
 with shutdown after three consecutive failures, and a 30-second drain budget.
@@ -765,6 +784,19 @@ check, strict Clippy, formatting, and 58 library tests passed.
   marker; the log is `/tmp/heph-failure-verify-real.log`. The failure test
   confirmed retry backoff, report-before-cleaned ordering, and preservation of
   the active and desired revision pointers.
+
+- [x] Add coordinator graceful drain for accepted service invocations. A
+  parent drain request is coalesced, fenced `mark_draining` conflicts preserve
+  `Ready` without retry spin, and the exact instance/fencing count remains
+  authoritative while the registry continues dispatching already accepted
+  calls. The total drain budget includes the durable transition, bounded
+  unavailable-count retries, and teardown; normal drained or deadline
+  retirement does not record failure backoff. Focused edge coverage now has
+  107 tests, strict edge/PostgreSQL all-target Clippy and formatting pass, and
+  the three real PostgreSQL coordinator tests passed with
+  `REAL_POSTGRES_CONNECTED_AND_MIGRATED=1 max_migration=76`; log:
+  `/tmp/heph-drain-review-pg.log`. Global reaping, supervisor scheduling,
+  Caddy cutover/exposure, and release UI integration remain pending.
 
 - [x] Add the caller-owned durable service lease monitor. It accepts the
   pre-claim monotonic deadline, renews only the exact instance/owner/fence,
