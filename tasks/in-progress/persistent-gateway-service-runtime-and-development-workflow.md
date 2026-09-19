@@ -1743,3 +1743,22 @@ workspace formatting, and workspace rustdoc passed in
 `/tmp/heph-outbox-overlay-doc.log`. The recurring populated PG/NATS shutdown
 failure remains unproven and this checkpoint does not claim to fix it; a
 separate reproduction is required.
+
+Authenticated service-log RPC checkpoint (2026-09-19): the real libkrun/Caddy
+golden path exercised `ListGatewayServiceLogs` through the generated Connect
+client and the production application-role pool. It returned two fixture-seeded
+stdout records across a signed scope-bound cursor, verified exact epoch
+metadata, app-role access, tampered/cross-scope cursor rejection, outsider and
+revoked-member denial, unauthenticated denial, and application-pool closure on
+shutdown. The run passed 35 golden tests and 8 gateway-postgres tests with
+`REAL_POSTGRES_CONNECTED_AND_MIGRATED=1 max_migration=80`; the RPC marker was
+`REAL_GATEWAY_SERVICE_LOG_RPC=1 app_role=hephaestus_app payload_cursor=1
+denied=outsider+revoked+unauthenticated`. Evidence is
+`/home/a/heph-gateway-rpc-isolated-v4.log`, from the exact `bfd9dfd` overlay
+`/home/a/heph-gateway-rpc-overlay-bfd9dfd` and dedicated target
+`/home/a/heph-gateway-rpc-target-bfd9dfd`. Final pinned Rust 1.88 formatting,
+strict app/rpc-proto Clippy, default golden compilation, 77 app unit tests,
+13 descriptor-policy tests, rustdoc, and generated-protobuf consistency passed;
+the hash comparison is `/home/a/heph-gateway-rpc-sha256-manifest.txt`.
+The rows are transactionally fixture-seeded for endpoint acceptance; production
+guest-log writer attachment, durable retention, and UI remain pending.

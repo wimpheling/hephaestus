@@ -33,9 +33,9 @@ use capability_domain::{
 };
 use control_plane_postgres::launch::PgRunLaunchAuthorizer;
 use control_plane_postgres::{
-    ControlPlanePool, connect as connect_control_plane, connect_worker as connect_oci_worker,
-    is_update_hook_run, load_vm_launch_contract, pending_update_admissions,
-    recoverable_update_hook_run_ids,
+    ControlPlanePool, connect as connect_control_plane, connect_app as connect_application,
+    connect_worker as connect_oci_worker, is_update_hook_run, load_vm_launch_contract,
+    pending_update_admissions, recoverable_update_hook_run_ids,
 };
 use event_postgres::{ReleaseOutboxPublisher, ensure_release_jetstream_topology};
 use forge_postgres::PgForgeRepository;
@@ -582,6 +582,7 @@ impl AppConfig {
 /// Constructed application whose external tasks have not started.
 pub struct HephaestusApp {
     pool: PgPool,
+    application_pool: PgPool,
     nats_client: async_nats::Client,
     jetstream: async_nats::jetstream::Context,
     forge: Arc<PgForgeRepository>,
@@ -1203,6 +1204,9 @@ impl HephaestusApp {
             .await
             .map_err(component("PostgreSQL connection"))?;
         verify_database_contract(&pool).await?;
+        let application_pool = connect_application(&config.database_url, 10)
+            .await
+            .map_err(component("PostgreSQL application-role connection"))?;
 
         let storage = Arc::new(
             GitStorage::initialize(&config.repository_root)
@@ -1557,6 +1561,7 @@ impl HephaestusApp {
 
         Ok(Self {
             pool,
+            application_pool,
             nats_client,
             jetstream,
             forge,
@@ -1659,6 +1664,7 @@ impl HephaestusApp {
         let rpc = rpc::service(
             rpc::ApplicationDependencies::new(
                 self.pool.clone(),
+                self.application_pool.clone(),
                 Arc::clone(&self.forge),
                 Arc::new(event_postgres::PostgresMutationReceiptReader::new(
                     self.pool.clone(),
@@ -2080,6 +2086,7 @@ impl HephaestusApp {
             cancellation,
             tasks,
             pool: self.pool,
+            application_pool: self.application_pool,
             nats_client: self.nats_client,
             jetstream: self.jetstream,
             forge: self.forge,
@@ -3722,6 +3729,7 @@ pub struct RunningHephaestus {
     cancellation: CancellationToken,
     tasks: Vec<JoinHandle<Result<(), String>>>,
     pool: PgPool,
+    application_pool: PgPool,
     nats_client: async_nats::Client,
     jetstream: async_nats::jetstream::Context,
     forge: Arc<PgForgeRepository>,
@@ -3739,6 +3747,14 @@ impl RunningHephaestus {
     #[must_use]
     pub const fn http_addr(&self) -> SocketAddr {
         self.http_addr
+    }
+
+    /// Returns a retained application-role pool for daemon integration checks.
+    #[cfg(feature = "test-fixtures")]
+    #[doc(hidden)]
+    #[must_use]
+    pub fn application_pool_for_test(&self) -> ControlPlanePool {
+        self.application_pool.clone()
     }
 
     /// Waits for one persisted lifecycle event.
@@ -3823,6 +3839,7 @@ impl RunningHephaestus {
             first_error.get_or_insert_with(|| AppError::Shutdown(error.to_string()));
         }
         self.pool.close().await;
+        self.application_pool.close().await;
         first_error.map_or(Ok(()), Err)
     }
 

@@ -9640,8 +9640,8 @@ pub struct ListGatewayServiceLogsRequestView<'a> {
     ///
     /// Field 2: `limit`
     pub limit: u32,
-    /// Opaque cursor bound to the exact five-field scope. The planned signed
-    /// cursor codec accepts at most 192 encoded bytes; malformed, tampered, or
+    /// Opaque cursor bound to the exact five-field scope. The signed cursor
+    /// codec accepts at most 192 encoded bytes; malformed, tampered, or
     /// cross-scope cursors are invalid rather than plain sequence numbers.
     ///
     /// Field 3: `after`
@@ -9973,8 +9973,8 @@ impl ListGatewayServiceLogsRequestOwnedView {
     pub fn limit(&self) -> u32 {
         self.0.reborrow().limit
     }
-    /// Opaque cursor bound to the exact five-field scope. The planned signed
-    /// cursor codec accepts at most 192 encoded bytes; malformed, tampered, or
+    /// Opaque cursor bound to the exact five-field scope. The signed cursor
+    /// codec accepts at most 192 encoded bytes; malformed, tampered, or
     /// cross-scope cursors are invalid rather than plain sequence numbers.
     ///
     /// Field 3: `after`

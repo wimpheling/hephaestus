@@ -634,6 +634,12 @@ defmodule Hephaestus.Gateway.V1.GatewayService.Service do
   )
 
   rpc(
+    :ListGatewayServiceLogs,
+    Hephaestus.Gateway.V1.ListGatewayServiceLogsRequest,
+    Hephaestus.Gateway.V1.ListGatewayServiceLogsResponse
+  )
+
+  rpc(
     :InstallReleaseGateways,
     Hephaestus.Gateway.V1.InstallReleaseGatewaysRequest,
     Hephaestus.Gateway.V1.InstallReleaseGatewaysResponse

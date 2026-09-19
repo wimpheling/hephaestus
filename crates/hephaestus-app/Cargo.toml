@@ -18,6 +18,7 @@ test-fixtures = []
 
 [dependencies]
 agent-config = { path = "../agent-config" }
+base64.workspace = true
 builder-catalog-application = { path = "../builder-catalog-application" }
 builder-catalog-domain = { path = "../builder-catalog-domain" }
 builder-catalog-postgres = { path = "../builder-catalog-postgres" }

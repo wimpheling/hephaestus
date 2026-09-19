@@ -5732,8 +5732,8 @@ pub struct ListGatewayServiceLogsRequest {
         skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_u32"
     )]
     pub limit: u32,
-    /// Opaque cursor bound to the exact five-field scope. The planned signed
-    /// cursor codec accepts at most 192 encoded bytes; malformed, tampered, or
+    /// Opaque cursor bound to the exact five-field scope. The signed cursor
+    /// codec accepts at most 192 encoded bytes; malformed, tampered, or
     /// cross-scope cursors are invalid rather than plain sequence numbers.
     ///
     /// Field 3: `after`

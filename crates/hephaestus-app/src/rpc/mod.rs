@@ -138,6 +138,7 @@ pub fn mediator_signing_key(internal_token: &[u8]) -> [u8; 32] {
 /// Application dependencies shared by the generated Connect services.
 pub(crate) struct ApplicationDependencies {
     pool: PgPool,
+    application_pool: PgPool,
     forge: Arc<PgForgeRepository>,
     mutation_receipt_reader: Arc<dyn MutationReceiptReader>,
     identity_resolver: Arc<dyn IdempotentIdentityResolver>,
@@ -146,12 +147,14 @@ pub(crate) struct ApplicationDependencies {
 impl ApplicationDependencies {
     pub(crate) fn new(
         pool: PgPool,
+        application_pool: PgPool,
         forge: Arc<PgForgeRepository>,
         mutation_receipt_reader: Arc<dyn MutationReceiptReader>,
         identity_resolver: Arc<dyn IdempotentIdentityResolver>,
     ) -> Self {
         Self {
             pool,
+            application_pool,
             forge,
             mutation_receipt_reader,
             identity_resolver,
@@ -201,9 +204,11 @@ pub(crate) fn service(
     let router = gateway::register(
         router,
         pool,
+        &applications.application_pool,
         Arc::clone(&storage),
         MediatorAuthenticator::new(mediator_signing_key),
         mutation_receipts.clone(),
+        cursor_key,
     );
     let router = rpc_proto::connect::hephaestus::instance::v1::AgentInstanceServiceExt::register(
         instance, router,

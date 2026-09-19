@@ -2,6 +2,8 @@
 
 mod configure_gateway;
 mod install_release_gateways;
+mod service_log_cursor;
+mod service_logs;
 
 use super::{
     MediatorAuthenticator, MutationReceipts, RpcError, into_connect_error, mutation_receipt,
@@ -12,6 +14,7 @@ use connectrpc::{RequestContext, Response, Router, ServiceRequest, ServiceResult
 use control_plane_postgres::ControlPlanePool as PgPool;
 use gateway_postgres::{
     GatewayManagementError, GatewayPage, PostgresGatewayInstaller, PostgresGatewayManagement,
+    PostgresGatewayServiceLogReader,
 };
 use rpc_proto::{
     connect::hephaestus::gateway::v1::{GatewayService, GatewayServiceExt},
@@ -23,6 +26,7 @@ use rpc_proto::{
             GatewayMailboxBinding, GatewayMailboxPublication, GatewayRevision, GatewayRoute,
             GatewaySummary, GetGatewayRequest, GetGatewayResponse, InstallReleaseGatewaysRequest,
             InstallReleaseGatewaysResponse, ListGatewayIngressRequest, ListGatewayIngressResponse,
+            ListGatewayServiceLogsRequest, ListGatewayServiceLogsResponse,
             ListMailboxBindingsRequest, ListMailboxBindingsResponse,
             ListMailboxPublicationsRequest, ListMailboxPublicationsResponse,
             ListProjectGatewaysRequest, ListProjectGatewaysResponse,
@@ -44,14 +48,18 @@ pub struct GatewayRpc {
     installer_application: GatewayInstallApplication,
     authenticator: MediatorAuthenticator,
     receipts: MutationReceipts,
+    service_logs: PostgresGatewayServiceLogReader,
+    service_log_cursor: service_log_cursor::ServiceLogCursorCodec,
 }
 
 impl GatewayRpc {
     fn new(
         pool: &PgPool,
+        application_pool: &PgPool,
         storage: Arc<forge_service::GitStorage>,
         authenticator: MediatorAuthenticator,
         receipts: MutationReceipts,
+        cursor_key: [u8; 32],
     ) -> Self {
         let authorizer = Arc::new(authz_postgres::PostgresMelangeAuthorizer);
         let installer = PostgresGatewayInstaller::new(pool.clone(), Arc::clone(&authorizer));
@@ -60,6 +68,11 @@ impl GatewayRpc {
             installer_application: GatewayInstallApplication::new(installer, storage),
             authenticator,
             receipts,
+            service_logs: PostgresGatewayServiceLogReader::new(
+                application_pool.clone(),
+                Arc::clone(&authorizer),
+            ),
+            service_log_cursor: service_log_cursor::ServiceLogCursorCodec::new(cursor_key),
         }
     }
 }
@@ -68,12 +81,21 @@ impl GatewayRpc {
 pub fn register(
     router: Router,
     pool: &PgPool,
+    application_pool: &PgPool,
     storage: Arc<forge_service::GitStorage>,
     authenticator: MediatorAuthenticator,
     receipts: MutationReceipts,
+    cursor_key: [u8; 32],
 ) -> Router {
     GatewayServiceExt::register(
-        Arc::new(GatewayRpc::new(pool, storage, authenticator, receipts)),
+        Arc::new(GatewayRpc::new(
+            pool,
+            application_pool,
+            storage,
+            authenticator,
+            receipts,
+            cursor_key,
+        )),
         router,
     )
 }
@@ -131,6 +153,14 @@ impl GatewayService for GatewayRpc {
             .into(),
             ..Default::default()
         })
+    }
+
+    async fn list_gateway_service_logs(
+        &self,
+        ctx: RequestContext,
+        message: ServiceRequest<'_, ListGatewayServiceLogsRequest>,
+    ) -> ServiceResult<ListGatewayServiceLogsResponse> {
+        service_logs::handle(self, ctx, message).await
     }
 
     async fn install_release_gateways(
@@ -351,7 +381,7 @@ impl GatewayService for GatewayRpc {
     }
 }
 
-fn query(
+pub(super) fn query(
     ctx: &RequestContext,
     authenticator: &MediatorAuthenticator,
     method: &str,
@@ -363,7 +393,7 @@ fn query(
     )
     .map_err(into_connect_error)
 }
-fn id(value: Option<&OpaqueId>) -> Result<Uuid, connectrpc::ConnectError> {
+pub(super) fn id(value: Option<&OpaqueId>) -> Result<Uuid, connectrpc::ConnectError> {
     value
         .ok_or_else(|| into_connect_error(RpcError::InvalidArgument))
         .and_then(|value| {
@@ -436,7 +466,7 @@ fn opaque(value: Uuid) -> OpaqueId {
         ..Default::default()
     }
 }
-fn timestamp(value: OffsetDateTime) -> buffa_types::google::protobuf::Timestamp {
+pub(super) fn timestamp(value: OffsetDateTime) -> buffa_types::google::protobuf::Timestamp {
     buffa_types::google::protobuf::Timestamp {
         seconds: value.unix_timestamp(),
         nanos: value.nanosecond().cast_signed(),

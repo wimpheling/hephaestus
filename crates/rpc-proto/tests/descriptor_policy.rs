@@ -61,7 +61,7 @@ fn reflection_inventory_contains_every_application_service_and_method() {
             .iter()
             .map(|service| service.methods().len())
             .sum::<usize>(),
-        87
+        88
     );
 
     let reflector = connectrpc_reflection::Reflector::from_descriptor_pool(pool)
@@ -357,7 +357,7 @@ fn every_method_declares_auth_kind_limits_and_retry_policy() {
         }
     }
 
-    assert_eq!(methods, 87, "review the policy when adding an RPC method");
+    assert_eq!(methods, 88, "review the policy when adding an RPC method");
 }
 
 #[test]
@@ -865,6 +865,22 @@ fn collections_are_paginated_with_stable_ordering() {
             if method.name().starts_with("List") || !collection_fields.is_empty() {
                 let input = pool.message(method.input());
                 let qualified = format!("{}/{}", service.full_name(), method.name());
+                if qualified == "hephaestus.gateway.v1.GatewayService/ListGatewayServiceLogs" {
+                    assert!(
+                        message_field_is(&pool, input, "after", "hephaestus.common.v1.Cursor"),
+                        "{qualified} must use its scope-bound cursor"
+                    );
+                    assert!(
+                        message_field_is(
+                            &pool,
+                            output,
+                            "next_after",
+                            "hephaestus.common.v1.Cursor"
+                        ),
+                        "{qualified} must return its scope-bound cursor"
+                    );
+                    continue;
+                }
                 for collection_field in &collection_fields {
                     let page_field = if collection_fields.len() == 1 {
                         "page".to_owned()
