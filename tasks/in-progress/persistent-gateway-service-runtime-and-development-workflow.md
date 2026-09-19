@@ -1683,3 +1683,20 @@ Pinned Rust 1.88 formatting, strict app Clippy, and workspace rustdoc passed
 in `/tmp/heph-revoked-active-teardown-fmt-v3.log`,
 `/tmp/heph-revoked-active-teardown-clippy-v2.log`, and
 `/tmp/heph-revoked-active-teardown-doc-v1.log`.
+
+Native development documentation checkpoint (2026-09-19): the cooking-service
+README and `docs/persistent-gateway-services.md` now describe the separate
+native host smoke path and its boundary from managed VM/Caddy authority. With
+Rust 1.88, the locked offline native suite passed 4 tests in
+`/tmp/heph-cooking-native-doc-test-v2.log`, and the release build completed in
+`/tmp/heph-cooking-native-doc-build-v2.log`. The exact documented `cargo run`
+path served `ready` and `healthy`, returned the same `startup_id` from both
+identity routes, and exited through process-group-scoped cleanup with port
+8080 clear; evidence is `/tmp/heph-cooking-native-doc-run-v2.log`. The
+debugger command was documented but not interactively exercised. The docs
+record the concrete Connect operations (`SetDraftVersion`, `PublishRelease`,
+`InstallReleaseGateways`, and `ConfigureGateway`) and state that the published
+cooking-service build/publish/install/configure/readiness/Caddy/identity/
+cleanup acceptance remains pending, while platform transport, bridge, Caddy,
+and daemon lifecycle proofs are already covered by repository tests. Durable
+service-log RPC/writer work remains pending.

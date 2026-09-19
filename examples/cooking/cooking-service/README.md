@@ -16,8 +16,9 @@ upgrade, trailer, or request-body behavior.
 Run the native tests and build with the repository toolchain:
 
 ```sh
-cargo test --manifest-path examples/cooking/cooking-service/Cargo.toml
-cargo build --manifest-path examples/cooking/cooking-service/Cargo.toml \
+cargo +1.88.0 test --manifest-path examples/cooking/cooking-service/Cargo.toml \
+  --locked --offline
+cargo +1.88.0 build --manifest-path examples/cooking/cooking-service/Cargo.toml \
   --locked --offline --release
 ```
 
@@ -31,15 +32,23 @@ For a local smoke request, run the binary in one terminal and use `curl` from
 another:
 
 ```sh
-cargo run --manifest-path examples/cooking/cooking-service/Cargo.toml --release
+cargo +1.88.0 run --manifest-path examples/cooking/cooking-service/Cargo.toml \
+  --locked --offline --release
 curl --http1.1 http://127.0.0.1:8080/service
 curl --http1.1 http://127.0.0.1:8080/service/identity
 ```
+
+For the complete native and managed workflow, including readiness, health,
+identity, debugger, port, cleanup, and live-reload boundaries, see
+[`docs/persistent-gateway-services.md`](../../../docs/persistent-gateway-services.md).
 
 The production build is the repository's normal Git/build/release workflow:
 push this source with `agent.toml` and `heph.gateways.toml`, wait for the
 isolated build, set a draft version, publish the release, and call
 `InstallReleaseGateways`. The current repository has those operations in its
 Connect APIs and cooking acceptance helpers; it does not provide a standalone
-publish/install CLI. Persistent-service Caddy forwarding and managed lifecycle
-acceptance remain pending platform work.
+publish/install CLI. Platform-level private-service transport, host bridge,
+Caddy adapter, and daemon lifecycle proofs are committed and covered by
+focused and real-VM tests. The published cooking-service workflow still needs
+its own end-to-end acceptance across build, publish, install, configure,
+readiness, Caddy request, identity, and cleanup.
