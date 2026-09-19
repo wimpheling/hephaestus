@@ -1524,6 +1524,7 @@ dependencies = [
  "time",
  "tokio",
  "tokio-util",
+ "tracing",
  "uuid",
  "vm-fake",
  "vm-trait",

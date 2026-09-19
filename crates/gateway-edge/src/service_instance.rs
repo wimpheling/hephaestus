@@ -6,12 +6,13 @@ use std::{
 };
 
 use tokio::{
-    sync::{mpsc, oneshot, watch},
+    sync::{broadcast, mpsc, oneshot, watch},
     time::{self, Instant},
 };
 use tokio_util::sync::CancellationToken;
 use vm_trait::{StopMode, VmError, VmExit, VmInstance};
 
+use crate::service_diagnostics::{ServiceDiagnostics, ServiceDiagnosticsSnapshot};
 use crate::{
     GatewayServiceFailure, GatewayServiceFailureCode, GatewayServiceLaunch,
     GatewayServiceLaunchResolver, ServiceProbeError, ServiceProbePolicy,
@@ -125,6 +126,7 @@ pub enum ServiceInstanceError {
 pub struct ServiceInstanceHandle {
     control: Arc<ControlInner>,
     state: watch::Receiver<ServiceWorkerState>,
+    diagnostics: watch::Receiver<ServiceDiagnosticsSnapshot>,
 }
 
 struct ControlInner {
@@ -161,6 +163,18 @@ impl ServiceInstanceHandle {
             .copied()
     }
 
+    /// Returns the latest content-free lifecycle diagnostics snapshot.
+    #[must_use]
+    pub fn diagnostics(&self) -> ServiceDiagnosticsSnapshot {
+        *self.diagnostics.borrow()
+    }
+
+    /// Subscribes to content-free lifecycle diagnostics updates.
+    #[must_use]
+    pub fn subscribe_diagnostics(&self) -> watch::Receiver<ServiceDiagnosticsSnapshot> {
+        self.diagnostics.clone()
+    }
+
     /// Requests one bounded health probe. Dropping this future does not stop
     /// the worker or abandon VM cleanup.
     ///
@@ -195,6 +209,7 @@ pub struct ServiceInstance {
     cancellation: CancellationToken,
     states: watch::Sender<ServiceWorkerState>,
     failure: Arc<RwLock<Option<GatewayServiceFailure>>>,
+    diagnostics: watch::Sender<ServiceDiagnosticsSnapshot>,
 }
 
 /// Creates a worker for one exact, already-provisioned service VM.
@@ -246,6 +261,7 @@ pub fn new_service_instance(
     let cancellation = CancellationToken::new();
     let (states, state_receiver) = watch::channel(ServiceWorkerState::Provisioned);
     let failure = Arc::new(RwLock::new(None));
+    let (diagnostics, diagnostics_receiver) = watch::channel(ServiceDiagnosticsSnapshot::default());
     let handle = ServiceInstanceHandle {
         control: Arc::new(ControlInner {
             commands,
@@ -253,6 +269,7 @@ pub fn new_service_instance(
             failure: Arc::clone(&failure),
         }),
         state: state_receiver.clone(),
+        diagnostics: diagnostics_receiver,
     };
     let worker = ServiceInstance {
         launch,
@@ -264,6 +281,7 @@ pub fn new_service_instance(
         cancellation,
         states,
         failure,
+        diagnostics,
     };
     Ok((handle, state_receiver, worker))
 }
@@ -276,6 +294,26 @@ impl ServiceInstance {
     /// Returns a redacted lifecycle or cleanup error. A successful return means
     /// that provider and materializer cleanup both completed.
     pub async fn run(mut self) -> Result<(), ServiceInstanceError> {
+        let mut events = self.vm.subscribe_events();
+        let mut diagnostics = ServiceDiagnostics::new(self.diagnostics.clone());
+        let mut events_open = true;
+        let mut lifecycle = Box::pin(self.run_lifecycle());
+        loop {
+            tokio::select! {
+                biased;
+                result = &mut lifecycle => {
+                    drop(lifecycle);
+                    drain_events(&mut events, &mut diagnostics, &mut events_open);
+                    return result;
+                }
+                event = events.recv(), if events_open => {
+                    events_open = diagnostics.observe(event);
+                }
+            }
+        }
+    }
+
+    async fn run_lifecycle(&mut self) -> Result<(), ServiceInstanceError> {
         let startup_deadline = Instant::now()
             .checked_add(self.policy.startup_timeout)
             .ok_or(ServiceInstanceError::InvalidPolicy)?;
@@ -312,6 +350,16 @@ impl ServiceInstance {
 
     fn set_state(&self, state: ServiceWorkerState) {
         let _ = self.states.send(state);
+        self.diagnostics.send_modify(|snapshot| {
+            snapshot.worker_state = state;
+        });
+        tracing::debug!(
+            gateway_id = %self.launch.identity.gateway_id,
+            revision_id = %self.launch.identity.revision_id,
+            instance_id = %self.launch.identity.instance_id,
+            state = ?state,
+            "gateway service lifecycle state changed"
+        );
     }
 
     async fn start_vm(&self) -> Result<(), VmError> {
@@ -514,6 +562,34 @@ fn failure_for_code(code: GatewayServiceFailureCode) -> Option<GatewayServiceFai
     GatewayServiceFailure::new(code, None, None).ok()
 }
 
+const MAX_DRAIN_EVENTS: usize = 64;
+
+fn drain_events(
+    events: &mut broadcast::Receiver<vm_trait::VmEvent>,
+    diagnostics: &mut ServiceDiagnostics,
+    events_open: &mut bool,
+) {
+    for _ in 0..MAX_DRAIN_EVENTS {
+        match events.try_recv() {
+            Ok(event) => {
+                *events_open = diagnostics.observe(Ok(event));
+            }
+            Err(broadcast::error::TryRecvError::Lagged(skipped)) => {
+                *events_open =
+                    diagnostics.observe(Err(broadcast::error::RecvError::Lagged(skipped)));
+            }
+            Err(broadcast::error::TryRecvError::Empty) => break,
+            Err(broadcast::error::TryRecvError::Closed) => {
+                *events_open = diagnostics.observe(Err(broadcast::error::RecvError::Closed));
+                break;
+            }
+        }
+        if !*events_open {
+            break;
+        }
+    }
+}
+
 enum Command {
     Health(oneshot::Sender<Result<http::StatusCode, ServiceInstanceError>>),
 }
@@ -534,7 +610,7 @@ mod tests {
     };
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt, DuplexStream},
-        sync::broadcast,
+        sync::{Notify, broadcast},
     };
     use uuid::Uuid;
     use vm_trait::{
@@ -547,7 +623,9 @@ mod tests {
         connections: Mutex<VecDeque<BoxedPrivateServiceConnection>>,
         events: broadcast::Sender<vm_trait::VmEvent>,
         exited: tokio::sync::watch::Sender<Option<VmExit>>,
+        first_open: Arc<Notify>,
         starts: AtomicUsize,
+        opens: AtomicUsize,
         destroys: AtomicUsize,
         destroy_ok: AtomicBool,
         start_ok: AtomicBool,
@@ -564,7 +642,9 @@ mod tests {
                 connections: Mutex::new(VecDeque::new()),
                 events,
                 exited,
+                first_open: Arc::new(Notify::new()),
                 starts: AtomicUsize::new(0),
+                opens: AtomicUsize::new(0),
                 destroys: AtomicUsize::new(0),
                 destroy_ok: AtomicBool::new(true),
                 start_ok: AtomicBool::new(true),
@@ -596,6 +676,9 @@ mod tests {
             if !self.start_ok.load(Ordering::Relaxed) {
                 return Err(VmError::Destroyed);
             }
+            let _ = self.events.send(vm_trait::VmEvent::Started {
+                ingress: Vec::new(),
+            });
             let delay = *self.start_delay.lock().expect("start delay lock");
             tokio::time::sleep(delay).await;
             Ok(())
@@ -623,6 +706,9 @@ mod tests {
         async fn open_private_service_connection(
             &self,
         ) -> Result<BoxedPrivateServiceConnection, VmError> {
+            if self.opens.fetch_add(1, Ordering::Relaxed) == 0 {
+                self.first_open.notify_waiters();
+            }
             self.connections
                 .lock()
                 .expect("connection lock")
@@ -765,6 +851,11 @@ mod tests {
         );
         assert_eq!(vm.destroys.load(Ordering::Relaxed), 1);
         assert_eq!(resolver.cleanups.load(Ordering::Relaxed), 1);
+        assert!(handle.diagnostics().lifecycle.started());
+        assert_eq!(
+            handle.diagnostics().worker_state,
+            ServiceWorkerState::Stopped
+        );
         drop(handle);
     }
 
@@ -901,6 +992,151 @@ mod tests {
         drop(handle);
         assert!(task.await.expect("worker join").is_ok());
         assert_eq!(vm.destroys.load(Ordering::Relaxed), 1);
+        assert_eq!(resolver.cleanups.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn cancellation_wins_over_a_busy_event_channel() {
+        let launch = launch(Uuid::new_v4());
+        let vm = FakeVm::new(launch.spec.id.clone());
+        *vm.start_delay.lock().expect("start delay lock") = Duration::from_millis(200);
+        let resolver = Arc::new(FakeResolver {
+            cleanups: AtomicUsize::new(0),
+        });
+        let (handle, _, worker) = new_service_instance(
+            launch,
+            vm.clone(),
+            resolver.clone(),
+            "service.test",
+            policy(),
+        )
+        .expect("worker");
+        let mut diagnostics = handle.subscribe_diagnostics();
+        let mut task = tokio::spawn(worker.run());
+        let events = vm.events.clone();
+        let stop_flood = Arc::new(AtomicBool::new(false));
+        let flood_stop = Arc::clone(&stop_flood);
+        let mut flood = tokio::spawn(async move {
+            while !flood_stop.load(Ordering::Relaxed) {
+                for _ in 0..100 {
+                    let _ = events.send(vm_trait::VmEvent::Log {
+                        stream: vm_trait::LogStream::Stdout,
+                        bytes: b"request Authorization secret".to_vec(),
+                    });
+                    tokio::task::yield_now().await;
+                }
+            }
+        });
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                let snapshot = *diagnostics.borrow();
+                if snapshot.lifecycle.started() || snapshot.stdout_bytes > 0 {
+                    break;
+                }
+                diagnostics.changed().await.expect("diagnostics update");
+            }
+        })
+        .await
+        .expect("event flood observed");
+        drop(handle);
+        let worker_result = if let Ok(result) =
+            tokio::time::timeout(Duration::from_secs(5), &mut task).await
+        {
+            result.expect("worker join")
+        } else {
+            task.abort();
+            let _ = task.await;
+            panic!("worker cleanup timed out");
+        };
+        assert!(worker_result.is_ok());
+        stop_flood.store(true, Ordering::Relaxed);
+        if let Ok(result) = tokio::time::timeout(Duration::from_secs(5), &mut flood).await {
+            result.expect("event flood");
+        } else {
+            flood.abort();
+            let _ = flood.await;
+            panic!("event flood did not stop");
+        }
+        assert_eq!(vm.destroys.load(Ordering::Relaxed), 1);
+        assert_eq!(resolver.cleanups.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn event_flood_does_not_restart_a_blocked_readiness_probe() {
+        let launch = launch(Uuid::new_v4());
+        let vm = FakeVm::new(launch.spec.id.clone());
+        let (client, _peer) = tokio::io::duplex(4096);
+        vm.push(Box::new(client));
+        let resolver = Arc::new(FakeResolver {
+            cleanups: AtomicUsize::new(0),
+        });
+        let slow_policy = ServiceInstancePolicy::new(
+            Duration::from_secs(2),
+            Duration::from_millis(20),
+            Duration::from_millis(500),
+            Duration::from_millis(50),
+        );
+        let (handle, _, worker) = new_service_instance(
+            launch,
+            vm.clone(),
+            resolver.clone(),
+            "service.test",
+            slow_policy,
+        )
+        .expect("worker");
+        let first_open = vm.first_open.clone();
+        let opened = first_open.notified();
+        let mut diagnostics = handle.subscribe_diagnostics();
+        let mut task = tokio::spawn(worker.run());
+        tokio::time::timeout(Duration::from_secs(2), opened)
+            .await
+            .expect("readiness probe opened");
+        assert_eq!(vm.opens.load(Ordering::Relaxed), 1);
+        let events = vm.events.clone();
+        let stop_flood = Arc::new(AtomicBool::new(false));
+        let flood_stop = Arc::clone(&stop_flood);
+        let mut flood = tokio::spawn(async move {
+            while !flood_stop.load(Ordering::Relaxed) {
+                for _ in 0..100 {
+                    let _ = events.send(vm_trait::VmEvent::Log {
+                        stream: vm_trait::LogStream::Stdout,
+                        bytes: b"request Authorization secret".to_vec(),
+                    });
+                    tokio::task::yield_now().await;
+                }
+            }
+        });
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let snapshot = *diagnostics.borrow();
+                if snapshot.stdout_bytes > 0 || snapshot.lagged_events > 0 {
+                    break;
+                }
+                diagnostics.changed().await.expect("diagnostics update");
+            }
+        })
+        .await
+        .expect("event flood consumed");
+        assert_eq!(vm.opens.load(Ordering::Relaxed), 1);
+        handle.shutdown();
+        let worker_result = if let Ok(result) =
+            tokio::time::timeout(Duration::from_secs(5), &mut task).await
+        {
+            result.expect("worker join")
+        } else {
+            task.abort();
+            let _ = task.await;
+            panic!("worker cleanup timed out");
+        };
+        assert!(worker_result.is_ok());
+        stop_flood.store(true, Ordering::Relaxed);
+        if let Ok(result) = tokio::time::timeout(Duration::from_secs(5), &mut flood).await {
+            result.expect("event flood");
+        } else {
+            flood.abort();
+            let _ = flood.await;
+            panic!("event flood did not stop");
+        }
         assert_eq!(resolver.cleanups.load(Ordering::Relaxed), 1);
     }
 

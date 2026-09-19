@@ -22,6 +22,7 @@ mod service_claim_resolution;
 mod service_cleanup;
 mod service_cleanup_driver;
 mod service_coordinator;
+pub(crate) mod service_diagnostics;
 mod service_execution;
 mod service_failure;
 mod service_handler;
@@ -57,6 +58,7 @@ pub use service_coordinator::{
     GatewayServiceCoordinatorFailure, GatewayServiceCoordinatorFailureReason,
     GatewayServiceCoordinatorStatus, GatewayServiceStartupIntent,
 };
+pub use service_diagnostics::{ServiceDiagnosticsSnapshot, ServiceLifecycleEvidence};
 pub use service_execution::{
     GatewayExecutionTarget, GatewayExecutionTargetError, GatewayExecutionTargetResolver,
     GatewayServiceAuthorityBudget,
