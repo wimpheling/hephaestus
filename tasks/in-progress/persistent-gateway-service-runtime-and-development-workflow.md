@@ -1176,7 +1176,7 @@ and workspace rustdoc also passed. Durable writer/flush integration,
 maintenance/eviction, authorized readers/RPC, and app/supervisor integration
 remain pending.
 
-Append checkpoint (2026-09-19): the parent-owned boot recovery gate now proves a
+Boot recovery checkpoint (2026-09-19): the parent-owned gate now proves a
 fresh first-page host inventory is empty before returning `Complete`, recovers
 at most two exact service claims concurrently, renews both leases while
 physical teardown is blocked, and retains raw ownership across dropped polling,
@@ -1185,8 +1185,8 @@ renewal failures. The 12-instance regression records every deterministic VM ID
 as physically cleaned and every durable row as cleaned before the next fresh
 empty proof; exact takeover rejects changed identity, VM ID, owner, or fence.
 The isolated overlay is committed `2f63d50` plus only the boot module/export
-changes. Rust 1.88.0 passed the full gateway-edge suite (152 tests plus ingress
-and doc tests), strict all-target/all-feature Clippy, formatting, and workspace
+changes. Rust 1.88.0 passed 152 gateway-edge unit tests and one ingress test,
+strict all-target/all-feature Clippy, formatting, and workspace
 rustdoc. Logs:
 `/tmp/gateway-edge-boot-isolated-test.log`,
 `/tmp/gateway-edge-boot-isolated-clippy.log`,
@@ -1194,3 +1194,21 @@ rustdoc. Logs:
 `/tmp/gateway-edge-boot-doc.log`. Daemon boot wiring, target scheduling, and
 later host inventory integration remain pending; this checkpoint does not mark
 the persistent-service feature complete.
+
+Writer checkpoint (2026-09-19): `ServiceLogWriter` is now a parent-owned,
+immutable instance/owner/fence pump. It drains at most one 64-record/4 MiB
+batch, retains the exact batch across unavailable or cancelled appends, uses
+bounded retry cadence, flushes cumulative loss counters without duplication,
+and reports terminal stale/contract failures and known unacknowledged data.
+Capacity accounts one batch and permits later batches; loss-only retries remain
+pending until acknowledged. `final_flush` is deadline-bound and must run after
+the worker event collector has settled while lease supervision remains active;
+idle polls are caller-paced. Exact overlay base `725f734` plus only the writer
+module/export passed 162 gateway-edge tests, pinned Rust 1.88.0 all-target
+Clippy, formatting, and workspace rustdoc. Logs:
+`/tmp/heph-log-writer-edge-tests-final2-20260919.log`,
+`/tmp/heph-log-writer-edge-clippy-final2-20260919.log`,
+`/tmp/heph-log-writer-fmt-final2-20260919.log`, and
+`/tmp/heph-log-writer-workspace-doc-final-20260919.log`. Coordinator/app
+writer wiring, durable retention/maintenance, and authorized readers remain
+pending.

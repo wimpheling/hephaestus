@@ -32,6 +32,7 @@ mod service_http;
 mod service_instance;
 mod service_launch;
 mod service_lease;
+mod service_log_writer;
 mod service_logs;
 mod service_ownership;
 mod service_preparation;
@@ -92,6 +93,10 @@ pub use service_lease::{
     GatewayServiceLeaseControl, GatewayServiceLeaseError, GatewayServiceLeaseLossReason,
     GatewayServiceLeaseMonitor, GatewayServiceLeasePolicy, GatewayServiceLeaseRetryReason,
     GatewayServiceLeaseRunResult, GatewayServiceLeaseStatus,
+};
+pub use service_log_writer::{
+    ServiceLogWriter, ServiceLogWriterError, ServiceLogWriterFlush, ServiceLogWriterPolicy,
+    ServiceLogWriterPoll,
 };
 pub use service_logs::{
     GatewayServiceLogAppendBatch, GatewayServiceLogAppendOutcome, GatewayServiceLogStore,
