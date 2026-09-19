@@ -2193,3 +2193,32 @@ seeded runtime scenarios separate. The matching sample README points to the
 canonical command and explicitly does not claim overall persistent-service
 completion. Local link/anchor checks, shell syntax checks for the harness, and
 `git diff --check` passed; no Cargo or VM command was run for this docs task.
+
+Real release-revocation cancellation checkpoint (2026-09-19): the external
+Caddy/libkrun revocation mode completed on the same owned process handle
+`99435` without restart. The run emitted
+`REAL_GATEWAY_SERVICE_REVOCATION_E2E=1` with gateway
+`8af9ac8f-d234-440c-b393-814adefbf7cd`, revision
+`e12384a2-939c-44c5-8b16-ae60b1acc279`, and instance
+`7532e81d-8477-4c39-84fe-8cca15efd6cf`. After a durably accepted public hold,
+production `ReleaseService::revoke` canceled the in-flight exchange; the
+assertions observed HTTP 502, invocation outcome `Failed`, no additional
+invocation row, the same instance `Cleaned`, and absent VM runtime, cgroup,
+and materializer paths. This is release-publication revocation cancellation;
+`GatewayLifecycle::Removed` remains the separate graceful-drain path for
+accepted work. The daemon then shut down orderly. Main evidence is
+`/home/a/heph-service-revocation-real-vm-20260919.log`; the external daemon
+cleanup evidence is
+`/home/a/heph-service-revocation-external-daemon-20260919.log`, including
+worker reap and VM resource cleanup. Phase evidence is
+`/home/a/heph-service-revocation-phase-20260919.json`; the dedicated
+`/home/a/heph-service-revocation-diagnostics-20260919` directory produced no
+failure diagnostics. The golden suite passed 35 tests (one ignored), the
+PostgreSQL suite passed eight tests, and the wrapper reported runtime and
+cgroup cleanup verified. Preflight `cargo check -p hephaestus-app --test
+golden --all-features`, strict golden Clippy with `-- -D warnings`, and
+`cargo test -p hephaestus-app --test golden --all-features --no-run` passed
+with target `/home/a/service-golden-isolation-target-0b7-20260919`,
+incremental disabled, and two jobs; their output was not redirected to
+separate log files. Final rustfmt check passed. Cargo and VM ownership are
+released; no active process handle remains.

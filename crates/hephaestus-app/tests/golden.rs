@@ -503,6 +503,8 @@ mod cooking_retirement;
 mod cooking_service_build;
 #[path = "../../../examples/cooking/tests/updates.rs"]
 mod cooking_updates;
+#[path = "service_helpers/revocation.rs"]
+mod service_revocation;
 // The integration-test support tree is private to this test crate; its
 // `pub(crate)` child boundaries are required by sibling fixture modules.
 #[allow(clippy::redundant_pub_crate)]
@@ -671,6 +673,9 @@ async fn finish_isolated_golden(
 /// consumes only the production environment contract used by `hephaestusd`.
 /// Later tests can replace the graceful signal below with an unclean process
 /// termination without changing the fixture or Caddy wiring.
+// Keep the external daemon fixture arguments explicit so each owned resource
+// and its cleanup boundary remain visible at the opt-in proof entry point.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 async fn exercise_external_gateway_service_warm_path(
     pool: &sqlx::PgPool,
     fixture: &GatewayServiceGoldenFixture,
@@ -679,6 +684,7 @@ async fn exercise_external_gateway_service_warm_path(
     root: &Path,
     root_image: &Path,
     release_artifact_root: &Path,
+    owner: &AuthenticatedIdentity,
 ) {
     let mut daemon =
         spawn_external_golden_daemon(gateway, app_config, root, root_image, None).await;
@@ -706,7 +712,25 @@ async fn exercise_external_gateway_service_warm_path(
         env::var("HEPHAESTUS_APP_GATEWAY_SERVICE_FAILED_CANDIDATE_E2E").as_deref() == Ok("1");
     let candidate_capacity =
         env::var("HEPHAESTUS_APP_GATEWAY_SERVICE_CANDIDATE_CAPACITY_E2E").as_deref() == Ok("1");
-    if failed_candidate {
+    let revocation =
+        env::var("HEPHAESTUS_APP_GATEWAY_SERVICE_REVOCATION_E2E").as_deref() == Ok("1");
+    if revocation {
+        service_revocation::exercise_external_gateway_service_revocation(
+            pool,
+            fixture,
+            &daemon,
+            first_instance_id,
+            &paths,
+            &public_url,
+            owner,
+        )
+        .await;
+        daemon.graceful_shutdown().await;
+        eprintln!(
+            "REAL_GATEWAY_SERVICE_REVOCATION_E2E=1 gateway_id={} revision_id={} instance_id={}",
+            fixture.gateway_id, fixture.revision_id, first_instance_id
+        );
+    } else if failed_candidate {
         exercise_external_gateway_service_failed_candidate(
             pool,
             fixture,
@@ -2836,6 +2860,8 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
     let gateway_service_e2e = env::var("HEPHAESTUS_APP_GATEWAY_SERVICE_E2E").as_deref() == Ok("1");
     let gateway_service_external_e2e =
         env::var("HEPHAESTUS_APP_GATEWAY_SERVICE_EXTERNAL_E2E").as_deref() == Ok("1");
+    let gateway_service_revocation_e2e =
+        env::var("HEPHAESTUS_APP_GATEWAY_SERVICE_REVOCATION_E2E").as_deref() == Ok("1");
     let gateway_service_cutover_e2e =
         env::var("HEPHAESTUS_APP_GATEWAY_SERVICE_CUTOVER_E2E").as_deref() == Ok("1");
     let gateway_service_failed_candidate_e2e =
@@ -2865,6 +2891,14 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
         "the external persistent-service proof requires the service fixture"
     );
     assert!(
+        !gateway_service_revocation_e2e || gateway_service_external_e2e,
+        "the service revocation proof requires the external daemon fixture"
+    );
+    assert!(
+        !gateway_service_revocation_e2e || (gateway_caddy_e2e && libkrun_e2e),
+        "the service revocation proof requires the joined Caddy/libkrun fixture"
+    );
+    assert!(
         !gateway_service_cutover_e2e || gateway_service_external_e2e,
         "the persistent-service cutover proof requires the external daemon fixture"
     );
@@ -2887,6 +2921,16 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
     assert!(
         !gateway_service_rollback_e2e || gateway_service_cutover_e2e,
         "the persistent-service rollback proof requires the cutover fixture"
+    );
+    assert!(
+        !gateway_service_revocation_e2e
+            || (!gateway_service_cutover_e2e
+                && !gateway_service_rollback_e2e
+                && !gateway_service_failed_candidate_e2e
+                && !gateway_service_candidate_capacity_e2e
+                && !gateway_service_log_rpc_e2e
+                && !gateway_service_log_guest_e2e),
+        "the service revocation proof requires the initial published service mode"
     );
     assert!(
         !gateway_service_log_rpc_e2e || gateway_service_e2e,
@@ -2924,6 +2968,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
                 && !gateway_service_failed_candidate_e2e
                 && !gateway_service_candidate_capacity_e2e
                 && !gateway_service_rollback_e2e
+                && !gateway_service_revocation_e2e
                 && !gateway_service_log_rpc_e2e
                 && !gateway_service_log_guest_e2e),
         "the Cooking service build proof cannot combine with seeded or alternate service modes"
@@ -3402,6 +3447,13 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             &root,
             &root_image,
             &release_artifact_root,
+            &AuthenticatedIdentity::new(
+                user_id,
+                &browser_oidc_issuer,
+                "golden-subject",
+                serde_json::json!({}),
+                RequestId::new(),
+            ),
         )
         .await;
         cleanup_streams(&nats_url).await;
