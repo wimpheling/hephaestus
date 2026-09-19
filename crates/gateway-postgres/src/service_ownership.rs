@@ -362,23 +362,27 @@ impl GatewayServiceOwnership for PostgresGatewayServiceOwnership {
 impl GatewayServiceExpiredClaimRecovery for PostgresGatewayServiceOwnership {
     async fn claim_expired_instance(
         &self,
-        identity: GatewayServiceIdentity,
+        previous: &GatewayServiceInstanceLease,
         owner: &GatewayServiceOwner,
         lease_duration: Duration,
     ) -> Result<GatewayServiceInstanceLease, GatewayServiceOwnershipError> {
-        validate_identity(identity.gateway_id, identity.revision_id)?;
+        validate_lease(previous)?;
         owner.validate()?;
         let lease_duration = checked_lease_duration(lease_duration)?;
-        if identity.instance_id.is_nil() {
-            return Err(GatewayServiceOwnershipError::InvalidArgument);
-        }
         let mut transaction = self.pool.begin().await.map_err(|error| storage(&error))?;
         // Recovery follows the aggregate lock order used by every ownership
         // mutation: gateway first, then the exact instance row.
-        lock_gateway(&mut transaction, identity.gateway_id).await?;
-        let current = lock_exact_instance(&mut transaction, identity).await?;
+        lock_gateway(&mut transaction, previous.identity.gateway_id).await?;
+        let current = lock_exact_instance(&mut transaction, previous.identity).await?;
         let now = database_now(&mut transaction).await?;
-        if current.owner_host_id != owner.host_id
+        if current.id != previous.identity.instance_id
+            || current.gateway_id != previous.identity.gateway_id
+            || current.revision_id != previous.identity.revision_id
+            || current.owner_host_id != previous.owner_host_id
+            || current.owner_host_id != owner.host_id
+            || current.owner_uuid != previous.owner_uuid
+            || current.fencing_token != previous.fencing_token
+            || current.vm_id != previous.vm_id
             || current.state == "cleaned"
             || current.lease_expires_at > now
         {

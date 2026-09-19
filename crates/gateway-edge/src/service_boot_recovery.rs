@@ -462,7 +462,7 @@ async fn retry_takeover(
 ) -> Result<GatewayServiceCleanupDriverOutcome, GatewayServiceCleanupDriverError> {
     let old_lease = state.lease.clone();
     let takeover = context.exact_recovery.claim_expired_instance(
-        old_lease.identity,
+        &old_lease,
         &context.owner,
         context.cleanup_policy.lease.lease_duration,
     );
@@ -742,7 +742,7 @@ mod tests {
     impl GatewayServiceExpiredClaimRecovery for TestExactRecovery {
         async fn claim_expired_instance(
             &self,
-            _: GatewayServiceIdentity,
+            _: &GatewayServiceInstanceLease,
             _: &GatewayServiceOwner,
             _: Duration,
         ) -> Result<GatewayServiceInstanceLease, GatewayServiceOwnershipError> {
