@@ -849,6 +849,22 @@ check, strict Clippy, formatting, and 58 library tests passed.
   passed. Caddy forwarding, managed lifecycle, and publish/install CLI support
   remain pending and are not claimed by this fixture.
 
+- [x] Bound final daemon outbox flushing to the existing shutdown deadline.
+  The old 100-pass cap could leave 974 product rows pending when the serial
+  workspace suite accumulated more than 2,000 rows; the exact baseline
+  reproduction failed at `golden.rs:2997` in
+  `/tmp/heph-golden-4b4b091-full.log`. The deadline-driven loop preserves the
+  existing quiescence error, and focused unit tests cover 101 passes plus an
+  already-expired deadline. An isolated committed-base full workspace run
+  with the equivalent deadline loop passed in
+  `/tmp/heph-golden-4b4b091-dynamic.log` (this is not a claim about the current
+  concurrent worktree). The final focused real PostgreSQL/NATS golden run
+  passed in `/tmp/heph-shutdown-focused-final.log`; its post-shutdown census
+  reports `pending_product=0`, `published_product=167`, and `dead_product=0`
+  in `/tmp/heph-shutdown-focused-final-db-census.log`. The focused app tests,
+  formatting, and clean-base strict app Clippy all passed. Full current-head
+  workspace quality remains pending concurrent gateway work.
+
 ## Non-goals
 
 This task does not replace MVP 03's bounded stateless invocation mode. It does

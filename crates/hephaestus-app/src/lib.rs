@@ -3052,7 +3052,7 @@ impl RunningHephaestus {
                 }
             }
         }
-        if let Err(error) = self.flush_outbox().await {
+        if let Err(error) = self.flush_outbox(deadline).await {
             first_error.get_or_insert(error);
         }
         if let Err(error) = self.nats_client.drain().await {
@@ -3062,7 +3062,7 @@ impl RunningHephaestus {
         first_error.map_or(Ok(()), Err)
     }
 
-    async fn flush_outbox(&self) -> Result<(), AppError> {
+    async fn flush_outbox(&self, deadline: Instant) -> Result<(), AppError> {
         let forge_publisher = ForgeNatsOutboxPublisher::new(self.jetstream.clone());
         let release_publisher =
             ReleaseOutboxPublisher::new(self.jetstream.clone(), self.pool.clone());
@@ -3079,7 +3079,7 @@ impl RunningHephaestus {
         );
         let mailbox_publisher =
             MailboxOutboxPublisher::new(self.jetstream.clone(), self.mailbox_repository.clone());
-        for _pass in 0..100 {
+        flush_until_quiescent(deadline, || async {
             let forge = forge_publisher
                 .publish_pending(self.forge.as_ref(), self.outbox_batch_size)
                 .await
@@ -3100,13 +3100,34 @@ impl RunningHephaestus {
                 .publish_pending(self.outbox_batch_size)
                 .await
                 .map_err(component("final mailbox outbox flush"))?;
-            if forge == 0 && releases == 0 && reviews == 0 && events == 0 && mailboxes == 0 {
-                return Ok(());
-            }
+            Ok::<_, AppError>(
+                forge == 0 && releases == 0 && reviews == 0 && events == 0 && mailboxes == 0,
+            )
+        })
+        .await
+    }
+}
+
+async fn flush_until_quiescent<F, Fut>(deadline: Instant, mut pass: F) -> Result<(), AppError>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<bool, AppError>>,
+{
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(AppError::Shutdown(String::from(
+                "final outbox flush did not quiesce",
+            )));
         }
-        Err(AppError::Shutdown(String::from(
-            "final outbox flush did not quiesce",
-        )))
+        let quiescent = tokio::time::timeout(remaining, pass())
+            .await
+            .map_err(|_| {
+                AppError::Shutdown(String::from("final outbox flush did not quiesce"))
+            })??;
+        if quiescent && Instant::now() < deadline {
+            return Ok(());
+        }
     }
 }
 
@@ -3820,8 +3841,8 @@ mod tests {
         GatewayServiceIdentity, GatewayServiceMaterializer, LocalGatewayReleaseMaterializer,
         LocalRunRuntimeConfig, LocalRunRuntimeManager, MaterializedRoot, OciImageReference,
         OciWorkerError, RuntimePolicy, StoredNetworkAccess, build_delivery_requires_redelivery,
-        deterministic_update_hook_run_id, guest_environment, refresh_image_filesystem_cache,
-        validate_runtime_policy, write_oci_manifest_if_dirty,
+        deterministic_update_hook_run_id, flush_until_quiescent, guest_environment,
+        refresh_image_filesystem_cache, validate_runtime_policy, write_oci_manifest_if_dirty,
     };
     use async_trait::async_trait;
     use gateway_edge::GatewayEdgeError;
@@ -3829,9 +3850,12 @@ mod tests {
     use run_orchestrator::{RunRuntimeCatalog, RunRuntimeCatalogError};
     use runtime_types::RunId;
     use sha2::{Digest, Sha256};
-    use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::{
+        path::PathBuf,
+        time::{Duration, Instant},
+    };
     use uuid::Uuid;
     use vm_trait::{VmError, VmResources};
 
@@ -3859,6 +3883,43 @@ mod tests {
             allow_broker_only: true,
             allow_egress: false,
         }
+    }
+
+    #[tokio::test]
+    async fn final_outbox_flush_drains_beyond_the_old_pass_cap() {
+        let mut passes = 0_u16;
+        flush_until_quiescent(Instant::now() + Duration::from_secs(1), || {
+            passes += 1;
+            let quiescent = passes > 100;
+            async move { Ok(quiescent) }
+        })
+        .await
+        .expect("flush reaches quiescence after more than 100 passes");
+        assert_eq!(passes, 101);
+    }
+
+    #[tokio::test]
+    async fn final_outbox_flush_preserves_deadline_failure() {
+        let called = Arc::new(AtomicBool::new(false));
+        let result = flush_until_quiescent(
+            Instant::now()
+                .checked_sub(Duration::from_secs(1))
+                .expect("deadline remains representable"),
+            {
+                let called = Arc::clone(&called);
+                move || {
+                    called.store(true, Ordering::Release);
+                    async { Ok(false) }
+                }
+            },
+        )
+        .await;
+        assert!(matches!(
+            result,
+            Err(super::AppError::Shutdown(message))
+                if message == "final outbox flush did not quiesce"
+        ));
+        assert!(!called.load(Ordering::Acquire));
     }
 
     #[test]
