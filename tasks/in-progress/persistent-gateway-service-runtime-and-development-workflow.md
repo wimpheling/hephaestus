@@ -159,6 +159,25 @@ receive scheduling priority over new launches. Staging-tree cleanup requires
 materialization quiescence. Failure backoff, durable diagnostics, recovery
 integration, and real Caddy acceptance remain implementation requirements.
 
+The next recovery integration must close the startup admission gate until a
+complete bounded host-inventory pass accounts for prior daemon instances.
+Unexpired rows belonging to an earlier daemon remain unresolved until the
+database permits an expired-claim takeover; a local clock comparison alone is
+not permission to destroy their VM. Recovery must use the returned fenced
+lease, settle provider orphan cleanup before materializer cleanup, and confirm
+the durable cleaned state before considering that resource released. Inventory
+pagination and recovery concurrency remain bounded even if historical rows
+exceed the current launch capacity. Such a backlog blocks new launches while
+cleanup makes progress; it must not be discarded to fit the capacity limit.
+
+For rows already tracked by this daemon, recovery must reuse the existing job,
+capacity token, and retained VM handle. In particular, an expired same-process
+claim cannot be routed through provider orphan cleanup while its VM remains
+registered. A claim-resolution barrier may release an uncertain reservation
+only after it proves the original claim did not commit; an ordinary inventory
+page that omits the row is insufficient. These are pending integration
+requirements, not acceptance evidence for the current startup primitives.
+
 ## Current implementation checkpoint
 
 The VM contract, standalone host broker, and host-side provider/worker/FFI
@@ -675,6 +694,23 @@ recovery scheduling, Caddy routing, and release UI remain pending.
   `REAL_POSTGRES_CONNECTED_AND_MIGRATED=1 max_migration=73`; retained log:
   `/tmp/hephaestus-gateway-recovery-real-strict.log`. Supervisor scheduling,
   cancellation wiring, and service runtime execution remain pending.
+
+- [x] Wire bounded abandoned-invocation recovery into the existing daemon
+  `gateway_reconciliation_loop`, using a separate worker-role authority pool so
+  the existing Caddy/dispatcher authority remains unchanged. The loop keeps at
+  most one recovery batch in flight, continues Caddy reconciliation while the
+  database batch waits, and aborts and joins the database task during daemon
+  shutdown. Two real worker-role PostgreSQL app tests passed against migration
+  0076: a stopping instance terminalized its invocation and revoked its host
+  session and secret lease while a live Ready instance and all three of its
+  records remained active; a held PostgreSQL row demonstrated worker lock
+  waiting, Caddy progress, cancellation, and clean joining. Evidence:
+  `/tmp/hephaestus-reaper-overlay-real-20260919-rerun.log`,
+  `/tmp/hephaestus-reaper-overlay-app-lib-20260919.log`, and
+  `/tmp/hephaestus-reaper-overlay-clippy-20260919.log`. Workspace formatting
+  still has unrelated baseline diffs in the service-instance and supervisor
+  files; app formatting and strict app Clippy passed. Full service supervisor
+  startup, claim recovery, draining, and Caddy acceptance remain pending.
 
 - [x] Extend service draining counts to the exact instance and fencing epoch,
   and extend recovery eligibility to reject missing, stale-fenced, expired,

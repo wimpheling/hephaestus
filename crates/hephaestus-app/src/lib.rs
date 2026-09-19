@@ -615,6 +615,7 @@ pub struct HephaestusApp {
 /// Runtime-owned dependencies for the optional shared-Caddy gateway edge.
 struct GatewayEdgeRuntime {
     authority: PostgresGatewayEdgeAuthority,
+    recovery_authority: PostgresGatewayEdgeAuthority,
     provider: Arc<dyn gateway_edge::GatewayProvider>,
     dispatcher: Arc<dyn GatewayRequestDispatcher>,
     dispatcher_listen: SocketAddr,
@@ -1320,6 +1321,8 @@ impl HephaestusApp {
             let authority = PostgresGatewayEdgeAuthority::new(pool.clone(), gateway_limits())
                 .with_runtime_authority(issuer, Duration::from_secs(30))
                 .map_err(component("gateway runtime authority"))?;
+            let recovery_authority =
+                PostgresGatewayEdgeAuthority::new(gateway_authority_pool.clone(), gateway_limits());
             let resolver_handoff: Arc<dyn RuntimeHandoffStore> = Arc::new(
                 EncryptedFileHandoffStore::new(gateway_handoff_root, gateway_handoff_key)
                     .map_err(component("gateway runtime resolver handoff"))?,
@@ -1376,6 +1379,7 @@ impl HephaestusApp {
             );
             Some(GatewayEdgeRuntime {
                 authority,
+                recovery_authority,
                 provider,
                 dispatcher,
                 dispatcher_listen: gateway.dispatcher_listen,
@@ -1715,10 +1719,12 @@ impl HephaestusApp {
         if let Some(gateway) = &self.gateway_edge {
             let gateway_reconcile_cancel = cancellation.clone();
             let gateway_authority = gateway.authority.clone();
+            let gateway_recovery_authority = gateway.recovery_authority.clone();
             let gateway_provider = Arc::clone(&gateway.provider);
             tasks.push(tokio::spawn(async move {
                 gateway_reconciliation_loop(
                     gateway_authority,
+                    gateway_recovery_authority,
                     gateway_provider,
                     gateway_reconcile_cancel,
                 )
@@ -2113,11 +2119,14 @@ const GATEWAY_CADDY_RECOVERY_INTERVAL: Duration = Duration::from_secs(30);
 /// Caddy process which restarted after this daemon observed the same revision.
 async fn gateway_reconciliation_loop(
     authority: PostgresGatewayEdgeAuthority,
+    recovery_authority: PostgresGatewayEdgeAuthority,
     provider: Arc<dyn GatewayProvider>,
     cancellation: CancellationToken,
 ) {
     let mut reconcile = tokio::time::interval(GATEWAY_RECONCILIATION_INTERVAL);
     reconcile.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut service_recovery = tokio::time::interval(GATEWAY_RECONCILIATION_INTERVAL);
+    service_recovery.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     // Avoid an immediate duplicate of the startup reconciliation while still
     // making a daemon-owned Caddy restart recover without operator action.
     let mut recovery = tokio::time::interval_at(
@@ -2125,14 +2134,49 @@ async fn gateway_reconciliation_loop(
         GATEWAY_CADDY_RECOVERY_INTERVAL,
     );
     recovery.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut service_recovery_task: Option<JoinHandle<()>> = None;
     loop {
         tokio::select! {
-            () = cancellation.cancelled() => return,
+            () = cancellation.cancelled() => {
+                if let Some(task) = service_recovery_task.take() {
+                    task.abort();
+                    let _ = task.await;
+                }
+                return;
+            },
             _ = reconcile.tick() => {
                 reconcile_gateway_once(&authority, provider.as_ref(), false).await;
             }
             _ = recovery.tick() => {
                 reconcile_gateway_once(&authority, provider.as_ref(), true).await;
+            }
+            _ = service_recovery.tick(), if service_recovery_task.is_none() => {
+                let authority = recovery_authority.clone();
+                service_recovery_task = Some(tokio::spawn(async move {
+                    match authority
+                        .recover_abandoned_service_invocations(OffsetDateTime::now_utc())
+                        .await
+                    {
+                        Ok(recovered) if recovered > 0 => {
+                            tracing::info!(recovered, "recovered abandoned gateway service invocations");
+                        }
+                        Ok(_) => {}
+                        Err(error) => {
+                            tracing::warn!(%error, "gateway service invocation recovery failed");
+                        }
+                    }
+                }));
+            }
+            result = async {
+                match service_recovery_task.as_mut() {
+                    Some(task) => Some(task.await),
+                    None => std::future::pending().await,
+                }
+            }, if service_recovery_task.is_some() => {
+                if let Some(Err(error)) = result {
+                    tracing::warn!(%error, "gateway service invocation recovery task failed");
+                }
+                service_recovery_task = None;
             }
         }
     }
@@ -4143,3 +4187,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod gateway_recovery_tests;
