@@ -631,6 +631,13 @@ impl LibkrunInstance {
             }
         });
 
+        // A configured private service is a supervisor-owned long-lived VM.
+        // Its lifetime ends through explicit stop/destroy or worker exit, so
+        // the one-shot wall-clock guard must not kill it while it is serving.
+        if self.private_service_timeout.is_some() {
+            return;
+        }
+
         let instance = Arc::clone(self);
         tokio::spawn(async move {
             let mut terminal = instance.terminal.subscribe();
@@ -2033,6 +2040,49 @@ mod tests {
         assert_eq!(exit.signal, Some(9));
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn private_service_survives_wall_clock_limit_until_explicit_destroy() {
+        let temp = TempDir::new().unwrap();
+        let runtime_dir = temp.path().join("service-runtime");
+        fs::create_dir(&runtime_dir).unwrap();
+        fs::set_permissions(&runtime_dir, fs::Permissions::from_mode(0o700)).unwrap();
+        let broker =
+            Arc::new(ServiceBroker::bind(&runtime_dir, 1, Duration::from_secs(1)).unwrap());
+        let control_worker = Arc::new(MockWorker::new());
+        let control = instance_with_wall_clock(
+            &temp,
+            Arc::clone(&control_worker),
+            Duration::from_millis(20),
+        );
+        control.start().await.unwrap();
+        let worker = Arc::new(MockWorker::new());
+        let instance = service_instance_with_wall_clock(
+            &temp,
+            Arc::clone(&worker),
+            Duration::from_millis(20),
+            Duration::from_secs(1),
+            Arc::clone(&broker),
+            runtime_dir,
+        );
+        instance.start().await.unwrap();
+
+        // Give both monitor tasks a scheduling turn so the paused-time
+        // deadlines are registered before advancing the clock.
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_millis(21)).await;
+        let control_exit = control.wait().await.unwrap();
+        assert_eq!(control_exit.signal, Some(9));
+        assert!(worker.process_exit.borrow().is_none());
+        assert!(broker.reserve().is_ok());
+
+        instance.destroy().await.unwrap();
+        assert_eq!(
+            worker.process_exit.borrow().as_ref().unwrap().signal,
+            Some(9)
+        );
+        assert!(broker.reserve().is_err());
+    }
+
     fn instance(temp: &TempDir, worker: Arc<MockWorker>) -> Arc<LibkrunInstance> {
         instance_with_wall_clock(temp, worker, Duration::from_secs(60))
     }
@@ -2052,10 +2102,28 @@ mod tests {
         broker: Arc<ServiceBroker>,
         runtime_dir: PathBuf,
     ) -> Arc<LibkrunInstance> {
-        instance_with_options(
+        service_instance_with_wall_clock(
             temp,
             worker,
             Duration::from_secs(60),
+            timeout_duration,
+            broker,
+            runtime_dir,
+        )
+    }
+
+    fn service_instance_with_wall_clock(
+        temp: &TempDir,
+        worker: Arc<MockWorker>,
+        wall_clock_timeout: Duration,
+        timeout_duration: Duration,
+        broker: Arc<ServiceBroker>,
+        runtime_dir: PathBuf,
+    ) -> Arc<LibkrunInstance> {
+        instance_with_options(
+            temp,
+            worker,
+            wall_clock_timeout,
             Some((timeout_duration, broker, runtime_dir)),
         )
     }

@@ -100,9 +100,11 @@ raw stream backpressure, and shutdown cleanup. Provider-owned brokers are
 created before worker launch, the worker forwards an exact redacted
 single-use challenge over the control channel, and libkrun maps the guest
 service vsock port to the per-VM Unix socket without passt or IP networking.
-The guest still rejects service mode before workload launch, so real guest
-bridging, long-lived service supervision, Caddy forwarding, and release UI
-remain unchecked.
+The guest now validates service mode before launch, brings up only `lo`,
+injects the declared loopback endpoint, and bridges bounded authenticated raw
+connections with cancellation and half-close handling. Real VM transport
+acceptance, HTTP readiness, Caddy forwarding, and release UI remain
+unchecked.
 
 - [x] Finish focused VM contract tests and workspace compatibility checks:
   `cargo test -p vm-trait`, `cargo test -p vm-libkrun --lib`,
@@ -130,7 +132,21 @@ remain unchecked.
 - [x] Verify provider-level cancellation and lifecycle ownership: blocked
   worker control sends remain bounded by the service semaphore, timed-out
   offers release broker capacity, and worker exit closes an active provider
-  stream. Focused provider tests are included in the 71 passing lib tests.
+  stream. Focused provider tests are included in the 72 passing lib tests.
+- [x] Keep configured private-service VMs outside the one-shot wall-clock
+  timeout; their lifetime ends through explicit stop/destroy or worker exit,
+  while ordinary VMs retain the existing deadline. Evidence: `cargo test
+  -p vm-libkrun --lib` (72 passed), focused ordinary/service wall-clock tests
+  (2 passed), focused Clippy, and a mutation check where removing the service
+  guard made the service-survival test fail.
+- [x] Implement the guest-side bridge slice: validate service settings and
+  service-only authority exclusions, enable guest loopback via ioctl, inject
+  `HEPH_SERVICE_HOST`/`HEPH_SERVICE_PORT`, authenticate on the dedicated vsock,
+  enforce the declared connection cap, forward both directions with half-close
+  semantics, and close active connections on cancellation, control EOF, or child
+  exit. Evidence: `cargo test -p vm-libkrun --bin heph-init` (10 passed),
+  focused guest-binary Clippy, formatting, and `cargo check -p vm-libkrun
+  --bin heph-init` pass. Real VM acceptance remains unchecked.
 
 ## Implementation checklist
 
@@ -158,9 +174,9 @@ remain unchecked.
   - [ ] Compare the candidate bounded transports and record the selected
     framing, authentication, flow-control, timeout, and backpressure contract
     for main-thread review.
-  - [ ] Implement guest listener ownership and authenticated host-to-guest
+  - [x] Implement guest loopback ownership and authenticated host-to-guest
     forwarding on the reviewed transport; reject arbitrary guest TCP exposure
-    and unauthorized host access.
+    and unauthorized host access. Real VM acceptance remains unchecked.
   - [ ] Implement readiness, health, request, connection, response-size, and
     in-flight resource limits with deterministic timeout and cancellation
     semantics.
