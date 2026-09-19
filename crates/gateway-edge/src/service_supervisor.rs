@@ -21,8 +21,9 @@ use crate::{
     GatewayServiceClaimResolutionStore, GatewayServiceCleanup, GatewayServiceCleanupDriver,
     GatewayServiceCleanupDriverError, GatewayServiceCleanupDriverOutcome,
     GatewayServiceCleanupDriverPolicy, GatewayServiceCoordinator, GatewayServiceCoordinatorFailure,
-    GatewayServiceCoordinatorFailureReason, GatewayServiceCoordinatorStatus, GatewayServiceFailure,
-    GatewayServiceFailureStore, GatewayServiceInstanceLease, GatewayServiceLaunchResolver,
+    GatewayServiceCoordinatorFailureReason, GatewayServiceCoordinatorStatus,
+    GatewayServiceExpiredClaimRecovery, GatewayServiceFailure, GatewayServiceFailureStore,
+    GatewayServiceInstanceLease, GatewayServiceInstanceState, GatewayServiceLaunchResolver,
     GatewayServiceLogWriterConfig, GatewayServiceOwner, GatewayServiceOwnership,
     GatewayServiceOwnershipError, GatewayServiceRegistry, GatewayServiceStartupIntent,
     GatewayServiceSupervisorPolicy, GatewayServiceTargetStore,
@@ -433,6 +434,52 @@ impl GatewayServiceSupervisor {
     /// Returns an error when the job is absent, has no retained terminal
     /// cleanup responsibility, or already has a retry in flight.
     pub fn retry_cleanup(&mut self, job_id: Uuid) -> Result<(), GatewayServiceSupervisorError> {
+        let (state, deadline) = self.begin_cleanup_retry(job_id)?;
+        self.cleanup_jobs.push(Box::pin(run_cleanup_retry(
+            job_id,
+            state,
+            deadline,
+            Arc::clone(&self.context),
+        )));
+        Ok(())
+    }
+
+    /// Schedules cleanup retry with exact expired-claim recovery.
+    ///
+    /// This keeps the original cleanup state and capacity reservation owned by
+    /// the supervisor. An expired lease may be replaced only by the supplied
+    /// serialized recovery port; an ambiguous takeover is resolved through
+    /// that same exact-instance barrier before physical work resumes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the job is absent, has no retained terminal
+    /// cleanup responsibility, or already has a retry in flight.
+    pub fn retry_cleanup_with_recovery(
+        &mut self,
+        job_id: Uuid,
+        recovery: Arc<dyn GatewayServiceExpiredClaimRecovery>,
+    ) -> Result<(), GatewayServiceSupervisorError> {
+        let (state, deadline) = self.begin_cleanup_retry(job_id)?;
+        self.cleanup_jobs
+            .push(Box::pin(run_cleanup_retry_with_recovery(
+                job_id,
+                state,
+                deadline,
+                Arc::clone(&self.context),
+                recovery,
+            )));
+        Ok(())
+    }
+
+    fn begin_cleanup_retry(
+        &mut self,
+        job_id: Uuid,
+    ) -> Result<(CleanupRetryState, Instant), GatewayServiceSupervisorError> {
+        let started = Instant::now();
+        let deadline = started
+            .checked_add(self.context.policy.lease.lease_duration)
+            .ok_or(GatewayServiceSupervisorError::InvalidInput)?;
         let record = self
             .records
             .get_mut(&job_id)
@@ -448,10 +495,6 @@ impl GatewayServiceSupervisor {
         if !record.capacity_retained {
             return Err(GatewayServiceSupervisorError::RetryNotEligible);
         }
-        let started = Instant::now();
-        let deadline = started
-            .checked_add(self.context.policy.lease.lease_duration)
-            .ok_or(GatewayServiceSupervisorError::InvalidInput)?;
         let state = if let Some(state) = record.cleanup_retry.take() {
             state
         } else {
@@ -462,9 +505,8 @@ impl GatewayServiceSupervisor {
                 )
             } else {
                 // A missing VM handle is not proof that provider teardown
-                // completed.  The first retry conservatively repeats orphan
-                // confirmation; later attempts retain explicit progress in
-                // GatewayServiceCleanup itself.
+                // completed. The first retry conservatively confirms the
+                // deterministic orphan before materializer cleanup.
                 GatewayServiceCleanup::from_progress(
                     failure.identity,
                     failure.vm.clone(),
@@ -485,13 +527,7 @@ impl GatewayServiceSupervisor {
         let _ = record
             .status
             .send(GatewayServiceSupervisorJobStatus::CleanupPending);
-        self.cleanup_jobs.push(Box::pin(run_cleanup_retry(
-            job_id,
-            state,
-            deadline,
-            Arc::clone(&self.context),
-        )));
-        Ok(())
+        Ok((state, deadline))
     }
 
     /// Resolves a late or ambiguous claim through the serialized gateway
@@ -886,6 +922,227 @@ async fn run_cleanup_retry(
     CleanupCompletion { id, state, result }
 }
 
+async fn run_cleanup_retry_with_recovery(
+    id: Uuid,
+    mut state: CleanupRetryState,
+    deadline: Instant,
+    context: Arc<GatewayServiceSupervisorContext>,
+    recovery: Arc<dyn GatewayServiceExpiredClaimRecovery>,
+) -> CleanupCompletion {
+    let policy = GatewayServiceCleanupDriverPolicy {
+        lease: context.policy.lease,
+        database_timeout: context.policy.instance.probe_timeout,
+    };
+    let result = match GatewayServiceCleanupDriver::new(
+        Arc::clone(&context.ownership),
+        Arc::clone(&context.failure_store),
+        Arc::clone(&context.targets),
+        Arc::clone(&context.provider),
+        Arc::clone(&context.resolver),
+        context.owner.clone(),
+        policy,
+    ) {
+        Ok(driver) => {
+            let confirmation = driver
+                .confirm_cleaned_state(&state.cleanup, &state.lease)
+                .await;
+            match confirmation {
+                Ok(true) => Ok(()),
+                Ok(false) | Err(GatewayServiceCleanupDriverError::Unavailable) => {
+                    renew_or_recover_cleanup(&driver, &mut state, deadline, &context, &recovery)
+                        .await
+                }
+                Err(GatewayServiceCleanupDriverError::Stale) => {
+                    recover_and_cleanup(&driver, &mut state, deadline, &context, &recovery).await
+                }
+                Err(error) => Err(error),
+            }
+        }
+        Err(error) => Err(error),
+    };
+    CleanupCompletion { id, state, result }
+}
+
+async fn renew_or_recover_cleanup(
+    driver: &GatewayServiceCleanupDriver,
+    state: &mut CleanupRetryState,
+    deadline: Instant,
+    context: &GatewayServiceSupervisorContext,
+    recovery: &Arc<dyn GatewayServiceExpiredClaimRecovery>,
+) -> Result<(), GatewayServiceCleanupDriverError> {
+    match driver
+        .renew_and_prepare_stopping(&mut state.lease, deadline)
+        .await
+    {
+        Ok(cleanup_deadline) => run_cleanup_attempt(driver, state, cleanup_deadline).await,
+        Err(GatewayServiceCleanupDriverError::Stale) => {
+            recover_and_cleanup(driver, state, deadline, context, recovery).await
+        }
+        Err(error) => Err(error),
+    }
+}
+
+async fn recover_and_cleanup(
+    driver: &GatewayServiceCleanupDriver,
+    state: &mut CleanupRetryState,
+    deadline: Instant,
+    context: &GatewayServiceSupervisorContext,
+    recovery: &Arc<dyn GatewayServiceExpiredClaimRecovery>,
+) -> Result<(), GatewayServiceCleanupDriverError> {
+    let (candidate, recovery_started) = recover_expired_claim(
+        recovery,
+        &state.lease,
+        &context.owner,
+        context.policy.lease.lease_duration,
+        context.policy.instance.probe_timeout,
+        deadline,
+        state.cleanup.vm_teardown_confirmed() && state.cleanup.materializer_cleanup_confirmed(),
+    )
+    .await?;
+    // Adopt only after all identity, owner, VM, fence, and state checks pass.
+    // A validated successor remains caller-owned even when its renewal fails.
+    state.lease = candidate;
+    if state.lease.state == GatewayServiceInstanceState::Cleaned {
+        if state.cleanup.vm_teardown_confirmed()
+            && state.cleanup.materializer_cleanup_confirmed()
+            && driver
+                .confirm_cleaned_state(&state.cleanup, &state.lease)
+                .await?
+        {
+            return Ok(());
+        }
+        return Err(GatewayServiceCleanupDriverError::Unavailable);
+    }
+    let renewal_deadline = recovery_started
+        .checked_add(context.policy.lease.lease_duration)
+        .map_or(deadline, |candidate| candidate.min(deadline));
+    // The observed successor grants no physical authority until this exact
+    // lease is renewed under a fresh conservative deadline.
+    let cleanup_deadline = driver
+        .renew_and_prepare_stopping(&mut state.lease, renewal_deadline)
+        .await?;
+    run_cleanup_attempt(driver, state, cleanup_deadline).await
+}
+
+async fn run_cleanup_attempt(
+    driver: &GatewayServiceCleanupDriver,
+    state: &mut CleanupRetryState,
+    deadline: Instant,
+) -> Result<(), GatewayServiceCleanupDriverError> {
+    match driver
+        .attempt(
+            &mut state.cleanup,
+            &mut state.lease,
+            &mut state.pending_failure,
+            deadline,
+        )
+        .await?
+    {
+        GatewayServiceCleanupDriverOutcome::Cleaned => Ok(()),
+        GatewayServiceCleanupDriverOutcome::Pending { .. } => {
+            Err(GatewayServiceCleanupDriverError::Unavailable)
+        }
+    }
+}
+
+async fn recover_expired_claim(
+    recovery: &Arc<dyn GatewayServiceExpiredClaimRecovery>,
+    previous: &GatewayServiceInstanceLease,
+    owner: &GatewayServiceOwner,
+    lease_duration: std::time::Duration,
+    database_timeout: std::time::Duration,
+    overall_deadline: Instant,
+    physical_confirmed: bool,
+) -> Result<(GatewayServiceInstanceLease, Instant), GatewayServiceCleanupDriverError> {
+    if !valid_claim_identity(previous) {
+        return Err(GatewayServiceCleanupDriverError::Stale);
+    }
+    if overall_deadline <= Instant::now() {
+        return Err(GatewayServiceCleanupDriverError::Stale);
+    }
+    let call_started = Instant::now();
+    let database_deadline = call_started
+        .checked_add(database_timeout)
+        .ok_or(GatewayServiceCleanupDriverError::InvalidInput)?;
+    let call_deadline = database_deadline.min(overall_deadline);
+    let takeover = time::timeout_at(
+        call_deadline,
+        recovery.claim_expired_instance(previous, owner, lease_duration),
+    )
+    .await;
+    let candidate = match takeover {
+        Ok(Ok(candidate)) => candidate,
+        Ok(Err(
+            GatewayServiceOwnershipError::StaleLease | GatewayServiceOwnershipError::Unavailable,
+        ))
+        | Err(_) => {
+            let resolve_started = Instant::now();
+            let resolve_deadline = resolve_started
+                .checked_add(database_timeout)
+                .ok_or(GatewayServiceCleanupDriverError::InvalidInput)?
+                .min(overall_deadline);
+            time::timeout_at(
+                resolve_deadline,
+                recovery.resolve_exact_instance(previous.identity),
+            )
+            .await
+            .map_err(|_| GatewayServiceCleanupDriverError::Unavailable)?
+            .map_err(map_recovery_ownership_error)?
+            .ok_or(GatewayServiceCleanupDriverError::Unavailable)?
+        }
+        Ok(Err(error)) => return Err(map_recovery_ownership_error(error)),
+    };
+    let successor_valid =
+        valid_expired_recovery_successor(previous, &candidate, owner, physical_confirmed);
+    let cleaned_valid = valid_claim_identity(previous)
+        && valid_claim_identity(&candidate)
+        && physical_confirmed
+        && candidate.state == GatewayServiceInstanceState::Cleaned
+        && same_claim(&candidate, previous);
+    if !(successor_valid || cleaned_valid) {
+        return Err(GatewayServiceCleanupDriverError::Stale);
+    }
+    Ok((candidate, call_started))
+}
+
+fn valid_expired_recovery_successor(
+    previous: &GatewayServiceInstanceLease,
+    candidate: &GatewayServiceInstanceLease,
+    owner: &GatewayServiceOwner,
+    physical_confirmed: bool,
+) -> bool {
+    let same_host =
+        candidate.owner_host_id == owner.host_id && previous.owner_host_id == owner.host_id;
+    previous
+        .fencing_token
+        .checked_add(1)
+        .is_some_and(|next_fence| {
+            valid_claim_identity(previous)
+                && valid_claim_identity(candidate)
+                && candidate.identity == previous.identity
+                && candidate.vm_id == previous.vm_id
+                && same_host
+                && candidate.owner_uuid == owner.owner_uuid
+                && candidate.fencing_token == next_fence
+                && (candidate.state == GatewayServiceInstanceState::Stopping
+                    || (physical_confirmed
+                        && candidate.state == GatewayServiceInstanceState::Cleaned))
+                && candidate.lease_expires_at > candidate.heartbeat_at
+        })
+}
+
+const fn map_recovery_ownership_error(
+    error: GatewayServiceOwnershipError,
+) -> GatewayServiceCleanupDriverError {
+    match error {
+        GatewayServiceOwnershipError::StaleLease => GatewayServiceCleanupDriverError::Stale,
+        GatewayServiceOwnershipError::Unavailable => GatewayServiceCleanupDriverError::Unavailable,
+        GatewayServiceOwnershipError::Conflict | GatewayServiceOwnershipError::InvalidArgument => {
+            GatewayServiceCleanupDriverError::Rejected
+        }
+    }
+}
+
 async fn run_claim_resolution(
     id: Uuid,
     request: GatewayServiceStartupRequest,
@@ -1256,7 +1513,7 @@ fn terminal(
 #[cfg(test)]
 mod tests {
     use std::{
-        collections::BTreeMap,
+        collections::{BTreeMap, VecDeque},
         path::PathBuf,
         sync::{
             Arc, Mutex,
@@ -1532,6 +1789,7 @@ mod tests {
         fail_destroy: Arc<AtomicBool>,
         destroy_gate: Arc<Mutex<Option<Arc<Notify>>>>,
         destroy_started: Arc<Mutex<Option<Arc<Notify>>>>,
+        destroy_calls: Arc<AtomicUsize>,
     }
 
     #[async_trait]
@@ -1573,6 +1831,7 @@ mod tests {
         }
 
         async fn destroy(&self) -> Result<(), VmError> {
+            self.destroy_calls.fetch_add(1, Ordering::Relaxed);
             if self.fail_destroy.load(Ordering::Relaxed) {
                 Err(VmError::Unavailable {
                     resource: String::from("test VM"),
@@ -1600,6 +1859,7 @@ mod tests {
         fail_destroy: Arc<AtomicBool>,
         destroy_gate: Arc<Mutex<Option<Arc<Notify>>>>,
         destroy_started: Arc<Mutex<Option<Arc<Notify>>>>,
+        destroy_calls: Arc<AtomicUsize>,
         orphan_cleanup_calls: AtomicUsize,
         last_vm: Mutex<Option<Arc<dyn VmInstance>>>,
     }
@@ -1618,6 +1878,7 @@ mod tests {
                 fail_destroy: Arc::clone(&self.fail_destroy),
                 destroy_gate: Arc::clone(&self.destroy_gate),
                 destroy_started: Arc::clone(&self.destroy_started),
+                destroy_calls: Arc::clone(&self.destroy_calls),
             });
             *self.last_vm.lock().expect("last VM") = Some(Arc::clone(&vm));
             Ok(vm)
@@ -1667,11 +1928,16 @@ mod tests {
 
     struct ReadyOwnership {
         lease: Mutex<GatewayServiceInstanceLease>,
+        renew_stale: AtomicBool,
     }
 
     impl ReadyOwnership {
         fn current(&self) -> GatewayServiceInstanceLease {
             self.lease.lock().expect("ready lease").clone()
+        }
+
+        fn replace(&self, lease: GatewayServiceInstanceLease) {
+            *self.lease.lock().expect("ready lease") = lease;
         }
 
         fn transition(
@@ -1702,7 +1968,13 @@ mod tests {
             _: &GatewayServiceOwner,
             _: std::time::Duration,
         ) -> Result<GatewayServiceInstanceLease, GatewayServiceOwnershipError> {
-            Ok(self.current())
+            let lease = self.current();
+            if self.renew_stale.load(Ordering::Relaxed)
+                || lease.lease_expires_at <= OffsetDateTime::now_utc()
+            {
+                return Err(GatewayServiceOwnershipError::StaleLease);
+            }
+            Ok(lease)
         }
 
         async fn claim_expired(
@@ -1761,6 +2033,56 @@ mod tests {
         ) -> Result<(), GatewayServiceOwnershipError> {
             let _ = self.transition(crate::GatewayServiceInstanceState::Cleaned);
             Ok(())
+        }
+    }
+
+    struct FixedExpiredRecovery {
+        ownership: Arc<ReadyOwnership>,
+        takeover:
+            Mutex<VecDeque<Result<GatewayServiceInstanceLease, GatewayServiceOwnershipError>>>,
+        resolution: Mutex<
+            VecDeque<Result<Option<GatewayServiceInstanceLease>, GatewayServiceOwnershipError>>,
+        >,
+        takeover_calls: AtomicUsize,
+        resolution_calls: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl GatewayServiceExpiredClaimRecovery for FixedExpiredRecovery {
+        async fn resolve_exact_instance(
+            &self,
+            _: GatewayServiceIdentity,
+        ) -> Result<Option<GatewayServiceInstanceLease>, GatewayServiceOwnershipError> {
+            self.resolution_calls.fetch_add(1, Ordering::Relaxed);
+            let result = self
+                .resolution
+                .lock()
+                .expect("resolution result")
+                .pop_front()
+                .unwrap_or(Ok(None));
+            if let Ok(Some(lease)) = &result {
+                self.ownership.replace(lease.clone());
+            }
+            result
+        }
+
+        async fn claim_expired_instance(
+            &self,
+            _: &GatewayServiceInstanceLease,
+            _: &GatewayServiceOwner,
+            _: std::time::Duration,
+        ) -> Result<GatewayServiceInstanceLease, GatewayServiceOwnershipError> {
+            self.takeover_calls.fetch_add(1, Ordering::Relaxed);
+            let result = self
+                .takeover
+                .lock()
+                .expect("takeover result")
+                .pop_front()
+                .unwrap_or(Err(GatewayServiceOwnershipError::Unavailable));
+            if let Ok(lease) = &result {
+                self.ownership.replace(lease.clone());
+            }
+            result
         }
     }
 
@@ -1883,6 +2205,7 @@ mod tests {
     ) -> (
         GatewayServiceSupervisor,
         Arc<ReadyProvider>,
+        Arc<ReadyOwnership>,
         GatewayServiceStartupRequest,
         Arc<AtomicUsize>,
     ) {
@@ -1943,12 +2266,14 @@ mod tests {
         };
         let ownership = Arc::new(ReadyOwnership {
             lease: Mutex::new(lease),
+            renew_stale: AtomicBool::new(false),
         });
         let fail_destroy = Arc::new(AtomicBool::new(fail_destroy));
         let provider = Arc::new(ReadyProvider {
             fail_destroy: Arc::clone(&fail_destroy),
             destroy_gate: Arc::new(Mutex::new(None)),
             destroy_started: Arc::new(Mutex::new(None)),
+            destroy_calls: Arc::new(AtomicUsize::new(0)),
             orphan_cleanup_calls: AtomicUsize::new(0),
             last_vm: Mutex::new(None),
         });
@@ -1988,6 +2313,7 @@ mod tests {
         (
             supervisor,
             provider,
+            ownership,
             GatewayServiceStartupRequest {
                 gateway_id,
                 revision_id,
@@ -2170,7 +2496,8 @@ mod tests {
 
     #[tokio::test]
     async fn coordinator_readiness_releases_startup_but_cleanup_failure_retains_vm() {
-        let (mut supervisor, provider, initial_request, _accepted) = ready_supervisor(true);
+        let (mut supervisor, provider, _ownership, initial_request, _accepted) =
+            ready_supervisor(true);
         let handle = supervisor.start(initial_request).expect("reservation");
         wait_until_ready(&mut supervisor, &handle).await;
         let snapshot = supervisor.capacity_snapshot();
@@ -2198,7 +2525,8 @@ mod tests {
 
     #[tokio::test]
     async fn terminal_cleanup_can_retry_with_the_same_capacity_and_vm() {
-        let (mut supervisor, provider, initial_request, _accepted) = ready_supervisor(true);
+        let (mut supervisor, provider, _ownership, initial_request, _accepted) =
+            ready_supervisor(true);
         let handle = supervisor.start(initial_request).expect("reservation");
         wait_until_ready(&mut supervisor, &handle).await;
         handle.cancel();
@@ -2206,6 +2534,17 @@ mod tests {
         assert_eq!(first.status, GatewayServiceSupervisorJobStatus::Cancelled);
         assert!(!first.capacity_released);
         let retained = provider.last_vm.lock().expect("last VM").clone();
+        let recorded = supervisor
+            .records
+            .get(&first.job_id)
+            .and_then(|record| record.completion.as_ref())
+            .and_then(|completion| completion.coordinator_failure.as_ref())
+            .and_then(|failure| failure.vm.as_ref())
+            .expect("recorded retained VM");
+        assert!(Arc::ptr_eq(
+            retained.as_ref().expect("retained VM"),
+            recorded
+        ));
         provider.fail_destroy.store(false, Ordering::Relaxed);
         supervisor
             .retry_cleanup(first.job_id)
@@ -2241,8 +2580,367 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn expired_cleanup_retains_successor_until_renewal_then_retries() {
+        let (mut supervisor, provider, ownership, initial_request, _accepted) =
+            ready_supervisor(true);
+        let handle = supervisor.start(initial_request).expect("reservation");
+        wait_until_ready(&mut supervisor, &handle).await;
+        handle.cancel();
+        let first = supervisor.poll().await.expect("initial cleanup result");
+        assert!(!first.capacity_released);
+        provider.fail_destroy.store(false, Ordering::Relaxed);
+
+        let old = supervisor
+            .records
+            .get(&first.job_id)
+            .and_then(|record| record.completion.as_ref())
+            .and_then(|completion| completion.lease.clone())
+            .expect("retained lease");
+        let owner = supervisor.context.owner.clone();
+        let now = OffsetDateTime::now_utc();
+        let mut expired_successor = old.clone();
+        expired_successor.owner_host_id = owner.host_id.clone();
+        expired_successor.owner_uuid = owner.owner_uuid;
+        expired_successor.fencing_token = old.fencing_token + 1;
+        expired_successor.state = GatewayServiceInstanceState::Stopping;
+        expired_successor.heartbeat_at = now - TimeDuration::seconds(2);
+        expired_successor.lease_expires_at = now - TimeDuration::seconds(1);
+        let mut live_successor = expired_successor.clone();
+        live_successor.fencing_token = expired_successor.fencing_token + 1;
+        live_successor.heartbeat_at = now;
+        live_successor.lease_expires_at = now + TimeDuration::minutes(1);
+        let recovery = Arc::new(FixedExpiredRecovery {
+            ownership: Arc::clone(&ownership),
+            takeover: Mutex::new(VecDeque::from([
+                Ok(expired_successor.clone()),
+                Ok(live_successor.clone()),
+            ])),
+            resolution: Mutex::new(VecDeque::new()),
+            takeover_calls: AtomicUsize::new(0),
+            resolution_calls: AtomicUsize::new(0),
+        });
+        ownership.renew_stale.store(true, Ordering::Relaxed);
+
+        supervisor
+            .retry_cleanup_with_recovery(first.job_id, recovery.clone())
+            .expect("expired cleanup retry");
+        let retained = supervisor.poll().await.expect("expired retry result");
+        assert_eq!(retained.status, GatewayServiceSupervisorJobStatus::Failed);
+        assert!(!retained.capacity_released);
+        assert_eq!(
+            supervisor
+                .records
+                .get(&first.job_id)
+                .and_then(|record| record.completion.as_ref())
+                .and_then(|completion| completion.lease.as_ref()),
+            Some(&expired_successor)
+        );
+        assert_eq!(provider.orphan_cleanup_calls.load(Ordering::Relaxed), 0);
+
+        ownership.renew_stale.store(false, Ordering::Relaxed);
+        supervisor
+            .retry_cleanup_with_recovery(first.job_id, recovery.clone())
+            .expect("eventual cleanup retry");
+        let cleaned = tokio::time::timeout(std::time::Duration::from_secs(5), supervisor.poll())
+            .await
+            .expect("bounded eventual cleanup")
+            .expect("cleanup result");
+        assert_eq!(cleaned.status, GatewayServiceSupervisorJobStatus::Settled);
+        assert!(cleaned.capacity_released);
+        assert_eq!(recovery.takeover_calls.load(Ordering::Relaxed), 2);
+        assert_eq!(provider.orphan_cleanup_calls.load(Ordering::Relaxed), 0);
+        assert_eq!(supervisor.capacity_snapshot().live_instances, 0);
+    }
+
+    #[tokio::test]
+    async fn expired_cleanup_retries_lost_takeover_and_resolution_acknowledgements() {
+        let (mut supervisor, provider, ownership, initial_request, _accepted) =
+            ready_supervisor(true);
+        let handle = supervisor.start(initial_request).expect("reservation");
+        wait_until_ready(&mut supervisor, &handle).await;
+        handle.cancel();
+        let first = supervisor.poll().await.expect("initial cleanup result");
+        assert!(!first.capacity_released);
+        provider.fail_destroy.store(false, Ordering::Relaxed);
+
+        let old = supervisor
+            .records
+            .get(&first.job_id)
+            .and_then(|record| record.completion.as_ref())
+            .and_then(|completion| completion.lease.clone())
+            .expect("retained lease");
+        let owner = supervisor.context.owner.clone();
+        let mut successor = old.clone();
+        successor.owner_host_id = owner.host_id.clone();
+        successor.owner_uuid = owner.owner_uuid;
+        successor.fencing_token = old.fencing_token + 1;
+        successor.state = GatewayServiceInstanceState::Stopping;
+        successor.heartbeat_at = OffsetDateTime::now_utc();
+        successor.lease_expires_at = successor.heartbeat_at + TimeDuration::minutes(1);
+        let recovery = Arc::new(FixedExpiredRecovery {
+            ownership: Arc::clone(&ownership),
+            takeover: Mutex::new(VecDeque::from([
+                Err(GatewayServiceOwnershipError::Unavailable),
+                Err(GatewayServiceOwnershipError::StaleLease),
+            ])),
+            resolution: Mutex::new(VecDeque::from([
+                Err(GatewayServiceOwnershipError::Unavailable),
+                Ok(Some(successor.clone())),
+            ])),
+            takeover_calls: AtomicUsize::new(0),
+            resolution_calls: AtomicUsize::new(0),
+        });
+        ownership.renew_stale.store(true, Ordering::Relaxed);
+
+        supervisor
+            .retry_cleanup_with_recovery(first.job_id, recovery.clone())
+            .expect("first recovery retry");
+        let first_retry = supervisor.poll().await.expect("first retry result");
+        assert_eq!(
+            first_retry.status,
+            GatewayServiceSupervisorJobStatus::Failed
+        );
+        assert!(!first_retry.capacity_released);
+        assert_eq!(recovery.takeover_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(recovery.resolution_calls.load(Ordering::Relaxed), 1);
+
+        supervisor
+            .retry_cleanup_with_recovery(first.job_id, recovery.clone())
+            .expect("second recovery retry");
+        let second_retry = supervisor.poll().await.expect("second retry result");
+        assert_eq!(
+            second_retry.status,
+            GatewayServiceSupervisorJobStatus::Failed
+        );
+        assert!(!second_retry.capacity_released);
+        assert_eq!(recovery.takeover_calls.load(Ordering::Relaxed), 2);
+        assert_eq!(recovery.resolution_calls.load(Ordering::Relaxed), 2);
+        assert_eq!(
+            supervisor
+                .records
+                .get(&first.job_id)
+                .and_then(|record| record.completion.as_ref())
+                .and_then(|completion| completion.lease.as_ref()),
+            Some(&successor)
+        );
+
+        ownership.renew_stale.store(false, Ordering::Relaxed);
+        supervisor
+            .retry_cleanup_with_recovery(first.job_id, recovery)
+            .expect("final cleanup retry");
+        let cleaned = tokio::time::timeout(std::time::Duration::from_secs(5), supervisor.poll())
+            .await
+            .expect("bounded final cleanup")
+            .expect("cleanup result");
+        assert_eq!(cleaned.status, GatewayServiceSupervisorJobStatus::Settled);
+        assert!(cleaned.capacity_released);
+        assert_eq!(provider.orphan_cleanup_calls.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn expired_cleanup_rejects_unrelated_successor_without_physical_work() {
+        let (mut supervisor, provider, ownership, initial_request, _accepted) =
+            ready_supervisor(true);
+        let handle = supervisor.start(initial_request).expect("reservation");
+        wait_until_ready(&mut supervisor, &handle).await;
+        handle.cancel();
+        let first = supervisor.poll().await.expect("initial cleanup result");
+        assert!(!first.capacity_released);
+        provider.fail_destroy.store(false, Ordering::Relaxed);
+        ownership.renew_stale.store(true, Ordering::Relaxed);
+        let retained_vm = provider.last_vm.lock().expect("last VM").clone();
+        let destroy_calls = provider.destroy_calls.load(Ordering::Relaxed);
+
+        let old = supervisor
+            .records
+            .get(&first.job_id)
+            .and_then(|record| record.completion.as_ref())
+            .and_then(|completion| completion.lease.clone())
+            .expect("retained lease");
+        let mut unrelated = old.clone();
+        unrelated.vm_id = String::from("gateway-service-foreign");
+        let recovery = Arc::new(FixedExpiredRecovery {
+            ownership: Arc::clone(&ownership),
+            takeover: Mutex::new(VecDeque::from([Ok(unrelated)])),
+            resolution: Mutex::new(VecDeque::new()),
+            takeover_calls: AtomicUsize::new(0),
+            resolution_calls: AtomicUsize::new(0),
+        });
+        supervisor
+            .retry_cleanup_with_recovery(first.job_id, recovery)
+            .expect("recovery retry");
+        let rejected = supervisor.poll().await.expect("recovery result");
+        assert_eq!(rejected.status, GatewayServiceSupervisorJobStatus::Failed);
+        assert!(!rejected.capacity_released);
+        assert_eq!(provider.orphan_cleanup_calls.load(Ordering::Relaxed), 0);
+        assert_eq!(supervisor.capacity_snapshot().live_instances, 1);
+        let recorded_vm = supervisor
+            .records
+            .get(&first.job_id)
+            .and_then(|record| record.completion.as_ref())
+            .and_then(|completion| completion.coordinator_failure.as_ref())
+            .and_then(|failure| failure.vm.as_ref())
+            .expect("recorded retained VM");
+        assert!(Arc::ptr_eq(
+            retained_vm.as_ref().expect("retained VM"),
+            recorded_vm
+        ));
+        assert_eq!(
+            provider.destroy_calls.load(Ordering::Relaxed),
+            destroy_calls
+        );
+        assert_eq!(
+            supervisor
+                .records
+                .get(&first.job_id)
+                .and_then(|record| record.completion.as_ref())
+                .and_then(|completion| completion.lease.as_ref()),
+            Some(&old)
+        );
+    }
+
+    #[tokio::test]
+    async fn expired_cleanup_rejects_cleaned_successor_before_physical_confirmation() {
+        let (mut supervisor, provider, ownership, initial_request, _accepted) =
+            ready_supervisor(true);
+        let handle = supervisor.start(initial_request).expect("reservation");
+        wait_until_ready(&mut supervisor, &handle).await;
+        handle.cancel();
+        let first = supervisor.poll().await.expect("initial cleanup result");
+        assert!(!first.capacity_released);
+        provider.fail_destroy.store(false, Ordering::Relaxed);
+        ownership.renew_stale.store(true, Ordering::Relaxed);
+        let retained_vm = provider.last_vm.lock().expect("last VM").clone();
+        let destroy_calls = provider.destroy_calls.load(Ordering::Relaxed);
+
+        let old = supervisor
+            .records
+            .get(&first.job_id)
+            .and_then(|record| record.completion.as_ref())
+            .and_then(|completion| completion.lease.clone())
+            .expect("retained lease");
+        let recovery = Arc::new(FixedExpiredRecovery {
+            ownership: Arc::clone(&ownership),
+            takeover: Mutex::new(VecDeque::from([Ok(GatewayServiceInstanceLease {
+                state: GatewayServiceInstanceState::Cleaned,
+                fencing_token: old.fencing_token + 1,
+                ..old.clone()
+            })])),
+            resolution: Mutex::new(VecDeque::new()),
+            takeover_calls: AtomicUsize::new(0),
+            resolution_calls: AtomicUsize::new(0),
+        });
+        supervisor
+            .retry_cleanup_with_recovery(first.job_id, recovery)
+            .expect("recovery retry");
+        let rejected = supervisor.poll().await.expect("recovery result");
+        assert_eq!(rejected.status, GatewayServiceSupervisorJobStatus::Failed);
+        assert!(!rejected.capacity_released);
+        assert_eq!(provider.orphan_cleanup_calls.load(Ordering::Relaxed), 0);
+        assert_eq!(supervisor.capacity_snapshot().live_instances, 1);
+        let recorded_vm = supervisor
+            .records
+            .get(&first.job_id)
+            .and_then(|record| record.completion.as_ref())
+            .and_then(|completion| completion.coordinator_failure.as_ref())
+            .and_then(|failure| failure.vm.as_ref())
+            .expect("recorded retained VM");
+        assert!(Arc::ptr_eq(
+            retained_vm.as_ref().expect("retained VM"),
+            recorded_vm
+        ));
+        assert_eq!(
+            provider.destroy_calls.load(Ordering::Relaxed),
+            destroy_calls
+        );
+        assert_eq!(
+            supervisor
+                .records
+                .get(&first.job_id)
+                .and_then(|record| record.completion.as_ref())
+                .and_then(|completion| completion.lease.as_ref()),
+            Some(&old)
+        );
+    }
+
+    #[tokio::test]
+    async fn expired_cleanup_keeps_state_for_absent_foreign_newer_or_rolled_back_resolution() {
+        #[derive(Clone, Copy)]
+        enum ResolutionCase {
+            Absent,
+            Foreign,
+            Newer,
+            RolledBack,
+        }
+
+        for case in [
+            ResolutionCase::Absent,
+            ResolutionCase::Foreign,
+            ResolutionCase::Newer,
+            ResolutionCase::RolledBack,
+        ] {
+            let (mut supervisor, provider, ownership, initial_request, _accepted) =
+                ready_supervisor(true);
+            let handle = supervisor.start(initial_request).expect("reservation");
+            wait_until_ready(&mut supervisor, &handle).await;
+            handle.cancel();
+            let first = supervisor.poll().await.expect("initial cleanup result");
+            assert!(!first.capacity_released);
+            provider.fail_destroy.store(false, Ordering::Relaxed);
+            ownership.renew_stale.store(true, Ordering::Relaxed);
+
+            let old = supervisor
+                .records
+                .get(&first.job_id)
+                .and_then(|record| record.completion.as_ref())
+                .and_then(|completion| completion.lease.clone())
+                .expect("retained lease");
+            let resolved = match case {
+                ResolutionCase::Absent => Ok(None),
+                ResolutionCase::Foreign => {
+                    let mut candidate = old.clone();
+                    candidate.owner_host_id = String::from("other-host");
+                    candidate.owner_uuid = Uuid::new_v4();
+                    Ok(Some(candidate))
+                }
+                ResolutionCase::Newer => {
+                    let mut candidate = old.clone();
+                    candidate.fencing_token += 2;
+                    Ok(Some(candidate))
+                }
+                ResolutionCase::RolledBack => Ok(Some(old.clone())),
+            };
+            let recovery = Arc::new(FixedExpiredRecovery {
+                ownership: Arc::clone(&ownership),
+                takeover: Mutex::new(VecDeque::from([Err(
+                    GatewayServiceOwnershipError::Unavailable,
+                )])),
+                resolution: Mutex::new(VecDeque::from([resolved])),
+                takeover_calls: AtomicUsize::new(0),
+                resolution_calls: AtomicUsize::new(0),
+            });
+            supervisor
+                .retry_cleanup_with_recovery(first.job_id, recovery)
+                .expect("recovery retry");
+            let rejected = supervisor.poll().await.expect("recovery result");
+            assert_eq!(rejected.status, GatewayServiceSupervisorJobStatus::Failed);
+            assert!(!rejected.capacity_released);
+            assert_eq!(provider.orphan_cleanup_calls.load(Ordering::Relaxed), 0);
+            assert_eq!(
+                supervisor
+                    .records
+                    .get(&first.job_id)
+                    .and_then(|record| record.completion.as_ref())
+                    .and_then(|completion| completion.lease.as_ref()),
+                Some(&old)
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn blocked_cleanup_retry_does_not_stop_other_startup_jobs() {
-        let (mut supervisor, provider, initial_request, _accepted) = ready_supervisor(true);
+        let (mut supervisor, provider, _ownership, initial_request, _accepted) =
+            ready_supervisor(true);
         let handle = supervisor.start(initial_request).expect("reservation");
         wait_until_ready(&mut supervisor, &handle).await;
         handle.cancel();
@@ -2290,7 +2988,7 @@ mod tests {
 
     #[tokio::test]
     async fn coordinator_success_releases_live_capacity_after_cleanup() {
-        let (mut supervisor, _provider, request, _accepted) = ready_supervisor(false);
+        let (mut supervisor, _provider, _ownership, request, _accepted) = ready_supervisor(false);
         let handle = supervisor.start(request).expect("reservation");
         wait_until_ready(&mut supervisor, &handle).await;
         assert_eq!(supervisor.capacity_snapshot().live_instances, 1);
@@ -2309,7 +3007,7 @@ mod tests {
 
     #[tokio::test]
     async fn startup_handle_forwards_drain_to_ready_coordinator() {
-        let (mut supervisor, _provider, request, accepted) = ready_supervisor(false);
+        let (mut supervisor, _provider, _ownership, request, accepted) = ready_supervisor(false);
         let handle = supervisor.start(request).expect("reservation");
         wait_until_ready(&mut supervisor, &handle).await;
 
@@ -2338,7 +3036,7 @@ mod tests {
 
     #[tokio::test]
     async fn startup_handle_retains_drain_requested_before_coordinator_creation() {
-        let (mut supervisor, _provider, request, _accepted) = ready_supervisor(false);
+        let (mut supervisor, _provider, _ownership, request, _accepted) = ready_supervisor(false);
         let handle = supervisor.start(request).expect("reservation");
         handle.request_drain();
 
@@ -2503,7 +3201,8 @@ mod tests {
             ResolutionCase::Expired,
             ResolutionCase::Unavailable,
         ] {
-            let (mut supervisor, provider, request, _accepted) = ready_supervisor(false);
+            let (mut supervisor, provider, _ownership, request, _accepted) =
+                ready_supervisor(false);
             let known = supervisor
                 .context
                 .targets
@@ -2639,7 +3338,7 @@ mod tests {
 
     #[tokio::test]
     async fn exact_resolved_owned_claim_is_cleaned_before_capacity_release() {
-        let (mut supervisor, provider, request, _accepted) = ready_supervisor(false);
+        let (mut supervisor, provider, _ownership, request, _accepted) = ready_supervisor(false);
         let lease = supervisor
             .context
             .targets

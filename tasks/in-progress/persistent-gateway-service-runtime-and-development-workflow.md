@@ -1700,3 +1700,28 @@ cooking-service build/publish/install/configure/readiness/Caddy/identity/
 cleanup acceptance remains pending, while platform transport, bridge, Caddy,
 and daemon lifecycle proofs are already covered by repository tests. Durable
 service-log RPC/writer work remains pending.
+
+Supervisor expired-owned cleanup recovery checkpoint (2026-09-19): the
+parent-owned cleanup retry now accepts a serialized exact-instance recovery
+port. It shares normal retry admission, falls back from stale/unavailable or
+timed-out expected-fence takeover to the gateway-locked exact resolver,
+validates the complete identity, deterministic VM ID, stable host, daemon
+owner, fencing successor, lifecycle state, and lease shape, and adopts a
+validated successor only after renewal succeeds before physical cleanup.
+Validated ownership and all cleanup progress remain retained when renewal or
+resolution fails; same-epoch `Cleaned` is accepted only with confirmed
+physical and materializer cleanup. Focused tests cover successor expiry before
+renewal, lost takeover and resolver acknowledgements across retries, absent,
+foreign, newer, and rolled-back epochs, malformed/unrelated successors, and
+premature `Cleaned` rows while preserving the original VM handle, pending
+capacity, and zero orphan cleanup. The isolated Rust 1.88 overlay is based on
+`bfd9dfda51bcfeabede24a562766b5dd7a061aae` at
+`/home/a/.cache/heph-supervisor-recovery-overlay-b3dffac-v4`; the owned
+`service_supervisor.rs` hash is
+`f88741f7c0ce4e56950ae623dcd9235a2f33c4bf7504f1bb67edbd085fb8fff5`.
+Gateway-edge passed 177 library tests, strict all-target/all-feature Clippy,
+workspace formatting, and gateway-edge rustdoc. Logs are
+`/home/a/.cache/heph-supervisor-recovery-overlay-b3dffac-v4/tests.log`,
+`clippy.log`, `fmt.log`, and `doc.log`. Daemon/app scheduling integration,
+same-process expired-lease recovery acceptance on real PostgreSQL, and the
+external VM/Caddy acceptance remain subsequent work.
