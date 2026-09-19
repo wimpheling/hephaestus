@@ -11,7 +11,10 @@ use async_trait::async_trait;
 use authz_domain::{AuthorizationDecision, ObjectRef, ObjectType, Permission, Subject};
 use authz_postgres::{PostgresMelangeAuthorizer, audit_decision, begin_actor_transaction};
 use forge_domain::{ProjectId, RepositoryId};
-use gateway_domain::{Exposure, GatewayDeclaration, GatewayId, GatewayRevisionId, HttpMethod};
+use gateway_domain::{
+    Exposure, GatewayDeclaration, GatewayId, GatewayRevisionId, GatewayServiceConfig, HttpMethod,
+    ServiceProbePath,
+};
 use gateway_edge::{
     GatewayConfigRevision, GatewayDesiredConfiguration, GatewayEdgeError, GatewayInvocationOutcome,
     GatewayInvocationRecorder, GatewayLimits, GatewayMailboxPublisher, GatewayReleaseResolver,
@@ -1171,6 +1174,8 @@ pub struct GatewayManagementRevision {
     pub release_agent_id: Option<Uuid>,
     /// Supported handler contract.
     pub handler_contract: String,
+    /// Typed loopback service declaration, when this is a persistent service.
+    pub service: Option<GatewayServiceConfig>,
     /// Declared exposure policy.
     pub exposure: String,
     /// Symbolic declared secret slot names only.
@@ -1422,7 +1427,9 @@ impl PostgresGatewayManagement {
         .await?
         .ok_or(GatewayManagementError::NotFound)?;
         let revisions = sqlx::query_as::<_, GatewayRevisionRow>(
-            "SELECT id, release_id, release_agent_id, handler_contract, exposure, secret_slots, mailbox_slots, created_at
+            "SELECT id, release_id, release_agent_id, handler_contract,
+                    service_loopback_port, service_readiness_path, service_health_path,
+                    exposure, secret_slots, mailbox_slots, created_at
              FROM gateway_revisions WHERE gateway_id = $1 ORDER BY created_at DESC, id DESC",
         )
         .bind(gateway_id)
@@ -1430,6 +1437,7 @@ impl PostgresGatewayManagement {
         .await?;
         let mut result = Vec::with_capacity(revisions.len());
         for revision in revisions {
+            let service = revision.service_config()?;
             let routes = sqlx::query_as::<_, GatewayRouteRow>(
                 "SELECT id, path, methods, enabled FROM gateway_routes
                  WHERE gateway_revision_id = $1 ORDER BY path, id",
@@ -1442,6 +1450,7 @@ impl PostgresGatewayManagement {
                 release_id: revision.release_id,
                 release_agent_id: revision.release_agent_id,
                 handler_contract: revision.handler_contract,
+                service,
                 exposure: revision.exposure,
                 secret_slots: revision.secret_slots,
                 mailbox_slots: revision.mailbox_slots,
@@ -1704,7 +1713,9 @@ impl PostgresGatewayManagement {
             "SELECT gateway.project_id, gateway.repository_id, gateway.active_revision_id,
                     gateway.lifecycle,
                     revision.release_id, revision.release_agent_id, revision.release_agent_key,
-                    revision.handler_contract, revision.exposure, revision.secret_slots,
+                    revision.handler_contract,
+                    revision.service_loopback_port, revision.service_readiness_path,
+                    revision.service_health_path, revision.exposure, revision.secret_slots,
                     revision.mailbox_slots,
                     agent.parameter_schema, release.state AS release_state
              FROM gateways AS gateway
@@ -1891,8 +1902,9 @@ impl PostgresGatewayManagement {
             "INSERT INTO gateway_revisions
                (id, gateway_id, project_id, repository_id, release_id, release_agent_id,
                 release_agent_key, handler_contract, exposure, parameters, secret_slots,
-                mailbox_slots, normalized_hash, created_by)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)",
+                mailbox_slots, service_loopback_port, service_readiness_path,
+                service_health_path, normalized_hash, created_by)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)",
         )
         .bind(revision_id)
         .bind(command.gateway_id)
@@ -1909,6 +1921,9 @@ impl PostgresGatewayManagement {
         )
         .bind(&current.secret_slots)
         .bind(&current.mailbox_slots)
+        .bind(current.service_loopback_port)
+        .bind(&current.service_readiness_path)
+        .bind(&current.service_health_path)
         .bind(revision_hash.as_slice())
         .bind(identity.user_id.as_uuid())
         .execute(&mut *tx)
@@ -2270,6 +2285,9 @@ struct ConfigureRevisionRow {
     release_agent_id: Option<Uuid>,
     release_agent_key: Option<String>,
     handler_contract: String,
+    service_loopback_port: Option<i32>,
+    service_readiness_path: Option<String>,
+    service_health_path: Option<String>,
     exposure: String,
     secret_slots: Vec<String>,
     mailbox_slots: Vec<String>,
@@ -2387,10 +2405,44 @@ struct GatewayRevisionRow {
     release_id: Option<Uuid>,
     release_agent_id: Option<Uuid>,
     handler_contract: String,
+    service_loopback_port: Option<i32>,
+    service_readiness_path: Option<String>,
+    service_health_path: Option<String>,
     exposure: String,
     secret_slots: Vec<String>,
     mailbox_slots: Vec<String>,
     created_at: OffsetDateTime,
+}
+
+impl GatewayRevisionRow {
+    fn service_config(&self) -> Result<Option<GatewayServiceConfig>, GatewayManagementError> {
+        service_config_from_columns(
+            self.service_loopback_port,
+            self.service_readiness_path.clone(),
+            self.service_health_path.clone(),
+        )
+    }
+}
+
+fn service_config_from_columns(
+    loopback_port: Option<i32>,
+    readiness_path: Option<String>,
+    health_path: Option<String>,
+) -> Result<Option<GatewayServiceConfig>, GatewayManagementError> {
+    match (loopback_port, readiness_path, health_path) {
+        (None, None, None) => Ok(None),
+        (Some(port), Some(readiness), Some(health)) => {
+            let port = u16::try_from(port).map_err(|_| GatewayManagementError::Unavailable)?;
+            let readiness = ServiceProbePath::parse(readiness)
+                .map_err(|_| GatewayManagementError::Unavailable)?;
+            let health =
+                ServiceProbePath::parse(health).map_err(|_| GatewayManagementError::Unavailable)?;
+            GatewayServiceConfig::new(port, readiness, health)
+                .map(Some)
+                .map_err(|_| GatewayManagementError::Unavailable)
+        }
+        _ => Err(GatewayManagementError::Unavailable),
+    }
 }
 #[derive(sqlx::FromRow)]
 struct GatewayRouteRow {
@@ -3018,7 +3070,9 @@ async fn require_repository_boundary(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
+// Keep the declaration, route, and authority materialization in one atomic
+// transaction despite the bounded number of immutable row fields.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 async fn install_declaration(
     tx: &mut Transaction<'_, Postgres>,
     identity: &AuthenticatedIdentity,
@@ -3051,8 +3105,9 @@ async fn install_declaration(
         "INSERT INTO gateway_revisions
             (id, gateway_id, project_id, repository_id, release_id, release_agent_id,
              release_agent_key, handler_contract, exposure, parameters, secret_slots,
-             mailbox_slots, normalized_hash, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+             mailbox_slots, service_loopback_port, service_readiness_path,
+             service_health_path, normalized_hash, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
          ON CONFLICT (gateway_id, normalized_hash) DO NOTHING
          RETURNING id",
     )
@@ -3073,6 +3128,24 @@ async fn install_declaration(
             .iter()
             .map(|slot| slot.key.as_str())
             .collect::<Vec<_>>(),
+    )
+    .bind(
+        declaration
+            .service
+            .as_ref()
+            .map(|service| i32::from(service.loopback_port)),
+    )
+    .bind(
+        declaration
+            .service
+            .as_ref()
+            .map(|service| service.readiness_path.as_str()),
+    )
+    .bind(
+        declaration
+            .service
+            .as_ref()
+            .map(|service| service.health_path.as_str()),
     )
     .bind(normalized_hash.as_slice())
     .bind(identity.user_id.as_uuid())
