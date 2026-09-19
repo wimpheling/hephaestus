@@ -33,10 +33,10 @@ mod service_ownership;
 mod service_preparation;
 mod service_probe;
 mod service_registry;
+mod service_supervisor;
 mod service_targets;
 
 pub use integration::caddy::LocalCaddyAdministration;
-pub use service_claim_resolution::GatewayServiceClaimResolutionStore;
 pub use service_capacity::{
     DEFAULT_SERVICE_DRAIN_TIMEOUT, DEFAULT_SERVICE_HEALTH_FAILURES,
     DEFAULT_SERVICE_HEALTH_INTERVAL, DEFAULT_SERVICE_MAX_REVISIONS_PER_GATEWAY,
@@ -45,6 +45,7 @@ pub use service_capacity::{
     GatewayServiceCapacityError, GatewayServiceCapacitySnapshot, GatewayServiceCapacityToken,
     GatewayServiceSupervisorPolicy,
 };
+pub use service_claim_resolution::GatewayServiceClaimResolutionStore;
 pub use service_cleanup::{GatewayServiceCleanup, GatewayServiceCleanupError};
 pub use service_cleanup_driver::{
     GatewayServiceCleanupDriver, GatewayServiceCleanupDriverError,
@@ -96,6 +97,12 @@ pub use service_probe::{
 pub use service_registry::{
     GatewayServiceInstanceKey, GatewayServiceRegistry, GatewayServiceRegistryError,
     MAX_SERVICE_REGISTRY_CAPACITY, MAX_SERVICE_REQUEST_CAPACITY,
+};
+pub use service_supervisor::{
+    GatewayServiceStartupHandle, GatewayServiceStartupRequest, GatewayServiceSupervisor,
+    GatewayServiceSupervisorContext, GatewayServiceSupervisorError, GatewayServiceSupervisorEvent,
+    GatewayServiceSupervisorJobStatus, GatewayServiceSupervisorShutdown,
+    GatewayServiceSupervisorUnresolved,
 };
 pub use service_targets::{
     GatewayServiceInstancePage, GatewayServiceInstancePageResult, GatewayServiceOwnedTarget,

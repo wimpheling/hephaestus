@@ -920,6 +920,20 @@ check, strict Clippy, formatting, and 58 library tests passed.
   checklist: project-scoped application logs remain an explicit opt-in contract
   with app-owned redaction, bounded retention, and a later authorized stream.
 
+- [x] Add parent-owned concurrent service startup bookkeeping. The supervisor
+  captures deadlines before claim, reserves capacity before any durable call,
+  owns and settles claim/coordinator futures through cancellation, quarantines
+  unavailable claims, releases startup capacity at readiness, and retains
+  unresolved leases, VM handles, and cleanup state until explicit shutdown.
+  Its readiness fixture exercises the coordinator through a private HTTP probe
+  and verifies destroy failure retains the exact VM handle and live capacity.
+  Isolated committed-base evidence passed 11 supervisor tests, 112 gateway-edge
+  library tests, strict all-target/all-feature Clippy, and formatting. The
+  supervisor module export follows the capacity exports, preserving the
+  committed-head rustfmt ordering. This is the bookkeeping building block;
+  application polling/reconciliation, recovery scheduling, and Caddy routing
+  remain pending.
+
 ## Non-goals
 
 This task does not replace MVP 03's bounded stateless invocation mode. It does

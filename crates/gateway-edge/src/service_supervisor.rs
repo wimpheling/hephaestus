@@ -1,0 +1,1631 @@
+//! Parent-owned concurrent startup bookkeeping for persistent services.
+
+use std::{
+    collections::HashMap,
+    future::Future,
+    pin::Pin,
+    sync::{Arc, Mutex},
+    task::Poll,
+};
+
+use tokio::{
+    sync::watch,
+    time::{self, Instant},
+};
+use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
+use vm_trait::VmProvider;
+
+use crate::{
+    GatewayServiceCapacity, GatewayServiceCapacityError, GatewayServiceCapacityToken,
+    GatewayServiceCoordinator, GatewayServiceCoordinatorFailure, GatewayServiceCoordinatorStatus,
+    GatewayServiceFailureStore, GatewayServiceInstanceLease, GatewayServiceLaunchResolver,
+    GatewayServiceOwner, GatewayServiceOwnership, GatewayServiceOwnershipError,
+    GatewayServiceRegistry, GatewayServiceStartupIntent, GatewayServiceSupervisorPolicy,
+    GatewayServiceTargetStore,
+};
+
+/// Validated immutable dependencies shared by all startup jobs.
+pub struct GatewayServiceSupervisorContext {
+    /// Daemon owner identity used for every claim and coordinator.
+    pub owner: GatewayServiceOwner,
+    /// Bounded service lifecycle policy.
+    pub policy: GatewayServiceSupervisorPolicy,
+    /// Durable ownership adapter.
+    pub ownership: Arc<dyn GatewayServiceOwnership>,
+    /// Durable redacted failure adapter.
+    pub failure_store: Arc<dyn GatewayServiceFailureStore>,
+    /// Immutable service launch resolver.
+    pub resolver: Arc<dyn GatewayServiceLaunchResolver>,
+    /// VM provider used by coordinators.
+    pub provider: Arc<dyn VmProvider>,
+    /// Exact target lookup adapter used by coordinators.
+    pub targets: Arc<dyn GatewayServiceTargetStore>,
+    /// Shared ready-instance registry.
+    pub registry: GatewayServiceRegistry,
+    /// Host-owned authority used for readiness probes.
+    pub service_authority: String,
+}
+
+/// A startup request selected by an already-running reconciliation caller.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GatewayServiceStartupRequest {
+    /// Gateway whose service revision is being started.
+    pub gateway_id: Uuid,
+    /// Exact immutable service revision.
+    pub revision_id: Uuid,
+    /// Whether readiness should activate or restore this revision.
+    pub intent: GatewayServiceStartupIntent,
+}
+
+/// Public lifecycle state for one parent-owned startup job.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GatewayServiceSupervisorJobStatus {
+    /// Capacity is reserved and the durable claim is in flight.
+    Claiming,
+    /// A claim exists and coordinator preparation is in flight.
+    Starting,
+    /// The coordinator reached readiness and startup capacity was released.
+    Ready,
+    /// The job ended with all physical and durable cleanup complete.
+    Settled,
+    /// The job ended while retaining an exact claim or cleanup responsibility.
+    Failed,
+    /// The claim operation may have committed but did not return a result.
+    Uncertain,
+    /// The caller requested cancellation and the job retained cleanup state.
+    Cancelled,
+}
+
+/// A caller-owned handle for cancellation and status observation.
+#[derive(Debug)]
+pub struct GatewayServiceStartupHandle {
+    id: Uuid,
+    cancellation: CancellationToken,
+    status: watch::Receiver<GatewayServiceSupervisorJobStatus>,
+}
+
+impl GatewayServiceStartupHandle {
+    /// Returns the stable job identifier.
+    #[must_use]
+    pub const fn job_id(&self) -> Uuid {
+        self.id
+    }
+
+    /// Requests cancellation while preserving the supervisor-owned job.
+    pub fn cancel(&self) {
+        self.cancellation.cancel();
+    }
+
+    /// Subscribes to lifecycle status changes.
+    #[must_use]
+    pub fn subscribe(&self) -> watch::Receiver<GatewayServiceSupervisorJobStatus> {
+        self.status.clone()
+    }
+}
+
+/// Completion notification returned by [`GatewayServiceSupervisor::poll`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GatewayServiceSupervisorEvent {
+    /// Completed job identifier.
+    pub job_id: Uuid,
+    /// Terminal public status.
+    pub status: GatewayServiceSupervisorJobStatus,
+    /// Whether the capacity reservation has been released.
+    pub capacity_released: bool,
+}
+
+/// Exact unresolved state returned when the supervisor is consumed at shutdown.
+#[derive(Debug)]
+pub struct GatewayServiceSupervisorUnresolved {
+    /// Job that still owns this state.
+    pub job_id: Uuid,
+    /// Exact gateway/revision request needed by later reconciliation.
+    pub request: GatewayServiceStartupRequest,
+    /// Exact capacity reservation retained for later reconciliation.
+    pub capacity_token: GatewayServiceCapacityToken,
+    /// Late durable claim, when one was returned.
+    pub lease: Option<GatewayServiceInstanceLease>,
+    /// Whether the claim operation ended without an authoritative result.
+    pub claim_uncertain: bool,
+    /// Coordinator failure retaining any VM or materialization responsibility.
+    pub coordinator_failure: Option<GatewayServiceCoordinatorFailure>,
+}
+
+/// Result of consuming a supervisor after cancellation and job settlement.
+#[derive(Debug)]
+pub struct GatewayServiceSupervisorShutdown {
+    /// Jobs whose capacity and cleanup responsibility remain unresolved.
+    pub unresolved: Vec<GatewayServiceSupervisorUnresolved>,
+}
+
+/// Construction and start failures which do not transfer ownership.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum GatewayServiceSupervisorError {
+    /// Context, request, or deadline input was malformed.
+    #[error("invalid gateway service supervisor input")]
+    InvalidInput,
+    /// Capacity was unavailable before any durable claim was attempted.
+    #[error("gateway service startup capacity is unavailable")]
+    Capacity(#[from] GatewayServiceCapacityError),
+    /// A job for this exact gateway and revision already exists.
+    #[error("gateway service startup is already reserved")]
+    Duplicate,
+}
+
+/// Parent-owned bounded set of concurrent startup jobs.
+pub struct GatewayServiceSupervisor {
+    context: Arc<GatewayServiceSupervisorContext>,
+    capacity: Arc<Mutex<GatewayServiceCapacity>>,
+    jobs: Vec<Pin<Box<dyn Future<Output = JobCompletion> + Send>>>,
+    records: HashMap<Uuid, JobRecord>,
+}
+
+#[derive(Clone, Copy)]
+struct StartupDeadlines {
+    initial_lease_deadline: Instant,
+    startup_deadline: Instant,
+}
+
+impl GatewayServiceSupervisor {
+    /// Creates a supervisor after validating all post-claim constructor inputs.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GatewayServiceSupervisorError::InvalidInput`] for an invalid
+    /// owner, policy, or HTTP authority.
+    pub fn new(
+        context: GatewayServiceSupervisorContext,
+    ) -> Result<Self, GatewayServiceSupervisorError> {
+        context
+            .owner
+            .validate()
+            .map_err(|_| GatewayServiceSupervisorError::InvalidInput)?;
+        context
+            .policy
+            .validate()
+            .map_err(|_| GatewayServiceSupervisorError::InvalidInput)?;
+        if context.service_authority.is_empty()
+            || http::uri::Authority::try_from(context.service_authority.as_str()).is_err()
+        {
+            return Err(GatewayServiceSupervisorError::InvalidInput);
+        }
+        let capacity = GatewayServiceCapacity::new(context.policy)
+            .map_err(GatewayServiceSupervisorError::Capacity)?;
+        Ok(Self {
+            context: Arc::new(context),
+            capacity: Arc::new(Mutex::new(capacity)),
+            jobs: Vec::new(),
+            records: HashMap::new(),
+        })
+    }
+
+    /// Starts one bounded job after reserving capacity before claim.
+    ///
+    /// # Errors
+    ///
+    /// Returns a capacity or duplicate error before durable ownership is
+    /// touched.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if the private capacity mutex was poisoned by a previous
+    /// panic in this process.
+    pub fn start(
+        &mut self,
+        request: GatewayServiceStartupRequest,
+    ) -> Result<GatewayServiceStartupHandle, GatewayServiceSupervisorError> {
+        if request.gateway_id.is_nil() || request.revision_id.is_nil() {
+            return Err(GatewayServiceSupervisorError::InvalidInput);
+        }
+        if self.records.values().any(|record| {
+            record.request.gateway_id == request.gateway_id
+                && record.request.revision_id == request.revision_id
+                && record.capacity_retained
+        }) {
+            return Err(GatewayServiceSupervisorError::Duplicate);
+        }
+        let claim_started = Instant::now();
+        let Some(initial_lease_deadline) =
+            claim_started.checked_add(self.context.policy.lease.lease_duration)
+        else {
+            return Err(GatewayServiceSupervisorError::InvalidInput);
+        };
+        let Some(startup_deadline) =
+            claim_started.checked_add(self.context.policy.instance.startup_timeout)
+        else {
+            return Err(GatewayServiceSupervisorError::InvalidInput);
+        };
+        let token = self
+            .capacity
+            .lock()
+            .expect("service capacity lock")
+            .reserve(request.gateway_id, request.revision_id)
+            .map_err(|error| match error {
+                GatewayServiceCapacityError::DuplicateRevision => {
+                    GatewayServiceSupervisorError::Duplicate
+                }
+                other => GatewayServiceSupervisorError::Capacity(other),
+            })?;
+        let id = Uuid::new_v4();
+        let cancellation = CancellationToken::new();
+        let (status, status_receiver) = watch::channel(GatewayServiceSupervisorJobStatus::Claiming);
+        self.records.insert(
+            id,
+            JobRecord {
+                request,
+                token,
+                cancellation: cancellation.clone(),
+                status: status.clone(),
+                capacity_retained: true,
+                completion: None,
+            },
+        );
+        self.jobs.push(Box::pin(run_job(
+            id,
+            request,
+            token,
+            StartupDeadlines {
+                initial_lease_deadline,
+                startup_deadline,
+            },
+            Arc::clone(&self.context),
+            Arc::clone(&self.capacity),
+            cancellation.clone(),
+            status,
+        )));
+        Ok(GatewayServiceStartupHandle {
+            id,
+            cancellation,
+            status: status_receiver,
+        })
+    }
+
+    /// Waits for one job completion. Dropping this wait does not drop jobs.
+    /// The caller must continue polling and eventually call [`Self::shutdown`]
+    /// to settle retained cleanup responsibility before dropping the supervisor.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if an internal job record is missing or the private
+    /// capacity mutex was poisoned by a previous panic in this process.
+    pub async fn poll(&mut self) -> Option<GatewayServiceSupervisorEvent> {
+        let completion = poll_next_job(&mut self.jobs).await?;
+        let record = self
+            .records
+            .get_mut(&completion.id)
+            .expect("startup job record");
+        record.capacity_retained = !completion.capacity_released;
+        record.completion = Some(completion.terminal);
+        let status = completion.status;
+        record.status.send_replace(status);
+        let event = GatewayServiceSupervisorEvent {
+            job_id: completion.id,
+            status,
+            capacity_released: completion.capacity_released,
+        };
+        if completion.capacity_released {
+            self.records.remove(&completion.id);
+        }
+        Some(event)
+    }
+
+    /// Returns the current reservation counts without releasing any job.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if the private capacity mutex was poisoned by a previous
+    /// panic in this process.
+    #[must_use]
+    pub fn capacity_snapshot(&self) -> crate::GatewayServiceCapacitySnapshot {
+        self.capacity
+            .lock()
+            .expect("service capacity lock")
+            .snapshot()
+    }
+
+    /// Returns whether [`Self::poll`] has a queued or running future to await.
+    ///
+    /// A false result can still accompany retained unresolved capacity; those
+    /// records require later reconciliation rather than a busy polling loop.
+    #[must_use]
+    pub fn has_pending_jobs(&self) -> bool {
+        !self.jobs.is_empty()
+    }
+
+    /// Consumes the supervisor, cancels every job, and joins all owned futures.
+    pub async fn shutdown(mut self) -> GatewayServiceSupervisorShutdown {
+        for record in self.records.values() {
+            record.cancellation.cancel();
+        }
+        while self.poll().await.is_some() {}
+        let unresolved = self
+            .records
+            .into_iter()
+            .filter_map(|(job_id, record)| {
+                record.completion.and_then(|completion| {
+                    if record.capacity_retained {
+                        Some(GatewayServiceSupervisorUnresolved {
+                            job_id,
+                            request: record.request,
+                            capacity_token: record.token,
+                            lease: completion.lease,
+                            claim_uncertain: completion.claim_uncertain,
+                            coordinator_failure: completion.coordinator_failure,
+                        })
+                    } else {
+                        None
+                    }
+                })
+            })
+            .collect();
+        GatewayServiceSupervisorShutdown { unresolved }
+    }
+}
+
+struct JobRecord {
+    request: GatewayServiceStartupRequest,
+    token: GatewayServiceCapacityToken,
+    cancellation: CancellationToken,
+    status: watch::Sender<GatewayServiceSupervisorJobStatus>,
+    capacity_retained: bool,
+    completion: Option<JobTerminal>,
+}
+
+struct JobCompletion {
+    id: Uuid,
+    status: GatewayServiceSupervisorJobStatus,
+    capacity_released: bool,
+    terminal: JobTerminal,
+}
+
+struct JobTerminal {
+    lease: Option<GatewayServiceInstanceLease>,
+    claim_uncertain: bool,
+    coordinator_failure: Option<GatewayServiceCoordinatorFailure>,
+}
+
+async fn poll_next_job(
+    jobs: &mut Vec<Pin<Box<dyn Future<Output = JobCompletion> + Send>>>,
+) -> Option<JobCompletion> {
+    std::future::poll_fn(|context| {
+        for index in (0..jobs.len()).rev() {
+            if let Poll::Ready(completion) = jobs[index].as_mut().poll(context) {
+                drop(jobs.swap_remove(index));
+                return Poll::Ready(Some(completion));
+            }
+        }
+        if jobs.is_empty() {
+            Poll::Ready(None)
+        } else {
+            Poll::Pending
+        }
+    })
+    .await
+}
+
+// This function intentionally owns the complete claim/coordinator state
+// machine so cancellation cannot drop a durable claim outside the supervisor.
+#[allow(
+    clippy::cognitive_complexity,
+    clippy::too_many_arguments,
+    clippy::too_many_lines
+)]
+async fn run_job(
+    id: Uuid,
+    request: GatewayServiceStartupRequest,
+    token: GatewayServiceCapacityToken,
+    deadlines: StartupDeadlines,
+    context: Arc<GatewayServiceSupervisorContext>,
+    capacity: Arc<Mutex<GatewayServiceCapacity>>,
+    cancellation: CancellationToken,
+    status: watch::Sender<GatewayServiceSupervisorJobStatus>,
+) -> JobCompletion {
+    if cancellation.is_cancelled() || Instant::now() >= deadlines.startup_deadline {
+        let status_value = if cancellation.is_cancelled() {
+            GatewayServiceSupervisorJobStatus::Cancelled
+        } else {
+            GatewayServiceSupervisorJobStatus::Failed
+        };
+        return terminal(
+            id,
+            token,
+            &capacity,
+            &status,
+            status_value,
+            None,
+            false,
+            true,
+            None,
+        );
+    }
+    let claim = context.ownership.claim_new(
+        request.gateway_id,
+        request.revision_id,
+        &context.owner,
+        context.policy.lease.lease_duration,
+    );
+    tokio::pin!(claim);
+    let claim_result = tokio::select! {
+        result = &mut claim => result,
+        () = cancellation.cancelled() => {
+            let _ = status.send(GatewayServiceSupervisorJobStatus::Cancelled);
+            claim.await
+        }
+        () = time::sleep_until(deadlines.startup_deadline) => {
+            let _ = status.send(GatewayServiceSupervisorJobStatus::Cancelled);
+            claim.await
+        }
+    };
+    let lease = match claim_result {
+        Ok(lease) => lease,
+        Err(
+            GatewayServiceOwnershipError::Conflict
+            | GatewayServiceOwnershipError::InvalidArgument
+            | GatewayServiceOwnershipError::StaleLease,
+        ) => {
+            return terminal(
+                id,
+                token,
+                &capacity,
+                &status,
+                GatewayServiceSupervisorJobStatus::Failed,
+                None,
+                false,
+                true,
+                None,
+            );
+        }
+        Err(GatewayServiceOwnershipError::Unavailable) => {
+            return terminal(
+                id,
+                token,
+                &capacity,
+                &status,
+                GatewayServiceSupervisorJobStatus::Uncertain,
+                None,
+                false,
+                false,
+                None,
+            );
+        }
+    };
+    if lease.identity.gateway_id != request.gateway_id
+        || lease.identity.revision_id != request.revision_id
+    {
+        return terminal(
+            id,
+            token,
+            &capacity,
+            &status,
+            GatewayServiceSupervisorJobStatus::Failed,
+            Some(lease),
+            false,
+            false,
+            None,
+        );
+    }
+    if cancellation.is_cancelled() || Instant::now() >= deadlines.startup_deadline {
+        return terminal(
+            id,
+            token,
+            &capacity,
+            &status,
+            GatewayServiceSupervisorJobStatus::Cancelled,
+            Some(lease),
+            false,
+            false,
+            None,
+        );
+    }
+    let _ = status.send(GatewayServiceSupervisorJobStatus::Starting);
+    let coordinator = GatewayServiceCoordinator::new(
+        lease.clone(),
+        context.owner.clone(),
+        deadlines.initial_lease_deadline,
+        deadlines.startup_deadline,
+        request.intent,
+        Arc::clone(&context.ownership),
+        Arc::clone(&context.failure_store),
+        Arc::clone(&context.resolver),
+        Arc::clone(&context.provider),
+        Arc::clone(&context.targets),
+        context.registry.clone(),
+        context.service_authority.clone(),
+        context.policy,
+    );
+    let Ok((coordinator, control)) = coordinator else {
+        return terminal(
+            id,
+            token,
+            &capacity,
+            &status,
+            GatewayServiceSupervisorJobStatus::Failed,
+            Some(lease),
+            false,
+            false,
+            None,
+        );
+    };
+    let coordinator_status = control.subscribe();
+    let mut coordinator_status = coordinator_status;
+    let mut run = Box::pin(coordinator.run());
+    let mut cancel_sent = false;
+    let mut startup_finished = false;
+    let mut status_open = true;
+    let result = loop {
+        tokio::select! {
+            result = &mut run => break result,
+            changed = coordinator_status.changed(), if status_open => {
+                if changed.is_err() {
+                    status_open = false;
+                    continue;
+                }
+                let current = *coordinator_status.borrow();
+                if current == GatewayServiceCoordinatorStatus::Ready && !startup_finished {
+                    startup_finished = finish_startup(&capacity, token);
+                    let _ = status.send(GatewayServiceSupervisorJobStatus::Ready);
+                } else if current == GatewayServiceCoordinatorStatus::Starting || current == GatewayServiceCoordinatorStatus::Preparing || current == GatewayServiceCoordinatorStatus::Probing {
+                    let _ = status.send(GatewayServiceSupervisorJobStatus::Starting);
+                }
+            }
+            () = cancellation.cancelled(), if !cancel_sent => {
+                cancel_sent = true;
+                control.cancel();
+            }
+        }
+    };
+    if !startup_finished {
+        startup_finished = finish_startup(&capacity, token);
+    }
+    match result {
+        Ok(()) => terminal(
+            id,
+            token,
+            &capacity,
+            &status,
+            GatewayServiceSupervisorJobStatus::Settled,
+            None,
+            startup_finished,
+            true,
+            None,
+        ),
+        Err(failure) => {
+            let released = failure.physical_cleanup_complete && failure.durable_cleanup_complete;
+            let status_value = if cancellation.is_cancelled() {
+                GatewayServiceSupervisorJobStatus::Cancelled
+            } else {
+                GatewayServiceSupervisorJobStatus::Failed
+            };
+            terminal(
+                id,
+                token,
+                &capacity,
+                &status,
+                status_value,
+                Some(failure.lease.clone()),
+                startup_finished,
+                released,
+                Some(failure),
+            )
+        }
+    }
+}
+
+fn finish_startup(
+    capacity: &Arc<Mutex<GatewayServiceCapacity>>,
+    token: GatewayServiceCapacityToken,
+) -> bool {
+    capacity
+        .lock()
+        .expect("service capacity lock")
+        .finish_startup(token)
+        .is_ok()
+}
+
+fn complete_capacity(
+    capacity: &Arc<Mutex<GatewayServiceCapacity>>,
+    token: GatewayServiceCapacityToken,
+) -> bool {
+    capacity
+        .lock()
+        .expect("service capacity lock")
+        .complete(token)
+        .is_ok()
+}
+
+// The terminal record keeps every ownership-bearing value together. Its
+// argument count is deliberate: callers must state cleanup completion before
+// releasing capacity.
+#[allow(clippy::too_many_arguments)]
+fn terminal(
+    id: Uuid,
+    token: GatewayServiceCapacityToken,
+    capacity: &Arc<Mutex<GatewayServiceCapacity>>,
+    status: &watch::Sender<GatewayServiceSupervisorJobStatus>,
+    status_value: GatewayServiceSupervisorJobStatus,
+    lease: Option<GatewayServiceInstanceLease>,
+    startup_finished: bool,
+    release_capacity: bool,
+    coordinator_failure: Option<GatewayServiceCoordinatorFailure>,
+) -> JobCompletion {
+    if !startup_finished {
+        let _ = finish_startup(capacity, token);
+    }
+    let capacity_released = release_capacity && complete_capacity(capacity, token);
+    let _ = status.send(status_value);
+    JobCompletion {
+        id,
+        status: status_value,
+        capacity_released,
+        terminal: JobTerminal {
+            lease,
+            claim_uncertain: status_value == GatewayServiceSupervisorJobStatus::Uncertain,
+            coordinator_failure,
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        collections::BTreeMap,
+        path::PathBuf,
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+        },
+    };
+
+    use ::time::{Duration as TimeDuration, OffsetDateTime};
+    use async_trait::async_trait;
+    use gateway_domain::{GatewayServiceConfig, ServiceProbePath};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::sync::Notify;
+    use vm_trait::{
+        BoxedPrivateServiceConnection, GuestCommand, NetworkMode, PrivateHttpServiceSpec,
+        RootFilesystem, StopMode, VmError, VmEvent, VmExit, VmId, VmInstance, VmProvider,
+        VmResources,
+    };
+
+    use super::*;
+    use crate::{
+        GatewayEdgeError, GatewayServiceFailure, GatewayServiceFailureStoreError,
+        GatewayServiceIdentity, GatewayServiceInstancePage, GatewayServiceInstancePageResult,
+        GatewayServiceTargetPage, GatewayServiceTargetPageResult, GatewayServiceTargetStore,
+    };
+
+    struct Noop {
+        claim_result:
+            Mutex<Option<Result<GatewayServiceInstanceLease, GatewayServiceOwnershipError>>>,
+        claim_started: Notify,
+        claim_release: Notify,
+        block_claim: AtomicBool,
+        claim_calls: AtomicUsize,
+    }
+
+    impl Default for Noop {
+        fn default() -> Self {
+            Self {
+                claim_result: Mutex::new(None),
+                claim_started: Notify::new(),
+                claim_release: Notify::new(),
+                block_claim: AtomicBool::new(false),
+                claim_calls: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl GatewayServiceOwnership for Noop {
+        async fn claim_new(
+            &self,
+            _: Uuid,
+            _: Uuid,
+            _: &GatewayServiceOwner,
+            _: std::time::Duration,
+        ) -> Result<GatewayServiceInstanceLease, GatewayServiceOwnershipError> {
+            self.claim_calls.fetch_add(1, Ordering::Relaxed);
+            self.claim_started.notify_one();
+            if self.block_claim.load(Ordering::Relaxed) {
+                self.claim_release.notified().await;
+            }
+            self.claim_result
+                .lock()
+                .expect("claim result")
+                .clone()
+                .unwrap_or_else(|| unimplemented!())
+        }
+
+        async fn renew(
+            &self,
+            _: &GatewayServiceInstanceLease,
+            _: &GatewayServiceOwner,
+            _: std::time::Duration,
+        ) -> Result<GatewayServiceInstanceLease, GatewayServiceOwnershipError> {
+            unimplemented!()
+        }
+
+        async fn claim_expired(
+            &self,
+            _: &GatewayServiceOwner,
+            _: std::time::Duration,
+            _: usize,
+        ) -> Result<Vec<GatewayServiceInstanceLease>, GatewayServiceOwnershipError> {
+            unimplemented!()
+        }
+
+        async fn mark_stopping(
+            &self,
+            _: &GatewayServiceInstanceLease,
+            _: &GatewayServiceOwner,
+        ) -> Result<GatewayServiceInstanceLease, GatewayServiceOwnershipError> {
+            unimplemented!()
+        }
+
+        async fn mark_starting(
+            &self,
+            _: &GatewayServiceInstanceLease,
+            _: &GatewayServiceOwner,
+        ) -> Result<GatewayServiceInstanceLease, GatewayServiceOwnershipError> {
+            unimplemented!()
+        }
+
+        async fn mark_ready(
+            &self,
+            _: &GatewayServiceInstanceLease,
+            _: &GatewayServiceOwner,
+        ) -> Result<GatewayServiceInstanceLease, GatewayServiceOwnershipError> {
+            unimplemented!()
+        }
+
+        async fn mark_draining(
+            &self,
+            _: &GatewayServiceInstanceLease,
+            _: &GatewayServiceOwner,
+        ) -> Result<GatewayServiceInstanceLease, GatewayServiceOwnershipError> {
+            unimplemented!()
+        }
+
+        async fn promote_ready(
+            &self,
+            _: &GatewayServiceInstanceLease,
+            _: &GatewayServiceOwner,
+        ) -> Result<Option<Uuid>, GatewayServiceOwnershipError> {
+            unimplemented!()
+        }
+
+        async fn mark_cleaned(
+            &self,
+            _: &GatewayServiceInstanceLease,
+            _: &GatewayServiceOwner,
+        ) -> Result<(), GatewayServiceOwnershipError> {
+            unimplemented!()
+        }
+    }
+
+    #[async_trait]
+    impl GatewayServiceFailureStore for Noop {
+        async fn record_failure(
+            &self,
+            _: &GatewayServiceInstanceLease,
+            _: &GatewayServiceOwner,
+            _: GatewayServiceFailure,
+        ) -> Result<(), GatewayServiceFailureStoreError> {
+            unimplemented!()
+        }
+    }
+
+    #[async_trait]
+    impl GatewayServiceLaunchResolver for Noop {
+        async fn resolve_service_launch(
+            &self,
+            _: crate::GatewayServiceLaunchRequest,
+        ) -> Result<crate::GatewayServiceLaunch, GatewayEdgeError> {
+            unimplemented!()
+        }
+
+        async fn cleanup_service_launch(
+            &self,
+            _: GatewayServiceIdentity,
+        ) -> Result<(), GatewayEdgeError> {
+            unimplemented!()
+        }
+    }
+
+    #[async_trait]
+    impl GatewayServiceTargetStore for Noop {
+        async fn list_service_targets(
+            &self,
+            _: GatewayServiceTargetPage,
+        ) -> Result<GatewayServiceTargetPageResult, GatewayEdgeError> {
+            unimplemented!()
+        }
+
+        async fn get_service_target(
+            &self,
+            _: Uuid,
+            _: Uuid,
+        ) -> Result<Option<crate::GatewayServiceOwnedTarget>, GatewayEdgeError> {
+            unimplemented!()
+        }
+
+        async fn count_accepted_service_invocations(
+            &self,
+            _: Uuid,
+            _: Uuid,
+        ) -> Result<u64, GatewayEdgeError> {
+            unimplemented!()
+        }
+
+        async fn count_accepted_service_invocations_for_instance(
+            &self,
+            _: crate::GatewayServiceInstanceKey,
+        ) -> Result<u64, GatewayEdgeError> {
+            unimplemented!()
+        }
+
+        async fn get_service_instance(
+            &self,
+            _: GatewayServiceIdentity,
+        ) -> Result<Option<GatewayServiceInstanceLease>, GatewayEdgeError> {
+            unimplemented!()
+        }
+
+        async fn list_service_instances(
+            &self,
+            _: GatewayServiceInstancePage,
+        ) -> Result<GatewayServiceInstancePageResult, GatewayEdgeError> {
+            unimplemented!()
+        }
+    }
+
+    #[async_trait]
+    impl VmProvider for Noop {
+        fn name(&self) -> &'static str {
+            "supervisor-test-noop"
+        }
+
+        async fn provision(
+            &self,
+            _: vm_trait::VmSpec,
+        ) -> Result<Arc<dyn vm_trait::VmInstance>, vm_trait::VmError> {
+            unimplemented!()
+        }
+
+        async fn cleanup_orphan(&self, _: &vm_trait::VmId) -> Result<(), vm_trait::VmError> {
+            unimplemented!()
+        }
+    }
+
+    struct ServiceReadyVm {
+        id: VmId,
+        events: tokio::sync::broadcast::Sender<VmEvent>,
+        fail_destroy: bool,
+    }
+
+    #[async_trait]
+    impl VmInstance for ServiceReadyVm {
+        fn id(&self) -> &VmId {
+            &self.id
+        }
+
+        async fn start(&self) -> Result<(), VmError> {
+            Ok(())
+        }
+
+        async fn stop(&self, _: StopMode) -> Result<(), VmError> {
+            Ok(())
+        }
+
+        async fn wait(&self) -> Result<VmExit, VmError> {
+            std::future::pending().await
+        }
+
+        async fn open_private_service_connection(
+            &self,
+        ) -> Result<BoxedPrivateServiceConnection, VmError> {
+            let (client, mut peer) = tokio::io::duplex(4096);
+            tokio::spawn(async move {
+                let mut request = [0_u8; 2048];
+                let _ = peer.read(&mut request).await;
+                peer.write_all(
+                    b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+                )
+                .await
+                .expect("readiness response");
+            });
+            Ok(Box::new(client))
+        }
+
+        fn subscribe_events(&self) -> tokio::sync::broadcast::Receiver<VmEvent> {
+            self.events.subscribe()
+        }
+
+        async fn destroy(&self) -> Result<(), VmError> {
+            if self.fail_destroy {
+                Err(VmError::Unavailable {
+                    resource: String::from("test VM"),
+                    reason: String::from("deliberate cleanup failure"),
+                })
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    struct ReadyProvider {
+        fail_destroy: bool,
+        last_vm: Mutex<Option<Arc<dyn VmInstance>>>,
+    }
+
+    #[async_trait]
+    impl VmProvider for ReadyProvider {
+        fn name(&self) -> &'static str {
+            "supervisor-ready-test"
+        }
+
+        async fn provision(&self, spec: vm_trait::VmSpec) -> Result<Arc<dyn VmInstance>, VmError> {
+            let (events, _) = tokio::sync::broadcast::channel(8);
+            let vm: Arc<dyn VmInstance> = Arc::new(ServiceReadyVm {
+                id: spec.id,
+                events,
+                fail_destroy: self.fail_destroy,
+            });
+            *self.last_vm.lock().expect("last VM") = Some(Arc::clone(&vm));
+            Ok(vm)
+        }
+
+        async fn cleanup_orphan(&self, id: &VmId) -> Result<(), VmError> {
+            let _ = id;
+            Ok(())
+        }
+    }
+
+    struct ReadyResolver {
+        launch: crate::GatewayServiceLaunch,
+    }
+
+    #[async_trait]
+    impl GatewayServiceLaunchResolver for ReadyResolver {
+        async fn resolve_service_launch(
+            &self,
+            _: crate::GatewayServiceLaunchRequest,
+        ) -> Result<crate::GatewayServiceLaunch, GatewayEdgeError> {
+            Ok(self.launch.clone())
+        }
+
+        async fn cleanup_service_launch(
+            &self,
+            _: GatewayServiceIdentity,
+        ) -> Result<(), GatewayEdgeError> {
+            Ok(())
+        }
+    }
+
+    struct ReadyFailureStore;
+
+    #[async_trait]
+    impl GatewayServiceFailureStore for ReadyFailureStore {
+        async fn record_failure(
+            &self,
+            _: &GatewayServiceInstanceLease,
+            _: &GatewayServiceOwner,
+            _: GatewayServiceFailure,
+        ) -> Result<(), GatewayServiceFailureStoreError> {
+            Ok(())
+        }
+    }
+
+    struct ReadyOwnership {
+        lease: Mutex<GatewayServiceInstanceLease>,
+    }
+
+    impl ReadyOwnership {
+        fn current(&self) -> GatewayServiceInstanceLease {
+            self.lease.lock().expect("ready lease").clone()
+        }
+
+        fn transition(
+            &self,
+            state: crate::GatewayServiceInstanceState,
+        ) -> GatewayServiceInstanceLease {
+            let mut lease = self.lease.lock().expect("ready lease");
+            lease.state = state;
+            lease.clone()
+        }
+    }
+
+    #[async_trait]
+    impl GatewayServiceOwnership for ReadyOwnership {
+        async fn claim_new(
+            &self,
+            _: Uuid,
+            _: Uuid,
+            _: &GatewayServiceOwner,
+            _: std::time::Duration,
+        ) -> Result<GatewayServiceInstanceLease, GatewayServiceOwnershipError> {
+            Ok(self.current())
+        }
+
+        async fn renew(
+            &self,
+            _: &GatewayServiceInstanceLease,
+            _: &GatewayServiceOwner,
+            _: std::time::Duration,
+        ) -> Result<GatewayServiceInstanceLease, GatewayServiceOwnershipError> {
+            Ok(self.current())
+        }
+
+        async fn claim_expired(
+            &self,
+            _: &GatewayServiceOwner,
+            _: std::time::Duration,
+            _: usize,
+        ) -> Result<Vec<GatewayServiceInstanceLease>, GatewayServiceOwnershipError> {
+            Ok(Vec::new())
+        }
+
+        async fn mark_stopping(
+            &self,
+            _: &GatewayServiceInstanceLease,
+            _: &GatewayServiceOwner,
+        ) -> Result<GatewayServiceInstanceLease, GatewayServiceOwnershipError> {
+            Ok(self.transition(crate::GatewayServiceInstanceState::Stopping))
+        }
+
+        async fn mark_starting(
+            &self,
+            _: &GatewayServiceInstanceLease,
+            _: &GatewayServiceOwner,
+        ) -> Result<GatewayServiceInstanceLease, GatewayServiceOwnershipError> {
+            Ok(self.transition(crate::GatewayServiceInstanceState::Starting))
+        }
+
+        async fn mark_ready(
+            &self,
+            _: &GatewayServiceInstanceLease,
+            _: &GatewayServiceOwner,
+        ) -> Result<GatewayServiceInstanceLease, GatewayServiceOwnershipError> {
+            Ok(self.transition(crate::GatewayServiceInstanceState::Ready))
+        }
+
+        async fn mark_draining(
+            &self,
+            _: &GatewayServiceInstanceLease,
+            _: &GatewayServiceOwner,
+        ) -> Result<GatewayServiceInstanceLease, GatewayServiceOwnershipError> {
+            Ok(self.transition(crate::GatewayServiceInstanceState::Draining))
+        }
+
+        async fn promote_ready(
+            &self,
+            _: &GatewayServiceInstanceLease,
+            _: &GatewayServiceOwner,
+        ) -> Result<Option<Uuid>, GatewayServiceOwnershipError> {
+            Ok(None)
+        }
+
+        async fn mark_cleaned(
+            &self,
+            _: &GatewayServiceInstanceLease,
+            _: &GatewayServiceOwner,
+        ) -> Result<(), GatewayServiceOwnershipError> {
+            let _ = self.transition(crate::GatewayServiceInstanceState::Cleaned);
+            Ok(())
+        }
+    }
+
+    struct ReadyTargets {
+        target: crate::GatewayServiceOwnedTarget,
+    }
+
+    #[async_trait]
+    impl GatewayServiceTargetStore for ReadyTargets {
+        async fn list_service_targets(
+            &self,
+            _: GatewayServiceTargetPage,
+        ) -> Result<GatewayServiceTargetPageResult, GatewayEdgeError> {
+            Ok(GatewayServiceTargetPageResult {
+                targets: Vec::new(),
+                next_after: None,
+            })
+        }
+
+        async fn get_service_target(
+            &self,
+            _: Uuid,
+            _: Uuid,
+        ) -> Result<Option<crate::GatewayServiceOwnedTarget>, GatewayEdgeError> {
+            Ok(Some(self.target.clone()))
+        }
+
+        async fn count_accepted_service_invocations(
+            &self,
+            _: Uuid,
+            _: Uuid,
+        ) -> Result<u64, GatewayEdgeError> {
+            Ok(0)
+        }
+
+        async fn count_accepted_service_invocations_for_instance(
+            &self,
+            _: crate::GatewayServiceInstanceKey,
+        ) -> Result<u64, GatewayEdgeError> {
+            Ok(0)
+        }
+
+        async fn get_service_instance(
+            &self,
+            _: GatewayServiceIdentity,
+        ) -> Result<Option<GatewayServiceInstanceLease>, GatewayEdgeError> {
+            Ok(None)
+        }
+
+        async fn list_service_instances(
+            &self,
+            _: GatewayServiceInstancePage,
+        ) -> Result<GatewayServiceInstancePageResult, GatewayEdgeError> {
+            Ok(GatewayServiceInstancePageResult {
+                instances: Vec::new(),
+                next_after: None,
+            })
+        }
+    }
+
+    fn supervisor_with_policy(
+        ownership: Arc<Noop>,
+        owner: GatewayServiceOwner,
+        policy: GatewayServiceSupervisorPolicy,
+    ) -> GatewayServiceSupervisor {
+        let registry =
+            GatewayServiceRegistry::new(8, policy.requests_per_instance).expect("registry");
+        GatewayServiceSupervisor::new(GatewayServiceSupervisorContext {
+            owner,
+            policy,
+            ownership,
+            failure_store: Arc::new(Noop::default()),
+            resolver: Arc::new(Noop::default()),
+            provider: Arc::new(Noop::default()),
+            targets: Arc::new(Noop::default()),
+            registry,
+            service_authority: String::from("127.0.0.1:8080"),
+        })
+        .expect("supervisor")
+    }
+
+    fn supervisor_with(ownership: Arc<Noop>) -> GatewayServiceSupervisor {
+        supervisor_with_policy(
+            ownership,
+            GatewayServiceOwner::new("test-host", Uuid::new_v4()).expect("owner"),
+            GatewayServiceSupervisorPolicy::default(),
+        )
+    }
+
+    fn supervisor() -> GatewayServiceSupervisor {
+        supervisor_with(Arc::new(Noop::default()))
+    }
+
+    fn lease(
+        request: GatewayServiceStartupRequest,
+        owner: &GatewayServiceOwner,
+    ) -> GatewayServiceInstanceLease {
+        let identity = GatewayServiceIdentity {
+            instance_id: Uuid::new_v4(),
+            gateway_id: request.gateway_id,
+            revision_id: request.revision_id,
+        };
+        GatewayServiceInstanceLease {
+            identity,
+            owner_host_id: owner.host_id.clone(),
+            owner_uuid: owner.owner_uuid,
+            fencing_token: 1,
+            state: crate::GatewayServiceInstanceState::Provisioning,
+            vm_id: format!("gateway-service-{}", identity.instance_id),
+            lease_expires_at: OffsetDateTime::now_utc() + TimeDuration::minutes(1),
+            heartbeat_at: OffsetDateTime::now_utc(),
+        }
+    }
+
+    fn ready_supervisor(
+        fail_destroy: bool,
+    ) -> (
+        GatewayServiceSupervisor,
+        Arc<ReadyProvider>,
+        GatewayServiceStartupRequest,
+    ) {
+        let gateway_id = Uuid::new_v4();
+        let revision_id = Uuid::new_v4();
+        let instance_id = Uuid::new_v4();
+        let identity = GatewayServiceIdentity {
+            instance_id,
+            gateway_id,
+            revision_id,
+        };
+        let owner = GatewayServiceOwner::new("ready-host", Uuid::new_v4()).expect("owner");
+        let service = GatewayServiceConfig::new(
+            8080,
+            ServiceProbePath::parse("/ready").expect("readiness"),
+            ServiceProbePath::parse("/health").expect("health"),
+        )
+        .expect("service");
+        let launch = crate::GatewayServiceLaunch {
+            identity,
+            service: service.clone(),
+            spec: vm_trait::VmSpec {
+                id: VmId(format!("gateway-service-{instance_id}")),
+                root: RootFilesystem::Directory {
+                    host_path: PathBuf::from("/tmp/supervisor-ready-root"),
+                },
+                disks: Vec::new(),
+                mounts: Vec::new(),
+                resources: VmResources {
+                    vcpus: 1,
+                    memory_mib: 64,
+                },
+                network: NetworkMode::Disabled,
+                command: GuestCommand {
+                    program: String::from("/service"),
+                    args: Vec::new(),
+                    env: BTreeMap::new(),
+                    working_dir: None,
+                },
+                runtime_authority: None,
+                private_http_service: Some(PrivateHttpServiceSpec {
+                    loopback_port: 8080,
+                    max_connections: 32,
+                    connect_timeout: std::time::Duration::from_secs(2),
+                }),
+                labels: BTreeMap::new(),
+            },
+        };
+        let lease = GatewayServiceInstanceLease {
+            identity,
+            owner_host_id: owner.host_id.clone(),
+            owner_uuid: owner.owner_uuid,
+            fencing_token: 1,
+            state: crate::GatewayServiceInstanceState::Provisioning,
+            vm_id: format!("gateway-service-{instance_id}"),
+            lease_expires_at: OffsetDateTime::now_utc() + TimeDuration::minutes(5),
+            heartbeat_at: OffsetDateTime::now_utc(),
+        };
+        let ownership = Arc::new(ReadyOwnership {
+            lease: Mutex::new(lease),
+        });
+        let provider = Arc::new(ReadyProvider {
+            fail_destroy,
+            last_vm: Mutex::new(None),
+        });
+        let target = crate::GatewayServiceOwnedTarget {
+            gateway_id,
+            lifecycle: String::from("enabled"),
+            active_revision_id: None,
+            desired_service_revision_id: Some(revision_id),
+            revision: crate::GatewayServiceRevisionTarget {
+                revision_id,
+                release_id: Some(Uuid::new_v4()),
+                release_state: Some(String::from("published")),
+                publication_eligible: true,
+                service,
+            },
+        };
+        let policy = GatewayServiceSupervisorPolicy::default();
+        let registry =
+            GatewayServiceRegistry::new(8, policy.requests_per_instance).expect("registry");
+        let supervisor = GatewayServiceSupervisor::new(GatewayServiceSupervisorContext {
+            owner,
+            policy,
+            ownership,
+            failure_store: Arc::new(ReadyFailureStore),
+            resolver: Arc::new(ReadyResolver { launch }),
+            provider: Arc::clone(&provider) as Arc<dyn VmProvider>,
+            targets: Arc::new(ReadyTargets { target }),
+            registry,
+            service_authority: String::from("127.0.0.1:8080"),
+        })
+        .expect("supervisor");
+        (
+            supervisor,
+            provider,
+            GatewayServiceStartupRequest {
+                gateway_id,
+                revision_id,
+                intent: GatewayServiceStartupIntent::ActivateDesired,
+            },
+        )
+    }
+
+    fn request(gateway_id: Uuid, revision_id: Uuid) -> GatewayServiceStartupRequest {
+        GatewayServiceStartupRequest {
+            gateway_id,
+            revision_id,
+            intent: GatewayServiceStartupIntent::ActivateDesired,
+        }
+    }
+
+    async fn wait_until_ready(
+        supervisor: &mut GatewayServiceSupervisor,
+        handle: &GatewayServiceStartupHandle,
+    ) {
+        let mut observed = handle.subscribe();
+        let poll = supervisor.poll();
+        tokio::pin!(poll);
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                tokio::select! {
+                    changed = observed.changed() => {
+                        changed.expect("status channel");
+                        if *observed.borrow() == GatewayServiceSupervisorJobStatus::Ready {
+                            break;
+                        }
+                    }
+                    event = &mut poll => panic!("startup ended before readiness: {event:?}"),
+                }
+            }
+        })
+        .await
+        .expect("bounded readiness");
+    }
+
+    #[test]
+    fn start_reserves_capacity_before_claim_future_is_polled() {
+        let mut supervisor = supervisor();
+        let request = request(Uuid::new_v4(), Uuid::new_v4());
+        let handle = supervisor.start(request).expect("reservation");
+        assert_eq!(
+            handle.subscribe().borrow().to_owned(),
+            GatewayServiceSupervisorJobStatus::Claiming
+        );
+        assert_eq!(supervisor.capacity_snapshot().live_instances, 1);
+        assert_eq!(supervisor.capacity_snapshot().starting_instances, 1);
+        drop(supervisor);
+    }
+
+    #[test]
+    fn startup_capacity_is_bounded_before_any_claim_is_polled() {
+        let mut supervisor = supervisor();
+        for _ in 0..2 {
+            supervisor
+                .start(request(Uuid::new_v4(), Uuid::new_v4()))
+                .expect("startup slot");
+        }
+        let error = supervisor
+            .start(request(Uuid::new_v4(), Uuid::new_v4()))
+            .expect_err("third startup must wait");
+        assert_eq!(
+            error,
+            GatewayServiceSupervisorError::Capacity(
+                GatewayServiceCapacityError::StartupCapacityExhausted
+            )
+        );
+        drop(supervisor);
+    }
+
+    #[tokio::test]
+    async fn cancellation_before_first_poll_releases_without_claiming() {
+        let ownership = Arc::new(Noop::default());
+        let mut supervisor = supervisor_with(Arc::clone(&ownership));
+        let handle = supervisor
+            .start(request(Uuid::new_v4(), Uuid::new_v4()))
+            .expect("reservation");
+        handle.cancel();
+        let event = supervisor.poll().await.expect("cancelled job");
+        assert_eq!(event.status, GatewayServiceSupervisorJobStatus::Cancelled);
+        assert!(event.capacity_released);
+        assert_eq!(ownership.claim_calls.load(Ordering::Relaxed), 0);
+        assert_eq!(supervisor.capacity_snapshot().live_instances, 0);
+        drop(supervisor);
+    }
+
+    #[tokio::test]
+    async fn expired_queued_deadline_releases_without_claiming() {
+        let ownership = Arc::new(Noop::default());
+        let policy = GatewayServiceSupervisorPolicy {
+            instance: crate::ServiceInstancePolicy::new(
+                std::time::Duration::from_millis(1),
+                std::time::Duration::from_millis(1),
+                std::time::Duration::from_millis(1),
+                std::time::Duration::from_secs(1),
+            ),
+            ..GatewayServiceSupervisorPolicy::default()
+        };
+        let mut supervisor = supervisor_with_policy(
+            Arc::clone(&ownership),
+            GatewayServiceOwner::new("test-host", Uuid::new_v4()).expect("owner"),
+            policy,
+        );
+        supervisor
+            .start(request(Uuid::new_v4(), Uuid::new_v4()))
+            .expect("reservation");
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        let event = supervisor.poll().await.expect("expired job");
+        assert_eq!(event.status, GatewayServiceSupervisorJobStatus::Failed);
+        assert!(event.capacity_released);
+        assert_eq!(ownership.claim_calls.load(Ordering::Relaxed), 0);
+        drop(supervisor);
+    }
+
+    // `shutdown` consumes the supervisor after joining every owned future; the
+    // nursery lint cannot see that this is the deliberate final drop point.
+    #[allow(clippy::significant_drop_tightening)]
+    #[tokio::test]
+    async fn successful_wrong_revision_claim_is_retained_without_provisioning() {
+        let ownership = Arc::new(Noop::default());
+        let owner = GatewayServiceOwner::new("test-host", Uuid::new_v4()).expect("owner");
+        let requested = request(Uuid::new_v4(), Uuid::new_v4());
+        let wrong = request(requested.gateway_id, Uuid::new_v4());
+        let claimed = lease(wrong, &owner);
+        *ownership.claim_result.lock().expect("claim result") = Some(Ok(claimed.clone()));
+        let mut supervisor = supervisor_with_policy(
+            Arc::clone(&ownership),
+            owner,
+            GatewayServiceSupervisorPolicy::default(),
+        );
+        supervisor.start(requested).expect("reservation");
+        let event = supervisor.poll().await.expect("invalid claim job");
+        assert_eq!(event.status, GatewayServiceSupervisorJobStatus::Failed);
+        assert!(!event.capacity_released);
+        let shutdown = supervisor.shutdown().await;
+        assert_eq!(shutdown.unresolved.len(), 1);
+        assert_eq!(shutdown.unresolved[0].lease.as_ref(), Some(&claimed));
+        assert_eq!(ownership.claim_calls.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn coordinator_readiness_releases_startup_but_cleanup_failure_retains_vm() {
+        let (mut supervisor, provider, request) = ready_supervisor(true);
+        let handle = supervisor.start(request).expect("reservation");
+        wait_until_ready(&mut supervisor, &handle).await;
+        let snapshot = supervisor.capacity_snapshot();
+        assert_eq!(snapshot.live_instances, 1);
+        assert_eq!(snapshot.starting_instances, 0);
+        handle.cancel();
+        let event = supervisor.poll().await.expect("cleanup result");
+        assert_eq!(event.status, GatewayServiceSupervisorJobStatus::Cancelled);
+        assert!(!event.capacity_released);
+        let expected_vm = provider.last_vm.lock().expect("last VM").clone();
+        let shutdown = supervisor.shutdown().await;
+        assert_eq!(shutdown.unresolved.len(), 1);
+        let failure = shutdown.unresolved[0]
+            .coordinator_failure
+            .as_ref()
+            .expect("retained coordinator failure");
+        let actual_vm = failure.vm.as_ref().expect("retained VM");
+        assert!(Arc::ptr_eq(
+            actual_vm,
+            expected_vm.as_ref().expect("expected VM")
+        ));
+        assert!(!failure.physical_cleanup_complete);
+    }
+
+    #[tokio::test]
+    async fn coordinator_success_releases_live_capacity_after_cleanup() {
+        let (mut supervisor, _provider, request) = ready_supervisor(false);
+        let handle = supervisor.start(request).expect("reservation");
+        wait_until_ready(&mut supervisor, &handle).await;
+        assert_eq!(supervisor.capacity_snapshot().live_instances, 1);
+        assert_eq!(supervisor.capacity_snapshot().starting_instances, 0);
+        handle.cancel();
+        let event = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            supervisor.poll(),
+        )
+        .await
+        .expect("bounded cleanup")
+        .expect("cleanup result");
+        assert!(event.capacity_released);
+        assert_eq!(supervisor.capacity_snapshot().live_instances, 0);
+        assert!(!supervisor.has_pending_jobs());
+        let shutdown = supervisor.shutdown().await;
+        assert!(shutdown.unresolved.is_empty());
+    }
+
+    // `shutdown` consumes the supervisor after joining every owned future; the
+    // nursery lint cannot see that this is the deliberate final drop point.
+    #[allow(clippy::significant_drop_tightening)]
+    #[tokio::test]
+    async fn cancellation_after_claim_started_retains_late_lease_and_capacity() {
+        let ownership = Arc::new(Noop::default());
+        ownership.block_claim.store(true, Ordering::Relaxed);
+        let request = request(Uuid::new_v4(), Uuid::new_v4());
+        let owner = GatewayServiceOwner::new("test-host", Uuid::new_v4()).expect("owner");
+        let claimed = lease(request, &owner);
+        *ownership.claim_result.lock().expect("claim result") = Some(Ok(claimed.clone()));
+        let mut supervisor = supervisor_with_policy(
+            Arc::clone(&ownership),
+            owner,
+            GatewayServiceSupervisorPolicy::default(),
+        );
+        let handle = supervisor.start(request).expect("reservation");
+        let event = {
+            let poll = supervisor.poll();
+            tokio::pin!(poll);
+            tokio::select! {
+                () = ownership.claim_started.notified() => {}
+                _ = &mut poll => panic!("claim should be blocked before cancellation"),
+            }
+            handle.cancel();
+            ownership.claim_release.notify_one();
+            poll.await.expect("cancelled job")
+        };
+        assert_eq!(event.status, GatewayServiceSupervisorJobStatus::Cancelled);
+        assert!(!event.capacity_released);
+        let shutdown = supervisor.shutdown().await;
+        assert_eq!(shutdown.unresolved.len(), 1);
+        assert_eq!(shutdown.unresolved[0].request, request);
+        assert_eq!(shutdown.unresolved[0].lease.as_ref(), Some(&claimed));
+    }
+
+    // `shutdown` consumes the supervisor after joining every owned future; the
+    // nursery lint cannot see that this is the deliberate final drop point.
+    #[allow(clippy::significant_drop_tightening)]
+    #[tokio::test]
+    async fn unavailable_claim_is_quarantined_until_reconciliation() {
+        let ownership = Arc::new(Noop::default());
+        *ownership.claim_result.lock().expect("claim result") =
+            Some(Err(GatewayServiceOwnershipError::Unavailable));
+        let mut supervisor = supervisor_with(Arc::clone(&ownership));
+        let request = request(Uuid::new_v4(), Uuid::new_v4());
+        supervisor.start(request).expect("reservation");
+        let event = supervisor.poll().await.expect("uncertain job");
+        assert_eq!(event.status, GatewayServiceSupervisorJobStatus::Uncertain);
+        assert!(!event.capacity_released);
+        assert_eq!(supervisor.capacity_snapshot().live_instances, 1);
+        assert_eq!(supervisor.capacity_snapshot().starting_instances, 0);
+        assert_eq!(
+            supervisor.start(request).unwrap_err(),
+            GatewayServiceSupervisorError::Duplicate
+        );
+        let shutdown = supervisor.shutdown().await;
+        assert_eq!(shutdown.unresolved.len(), 1);
+        assert_eq!(shutdown.unresolved[0].request, request);
+    }
+
+    #[tokio::test]
+    async fn definite_claim_conflict_releases_capacity() {
+        let ownership = Arc::new(Noop::default());
+        *ownership.claim_result.lock().expect("claim result") =
+            Some(Err(GatewayServiceOwnershipError::Conflict));
+        let mut supervisor = supervisor_with(Arc::clone(&ownership));
+        let request = request(Uuid::new_v4(), Uuid::new_v4());
+        supervisor.start(request).expect("reservation");
+        let event = supervisor.poll().await.expect("conflict job");
+        assert_eq!(event.status, GatewayServiceSupervisorJobStatus::Failed);
+        assert!(event.capacity_released);
+        assert_eq!(supervisor.capacity_snapshot().live_instances, 0);
+        drop(supervisor);
+    }
+
+    #[tokio::test]
+    async fn dropping_poll_wait_keeps_parent_owned_future() {
+        let notify = Arc::new(Notify::new());
+        let waiter = Arc::clone(&notify);
+        let mut jobs: Vec<Pin<Box<dyn Future<Output = JobCompletion> + Send>>> =
+            vec![Box::pin(async move {
+                waiter.notified().await;
+                JobCompletion {
+                    id: Uuid::new_v4(),
+                    status: GatewayServiceSupervisorJobStatus::Settled,
+                    capacity_released: true,
+                    terminal: JobTerminal {
+                        lease: None,
+                        claim_uncertain: false,
+                        coordinator_failure: None,
+                    },
+                }
+            })];
+        {
+            let pending = poll_next_job(&mut jobs);
+            tokio::pin!(pending);
+            assert!(
+                tokio::time::timeout(std::time::Duration::from_millis(5), &mut pending)
+                    .await
+                    .is_err()
+            );
+        }
+        assert_eq!(jobs.len(), 1);
+        notify.notify_one();
+        assert!(poll_next_job(&mut jobs).await.is_some());
+        assert!(jobs.is_empty());
+    }
+}
