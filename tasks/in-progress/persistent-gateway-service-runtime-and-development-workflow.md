@@ -1333,3 +1333,28 @@ database fixture contamination: enabled targets left by the PostgreSQL suite
 could consume the bounded global startup scan before the recovery fixture was
 reached. The tested fix is test isolation only; the cutover implementation
 remains a separate uncommitted work in progress.
+
+Live-guest crash recovery checkpoint (2026-09-19): on committed base
+`95639da`, the isolated overlay
+`/tmp/heph-persistent-crash-verify-20260919` ran the joined command
+`HEPHAESTUS_APP_GATEWAY_SERVICE_E2E=1 scripts/run-gateway-libkrun-e2e.sh`.
+After the warm pair and graceful restart proof, public Caddy
+`/gateway/service/crash` returned the fixture's acknowledged 503, the guest
+exited with code 42, and the daemon recorded redacted `unexpected_exit` data
+for the old instance before reaching `cleaned`; its runtime, cgroup, and
+materializer paths were absent. The daemon then made a new instance Ready and
+active on the same immutable revision with a different startup ID, and two
+public identity requests reached the replacement with count `2->3`. The run
+recorded `persistent-service-crash ... exit_code=42`, passed 35 golden tests
+with one ignored and the 8-test gateway-postgres resolver suite, emitted
+`persistent-service-e2e=passed`, and confirmed
+`daemon golden E2E passed; runtime and cgroup cleanup verified`. Final pinned
+Rust 1.88 checks on the isolated overlay passed formatting, golden compilation,
+strict targeted Clippy, and rustdoc. Logs:
+`/tmp/heph-persistent-service-crash-e2e-20260919.log`,
+`/tmp/heph-persistent-crash-compile-final-isolated-20260919.log`,
+`/tmp/heph-persistent-crash-clippy-final-isolated-20260919.log`, and
+`/tmp/heph-persistent-crash-doc-final-isolated-20260919.log`. This proves a
+guest crash with the daemon alive and automatic replacement only; uncaught
+daemon crash recovery, expired-boot recovery, cutover, revocation/drain, and
+release UI remain pending.

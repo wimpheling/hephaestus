@@ -2653,6 +2653,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             (None, None)
         };
         if gateway_caddy_e2e {
+            let mut service_startup_id_before_crash = None;
             let admin_url =
                 env::var("HEPHAESTUS_CADDY_TEST_ADMIN_URL").expect("joined Caddy admin URL");
             let applied_config =
@@ -2672,6 +2673,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
                     &env::var("HEPHAESTUS_CADDY_TEST_PUBLIC_URL").expect("joined Caddy public URL"),
                 )
                 .await;
+                service_startup_id_before_crash = Some(first_service_proof.startup_id.clone());
                 if gateway_service_e2e {
                     let service_fixture = gateway_service_fixture
                         .as_ref()
@@ -2768,6 +2770,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
                             .expect("joined Caddy public URL after restart"),
                     )
                     .await;
+                    service_startup_id_before_crash = Some(second_service_proof.startup_id.clone());
                     assert_ne!(
                         first_service_proof.startup_id, second_service_proof.startup_id,
                         "restart must replace the guest startup identity"
@@ -2785,6 +2788,95 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             }
             let public_url =
                 env::var("HEPHAESTUS_CADDY_TEST_PUBLIC_URL").expect("joined Caddy public URL");
+            if gateway_service_e2e {
+                let service_fixture = gateway_service_fixture
+                    .as_ref()
+                    .expect("persistent service fixture before crash proof");
+                let crashed_instance_id =
+                    service_instance_id.expect("persistent service instance before crash proof");
+                let crashed_startup_id = service_startup_id_before_crash
+                    .as_deref()
+                    .expect("persistent service startup identity before crash");
+                let crashed_resource_paths = service_resource_paths
+                    .as_ref()
+                    .expect("persistent service paths before crash proof");
+                exercise_gateway_service_crash(&public_url).await;
+                let replacement_instance_id = wait_for_gateway_service_crash_replacement(
+                    &pool,
+                    service_fixture,
+                    crashed_instance_id,
+                )
+                .await;
+                assert_ne!(
+                    crashed_instance_id, replacement_instance_id,
+                    "guest crash must create a replacement service instance"
+                );
+                let crash_evidence: (String, String, i32, Option<i32>) = sqlx::query_as(
+                    "SELECT state, failure_code, exit_code, exit_signal
+                       FROM gateway_service_instances
+                      WHERE id = $1 AND gateway_id = $2 AND revision_id = $3",
+                )
+                .bind(crashed_instance_id)
+                .bind(service_fixture.gateway_id)
+                .bind(service_fixture.revision_id)
+                .fetch_one(&pool)
+                .await
+                .expect("read durable guest crash evidence");
+                assert_eq!(
+                    crash_evidence,
+                    (
+                        String::from("cleaned"),
+                        String::from("unexpected_exit"),
+                        42,
+                        None,
+                    )
+                );
+                let (provider_runtime, cgroup, materializer) = crashed_resource_paths;
+                assert!(!provider_runtime.exists());
+                assert!(!cgroup.exists());
+                assert!(!materializer.exists());
+                let replacement_revision_id: uuid::Uuid = sqlx::query_scalar(
+                    "SELECT revision_id FROM gateway_service_instances WHERE id = $1",
+                )
+                .bind(replacement_instance_id)
+                .fetch_one(&pool)
+                .await
+                .expect("read replacement service revision after crash");
+                assert_eq!(replacement_revision_id, service_fixture.revision_id);
+                let replacement_resource_paths = {
+                    let vm_id = format!("gateway-service-{replacement_instance_id}");
+                    let provider_runtime_root = PathBuf::from(
+                        env::var("HEPHAESTUS_LIBKRUN_RUNTIME_ROOT")
+                            .expect("libkrun runtime root for crash cleanup assertion"),
+                    );
+                    let cgroup_root = PathBuf::from(
+                        env::var("HEPHAESTUS_LIBKRUN_CGROUP_ROOT")
+                            .expect("libkrun cgroup root for crash cleanup assertion"),
+                    );
+                    (
+                        provider_runtime_root.join(&vm_id),
+                        cgroup_root.join(&vm_id),
+                        root.join("run-runtime")
+                            .join("gateway-services")
+                            .join(replacement_instance_id.to_string()),
+                    )
+                };
+                let (provider_runtime, cgroup, materializer) = &replacement_resource_paths;
+                assert!(provider_runtime.is_dir());
+                assert!(cgroup.is_dir());
+                assert!(materializer.is_dir());
+                let replacement_proof = exercise_gateway_service_requests(&public_url).await;
+                assert_ne!(
+                    crashed_startup_id, replacement_proof.startup_id,
+                    "guest crash must replace the startup identity"
+                );
+                println!(
+                    "persistent-service-crash old_instance={crashed_instance_id} replacement_instance={replacement_instance_id} exit_code=42 replacement_startup_id={} replacement_pid={}",
+                    replacement_proof.startup_id, replacement_proof.pid,
+                );
+                service_instance_id = Some(replacement_instance_id);
+                service_resource_paths = Some(replacement_resource_paths);
+            }
             let client = reqwest::Client::new();
             let first = client
                 .post(format!("{public_url}/gateway/brokered?mode=real"))
@@ -3766,6 +3858,8 @@ struct GatewayServiceGoldenFixture {
     revision_id: uuid::Uuid,
 }
 
+type GatewayServiceCrashEvidence = (String, Option<String>, Option<i32>, Option<i32>);
+
 /// Adds an exact released, stateless gateway handler alongside the reusable
 /// agent. The artifact delegates only to the guest integration checker, which
 /// validates that the daemon replaced the inbound secret before VM delivery.
@@ -3964,6 +4058,7 @@ async fn seed_gateway_service_route(
     for (route_id, path) in [
         (service_route_id, "/service"),
         (identity_route_id, "/service/identity"),
+        (uuid::Uuid::new_v4(), "/service/crash"),
     ] {
         sqlx::query(
             "INSERT INTO gateway_routes
@@ -4025,6 +4120,83 @@ async fn wait_for_gateway_service_ready(
     })
     .await
     .expect("daemon-owned service reaches Ready and active state")
+}
+
+/// Waits for the daemon to retain the crashed instance's redacted exit report,
+/// finish its physical cleanup, and promote a replacement for the same
+/// immutable revision.
+async fn wait_for_gateway_service_crash_replacement(
+    pool: &sqlx::PgPool,
+    fixture: &GatewayServiceGoldenFixture,
+    crashed_instance_id: uuid::Uuid,
+) -> uuid::Uuid {
+    tokio::time::timeout(Duration::from_secs(120), async {
+        loop {
+            let old: Option<GatewayServiceCrashEvidence> = sqlx::query_as(
+                "SELECT state, failure_code, exit_code, exit_signal
+                       FROM gateway_service_instances
+                      WHERE id = $1 AND gateway_id = $2 AND revision_id = $3",
+            )
+            .bind(crashed_instance_id)
+            .bind(fixture.gateway_id)
+            .bind(fixture.revision_id)
+            .fetch_optional(pool)
+            .await
+            .expect("read crashed persistent-service instance");
+            let replacement: Option<uuid::Uuid> = sqlx::query_scalar(
+                "SELECT instance.id
+                   FROM gateway_service_instances AS instance
+                   JOIN gateways AS gateway ON gateway.id = instance.gateway_id
+                  WHERE instance.id <> $1
+                    AND instance.gateway_id = $2
+                    AND instance.revision_id = $3
+                    AND instance.state = 'ready'
+                    AND gateway.active_revision_id = $3
+                  ORDER BY instance.created_at DESC
+                  LIMIT 1",
+            )
+            .bind(crashed_instance_id)
+            .bind(fixture.gateway_id)
+            .bind(fixture.revision_id)
+            .fetch_optional(pool)
+            .await
+            .expect("read replacement persistent-service instance");
+            if let (
+                Some((state, Some(failure_code), Some(exit_code), None)),
+                Some(replacement_id),
+            ) = (old, replacement)
+            {
+                if state == "cleaned" && failure_code == "unexpected_exit" && exit_code == 42 {
+                    return replacement_id;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("daemon replaces crashed persistent service")
+}
+
+/// Sends the opt-in fixture crash request through public Caddy routing and
+/// waits for the guest's acknowledged 503 before it exits with code 42.
+async fn exercise_gateway_service_crash(public_url: &str) {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .expect("bounded persistent-service crash client");
+    let response = client
+        .get(format!("{public_url}/gateway/service/crash"))
+        .send()
+        .await
+        .expect("public persistent-service crash request");
+    assert_eq!(response.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        response
+            .bytes()
+            .await
+            .expect("read persistent-service crash response"),
+        "crashing"
+    );
 }
 
 /// Sends two public requests through the real Caddy/daemon path and proves

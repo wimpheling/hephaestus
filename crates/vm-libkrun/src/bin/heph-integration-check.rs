@@ -514,7 +514,7 @@ fn serve_service_connection(
             );
             write_service_response(&mut stream, 200, "application/json", body.as_bytes())
         }
-        "/crash" => {
+        "/crash" | "/gateway/service/crash" => {
             if let Err(error) = write_service_response(&mut stream, 503, "text/plain", b"crashing")
             {
                 eprintln!("service crash response failed: {error}");
