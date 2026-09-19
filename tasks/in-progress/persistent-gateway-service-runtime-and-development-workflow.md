@@ -1030,6 +1030,24 @@ check, strict Clippy, formatting, and 58 library tests passed.
   Application capture, bounded retention, authorized scoped reading, and RPC
   exposure remain pending; lifecycle diagnostics remain content-free.
 
+- [x] Add the first opt-in application log collector boundary to the service
+  worker. `Application` declarations create a parent-visible bounded queue;
+  `Disabled` declarations retain no raw bytes. Each event is capped at 64 KiB,
+  the queue at 64 chunks and 4 MiB, and oversized, full-queue, contention,
+  sequence-exhaustion, and provider-event-lag loss are reported explicitly.
+  Records expose stream, host-observed time, and sequence metadata; custom
+  debug output reports only metadata and byte lengths, so raw chunks do not
+  enter tracing or lifecycle failure metadata. The worker continues its same
+  lifecycle/readiness/cleanup future while capture uses synchronous bounded
+  `try_record` and a bounded drain API for the future durable writer.
+  Application-enabled readiness/flood tests, disabled-mode coverage, queue
+  overflow, provider lag, contention, and sequence exhaustion passed. Clean
+  committed-base `ff57c9f` with only the three collector files overlaid passed
+  134 gateway-edge library tests, strict all-target/all-feature Clippy,
+  workspace formatting, and workspace rustdoc; logs are retained at
+  `/tmp/heph-log-ff57c9f-verified/`. Durable PostgreSQL writing, retention
+  policy, authorized scoped reading, and RPC exposure remain pending.
+
 ## Non-goals
 
 This task does not replace MVP 03's bounded stateless invocation mode. It does

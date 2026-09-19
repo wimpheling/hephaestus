@@ -30,6 +30,7 @@ mod service_http;
 mod service_instance;
 mod service_launch;
 mod service_lease;
+mod service_logs;
 mod service_ownership;
 mod service_preparation;
 mod service_probe;
@@ -83,6 +84,10 @@ pub use service_lease::{
     GatewayServiceLeaseControl, GatewayServiceLeaseError, GatewayServiceLeaseLossReason,
     GatewayServiceLeaseMonitor, GatewayServiceLeasePolicy, GatewayServiceLeaseRetryReason,
     GatewayServiceLeaseRunResult, GatewayServiceLeaseStatus,
+};
+pub use service_logs::{
+    MAX_SERVICE_LOG_CHUNK_BYTES, MAX_SERVICE_LOG_QUEUE_BYTES, MAX_SERVICE_LOG_QUEUE_CHUNKS,
+    ServiceLogBufferHandle, ServiceLogBufferSnapshot, ServiceLogLoss, ServiceLogRecord,
 };
 pub use service_ownership::{
     GatewayServiceInstanceLease, GatewayServiceInstanceState, GatewayServiceOwner,

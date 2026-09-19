@@ -5,19 +5,22 @@ use std::{
     time::Duration,
 };
 
+use ::time::OffsetDateTime;
 use tokio::{
     sync::{broadcast, mpsc, oneshot, watch},
     time::{self, Instant},
 };
 use tokio_util::sync::CancellationToken;
-use vm_trait::{StopMode, VmError, VmExit, VmInstance};
+use vm_trait::{StopMode, VmError, VmEvent, VmExit, VmInstance};
 
 use crate::service_diagnostics::{ServiceDiagnostics, ServiceDiagnosticsSnapshot};
+use crate::service_logs::ServiceLogBufferHandle;
 use crate::{
     GatewayServiceFailure, GatewayServiceFailureCode, GatewayServiceLaunch,
     GatewayServiceLaunchResolver, ServiceProbeError, ServiceProbePolicy,
     probe_private_service_http,
 };
+use gateway_domain::ServiceLogCaptureMode;
 
 const COMMAND_CAPACITY: usize = 8;
 const MAX_STARTUP_TIMEOUT: Duration = Duration::from_secs(300);
@@ -127,6 +130,7 @@ pub struct ServiceInstanceHandle {
     control: Arc<ControlInner>,
     state: watch::Receiver<ServiceWorkerState>,
     diagnostics: watch::Receiver<ServiceDiagnosticsSnapshot>,
+    logs: Option<ServiceLogBufferHandle>,
 }
 
 struct ControlInner {
@@ -175,6 +179,12 @@ impl ServiceInstanceHandle {
         self.diagnostics.clone()
     }
 
+    /// Returns the bounded application log queue when capture was opted in.
+    #[must_use]
+    pub fn service_logs(&self) -> Option<ServiceLogBufferHandle> {
+        self.logs.clone()
+    }
+
     /// Requests one bounded health probe. Dropping this future does not stop
     /// the worker or abandon VM cleanup.
     ///
@@ -210,6 +220,7 @@ pub struct ServiceInstance {
     states: watch::Sender<ServiceWorkerState>,
     failure: Arc<RwLock<Option<GatewayServiceFailure>>>,
     diagnostics: watch::Sender<ServiceDiagnosticsSnapshot>,
+    logs: Option<ServiceLogBufferHandle>,
 }
 
 /// Creates a worker for one exact, already-provisioned service VM.
@@ -262,6 +273,11 @@ pub fn new_service_instance(
     let (states, state_receiver) = watch::channel(ServiceWorkerState::Provisioned);
     let failure = Arc::new(RwLock::new(None));
     let (diagnostics, diagnostics_receiver) = watch::channel(ServiceDiagnosticsSnapshot::default());
+    let logs = matches!(
+        launch.service.log_capture_mode,
+        ServiceLogCaptureMode::Application
+    )
+    .then(ServiceLogBufferHandle::new);
     let handle = ServiceInstanceHandle {
         control: Arc::new(ControlInner {
             commands,
@@ -270,6 +286,7 @@ pub fn new_service_instance(
         }),
         state: state_receiver.clone(),
         diagnostics: diagnostics_receiver,
+        logs: logs.clone(),
     };
     let worker = ServiceInstance {
         launch,
@@ -282,6 +299,7 @@ pub fn new_service_instance(
         states,
         failure,
         diagnostics,
+        logs,
     };
     Ok((handle, state_receiver, worker))
 }
@@ -296,6 +314,7 @@ impl ServiceInstance {
     pub async fn run(mut self) -> Result<(), ServiceInstanceError> {
         let mut events = self.vm.subscribe_events();
         let mut diagnostics = ServiceDiagnostics::new(self.diagnostics.clone());
+        let logs = self.logs.clone();
         let mut events_open = true;
         let mut lifecycle = Box::pin(self.run_lifecycle());
         loop {
@@ -303,11 +322,11 @@ impl ServiceInstance {
                 biased;
                 result = &mut lifecycle => {
                     drop(lifecycle);
-                    drain_events(&mut events, &mut diagnostics, &mut events_open);
+                    drain_events(&mut events, &mut diagnostics, &mut events_open, logs.as_ref());
                     return result;
                 }
                 event = events.recv(), if events_open => {
-                    events_open = diagnostics.observe(event);
+                    events_open = observe_event(&mut diagnostics, logs.as_ref(), event);
                 }
             }
         }
@@ -564,23 +583,57 @@ fn failure_for_code(code: GatewayServiceFailureCode) -> Option<GatewayServiceFai
 
 const MAX_DRAIN_EVENTS: usize = 64;
 
+fn capture_log_event(logs: Option<&ServiceLogBufferHandle>, event: &VmEvent) {
+    let Some(logs) = logs else {
+        return;
+    };
+    if let VmEvent::Log { stream, bytes } = event {
+        logs.try_record(*stream, OffsetDateTime::now_utc(), bytes);
+    }
+}
+
+fn observe_event(
+    diagnostics: &mut ServiceDiagnostics,
+    logs: Option<&ServiceLogBufferHandle>,
+    event: Result<VmEvent, broadcast::error::RecvError>,
+) -> bool {
+    match event {
+        Ok(event) => {
+            capture_log_event(logs, &event);
+            diagnostics.observe(Ok(event))
+        }
+        Err(error @ broadcast::error::RecvError::Lagged(skipped)) => {
+            if let Some(logs) = logs {
+                logs.record_provider_lag(skipped);
+            }
+            diagnostics.observe(Err(error))
+        }
+        Err(error) => diagnostics.observe(Err(error)),
+    }
+}
+
 fn drain_events(
     events: &mut broadcast::Receiver<vm_trait::VmEvent>,
     diagnostics: &mut ServiceDiagnostics,
     events_open: &mut bool,
+    logs: Option<&ServiceLogBufferHandle>,
 ) {
     for _ in 0..MAX_DRAIN_EVENTS {
         match events.try_recv() {
             Ok(event) => {
-                *events_open = diagnostics.observe(Ok(event));
+                *events_open = observe_event(diagnostics, logs, Ok(event));
             }
             Err(broadcast::error::TryRecvError::Lagged(skipped)) => {
-                *events_open =
-                    diagnostics.observe(Err(broadcast::error::RecvError::Lagged(skipped)));
+                *events_open = observe_event(
+                    diagnostics,
+                    logs,
+                    Err(broadcast::error::RecvError::Lagged(skipped)),
+                );
             }
             Err(broadcast::error::TryRecvError::Empty) => break,
             Err(broadcast::error::TryRecvError::Closed) => {
-                *events_open = diagnostics.observe(Err(broadcast::error::RecvError::Closed));
+                *events_open =
+                    observe_event(diagnostics, logs, Err(broadcast::error::RecvError::Closed));
                 break;
             }
         }
@@ -629,6 +682,7 @@ mod tests {
         destroys: AtomicUsize,
         destroy_ok: AtomicBool,
         start_ok: AtomicBool,
+        emit_start_log: AtomicBool,
         stop_ok: AtomicBool,
         start_delay: Mutex<Duration>,
     }
@@ -648,6 +702,7 @@ mod tests {
                 destroys: AtomicUsize::new(0),
                 destroy_ok: AtomicBool::new(true),
                 start_ok: AtomicBool::new(true),
+                emit_start_log: AtomicBool::new(false),
                 stop_ok: AtomicBool::new(true),
                 start_delay: Mutex::new(Duration::ZERO),
             })
@@ -675,6 +730,12 @@ mod tests {
             self.starts.fetch_add(1, Ordering::Relaxed);
             if !self.start_ok.load(Ordering::Relaxed) {
                 return Err(VmError::Destroyed);
+            }
+            if self.emit_start_log.load(Ordering::Relaxed) {
+                let _ = self.events.send(vm_trait::VmEvent::Log {
+                    stream: vm_trait::LogStream::Stdout,
+                    bytes: b"before-readiness".to_vec(),
+                });
             }
             let _ = self.events.send(vm_trait::VmEvent::Started {
                 ingress: Vec::new(),
@@ -792,6 +853,14 @@ mod tests {
         }
     }
 
+    fn launch_with_logs(instance_id: Uuid) -> GatewayServiceLaunch {
+        let mut launch = launch(instance_id);
+        launch.service = launch
+            .service
+            .with_log_capture_mode(gateway_domain::ServiceLogCaptureMode::Application);
+        launch
+    }
+
     fn policy() -> ServiceInstancePolicy {
         ServiceInstancePolicy::new(
             Duration::from_millis(120),
@@ -807,6 +876,51 @@ mod tests {
         let response =
             format!("HTTP/1.1 {status} OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n");
         let _ = peer.write_all(response.as_bytes()).await;
+    }
+
+    #[tokio::test]
+    async fn application_log_capture_is_opt_in_and_starts_before_readiness() {
+        let launch = launch_with_logs(Uuid::new_v4());
+        let vm = FakeVm::new(launch.spec.id.clone());
+        vm.emit_start_log.store(true, Ordering::Relaxed);
+        let (client, peer) = tokio::io::duplex(4096);
+        vm.push(Box::new(client));
+        tokio::spawn(response_peer(peer, 200));
+        let resolver = Arc::new(FakeResolver {
+            cleanups: AtomicUsize::new(0),
+        });
+        let (handle, mut state, worker) =
+            new_service_instance(launch, vm, resolver, "service.test", policy()).expect("worker");
+        let logs = handle.service_logs().expect("application log queue");
+        let task = tokio::spawn(worker.run());
+        wait_for_state(&mut state, ServiceWorkerState::Ready).await;
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if logs.snapshot().queued_chunks > 0 {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("start log captured");
+        let records = logs.drain(8, 1024);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].bytes, b"before-readiness");
+        handle.shutdown();
+        assert!(task.await.expect("worker join").is_ok());
+    }
+
+    #[test]
+    fn disabled_log_capture_has_no_raw_queue() {
+        let launch = launch(Uuid::new_v4());
+        let vm = FakeVm::new(launch.spec.id.clone());
+        let resolver = Arc::new(FakeResolver {
+            cleanups: AtomicUsize::new(0),
+        });
+        let (handle, _, _) =
+            new_service_instance(launch, vm, resolver, "service.test", policy()).expect("worker");
+        assert!(handle.service_logs().is_none());
     }
 
     async fn wait_for_state(
@@ -997,7 +1111,7 @@ mod tests {
 
     #[tokio::test]
     async fn cancellation_wins_over_a_busy_event_channel() {
-        let launch = launch(Uuid::new_v4());
+        let launch = launch_with_logs(Uuid::new_v4());
         let vm = FakeVm::new(launch.spec.id.clone());
         *vm.start_delay.lock().expect("start delay lock") = Duration::from_millis(200);
         let resolver = Arc::new(FakeResolver {
@@ -1012,6 +1126,7 @@ mod tests {
         )
         .expect("worker");
         let mut diagnostics = handle.subscribe_diagnostics();
+        let logs = handle.service_logs().expect("application log queue");
         let mut task = tokio::spawn(worker.run());
         let events = vm.events.clone();
         let stop_flood = Arc::new(AtomicBool::new(false));
@@ -1058,11 +1173,12 @@ mod tests {
         }
         assert_eq!(vm.destroys.load(Ordering::Relaxed), 1);
         assert_eq!(resolver.cleanups.load(Ordering::Relaxed), 1);
+        assert!(logs.snapshot().queued_chunks > 0);
     }
 
     #[tokio::test]
     async fn event_flood_does_not_restart_a_blocked_readiness_probe() {
-        let launch = launch(Uuid::new_v4());
+        let launch = launch_with_logs(Uuid::new_v4());
         let vm = FakeVm::new(launch.spec.id.clone());
         let (client, _peer) = tokio::io::duplex(4096);
         vm.push(Box::new(client));
@@ -1083,6 +1199,7 @@ mod tests {
             slow_policy,
         )
         .expect("worker");
+        let logs = handle.service_logs().expect("application log queue");
         let first_open = vm.first_open.clone();
         let opened = first_open.notified();
         let mut diagnostics = handle.subscribe_diagnostics();
@@ -1116,6 +1233,16 @@ mod tests {
         })
         .await
         .expect("event flood consumed");
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if logs.snapshot().queued_chunks > 0 {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("application log flood captured");
         assert_eq!(vm.opens.load(Ordering::Relaxed), 1);
         handle.shutdown();
         let worker_result =
