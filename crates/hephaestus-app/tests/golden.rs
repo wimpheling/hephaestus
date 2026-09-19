@@ -1012,7 +1012,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
         .expect("build production application");
     let daemon_readiness_timer =
         WorkloadPhaseTimer::start("gateway-readiness", workload_phase_timing);
-    let running = app.start().await;
+    let running = async move { app.start().await }.await;
     daemon_readiness_timer.finish(running.is_ok());
     let running = running.expect("start ready application");
     // The Cooking proof deliberately spans several production builds before

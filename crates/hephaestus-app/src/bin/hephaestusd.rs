@@ -39,8 +39,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         )
         .init();
     let config = environment_config()?;
-    let app = HephaestusApp::build(config).await?;
-    let running = app.start().await?;
+    let running = HephaestusApp::build(config).await?.start().await?;
     eprintln!("hephaestusd ready at http://{}", running.http_addr());
     tokio::signal::ctrl_c().await?;
     running.shutdown().await?;

@@ -1,18 +1,28 @@
 //! Real `PostgreSQL` proof for daemon-owned service invocation recovery.
 
-use super::gateway_reconciliation_loop;
+use super::{gateway_reconciliation_loop, gateway_reconciliation_loop_with_supervisor};
 use async_trait::async_trait;
 use bytes::Bytes;
+use gateway_domain::{GatewayServiceConfig, ServiceProbePath};
 use gateway_edge::{
     GatewayConfigRevision, GatewayDesiredConfiguration, GatewayEdgeError, GatewayLimits,
     GatewayProvider, GatewayProviderResponse, GatewayRequest, GatewayResponse,
+    GatewayServiceLaunch, GatewayServiceLaunchRequest, GatewayServiceLaunchResolver,
+    GatewayServiceOwner, GatewayServiceRegistry, GatewayServiceStartupIntent,
+    GatewayServiceStartupRequest, GatewayServiceSupervisor, GatewayServiceSupervisorContext,
+    GatewayServiceSupervisorJobStatus, GatewayServiceSupervisorPolicy,
 };
-use gateway_postgres::PostgresGatewayEdgeAuthority;
+use gateway_postgres::{
+    PostgresGatewayEdgeAuthority, PostgresGatewayServiceFailureStore,
+    PostgresGatewayServiceOwnership, PostgresGatewayServiceTargets,
+};
 use http::{HeaderMap, StatusCode};
 use serial_test::serial;
 use sqlx::postgres::PgPoolOptions;
 use std::{
+    collections::BTreeMap,
     env,
+    path::PathBuf,
     sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -22,6 +32,12 @@ use std::{
 use time::{Duration, OffsetDateTime};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
+use vm_fake::FakeProvider;
+use vm_trait::{
+    BoxedPrivateServiceConnection, GuestCommand, NetworkMode, PrivateHttpRequest,
+    PrivateHttpResponse, PrivateHttpServiceSpec, RootFilesystem, StopMode, VmError, VmEvent, VmId,
+    VmInstance, VmProvider, VmResources, VmSpec,
+};
 
 #[derive(Clone, Copy)]
 struct Fixture {
@@ -34,13 +50,194 @@ struct Fixture {
     service_instance: Option<Uuid>,
 }
 
+type DebugServiceInstanceRow = (Uuid, String, i64, Option<String>, Option<i32>);
+
 struct RecoveryProvider {
+    reconciles: Arc<AtomicUsize>,
+}
+
+struct BlockingCaddyProvider {
+    started: Arc<tokio::sync::Notify>,
+    release: Arc<tokio::sync::Notify>,
     reconciles: Arc<AtomicUsize>,
 }
 
 impl RecoveryProvider {
     fn new(reconciles: Arc<AtomicUsize>) -> Self {
         Self { reconciles }
+    }
+}
+
+#[derive(Clone)]
+struct ServiceTransportProvider {
+    inner: FakeProvider,
+    destroyed: Arc<AtomicUsize>,
+}
+
+struct ServiceTransportVm {
+    inner: Arc<dyn VmInstance>,
+    destroyed: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl VmProvider for ServiceTransportProvider {
+    fn name(&self) -> &'static str {
+        "fake-service-transport"
+    }
+
+    async fn provision(&self, spec: VmSpec) -> Result<Arc<dyn VmInstance>, VmError> {
+        let inner = self.inner.provision(spec).await?;
+        Ok(Arc::new(ServiceTransportVm {
+            inner,
+            destroyed: Arc::clone(&self.destroyed),
+        }))
+    }
+
+    async fn cleanup_orphan(&self, id: &VmId) -> Result<(), VmError> {
+        self.inner.cleanup_orphan(id).await
+    }
+}
+
+#[async_trait]
+impl VmInstance for ServiceTransportVm {
+    fn id(&self) -> &VmId {
+        self.inner.id()
+    }
+
+    async fn start(&self) -> Result<(), VmError> {
+        self.inner.start().await
+    }
+
+    async fn stop(&self, mode: StopMode) -> Result<(), VmError> {
+        self.inner.stop(mode).await
+    }
+
+    async fn wait(&self) -> Result<vm_trait::VmExit, VmError> {
+        self.inner.wait().await
+    }
+
+    async fn invoke_private_http(
+        &self,
+        request: PrivateHttpRequest,
+    ) -> Result<PrivateHttpResponse, VmError> {
+        self.inner.invoke_private_http(request).await
+    }
+
+    async fn open_private_service_connection(
+        &self,
+    ) -> Result<BoxedPrivateServiceConnection, VmError> {
+        let (client, mut server) = tokio::io::duplex(4096);
+        tokio::spawn(async move {
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 512];
+            loop {
+                let count = tokio::io::AsyncReadExt::read(&mut server, &mut buffer).await?;
+                if count == 0 {
+                    return Ok::<(), std::io::Error>(());
+                }
+                request.extend_from_slice(&buffer[..count]);
+                if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    tokio::io::AsyncWriteExt::write_all(
+                        &mut server,
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    )
+                    .await?;
+                    request.clear();
+                }
+            }
+        });
+        Ok(Box::new(client))
+    }
+
+    fn subscribe_events(&self) -> tokio::sync::broadcast::Receiver<VmEvent> {
+        self.inner.subscribe_events()
+    }
+
+    async fn destroy(&self) -> Result<(), VmError> {
+        let result = self.inner.destroy().await;
+        if result.is_ok() {
+            self.destroyed.fetch_add(1, Ordering::Release);
+        }
+        result
+    }
+}
+
+struct NoopLaunchResolver;
+
+#[async_trait]
+impl GatewayServiceLaunchResolver for NoopLaunchResolver {
+    async fn resolve_service_launch(
+        &self,
+        request: GatewayServiceLaunchRequest,
+    ) -> Result<GatewayServiceLaunch, GatewayEdgeError> {
+        let service = GatewayServiceConfig::new(
+            18_080,
+            ServiceProbePath::parse("/ready").expect("readiness path"),
+            ServiceProbePath::parse("/health").expect("health path"),
+        )
+        .expect("service config");
+        Ok(GatewayServiceLaunch {
+            identity: request.identity,
+            service,
+            spec: VmSpec {
+                id: VmId(format!("gateway-service-{}", request.identity.instance_id)),
+                root: RootFilesystem::Directory {
+                    host_path: PathBuf::from("/tmp"),
+                },
+                disks: Vec::new(),
+                mounts: Vec::new(),
+                resources: VmResources {
+                    vcpus: 1,
+                    memory_mib: 64,
+                },
+                network: NetworkMode::Disabled,
+                private_http_service: Some(PrivateHttpServiceSpec {
+                    loopback_port: 18_080,
+                    max_connections: 32,
+                    connect_timeout: StdDuration::from_secs(2),
+                }),
+                command: GuestCommand {
+                    program: String::from("/service"),
+                    args: Vec::new(),
+                    env: BTreeMap::new(),
+                    working_dir: None,
+                },
+                runtime_authority: None,
+                labels: BTreeMap::new(),
+            },
+        })
+    }
+
+    async fn cleanup_service_launch(
+        &self,
+        _identity: gateway_edge::GatewayServiceIdentity,
+    ) -> Result<(), GatewayEdgeError> {
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl GatewayProvider for BlockingCaddyProvider {
+    async fn reconcile(
+        &self,
+        desired: &GatewayDesiredConfiguration,
+    ) -> Result<GatewayConfigRevision, GatewayEdgeError> {
+        self.reconciles.fetch_add(1, Ordering::Release);
+        self.started.notify_one();
+        self.release.notified().await;
+        Ok(desired.revision)
+    }
+
+    async fn forward(&self, _request: GatewayRequest) -> GatewayProviderResponse {
+        GatewayProviderResponse {
+            response: GatewayResponse {
+                status: StatusCode::INTERNAL_SERVER_ERROR,
+                headers: HeaderMap::new(),
+                body: Bytes::new(),
+                mailbox_publication: None,
+            },
+            invocation_id: Uuid::new_v4(),
+        }
     }
 }
 
@@ -102,11 +299,13 @@ async fn daemon_reconciliation_reaps_abandoned_service_invocation_and_joins() {
 
     let reconciles = Arc::new(AtomicUsize::new(0));
     let authority = make_authority(pool.clone());
-    let recovery_authority = make_authority(worker_pool().await);
+    let recovery_pool = worker_pool().await;
+    let recovery_authority = make_authority(recovery_pool.clone());
     let cancellation = CancellationToken::new();
     let task = tokio::spawn(gateway_reconciliation_loop(
         authority,
         recovery_authority,
+        test_supervisor_context(recovery_pool),
         Arc::new(RecoveryProvider::new(Arc::clone(&reconciles))),
         cancellation.clone(),
     ));
@@ -216,11 +415,13 @@ async fn daemon_recovery_cancellation_joins_a_database_blocked_batch() {
 
     let reconciles = Arc::new(AtomicUsize::new(0));
     let authority = make_authority(pool.clone());
-    let recovery_authority = make_authority(worker_pool().await);
+    let recovery_pool = worker_pool().await;
+    let recovery_authority = make_authority(recovery_pool.clone());
     let cancellation = CancellationToken::new();
     let task = tokio::spawn(gateway_reconciliation_loop(
         authority,
         recovery_authority,
+        test_supervisor_context(recovery_pool),
         Arc::new(RecoveryProvider::new(Arc::clone(&reconciles))),
         cancellation.clone(),
     ));
@@ -301,6 +502,145 @@ async fn daemon_recovery_cancellation_joins_a_database_blocked_batch() {
     lock.rollback().await.expect("release authority lock");
 }
 
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+// The supervisor is deliberately moved into the parent-owned loop future;
+// its shutdown path runs there rather than at this test scope's end.
+#[allow(clippy::significant_drop_tightening)]
+async fn daemon_loop_polls_service_supervisor_while_caddy_reconcile_is_blocked() {
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let fixture = seed_fixture(&pool, "http.service.v1").await;
+    sqlx::query(
+        "UPDATE gateways
+            SET desired_service_revision_id = $2,
+                active_revision_id = NULL
+          WHERE id = $1",
+    )
+    .bind(fixture.gateway)
+    .bind(fixture.revision)
+    .execute(&pool)
+    .await
+    .expect("set desired service revision for supervisor startup");
+    sqlx::query("DELETE FROM gateway_service_instances WHERE id = $1")
+        .bind(fixture.service_instance)
+        .execute(&pool)
+        .await
+        .expect("remove fixture instance before supervisor claim");
+
+    let recovery_pool = worker_pool().await;
+    let (supervisor_context, destroyed) =
+        test_supervisor_context_with_destroy_counter(recovery_pool.clone());
+    let mut supervisor = GatewayServiceSupervisor::new(supervisor_context)
+        .expect("construct test service supervisor");
+    let handle = supervisor
+        .start(GatewayServiceStartupRequest {
+            gateway_id: fixture.gateway,
+            revision_id: fixture.revision,
+            intent: GatewayServiceStartupIntent::ActivateDesired,
+        })
+        .expect("start service supervisor job");
+    let mut status = handle.subscribe();
+    let caddy_started = Arc::new(tokio::sync::Notify::new());
+    let caddy_release = Arc::new(tokio::sync::Notify::new());
+    let caddy = Arc::new(BlockingCaddyProvider {
+        started: Arc::clone(&caddy_started),
+        release: Arc::clone(&caddy_release),
+        reconciles: Arc::new(AtomicUsize::new(0)),
+    });
+    let cancellation = CancellationToken::new();
+    let task = tokio::spawn(gateway_reconciliation_loop_with_supervisor(
+        make_authority(pool.clone()),
+        make_authority(recovery_pool),
+        supervisor,
+        caddy,
+        cancellation.clone(),
+    ));
+
+    tokio::time::timeout(StdDuration::from_secs(10), caddy_started.notified())
+        .await
+        .expect("Caddy reconciliation starts and remains blocked");
+    let ready = tokio::time::timeout(StdDuration::from_secs(10), async {
+        loop {
+            if *status.borrow() == GatewayServiceSupervisorJobStatus::Ready {
+                break;
+            }
+            if status.changed().await.is_err() {
+                break;
+            }
+        }
+    })
+    .await;
+    let debug_instances: Vec<DebugServiceInstanceRow> = sqlx::query_as(
+        "SELECT id, state, fencing_token, failure_code, exit_code
+           FROM gateway_service_instances
+          WHERE gateway_id = $1 AND revision_id = $2",
+    )
+    .bind(fixture.gateway)
+    .bind(fixture.revision)
+    .fetch_all(&pool)
+    .await
+    .expect("read supervisor debug state");
+    assert!(
+        ready.is_ok(),
+        "supervisor reaches Ready while Caddy is blocked; status={:?}, instances={debug_instances:?}",
+        *status.borrow(),
+    );
+    assert_eq!(
+        *status.borrow(),
+        GatewayServiceSupervisorJobStatus::Ready,
+        "supervisor status must remain Ready while Caddy is blocked; instances={debug_instances:?}"
+    );
+
+    let first_heartbeat: OffsetDateTime = sqlx::query_scalar(
+        "SELECT heartbeat_at
+           FROM gateway_service_instances
+          WHERE gateway_id = $1 AND revision_id = $2 AND state = 'ready'",
+    )
+    .bind(fixture.gateway)
+    .bind(fixture.revision)
+    .fetch_one(&pool)
+    .await
+    .expect("read ready service heartbeat");
+    tokio::time::sleep(StdDuration::from_secs(6)).await;
+    let second_heartbeat: OffsetDateTime = sqlx::query_scalar(
+        "SELECT heartbeat_at
+           FROM gateway_service_instances
+          WHERE gateway_id = $1 AND revision_id = $2 AND state = 'ready'",
+    )
+    .bind(fixture.gateway)
+    .bind(fixture.revision)
+    .fetch_one(&pool)
+    .await
+    .expect("read renewed service heartbeat");
+    assert!(
+        second_heartbeat > first_heartbeat,
+        "supervisor lease monitor must renew while Caddy is blocked"
+    );
+
+    cancellation.cancel();
+    tokio::time::timeout(StdDuration::from_secs(10), task)
+        .await
+        .expect("supervisor and Caddy tasks join on shutdown")
+        .expect("reconciliation task join");
+    caddy_release.notify_one();
+    let final_state: String = sqlx::query_scalar(
+        "SELECT state
+           FROM gateway_service_instances
+          WHERE gateway_id = $1 AND revision_id = $2
+          ORDER BY fencing_token DESC
+          LIMIT 1",
+    )
+    .bind(fixture.gateway)
+    .bind(fixture.revision)
+    .fetch_one(&pool)
+    .await
+    .expect("read cleaned service state");
+    assert_eq!(final_state, "cleaned");
+    assert_eq!(destroyed.load(Ordering::Acquire), 1);
+}
+
 const fn make_authority(pool: sqlx::PgPool) -> PostgresGatewayEdgeAuthority {
     PostgresGatewayEdgeAuthority::new(
         pool,
@@ -313,6 +653,32 @@ const fn make_authority(pool: sqlx::PgPool) -> PostgresGatewayEdgeAuthority {
             execution_timeout: StdDuration::from_secs(10),
         },
     )
+}
+
+fn test_supervisor_context(pool: sqlx::PgPool) -> GatewayServiceSupervisorContext {
+    test_supervisor_context_with_destroy_counter(pool).0
+}
+
+fn test_supervisor_context_with_destroy_counter(
+    pool: sqlx::PgPool,
+) -> (GatewayServiceSupervisorContext, Arc<AtomicUsize>) {
+    let destroyed = Arc::new(AtomicUsize::new(0));
+    let context = GatewayServiceSupervisorContext {
+        owner: GatewayServiceOwner::new("recovery-test-host", Uuid::new_v4())
+            .expect("test supervisor owner"),
+        policy: GatewayServiceSupervisorPolicy::default(),
+        ownership: Arc::new(PostgresGatewayServiceOwnership::new(pool.clone())),
+        failure_store: Arc::new(PostgresGatewayServiceFailureStore::new(pool.clone())),
+        resolver: Arc::new(NoopLaunchResolver),
+        provider: Arc::new(ServiceTransportProvider {
+            inner: FakeProvider::new(),
+            destroyed: Arc::clone(&destroyed),
+        }),
+        targets: Arc::new(PostgresGatewayServiceTargets::new(pool)),
+        registry: GatewayServiceRegistry::new(10, 16).expect("test service registry"),
+        service_authority: String::from("127.0.0.1:8080"),
+    };
+    (context, destroyed)
 }
 
 async fn test_pool() -> Option<sqlx::PgPool> {

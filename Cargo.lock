@@ -2394,6 +2394,7 @@ dependencies = [
  "forge-postgres",
  "forge-service",
  "futures-util",
+ "gateway-domain",
  "gateway-edge",
  "gateway-postgres",
  "git-capability-domain",

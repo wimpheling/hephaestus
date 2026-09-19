@@ -116,6 +116,7 @@ workspace-domain = { path = "../workspace-domain" }
 
 [dev-dependencies]
 base64.workspace = true
+gateway-domain = { path = "../gateway-domain" }
 registry-token = { path = "../registry-token" }
 rpc-proto = { path = "../rpc-proto", features = ["client"] }
 brokered-egress-domain = { path = "../brokered-egress-domain" }

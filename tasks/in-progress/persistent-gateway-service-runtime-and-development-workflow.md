@@ -1107,6 +1107,24 @@ recovery test timeout does not address this failure. Boot recovery and the
 migration 0078 durable log append slice are still under implementation/review;
 the latter's initially skipped PostgreSQL test is not acceptance evidence.
 
+The app supervisor composition checkpoint is verified on isolated `da1f16d`
+with only the app overlay and migration expectation 77. `GatewayEdgeRuntime`
+now shares the service owner, registry, materializer, and supervisor context;
+the reconciliation loop parent-polls one Caddy reconciliation future, coalesces
+recovery requests, and polls the service supervisor while jobs are pending.
+The blocked-Caddy real PostgreSQL fixture reached service `Ready`, advanced its
+heartbeat, then cancelled and cleaned the instance. Full app library tests
+passed (63 tests) against migration 77. Rust 1.88.0 workspace Clippy,
+formatting, and rustdoc passed in the same overlay. Durable target selection,
+startup scheduling, boot recovery, and global supervisor policy integration
+remain pending.
+
+Evidence: `/tmp/heph-app-supervisor-full-real-pinned-final-20260919.log`,
+`/tmp/heph-app-supervisor-db-marker-final-20260919.log`,
+`/tmp/heph-app-supervisor-workspace-clippy-pinned-20260919.log`,
+`/tmp/heph-app-supervisor-fmt-pinned-20260919.log`, and
+`/tmp/heph-app-supervisor-doc-pinned-final-20260919.log`.
+
 - [ ] Run `cargo fmt --all -- --check` after implementation changes.
 - [ ] Run `cargo clippy --workspace --all-targets --all-features`.
 - [ ] Run `cargo test --workspace --all-features`.
