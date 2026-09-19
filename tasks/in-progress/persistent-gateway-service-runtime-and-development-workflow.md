@@ -1451,3 +1451,29 @@ tests, strict all-target/all-feature Clippy, formatting, and rustdoc; logs are
 `/tmp/heph-read-contract-b4c25f6-{edge-tests,clippy,fmt,doc}.log`. PostgreSQL
 reader authorization, adapter queries, RPC/protobuf exposure, and project
 usage loss visibility remain pending.
+
+Committed production-daemon verification at `b4c25f6`: [CI run
+35435872520](https://github.com/wimpheling/hephaestus/actions/runs/35435872520)
+passes Rust/authorization, cooking applications, and live browser review.
+
+Cleanup-retry checkpoint (2026-09-19): the daemon reconciliation loop now
+retries retained supervisor cleanup through the parent polling loop with a
+fair cursor, bounded backoff, and at most two in-flight cleanup retries. A
+queued cleanup retry takes precedence over new startup admission without
+stopping healthy services or Caddy reconciliation. The real PostgreSQL test
+captures the original instance ID, fencing token, and VM ID, injects a first
+destroy failure, and verifies that the same retained claim and VM are retried.
+While the retry remains physically blocked, both the retained cleanup claim and
+healthy replacement renew their heartbeats and two later target scans complete;
+the next candidate is still unclaimed. Materializer cleanup and durable
+`cleaned` state complete before that candidate is admitted. The final
+migration-79 overlay at `/tmp/heph-retry-final-overlay.2LWC1V` passed the
+focused regression and the full 71-test app library suite with real PostgreSQL
+and the `hephaestus_worker` role. Pinned Rust 1.88 formatting, strict app
+Clippy, and workspace rustdoc passed; logs are
+`/tmp/heph-retry-b4-heartbeats-20260919.log`,
+`/tmp/heph-retry-b4-full-final-app-20260919.log`,
+`/tmp/heph-retry-b4-fmt-20260919.log`,
+`/tmp/heph-retry-b4-clippy-20260919.log`, and
+`/tmp/heph-retry-b4-doc-20260919.log`. Ambiguous-claim resolution,
+expired-claim takeover, and release UI remain pending.

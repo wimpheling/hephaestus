@@ -2190,12 +2190,17 @@ type GatewayServiceTargetScan = Pin<
 >;
 
 const SERVICE_TARGET_REFRESH_TIMEOUT: Duration = Duration::from_secs(2);
+const SERVICE_CLEANUP_RETRY_INITIAL_BACKOFF: Duration = Duration::from_secs(1);
+const SERVICE_CLEANUP_RETRY_MAX_BACKOFF: Duration = Duration::from_secs(30);
 
 struct TrackedServiceJob {
     gateway_id: Uuid,
     revision_id: Uuid,
     handle: gateway_edge::GatewayServiceStartupHandle,
     retirement_requested: bool,
+    cleanup_retry_due: Option<Instant>,
+    cleanup_retry_backoff: Duration,
+    cleanup_retry_attempted: bool,
 }
 
 type GatewayServiceTargetRefresh = Pin<
@@ -2327,6 +2332,9 @@ async fn gateway_reconciliation_loop_with_boot(
     let mut target_refresh_cursor = None;
     let mut target_refresh_interval = tokio::time::interval(GATEWAY_RECONCILIATION_INTERVAL);
     target_refresh_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut cleanup_retry_interval = tokio::time::interval(GATEWAY_RECONCILIATION_INTERVAL);
+    cleanup_retry_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut cleanup_retry_cursor = None;
     loop {
         tokio::select! {
             () = cancellation.cancelled() => {
@@ -2471,10 +2479,16 @@ async fn gateway_reconciliation_loop_with_boot(
                 match result {
                     Some(Ok(page)) => {
                         target_scan_after = page.next_after;
+                        let cleanup_queued = schedule_one_cleanup_retry(
+                            &mut service_supervisor,
+                            &mut tracked_jobs,
+                            &mut cleanup_retry_cursor,
+                        );
                         reconcile_service_target_page(
                             &mut service_supervisor,
                             &mut tracked_jobs,
                             page,
+                            !cleanup_queued,
                         );
                     }
                     Some(Err(error)) => {
@@ -2555,8 +2569,25 @@ async fn gateway_reconciliation_loop_with_boot(
                     );
                     if event.capacity_released {
                         tracked_jobs.remove(&event.job_id);
+                    } else if let Some(job) = tracked_jobs.get_mut(&event.job_id) {
+                        let now = Instant::now();
+                        if job.cleanup_retry_attempted {
+                            job.cleanup_retry_due = now.checked_add(job.cleanup_retry_backoff);
+                            job.cleanup_retry_backoff = (job.cleanup_retry_backoff * 2)
+                                .min(SERVICE_CLEANUP_RETRY_MAX_BACKOFF);
+                        } else {
+                            job.cleanup_retry_attempted = true;
+                            job.cleanup_retry_due = Some(now);
+                        }
                     }
                 }
+            }
+            _ = cleanup_retry_interval.tick() => {
+                let _ = schedule_one_cleanup_retry(
+                    &mut service_supervisor,
+                    &mut tracked_jobs,
+                    &mut cleanup_retry_cursor,
+                );
             }
         }
     }
@@ -2593,6 +2624,7 @@ fn reconcile_service_target_page(
     supervisor: &mut GatewayServiceSupervisor,
     tracked_jobs: &mut HashMap<Uuid, TrackedServiceJob>,
     page: GatewayServiceTargetPageResult,
+    allow_startups: bool,
 ) {
     for target in page.targets {
         if target.lifecycle != "enabled" {
@@ -2604,7 +2636,8 @@ fn reconcile_service_target_page(
             .is_some_and(|active| {
                 target.active_revision_id == Some(active.revision_id) && active.publication_eligible
             });
-        if let Some(active) = target.active_service_revision.as_ref()
+        if allow_startups
+            && let Some(active) = target.active_service_revision.as_ref()
             && active_is_eligible
         {
             start_service_job(
@@ -2642,7 +2675,8 @@ fn reconcile_service_target_page(
             .values()
             .filter(|job| job.gateway_id == target.gateway_id)
             .count();
-        if (active_ready || target.active_service_revision.is_none() || revoked_active_settled)
+        if allow_startups
+            && (active_ready || target.active_service_revision.is_none() || revoked_active_settled)
             && gateway_job_count < 2
         {
             start_service_job(
@@ -2656,6 +2690,73 @@ fn reconcile_service_target_page(
             );
         }
     }
+}
+
+fn schedule_one_cleanup_retry(
+    supervisor: &mut GatewayServiceSupervisor,
+    tracked_jobs: &mut HashMap<Uuid, TrackedServiceJob>,
+    cursor: &mut Option<Uuid>,
+) -> bool {
+    let pending = tracked_jobs
+        .values()
+        .filter(|job| {
+            *job.handle.subscribe().borrow() == GatewayServiceSupervisorJobStatus::CleanupPending
+        })
+        .count();
+    if pending >= 2 {
+        return false;
+    }
+
+    let now = Instant::now();
+    let mut ids = tracked_jobs.keys().copied().collect::<Vec<_>>();
+    ids.sort_unstable();
+    let Some(job_id) = cursor
+        .and_then(|last| ids.iter().copied().find(|id| *id > last))
+        .or_else(|| ids.first().copied())
+    else {
+        return false;
+    };
+    let ordered = ids
+        .iter()
+        .copied()
+        .cycle()
+        .skip_while(|id| *id != job_id)
+        .take(ids.len())
+        .collect::<Vec<_>>();
+    for candidate in ordered {
+        let Some(job) = tracked_jobs.get_mut(&candidate) else {
+            continue;
+        };
+        let due = job
+            .cleanup_retry_due
+            .is_some_and(|deadline| deadline <= now);
+        if !due {
+            continue;
+        }
+        *cursor = Some(candidate);
+        match supervisor.retry_cleanup(candidate) {
+            Ok(()) => {
+                job.cleanup_retry_due = None;
+                return true;
+            }
+            Err(gateway_edge::GatewayServiceSupervisorError::RetryNotEligible) => {
+                // The supervisor retains the job and its capacity.  Clear the
+                // due marker until a completion event makes it eligible again.
+                job.cleanup_retry_due = None;
+            }
+            Err(gateway_edge::GatewayServiceSupervisorError::RetryNotFound) => {
+                job.cleanup_retry_due = None;
+            }
+            Err(gateway_edge::GatewayServiceSupervisorError::RetryAlreadyInFlight) => {
+                job.cleanup_retry_due = now.checked_add(job.cleanup_retry_backoff);
+            }
+            Err(error) => {
+                tracing::debug!(job_id = %candidate, %error, "gateway service cleanup retry was not scheduled");
+                job.cleanup_retry_due = now.checked_add(job.cleanup_retry_backoff);
+            }
+        }
+    }
+    false
 }
 
 fn start_service_job(
@@ -2676,6 +2777,9 @@ fn start_service_job(
                     revision_id: request.revision_id,
                     handle,
                     retirement_requested: false,
+                    cleanup_retry_due: None,
+                    cleanup_retry_backoff: SERVICE_CLEANUP_RETRY_INITIAL_BACKOFF,
+                    cleanup_retry_attempted: false,
                 },
             );
         }
