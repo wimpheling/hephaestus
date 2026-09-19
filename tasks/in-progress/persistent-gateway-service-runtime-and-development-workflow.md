@@ -305,6 +305,17 @@ application integration remain pending.
   log: `/tmp/hephaestus-service-authority-terminal-cleanup-real-batched.log`.
   Dispatch acceptance, completion/cancellation wiring, and a separate
   cancellation reaper remain pending.
+- [x] Gateway acceptance now selects the immutable handler contract from the
+  authoritative insert and routes `http.service.v1` to host-mediated issuance
+  while preserving `http.v1` guest issuance. Service acceptance fails closed
+  without a runtime issuer, while stateless no-issuer acceptance remains
+  compatible. Invocation, live session, and lease setup use the same lock
+  order, and issuance, lease, unknown-contract, and TTL failures terminally
+  reject the invocation. The exact-environment PostgreSQL acceptance suite
+  printed `REAL_POSTGRES_CONNECTED_AND_MIGRATED=1 migration=72` and passed 4
+  tests in 1.53s; evidence is retained at
+  `/tmp/hephaestus-gateway-acceptance-real.log`. Live service execution,
+  cancellation completion wiring, and recovery reaping remain pending.
 
 ## Non-goals
 
