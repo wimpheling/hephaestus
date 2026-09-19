@@ -136,6 +136,26 @@ retained in `/tmp/heph-service-launch-postgres-20260919-attempt2.log` with
 markers; the focused test passed 1 test in 1.31s. Supervisor activation and
 application integration remain pending.
 
+The gateway-edge HTTP adapter now provides one bounded HTTP/1 request/response
+exchange over an already authenticated private service stream. It emits an
+origin-form request with the trusted `Host`, computed `Content-Length`, and
+`Connection: close`, while removing forwarding, proxy, hop-by-hop, and dynamic
+`Connection`-nominated headers. Responses require explicit `Content-Length` or
+decoded chunked framing; bodyful close-delimited responses, upgrades (including
+non-101 `Upgrade` headers), trailers, ambiguous framing, and unsupported
+streaming behavior are rejected. HEAD and 304 representation lengths are
+preserved, while 204 responses omit `Content-Length`. The adapter applies one
+exchange deadline, bounded body/header/path policies, cancellation-safe driver
+ownership, and rejects pathological public policy values. Its wire-header bound
+is an aggregate canonical-header limit; Hyper's HTTP/1 parser has an 8 KiB
+minimum buffer, so the policy does not claim a raw-wire bound below that size.
+Evidence: 12 focused `gateway-edge` service HTTP tests, including raw
+`Content-Length` plus `Transfer-Encoding` rejection, unannounced trailer
+rejection, upgrade rejection, and caller-cancellation stream closure; focused
+Clippy, package checks, formatting, and diff checks pass. This is adapter-only
+support: live service mode, readiness/health supervision, Caddy forwarding,
+managed lifecycle, and release UI wiring remain unchecked.
+
 - [x] Finish focused VM contract tests and workspace compatibility checks:
   `cargo test -p vm-trait`, `cargo test -p vm-libkrun --lib`,
   `cargo test -p vm-fake`, focused Clippy, `cargo check --workspace

@@ -17,9 +17,11 @@ use uuid::Uuid;
 use vm_trait::{PrivateHttpRequest, PrivateHttpResponse, PrivateMailboxPublication, VmInstance};
 
 mod integration;
+mod service_http;
 mod service_launch;
 
 pub use integration::caddy::LocalCaddyAdministration;
+pub use service_http::{ServiceHttpPolicy, exchange as exchange_private_service_http};
 pub use service_launch::{
     DEFAULT_SERVICE_CONNECT_TIMEOUT, DEFAULT_SERVICE_MAX_CONNECTIONS, GatewayServiceArtifact,
     GatewayServiceArtifactKind, GatewayServiceIdentity, GatewayServiceLaunch,
