@@ -1,10 +1,12 @@
 //! Opt-in hardware integration tests for the Fedora libkrun backend.
 
 use bytes::Bytes;
-use gateway_domain::ServiceProbePath;
+use gateway_domain::{GatewayServiceConfig, ServiceProbePath};
 use gateway_edge::{
-    GatewayRequest, GatewayScheme, ServiceHttpPolicy, ServiceProbePolicy, TrustedRequestMetadata,
-    exchange_private_service_http, probe_private_service_http,
+    GatewayEdgeError, GatewayRequest, GatewayScheme, GatewayServiceIdentity, GatewayServiceLaunch,
+    GatewayServiceLaunchRequest, GatewayServiceLaunchResolver, ServiceHttpPolicy,
+    ServiceInstancePolicy, ServiceProbePolicy, ServiceWorkerState, TrustedRequestMetadata,
+    exchange_private_service_http, new_service_instance, probe_private_service_http,
 };
 use http::{HeaderMap, HeaderValue, Method, StatusCode};
 use runtime_types::RunId;
@@ -19,7 +21,10 @@ use std::{
     net::{IpAddr, Ipv4Addr},
     os::unix::fs::PermissionsExt,
     path::PathBuf,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::{Duration, Instant},
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -39,6 +44,30 @@ const ENABLE_FLAG: &str = "HEPHAESTUS_LIBKRUN_INTEGRATION";
 struct IntegrationBroker {
     credential: [u8; RUNTIME_AUTHORITY_CREDENTIAL_BYTES],
     session_id: uuid::Uuid,
+}
+
+struct IntegrationServiceResolver {
+    expected: GatewayServiceIdentity,
+    cleanups: AtomicUsize,
+}
+
+#[async_trait::async_trait]
+impl GatewayServiceLaunchResolver for IntegrationServiceResolver {
+    async fn resolve_service_launch(
+        &self,
+        _: GatewayServiceLaunchRequest,
+    ) -> Result<GatewayServiceLaunch, GatewayEdgeError> {
+        Err(GatewayEdgeError::Unavailable)
+    }
+
+    async fn cleanup_service_launch(
+        &self,
+        identity: GatewayServiceIdentity,
+    ) -> Result<(), GatewayEdgeError> {
+        assert_eq!(identity, self.expected);
+        self.cleanups.fetch_add(1, Ordering::Relaxed);
+        Ok(())
+    }
 }
 
 #[async_trait::async_trait]
@@ -312,7 +341,10 @@ async fn boots_and_exercises_guest_runtime_without_privilege_escalation() {
     assert!(!cgroup_root_for_assertion.join(&gateway_id).exists());
     assert!(!cgroup_root_for_assertion.join(&persisted_id).exists());
 
-    let service_spec = private_service_spec(rootfs.clone());
+    let service_spec = private_service_spec(
+        rootfs.clone(),
+        format!("integration-private-service-{}", std::process::id()),
+    );
     assert!(service_spec.runtime_authority.is_none());
     assert!(matches!(service_spec.network, NetworkMode::Disabled));
     assert!(
@@ -411,6 +443,77 @@ async fn boots_and_exercises_guest_runtime_without_privilege_escalation() {
     assert!(matches!(close_result, Err(_) | Ok(0)));
     assert!(!runtime_root.join(&service_id).exists());
     assert!(!cgroup_root_for_assertion.join(&service_id).exists());
+
+    let worker_identity = GatewayServiceIdentity {
+        instance_id: uuid::Uuid::new_v4(),
+        gateway_id: uuid::Uuid::new_v4(),
+        revision_id: uuid::Uuid::new_v4(),
+    };
+    let worker_spec = private_service_spec(
+        rootfs.clone(),
+        format!("gateway-service-{}", worker_identity.instance_id),
+    );
+    let worker_launch = GatewayServiceLaunch {
+        identity: worker_identity,
+        service: GatewayServiceConfig::new(
+            8080,
+            ServiceProbePath::parse("/readyz").expect("worker readiness path"),
+            ServiceProbePath::parse("/healthz").expect("worker health path"),
+        )
+        .expect("worker service declaration"),
+        spec: worker_spec,
+    };
+    let worker_vm = provider
+        .provision(worker_launch.spec.clone())
+        .await
+        .expect("provision prepared service worker VM");
+    let worker_vm_id = worker_vm.id().0.clone();
+    let worker_resolver = Arc::new(IntegrationServiceResolver {
+        expected: worker_identity,
+        cleanups: AtomicUsize::new(0),
+    });
+    let (worker_handle, mut worker_state, worker) = new_service_instance(
+        worker_launch,
+        Arc::clone(&worker_vm),
+        worker_resolver.clone(),
+        "service.internal",
+        ServiceInstancePolicy::new(
+            Duration::from_secs(30),
+            Duration::from_millis(100),
+            Duration::from_secs(3),
+            Duration::from_secs(5),
+        ),
+    )
+    .expect("construct prepared service worker");
+    let worker_task = tokio::spawn(worker.run());
+    tokio::time::timeout(Duration::from_secs(60), async {
+        while *worker_state.borrow() != ServiceWorkerState::Ready {
+            worker_state
+                .changed()
+                .await
+                .expect("prepared service worker state");
+        }
+    })
+    .await
+    .expect("prepared service worker readiness timeout");
+    println!("REAL_PREPARED_SERVICE_WORKER_READY=1");
+    assert_eq!(
+        worker_handle
+            .health()
+            .await
+            .expect("prepared service worker health"),
+        StatusCode::OK
+    );
+    println!("REAL_PREPARED_SERVICE_WORKER_HEALTH=1");
+    worker_handle.shutdown();
+    worker_task
+        .await
+        .expect("prepared service worker join")
+        .expect("prepared service worker cleanup");
+    assert_eq!(worker_resolver.cleanups.load(Ordering::Relaxed), 1);
+    assert!(!runtime_root.join(&worker_vm_id).exists());
+    assert!(!cgroup_root_for_assertion.join(&worker_vm_id).exists());
+    println!("REAL_PREPARED_SERVICE_WORKER_CLEANED=1");
 
     let graceful = provider
         .provision(long_running_spec(rootfs_for_graceful_test, "graceful"))
@@ -890,12 +993,9 @@ fn private_http_spec(rootfs: PathBuf) -> VmSpec {
     }
 }
 
-fn private_service_spec(rootfs: PathBuf) -> VmSpec {
+fn private_service_spec(rootfs: PathBuf, id: String) -> VmSpec {
     VmSpec {
-        id: VmId(format!(
-            "integration-private-service-{}",
-            std::process::id()
-        )),
+        id: VmId(id),
         root: RootFilesystem::Directory { host_path: rootfs },
         disks: Vec::new(),
         mounts: Vec::new(),

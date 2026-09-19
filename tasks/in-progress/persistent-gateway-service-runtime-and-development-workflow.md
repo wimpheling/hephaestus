@@ -237,6 +237,20 @@ retain the VM handle when destroy fails or times out so same-process recovery
 can retry destruction; a durable VM ID alone is insufficient while the
 provider's live-handle registry still owns the instance.
 
+The real libkrun integration scenario now provisions a second fixture VM with
+the exact `gateway-service-<instance_uuid>` identity, retains its VM handle,
+and runs the prepared worker as a parent-owned task. The test waits for
+HTTP-derived `Ready`, exercises the worker health command, requests shutdown,
+and asserts one exact resolver cleanup callback plus removal of the provider
+runtime and cgroup entries. The distinct run passed one real VM test in 9.51
+seconds with markers `REAL_PREPARED_SERVICE_WORKER_READY=1`,
+`REAL_PREPARED_SERVICE_WORKER_HEALTH=1`, and
+`REAL_PREPARED_SERVICE_WORKER_CLEANED=1`; evidence is retained at
+`/tmp/heph-libkrun-integration-20260919-prepared-worker.log`. This proves the
+prepared worker against the fixture launch only; release materialization,
+durable ownership/fencing, Caddy routing, supervisor recovery, and request
+draining remain unchecked.
+
 - [x] Finish focused VM contract tests and workspace compatibility checks:
   `cargo test -p vm-trait`, `cargo test -p vm-libkrun --lib`,
   `cargo test -p vm-fake`, focused Clippy, `cargo check --workspace
