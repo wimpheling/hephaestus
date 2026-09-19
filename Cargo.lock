@@ -5712,6 +5712,8 @@ dependencies = [
  "brokered-egress-client",
  "bytes",
  "ciborium",
+ "gateway-domain",
+ "gateway-edge",
  "http",
  "libc",
  "libloading",

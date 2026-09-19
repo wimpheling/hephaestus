@@ -1,6 +1,11 @@
 //! Opt-in hardware integration tests for the Fedora libkrun backend.
 
 use bytes::Bytes;
+use gateway_domain::ServiceProbePath;
+use gateway_edge::{
+    GatewayRequest, GatewayScheme, ServiceHttpPolicy, ServiceProbePolicy, TrustedRequestMetadata,
+    exchange_private_service_http, probe_private_service_http,
+};
 use http::{HeaderMap, HeaderValue, Method, StatusCode};
 use runtime_types::RunId;
 use secret_broker::{
@@ -335,8 +340,17 @@ async fn boots_and_exercises_guest_runtime_without_privilege_escalation() {
         (200, b"healthy".to_vec())
     );
 
-    let identity_one = parse_service_identity(&poll_private_service(&service, "/identity").await);
-    let identity_two = parse_service_identity(&poll_private_service(&service, "/identity").await);
+    let readiness_probe = poll_private_service_probe(&service, "/readyz").await;
+    assert_eq!(readiness_probe.status, StatusCode::OK);
+    let health_probe = poll_private_service_probe(&service, "/healthz").await;
+    assert_eq!(health_probe.status, StatusCode::OK);
+
+    let identity_one = parse_adapter_service_identity(
+        &private_service_adapter_request(&service, "/identity").await,
+    );
+    let identity_two = parse_adapter_service_identity(
+        &private_service_adapter_request(&service, "/identity").await,
+    );
     assert_eq!(identity_one["pid"], identity_two["pid"]);
     assert_eq!(identity_one["startup_id"], identity_two["startup_id"]);
 
@@ -928,6 +942,66 @@ async fn poll_private_service(vm: &Arc<dyn VmInstance>, path: &str) -> (u16, Vec
     .expect("private service readiness polling timeout")
 }
 
+async fn poll_private_service_probe(
+    vm: &Arc<dyn VmInstance>,
+    path: &str,
+) -> gateway_edge::ServiceProbeSuccess {
+    let path = ServiceProbePath::parse(path).expect("declared service probe path");
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            match probe_private_service_http(
+                vm.as_ref(),
+                &path,
+                "service.internal",
+                ServiceProbePolicy::new(Duration::from_secs(5)),
+            )
+            .await
+            {
+                Ok(response) => return response,
+                Err(_) => tokio::time::sleep(Duration::from_millis(50)).await,
+            }
+        }
+    })
+    .await
+    .expect("private service probe readiness timeout")
+}
+
+async fn private_service_adapter_request(
+    vm: &Arc<dyn VmInstance>,
+    path: &str,
+) -> gateway_edge::GatewayResponse {
+    let connection = vm
+        .open_private_service_connection()
+        .await
+        .expect("open service connection for gateway-edge adapter");
+    exchange_private_service_http(
+        connection,
+        GatewayRequest {
+            method: Method::GET,
+            path_and_query: path.to_owned(),
+            headers: HeaderMap::new(),
+            body: Bytes::new(),
+            trusted: TrustedRequestMetadata {
+                scheme: GatewayScheme::Http,
+                authority: String::from("service.internal"),
+                client_address: IpAddr::V4(Ipv4Addr::LOCALHOST),
+                request_id: uuid::Uuid::new_v4(),
+            },
+        },
+        ServiceHttpPolicy {
+            max_request_body_bytes: 1,
+            max_response_body_bytes: 64 * 1024,
+            max_request_headers: 4,
+            max_response_headers: 32,
+            max_path_and_query_bytes: 512,
+            max_wire_header_bytes: 8 * 1024,
+            exchange_timeout: Duration::from_secs(5),
+        },
+    )
+    .await
+    .expect("gateway-edge private service exchange")
+}
+
 async fn private_service_request(
     vm: &Arc<dyn VmInstance>,
     path: &str,
@@ -990,9 +1064,9 @@ async fn private_service_request_inner(
     Ok((status, response[header_end + 4..].to_vec()))
 }
 
-fn parse_service_identity(response: &(u16, Vec<u8>)) -> serde_json::Value {
-    assert_eq!(response.0, 200);
-    serde_json::from_slice(&response.1).expect("service identity JSON")
+fn parse_adapter_service_identity(response: &gateway_edge::GatewayResponse) -> serde_json::Value {
+    assert_eq!(response.status, StatusCode::OK);
+    serde_json::from_slice(&response.body).expect("service identity JSON")
 }
 
 async fn collect_logs_until_exit(events: &mut tokio::sync::broadcast::Receiver<VmEvent>) -> String {

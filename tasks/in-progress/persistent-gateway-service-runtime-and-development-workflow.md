@@ -170,6 +170,17 @@ HTTP-readiness separation, total open-plus-exchange timeout, and cancellation
 closing the private stream. Instance ownership, durable admission, lifecycle
 supervision, and Caddy integration remain pending.
 
+The committed libkrun integration test now exercises both edge adapters over
+the real guest vsock path: repeated gateway-edge HTTP exchanges at `/identity`
+prove one long-lived process identity, and the declared readiness and health
+paths pass through the bounded probe adapter. The raw transport assertions for
+delayed responses, capacity, active-stream teardown, and VM cleanup remain in
+the same scenario. The exact non-skipped real-VM harness passed one test in
+7.23 seconds with runtime and cgroup cleanup verified; retained evidence is
+`/tmp/heph-libkrun-integration-20260919-adapter-attempt2.log`. This proves the
+adapter-to-vsock path only; prepared-worker, durable ownership/ledger,
+supervisor, Caddy routing, and release UI behavior remain unchecked.
+
 - [x] Finish focused VM contract tests and workspace compatibility checks:
   `cargo test -p vm-trait`, `cargo test -p vm-libkrun --lib`,
   `cargo test -p vm-fake`, focused Clippy, `cargo check --workspace

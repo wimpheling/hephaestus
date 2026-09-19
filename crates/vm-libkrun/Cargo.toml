@@ -49,6 +49,8 @@ required-features = ["integration-guest"]
 
 [dev-dependencies]
 async-trait.workspace = true
+gateway-domain = { path = "../gateway-domain" }
+gateway-edge = { path = "../gateway-edge" }
 secret-broker = { path = "../secret-broker" }
 secret-domain = { path = "../secret-domain" }
 secret-runtime = { path = "../secret-runtime" }
