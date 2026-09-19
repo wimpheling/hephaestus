@@ -2,7 +2,8 @@ use crate::{
     cgroup::Cgroup,
     config::LibkrunConfig,
     framing::{read_async, write_async},
-    protocol::SUPERVISOR_SOCKET_NAME,
+    protocol::{PrivateServiceConnectionMessage, SUPERVISOR_SOCKET_NAME},
+    service_transport::ServiceBroker,
     validation::{
         PROVIDER_NAME, PreparedForward, PreparedSpec, prepare_spec, validate_config, validate_id,
     },
@@ -30,13 +31,13 @@ use std::{
 use tokio::{
     net::{UnixListener, unix::OwnedReadHalf, unix::OwnedWriteHalf},
     process::{Child, Command},
-    sync::{Mutex, broadcast, oneshot, watch},
+    sync::{Mutex, Semaphore, broadcast, oneshot, watch},
     time::{sleep, timeout},
 };
 use tracing::{error, info, warn};
 use vm_trait::{
-    LogStream, PortForward, PortProtocol, StopMode, VmError, VmEvent, VmExit, VmId, VmInstance,
-    VmMetric, VmProvider, VmSpec,
+    BoxedPrivateServiceConnection, LogStream, PortForward, PortProtocol, StopMode, VmError,
+    VmEvent, VmExit, VmId, VmInstance, VmMetric, VmProvider, VmSpec,
 };
 
 const EVENT_CAPACITY: usize = 256;
@@ -151,6 +152,32 @@ impl LibkrunProvider {
             .labels
             .get(crate::protocol::GATEWAY_HANDLER_CONTRACT_LABEL)
             .is_some_and(|value| value == crate::protocol::GATEWAY_HANDLER_CONTRACT_V1);
+        let private_service_timeout = spec
+            .private_http_service
+            .as_ref()
+            .map(|service| Duration::from_millis(service.connect_timeout_ms));
+        let private_service_dispatch = spec
+            .private_http_service
+            .as_ref()
+            .map(|service| Arc::new(Semaphore::new(service.max_connections as usize)));
+        let service_broker = match spec.private_http_service.as_ref() {
+            Some(service) => match ServiceBroker::bind(
+                &runtime_dir,
+                service.max_connections,
+                private_service_timeout.expect("service timeout is present"),
+            ) {
+                Ok(broker) => Some(Arc::new(broker)),
+                Err(error) => {
+                    let _cgroup_result = cgroup.cleanup();
+                    let _runtime_result = fs::remove_dir_all(&runtime_dir);
+                    return Err(unavailable_error(
+                        "private service broker",
+                        error.to_string(),
+                    ));
+                }
+            },
+            None => None,
+        };
         let worker = match self
             .inner
             .worker_spawner
@@ -159,6 +186,9 @@ impl LibkrunProvider {
         {
             Ok(worker) => worker,
             Err(error) => {
+                if let Some(broker) = service_broker.as_ref() {
+                    broker.shutdown().await;
+                }
                 let _cgroup_result = cgroup.cleanup();
                 let _runtime_result = fs::remove_dir_all(&runtime_dir);
                 return Err(error);
@@ -182,9 +212,12 @@ impl LibkrunProvider {
             resources: Mutex::new(Some(OwnedResources {
                 runtime_dir,
                 cgroup,
+                service_broker,
             })),
             provider_ids: Arc::clone(&self.inner),
             private_http_enabled,
+            private_service_timeout,
+            private_service_dispatch,
             private_http_waiters: Mutex::new(HashMap::new()),
             next_private_http_request: AtomicU64::new(1),
         });
@@ -207,6 +240,8 @@ struct LibkrunInstance {
     resources: Mutex<Option<OwnedResources>>,
     provider_ids: Arc<ProviderInner>,
     private_http_enabled: bool,
+    private_service_timeout: Option<Duration>,
+    private_service_dispatch: Option<Arc<Semaphore>>,
     private_http_waiters:
         Mutex<HashMap<u64, oneshot::Sender<Result<vm_trait::PrivateHttpResponse, VmError>>>>,
     next_private_http_request: AtomicU64,
@@ -231,6 +266,7 @@ enum Lifecycle {
 struct OwnedResources {
     runtime_dir: PathBuf,
     cgroup: Cgroup,
+    service_broker: Option<Arc<ServiceBroker>>,
 }
 
 #[async_trait]
@@ -388,6 +424,92 @@ impl VmInstance for LibkrunInstance {
         }
     }
 
+    // The offer must remain owned by the timeout future so cancellation drops
+    // it and releases its pending broker slot.
+    #[allow(clippy::significant_drop_tightening)]
+    async fn open_private_service_connection(
+        &self,
+    ) -> Result<BoxedPrivateServiceConnection, VmError> {
+        let timeout_duration =
+            self.private_service_timeout
+                .ok_or_else(|| VmError::Unsupported {
+                    feature: "private HTTP service is not declared for this VM".to_owned(),
+                    provider: PROVIDER_NAME.to_owned(),
+                })?;
+        {
+            let state = self.state.lock().await;
+            match &*state {
+                Lifecycle::Running => {}
+                Lifecycle::Destroyed => return Err(VmError::Destroyed),
+                Lifecycle::Exited => {
+                    return Err(VmError::InvalidState("the VM has exited"));
+                }
+                Lifecycle::Provisioned | Lifecycle::Starting => {
+                    return Err(VmError::InvalidState("the VM is not running"));
+                }
+                Lifecycle::Stopping => {
+                    return Err(VmError::InvalidState("the VM is stopping"));
+                }
+                Lifecycle::StartFailed(_) => {
+                    return Err(VmError::InvalidState("the VM failed to start"));
+                }
+            }
+        }
+        let dispatch = self.private_service_dispatch.clone().ok_or_else(|| {
+            unavailable_error("private service broker", "dispatch is unavailable")
+        })?;
+        let permit = dispatch.try_acquire_owned().map_err(|error| {
+            unavailable_error(
+                "private service connection",
+                match error {
+                    tokio::sync::TryAcquireError::Closed => "dispatch is closed",
+                    tokio::sync::TryAcquireError::NoPermits => "connection capacity is exhausted",
+                },
+            )
+        })?;
+        let broker = {
+            let resources = self.resources.lock().await;
+            resources
+                .as_ref()
+                .and_then(|owned| owned.service_broker.as_ref())
+                .cloned()
+        }
+        .ok_or_else(|| unavailable_error("private service broker", "broker is unavailable"))?;
+        let offer = broker
+            .reserve()
+            .map_err(|error| unavailable_error("private service connection", error.to_string()))?;
+        let connection = PrivateServiceConnectionMessage {
+            connection_id: offer.id(),
+            challenge: offer.challenge().clone(),
+        };
+        let worker = Arc::clone(&self.worker);
+        let control_task = tokio::spawn(async move {
+            let _permit = permit;
+            worker
+                .request(WorkerCommand::OpenPrivateServiceConnection { connection })
+                .await
+        });
+        let result = timeout(timeout_duration, async {
+            control_task
+                .await
+                .map_err(|error| provider_error("worker-control-task", error))??;
+            offer
+                .connect()
+                .await
+                .map_err(|error| unavailable_error("private service connection", error.to_string()))
+        })
+        .await;
+        result.map_or_else(
+            |_| {
+                Err(unavailable_error(
+                    "private service connection",
+                    "connection timed out",
+                ))
+            },
+            |result| result.map(|connection| Box::new(connection) as BoxedPrivateServiceConnection),
+        )
+    }
+
     fn subscribe_events(&self) -> broadcast::Receiver<VmEvent> {
         self.events.subscribe()
     }
@@ -473,6 +595,8 @@ impl LibkrunInstance {
         }
     }
 
+    // The task must own this Arc for the complete event-forwarding lifetime.
+    #[allow(clippy::significant_drop_tightening)]
     fn spawn_event_forwarder(self: &Arc<Self>) {
         let instance = Arc::clone(self);
         let mut events = instance.worker.subscribe_events();
@@ -489,6 +613,8 @@ impl LibkrunInstance {
         });
     }
 
+    // The monitor tasks intentionally retain the instance until process exit.
+    #[allow(clippy::significant_drop_tightening)]
     fn spawn_process_monitor(self: &Arc<Self>) {
         let instance = Arc::clone(self);
         let mut process_exit = instance.worker.subscribe_process_exit();
@@ -635,6 +761,7 @@ impl LibkrunInstance {
             }
         }
         send_event(&self.events, VmEvent::Exited(exit));
+        self.shutdown_service_broker().await;
         self.fail_private_http_waiters("guest exited before private HTTP response")
             .await;
     }
@@ -647,6 +774,7 @@ impl LibkrunInstance {
     }
 
     async fn force_cleanup(&self, was_started: bool) -> Result<(), VmError> {
+        self.shutdown_service_broker().await;
         if was_started {
             self.worker.kill().await?;
             let _status = timeout(self.config.startup_timeout, self.worker.wait_process())
@@ -667,7 +795,20 @@ impl LibkrunInstance {
         self.cleanup_resources().await
     }
 
+    // The broker is cloned out before awaiting shutdown so the resources lock
+    // never spans an await.
+    #[allow(clippy::significant_drop_tightening)]
     async fn cleanup_resources(&self) -> Result<(), VmError> {
+        let broker = self
+            .resources
+            .lock()
+            .await
+            .as_ref()
+            .and_then(|owned| owned.service_broker.as_ref())
+            .cloned();
+        if let Some(broker) = broker {
+            broker.shutdown().await;
+        }
         let mut resources = self.resources.lock().await;
         if let Some(owned) = resources.as_ref() {
             cleanup_runtime(&owned.runtime_dir)?;
@@ -682,6 +823,19 @@ impl LibkrunInstance {
         drop(resources);
         self.provider_ids.ids.lock().await.remove(&self.id);
         Ok(())
+    }
+
+    async fn shutdown_service_broker(&self) {
+        let broker = self
+            .resources
+            .lock()
+            .await
+            .as_ref()
+            .and_then(|owned| owned.service_broker.as_ref())
+            .cloned();
+        if let Some(broker) = broker {
+            broker.shutdown().await;
+        }
     }
 }
 
@@ -1314,15 +1468,23 @@ impl fmt::Display for MessageError {
 impl Error for MessageError {}
 
 #[cfg(test)]
+// These lifecycle tests intentionally keep Arc handles live across awaits so
+// concurrent start/exit behavior remains observable through each task.
+#[allow(clippy::significant_drop_tightening)]
 mod tests {
     use super::{
-        ErrorSnapshot, LibkrunInstance, Lifecycle, ProcessStatus, ProcessWorkerSpawner,
-        ProviderInner, Terminal, WorkerBackend, WorkerSpawner, create_runtime_dir,
-        wire_to_vm_error,
+        Cgroup, ErrorSnapshot, LibkrunInstance, Lifecycle, OwnedResources, ProcessStatus,
+        ProcessWorkerSpawner, ProviderInner, Terminal, WorkerBackend, WorkerSpawner,
+        create_runtime_dir, wire_to_vm_error,
     };
     use crate::{
         config::LibkrunConfig,
-        protocol::PrivateHttpResponseMessage,
+        protocol::{
+            PRIVATE_SERVICE_CHALLENGE_BYTES, PRIVATE_SERVICE_HANDSHAKE_MAGIC,
+            PRIVATE_SERVICE_HANDSHAKE_VERSION, PrivateHttpResponseMessage,
+            PrivateServiceConnectionMessage,
+        },
+        service_transport::ServiceBroker,
         worker::{WireError, WireErrorKind, WorkerCommand, WorkerEvent},
     };
     use async_trait::async_trait;
@@ -1338,7 +1500,9 @@ mod tests {
         time::Duration,
     };
     use tempfile::TempDir;
-    use tokio::sync::{Mutex, Notify, broadcast, watch};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::UnixStream;
+    use tokio::sync::{Mutex, Notify, Semaphore, broadcast, watch};
     use vm_trait::{
         DiskFormat, GuestCommand, NetworkMode, PrivateHttpRequest, RootFilesystem, StopMode,
         VmDisk, VmError, VmEvent, VmId, VmInstance, VmProvider, VmResources, VmSpec,
@@ -1685,6 +1849,179 @@ mod tests {
         assert_eq!(instance.wait().await.unwrap().code, Some(23));
     }
 
+    #[tokio::test]
+    async fn private_service_dispatch_binds_challenge_to_guest_stream() {
+        let temp = TempDir::new().unwrap();
+        let runtime_dir = temp.path().join("service-runtime");
+        fs::create_dir(&runtime_dir).unwrap();
+        fs::set_permissions(&runtime_dir, fs::Permissions::from_mode(0o700)).unwrap();
+        let broker =
+            Arc::new(ServiceBroker::bind(&runtime_dir, 1, Duration::from_secs(1)).unwrap());
+        let worker = Arc::new(MockWorker::new());
+        let mut requests = worker.service_requests.subscribe();
+        let instance = service_instance(
+            &temp,
+            Arc::clone(&worker),
+            Duration::from_secs(1),
+            Arc::clone(&broker),
+            runtime_dir,
+        );
+        instance.start().await.unwrap();
+
+        let opening = tokio::spawn({
+            let instance = Arc::clone(&instance);
+            async move { instance.open_private_service_connection().await }
+        });
+        let request = requests.recv().await.unwrap();
+        let mut guest = UnixStream::connect(broker.socket_path()).await.unwrap();
+        let mut frame = [0_u8;
+            PRIVATE_SERVICE_HANDSHAKE_MAGIC.len() + 1 + 16 + PRIVATE_SERVICE_CHALLENGE_BYTES];
+        frame[..PRIVATE_SERVICE_HANDSHAKE_MAGIC.len()]
+            .copy_from_slice(&PRIVATE_SERVICE_HANDSHAKE_MAGIC);
+        frame[PRIVATE_SERVICE_HANDSHAKE_MAGIC.len()] = PRIVATE_SERVICE_HANDSHAKE_VERSION;
+        let id_start = PRIVATE_SERVICE_HANDSHAKE_MAGIC.len() + 1;
+        frame[id_start..id_start + 16].copy_from_slice(request.connection_id.as_bytes());
+        frame[id_start + 16..].copy_from_slice(request.challenge.as_bytes());
+        guest.write_all(&frame).await.unwrap();
+        let mut service = opening.await.unwrap().unwrap();
+        service.write_all(b"request").await.unwrap();
+        let mut request_bytes = [0_u8; 7];
+        guest.read_exact(&mut request_bytes).await.unwrap();
+        assert_eq!(&request_bytes, b"request");
+        broker.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn worker_exit_closes_provider_owned_private_service_stream() {
+        let temp = TempDir::new().unwrap();
+        let runtime_dir = temp.path().join("service-runtime");
+        fs::create_dir(&runtime_dir).unwrap();
+        fs::set_permissions(&runtime_dir, fs::Permissions::from_mode(0o700)).unwrap();
+        let broker =
+            Arc::new(ServiceBroker::bind(&runtime_dir, 1, Duration::from_secs(1)).unwrap());
+        let worker = Arc::new(MockWorker::new());
+        let mut requests = worker.service_requests.subscribe();
+        let instance = service_instance(
+            &temp,
+            Arc::clone(&worker),
+            Duration::from_secs(1),
+            Arc::clone(&broker),
+            runtime_dir,
+        );
+        instance.start().await.unwrap();
+
+        let opening = tokio::spawn({
+            let instance = Arc::clone(&instance);
+            async move { instance.open_private_service_connection().await }
+        });
+        let request = requests.recv().await.unwrap();
+        let mut guest = UnixStream::connect(broker.socket_path()).await.unwrap();
+        let mut frame = [0_u8;
+            PRIVATE_SERVICE_HANDSHAKE_MAGIC.len() + 1 + 16 + PRIVATE_SERVICE_CHALLENGE_BYTES];
+        frame[..PRIVATE_SERVICE_HANDSHAKE_MAGIC.len()]
+            .copy_from_slice(&PRIVATE_SERVICE_HANDSHAKE_MAGIC);
+        frame[PRIVATE_SERVICE_HANDSHAKE_MAGIC.len()] = PRIVATE_SERVICE_HANDSHAKE_VERSION;
+        let id_start = PRIVATE_SERVICE_HANDSHAKE_MAGIC.len() + 1;
+        frame[id_start..id_start + 16].copy_from_slice(request.connection_id.as_bytes());
+        frame[id_start + 16..].copy_from_slice(request.challenge.as_bytes());
+        guest.write_all(&frame).await.unwrap();
+        let mut service = opening.await.unwrap().unwrap();
+
+        worker.exit(Some(0), None);
+        let mut bytes = [0_u8; 1];
+        let read = tokio::time::timeout(Duration::from_secs(1), service.read(&mut bytes))
+            .await
+            .unwrap();
+        assert!(matches!(read, Err(_) | Ok(0)));
+    }
+
+    #[tokio::test]
+    async fn private_service_timeout_releases_pending_offer() {
+        let temp = TempDir::new().unwrap();
+        let runtime_dir = temp.path().join("service-runtime");
+        fs::create_dir(&runtime_dir).unwrap();
+        fs::set_permissions(&runtime_dir, fs::Permissions::from_mode(0o700)).unwrap();
+        let broker =
+            Arc::new(ServiceBroker::bind(&runtime_dir, 1, Duration::from_secs(1)).unwrap());
+        let instance = service_instance(
+            &temp,
+            Arc::new(MockWorker::new()),
+            Duration::from_millis(20),
+            Arc::clone(&broker),
+            runtime_dir,
+        );
+        instance.start().await.unwrap();
+        assert!(matches!(
+            instance.open_private_service_connection().await,
+            Err(VmError::Unavailable { .. })
+        ));
+        assert!(broker.reserve().is_ok());
+        broker.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn blocked_private_service_dispatch_is_bounded_and_released() {
+        let temp = TempDir::new().unwrap();
+        let runtime_dir = temp.path().join("service-runtime");
+        fs::create_dir(&runtime_dir).unwrap();
+        fs::set_permissions(&runtime_dir, fs::Permissions::from_mode(0o700)).unwrap();
+        let broker =
+            Arc::new(ServiceBroker::bind(&runtime_dir, 1, Duration::from_secs(1)).unwrap());
+        let worker = Arc::new(MockWorker::blocking_service());
+        let instance = service_instance(
+            &temp,
+            Arc::clone(&worker),
+            Duration::from_millis(20),
+            Arc::clone(&broker),
+            runtime_dir,
+        );
+        instance.start().await.unwrap();
+
+        let first = tokio::spawn({
+            let instance = Arc::clone(&instance);
+            async move { instance.open_private_service_connection().await }
+        });
+        worker.service_entered.notified().await;
+        assert!(matches!(
+            first.await.unwrap(),
+            Err(VmError::Unavailable { .. })
+        ));
+        assert!(matches!(
+            instance.open_private_service_connection().await,
+            Err(VmError::Unavailable { .. })
+        ));
+
+        worker.block_service.store(false, Ordering::Relaxed);
+        worker.release_service.notify_one();
+        worker.service_finished.notified().await;
+        for _ in 0..16 {
+            if instance
+                .private_service_dispatch
+                .as_ref()
+                .expect("service dispatch semaphore")
+                .available_permits()
+                == 1
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(
+            instance
+                .private_service_dispatch
+                .as_ref()
+                .expect("service dispatch semaphore")
+                .available_permits(),
+            1
+        );
+        assert!(matches!(
+            instance.open_private_service_connection().await,
+            Err(VmError::Unavailable { .. })
+        ));
+        assert!(broker.reserve().is_ok());
+        broker.shutdown().await;
+    }
+
     #[tokio::test(start_paused = true)]
     async fn wall_clock_limit_terminates_running_worker() {
         let temp = TempDir::new().unwrap();
@@ -1704,6 +2041,30 @@ mod tests {
         temp: &TempDir,
         worker: Arc<MockWorker>,
         wall_clock_timeout: Duration,
+    ) -> Arc<LibkrunInstance> {
+        instance_with_options(temp, worker, wall_clock_timeout, None)
+    }
+
+    fn service_instance(
+        temp: &TempDir,
+        worker: Arc<MockWorker>,
+        timeout_duration: Duration,
+        broker: Arc<ServiceBroker>,
+        runtime_dir: PathBuf,
+    ) -> Arc<LibkrunInstance> {
+        instance_with_options(
+            temp,
+            worker,
+            Duration::from_secs(60),
+            Some((timeout_duration, broker, runtime_dir)),
+        )
+    }
+
+    fn instance_with_options(
+        temp: &TempDir,
+        worker: Arc<MockWorker>,
+        wall_clock_timeout: Duration,
+        service: Option<(Duration, Arc<ServiceBroker>, PathBuf)>,
     ) -> Arc<LibkrunInstance> {
         let mut config = LibkrunConfig::new(
             temp.path(),
@@ -1726,6 +2087,15 @@ mod tests {
         let (terminal, _) = watch::channel(None::<Terminal>);
         let (ready, _) = watch::channel(false);
         let (start_result, _) = watch::channel(None::<Result<(), ErrorSnapshot>>);
+        let private_service_timeout = service.as_ref().map(|(timeout, _, _)| *timeout);
+        let private_service_dispatch = service
+            .as_ref()
+            .map(|(_, _, _)| Arc::new(Semaphore::new(1)));
+        let resources = service.map(|(_, broker, runtime_dir)| OwnedResources {
+            runtime_dir,
+            cgroup: Cgroup::existing(&config, "test"),
+            service_broker: Some(broker),
+        });
         let instance = Arc::new(LibkrunInstance {
             id: VmId("test".to_owned()),
             config,
@@ -1736,9 +2106,11 @@ mod tests {
             ready,
             start_result,
             events,
-            resources: Mutex::new(None),
+            resources: Mutex::new(resources),
             provider_ids,
             private_http_enabled: true,
+            private_service_timeout,
+            private_service_dispatch,
             private_http_waiters: Mutex::new(HashMap::new()),
             next_private_http_request: AtomicU64::new(1),
         });
@@ -1816,28 +2188,39 @@ mod tests {
 
     struct MockWorker {
         events: broadcast::Sender<WorkerEvent>,
+        service_requests: broadcast::Sender<PrivateServiceConnectionMessage>,
         process_exit: watch::Sender<Option<ProcessStatus>>,
         start_calls: AtomicUsize,
         send_ready: bool,
         fail_start: bool,
         block_start: bool,
+        block_service: std::sync::atomic::AtomicBool,
         start_entered: Notify,
         release_start: Notify,
+        service_entered: Notify,
+        release_service: Notify,
+        service_finished: Notify,
     }
 
     impl MockWorker {
         fn new() -> Self {
             let (events, _) = broadcast::channel(32);
+            let (service_requests, _) = broadcast::channel(8);
             let (process_exit, _) = watch::channel(None);
             Self {
                 events,
+                service_requests,
                 process_exit,
                 start_calls: AtomicUsize::new(0),
                 send_ready: true,
                 fail_start: false,
                 block_start: false,
+                block_service: std::sync::atomic::AtomicBool::new(false),
                 start_entered: Notify::new(),
                 release_start: Notify::new(),
+                service_entered: Notify::new(),
+                release_service: Notify::new(),
+                service_finished: Notify::new(),
             }
         }
 
@@ -1860,6 +2243,12 @@ mod tests {
                 block_start: true,
                 ..Self::new()
             }
+        }
+
+        fn blocking_service() -> Self {
+            let worker = Self::new();
+            worker.block_service.store(true, Ordering::Relaxed);
+            worker
         }
 
         fn exit(&self, code: Option<i32>, signal: Option<i32>) {
@@ -1909,6 +2298,14 @@ mod tests {
                     }));
                 }
                 WorkerCommand::Configure { .. } | WorkerCommand::Health { .. } => {}
+                WorkerCommand::OpenPrivateServiceConnection { connection } => {
+                    if self.block_service.load(Ordering::Relaxed) {
+                        self.service_entered.notify_one();
+                        self.release_service.notified().await;
+                    }
+                    drop(self.service_requests.send(connection));
+                    self.service_finished.notify_one();
+                }
                 WorkerCommand::InvokePrivateHttp { request_id, .. } => {
                     drop(self.events.send(WorkerEvent::PrivateHttpResponse {
                         request_id,

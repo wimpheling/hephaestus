@@ -92,7 +92,8 @@ mod tests {
     use super::{read_sync, write_sync};
     use crate::protocol::{
         GuestCommandMessage, GuestLogStream, GuestMessage, GuestMount, HostMessage, MAX_FRAME_SIZE,
-        PROTOCOL_VERSION, PrivateHttpServiceMessage, RuntimeAuthorityMessage,
+        PRIVATE_SERVICE_CHALLENGE_BYTES, PROTOCOL_VERSION, PrivateHttpServiceMessage,
+        PrivateServiceChallenge, PrivateServiceConnectionMessage, RuntimeAuthorityMessage,
     };
     use serde::Serialize;
     use std::{collections::BTreeMap, io::Cursor, path::PathBuf};
@@ -150,6 +151,12 @@ mod tests {
                     path_and_query: String::from("/gateway/test"),
                     headers: vec![(String::from("content-type"), String::from("text/plain"))],
                     body: vec![1, 2, 3],
+                },
+            },
+            HostMessage::OpenPrivateServiceConnection {
+                connection: PrivateServiceConnectionMessage {
+                    connection_id: uuid::Uuid::nil(),
+                    challenge: PrivateServiceChallenge([0xA5; PRIVATE_SERVICE_CHALLENGE_BYTES]),
                 },
             },
         ];

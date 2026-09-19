@@ -91,14 +91,18 @@ require main-thread review before each integration step.
 
 ## Current implementation checkpoint
 
-The first VM contract slice and the standalone host broker are being
-implemented on the feature branch and remain fail-closed until provider and
-guest integration exists. The contract carries optional validated
-private-service settings through the libkrun protocol while preserving the
-stateless `http.v1` gateway-handler flag. The broker owns a private Unix
-listener, single-use challenge binding, bounded reservations, raw stream
-backpressure, and shutdown cleanup. No vsock mapping, provider wiring,
-release UI, or Caddy forwarding is included in this checkpoint.
+The VM contract, standalone host broker, and host-side provider/worker/FFI
+wiring are implemented on the feature branch. The contract carries optional
+validated private-service settings through the libkrun protocol while
+preserving the stateless `http.v1` gateway-handler flag. The broker owns a
+private Unix listener, single-use challenge binding, bounded reservations,
+raw stream backpressure, and shutdown cleanup. Provider-owned brokers are
+created before worker launch, the worker forwards an exact redacted
+single-use challenge over the control channel, and libkrun maps the guest
+service vsock port to the per-VM Unix socket without passt or IP networking.
+The guest still rejects service mode before workload launch, so real guest
+bridging, long-lived service supervision, Caddy forwarding, and release UI
+remain unchecked.
 
 - [x] Finish focused VM contract tests and workspace compatibility checks:
   `cargo test -p vm-trait`, `cargo test -p vm-libkrun --lib`,
@@ -111,9 +115,22 @@ release UI, or Caddy forwarding is included in this checkpoint.
   replay rejection, pending cancellation and expiry, active-capacity bounds,
   shutdown of pending and active connections, pending-read wakeup, and
   incomplete-handshake cancellation. Evidence: `cargo test -p vm-libkrun
-  --lib service_transport::tests` (7 passed) and `cargo clippy -p vm-libkrun
-  --lib --tests --all-features` pass; no provider or guest integration is
-  claimed.
+  --lib service_transport::tests` (8 passed) and focused Clippy pass.
+- [x] Wire the host provider, worker command, shared handshake protocol, and
+  fixed-vsock FFI mapping. Provider connection calls enforce the declared
+  timeout across worker dispatch and authenticated broker connection; a
+  bounded control semaphore keeps timed-out sends from interrupting a worker
+  frame, and capacity acquisition fails fast so the declared connect timeout
+  is one total operation deadline. Evidence: `cargo test -p vm-libkrun --lib`
+  (71 passed),
+  `cargo clippy -p vm-libkrun --all-targets --all-features`,
+  `cargo check --workspace --all-targets --all-features`, formatting, and
+  `git diff --check` pass; `cargo doc --workspace --all-features --no-deps`
+  exited 0 with no warnings. Guest service mode remains fail-closed.
+- [x] Verify provider-level cancellation and lifecycle ownership: blocked
+  worker control sends remain bounded by the service semaphore, timed-out
+  offers release broker capacity, and worker exit closes an active provider
+  stream. Focused provider tests are included in the 71 passing lib tests.
 
 ## Implementation checklist
 

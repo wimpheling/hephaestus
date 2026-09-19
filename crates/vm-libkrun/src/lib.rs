@@ -11,9 +11,7 @@ mod framing;
 mod network;
 pub mod protocol;
 mod provider;
-// This standalone transport is intentionally unused until the next provider
-// integration slice wires it into VM lifecycle ownership.
-#[allow(dead_code, clippy::redundant_pub_crate)]
+#[allow(clippy::redundant_pub_crate)]
 pub(crate) mod service_transport;
 mod validation;
 mod worker;

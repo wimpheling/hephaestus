@@ -7,8 +7,8 @@ use crate::{
         GuestCommandMessage, GuestLogStream, GuestMessage, GuestMount, GuestStateVolume,
         HostMessage, MAX_LOG_CHUNK_SIZE, MAX_METRIC_LABELS, MAX_METRIC_TEXT_SIZE,
         MAX_PRIVATE_HTTP_BODY_BYTES, MAX_PRIVATE_HTTP_HEADERS, MAX_RESULT_MESSAGE_SIZE,
-        PROTOCOL_VERSION, PrivateHttpServiceMessage, RUNTIME_AUTHORITY_PATH_ENV,
-        RuntimeAuthorityMessage,
+        PRIVATE_SERVICE_SOCKET_NAME, PROTOCOL_VERSION, PrivateHttpServiceMessage,
+        PrivateServiceConnectionMessage, RUNTIME_AUTHORITY_PATH_ENV, RuntimeAuthorityMessage,
     },
     validation::{PreparedForward, PreparedSpec},
 };
@@ -61,6 +61,9 @@ pub enum WorkerCommand {
     InvokePrivateHttp {
         request_id: u64,
         request: crate::protocol::PrivateHttpRequestMessage,
+    },
+    OpenPrivateServiceConnection {
+        connection: PrivateServiceConnectionMessage,
     },
     Destroy,
 }
@@ -208,6 +211,13 @@ fn run(
                     .and_then(|configured| configured.private_http(request_id, private_request));
                 send_response(writer, request.request_id, result)?;
             }
+            WorkerCommand::OpenPrivateServiceConnection { connection } => {
+                let result = runtime
+                    .as_ref()
+                    .ok_or_else(|| WireError::invalid_state("worker is not configured"))
+                    .and_then(|configured| configured.open_private_service_connection(connection));
+                send_response(writer, request.request_id, result)?;
+            }
             WorkerCommand::Destroy => {
                 send_response(writer, request.request_id, Ok(()))?;
                 drop(runtime.take());
@@ -283,6 +293,11 @@ impl WorkerRuntime {
             passt_socket.as_deref(),
             &control_path,
             self.config.broker_socket_path.as_deref(),
+            self.spec
+                .private_http_service
+                .as_ref()
+                .map(|_| self.runtime_dir.join(PRIVATE_SERVICE_SOCKET_NAME))
+                .as_deref(),
         ) {
             drop(passt);
             return Err(WireError::from(error));
@@ -348,6 +363,28 @@ impl WorkerRuntime {
                 request_id,
                 request,
             },
+        )
+        .map_err(|error| WireError::io(&error));
+        drop(guest);
+        result
+    }
+
+    fn open_private_service_connection(
+        &self,
+        connection: PrivateServiceConnectionMessage,
+    ) -> Result<(), WireError> {
+        if self.spec.private_http_service.is_none() {
+            return Err(WireError::unsupported(
+                "private HTTP service is not declared for this VM",
+            ));
+        }
+        let mut guest = lock(&self.guest);
+        let stream = guest
+            .as_mut()
+            .ok_or_else(|| WireError::unavailable("guest control channel is not ready"))?;
+        let result = write_sync(
+            stream,
+            &HostMessage::OpenPrivateServiceConnection { connection },
         )
         .map_err(|error| WireError::io(&error));
         drop(guest);
@@ -712,6 +749,14 @@ impl WireError {
         Self {
             kind: WireErrorKind::InvalidState,
             code: "invalid-state".to_owned(),
+            message: message.into(),
+        }
+    }
+
+    pub fn unsupported(message: impl Into<String>) -> Self {
+        Self {
+            kind: WireErrorKind::Unsupported,
+            code: "unsupported".to_owned(),
             message: message.into(),
         }
     }

@@ -14,6 +14,10 @@ use std::{
     time::{Duration, Instant},
 };
 
+use crate::protocol::{
+    PRIVATE_SERVICE_CHALLENGE_BYTES, PRIVATE_SERVICE_HANDSHAKE_MAGIC,
+    PRIVATE_SERVICE_HANDSHAKE_VERSION, PRIVATE_SERVICE_SOCKET_NAME, PrivateServiceChallenge,
+};
 use subtle::ConstantTimeEq;
 use thiserror::Error;
 use tokio::{
@@ -25,12 +29,8 @@ use tokio::{
 };
 use uuid::Uuid;
 
-const SERVICE_SOCKET_NAME: &str = "private-service.sock";
-const SERVICE_HANDSHAKE_MAGIC: [u8; 8] = *b"HEPH-SVC";
-const SERVICE_HANDSHAKE_VERSION: u8 = 1;
-const SERVICE_CHALLENGE_BYTES: usize = 32;
 const SERVICE_HANDSHAKE_BYTES: usize =
-    SERVICE_HANDSHAKE_MAGIC.len() + 1 + 16 + SERVICE_CHALLENGE_BYTES;
+    PRIVATE_SERVICE_HANDSHAKE_MAGIC.len() + 1 + 16 + PRIVATE_SERVICE_CHALLENGE_BYTES;
 const MAX_HANDSHAKE_ATTEMPTS_PER_TURN: usize = 64;
 const HANDSHAKE_BACKOFF: Duration = Duration::from_millis(10);
 
@@ -60,20 +60,7 @@ impl From<io::Error> for ServiceTransportError {
 }
 
 /// A single-use challenge delivered over the VM control channel.
-#[derive(Clone, Eq, PartialEq)]
-pub(crate) struct ServiceChallenge([u8; SERVICE_CHALLENGE_BYTES]);
-
-impl ServiceChallenge {
-    pub(crate) const fn as_bytes(&self) -> &[u8; SERVICE_CHALLENGE_BYTES] {
-        &self.0
-    }
-}
-
-impl fmt::Debug for ServiceChallenge {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("[REDACTED]")
-    }
-}
+pub(crate) type ServiceChallenge = PrivateServiceChallenge;
 
 /// Metadata needed to authorize one guest service connection.
 pub(crate) struct ServiceConnectionOffer {
@@ -337,7 +324,7 @@ impl ServiceBroker {
             ));
         }
 
-        let socket_path = runtime_dir.join(SERVICE_SOCKET_NAME);
+        let socket_path = runtime_dir.join(PRIVATE_SERVICE_SOCKET_NAME);
         let listener = UnixListener::bind(&socket_path)?;
         if let Err(error) = fs::set_permissions(&socket_path, fs::Permissions::from_mode(0o600)) {
             drop(listener);
@@ -364,6 +351,7 @@ impl ServiceBroker {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn socket_path(&self) -> &Path {
         &self.socket_path
     }
@@ -589,30 +577,30 @@ async fn read_handshake(
 ) -> Result<(Uuid, ServiceChallenge, UnixStream), ServiceTransportError> {
     let mut frame = [0_u8; SERVICE_HANDSHAKE_BYTES];
     stream.read_exact(&mut frame).await?;
-    if frame[..SERVICE_HANDSHAKE_MAGIC.len()] != SERVICE_HANDSHAKE_MAGIC
-        || frame[SERVICE_HANDSHAKE_MAGIC.len()] != SERVICE_HANDSHAKE_VERSION
+    if frame[..PRIVATE_SERVICE_HANDSHAKE_MAGIC.len()] != PRIVATE_SERVICE_HANDSHAKE_MAGIC
+        || frame[PRIVATE_SERVICE_HANDSHAKE_MAGIC.len()] != PRIVATE_SERVICE_HANDSHAKE_VERSION
     {
         return Err(ServiceTransportError::HandshakeRejected);
     }
-    let id_start = SERVICE_HANDSHAKE_MAGIC.len() + 1;
+    let id_start = PRIVATE_SERVICE_HANDSHAKE_MAGIC.len() + 1;
     let id_end = id_start + 16;
     let id = Uuid::from_bytes(
         frame[id_start..id_end]
             .try_into()
             .expect("fixed UUID width"),
     );
-    let mut challenge = [0_u8; SERVICE_CHALLENGE_BYTES];
+    let mut challenge = [0_u8; PRIVATE_SERVICE_CHALLENGE_BYTES];
     challenge.copy_from_slice(&frame[id_end..]);
-    Ok((id, ServiceChallenge(challenge), stream))
+    Ok((id, PrivateServiceChallenge(challenge), stream))
 }
 
 fn random_challenge() -> ServiceChallenge {
     let first = Uuid::new_v4();
     let second = Uuid::new_v4();
-    let mut challenge = [0_u8; SERVICE_CHALLENGE_BYTES];
+    let mut challenge = [0_u8; PRIVATE_SERVICE_CHALLENGE_BYTES];
     challenge[..16].copy_from_slice(first.as_bytes());
     challenge[16..].copy_from_slice(second.as_bytes());
-    ServiceChallenge(challenge)
+    PrivateServiceChallenge(challenge)
 }
 
 fn constant_time_equal(left: &[u8], right: &[u8]) -> bool {
@@ -672,11 +660,12 @@ mod tests {
         directory
     }
 
-    fn frame(id: Uuid, challenge: &ServiceChallenge) -> [u8; SERVICE_HANDSHAKE_BYTES] {
+    fn frame(id: Uuid, challenge: &PrivateServiceChallenge) -> [u8; SERVICE_HANDSHAKE_BYTES] {
         let mut frame = [0_u8; SERVICE_HANDSHAKE_BYTES];
-        frame[..SERVICE_HANDSHAKE_MAGIC.len()].copy_from_slice(&SERVICE_HANDSHAKE_MAGIC);
-        frame[SERVICE_HANDSHAKE_MAGIC.len()] = SERVICE_HANDSHAKE_VERSION;
-        let id_start = SERVICE_HANDSHAKE_MAGIC.len() + 1;
+        frame[..PRIVATE_SERVICE_HANDSHAKE_MAGIC.len()]
+            .copy_from_slice(&PRIVATE_SERVICE_HANDSHAKE_MAGIC);
+        frame[PRIVATE_SERVICE_HANDSHAKE_MAGIC.len()] = PRIVATE_SERVICE_HANDSHAKE_VERSION;
+        let id_start = PRIVATE_SERVICE_HANDSHAKE_MAGIC.len() + 1;
         frame[id_start..id_start + 16].copy_from_slice(id.as_bytes());
         frame[id_start + 16..].copy_from_slice(challenge.as_bytes());
         frame

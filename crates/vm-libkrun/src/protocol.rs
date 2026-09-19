@@ -41,6 +41,44 @@ pub const GATEWAY_HANDLER_CONTRACT_LABEL: &str = "hephaestus.gateway.handler-con
 /// The only gateway handler contract understood by this protocol version.
 pub const GATEWAY_HANDLER_CONTRACT_V1: &str = "http.v1";
 
+/// Fixed vsock port used for the guest-initiated private service bridge.
+pub const PRIVATE_SERVICE_VSOCK_PORT: u32 = 19_002;
+/// Stable magic prefix for the private service handshake.
+pub const PRIVATE_SERVICE_HANDSHAKE_MAGIC: [u8; 8] = *b"HEPH-SVC";
+/// Current private service handshake version.
+pub const PRIVATE_SERVICE_HANDSHAKE_VERSION: u8 = 1;
+/// Number of unpredictable bytes in one private service challenge.
+pub const PRIVATE_SERVICE_CHALLENGE_BYTES: usize = 32;
+/// Parent-owned Unix socket mapped to [`PRIVATE_SERVICE_VSOCK_PORT`].
+pub(crate) const PRIVATE_SERVICE_SOCKET_NAME: &str = "private-service.sock";
+
+/// A single-use private service handshake challenge.
+#[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub struct PrivateServiceChallenge(pub [u8; PRIVATE_SERVICE_CHALLENGE_BYTES]);
+
+impl PrivateServiceChallenge {
+    /// Returns the challenge bytes for the fixed handshake encoding.
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8; PRIVATE_SERVICE_CHALLENGE_BYTES] {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for PrivateServiceChallenge {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("[REDACTED]")
+    }
+}
+
+/// Host-to-guest metadata authorizing one private service connection.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrivateServiceConnectionMessage {
+    /// Exact pending connection identifier.
+    pub connection_id: uuid::Uuid,
+    /// Single-use proof bound to `connection_id`.
+    pub challenge: PrivateServiceChallenge,
+}
+
 /// Wire representation of a declared long-lived private HTTP service.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PrivateHttpServiceMessage {
@@ -103,6 +141,11 @@ pub enum HostMessage {
         /// Optional long-lived private HTTP service declaration.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         private_http_service: Option<PrivateHttpServiceMessage>,
+    },
+    /// Opens one authorized guest-initiated private service connection.
+    OpenPrivateServiceConnection {
+        /// Exact connection authorization metadata.
+        connection: PrivateServiceConnectionMessage,
     },
     /// Requests graceful cancellation.
     Cancel {
