@@ -560,7 +560,21 @@ async fn exercise_external_gateway_service_warm_path(
     let rollback = env::var("HEPHAESTUS_APP_GATEWAY_SERVICE_ROLLBACK_E2E").as_deref() == Ok("1");
     let unclean_restart =
         env::var("HEPHAESTUS_APP_GATEWAY_SERVICE_EXTERNAL_CRASH_E2E").as_deref() == Ok("1");
-    if cutover {
+    let failed_candidate =
+        env::var("HEPHAESTUS_APP_GATEWAY_SERVICE_FAILED_CANDIDATE_E2E").as_deref() == Ok("1");
+    if failed_candidate {
+        exercise_external_gateway_service_failed_candidate(
+            pool,
+            fixture,
+            daemon,
+            first_instance_id,
+            paths,
+            &first_proof,
+            &public_url,
+            release_artifact_root,
+        )
+        .await;
+    } else if cutover {
         exercise_external_gateway_service_cutover(
             pool,
             fixture,
@@ -720,6 +734,396 @@ async fn exercise_external_gateway_service_unclean_restart(
     eprintln!("persistent-service-unclean-daemon-recovery-passed");
 }
 
+/// Exercises a real failed candidate while the original ready revision keeps
+/// serving public identity requests. The `/crash` readiness probe returns the
+/// fixture's 503 before its process exits with 42; this acceptance requires
+/// the durable unexpected-exit report so a generic startup failure cannot be
+/// mistaken for guest execution.
+#[allow(
+    // This one acceptance path keeps failure, public continuity, and cleanup
+    // assertions together so their ordering remains explicit.
+    clippy::cognitive_complexity,
+    clippy::too_many_arguments,
+    clippy::too_many_lines
+)]
+async fn exercise_external_gateway_service_failed_candidate(
+    pool: &sqlx::PgPool,
+    fixture: &GatewayServiceGoldenFixture,
+    daemon: ExternalGoldenDaemon,
+    old_instance_id: uuid::Uuid,
+    old_paths: (PathBuf, PathBuf, PathBuf),
+    first_proof: &GatewayServiceRequestProof,
+    public_url: &str,
+    release_artifact_root: &Path,
+) {
+    let old_fencing_token: i64 = sqlx::query_scalar(
+        "SELECT fencing_token
+           FROM gateway_service_instances
+          WHERE id = $1 AND gateway_id = $2 AND revision_id = $3",
+    )
+    .bind(old_instance_id)
+    .bind(fixture.gateway_id)
+    .bind(fixture.revision_id)
+    .fetch_one(pool)
+    .await
+    .expect("read A fencing token before failed candidate");
+    assert!(old_paths.0.is_dir() && old_paths.1.is_dir() && old_paths.2.is_dir());
+
+    let candidate =
+        seed_gateway_service_cutover_candidate(pool, fixture, release_artifact_root, "/crash")
+            .await;
+    let gateway_events_before_declaration: i64 = sqlx::query_scalar(
+        "SELECT count(*)
+           FROM application_events
+          WHERE aggregate_type = 'gateway' AND aggregate_id = $1",
+    )
+    .bind(fixture.gateway_id)
+    .fetch_one(pool)
+    .await
+    .expect("count gateway events before failed candidate declaration");
+    sqlx::query("UPDATE gateways SET desired_service_revision_id = $2 WHERE id = $1")
+        .bind(fixture.gateway_id)
+        .bind(candidate.revision_id)
+        .execute(pool)
+        .await
+        .expect("declare failed published candidate");
+    let gateway_events_after_declaration: i64 = sqlx::query_scalar(
+        "SELECT count(*)
+           FROM application_events
+          WHERE aggregate_type = 'gateway' AND aggregate_id = $1",
+    )
+    .bind(fixture.gateway_id)
+    .fetch_one(pool)
+    .await
+    .expect("count gateway events after failed candidate declaration");
+    assert_eq!(
+        gateway_events_after_declaration,
+        gateway_events_before_declaration + 1,
+        "declaring failed B emits exactly one durable gateway event"
+    );
+
+    // A bounded request after declaration confirms that the existing public
+    // revision remains the one served while B is being attempted.
+    let during_startup = exercise_gateway_service_requests(public_url).await;
+    assert_eq!(during_startup.startup_id, first_proof.startup_id);
+    let evidence = wait_for_failed_gateway_service_candidate(
+        pool,
+        fixture.gateway_id,
+        candidate.revision_id,
+        (old_instance_id, fixture.revision_id, old_fencing_token),
+        first_proof,
+        public_url,
+    )
+    .await;
+
+    assert_eq!(evidence.gateway_id, fixture.gateway_id);
+    assert_eq!(evidence.revision_id, candidate.revision_id);
+    assert!(
+        !evidence.observed_ready,
+        "failed B must not be observed Ready during lifecycle polling"
+    );
+    assert!(
+        !evidence.observed_promoted,
+        "failed B must not be observed as the active revision during polling"
+    );
+    assert_eq!(evidence.state, "cleaned");
+    let failure_code = evidence
+        .failure_code
+        .as_deref()
+        .expect("failed B retains a durable failure classification");
+    assert_eq!(
+        failure_code, "unexpected_exit",
+        "failed-candidate proof must observe the guest crash, not startup failure"
+    );
+    assert_eq!(evidence.exit_code, Some(42));
+    assert!(evidence.exit_signal.is_none());
+    assert!(evidence.failed_at.is_some());
+    assert_eq!(evidence.fencing_token, evidence.initial_fencing_token);
+
+    let b_invocations: i64 = sqlx::query_scalar(
+        "SELECT count(*)
+           FROM gateway_invocations
+          WHERE gateway_id = $1
+            AND gateway_revision_id = $2",
+    )
+    .bind(fixture.gateway_id)
+    .bind(candidate.revision_id)
+    .fetch_one(pool)
+    .await
+    .expect("count all failed B invocations");
+    assert_eq!(
+        b_invocations, 0,
+        "failed B must not receive invocations of any outcome"
+    );
+    let b_bound_invocations: i64 = sqlx::query_scalar(
+        "SELECT count(*)
+           FROM gateway_invocations
+          WHERE gateway_id = $1
+            AND gateway_revision_id = $2
+            AND service_instance_id = $3
+            AND service_instance_fencing_token = $4",
+    )
+    .bind(fixture.gateway_id)
+    .bind(candidate.revision_id)
+    .bind(evidence.instance_id)
+    .bind(evidence.fencing_token)
+    .fetch_one(pool)
+    .await
+    .expect("count failed B invocations bound to its exact lease");
+    assert_eq!(
+        b_bound_invocations, 0,
+        "failed B must not receive invocations on its exact instance and fence"
+    );
+
+    let gateway_events_after_cleanup: i64 = sqlx::query_scalar(
+        "SELECT count(*)
+           FROM application_events
+          WHERE aggregate_type = 'gateway' AND aggregate_id = $1",
+    )
+    .bind(fixture.gateway_id)
+    .fetch_one(pool)
+    .await
+    .expect("count gateway events after failed candidate cleanup");
+    assert_eq!(
+        gateway_events_after_cleanup, gateway_events_after_declaration,
+        "failed B cleanup must not promote or roll back a gateway pointer"
+    );
+
+    let (active_revision, old_state): (Option<uuid::Uuid>, String) = sqlx::query_as(
+        "SELECT gateway.active_revision_id, instance.state
+           FROM gateways AS gateway
+           JOIN gateway_service_instances AS instance
+             ON instance.id = $2
+            AND instance.gateway_id = gateway.id
+            AND instance.revision_id = $3
+          WHERE gateway.id = $1",
+    )
+    .bind(fixture.gateway_id)
+    .bind(old_instance_id)
+    .bind(fixture.revision_id)
+    .fetch_one(pool)
+    .await
+    .expect("read active A after failed B cleanup");
+    assert_eq!(active_revision, Some(fixture.revision_id));
+    assert_eq!(old_state, "ready");
+
+    let retry = evidence
+        .retry
+        .expect("failed B records a revision-scoped retry snapshot");
+    assert!(retry.0 >= 1, "failed B increments durable retry streak");
+    let failed_at = evidence
+        .failed_at
+        .expect("failed B includes durable failure timestamp");
+    let minimum_retry_delay = match retry.0 {
+        1 => 1,
+        2 => 2,
+        3 => 4,
+        4 => 8,
+        5 => 16,
+        6 => 32,
+        _ => 60,
+    };
+    let next_retry_at = retry
+        .1
+        .expect("failed B retry snapshot includes next retry timestamp");
+    assert!(
+        next_retry_at >= failed_at + time::Duration::seconds(minimum_retry_delay),
+        "failed B retry must honor durable failure backoff"
+    );
+
+    let after_cleanup = exercise_gateway_service_requests(public_url).await;
+    assert_eq!(after_cleanup.startup_id, first_proof.startup_id);
+    let old_fence_after: i64 = sqlx::query_scalar(
+        "SELECT fencing_token
+           FROM gateway_service_instances
+          WHERE id = $1 AND gateway_id = $2 AND revision_id = $3",
+    )
+    .bind(old_instance_id)
+    .bind(fixture.gateway_id)
+    .bind(fixture.revision_id)
+    .fetch_one(pool)
+    .await
+    .expect("read A fencing token after failed B cleanup");
+    assert_eq!(old_fence_after, old_fencing_token);
+
+    let b_paths = gateway_service_resource_paths(evidence.instance_id);
+    assert!(!b_paths.0.exists(), "failed B VM runtime is cleaned");
+    assert!(!b_paths.1.exists(), "failed B cgroup is cleaned");
+    assert!(!b_paths.2.exists(), "failed B materializer is cleaned");
+
+    daemon.graceful_shutdown().await;
+    wait_for_gateway_service_cleaned(pool, fixture, old_instance_id).await;
+    assert!(!old_paths.0.exists(), "A VM runtime is cleaned at shutdown");
+    assert!(!old_paths.1.exists(), "A cgroup is cleaned at shutdown");
+    assert!(
+        !old_paths.2.exists(),
+        "A materializer is cleaned at shutdown"
+    );
+    eprintln!(
+        "persistent-service-failed-candidate-passed old_instance={old_instance_id} candidate_instance={} candidate_fence={} failure_code={failure_code} old_startup_id={}",
+        evidence.instance_id, evidence.fencing_token, first_proof.startup_id
+    );
+}
+
+type FailedGatewayServiceRow = (
+    uuid::Uuid,
+    i64,
+    String,
+    Option<String>,
+    Option<OffsetDateTime>,
+    Option<i32>,
+    Option<i32>,
+    Option<uuid::Uuid>,
+    Option<i32>,
+    Option<OffsetDateTime>,
+);
+
+#[derive(Debug)]
+struct FailedGatewayServiceEvidence {
+    gateway_id: uuid::Uuid,
+    revision_id: uuid::Uuid,
+    instance_id: uuid::Uuid,
+    initial_fencing_token: i64,
+    fencing_token: i64,
+    state: String,
+    failure_code: Option<String>,
+    failed_at: Option<OffsetDateTime>,
+    exit_code: Option<i32>,
+    exit_signal: Option<i32>,
+    observed_ready: bool,
+    observed_promoted: bool,
+    retry: Option<(i32, Option<OffsetDateTime>)>,
+}
+
+async fn wait_for_failed_gateway_service_candidate(
+    pool: &sqlx::PgPool,
+    gateway_id: uuid::Uuid,
+    revision_id: uuid::Uuid,
+    old_identity: (uuid::Uuid, uuid::Uuid, i64),
+    old_proof: &GatewayServiceRequestProof,
+    public_url: &str,
+) -> FailedGatewayServiceEvidence {
+    let (old_instance_id, old_revision_id, old_fencing_token) = old_identity;
+    tokio::time::timeout(Duration::from_secs(120), async {
+        // The ownership schema has no historical ready_at column. Poll the
+        // complete launch lifetime and record every observed Ready state;
+        // the durable gateway event count in the caller proves that no active
+        // pointer transition occurred after B was declared.
+        let mut initial_fencing_token = None;
+        let mut candidate_id = None;
+        let mut observed_ready = false;
+        let mut observed_promoted = false;
+        let mut served_during_failure = false;
+        loop {
+            let row: Option<FailedGatewayServiceRow> = sqlx::query_as(
+                "SELECT instance.id, instance.fencing_token, instance.state,
+                        instance.failure_code, instance.failed_at,
+                        instance.exit_code, instance.exit_signal,
+                        gateway.active_revision_id,
+                        retry.failure_streak, retry.next_retry_at
+                   FROM gateway_service_instances AS instance
+                   JOIN gateways AS gateway ON gateway.id = instance.gateway_id
+                   LEFT JOIN gateway_service_retry_state AS retry
+                     ON retry.gateway_id = instance.gateway_id
+                    AND retry.revision_id = instance.revision_id
+                  WHERE instance.gateway_id = $1
+                    AND instance.revision_id = $2
+                    AND (($3::uuid IS NULL AND instance.id <> $4)
+                         OR instance.id = $3)
+                  ORDER BY instance.created_at ASC, instance.id ASC
+                  LIMIT 1",
+            )
+            .bind(gateway_id)
+            .bind(revision_id)
+            .bind(candidate_id)
+            .bind(old_instance_id)
+            .fetch_optional(pool)
+            .await
+            .expect("read failed candidate lifecycle evidence");
+            if let Some((
+                observed_id,
+                fencing_token,
+                state,
+                failure_code,
+                failed_at,
+                exit_code,
+                exit_signal,
+                active_revision,
+                failure_streak,
+                next_retry_at,
+            )) = row
+            {
+                if let Some(expected_id) = candidate_id {
+                    assert_eq!(
+                        observed_id, expected_id,
+                        "failed-candidate evidence must stay bound to its first instance"
+                    );
+                } else {
+                    candidate_id = Some(observed_id);
+                    initial_fencing_token = Some(fencing_token);
+                }
+                observed_ready |= state == "ready";
+                observed_promoted |= active_revision == Some(revision_id);
+                if failure_code.is_some() && !served_during_failure {
+                    let proof = exercise_gateway_service_requests(public_url).await;
+                    assert_eq!(proof.startup_id, old_proof.startup_id);
+                    let current_old_fence = read_gateway_service_fencing_token(
+                        pool,
+                        old_instance_id,
+                        gateway_id,
+                        old_revision_id,
+                    )
+                    .await;
+                    assert_eq!(current_old_fence, old_fencing_token);
+                    served_during_failure = true;
+                }
+                if let (true, Some(failure_streak)) =
+                    (state == "cleaned" && failure_code.is_some(), failure_streak)
+                {
+                    return FailedGatewayServiceEvidence {
+                        gateway_id,
+                        revision_id,
+                        instance_id: candidate_id.expect("capture B candidate identity"),
+                        initial_fencing_token: initial_fencing_token
+                            .expect("capture B initial fencing token"),
+                        fencing_token,
+                        state,
+                        failure_code,
+                        failed_at,
+                        exit_code,
+                        exit_signal,
+                        observed_ready,
+                        observed_promoted,
+                        retry: Some((failure_streak, next_retry_at)),
+                    };
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("failed service candidate reaches durable cleanup")
+}
+
+async fn read_gateway_service_fencing_token(
+    pool: &sqlx::PgPool,
+    instance_id: uuid::Uuid,
+    gateway_id: uuid::Uuid,
+    revision_id: uuid::Uuid,
+) -> i64 {
+    sqlx::query_scalar(
+        "SELECT fencing_token
+           FROM gateway_service_instances
+          WHERE id = $1 AND gateway_id = $2 AND revision_id = $3",
+    )
+    .bind(instance_id)
+    .bind(gateway_id)
+    .bind(revision_id)
+    .fetch_one(pool)
+    .await
+    .expect("read A fencing token during failed B cleanup")
+}
+
 /// Exercises one real public revision cutover while an accepted request is
 /// still executing against the old guest.  The service fixture's bounded hold
 /// response keeps the exchange buffered until the new revision is serving.
@@ -746,7 +1150,8 @@ async fn exercise_external_gateway_service_cutover(
     rollback: bool,
 ) {
     let candidate =
-        seed_gateway_service_cutover_candidate(pool, fixture, release_artifact_root).await;
+        seed_gateway_service_cutover_candidate(pool, fixture, release_artifact_root, "/readyz")
+            .await;
     let baseline_invocations: i64 =
         sqlx::query_scalar("SELECT count(*) FROM gateway_invocations WHERE gateway_id = $1")
             .bind(fixture.gateway_id)
@@ -2015,6 +2420,8 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
         env::var("HEPHAESTUS_APP_GATEWAY_SERVICE_EXTERNAL_E2E").as_deref() == Ok("1");
     let gateway_service_cutover_e2e =
         env::var("HEPHAESTUS_APP_GATEWAY_SERVICE_CUTOVER_E2E").as_deref() == Ok("1");
+    let gateway_service_failed_candidate_e2e =
+        env::var("HEPHAESTUS_APP_GATEWAY_SERVICE_FAILED_CANDIDATE_E2E").as_deref() == Ok("1");
     let gateway_service_rollback_e2e =
         env::var("HEPHAESTUS_APP_GATEWAY_SERVICE_ROLLBACK_E2E").as_deref() == Ok("1");
     let gateway_service_log_rpc_e2e =
@@ -2038,6 +2445,10 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
     assert!(
         !gateway_service_cutover_e2e || gateway_service_external_e2e,
         "the persistent-service cutover proof requires the external daemon fixture"
+    );
+    assert!(
+        !gateway_service_failed_candidate_e2e || gateway_service_external_e2e,
+        "the failed-candidate proof requires the external daemon fixture"
     );
     assert!(
         !gateway_service_rollback_e2e || gateway_service_cutover_e2e,
@@ -5596,6 +6007,7 @@ async fn seed_gateway_service_cutover_candidate(
     pool: &sqlx::PgPool,
     fixture: &GatewayServiceGoldenFixture,
     artifact_root: &Path,
+    readiness_path: &str,
 ) -> GatewayServiceGoldenFixture {
     let (project_id, repository_id, source_agent_key, source_publication_actor_id, created_by): (
         uuid::Uuid,
@@ -5761,7 +6173,7 @@ async fn seed_gateway_service_cutover_candidate(
              parameters, secret_slots, mailbox_slots, normalized_hash, created_by,
              service_loopback_port, service_readiness_path, service_health_path)
          VALUES ($1, $2, $3, $4, $5, $6, $7, 'http.service.v1', 'public',
-                 '{}', '{}', '{}', $8, $9, 8080, '/readyz', '/healthz')",
+                 '{}', '{}', '{}', $8, $9, 8080, $10, '/healthz')",
     )
     .bind(revision_id)
     .bind(fixture.gateway_id)
@@ -5772,6 +6184,7 @@ async fn seed_gateway_service_cutover_candidate(
     .bind(&source_agent_key)
     .bind(normalized_hash.as_slice())
     .bind(publication_actor_id)
+    .bind(readiness_path)
     .execute(pool)
     .await
     .expect("seed cutover service revision");

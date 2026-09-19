@@ -1907,3 +1907,24 @@ Default fake-provider event behavior remains unchanged, and no detached tasks
 were introduced. This proves synthetic VM-event persistence through the
 production reconciliation path; actual libkrun guest output through the
 gateway RPC remains pending.
+
+Failed-candidate real VM/Caddy checkpoint (2026-09-19): the clean `45a7f61`
+golden overlay at `/dev/shm/heph-failed-candidate-current` now binds the
+retained A fencing check to A's exact `(instance, gateway, revision)` identity,
+while keeping B lifecycle evidence separate. The short-path libkrun run used
+`/dev/shm/h` to keep Unix socket paths below the Linux limit and passed 35
+ golden tests (one unrelated test ignored) in
+`/home/a/heph-failed-candidate-e2e-short-v2.log`; the gateway PostgreSQL
+sequence passed 8 tests with
+`REAL_POSTGRES_CONNECTED_AND_MIGRATED=1 max_migration=80`, seeded resolver
+fixture, and query evidence in the same log. The acceptance observed A's
+stable public startup identity across requests, B's durable
+`failure_code=unexpected_exit`, `exit_code=42`, and no signal, zero B
+invocations, unchanged gateway application-event count, exact B identity/fence,
+and a same-SQL-snapshot retry streak/next-retry timestamp for B's failure and
+cleaned state. There was no additional gateway event after B's desired
+declaration. VM, cgroup, and materializer cleanup completed. Lifecycle polling
+did not observe B in `Ready`; the ownership schema has no
+historical `ready_at`, so this evidence does not claim an absolute historical
+never-Ready proof. C-capacity retention, revocation/adversarial candidates,
+and broader cutover scheduling remain separate acceptance work.
