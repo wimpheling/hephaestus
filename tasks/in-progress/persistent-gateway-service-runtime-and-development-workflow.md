@@ -1175,3 +1175,22 @@ edge/PostgreSQL all-target Clippy, the focused batch contract test, formatting,
 and workspace rustdoc also passed. Durable writer/flush integration,
 maintenance/eviction, authorized readers/RPC, and app/supervisor integration
 remain pending.
+
+Append checkpoint (2026-09-19): the parent-owned boot recovery gate now proves a
+fresh first-page host inventory is empty before returning `Complete`, recovers
+at most two exact service claims concurrently, renews both leases while
+physical teardown is blocked, and retains raw ownership across dropped polling,
+shutdown, malformed batch responses, unavailable acknowledgements, and partial
+renewal failures. The 12-instance regression records every deterministic VM ID
+as physically cleaned and every durable row as cleaned before the next fresh
+empty proof; exact takeover rejects changed identity, VM ID, owner, or fence.
+The isolated overlay is committed `2f63d50` plus only the boot module/export
+changes. Rust 1.88.0 passed the full gateway-edge suite (152 tests plus ingress
+and doc tests), strict all-target/all-feature Clippy, formatting, and workspace
+rustdoc. Logs:
+`/tmp/gateway-edge-boot-isolated-test.log`,
+`/tmp/gateway-edge-boot-isolated-clippy.log`,
+`/tmp/gateway-edge-boot-isolated-fmt.log`, and
+`/tmp/gateway-edge-boot-doc.log`. Daemon boot wiring, target scheduling, and
+later host inventory integration remain pending; this checkpoint does not mark
+the persistent-service feature complete.

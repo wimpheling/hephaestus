@@ -17,6 +17,7 @@ use uuid::Uuid;
 use vm_trait::{PrivateHttpRequest, PrivateHttpResponse, PrivateMailboxPublication, VmInstance};
 
 mod integration;
+mod service_boot_recovery;
 mod service_capacity;
 mod service_claim_resolution;
 mod service_cleanup;
@@ -40,6 +41,11 @@ mod service_supervisor;
 mod service_targets;
 
 pub use integration::caddy::LocalCaddyAdministration;
+pub use service_boot_recovery::{
+    GatewayServiceBootRecovery, GatewayServiceBootRecoveryContext, GatewayServiceBootRecoveryError,
+    GatewayServiceBootRecoveryEvent, GatewayServiceBootRecoveryShutdown,
+    GatewayServiceBootRecoveryUnresolved, MAX_SERVICE_BOOT_RECOVERY_CLEANUPS,
+};
 pub use service_capacity::{
     DEFAULT_SERVICE_DRAIN_TIMEOUT, DEFAULT_SERVICE_HEALTH_FAILURES,
     DEFAULT_SERVICE_HEALTH_INTERVAL, DEFAULT_SERVICE_MAX_REVISIONS_PER_GATEWAY,
