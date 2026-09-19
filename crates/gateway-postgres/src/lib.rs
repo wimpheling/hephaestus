@@ -847,6 +847,7 @@ impl GatewayReleaseResolver for PostgresGatewayReleaseResolver {
                AND invocation.outcome = 'accepted'
                AND revision.handler_contract = 'http.v1'
                AND release.state = 'published'
+               AND session.admission_mode = 'guest_handoff'
                AND session.status = 'pending_handoff'
                AND session.expires_at > now()",
         )

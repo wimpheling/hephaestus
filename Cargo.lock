@@ -4232,8 +4232,10 @@ dependencies = [
  "capability-domain",
  "run-domain",
  "runtime-authority",
+ "serial_test",
  "sqlx",
  "time",
+ "tokio",
  "tracing",
  "uuid",
 ]

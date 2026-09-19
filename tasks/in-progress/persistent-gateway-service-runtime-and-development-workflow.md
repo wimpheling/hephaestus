@@ -217,6 +217,27 @@ remain unchecked.
     access, SSRF, host-header confusion, cross-release/project access,
     resource exhaustion, and secret leakage.
 
+### Host-mediated session foundation checkpoint
+
+- [x] Add migration 0071 and durable session admission modes. `guest_handoff`
+  retains the existing pending, bearer-handoff, and acknowledgement contract;
+  `host_mediated` is active without a guest bearer or bootstrap acknowledgement,
+  stores no credential verifier, preserves the exact authorization snapshot and
+  identity, serializes concurrent retries by invocation, and rejects guest
+  acknowledgement, mode mutation, credential mutation, invalid host lifecycle
+  shapes, changed-identity retries, and retries after revocation.
+- [x] Add `issue_gateway_service` with immutable `http.service.v1` versus
+  `http.v1` contract checks, preserve ordinary guest issuance, and reject
+  direct guest repository creation for service revisions. Service mailbox
+  sideband, dispatch integration, secret completion wiring, readiness-gated
+  activation, and long-lived lifecycle management remain pending.
+- [x] Real disposable PostgreSQL evidence: with the exact
+  `HEPHAESTUS_POSTGRES_TEST_URL` environment variable, the runtime-authority
+  test printed `REAL_POSTGRES_CONNECTED_AND_MIGRATED=1 migration=71` and passed
+  1 test in 1.28s; the gateway PostgreSQL target passed 7 tests in 1.94s.
+  Focused Clippy, formatting, and diff checks pass. Retained log:
+  `/tmp/hephaestus-service-authority-postgres-20260919-real.log`.
+
 ## Non-goals
 
 This task does not replace MVP 03's bounded stateless invocation mode. It does

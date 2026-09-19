@@ -40,6 +40,18 @@ pub trait GatewayRuntimeAuthorityIssuer: Send + Sync {
         &self,
         request: GatewayRuntimeSessionRequest,
     ) -> Result<StoredRuntimeSession, RuntimeAuthorityError>;
+
+    /// Persists an immutable gateway snapshot and host-mediated service session.
+    ///
+    /// Host-mediated sessions are active without a guest acknowledgement and
+    /// never create runtime bearer handoff material. Implementations that do
+    /// not support service admission fail closed by default.
+    async fn issue_gateway_service(
+        &self,
+        _request: GatewayRuntimeSessionRequest,
+    ) -> Result<StoredRuntimeSession, RuntimeAuthorityError> {
+        Err(RuntimeAuthorityError::Persistence)
+    }
 }
 
 /// Immutable input persisted while issuing one runtime session.
