@@ -5,9 +5,9 @@ use async_trait::async_trait;
 use gateway_domain::{GatewayServiceConfig, ServiceProbePath};
 use gateway_edge::{
     GatewayEdgeError, GatewayServiceIdentity, GatewayServiceInstanceKey,
-    GatewayServiceInstanceLease, GatewayServiceOwnedTarget, GatewayServiceRevisionTarget,
-    GatewayServiceTarget, GatewayServiceTargetPage, GatewayServiceTargetPageResult,
-    GatewayServiceTargetStore,
+    GatewayServiceInstanceLease, GatewayServiceInstancePage, GatewayServiceInstancePageResult,
+    GatewayServiceOwnedTarget, GatewayServiceRevisionTarget, GatewayServiceTarget,
+    GatewayServiceTargetPage, GatewayServiceTargetPageResult, GatewayServiceTargetStore,
 };
 use sqlx::{FromRow, PgPool};
 use std::convert::TryFrom;
@@ -225,6 +225,43 @@ impl GatewayServiceTargetStore for PostgresGatewayServiceTargets {
                 .map_err(|_| GatewayEdgeError::Unavailable)
         })
         .transpose()
+    }
+
+    async fn list_service_instances(
+        &self,
+        page: GatewayServiceInstancePage,
+    ) -> Result<GatewayServiceInstancePageResult, GatewayEdgeError> {
+        page.validate()?;
+        let rows = sqlx::query_as::<_, ServiceInstanceRow>(
+            "SELECT id, gateway_id, revision_id, owner_host_id, owner_uuid,
+                    fencing_token, vm_id, state, lease_expires_at, heartbeat_at
+               FROM gateway_service_instances
+              WHERE owner_host_id = $1
+                AND state <> 'cleaned'
+                AND ($2::uuid IS NULL OR id > $2)
+              ORDER BY id
+              LIMIT $3",
+        )
+        .bind(&page.host_id)
+        .bind(page.after)
+        .bind(i64::from(page.limit) + 1)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|_| GatewayEdgeError::Unavailable)?;
+        let mut instances = rows
+            .into_iter()
+            .map(|row| row.into_lease().map_err(|_| GatewayEdgeError::Unavailable))
+            .collect::<Result<Vec<_>, _>>()?;
+        let next_after = if instances.len() > usize::from(page.limit) {
+            instances.pop();
+            instances.last().map(|lease| lease.identity.instance_id)
+        } else {
+            None
+        };
+        Ok(GatewayServiceInstancePageResult {
+            instances,
+            next_after,
+        })
     }
 }
 

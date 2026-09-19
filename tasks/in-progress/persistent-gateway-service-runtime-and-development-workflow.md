@@ -753,6 +753,20 @@ check, strict Clippy, formatting, and 58 library tests passed.
   and `service_targets` test. Supervisor recovery scheduling and lifecycle
   integration remain pending.
 
+- [x] Add bounded stable-host inventory for persistent service instances. The
+  worker-role target adapter now pages non-cleaned rows by stable host ID and
+  immutable instance UUID, deliberately retaining expired claims and older
+  daemon owner UUIDs while excluding other hosts and cleaned rows. A
+  randomized real PostgreSQL fixture covered 130 same-host instances,
+  multiple owner UUIDs, live and expired leases, foreign-host exclusion,
+  cleaned-row exclusion, strict cursor ordering, and invalid page inputs;
+  all four target tests passed against migration 0076. Evidence:
+  `/tmp/hephaestus-gateway-service-target-inventory-20260919.log`. Full
+  gateway-postgres all-target strict Clippy and targeted edge/postgres checks
+  passed; full edge all-target Clippy remains blocked by unrelated coordinator
+  test lints. This inventory supports capacity accounting and previous-daemon
+  recovery; it does not claim global recovery or lifecycle scheduling.
+
 ## Non-goals
 
 This task does not replace MVP 03's bounded stateless invocation mode. It does

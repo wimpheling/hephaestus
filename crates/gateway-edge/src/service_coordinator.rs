@@ -1376,6 +1376,16 @@ mod tests {
         ) -> Result<u64, GatewayEdgeError> {
             Ok(0)
         }
+
+        async fn list_service_instances(
+            &self,
+            _: crate::GatewayServiceInstancePage,
+        ) -> Result<crate::GatewayServiceInstancePageResult, GatewayEdgeError> {
+            Ok(crate::GatewayServiceInstancePageResult {
+                instances: Vec::new(),
+                next_after: None,
+            })
+        }
     }
 
     struct BlockingTargets {
@@ -1426,6 +1436,16 @@ mod tests {
             _: GatewayServiceInstanceKey,
         ) -> Result<u64, GatewayEdgeError> {
             Ok(0)
+        }
+
+        async fn list_service_instances(
+            &self,
+            _: crate::GatewayServiceInstancePage,
+        ) -> Result<crate::GatewayServiceInstancePageResult, GatewayEdgeError> {
+            Ok(crate::GatewayServiceInstancePageResult {
+                instances: Vec::new(),
+                next_after: None,
+            })
         }
     }
 

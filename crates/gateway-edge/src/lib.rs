@@ -88,8 +88,9 @@ pub use service_registry::{
     MAX_SERVICE_REGISTRY_CAPACITY, MAX_SERVICE_REQUEST_CAPACITY,
 };
 pub use service_targets::{
-    GatewayServiceOwnedTarget, GatewayServiceRevisionTarget, GatewayServiceTarget,
-    GatewayServiceTargetPage, GatewayServiceTargetPageResult, GatewayServiceTargetStore,
+    GatewayServiceInstancePage, GatewayServiceInstancePageResult, GatewayServiceOwnedTarget,
+    GatewayServiceRevisionTarget, GatewayServiceTarget, GatewayServiceTargetPage,
+    GatewayServiceTargetPageResult, GatewayServiceTargetStore, MAX_SERVICE_INSTANCE_PAGE_SIZE,
     MAX_SERVICE_TARGET_PAGE_SIZE,
 };
 

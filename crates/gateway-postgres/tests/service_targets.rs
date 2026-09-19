@@ -1,14 +1,16 @@
 //! Real `PostgreSQL` coverage for read-only persistent-service target queries.
 
 use gateway_edge::{
-    GatewayServiceIdentity, GatewayServiceInstanceKey, GatewayServiceInstanceState,
-    GatewayServiceOwner, GatewayServiceOwnership, GatewayServiceTargetPage,
-    GatewayServiceTargetStore, MAX_SERVICE_TARGET_PAGE_SIZE,
+    GatewayServiceIdentity, GatewayServiceInstanceKey, GatewayServiceInstancePage,
+    GatewayServiceInstanceState, GatewayServiceOwner, GatewayServiceOwnership,
+    GatewayServiceTargetPage, GatewayServiceTargetStore, MAX_SERVICE_INSTANCE_PAGE_SIZE,
+    MAX_SERVICE_TARGET_PAGE_SIZE,
 };
 use gateway_postgres::{PostgresGatewayServiceOwnership, PostgresGatewayServiceTargets};
 use serial_test::serial;
 use sqlx::postgres::PgPoolOptions;
 use std::{collections::HashSet, env, time::Duration};
+use time::OffsetDateTime;
 use uuid::Uuid;
 
 #[tokio::test(flavor = "multi_thread")]
@@ -243,6 +245,7 @@ async fn exact_service_instance_lookup_survives_fencing_and_cleanup() {
         "published",
         "starting",
         true,
+        None,
     )
     .await;
     let identity = GatewayServiceIdentity {
@@ -361,6 +364,116 @@ fn service_target_page_rejects_unbounded_or_nil_cursors() {
     assert!(GatewayServiceTargetPage::new(None, 0).is_err());
     assert!(GatewayServiceTargetPage::new(None, MAX_SERVICE_TARGET_PAGE_SIZE + 1).is_err());
     assert!(GatewayServiceTargetPage::new(Some(Uuid::nil()), 1).is_err());
+    assert!(GatewayServiceInstancePage::new("valid-host", None, 1).is_ok());
+    assert!(GatewayServiceInstancePage::new("", None, 1).is_err());
+    assert!(GatewayServiceInstancePage::new("invalid host", None, 1).is_err());
+    assert!(GatewayServiceInstancePage::new("valid-host", None, 0).is_err());
+    assert!(GatewayServiceInstancePage::new("valid-host", Some(Uuid::nil()), 1).is_err());
+    assert!(
+        GatewayServiceInstancePage::new("valid-host", None, MAX_SERVICE_INSTANCE_PAGE_SIZE + 1)
+            .is_err()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn service_instance_inventory_is_stable_by_host_and_cursor() {
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let worker = worker_pool().await;
+    let store = PostgresGatewayServiceTargets::new(worker);
+    let host = format!("inventory-host-{}", Uuid::new_v4());
+    let mut expected = HashSet::new();
+    let mut expired_instance = None;
+    for index in 0..130 {
+        let fixture = seed_gateway_with_instance_state(
+            &pool,
+            &format!("inventory-{index}-{}", Uuid::new_v4()),
+            "enabled",
+            "published",
+            "ready",
+            index == 0,
+            Some(&host),
+        )
+        .await;
+        if index == 0 {
+            expired_instance = Some(fixture.old_instance);
+        }
+        expected.insert(fixture.old_instance);
+    }
+    let foreign_host = format!("foreign-host-{}", Uuid::new_v4());
+    let foreign = seed_gateway_with_instance_state(
+        &pool,
+        &format!("foreign-{}", Uuid::new_v4()),
+        "enabled",
+        "published",
+        "ready",
+        false,
+        Some(&foreign_host),
+    )
+    .await;
+    let cleaned = seed_gateway_with_instance_state(
+        &pool,
+        &format!("cleaned-{}", Uuid::new_v4()),
+        "enabled",
+        "published",
+        "cleaned",
+        false,
+        Some(&host),
+    )
+    .await;
+
+    let observed = tokio::time::timeout(Duration::from_secs(30), async {
+        let mut cursor = None;
+        let mut pages = 0;
+        let mut observed = Vec::new();
+        loop {
+            pages += 1;
+            assert!(pages <= 16, "inventory pagination exceeded bounded pages");
+            let page = GatewayServiceInstancePage::new(host.clone(), cursor, 17)
+                .expect("valid inventory page");
+            let result = store
+                .list_service_instances(page)
+                .await
+                .expect("list service instances");
+            assert!(result.instances.len() <= 17);
+            observed.extend(result.instances);
+            let Some(next) = result.next_after else {
+                break;
+            };
+            assert_ne!(Some(next), cursor);
+            cursor = Some(next);
+        }
+        observed
+    })
+    .await
+    .expect("inventory pagination completes");
+    assert!(
+        observed
+            .windows(2)
+            .all(|pair| pair[0].identity.instance_id < pair[1].identity.instance_id)
+    );
+    let observed_ids: HashSet<_> = observed
+        .iter()
+        .map(|lease| lease.identity.instance_id)
+        .collect();
+    assert_eq!(observed.len(), expected.len());
+    assert_eq!(observed_ids, expected);
+    let expired_instance = expired_instance.expect("expired inventory row");
+    assert!(observed.iter().any(|lease| {
+        lease.identity.instance_id == expired_instance
+            && lease.lease_expires_at < OffsetDateTime::now_utc()
+    }));
+    assert!(
+        observed
+            .iter()
+            .any(|lease| lease.lease_expires_at > OffsetDateTime::now_utc())
+    );
+    let owners: HashSet<_> = observed.iter().map(|lease| lease.owner_uuid).collect();
+    assert!(owners.len() > 1);
+    assert!(!observed_ids.contains(&foreign.old_instance));
+    assert!(!observed_ids.contains(&cleaned.old_instance));
 }
 
 struct Fixture {
@@ -432,7 +545,8 @@ async fn seed_gateway(
     lifecycle: &str,
     candidate_state: &str,
 ) -> Fixture {
-    seed_gateway_with_instance_state(pool, name, lifecycle, candidate_state, "ready", false).await
+    seed_gateway_with_instance_state(pool, name, lifecycle, candidate_state, "ready", false, None)
+        .await
 }
 
 // This variant lets lifecycle-boundary tests start an instance in the exact
@@ -445,6 +559,7 @@ async fn seed_gateway_with_instance_state(
     candidate_state: &str,
     instance_state: &str,
     instance_expired: bool,
+    owner_host_override: Option<&str>,
 ) -> Fixture {
     let owner = Uuid::new_v4();
     let organization = Uuid::new_v4();
@@ -547,7 +662,8 @@ async fn seed_gateway_with_instance_state(
     .await
     .expect("service route");
     let old_instance = Uuid::new_v4();
-    let owner_host_id = format!("target-host-{name}-{gateway}");
+    let owner_host_id =
+        owner_host_override.map_or_else(|| format!("target-host-{name}-{gateway}"), str::to_owned);
     let lease_expires = if instance_expired {
         "now() - interval '1 second'"
     } else {
@@ -561,9 +677,10 @@ async fn seed_gateway_with_instance_state(
     let query = format!(
         "INSERT INTO gateway_service_instances
             (id, gateway_id, revision_id, owner_host_id, owner_uuid,
-             fencing_token, vm_id, state, lease_expires_at, heartbeat_at)
+             fencing_token, vm_id, state, lease_expires_at, heartbeat_at, cleaned_at)
          VALUES ($1, $2, $3, $7, $4, 1,
-                 $5, $6, {lease_expires}, {heartbeat_at})"
+                 $5, $6, {lease_expires}, {heartbeat_at},
+                 CASE WHEN $6 = 'cleaned' THEN now() ELSE NULL END)"
     );
     sqlx::query(&query)
         .bind(old_instance)

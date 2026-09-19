@@ -9,6 +9,8 @@ use crate::{GatewayServiceIdentity, GatewayServiceInstanceKey, GatewayServiceIns
 
 /// Maximum number of gateways returned by one service-target page.
 pub const MAX_SERVICE_TARGET_PAGE_SIZE: u16 = 128;
+/// Maximum number of durable service instances returned by one inventory page.
+pub const MAX_SERVICE_INSTANCE_PAGE_SIZE: u16 = 128;
 
 /// Bounded stable-UUID cursor request for service targets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,6 +47,62 @@ impl GatewayServiceTargetPage {
         {
             return Err(GatewayEdgeError::Contract(
                 "invalid gateway service target page",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Bounded stable-UUID page for one daemon host's non-cleaned instances.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GatewayServiceInstancePage {
+    /// Stable host identity; daemon incarnation UUIDs are intentionally ignored.
+    pub host_id: String,
+    /// Return instances strictly after this immutable instance identity.
+    pub after: Option<Uuid>,
+    /// Maximum number of instances to return.
+    pub limit: u16,
+}
+
+impl GatewayServiceInstancePage {
+    /// Creates a validated host inventory page.
+    ///
+    /// # Errors
+    ///
+    /// Returns a contract error for an invalid host, cursor, or page size.
+    pub fn new(
+        host_id: impl Into<String>,
+        after: Option<Uuid>,
+        limit: u16,
+    ) -> Result<Self, GatewayEdgeError> {
+        let page = Self {
+            host_id: host_id.into(),
+            after,
+            limit,
+        };
+        page.validate()?;
+        Ok(page)
+    }
+
+    /// Validates a page assembled by an internal caller.
+    ///
+    /// # Errors
+    ///
+    /// Returns a contract error for an invalid host, cursor, or page size.
+    pub fn validate(&self) -> Result<(), GatewayEdgeError> {
+        if self.host_id.is_empty()
+            || self.host_id.len() > crate::MAX_SERVICE_OWNER_HOST_BYTES
+            || self.host_id != self.host_id.trim()
+            || self
+                .host_id
+                .bytes()
+                .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
+            || self.limit == 0
+            || self.limit > MAX_SERVICE_INSTANCE_PAGE_SIZE
+            || self.after.is_some_and(|value| value.is_nil())
+        {
+            return Err(GatewayEdgeError::Contract(
+                "invalid gateway service instance page",
             ));
         }
         Ok(())
@@ -108,6 +166,15 @@ pub struct GatewayServiceTargetPageResult {
     pub next_after: Option<Uuid>,
 }
 
+/// One bounded page of stable-host service-instance inventory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GatewayServiceInstancePageResult {
+    /// Non-cleaned instances ordered by immutable instance UUID.
+    pub instances: Vec<GatewayServiceInstanceLease>,
+    /// Cursor for the next page, when more rows exist.
+    pub next_after: Option<Uuid>,
+}
+
 /// Read-only gateway service target queries for a lifecycle supervisor.
 #[async_trait]
 pub trait GatewayServiceTargetStore: Send + Sync {
@@ -148,4 +215,11 @@ pub trait GatewayServiceTargetStore: Send + Sync {
         &self,
         identity: GatewayServiceIdentity,
     ) -> Result<Option<GatewayServiceInstanceLease>, GatewayEdgeError>;
+
+    /// Lists all non-cleaned instances owned by one stable host identity.
+    /// Expired rows and claims from older daemon incarnations are included.
+    async fn list_service_instances(
+        &self,
+        page: GatewayServiceInstancePage,
+    ) -> Result<GatewayServiceInstancePageResult, GatewayEdgeError>;
 }
