@@ -34,7 +34,8 @@ use rpc_proto::{
     messages::hephaestus::{
         common::v1::{Cursor, OpaqueId},
         gateway::v1::{
-            GatewayServiceLogScope, GatewayServiceLogStream, ListGatewayServiceLogsRequest,
+            GatewayServiceLogScope, GatewayServiceLogStream, GetProjectServiceLogMetadataRequest,
+            ListGatewayServiceLogsRequest,
         },
     },
 };
@@ -6698,6 +6699,8 @@ async fn exercise_gateway_service_log_rpc(
             "UPDATE gateway_service_log_project_usage
                 SET retained_bytes = retained_bytes + $2,
                     retained_chunks = retained_chunks + 1,
+                    storage_dropped_chunks = 7,
+                    storage_dropped_bytes = 123,
                     updated_at = now()
               WHERE project_id = $1",
         )
@@ -6731,7 +6734,111 @@ async fn exercise_gateway_service_log_rpc(
         connection,
         ClientConfig::new(uri).with_protocol(Protocol::Connect),
     );
+    let metadata_request = |project_id: uuid::Uuid| GetProjectServiceLogMetadataRequest {
+        project_id: opaque_id(project_id).into(),
+        ..Default::default()
+    };
     let owner_token = service_log_rpc_token(&owner_id.as_uuid(), "ListGatewayServiceLogs");
+    let metadata_token = service_log_rpc_token(&owner_id.as_uuid(), "GetProjectServiceLogMetadata");
+    let metadata = client
+        .get_project_service_log_metadata_with_options(
+            metadata_request(project_id),
+            CallOptions::default().with_header("authorization", format!("Bearer {metadata_token}")),
+        )
+        .await
+        .expect("authorized project service-log metadata")
+        .into_owned();
+    let metadata = metadata
+        .metadata
+        .as_option()
+        .expect("project service-log metadata response");
+    assert!(metadata.usage_present);
+    assert_eq!(metadata.storage_dropped_chunks, 7);
+    assert_eq!(metadata.storage_dropped_bytes, 123);
+
+    let foreign_owner = uuid::Uuid::new_v4();
+    let foreign_organization = uuid::Uuid::new_v4();
+    let foreign_project = uuid::Uuid::new_v4();
+    sqlx::query("INSERT INTO users (id, display_name) VALUES ($1, 'RPC Log Foreign Owner')")
+        .bind(foreign_owner)
+        .execute(pool)
+        .await
+        .expect("seed foreign service-log owner");
+    sqlx::query("INSERT INTO organizations (id, name) VALUES ($1, $2)")
+        .bind(foreign_organization)
+        .bind(format!("rpc-log-foreign-{foreign_organization}"))
+        .execute(pool)
+        .await
+        .expect("seed foreign service-log organization");
+    sqlx::query(
+        "INSERT INTO organization_members (organization_id, user_id, role)
+         VALUES ($1, $2, 'owner')",
+    )
+    .bind(foreign_organization)
+    .bind(foreign_owner)
+    .execute(pool)
+    .await
+    .expect("seed foreign service-log organization owner");
+    sqlx::query("INSERT INTO projects (id, organization_id, name) VALUES ($1, $2, $3)")
+        .bind(foreign_project)
+        .bind(foreign_organization)
+        .bind(format!("rpc-log-foreign-project-{foreign_project}"))
+        .execute(pool)
+        .await
+        .expect("seed foreign service-log project");
+    sqlx::query(
+        "INSERT INTO gateway_service_log_project_usage
+            (project_id, storage_dropped_chunks, storage_dropped_bytes)
+         VALUES ($1, 99, 999)",
+    )
+    .bind(foreign_project)
+    .execute(pool)
+    .await
+    .expect("seed foreign service-log metadata");
+    let error = client
+        .get_project_service_log_metadata_with_options(
+            metadata_request(foreign_project),
+            CallOptions::default().with_header("authorization", format!("Bearer {metadata_token}")),
+        )
+        .await
+        .expect_err("cross-project metadata must fail");
+    assert_eq!(error.code, ErrorCode::PermissionDenied);
+    assert!(!format!("{error:?}").contains("999"));
+
+    let error = client
+        .get_project_service_log_metadata_with_options(
+            metadata_request(project_id),
+            CallOptions::default(),
+        )
+        .await
+        .expect_err("missing metadata authorization must fail");
+    assert_eq!(error.code, ErrorCode::Unauthenticated);
+    let wrong_audience_token = service_log_rpc_token(&owner_id.as_uuid(), "ListGatewayServiceLogs");
+    let error = client
+        .get_project_service_log_metadata_with_options(
+            metadata_request(project_id),
+            CallOptions::default()
+                .with_header("authorization", format!("Bearer {wrong_audience_token}")),
+        )
+        .await
+        .expect_err("wrong metadata audience must fail");
+    assert_eq!(error.code, ErrorCode::Unauthenticated);
+    let error = client
+        .get_project_service_log_metadata_with_options(
+            GetProjectServiceLogMetadataRequest::default(),
+            CallOptions::default().with_header("authorization", format!("Bearer {metadata_token}")),
+        )
+        .await
+        .expect_err("missing project id must fail");
+    assert_eq!(error.code, ErrorCode::InvalidArgument);
+    let error = client
+        .get_project_service_log_metadata_with_options(
+            metadata_request(uuid::Uuid::nil()),
+            CallOptions::default().with_header("authorization", format!("Bearer {metadata_token}")),
+        )
+        .await
+        .expect_err("nil project id must fail");
+    assert_eq!(error.code, ErrorCode::InvalidArgument);
     let request =
         |scope: GatewayServiceLogScope, after: Option<String>| ListGatewayServiceLogsRequest {
             scope: scope.into(),
@@ -6859,6 +6966,23 @@ async fn exercise_gateway_service_log_rpc(
         .await
         .expect("grant service log RPC member");
     let member_token = service_log_rpc_token(&member_id, "ListGatewayServiceLogs");
+    let member_metadata_token = service_log_rpc_token(&member_id, "GetProjectServiceLogMetadata");
+    let member_metadata = client
+        .get_project_service_log_metadata_with_options(
+            metadata_request(project_id),
+            CallOptions::default()
+                .with_header("authorization", format!("Bearer {member_metadata_token}")),
+        )
+        .await
+        .expect("current member can read project service-log metadata")
+        .into_owned();
+    let member_metadata = member_metadata
+        .metadata
+        .as_option()
+        .expect("member project service-log metadata response");
+    assert!(member_metadata.usage_present);
+    assert_eq!(member_metadata.storage_dropped_chunks, 7);
+    assert_eq!(member_metadata.storage_dropped_bytes, 123);
     client
         .list_gateway_service_logs_with_options(
             request(scope.clone(), None),
@@ -6872,6 +6996,16 @@ async fn exercise_gateway_service_log_rpc(
         .execute(pool)
         .await
         .expect("revoke service log RPC member");
+    let error = client
+        .get_project_service_log_metadata_with_options(
+            metadata_request(project_id),
+            CallOptions::default()
+                .with_header("authorization", format!("Bearer {member_metadata_token}")),
+        )
+        .await
+        .expect_err("revoked member project metadata must fail");
+    assert_eq!(error.code, ErrorCode::PermissionDenied);
+    assert!(!format!("{error:?}").contains("rpc-service-log"));
     let error = client
         .list_gateway_service_logs_with_options(
             request(scope.clone(), None),

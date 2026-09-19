@@ -2088,3 +2088,20 @@ semicolons, satisfying the test-target lint without changing behavior. Golden
 panic-only branches were likewise rewritten as equivalent assertions in the
 pending acceptance source. Formatting and diff checks passed. These preflight
 checks are not real VM/Caddy acceptance evidence.
+
+Project-loss RPC real-stack checkpoint (2026-09-19): the owned Caddy/libkrun
+harness passed 35 golden tests (one ignored) and eight PostgreSQL tests with
+migration 81, then verified runtime/cgroup cleanup. The seeded log-RPC path
+now also exercises the generated project metadata method: owner counters
+7/123, cross-organization denial, missing and wrong-audience authentication,
+missing/nil project IDs, member access and revocation. The existing retained
+column denial remains. Evidence is
+`/home/a/heph-project-metadata-real-vm-20260919-v2.log`, including
+`REAL_GATEWAY_SERVICE_LOG_RPC=1 app_role=hephaestus_app`. The counters and log
+rows in this mode are fixture-seeded; actual guest output is a separate gate.
+The first attempt stopped before API execution because the harness looked
+for guest binaries under the deleted repository target directory. Artifact
+lookups now honor the resolved/exported `CARGO_TARGET_DIR`; log-RPC modes also
+select `test-fixtures` before Cargo's argument separator. Shell syntax and
+diff checks passed. The original failed log is preserved at
+`/home/a/heph-project-metadata-real-vm-20260919.log`.

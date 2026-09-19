@@ -17,6 +17,15 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly script_dir
 repo_root="$(cd -- "${script_dir}/.." && pwd -P)"
 readonly repo_root
+if [[ "${CARGO_TARGET_DIR:-}" = /* ]]; then
+    cargo_target_dir="${CARGO_TARGET_DIR}"
+elif [[ -n "${CARGO_TARGET_DIR:-}" ]]; then
+    cargo_target_dir="${repo_root}/${CARGO_TARGET_DIR}"
+else
+    cargo_target_dir="${repo_root}/target"
+fi
+readonly cargo_target_dir
+export CARGO_TARGET_DIR="${cargo_target_dir}"
 source "${repo_root}/scripts/shell-failure-diagnostics.sh"
 heph_shell_failure_init libkrun-integration libkrun
 ubuntu_image="${HEPHAESTUS_LIBKRUN_UBUNTU_IMAGE:-${DEFAULT_UBUNTU_IMAGE}}"
@@ -180,10 +189,10 @@ load_repository_image_workflow() {
 prepare_guest_root() {
     local root="$1"
     install -D -m 0755 \
-        "${repo_root}/target/${GUEST_TARGET}/release/heph-init" \
+        "${cargo_target_dir}/${GUEST_TARGET}/release/heph-init" \
         "${root}/usr/libexec/hephaestus/heph-init"
     install -D -m 0755 \
-        "${repo_root}/target/${GUEST_TARGET}/release/heph-integration-check" \
+        "${cargo_target_dir}/${GUEST_TARGET}/release/heph-integration-check" \
         "${root}/usr/libexec/hephaestus/integration-check.payload"
     # libkrun's embedded DHCP setup runs before this workload. Keep the
     # fixture diagnostic immediately before the check so a network failure
@@ -908,6 +917,11 @@ if [[ "${HEPHAESTUS_APP_LIBKRUN_E2E:-0}" == "1" ]]; then
     fi
     phase_timing_end runtime-worker-build passed
     phase_timing_start golden-tests
+    golden_features=()
+    if [[ "${HEPHAESTUS_APP_GATEWAY_SERVICE_LOG_GUEST_E2E:-0}" == "1" ||
+        "${HEPHAESTUS_APP_GATEWAY_SERVICE_LOG_RPC_E2E:-0}" == "1" ]]; then
+        golden_features+=(--features test-fixtures)
+    fi
     run_as_guest_owner env \
         HEPHAESTUS_APP_LIBKRUN_E2E=1 \
         HEPHAESTUS_POSTGRES_TEST_URL="${postgres_url}" \
@@ -919,7 +933,7 @@ if [[ "${HEPHAESTUS_APP_LIBKRUN_E2E:-0}" == "1" ]]; then
         HEPHAESTUS_LIBKRUN_DISK_ROOT="${fixture_root}/disks" \
         HEPHAESTUS_LIBKRUN_MOUNT_ROOT="${fixture_root}/mounts" \
         HEPHAESTUS_LIBKRUN_CGROUP_ROOT="${cgroup_root}" \
-        HEPHAESTUS_LIBKRUN_WORKER="${target_directory:-${repo_root}/target}/debug/hephaestus-vm-libkrun-worker" \
+        HEPHAESTUS_LIBKRUN_WORKER="${target_directory:-${cargo_target_dir}}/debug/hephaestus-vm-libkrun-worker" \
         HEPHAESTUS_TEST_OCI_BUILDER_VM_IMAGE="${builder_vm_image}" \
         HEPHAESTUS_TEST_OCI_VERIFIER_VM_IMAGE="${verifier_vm_image}" \
         HEPHAESTUS_TEST_OCI_BASE_LAYOUT_MANIFEST="${base_layout_manifest}" \
@@ -932,6 +946,7 @@ if [[ "${HEPHAESTUS_APP_LIBKRUN_E2E:-0}" == "1" ]]; then
         --manifest-path "${repo_root}/Cargo.toml" \
         --package hephaestus-app \
         --test golden \
+        "${golden_features[@]}" \
         -- --nocapture
     phase_timing_end golden-tests passed
     # Reuse the same disposable authority database and JetStream fixture for
@@ -963,7 +978,7 @@ elif [[ "${HEPHAESTUS_PHASE1B_INTEGRATION:-0}" == "1" ]]; then
         HEPHAESTUS_LIBKRUN_DISK_ROOT="${fixture_root}/disks" \
         HEPHAESTUS_LIBKRUN_MOUNT_ROOT="${fixture_root}/mounts" \
         HEPHAESTUS_LIBKRUN_CGROUP_ROOT="${cgroup_root}" \
-        HEPHAESTUS_LIBKRUN_WORKER="${repo_root}/target/debug/hephaestus-vm-libkrun-worker" \
+        HEPHAESTUS_LIBKRUN_WORKER="${cargo_target_dir}/debug/hephaestus-vm-libkrun-worker" \
         cargo test \
         --manifest-path "${repo_root}/Cargo.toml" \
         --package run-postgres \
