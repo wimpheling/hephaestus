@@ -181,6 +181,26 @@ the same scenario. The exact non-skipped real-VM harness passed one test in
 adapter-to-vsock path only; prepared-worker, durable ownership/ledger,
 supervisor, Caddy routing, and release UI behavior remain unchecked.
 
+The prepared-instance worker now owns one already-provisioned VM from start
+through readiness, bounded health checks, exit, shutdown, and cleanup. It uses
+one startup deadline covering VM start and HTTP readiness, publishes `Ready`
+only after a successful declared readiness probe, and keeps health failures
+non-destructive while the instance remains ready. The parent supervisor owns
+the returned worker future; no lifecycle task is detached. Dropping the last
+control handle cancels startup or probing, and dropping a health request future
+does not abandon the worker. Cleanup always attempts VM destruction after a
+bounded stop attempt, and invokes materializer cleanup only after destruction
+succeeds; failed destruction remains `CleanupIncomplete`. Evidence: seven
+focused worker tests, gateway-edge Clippy with `-D warnings`, and
+`cargo check --workspace --all-targets --all-features` pass. Disk recovery
+removed only this worktree's rebuildable `target/debug/incremental` artifacts
+after confirming no process used the target; source, logs, and commits were
+preserved. Durable ownership, global supervision, request draining, Caddy
+forwarding, and release UI behavior remain unchecked. The parent registry must
+retain the VM handle when destroy fails or times out so same-process recovery
+can retry destruction; a durable VM ID alone is insufficient while the
+provider's live-handle registry still owns the instance.
+
 - [x] Finish focused VM contract tests and workspace compatibility checks:
   `cargo test -p vm-trait`, `cargo test -p vm-libkrun --lib`,
   `cargo test -p vm-fake`, focused Clippy, `cargo check --workspace
