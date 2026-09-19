@@ -488,9 +488,10 @@ pub const GATEWAY_SERVICE_LIST_MAILBOX_PUBLICATIONS_SPEC: ::connectrpc::Spec = :
         ::connectrpc::StreamType::Unary,
     )
     .with_idempotency_level(::connectrpc::IdempotencyLevel::NoSideEffects);
-/// Project-scoped management and redacted ingress inspection for repository
-/// gateways. Public request payloads and provider credentials are never part of
-/// this API.
+/// Project-scoped management, redacted ingress inspection, and explicitly
+/// opted-in application output for repository gateways. Ingress inspection
+/// remains value-free; application-emitted log bytes require app-owned
+/// redaction, and the platform does not promise universal secret detection.
 ///
 /// # Implementing handlers
 ///

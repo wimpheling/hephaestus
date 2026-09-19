@@ -1,9 +1,17 @@
 //! Descriptor-level policy checks for the shared application protocol.
 
-use buffa::ExtensionSet as _;
+use buffa::{ExtensionSet as _, Message as _};
 use buffa_descriptor::{DescriptorPool, FieldKind, MessageDescriptor, ScalarType, SingularKind};
+use buffa_types::google::protobuf::Timestamp;
 use rpc_proto::messages::hephaestus::options::v1::{
     AUTHORIZATION, MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, OPERATION_KIND, SENSITIVE,
+};
+use rpc_proto::messages::hephaestus::{
+    common::v1::Cursor,
+    gateway::v1::{
+        GatewayServiceLogMetadata, GatewayServiceLogRecord, GatewayServiceLogStream,
+        ListGatewayServiceLogsResponse,
+    },
 };
 use serde::Deserialize;
 use std::{collections::BTreeMap, collections::BTreeSet, sync::Arc};
@@ -894,6 +902,7 @@ fn application_payloads_are_typed_and_responses_are_secret_safe() {
     let pool = pool();
     let allowed_bytes = BTreeSet::from([
         "hephaestus.artifact.v1.StreamArtifactResponse.contents",
+        "hephaestus.gateway.v1.GatewayServiceLogRecord.contents",
         "hephaestus.repository_browser.v1.StreamFileResponse.contents",
         "hephaestus.pat.v1.PersonalAccessTokenValue.value",
         "hephaestus.secret.v1.SecretValue.value",
@@ -970,6 +979,77 @@ fn application_payloads_are_typed_and_responses_are_secret_safe() {
             }
         }
     }
+}
+
+#[test]
+fn service_log_response_worst_case_stays_below_rpc_budget() {
+    const MAX_PAGE_CONTENTS: usize = 512 * 1024;
+    const MAX_RECORDS: usize = 100;
+    const RPC_RESPONSE_LIMIT: usize = 1_048_576;
+    let remainder = MAX_PAGE_CONTENTS % MAX_RECORDS;
+    let base_record_bytes = MAX_PAGE_CONTENTS / MAX_RECORDS;
+    let metadata = GatewayServiceLogMetadata {
+        epoch_present: true,
+        acknowledged_through: Some(u64::MAX),
+        retained_bytes: u64::MAX,
+        retained_chunks: u64::MAX,
+        producer_dropped_chunks: u64::MAX,
+        producer_dropped_bytes: u64::MAX,
+        provider_lagged_events: u64::MAX,
+        storage_dropped_chunks: u64::MAX,
+        storage_dropped_bytes: u64::MAX,
+        evicted_chunks: u64::MAX,
+        evicted_bytes: u64::MAX,
+        earliest_retained_sequence: Some(u64::MAX),
+        ..Default::default()
+    };
+    let records = (0..MAX_RECORDS)
+        .map(|index| GatewayServiceLogRecord {
+            sequence: u64::MAX - index as u64,
+            stream: GatewayServiceLogStream::GATEWAY_SERVICE_LOG_STREAM_STDERR.into(),
+            observed_at: Timestamp {
+                seconds: i64::MAX,
+                nanos: 999_999_999,
+                ..Default::default()
+            }
+            .into(),
+            stored_at: Timestamp {
+                seconds: i64::MAX,
+                nanos: 999_999_999,
+                ..Default::default()
+            }
+            .into(),
+            contents: vec![0xa5; base_record_bytes + usize::from(index < remainder)],
+            ..Default::default()
+        })
+        .collect::<Vec<_>>();
+    let response = ListGatewayServiceLogsResponse {
+        metadata: metadata.into(),
+        records,
+        history_incomplete: true,
+        next_after: Cursor {
+            value: "cursor".repeat(32),
+            ..Default::default()
+        }
+        .into(),
+        ..Default::default()
+    };
+
+    let encoded = response.encode_to_vec();
+    assert_eq!(
+        response
+            .records
+            .iter()
+            .map(|record| record.contents.len())
+            .sum::<usize>(),
+        MAX_PAGE_CONTENTS
+    );
+    assert_eq!(encoded.len(), response.encoded_len() as usize);
+    assert!(
+        encoded.len() < RPC_RESPONSE_LIMIT,
+        "worst-case log page encoded to {} bytes",
+        encoded.len()
+    );
 }
 
 #[test]

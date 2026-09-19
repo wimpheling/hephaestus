@@ -26,6 +26,9 @@ pub mod __buffa {
         reg.register_json_any(super::__GATEWAY_REVISION_JSON_ANY);
         reg.register_json_any(super::__GATEWAY_SUMMARY_JSON_ANY);
         reg.register_json_any(super::__GATEWAY_INGRESS_JSON_ANY);
+        reg.register_json_any(super::__GATEWAY_SERVICE_LOG_SCOPE_JSON_ANY);
+        reg.register_json_any(super::__GATEWAY_SERVICE_LOG_RECORD_JSON_ANY);
+        reg.register_json_any(super::__GATEWAY_SERVICE_LOG_METADATA_JSON_ANY);
         reg.register_json_any(super::__GATEWAY_MAILBOX_BINDING_JSON_ANY);
         reg.register_json_any(super::__GATEWAY_MAILBOX_PUBLICATION_JSON_ANY);
         reg.register_json_any(super::__LIST_PROJECT_GATEWAYS_REQUEST_JSON_ANY);
@@ -39,6 +42,8 @@ pub mod __buffa {
         reg.register_json_any(super::__CONFIGURE_GATEWAY_RESPONSE_JSON_ANY);
         reg.register_json_any(super::__LIST_GATEWAY_INGRESS_REQUEST_JSON_ANY);
         reg.register_json_any(super::__LIST_GATEWAY_INGRESS_RESPONSE_JSON_ANY);
+        reg.register_json_any(super::__LIST_GATEWAY_SERVICE_LOGS_REQUEST_JSON_ANY);
+        reg.register_json_any(super::__LIST_GATEWAY_SERVICE_LOGS_RESPONSE_JSON_ANY);
         reg.register_json_any(super::__SET_GATEWAY_LIFECYCLE_REQUEST_JSON_ANY);
         reg.register_json_any(super::__SET_GATEWAY_LIFECYCLE_RESPONSE_JSON_ANY);
         reg.register_json_any(super::__CREATE_MAILBOX_BINDING_REQUEST_JSON_ANY);
@@ -67,6 +72,18 @@ pub use self::__buffa::view::GatewaySummaryOwnedView;
 pub use self::__buffa::view::GatewayIngressView;
 #[doc(inline)]
 pub use self::__buffa::view::GatewayIngressOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::GatewayServiceLogScopeView;
+#[doc(inline)]
+pub use self::__buffa::view::GatewayServiceLogScopeOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::GatewayServiceLogRecordView;
+#[doc(inline)]
+pub use self::__buffa::view::GatewayServiceLogRecordOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::GatewayServiceLogMetadataView;
+#[doc(inline)]
+pub use self::__buffa::view::GatewayServiceLogMetadataOwnedView;
 #[doc(inline)]
 pub use self::__buffa::view::GatewayMailboxBindingView;
 #[doc(inline)]
@@ -119,6 +136,14 @@ pub use self::__buffa::view::ListGatewayIngressRequestOwnedView;
 pub use self::__buffa::view::ListGatewayIngressResponseView;
 #[doc(inline)]
 pub use self::__buffa::view::ListGatewayIngressResponseOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::ListGatewayServiceLogsRequestView;
+#[doc(inline)]
+pub use self::__buffa::view::ListGatewayServiceLogsRequestOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::ListGatewayServiceLogsResponseView;
+#[doc(inline)]
+pub use self::__buffa::view::ListGatewayServiceLogsResponseOwnedView;
 #[doc(inline)]
 pub use self::__buffa::view::SetGatewayLifecycleRequestView;
 #[doc(inline)]

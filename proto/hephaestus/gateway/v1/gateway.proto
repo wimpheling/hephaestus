@@ -6,9 +6,10 @@ import "google/protobuf/timestamp.proto";
 import "hephaestus/common/v1/common.proto";
 import "hephaestus/options/v1/options.proto";
 
-// Project-scoped management and redacted ingress inspection for repository
-// gateways. Public request payloads and provider credentials are never part of
-// this API.
+// Project-scoped management, redacted ingress inspection, and explicitly
+// opted-in application output for repository gateways. Ingress inspection
+// remains value-free; application-emitted log bytes require app-owned
+// redaction, and the platform does not promise universal secret detection.
 service GatewayService {
   rpc ListProjectGateways(ListProjectGatewaysRequest) returns (ListProjectGatewaysResponse) {
     option idempotency_level = NO_SIDE_EFFECTS;
@@ -146,6 +147,12 @@ enum GatewayIngressOutcome {
   GATEWAY_INGRESS_OUTCOME_REJECTED = 5;
 }
 
+enum GatewayServiceLogStream {
+  GATEWAY_SERVICE_LOG_STREAM_UNSPECIFIED = 0;
+  GATEWAY_SERVICE_LOG_STREAM_STDOUT = 1;
+  GATEWAY_SERVICE_LOG_STREAM_STDERR = 2;
+}
+
 message GatewayRoute {
   hephaestus.common.v1.OpaqueId id = 1;
   string path = 2;
@@ -187,6 +194,44 @@ message GatewayIngress {
   GatewayIngressOutcome outcome = 4;
   google.protobuf.Timestamp accepted_at = 5;
   optional google.protobuf.Timestamp completed_at = 6;
+}
+
+// Exact immutable scope for one persistent service log epoch. The reader
+// validates every field together; callers must not infer scope from one ID.
+// Fencing tokens are positive and must fit a signed 64-bit database value.
+message GatewayServiceLogScope {
+  hephaestus.common.v1.OpaqueId project_id = 1;
+  hephaestus.common.v1.OpaqueId gateway_id = 2;
+  hephaestus.common.v1.OpaqueId revision_id = 3;
+  hephaestus.common.v1.OpaqueId instance_id = 4;
+  uint64 fencing_token = 5;
+}
+
+message GatewayServiceLogRecord {
+  uint64 sequence = 1;
+  GatewayServiceLogStream stream = 2;
+  google.protobuf.Timestamp observed_at = 3;
+  google.protobuf.Timestamp stored_at = 4;
+  // Raw application output is opt-in and each chunk is at most 64 KiB. A page
+  // contains at most 512 KiB of contents. The application owner is
+  // responsible for redaction; the platform does not guarantee arbitrary
+  // secret detection and never places these bytes in errors or diagnostics.
+  bytes contents = 5;
+}
+
+message GatewayServiceLogMetadata {
+  bool epoch_present = 1;
+  optional uint64 acknowledged_through = 2;
+  uint64 retained_bytes = 3;
+  uint64 retained_chunks = 4;
+  uint64 producer_dropped_chunks = 5;
+  uint64 producer_dropped_bytes = 6;
+  uint64 provider_lagged_events = 7;
+  uint64 storage_dropped_chunks = 8;
+  uint64 storage_dropped_bytes = 9;
+  uint64 evicted_chunks = 10;
+  uint64 evicted_bytes = 11;
+  optional uint64 earliest_retained_sequence = 12;
 }
 
 // Redacted immutable binding metadata. Neither mailbox event bodies nor
@@ -286,6 +331,22 @@ message ListGatewayIngressRequest {
 message ListGatewayIngressResponse {
   repeated GatewayIngress ingress = 1;
   hephaestus.common.v1.PageResponse page = 2;
+}
+
+message ListGatewayServiceLogsRequest {
+  GatewayServiceLogScope scope = 1;
+  // Must be 1..100; zero is invalid rather than an unbounded default.
+  uint32 limit = 2;
+  // Opaque cursor bound to the exact five-field scope. The planned signed
+  // cursor codec accepts at most 192 encoded bytes; malformed, tampered, or
+  // cross-scope cursors are invalid rather than plain sequence numbers.
+  hephaestus.common.v1.Cursor after = 3;
+}
+message ListGatewayServiceLogsResponse {
+  GatewayServiceLogMetadata metadata = 1;
+  repeated GatewayServiceLogRecord records = 2;
+  bool history_incomplete = 3;
+  hephaestus.common.v1.Cursor next_after = 4;
 }
 message SetGatewayLifecycleRequest {
   hephaestus.common.v1.RequestContext context = 1;

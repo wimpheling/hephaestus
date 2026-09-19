@@ -1584,3 +1584,23 @@ logs are `/tmp/heph-rollback-fmt-v1.log`,
 `bd340cf` passed all three jobs. This proves operator rollback through the
 real daemon/Caddy path; same-process expired-claim recovery, additional
 adversarial cases, and release UI remain pending.
+
+Additive service-log RPC contract checkpoint (2026-09-19): the gateway
+protobuf now defines the exact project/gateway/revision/instance/fence scope,
+stdout/stderr records with observed and stored timestamps, epoch loss and
+retention metadata, and a bounded page request/response shape. The contract
+documents 1--100 records, 64 KiB chunks, 512 KiB aggregate contents, and a
+192-byte opaque cursor bound to all five scope fields. Raw contents are an
+opt-in application-owned redaction responsibility; the platform does not
+promise universal secret detection. The descriptor bytes allowlist contains
+only the reviewed `GatewayServiceLogRecord.contents` field; no request-only
+`sensitive` annotation was added. The exact `bd340cf` archive with only the
+eight protocol-owned files overlaid is `/tmp/heph-proto-bd340cf.gCHmUn`.
+Pinned Rust 1.88 descriptor policy tests passed 13/13, including the
+100-record/512 KiB encoding budget test; strict `rpc-proto` Clippy,
+formatting, rustdoc, Buf generation consistency, and protobuf breaking checks
+passed. The RPC method, handler, cursor codec, application-role pool wiring,
+and UI remain pending; this checkpoint exposes no service method yet. Logs are
+`/tmp/heph-proto-bd340cf-{fmt,clippy,descriptor,doc}.log`,
+`/tmp/heph-proto-check-generated.log`, and
+`/tmp/heph-proto-check-breaking.log`.

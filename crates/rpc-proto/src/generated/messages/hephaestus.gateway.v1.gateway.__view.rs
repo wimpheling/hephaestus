@@ -2148,6 +2148,1531 @@ impl ::serde::Serialize for GatewayIngressOwnedView {
         ::serde::Serialize::serialize(&self.0, __s)
     }
 }
+/// Exact immutable scope for one persistent service log epoch. The reader
+/// validates every field together; callers must not infer scope from one ID.
+/// Fencing tokens are positive and must fit a signed 64-bit database value.
+#[derive(Clone, Debug, Default)]
+pub struct GatewayServiceLogScopeView<'a> {
+    /// Field 1: `project_id`
+    pub project_id: ::buffa::MessageFieldView<
+        super::super::super::super::common::v1::__buffa::view::OpaqueIdView<'a>,
+    >,
+    /// Field 2: `gateway_id`
+    pub gateway_id: ::buffa::MessageFieldView<
+        super::super::super::super::common::v1::__buffa::view::OpaqueIdView<'a>,
+    >,
+    /// Field 3: `revision_id`
+    pub revision_id: ::buffa::MessageFieldView<
+        super::super::super::super::common::v1::__buffa::view::OpaqueIdView<'a>,
+    >,
+    /// Field 4: `instance_id`
+    pub instance_id: ::buffa::MessageFieldView<
+        super::super::super::super::common::v1::__buffa::view::OpaqueIdView<'a>,
+    >,
+    /// Field 5: `fencing_token`
+    pub fencing_token: u64,
+    pub __buffa_unknown_fields: ::buffa::UnknownFieldsView<'a>,
+}
+impl<'a> ::buffa::MessageView<'a> for GatewayServiceLogScopeView<'a> {
+    type Owned = super::super::GatewayServiceLogScope;
+    fn decode_view(buf: &'a [u8]) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        let __limit = ::core::cell::Cell::new(::buffa::DEFAULT_UNKNOWN_FIELD_LIMIT);
+        <Self as ::buffa::MessageView>::decode_view_ctx(
+            buf,
+            ::buffa::DecodeContext::new(::buffa::RECURSION_LIMIT, &__limit),
+        )
+    }
+    fn decode_view_with_ctx(
+        buf: &'a [u8],
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        <Self as ::buffa::MessageView>::decode_view_ctx(buf, ctx)
+    }
+    fn merge_view_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        cur: &'a [u8],
+        before_tag: &'a [u8],
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<&'a [u8], ::buffa::DecodeError> {
+        let _ = ctx;
+        #[allow(unused_variables)]
+        let view = self;
+        let mut cur = cur;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                let __sub_ctx = ctx.descend()?;
+                let sub = ::buffa::types::borrow_bytes(&mut cur)?;
+                match view.project_id.as_mut() {
+                    Some(existing) => {
+                        ::buffa::MessageView::merge_into_view(existing, sub, __sub_ctx)?
+                    }
+                    None => {
+                        view.project_id = ::buffa::MessageFieldView::set(
+                            <super::super::super::super::common::v1::__buffa::view::OpaqueIdView as ::buffa::MessageView>::decode_view_ctx(
+                                sub,
+                                __sub_ctx,
+                            )?,
+                        );
+                    }
+                }
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                let __sub_ctx = ctx.descend()?;
+                let sub = ::buffa::types::borrow_bytes(&mut cur)?;
+                match view.gateway_id.as_mut() {
+                    Some(existing) => {
+                        ::buffa::MessageView::merge_into_view(existing, sub, __sub_ctx)?
+                    }
+                    None => {
+                        view.gateway_id = ::buffa::MessageFieldView::set(
+                            <super::super::super::super::common::v1::__buffa::view::OpaqueIdView as ::buffa::MessageView>::decode_view_ctx(
+                                sub,
+                                __sub_ctx,
+                            )?,
+                        );
+                    }
+                }
+            }
+            3u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                let __sub_ctx = ctx.descend()?;
+                let sub = ::buffa::types::borrow_bytes(&mut cur)?;
+                match view.revision_id.as_mut() {
+                    Some(existing) => {
+                        ::buffa::MessageView::merge_into_view(existing, sub, __sub_ctx)?
+                    }
+                    None => {
+                        view.revision_id = ::buffa::MessageFieldView::set(
+                            <super::super::super::super::common::v1::__buffa::view::OpaqueIdView as ::buffa::MessageView>::decode_view_ctx(
+                                sub,
+                                __sub_ctx,
+                            )?,
+                        );
+                    }
+                }
+            }
+            4u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                let __sub_ctx = ctx.descend()?;
+                let sub = ::buffa::types::borrow_bytes(&mut cur)?;
+                match view.instance_id.as_mut() {
+                    Some(existing) => {
+                        ::buffa::MessageView::merge_into_view(existing, sub, __sub_ctx)?
+                    }
+                    None => {
+                        view.instance_id = ::buffa::MessageFieldView::set(
+                            <super::super::super::super::common::v1::__buffa::view::OpaqueIdView as ::buffa::MessageView>::decode_view_ctx(
+                                sub,
+                                __sub_ctx,
+                            )?,
+                        );
+                    }
+                }
+            }
+            5u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                view.fencing_token = ::buffa::types::decode_uint64(&mut cur)?;
+            }
+            _ => {
+                ::buffa::encoding::skip_field_depth(tag, &mut cur, ctx.depth())?;
+                let span_len = before_tag.len() - cur.len();
+                view.__buffa_unknown_fields.push_record(before_tag, span_len, ctx)?;
+            }
+        }
+        ::core::result::Result::Ok(cur)
+    }
+    fn to_owned_message(
+        &self,
+    ) -> ::core::result::Result<
+        super::super::GatewayServiceLogScope,
+        ::buffa::DecodeError,
+    > {
+        self.to_owned_from_source(None)
+    }
+    #[allow(clippy::useless_conversion, clippy::needless_update)]
+    fn to_owned_from_source(
+        &self,
+        __buffa_src: ::core::option::Option<&::buffa::bytes::Bytes>,
+    ) -> ::core::result::Result<
+        super::super::GatewayServiceLogScope,
+        ::buffa::DecodeError,
+    > {
+        #[allow(unused_imports)]
+        use ::buffa::alloc::string::ToString as _;
+        let _ = __buffa_src;
+        ::core::result::Result::Ok(super::super::GatewayServiceLogScope {
+            project_id: match self.project_id.as_option() {
+                Some(v) => {
+                    ::buffa::MessageField::<
+                        super::super::super::super::common::v1::OpaqueId,
+                    >::some(v.to_owned_from_source(__buffa_src)?)
+                }
+                None => ::buffa::MessageField::none(),
+            },
+            gateway_id: match self.gateway_id.as_option() {
+                Some(v) => {
+                    ::buffa::MessageField::<
+                        super::super::super::super::common::v1::OpaqueId,
+                    >::some(v.to_owned_from_source(__buffa_src)?)
+                }
+                None => ::buffa::MessageField::none(),
+            },
+            revision_id: match self.revision_id.as_option() {
+                Some(v) => {
+                    ::buffa::MessageField::<
+                        super::super::super::super::common::v1::OpaqueId,
+                    >::some(v.to_owned_from_source(__buffa_src)?)
+                }
+                None => ::buffa::MessageField::none(),
+            },
+            instance_id: match self.instance_id.as_option() {
+                Some(v) => {
+                    ::buffa::MessageField::<
+                        super::super::super::super::common::v1::OpaqueId,
+                    >::some(v.to_owned_from_source(__buffa_src)?)
+                }
+                None => ::buffa::MessageField::none(),
+            },
+            fencing_token: self.fencing_token,
+            __buffa_unknown_fields: self.__buffa_unknown_fields.to_owned()?.into(),
+            ..::core::default::Default::default()
+        })
+    }
+}
+impl<'a> ::buffa::ViewEncode<'a> for GatewayServiceLogScopeView<'a> {
+    #[allow(clippy::needless_borrow, clippy::let_and_return)]
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if self.project_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.project_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.gateway_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.gateway_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.revision_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.revision_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.instance_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.instance_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.fencing_token != 0u64 {
+            size += 1u32 + ::buffa::types::uint64_encoded_len(self.fencing_token) as u32;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    #[allow(clippy::needless_borrow)]
+    fn write_to(
+        &self,
+        __cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if self.project_id.is_set() {
+            ::buffa::types::put_len_delimited_header(1u32, __cache.consume_next(), buf);
+            self.project_id.write_to(__cache, buf);
+        }
+        if self.gateway_id.is_set() {
+            ::buffa::types::put_len_delimited_header(2u32, __cache.consume_next(), buf);
+            self.gateway_id.write_to(__cache, buf);
+        }
+        if self.revision_id.is_set() {
+            ::buffa::types::put_len_delimited_header(3u32, __cache.consume_next(), buf);
+            self.revision_id.write_to(__cache, buf);
+        }
+        if self.instance_id.is_set() {
+            ::buffa::types::put_len_delimited_header(4u32, __cache.consume_next(), buf);
+            self.instance_id.write_to(__cache, buf);
+        }
+        if self.fencing_token != 0u64 {
+            ::buffa::types::put_uint64_field(5u32, self.fencing_token, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+}
+/// Serializes this view as protobuf JSON.
+///
+/// Implicit-presence fields with default values are omitted, `required`
+/// fields are always emitted, explicit-presence (`optional`) fields are
+/// emitted only when set, bytes fields are base64-encoded, and enum
+/// values are their proto name strings.
+///
+/// This impl uses `serialize_map(None)` because the number of emitted
+/// fields depends on default-omission rules; serializers that require
+/// known map lengths (e.g. `bincode`) will return a runtime error.
+/// Use the owned message type for those formats.
+impl<'__a> ::serde::Serialize for GatewayServiceLogScopeView<'__a> {
+    fn serialize<__S: ::serde::Serializer>(
+        &self,
+        __s: __S,
+    ) -> ::core::result::Result<__S::Ok, __S::Error> {
+        use ::serde::ser::SerializeMap as _;
+        let mut __map = __s.serialize_map(::core::option::Option::None)?;
+        {
+            if let ::core::option::Option::Some(__v) = self.project_id.as_option() {
+                __map.serialize_entry("projectId", __v)?;
+            }
+        }
+        {
+            if let ::core::option::Option::Some(__v) = self.gateway_id.as_option() {
+                __map.serialize_entry("gatewayId", __v)?;
+            }
+        }
+        {
+            if let ::core::option::Option::Some(__v) = self.revision_id.as_option() {
+                __map.serialize_entry("revisionId", __v)?;
+            }
+        }
+        {
+            if let ::core::option::Option::Some(__v) = self.instance_id.as_option() {
+                __map.serialize_entry("instanceId", __v)?;
+            }
+        }
+        if !::buffa::json_helpers::skip_if::is_zero_u64(&self.fencing_token) {
+            __map
+                .serialize_entry(
+                    "fencingToken",
+                    &::buffa::json_helpers::ProtoJson(&self.fencing_token),
+                )?;
+        }
+        __map.end()
+    }
+}
+impl<'a> ::buffa::MessageName for GatewayServiceLogScopeView<'a> {
+    const PACKAGE: &'static str = "hephaestus.gateway.v1";
+    const NAME: &'static str = "GatewayServiceLogScope";
+    const FULL_NAME: &'static str = "hephaestus.gateway.v1.GatewayServiceLogScope";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.gateway.v1.GatewayServiceLogScope";
+}
+::buffa::impl_default_view_instance!(GatewayServiceLogScopeView);
+::buffa::impl_view_reborrow!(GatewayServiceLogScopeView);
+/** Self-contained, `'static` owned view of a `GatewayServiceLogScope` message.
+
+ Wraps [`::buffa::OwnedView`]`<`[`GatewayServiceLogScopeView`]`<'static>>`: the decoded view and the [`::buffa::bytes::Bytes`] buffer it borrows from travel together, so the handle is `'static` and `Send + Sync` — suitable for async handlers, spawned tasks, and anywhere a `'static` bound is required.
+
+ Field accessors return borrows tied to `&self`. Use [`Self::view`] to get the full [`GatewayServiceLogScopeView`] when you need struct patterns, iteration helpers, or to pass the view to lifetime-parameterised code.*/
+#[derive(Clone, Debug)]
+pub struct GatewayServiceLogScopeOwnedView(
+    ::buffa::OwnedView<GatewayServiceLogScopeView<'static>>,
+);
+impl GatewayServiceLogScopeOwnedView {
+    /// Decode an owned view from a [`::buffa::bytes::Bytes`] buffer.
+    ///
+    /// The view borrows directly from the buffer's data; the buffer is
+    /// retained inside the returned handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`::buffa::DecodeError`] if the buffer contains invalid
+    /// protobuf data.
+    pub fn decode(
+        bytes: ::buffa::bytes::Bytes,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        ::core::result::Result::Ok(
+            GatewayServiceLogScopeOwnedView(::buffa::OwnedView::decode(bytes)?),
+        )
+    }
+    /// Decode with custom [`::buffa::DecodeOptions`] (recursion limit,
+    /// max message size).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`::buffa::DecodeError`] if the buffer is invalid or
+    /// exceeds the configured limits.
+    pub fn decode_with_options(
+        bytes: ::buffa::bytes::Bytes,
+        opts: &::buffa::DecodeOptions,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        ::core::result::Result::Ok(
+            GatewayServiceLogScopeOwnedView(
+                ::buffa::OwnedView::decode_with_options(bytes, opts)?,
+            ),
+        )
+    }
+    /// Build from an owned message via an encode → decode round-trip.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`::buffa::DecodeError`] if the re-encoded bytes are
+    /// somehow invalid (should not happen for well-formed messages).
+    pub fn from_owned(
+        msg: &super::super::GatewayServiceLogScope,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        ::core::result::Result::Ok(
+            GatewayServiceLogScopeOwnedView(::buffa::OwnedView::from_owned(msg)?),
+        )
+    }
+    /// Borrow the full [`GatewayServiceLogScopeView`] with its lifetime tied to `&self`.
+    #[must_use]
+    pub fn view(&self) -> &GatewayServiceLogScopeView<'_> {
+        self.0.reborrow()
+    }
+    /// Convert to the owned message type.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if re-materializing preserved unknown fields
+    /// fails (e.g. the unknown-field limit is exceeded).
+    pub fn to_owned_message(
+        &self,
+    ) -> ::core::result::Result<
+        super::super::GatewayServiceLogScope,
+        ::buffa::DecodeError,
+    > {
+        self.0.to_owned_message()
+    }
+    /// The underlying bytes buffer.
+    #[must_use]
+    pub fn bytes(&self) -> &::buffa::bytes::Bytes {
+        self.0.bytes()
+    }
+    /// Consume the handle, returning the underlying bytes buffer.
+    #[must_use]
+    pub fn into_bytes(self) -> ::buffa::bytes::Bytes {
+        self.0.into_bytes()
+    }
+    /// Field 1: `project_id`
+    #[must_use]
+    pub fn project_id(
+        &self,
+    ) -> &::buffa::MessageFieldView<
+        super::super::super::super::common::v1::__buffa::view::OpaqueIdView<'_>,
+    > {
+        &self.0.reborrow().project_id
+    }
+    /// Field 2: `gateway_id`
+    #[must_use]
+    pub fn gateway_id(
+        &self,
+    ) -> &::buffa::MessageFieldView<
+        super::super::super::super::common::v1::__buffa::view::OpaqueIdView<'_>,
+    > {
+        &self.0.reborrow().gateway_id
+    }
+    /// Field 3: `revision_id`
+    #[must_use]
+    pub fn revision_id(
+        &self,
+    ) -> &::buffa::MessageFieldView<
+        super::super::super::super::common::v1::__buffa::view::OpaqueIdView<'_>,
+    > {
+        &self.0.reborrow().revision_id
+    }
+    /// Field 4: `instance_id`
+    #[must_use]
+    pub fn instance_id(
+        &self,
+    ) -> &::buffa::MessageFieldView<
+        super::super::super::super::common::v1::__buffa::view::OpaqueIdView<'_>,
+    > {
+        &self.0.reborrow().instance_id
+    }
+    /// Field 5: `fencing_token`
+    #[must_use]
+    pub fn fencing_token(&self) -> u64 {
+        self.0.reborrow().fencing_token
+    }
+}
+impl ::core::convert::From<::buffa::OwnedView<GatewayServiceLogScopeView<'static>>>
+for GatewayServiceLogScopeOwnedView {
+    fn from(inner: ::buffa::OwnedView<GatewayServiceLogScopeView<'static>>) -> Self {
+        GatewayServiceLogScopeOwnedView(inner)
+    }
+}
+impl ::core::convert::From<GatewayServiceLogScopeOwnedView>
+for ::buffa::OwnedView<GatewayServiceLogScopeView<'static>> {
+    fn from(wrapper: GatewayServiceLogScopeOwnedView) -> Self {
+        wrapper.0
+    }
+}
+impl ::core::convert::AsRef<::buffa::OwnedView<GatewayServiceLogScopeView<'static>>>
+for GatewayServiceLogScopeOwnedView {
+    fn as_ref(&self) -> &::buffa::OwnedView<GatewayServiceLogScopeView<'static>> {
+        &self.0
+    }
+}
+impl ::buffa::HasMessageView for super::super::GatewayServiceLogScope {
+    type View<'a> = GatewayServiceLogScopeView<'a>;
+    type ViewHandle = GatewayServiceLogScopeOwnedView;
+}
+impl ::serde::Serialize for GatewayServiceLogScopeOwnedView {
+    fn serialize<__S: ::serde::Serializer>(
+        &self,
+        __s: __S,
+    ) -> ::core::result::Result<__S::Ok, __S::Error> {
+        ::serde::Serialize::serialize(&self.0, __s)
+    }
+}
+#[derive(Clone, Debug, Default)]
+pub struct GatewayServiceLogRecordView<'a> {
+    /// Field 1: `sequence`
+    pub sequence: u64,
+    /// Field 2: `stream`
+    pub stream: ::buffa::EnumValue<super::super::GatewayServiceLogStream>,
+    /// Field 3: `observed_at`
+    pub observed_at: ::buffa::MessageFieldView<
+        ::buffa_types::google::protobuf::__buffa::view::TimestampView<'a>,
+    >,
+    /// Field 4: `stored_at`
+    pub stored_at: ::buffa::MessageFieldView<
+        ::buffa_types::google::protobuf::__buffa::view::TimestampView<'a>,
+    >,
+    /// Raw application output is opt-in and each chunk is at most 64 KiB. A page
+    /// contains at most 512 KiB of contents. The application owner is
+    /// responsible for redaction; the platform does not guarantee arbitrary
+    /// secret detection and never places these bytes in errors or diagnostics.
+    ///
+    /// Field 5: `contents`
+    pub contents: &'a [u8],
+    pub __buffa_unknown_fields: ::buffa::UnknownFieldsView<'a>,
+}
+impl<'a> ::buffa::MessageView<'a> for GatewayServiceLogRecordView<'a> {
+    type Owned = super::super::GatewayServiceLogRecord;
+    fn decode_view(buf: &'a [u8]) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        let __limit = ::core::cell::Cell::new(::buffa::DEFAULT_UNKNOWN_FIELD_LIMIT);
+        <Self as ::buffa::MessageView>::decode_view_ctx(
+            buf,
+            ::buffa::DecodeContext::new(::buffa::RECURSION_LIMIT, &__limit),
+        )
+    }
+    fn decode_view_with_ctx(
+        buf: &'a [u8],
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        <Self as ::buffa::MessageView>::decode_view_ctx(buf, ctx)
+    }
+    fn merge_view_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        cur: &'a [u8],
+        before_tag: &'a [u8],
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<&'a [u8], ::buffa::DecodeError> {
+        let _ = ctx;
+        #[allow(unused_variables)]
+        let view = self;
+        let mut cur = cur;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                view.sequence = ::buffa::types::decode_uint64(&mut cur)?;
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                view.stream = ::buffa::EnumValue::from(
+                    ::buffa::types::decode_int32(&mut cur)?,
+                );
+            }
+            3u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                let __sub_ctx = ctx.descend()?;
+                let sub = ::buffa::types::borrow_bytes(&mut cur)?;
+                match view.observed_at.as_mut() {
+                    Some(existing) => {
+                        ::buffa::MessageView::merge_into_view(existing, sub, __sub_ctx)?
+                    }
+                    None => {
+                        view.observed_at = ::buffa::MessageFieldView::set(
+                            <::buffa_types::google::protobuf::__buffa::view::TimestampView as ::buffa::MessageView>::decode_view_ctx(
+                                sub,
+                                __sub_ctx,
+                            )?,
+                        );
+                    }
+                }
+            }
+            4u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                let __sub_ctx = ctx.descend()?;
+                let sub = ::buffa::types::borrow_bytes(&mut cur)?;
+                match view.stored_at.as_mut() {
+                    Some(existing) => {
+                        ::buffa::MessageView::merge_into_view(existing, sub, __sub_ctx)?
+                    }
+                    None => {
+                        view.stored_at = ::buffa::MessageFieldView::set(
+                            <::buffa_types::google::protobuf::__buffa::view::TimestampView as ::buffa::MessageView>::decode_view_ctx(
+                                sub,
+                                __sub_ctx,
+                            )?,
+                        );
+                    }
+                }
+            }
+            5u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                view.contents = ::buffa::types::borrow_bytes(&mut cur)?;
+            }
+            _ => {
+                ::buffa::encoding::skip_field_depth(tag, &mut cur, ctx.depth())?;
+                let span_len = before_tag.len() - cur.len();
+                view.__buffa_unknown_fields.push_record(before_tag, span_len, ctx)?;
+            }
+        }
+        ::core::result::Result::Ok(cur)
+    }
+    fn to_owned_message(
+        &self,
+    ) -> ::core::result::Result<
+        super::super::GatewayServiceLogRecord,
+        ::buffa::DecodeError,
+    > {
+        self.to_owned_from_source(None)
+    }
+    #[allow(clippy::useless_conversion, clippy::needless_update)]
+    fn to_owned_from_source(
+        &self,
+        __buffa_src: ::core::option::Option<&::buffa::bytes::Bytes>,
+    ) -> ::core::result::Result<
+        super::super::GatewayServiceLogRecord,
+        ::buffa::DecodeError,
+    > {
+        #[allow(unused_imports)]
+        use ::buffa::alloc::string::ToString as _;
+        let _ = __buffa_src;
+        ::core::result::Result::Ok(super::super::GatewayServiceLogRecord {
+            sequence: self.sequence,
+            stream: self.stream,
+            observed_at: match self.observed_at.as_option() {
+                Some(v) => {
+                    ::buffa::MessageField::<
+                        ::buffa_types::google::protobuf::Timestamp,
+                    >::some(v.to_owned_from_source(__buffa_src)?)
+                }
+                None => ::buffa::MessageField::none(),
+            },
+            stored_at: match self.stored_at.as_option() {
+                Some(v) => {
+                    ::buffa::MessageField::<
+                        ::buffa_types::google::protobuf::Timestamp,
+                    >::some(v.to_owned_from_source(__buffa_src)?)
+                }
+                None => ::buffa::MessageField::none(),
+            },
+            contents: (self.contents).to_vec(),
+            __buffa_unknown_fields: self.__buffa_unknown_fields.to_owned()?.into(),
+            ..::core::default::Default::default()
+        })
+    }
+}
+impl<'a> ::buffa::ViewEncode<'a> for GatewayServiceLogRecordView<'a> {
+    #[allow(clippy::needless_borrow, clippy::let_and_return)]
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if self.sequence != 0u64 {
+            size += 1u32 + ::buffa::types::uint64_encoded_len(self.sequence) as u32;
+        }
+        {
+            let val = self.stream.to_i32();
+            if val != 0 {
+                size += 1u32 + ::buffa::types::int32_encoded_len(val) as u32;
+            }
+        }
+        if self.observed_at.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.observed_at.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.stored_at.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.stored_at.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if !self.contents.is_empty() {
+            size += 1u32 + ::buffa::types::bytes_encoded_len(&self.contents) as u32;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    #[allow(clippy::needless_borrow)]
+    fn write_to(
+        &self,
+        __cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if self.sequence != 0u64 {
+            ::buffa::types::put_uint64_field(1u32, self.sequence, buf);
+        }
+        {
+            let val = self.stream.to_i32();
+            if val != 0 {
+                ::buffa::types::put_int32_field(2u32, val, buf);
+            }
+        }
+        if self.observed_at.is_set() {
+            ::buffa::types::put_len_delimited_header(3u32, __cache.consume_next(), buf);
+            self.observed_at.write_to(__cache, buf);
+        }
+        if self.stored_at.is_set() {
+            ::buffa::types::put_len_delimited_header(4u32, __cache.consume_next(), buf);
+            self.stored_at.write_to(__cache, buf);
+        }
+        if !self.contents.is_empty() {
+            ::buffa::types::put_bytes_field(5u32, &self.contents, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+}
+/// Serializes this view as protobuf JSON.
+///
+/// Implicit-presence fields with default values are omitted, `required`
+/// fields are always emitted, explicit-presence (`optional`) fields are
+/// emitted only when set, bytes fields are base64-encoded, and enum
+/// values are their proto name strings.
+///
+/// This impl uses `serialize_map(None)` because the number of emitted
+/// fields depends on default-omission rules; serializers that require
+/// known map lengths (e.g. `bincode`) will return a runtime error.
+/// Use the owned message type for those formats.
+impl<'__a> ::serde::Serialize for GatewayServiceLogRecordView<'__a> {
+    fn serialize<__S: ::serde::Serializer>(
+        &self,
+        __s: __S,
+    ) -> ::core::result::Result<__S::Ok, __S::Error> {
+        use ::serde::ser::SerializeMap as _;
+        let mut __map = __s.serialize_map(::core::option::Option::None)?;
+        if !::buffa::json_helpers::skip_if::is_zero_u64(&self.sequence) {
+            __map
+                .serialize_entry(
+                    "sequence",
+                    &::buffa::json_helpers::ProtoJson(&self.sequence),
+                )?;
+        }
+        if !::buffa::json_helpers::skip_if::is_default_enum_value(&self.stream) {
+            __map.serialize_entry("stream", &self.stream)?;
+        }
+        {
+            if let ::core::option::Option::Some(__v) = self.observed_at.as_option() {
+                __map.serialize_entry("observedAt", __v)?;
+            }
+        }
+        {
+            if let ::core::option::Option::Some(__v) = self.stored_at.as_option() {
+                __map.serialize_entry("storedAt", __v)?;
+            }
+        }
+        if !::buffa::json_helpers::skip_if::is_empty_bytes(self.contents) {
+            __map
+                .serialize_entry(
+                    "contents",
+                    &::buffa::json_helpers::BytesJson(self.contents),
+                )?;
+        }
+        __map.end()
+    }
+}
+impl<'a> ::buffa::MessageName for GatewayServiceLogRecordView<'a> {
+    const PACKAGE: &'static str = "hephaestus.gateway.v1";
+    const NAME: &'static str = "GatewayServiceLogRecord";
+    const FULL_NAME: &'static str = "hephaestus.gateway.v1.GatewayServiceLogRecord";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.gateway.v1.GatewayServiceLogRecord";
+}
+::buffa::impl_default_view_instance!(GatewayServiceLogRecordView);
+::buffa::impl_view_reborrow!(GatewayServiceLogRecordView);
+/** Self-contained, `'static` owned view of a `GatewayServiceLogRecord` message.
+
+ Wraps [`::buffa::OwnedView`]`<`[`GatewayServiceLogRecordView`]`<'static>>`: the decoded view and the [`::buffa::bytes::Bytes`] buffer it borrows from travel together, so the handle is `'static` and `Send + Sync` — suitable for async handlers, spawned tasks, and anywhere a `'static` bound is required.
+
+ Field accessors return borrows tied to `&self`. Use [`Self::view`] to get the full [`GatewayServiceLogRecordView`] when you need struct patterns, iteration helpers, or to pass the view to lifetime-parameterised code.*/
+#[derive(Clone, Debug)]
+pub struct GatewayServiceLogRecordOwnedView(
+    ::buffa::OwnedView<GatewayServiceLogRecordView<'static>>,
+);
+impl GatewayServiceLogRecordOwnedView {
+    /// Decode an owned view from a [`::buffa::bytes::Bytes`] buffer.
+    ///
+    /// The view borrows directly from the buffer's data; the buffer is
+    /// retained inside the returned handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`::buffa::DecodeError`] if the buffer contains invalid
+    /// protobuf data.
+    pub fn decode(
+        bytes: ::buffa::bytes::Bytes,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        ::core::result::Result::Ok(
+            GatewayServiceLogRecordOwnedView(::buffa::OwnedView::decode(bytes)?),
+        )
+    }
+    /// Decode with custom [`::buffa::DecodeOptions`] (recursion limit,
+    /// max message size).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`::buffa::DecodeError`] if the buffer is invalid or
+    /// exceeds the configured limits.
+    pub fn decode_with_options(
+        bytes: ::buffa::bytes::Bytes,
+        opts: &::buffa::DecodeOptions,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        ::core::result::Result::Ok(
+            GatewayServiceLogRecordOwnedView(
+                ::buffa::OwnedView::decode_with_options(bytes, opts)?,
+            ),
+        )
+    }
+    /// Build from an owned message via an encode → decode round-trip.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`::buffa::DecodeError`] if the re-encoded bytes are
+    /// somehow invalid (should not happen for well-formed messages).
+    pub fn from_owned(
+        msg: &super::super::GatewayServiceLogRecord,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        ::core::result::Result::Ok(
+            GatewayServiceLogRecordOwnedView(::buffa::OwnedView::from_owned(msg)?),
+        )
+    }
+    /// Borrow the full [`GatewayServiceLogRecordView`] with its lifetime tied to `&self`.
+    #[must_use]
+    pub fn view(&self) -> &GatewayServiceLogRecordView<'_> {
+        self.0.reborrow()
+    }
+    /// Convert to the owned message type.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if re-materializing preserved unknown fields
+    /// fails (e.g. the unknown-field limit is exceeded).
+    pub fn to_owned_message(
+        &self,
+    ) -> ::core::result::Result<
+        super::super::GatewayServiceLogRecord,
+        ::buffa::DecodeError,
+    > {
+        self.0.to_owned_message()
+    }
+    /// The underlying bytes buffer.
+    #[must_use]
+    pub fn bytes(&self) -> &::buffa::bytes::Bytes {
+        self.0.bytes()
+    }
+    /// Consume the handle, returning the underlying bytes buffer.
+    #[must_use]
+    pub fn into_bytes(self) -> ::buffa::bytes::Bytes {
+        self.0.into_bytes()
+    }
+    /// Field 1: `sequence`
+    #[must_use]
+    pub fn sequence(&self) -> u64 {
+        self.0.reborrow().sequence
+    }
+    /// Field 2: `stream`
+    #[must_use]
+    pub fn stream(&self) -> ::buffa::EnumValue<super::super::GatewayServiceLogStream> {
+        self.0.reborrow().stream
+    }
+    /// Field 3: `observed_at`
+    #[must_use]
+    pub fn observed_at(
+        &self,
+    ) -> &::buffa::MessageFieldView<
+        ::buffa_types::google::protobuf::__buffa::view::TimestampView<'_>,
+    > {
+        &self.0.reborrow().observed_at
+    }
+    /// Field 4: `stored_at`
+    #[must_use]
+    pub fn stored_at(
+        &self,
+    ) -> &::buffa::MessageFieldView<
+        ::buffa_types::google::protobuf::__buffa::view::TimestampView<'_>,
+    > {
+        &self.0.reborrow().stored_at
+    }
+    /// Raw application output is opt-in and each chunk is at most 64 KiB. A page
+    /// contains at most 512 KiB of contents. The application owner is
+    /// responsible for redaction; the platform does not guarantee arbitrary
+    /// secret detection and never places these bytes in errors or diagnostics.
+    ///
+    /// Field 5: `contents`
+    #[must_use]
+    pub fn contents(&self) -> &'_ [u8] {
+        self.0.reborrow().contents
+    }
+}
+impl ::core::convert::From<::buffa::OwnedView<GatewayServiceLogRecordView<'static>>>
+for GatewayServiceLogRecordOwnedView {
+    fn from(inner: ::buffa::OwnedView<GatewayServiceLogRecordView<'static>>) -> Self {
+        GatewayServiceLogRecordOwnedView(inner)
+    }
+}
+impl ::core::convert::From<GatewayServiceLogRecordOwnedView>
+for ::buffa::OwnedView<GatewayServiceLogRecordView<'static>> {
+    fn from(wrapper: GatewayServiceLogRecordOwnedView) -> Self {
+        wrapper.0
+    }
+}
+impl ::core::convert::AsRef<::buffa::OwnedView<GatewayServiceLogRecordView<'static>>>
+for GatewayServiceLogRecordOwnedView {
+    fn as_ref(&self) -> &::buffa::OwnedView<GatewayServiceLogRecordView<'static>> {
+        &self.0
+    }
+}
+impl ::buffa::HasMessageView for super::super::GatewayServiceLogRecord {
+    type View<'a> = GatewayServiceLogRecordView<'a>;
+    type ViewHandle = GatewayServiceLogRecordOwnedView;
+}
+impl ::serde::Serialize for GatewayServiceLogRecordOwnedView {
+    fn serialize<__S: ::serde::Serializer>(
+        &self,
+        __s: __S,
+    ) -> ::core::result::Result<__S::Ok, __S::Error> {
+        ::serde::Serialize::serialize(&self.0, __s)
+    }
+}
+#[derive(Clone, Debug, Default)]
+pub struct GatewayServiceLogMetadataView<'a> {
+    /// Field 1: `epoch_present`
+    pub epoch_present: bool,
+    /// Field 2: `acknowledged_through`
+    pub acknowledged_through: ::core::option::Option<u64>,
+    /// Field 3: `retained_bytes`
+    pub retained_bytes: u64,
+    /// Field 4: `retained_chunks`
+    pub retained_chunks: u64,
+    /// Field 5: `producer_dropped_chunks`
+    pub producer_dropped_chunks: u64,
+    /// Field 6: `producer_dropped_bytes`
+    pub producer_dropped_bytes: u64,
+    /// Field 7: `provider_lagged_events`
+    pub provider_lagged_events: u64,
+    /// Field 8: `storage_dropped_chunks`
+    pub storage_dropped_chunks: u64,
+    /// Field 9: `storage_dropped_bytes`
+    pub storage_dropped_bytes: u64,
+    /// Field 10: `evicted_chunks`
+    pub evicted_chunks: u64,
+    /// Field 11: `evicted_bytes`
+    pub evicted_bytes: u64,
+    /// Field 12: `earliest_retained_sequence`
+    pub earliest_retained_sequence: ::core::option::Option<u64>,
+    pub __buffa_unknown_fields: ::buffa::UnknownFieldsView<'a>,
+}
+impl<'a> ::buffa::MessageView<'a> for GatewayServiceLogMetadataView<'a> {
+    type Owned = super::super::GatewayServiceLogMetadata;
+    fn decode_view(buf: &'a [u8]) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        let __limit = ::core::cell::Cell::new(::buffa::DEFAULT_UNKNOWN_FIELD_LIMIT);
+        <Self as ::buffa::MessageView>::decode_view_ctx(
+            buf,
+            ::buffa::DecodeContext::new(::buffa::RECURSION_LIMIT, &__limit),
+        )
+    }
+    fn decode_view_with_ctx(
+        buf: &'a [u8],
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        <Self as ::buffa::MessageView>::decode_view_ctx(buf, ctx)
+    }
+    fn merge_view_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        cur: &'a [u8],
+        before_tag: &'a [u8],
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<&'a [u8], ::buffa::DecodeError> {
+        let _ = ctx;
+        #[allow(unused_variables)]
+        let view = self;
+        let mut cur = cur;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                view.epoch_present = ::buffa::types::decode_bool(&mut cur)?;
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                view.acknowledged_through = Some(
+                    ::buffa::types::decode_uint64(&mut cur)?,
+                );
+            }
+            3u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                view.retained_bytes = ::buffa::types::decode_uint64(&mut cur)?;
+            }
+            4u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                view.retained_chunks = ::buffa::types::decode_uint64(&mut cur)?;
+            }
+            5u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                view.producer_dropped_chunks = ::buffa::types::decode_uint64(&mut cur)?;
+            }
+            6u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                view.producer_dropped_bytes = ::buffa::types::decode_uint64(&mut cur)?;
+            }
+            7u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                view.provider_lagged_events = ::buffa::types::decode_uint64(&mut cur)?;
+            }
+            8u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                view.storage_dropped_chunks = ::buffa::types::decode_uint64(&mut cur)?;
+            }
+            9u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                view.storage_dropped_bytes = ::buffa::types::decode_uint64(&mut cur)?;
+            }
+            10u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                view.evicted_chunks = ::buffa::types::decode_uint64(&mut cur)?;
+            }
+            11u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                view.evicted_bytes = ::buffa::types::decode_uint64(&mut cur)?;
+            }
+            12u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                view.earliest_retained_sequence = Some(
+                    ::buffa::types::decode_uint64(&mut cur)?,
+                );
+            }
+            _ => {
+                ::buffa::encoding::skip_field_depth(tag, &mut cur, ctx.depth())?;
+                let span_len = before_tag.len() - cur.len();
+                view.__buffa_unknown_fields.push_record(before_tag, span_len, ctx)?;
+            }
+        }
+        ::core::result::Result::Ok(cur)
+    }
+    fn to_owned_message(
+        &self,
+    ) -> ::core::result::Result<
+        super::super::GatewayServiceLogMetadata,
+        ::buffa::DecodeError,
+    > {
+        self.to_owned_from_source(None)
+    }
+    #[allow(clippy::useless_conversion, clippy::needless_update)]
+    fn to_owned_from_source(
+        &self,
+        __buffa_src: ::core::option::Option<&::buffa::bytes::Bytes>,
+    ) -> ::core::result::Result<
+        super::super::GatewayServiceLogMetadata,
+        ::buffa::DecodeError,
+    > {
+        #[allow(unused_imports)]
+        use ::buffa::alloc::string::ToString as _;
+        let _ = __buffa_src;
+        ::core::result::Result::Ok(super::super::GatewayServiceLogMetadata {
+            epoch_present: self.epoch_present,
+            acknowledged_through: self.acknowledged_through,
+            retained_bytes: self.retained_bytes,
+            retained_chunks: self.retained_chunks,
+            producer_dropped_chunks: self.producer_dropped_chunks,
+            producer_dropped_bytes: self.producer_dropped_bytes,
+            provider_lagged_events: self.provider_lagged_events,
+            storage_dropped_chunks: self.storage_dropped_chunks,
+            storage_dropped_bytes: self.storage_dropped_bytes,
+            evicted_chunks: self.evicted_chunks,
+            evicted_bytes: self.evicted_bytes,
+            earliest_retained_sequence: self.earliest_retained_sequence,
+            __buffa_unknown_fields: self.__buffa_unknown_fields.to_owned()?.into(),
+            ..::core::default::Default::default()
+        })
+    }
+}
+impl<'a> ::buffa::ViewEncode<'a> for GatewayServiceLogMetadataView<'a> {
+    #[allow(clippy::needless_borrow, clippy::let_and_return)]
+    fn compute_size(&self, _cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if self.epoch_present {
+            size += 1u32 + ::buffa::types::BOOL_ENCODED_LEN as u32;
+        }
+        if let Some(v) = self.acknowledged_through {
+            size += 1u32 + ::buffa::types::uint64_encoded_len(v) as u32;
+        }
+        if self.retained_bytes != 0u64 {
+            size
+                += 1u32 + ::buffa::types::uint64_encoded_len(self.retained_bytes) as u32;
+        }
+        if self.retained_chunks != 0u64 {
+            size
+                += 1u32
+                    + ::buffa::types::uint64_encoded_len(self.retained_chunks) as u32;
+        }
+        if self.producer_dropped_chunks != 0u64 {
+            size
+                += 1u32
+                    + ::buffa::types::uint64_encoded_len(self.producer_dropped_chunks)
+                        as u32;
+        }
+        if self.producer_dropped_bytes != 0u64 {
+            size
+                += 1u32
+                    + ::buffa::types::uint64_encoded_len(self.producer_dropped_bytes)
+                        as u32;
+        }
+        if self.provider_lagged_events != 0u64 {
+            size
+                += 1u32
+                    + ::buffa::types::uint64_encoded_len(self.provider_lagged_events)
+                        as u32;
+        }
+        if self.storage_dropped_chunks != 0u64 {
+            size
+                += 1u32
+                    + ::buffa::types::uint64_encoded_len(self.storage_dropped_chunks)
+                        as u32;
+        }
+        if self.storage_dropped_bytes != 0u64 {
+            size
+                += 1u32
+                    + ::buffa::types::uint64_encoded_len(self.storage_dropped_bytes)
+                        as u32;
+        }
+        if self.evicted_chunks != 0u64 {
+            size
+                += 1u32 + ::buffa::types::uint64_encoded_len(self.evicted_chunks) as u32;
+        }
+        if self.evicted_bytes != 0u64 {
+            size += 1u32 + ::buffa::types::uint64_encoded_len(self.evicted_bytes) as u32;
+        }
+        if let Some(v) = self.earliest_retained_sequence {
+            size += 1u32 + ::buffa::types::uint64_encoded_len(v) as u32;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    #[allow(clippy::needless_borrow)]
+    fn write_to(
+        &self,
+        _cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if self.epoch_present {
+            ::buffa::types::put_bool_field(1u32, self.epoch_present, buf);
+        }
+        if let Some(v) = self.acknowledged_through {
+            ::buffa::types::put_uint64_field(2u32, v, buf);
+        }
+        if self.retained_bytes != 0u64 {
+            ::buffa::types::put_uint64_field(3u32, self.retained_bytes, buf);
+        }
+        if self.retained_chunks != 0u64 {
+            ::buffa::types::put_uint64_field(4u32, self.retained_chunks, buf);
+        }
+        if self.producer_dropped_chunks != 0u64 {
+            ::buffa::types::put_uint64_field(5u32, self.producer_dropped_chunks, buf);
+        }
+        if self.producer_dropped_bytes != 0u64 {
+            ::buffa::types::put_uint64_field(6u32, self.producer_dropped_bytes, buf);
+        }
+        if self.provider_lagged_events != 0u64 {
+            ::buffa::types::put_uint64_field(7u32, self.provider_lagged_events, buf);
+        }
+        if self.storage_dropped_chunks != 0u64 {
+            ::buffa::types::put_uint64_field(8u32, self.storage_dropped_chunks, buf);
+        }
+        if self.storage_dropped_bytes != 0u64 {
+            ::buffa::types::put_uint64_field(9u32, self.storage_dropped_bytes, buf);
+        }
+        if self.evicted_chunks != 0u64 {
+            ::buffa::types::put_uint64_field(10u32, self.evicted_chunks, buf);
+        }
+        if self.evicted_bytes != 0u64 {
+            ::buffa::types::put_uint64_field(11u32, self.evicted_bytes, buf);
+        }
+        if let Some(v) = self.earliest_retained_sequence {
+            ::buffa::types::put_uint64_field(12u32, v, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+}
+/// Serializes this view as protobuf JSON.
+///
+/// Implicit-presence fields with default values are omitted, `required`
+/// fields are always emitted, explicit-presence (`optional`) fields are
+/// emitted only when set, bytes fields are base64-encoded, and enum
+/// values are their proto name strings.
+///
+/// This impl uses `serialize_map(None)` because the number of emitted
+/// fields depends on default-omission rules; serializers that require
+/// known map lengths (e.g. `bincode`) will return a runtime error.
+/// Use the owned message type for those formats.
+impl<'__a> ::serde::Serialize for GatewayServiceLogMetadataView<'__a> {
+    fn serialize<__S: ::serde::Serializer>(
+        &self,
+        __s: __S,
+    ) -> ::core::result::Result<__S::Ok, __S::Error> {
+        use ::serde::ser::SerializeMap as _;
+        let mut __map = __s.serialize_map(::core::option::Option::None)?;
+        if self.epoch_present {
+            __map.serialize_entry("epochPresent", &self.epoch_present)?;
+        }
+        if let ::core::option::Option::Some(__v) = self.acknowledged_through {
+            __map
+                .serialize_entry(
+                    "acknowledgedThrough",
+                    &::buffa::json_helpers::ProtoJson(&__v),
+                )?;
+        }
+        if !::buffa::json_helpers::skip_if::is_zero_u64(&self.retained_bytes) {
+            __map
+                .serialize_entry(
+                    "retainedBytes",
+                    &::buffa::json_helpers::ProtoJson(&self.retained_bytes),
+                )?;
+        }
+        if !::buffa::json_helpers::skip_if::is_zero_u64(&self.retained_chunks) {
+            __map
+                .serialize_entry(
+                    "retainedChunks",
+                    &::buffa::json_helpers::ProtoJson(&self.retained_chunks),
+                )?;
+        }
+        if !::buffa::json_helpers::skip_if::is_zero_u64(&self.producer_dropped_chunks) {
+            __map
+                .serialize_entry(
+                    "producerDroppedChunks",
+                    &::buffa::json_helpers::ProtoJson(&self.producer_dropped_chunks),
+                )?;
+        }
+        if !::buffa::json_helpers::skip_if::is_zero_u64(&self.producer_dropped_bytes) {
+            __map
+                .serialize_entry(
+                    "producerDroppedBytes",
+                    &::buffa::json_helpers::ProtoJson(&self.producer_dropped_bytes),
+                )?;
+        }
+        if !::buffa::json_helpers::skip_if::is_zero_u64(&self.provider_lagged_events) {
+            __map
+                .serialize_entry(
+                    "providerLaggedEvents",
+                    &::buffa::json_helpers::ProtoJson(&self.provider_lagged_events),
+                )?;
+        }
+        if !::buffa::json_helpers::skip_if::is_zero_u64(&self.storage_dropped_chunks) {
+            __map
+                .serialize_entry(
+                    "storageDroppedChunks",
+                    &::buffa::json_helpers::ProtoJson(&self.storage_dropped_chunks),
+                )?;
+        }
+        if !::buffa::json_helpers::skip_if::is_zero_u64(&self.storage_dropped_bytes) {
+            __map
+                .serialize_entry(
+                    "storageDroppedBytes",
+                    &::buffa::json_helpers::ProtoJson(&self.storage_dropped_bytes),
+                )?;
+        }
+        if !::buffa::json_helpers::skip_if::is_zero_u64(&self.evicted_chunks) {
+            __map
+                .serialize_entry(
+                    "evictedChunks",
+                    &::buffa::json_helpers::ProtoJson(&self.evicted_chunks),
+                )?;
+        }
+        if !::buffa::json_helpers::skip_if::is_zero_u64(&self.evicted_bytes) {
+            __map
+                .serialize_entry(
+                    "evictedBytes",
+                    &::buffa::json_helpers::ProtoJson(&self.evicted_bytes),
+                )?;
+        }
+        if let ::core::option::Option::Some(__v) = self.earliest_retained_sequence {
+            __map
+                .serialize_entry(
+                    "earliestRetainedSequence",
+                    &::buffa::json_helpers::ProtoJson(&__v),
+                )?;
+        }
+        __map.end()
+    }
+}
+impl<'a> ::buffa::MessageName for GatewayServiceLogMetadataView<'a> {
+    const PACKAGE: &'static str = "hephaestus.gateway.v1";
+    const NAME: &'static str = "GatewayServiceLogMetadata";
+    const FULL_NAME: &'static str = "hephaestus.gateway.v1.GatewayServiceLogMetadata";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.gateway.v1.GatewayServiceLogMetadata";
+}
+::buffa::impl_default_view_instance!(GatewayServiceLogMetadataView);
+::buffa::impl_view_reborrow!(GatewayServiceLogMetadataView);
+/** Self-contained, `'static` owned view of a `GatewayServiceLogMetadata` message.
+
+ Wraps [`::buffa::OwnedView`]`<`[`GatewayServiceLogMetadataView`]`<'static>>`: the decoded view and the [`::buffa::bytes::Bytes`] buffer it borrows from travel together, so the handle is `'static` and `Send + Sync` — suitable for async handlers, spawned tasks, and anywhere a `'static` bound is required.
+
+ Field accessors return borrows tied to `&self`. Use [`Self::view`] to get the full [`GatewayServiceLogMetadataView`] when you need struct patterns, iteration helpers, or to pass the view to lifetime-parameterised code.*/
+#[derive(Clone, Debug)]
+pub struct GatewayServiceLogMetadataOwnedView(
+    ::buffa::OwnedView<GatewayServiceLogMetadataView<'static>>,
+);
+impl GatewayServiceLogMetadataOwnedView {
+    /// Decode an owned view from a [`::buffa::bytes::Bytes`] buffer.
+    ///
+    /// The view borrows directly from the buffer's data; the buffer is
+    /// retained inside the returned handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`::buffa::DecodeError`] if the buffer contains invalid
+    /// protobuf data.
+    pub fn decode(
+        bytes: ::buffa::bytes::Bytes,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        ::core::result::Result::Ok(
+            GatewayServiceLogMetadataOwnedView(::buffa::OwnedView::decode(bytes)?),
+        )
+    }
+    /// Decode with custom [`::buffa::DecodeOptions`] (recursion limit,
+    /// max message size).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`::buffa::DecodeError`] if the buffer is invalid or
+    /// exceeds the configured limits.
+    pub fn decode_with_options(
+        bytes: ::buffa::bytes::Bytes,
+        opts: &::buffa::DecodeOptions,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        ::core::result::Result::Ok(
+            GatewayServiceLogMetadataOwnedView(
+                ::buffa::OwnedView::decode_with_options(bytes, opts)?,
+            ),
+        )
+    }
+    /// Build from an owned message via an encode → decode round-trip.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`::buffa::DecodeError`] if the re-encoded bytes are
+    /// somehow invalid (should not happen for well-formed messages).
+    pub fn from_owned(
+        msg: &super::super::GatewayServiceLogMetadata,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        ::core::result::Result::Ok(
+            GatewayServiceLogMetadataOwnedView(::buffa::OwnedView::from_owned(msg)?),
+        )
+    }
+    /// Borrow the full [`GatewayServiceLogMetadataView`] with its lifetime tied to `&self`.
+    #[must_use]
+    pub fn view(&self) -> &GatewayServiceLogMetadataView<'_> {
+        self.0.reborrow()
+    }
+    /// Convert to the owned message type.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if re-materializing preserved unknown fields
+    /// fails (e.g. the unknown-field limit is exceeded).
+    pub fn to_owned_message(
+        &self,
+    ) -> ::core::result::Result<
+        super::super::GatewayServiceLogMetadata,
+        ::buffa::DecodeError,
+    > {
+        self.0.to_owned_message()
+    }
+    /// The underlying bytes buffer.
+    #[must_use]
+    pub fn bytes(&self) -> &::buffa::bytes::Bytes {
+        self.0.bytes()
+    }
+    /// Consume the handle, returning the underlying bytes buffer.
+    #[must_use]
+    pub fn into_bytes(self) -> ::buffa::bytes::Bytes {
+        self.0.into_bytes()
+    }
+    /// Field 1: `epoch_present`
+    #[must_use]
+    pub fn epoch_present(&self) -> bool {
+        self.0.reborrow().epoch_present
+    }
+    /// Field 2: `acknowledged_through`
+    #[must_use]
+    pub fn acknowledged_through(&self) -> ::core::option::Option<u64> {
+        self.0.reborrow().acknowledged_through
+    }
+    /// Field 3: `retained_bytes`
+    #[must_use]
+    pub fn retained_bytes(&self) -> u64 {
+        self.0.reborrow().retained_bytes
+    }
+    /// Field 4: `retained_chunks`
+    #[must_use]
+    pub fn retained_chunks(&self) -> u64 {
+        self.0.reborrow().retained_chunks
+    }
+    /// Field 5: `producer_dropped_chunks`
+    #[must_use]
+    pub fn producer_dropped_chunks(&self) -> u64 {
+        self.0.reborrow().producer_dropped_chunks
+    }
+    /// Field 6: `producer_dropped_bytes`
+    #[must_use]
+    pub fn producer_dropped_bytes(&self) -> u64 {
+        self.0.reborrow().producer_dropped_bytes
+    }
+    /// Field 7: `provider_lagged_events`
+    #[must_use]
+    pub fn provider_lagged_events(&self) -> u64 {
+        self.0.reborrow().provider_lagged_events
+    }
+    /// Field 8: `storage_dropped_chunks`
+    #[must_use]
+    pub fn storage_dropped_chunks(&self) -> u64 {
+        self.0.reborrow().storage_dropped_chunks
+    }
+    /// Field 9: `storage_dropped_bytes`
+    #[must_use]
+    pub fn storage_dropped_bytes(&self) -> u64 {
+        self.0.reborrow().storage_dropped_bytes
+    }
+    /// Field 10: `evicted_chunks`
+    #[must_use]
+    pub fn evicted_chunks(&self) -> u64 {
+        self.0.reborrow().evicted_chunks
+    }
+    /// Field 11: `evicted_bytes`
+    #[must_use]
+    pub fn evicted_bytes(&self) -> u64 {
+        self.0.reborrow().evicted_bytes
+    }
+    /// Field 12: `earliest_retained_sequence`
+    #[must_use]
+    pub fn earliest_retained_sequence(&self) -> ::core::option::Option<u64> {
+        self.0.reborrow().earliest_retained_sequence
+    }
+}
+impl ::core::convert::From<::buffa::OwnedView<GatewayServiceLogMetadataView<'static>>>
+for GatewayServiceLogMetadataOwnedView {
+    fn from(inner: ::buffa::OwnedView<GatewayServiceLogMetadataView<'static>>) -> Self {
+        GatewayServiceLogMetadataOwnedView(inner)
+    }
+}
+impl ::core::convert::From<GatewayServiceLogMetadataOwnedView>
+for ::buffa::OwnedView<GatewayServiceLogMetadataView<'static>> {
+    fn from(wrapper: GatewayServiceLogMetadataOwnedView) -> Self {
+        wrapper.0
+    }
+}
+impl ::core::convert::AsRef<::buffa::OwnedView<GatewayServiceLogMetadataView<'static>>>
+for GatewayServiceLogMetadataOwnedView {
+    fn as_ref(&self) -> &::buffa::OwnedView<GatewayServiceLogMetadataView<'static>> {
+        &self.0
+    }
+}
+impl ::buffa::HasMessageView for super::super::GatewayServiceLogMetadata {
+    type View<'a> = GatewayServiceLogMetadataView<'a>;
+    type ViewHandle = GatewayServiceLogMetadataOwnedView;
+}
+impl ::serde::Serialize for GatewayServiceLogMetadataOwnedView {
+    fn serialize<__S: ::serde::Serializer>(
+        &self,
+        __s: __S,
+    ) -> ::core::result::Result<__S::Ok, __S::Error> {
+        ::serde::Serialize::serialize(&self.0, __s)
+    }
+}
 /// Redacted immutable binding metadata. Neither mailbox event bodies nor
 /// guest/runtime credentials are represented by this API.
 #[derive(Clone, Debug, Default)]
@@ -8098,6 +9623,824 @@ impl ::buffa::HasMessageView for super::super::ListGatewayIngressResponse {
     type ViewHandle = ListGatewayIngressResponseOwnedView;
 }
 impl ::serde::Serialize for ListGatewayIngressResponseOwnedView {
+    fn serialize<__S: ::serde::Serializer>(
+        &self,
+        __s: __S,
+    ) -> ::core::result::Result<__S::Ok, __S::Error> {
+        ::serde::Serialize::serialize(&self.0, __s)
+    }
+}
+#[derive(Clone, Debug, Default)]
+pub struct ListGatewayServiceLogsRequestView<'a> {
+    /// Field 1: `scope`
+    pub scope: ::buffa::MessageFieldView<
+        super::super::__buffa::view::GatewayServiceLogScopeView<'a>,
+    >,
+    /// Must be 1..100; zero is invalid rather than an unbounded default.
+    ///
+    /// Field 2: `limit`
+    pub limit: u32,
+    /// Opaque cursor bound to the exact five-field scope. The planned signed
+    /// cursor codec accepts at most 192 encoded bytes; malformed, tampered, or
+    /// cross-scope cursors are invalid rather than plain sequence numbers.
+    ///
+    /// Field 3: `after`
+    pub after: ::buffa::MessageFieldView<
+        super::super::super::super::common::v1::__buffa::view::CursorView<'a>,
+    >,
+    pub __buffa_unknown_fields: ::buffa::UnknownFieldsView<'a>,
+}
+impl<'a> ::buffa::MessageView<'a> for ListGatewayServiceLogsRequestView<'a> {
+    type Owned = super::super::ListGatewayServiceLogsRequest;
+    fn decode_view(buf: &'a [u8]) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        let __limit = ::core::cell::Cell::new(::buffa::DEFAULT_UNKNOWN_FIELD_LIMIT);
+        <Self as ::buffa::MessageView>::decode_view_ctx(
+            buf,
+            ::buffa::DecodeContext::new(::buffa::RECURSION_LIMIT, &__limit),
+        )
+    }
+    fn decode_view_with_ctx(
+        buf: &'a [u8],
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        <Self as ::buffa::MessageView>::decode_view_ctx(buf, ctx)
+    }
+    fn merge_view_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        cur: &'a [u8],
+        before_tag: &'a [u8],
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<&'a [u8], ::buffa::DecodeError> {
+        let _ = ctx;
+        #[allow(unused_variables)]
+        let view = self;
+        let mut cur = cur;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                let __sub_ctx = ctx.descend()?;
+                let sub = ::buffa::types::borrow_bytes(&mut cur)?;
+                match view.scope.as_mut() {
+                    Some(existing) => {
+                        ::buffa::MessageView::merge_into_view(existing, sub, __sub_ctx)?
+                    }
+                    None => {
+                        view.scope = ::buffa::MessageFieldView::set(
+                            <super::super::__buffa::view::GatewayServiceLogScopeView as ::buffa::MessageView>::decode_view_ctx(
+                                sub,
+                                __sub_ctx,
+                            )?,
+                        );
+                    }
+                }
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                view.limit = ::buffa::types::decode_uint32(&mut cur)?;
+            }
+            3u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                let __sub_ctx = ctx.descend()?;
+                let sub = ::buffa::types::borrow_bytes(&mut cur)?;
+                match view.after.as_mut() {
+                    Some(existing) => {
+                        ::buffa::MessageView::merge_into_view(existing, sub, __sub_ctx)?
+                    }
+                    None => {
+                        view.after = ::buffa::MessageFieldView::set(
+                            <super::super::super::super::common::v1::__buffa::view::CursorView as ::buffa::MessageView>::decode_view_ctx(
+                                sub,
+                                __sub_ctx,
+                            )?,
+                        );
+                    }
+                }
+            }
+            _ => {
+                ::buffa::encoding::skip_field_depth(tag, &mut cur, ctx.depth())?;
+                let span_len = before_tag.len() - cur.len();
+                view.__buffa_unknown_fields.push_record(before_tag, span_len, ctx)?;
+            }
+        }
+        ::core::result::Result::Ok(cur)
+    }
+    fn to_owned_message(
+        &self,
+    ) -> ::core::result::Result<
+        super::super::ListGatewayServiceLogsRequest,
+        ::buffa::DecodeError,
+    > {
+        self.to_owned_from_source(None)
+    }
+    #[allow(clippy::useless_conversion, clippy::needless_update)]
+    fn to_owned_from_source(
+        &self,
+        __buffa_src: ::core::option::Option<&::buffa::bytes::Bytes>,
+    ) -> ::core::result::Result<
+        super::super::ListGatewayServiceLogsRequest,
+        ::buffa::DecodeError,
+    > {
+        #[allow(unused_imports)]
+        use ::buffa::alloc::string::ToString as _;
+        let _ = __buffa_src;
+        ::core::result::Result::Ok(super::super::ListGatewayServiceLogsRequest {
+            scope: match self.scope.as_option() {
+                Some(v) => {
+                    ::buffa::MessageField::<
+                        super::super::GatewayServiceLogScope,
+                    >::some(v.to_owned_from_source(__buffa_src)?)
+                }
+                None => ::buffa::MessageField::none(),
+            },
+            limit: self.limit,
+            after: match self.after.as_option() {
+                Some(v) => {
+                    ::buffa::MessageField::<
+                        super::super::super::super::common::v1::Cursor,
+                    >::some(v.to_owned_from_source(__buffa_src)?)
+                }
+                None => ::buffa::MessageField::none(),
+            },
+            __buffa_unknown_fields: self.__buffa_unknown_fields.to_owned()?.into(),
+            ..::core::default::Default::default()
+        })
+    }
+}
+impl<'a> ::buffa::ViewEncode<'a> for ListGatewayServiceLogsRequestView<'a> {
+    #[allow(clippy::needless_borrow, clippy::let_and_return)]
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if self.scope.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.scope.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.limit != 0u32 {
+            size += 1u32 + ::buffa::types::uint32_encoded_len(self.limit) as u32;
+        }
+        if self.after.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.after.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    #[allow(clippy::needless_borrow)]
+    fn write_to(
+        &self,
+        __cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if self.scope.is_set() {
+            ::buffa::types::put_len_delimited_header(1u32, __cache.consume_next(), buf);
+            self.scope.write_to(__cache, buf);
+        }
+        if self.limit != 0u32 {
+            ::buffa::types::put_uint32_field(2u32, self.limit, buf);
+        }
+        if self.after.is_set() {
+            ::buffa::types::put_len_delimited_header(3u32, __cache.consume_next(), buf);
+            self.after.write_to(__cache, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+}
+/// Serializes this view as protobuf JSON.
+///
+/// Implicit-presence fields with default values are omitted, `required`
+/// fields are always emitted, explicit-presence (`optional`) fields are
+/// emitted only when set, bytes fields are base64-encoded, and enum
+/// values are their proto name strings.
+///
+/// This impl uses `serialize_map(None)` because the number of emitted
+/// fields depends on default-omission rules; serializers that require
+/// known map lengths (e.g. `bincode`) will return a runtime error.
+/// Use the owned message type for those formats.
+impl<'__a> ::serde::Serialize for ListGatewayServiceLogsRequestView<'__a> {
+    fn serialize<__S: ::serde::Serializer>(
+        &self,
+        __s: __S,
+    ) -> ::core::result::Result<__S::Ok, __S::Error> {
+        use ::serde::ser::SerializeMap as _;
+        let mut __map = __s.serialize_map(::core::option::Option::None)?;
+        {
+            if let ::core::option::Option::Some(__v) = self.scope.as_option() {
+                __map.serialize_entry("scope", __v)?;
+            }
+        }
+        if !::buffa::json_helpers::skip_if::is_zero_u32(&self.limit) {
+            __map
+                .serialize_entry(
+                    "limit",
+                    &::buffa::json_helpers::ProtoJson(&self.limit),
+                )?;
+        }
+        {
+            if let ::core::option::Option::Some(__v) = self.after.as_option() {
+                __map.serialize_entry("after", __v)?;
+            }
+        }
+        __map.end()
+    }
+}
+impl<'a> ::buffa::MessageName for ListGatewayServiceLogsRequestView<'a> {
+    const PACKAGE: &'static str = "hephaestus.gateway.v1";
+    const NAME: &'static str = "ListGatewayServiceLogsRequest";
+    const FULL_NAME: &'static str = "hephaestus.gateway.v1.ListGatewayServiceLogsRequest";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.gateway.v1.ListGatewayServiceLogsRequest";
+}
+::buffa::impl_default_view_instance!(ListGatewayServiceLogsRequestView);
+::buffa::impl_view_reborrow!(ListGatewayServiceLogsRequestView);
+/** Self-contained, `'static` owned view of a `ListGatewayServiceLogsRequest` message.
+
+ Wraps [`::buffa::OwnedView`]`<`[`ListGatewayServiceLogsRequestView`]`<'static>>`: the decoded view and the [`::buffa::bytes::Bytes`] buffer it borrows from travel together, so the handle is `'static` and `Send + Sync` — suitable for async handlers, spawned tasks, and anywhere a `'static` bound is required.
+
+ Field accessors return borrows tied to `&self`. Use [`Self::view`] to get the full [`ListGatewayServiceLogsRequestView`] when you need struct patterns, iteration helpers, or to pass the view to lifetime-parameterised code.*/
+#[derive(Clone, Debug)]
+pub struct ListGatewayServiceLogsRequestOwnedView(
+    ::buffa::OwnedView<ListGatewayServiceLogsRequestView<'static>>,
+);
+impl ListGatewayServiceLogsRequestOwnedView {
+    /// Decode an owned view from a [`::buffa::bytes::Bytes`] buffer.
+    ///
+    /// The view borrows directly from the buffer's data; the buffer is
+    /// retained inside the returned handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`::buffa::DecodeError`] if the buffer contains invalid
+    /// protobuf data.
+    pub fn decode(
+        bytes: ::buffa::bytes::Bytes,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        ::core::result::Result::Ok(
+            ListGatewayServiceLogsRequestOwnedView(::buffa::OwnedView::decode(bytes)?),
+        )
+    }
+    /// Decode with custom [`::buffa::DecodeOptions`] (recursion limit,
+    /// max message size).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`::buffa::DecodeError`] if the buffer is invalid or
+    /// exceeds the configured limits.
+    pub fn decode_with_options(
+        bytes: ::buffa::bytes::Bytes,
+        opts: &::buffa::DecodeOptions,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        ::core::result::Result::Ok(
+            ListGatewayServiceLogsRequestOwnedView(
+                ::buffa::OwnedView::decode_with_options(bytes, opts)?,
+            ),
+        )
+    }
+    /// Build from an owned message via an encode → decode round-trip.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`::buffa::DecodeError`] if the re-encoded bytes are
+    /// somehow invalid (should not happen for well-formed messages).
+    pub fn from_owned(
+        msg: &super::super::ListGatewayServiceLogsRequest,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        ::core::result::Result::Ok(
+            ListGatewayServiceLogsRequestOwnedView(::buffa::OwnedView::from_owned(msg)?),
+        )
+    }
+    /// Borrow the full [`ListGatewayServiceLogsRequestView`] with its lifetime tied to `&self`.
+    #[must_use]
+    pub fn view(&self) -> &ListGatewayServiceLogsRequestView<'_> {
+        self.0.reborrow()
+    }
+    /// Convert to the owned message type.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if re-materializing preserved unknown fields
+    /// fails (e.g. the unknown-field limit is exceeded).
+    pub fn to_owned_message(
+        &self,
+    ) -> ::core::result::Result<
+        super::super::ListGatewayServiceLogsRequest,
+        ::buffa::DecodeError,
+    > {
+        self.0.to_owned_message()
+    }
+    /// The underlying bytes buffer.
+    #[must_use]
+    pub fn bytes(&self) -> &::buffa::bytes::Bytes {
+        self.0.bytes()
+    }
+    /// Consume the handle, returning the underlying bytes buffer.
+    #[must_use]
+    pub fn into_bytes(self) -> ::buffa::bytes::Bytes {
+        self.0.into_bytes()
+    }
+    /// Field 1: `scope`
+    #[must_use]
+    pub fn scope(
+        &self,
+    ) -> &::buffa::MessageFieldView<
+        super::super::__buffa::view::GatewayServiceLogScopeView<'_>,
+    > {
+        &self.0.reborrow().scope
+    }
+    /// Must be 1..100; zero is invalid rather than an unbounded default.
+    ///
+    /// Field 2: `limit`
+    #[must_use]
+    pub fn limit(&self) -> u32 {
+        self.0.reborrow().limit
+    }
+    /// Opaque cursor bound to the exact five-field scope. The planned signed
+    /// cursor codec accepts at most 192 encoded bytes; malformed, tampered, or
+    /// cross-scope cursors are invalid rather than plain sequence numbers.
+    ///
+    /// Field 3: `after`
+    #[must_use]
+    pub fn after(
+        &self,
+    ) -> &::buffa::MessageFieldView<
+        super::super::super::super::common::v1::__buffa::view::CursorView<'_>,
+    > {
+        &self.0.reborrow().after
+    }
+}
+impl ::core::convert::From<
+    ::buffa::OwnedView<ListGatewayServiceLogsRequestView<'static>>,
+> for ListGatewayServiceLogsRequestOwnedView {
+    fn from(
+        inner: ::buffa::OwnedView<ListGatewayServiceLogsRequestView<'static>>,
+    ) -> Self {
+        ListGatewayServiceLogsRequestOwnedView(inner)
+    }
+}
+impl ::core::convert::From<ListGatewayServiceLogsRequestOwnedView>
+for ::buffa::OwnedView<ListGatewayServiceLogsRequestView<'static>> {
+    fn from(wrapper: ListGatewayServiceLogsRequestOwnedView) -> Self {
+        wrapper.0
+    }
+}
+impl ::core::convert::AsRef<
+    ::buffa::OwnedView<ListGatewayServiceLogsRequestView<'static>>,
+> for ListGatewayServiceLogsRequestOwnedView {
+    fn as_ref(&self) -> &::buffa::OwnedView<ListGatewayServiceLogsRequestView<'static>> {
+        &self.0
+    }
+}
+impl ::buffa::HasMessageView for super::super::ListGatewayServiceLogsRequest {
+    type View<'a> = ListGatewayServiceLogsRequestView<'a>;
+    type ViewHandle = ListGatewayServiceLogsRequestOwnedView;
+}
+impl ::serde::Serialize for ListGatewayServiceLogsRequestOwnedView {
+    fn serialize<__S: ::serde::Serializer>(
+        &self,
+        __s: __S,
+    ) -> ::core::result::Result<__S::Ok, __S::Error> {
+        ::serde::Serialize::serialize(&self.0, __s)
+    }
+}
+#[derive(Clone, Debug, Default)]
+pub struct ListGatewayServiceLogsResponseView<'a> {
+    /// Field 1: `metadata`
+    pub metadata: ::buffa::MessageFieldView<
+        super::super::__buffa::view::GatewayServiceLogMetadataView<'a>,
+    >,
+    /// Field 2: `records`
+    pub records: ::buffa::RepeatedView<
+        'a,
+        super::super::__buffa::view::GatewayServiceLogRecordView<'a>,
+    >,
+    /// Field 3: `history_incomplete`
+    pub history_incomplete: bool,
+    /// Field 4: `next_after`
+    pub next_after: ::buffa::MessageFieldView<
+        super::super::super::super::common::v1::__buffa::view::CursorView<'a>,
+    >,
+    pub __buffa_unknown_fields: ::buffa::UnknownFieldsView<'a>,
+}
+impl<'a> ::buffa::MessageView<'a> for ListGatewayServiceLogsResponseView<'a> {
+    type Owned = super::super::ListGatewayServiceLogsResponse;
+    fn decode_view(buf: &'a [u8]) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        let __limit = ::core::cell::Cell::new(::buffa::DEFAULT_UNKNOWN_FIELD_LIMIT);
+        <Self as ::buffa::MessageView>::decode_view_ctx(
+            buf,
+            ::buffa::DecodeContext::new(::buffa::RECURSION_LIMIT, &__limit),
+        )
+    }
+    fn decode_view_with_ctx(
+        buf: &'a [u8],
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        <Self as ::buffa::MessageView>::decode_view_ctx(buf, ctx)
+    }
+    fn merge_view_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        cur: &'a [u8],
+        before_tag: &'a [u8],
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<&'a [u8], ::buffa::DecodeError> {
+        let _ = ctx;
+        #[allow(unused_variables)]
+        let view = self;
+        let mut cur = cur;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                let __sub_ctx = ctx.descend()?;
+                let sub = ::buffa::types::borrow_bytes(&mut cur)?;
+                match view.metadata.as_mut() {
+                    Some(existing) => {
+                        ::buffa::MessageView::merge_into_view(existing, sub, __sub_ctx)?
+                    }
+                    None => {
+                        view.metadata = ::buffa::MessageFieldView::set(
+                            <super::super::__buffa::view::GatewayServiceLogMetadataView as ::buffa::MessageView>::decode_view_ctx(
+                                sub,
+                                __sub_ctx,
+                            )?,
+                        );
+                    }
+                }
+            }
+            3u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                view.history_incomplete = ::buffa::types::decode_bool(&mut cur)?;
+            }
+            4u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                let __sub_ctx = ctx.descend()?;
+                let sub = ::buffa::types::borrow_bytes(&mut cur)?;
+                match view.next_after.as_mut() {
+                    Some(existing) => {
+                        ::buffa::MessageView::merge_into_view(existing, sub, __sub_ctx)?
+                    }
+                    None => {
+                        view.next_after = ::buffa::MessageFieldView::set(
+                            <super::super::super::super::common::v1::__buffa::view::CursorView as ::buffa::MessageView>::decode_view_ctx(
+                                sub,
+                                __sub_ctx,
+                            )?,
+                        );
+                    }
+                }
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                let __sub_ctx = ctx.descend()?;
+                let sub = ::buffa::types::borrow_bytes(&mut cur)?;
+                view.records
+                    .push(
+                        <super::super::__buffa::view::GatewayServiceLogRecordView as ::buffa::MessageView>::decode_view_ctx(
+                            sub,
+                            __sub_ctx,
+                        )?,
+                    );
+            }
+            _ => {
+                ::buffa::encoding::skip_field_depth(tag, &mut cur, ctx.depth())?;
+                let span_len = before_tag.len() - cur.len();
+                view.__buffa_unknown_fields.push_record(before_tag, span_len, ctx)?;
+            }
+        }
+        ::core::result::Result::Ok(cur)
+    }
+    fn to_owned_message(
+        &self,
+    ) -> ::core::result::Result<
+        super::super::ListGatewayServiceLogsResponse,
+        ::buffa::DecodeError,
+    > {
+        self.to_owned_from_source(None)
+    }
+    #[allow(clippy::useless_conversion, clippy::needless_update)]
+    fn to_owned_from_source(
+        &self,
+        __buffa_src: ::core::option::Option<&::buffa::bytes::Bytes>,
+    ) -> ::core::result::Result<
+        super::super::ListGatewayServiceLogsResponse,
+        ::buffa::DecodeError,
+    > {
+        #[allow(unused_imports)]
+        use ::buffa::alloc::string::ToString as _;
+        let _ = __buffa_src;
+        ::core::result::Result::Ok(super::super::ListGatewayServiceLogsResponse {
+            metadata: match self.metadata.as_option() {
+                Some(v) => {
+                    ::buffa::MessageField::<
+                        super::super::GatewayServiceLogMetadata,
+                    >::some(v.to_owned_from_source(__buffa_src)?)
+                }
+                None => ::buffa::MessageField::none(),
+            },
+            records: self
+                .records
+                .iter()
+                .map(|v| v.to_owned_from_source(__buffa_src))
+                .collect::<::core::result::Result<_, ::buffa::DecodeError>>()?,
+            history_incomplete: self.history_incomplete,
+            next_after: match self.next_after.as_option() {
+                Some(v) => {
+                    ::buffa::MessageField::<
+                        super::super::super::super::common::v1::Cursor,
+                    >::some(v.to_owned_from_source(__buffa_src)?)
+                }
+                None => ::buffa::MessageField::none(),
+            },
+            __buffa_unknown_fields: self.__buffa_unknown_fields.to_owned()?.into(),
+            ..::core::default::Default::default()
+        })
+    }
+}
+impl<'a> ::buffa::ViewEncode<'a> for ListGatewayServiceLogsResponseView<'a> {
+    #[allow(clippy::needless_borrow, clippy::let_and_return)]
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if self.metadata.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.metadata.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        for v in &self.records {
+            let __slot = __cache.reserve();
+            let inner_size = v.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.history_incomplete {
+            size += 1u32 + ::buffa::types::BOOL_ENCODED_LEN as u32;
+        }
+        if self.next_after.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.next_after.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    #[allow(clippy::needless_borrow)]
+    fn write_to(
+        &self,
+        __cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if self.metadata.is_set() {
+            ::buffa::types::put_len_delimited_header(1u32, __cache.consume_next(), buf);
+            self.metadata.write_to(__cache, buf);
+        }
+        for v in &self.records {
+            ::buffa::types::put_len_delimited_header(2u32, __cache.consume_next(), buf);
+            v.write_to(__cache, buf);
+        }
+        if self.history_incomplete {
+            ::buffa::types::put_bool_field(3u32, self.history_incomplete, buf);
+        }
+        if self.next_after.is_set() {
+            ::buffa::types::put_len_delimited_header(4u32, __cache.consume_next(), buf);
+            self.next_after.write_to(__cache, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+}
+/// Serializes this view as protobuf JSON.
+///
+/// Implicit-presence fields with default values are omitted, `required`
+/// fields are always emitted, explicit-presence (`optional`) fields are
+/// emitted only when set, bytes fields are base64-encoded, and enum
+/// values are their proto name strings.
+///
+/// This impl uses `serialize_map(None)` because the number of emitted
+/// fields depends on default-omission rules; serializers that require
+/// known map lengths (e.g. `bincode`) will return a runtime error.
+/// Use the owned message type for those formats.
+impl<'__a> ::serde::Serialize for ListGatewayServiceLogsResponseView<'__a> {
+    fn serialize<__S: ::serde::Serializer>(
+        &self,
+        __s: __S,
+    ) -> ::core::result::Result<__S::Ok, __S::Error> {
+        use ::serde::ser::SerializeMap as _;
+        let mut __map = __s.serialize_map(::core::option::Option::None)?;
+        {
+            if let ::core::option::Option::Some(__v) = self.metadata.as_option() {
+                __map.serialize_entry("metadata", __v)?;
+            }
+        }
+        if !self.records.is_empty() {
+            __map.serialize_entry("records", &*self.records)?;
+        }
+        if self.history_incomplete {
+            __map.serialize_entry("historyIncomplete", &self.history_incomplete)?;
+        }
+        {
+            if let ::core::option::Option::Some(__v) = self.next_after.as_option() {
+                __map.serialize_entry("nextAfter", __v)?;
+            }
+        }
+        __map.end()
+    }
+}
+impl<'a> ::buffa::MessageName for ListGatewayServiceLogsResponseView<'a> {
+    const PACKAGE: &'static str = "hephaestus.gateway.v1";
+    const NAME: &'static str = "ListGatewayServiceLogsResponse";
+    const FULL_NAME: &'static str = "hephaestus.gateway.v1.ListGatewayServiceLogsResponse";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.gateway.v1.ListGatewayServiceLogsResponse";
+}
+::buffa::impl_default_view_instance!(ListGatewayServiceLogsResponseView);
+::buffa::impl_view_reborrow!(ListGatewayServiceLogsResponseView);
+/** Self-contained, `'static` owned view of a `ListGatewayServiceLogsResponse` message.
+
+ Wraps [`::buffa::OwnedView`]`<`[`ListGatewayServiceLogsResponseView`]`<'static>>`: the decoded view and the [`::buffa::bytes::Bytes`] buffer it borrows from travel together, so the handle is `'static` and `Send + Sync` — suitable for async handlers, spawned tasks, and anywhere a `'static` bound is required.
+
+ Field accessors return borrows tied to `&self`. Use [`Self::view`] to get the full [`ListGatewayServiceLogsResponseView`] when you need struct patterns, iteration helpers, or to pass the view to lifetime-parameterised code.*/
+#[derive(Clone, Debug)]
+pub struct ListGatewayServiceLogsResponseOwnedView(
+    ::buffa::OwnedView<ListGatewayServiceLogsResponseView<'static>>,
+);
+impl ListGatewayServiceLogsResponseOwnedView {
+    /// Decode an owned view from a [`::buffa::bytes::Bytes`] buffer.
+    ///
+    /// The view borrows directly from the buffer's data; the buffer is
+    /// retained inside the returned handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`::buffa::DecodeError`] if the buffer contains invalid
+    /// protobuf data.
+    pub fn decode(
+        bytes: ::buffa::bytes::Bytes,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        ::core::result::Result::Ok(
+            ListGatewayServiceLogsResponseOwnedView(::buffa::OwnedView::decode(bytes)?),
+        )
+    }
+    /// Decode with custom [`::buffa::DecodeOptions`] (recursion limit,
+    /// max message size).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`::buffa::DecodeError`] if the buffer is invalid or
+    /// exceeds the configured limits.
+    pub fn decode_with_options(
+        bytes: ::buffa::bytes::Bytes,
+        opts: &::buffa::DecodeOptions,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        ::core::result::Result::Ok(
+            ListGatewayServiceLogsResponseOwnedView(
+                ::buffa::OwnedView::decode_with_options(bytes, opts)?,
+            ),
+        )
+    }
+    /// Build from an owned message via an encode → decode round-trip.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`::buffa::DecodeError`] if the re-encoded bytes are
+    /// somehow invalid (should not happen for well-formed messages).
+    pub fn from_owned(
+        msg: &super::super::ListGatewayServiceLogsResponse,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        ::core::result::Result::Ok(
+            ListGatewayServiceLogsResponseOwnedView(::buffa::OwnedView::from_owned(msg)?),
+        )
+    }
+    /// Borrow the full [`ListGatewayServiceLogsResponseView`] with its lifetime tied to `&self`.
+    #[must_use]
+    pub fn view(&self) -> &ListGatewayServiceLogsResponseView<'_> {
+        self.0.reborrow()
+    }
+    /// Convert to the owned message type.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if re-materializing preserved unknown fields
+    /// fails (e.g. the unknown-field limit is exceeded).
+    pub fn to_owned_message(
+        &self,
+    ) -> ::core::result::Result<
+        super::super::ListGatewayServiceLogsResponse,
+        ::buffa::DecodeError,
+    > {
+        self.0.to_owned_message()
+    }
+    /// The underlying bytes buffer.
+    #[must_use]
+    pub fn bytes(&self) -> &::buffa::bytes::Bytes {
+        self.0.bytes()
+    }
+    /// Consume the handle, returning the underlying bytes buffer.
+    #[must_use]
+    pub fn into_bytes(self) -> ::buffa::bytes::Bytes {
+        self.0.into_bytes()
+    }
+    /// Field 1: `metadata`
+    #[must_use]
+    pub fn metadata(
+        &self,
+    ) -> &::buffa::MessageFieldView<
+        super::super::__buffa::view::GatewayServiceLogMetadataView<'_>,
+    > {
+        &self.0.reborrow().metadata
+    }
+    /// Field 2: `records`
+    #[must_use]
+    pub fn records(
+        &self,
+    ) -> &::buffa::RepeatedView<
+        '_,
+        super::super::__buffa::view::GatewayServiceLogRecordView<'_>,
+    > {
+        &self.0.reborrow().records
+    }
+    /// Field 3: `history_incomplete`
+    #[must_use]
+    pub fn history_incomplete(&self) -> bool {
+        self.0.reborrow().history_incomplete
+    }
+    /// Field 4: `next_after`
+    #[must_use]
+    pub fn next_after(
+        &self,
+    ) -> &::buffa::MessageFieldView<
+        super::super::super::super::common::v1::__buffa::view::CursorView<'_>,
+    > {
+        &self.0.reborrow().next_after
+    }
+}
+impl ::core::convert::From<
+    ::buffa::OwnedView<ListGatewayServiceLogsResponseView<'static>>,
+> for ListGatewayServiceLogsResponseOwnedView {
+    fn from(
+        inner: ::buffa::OwnedView<ListGatewayServiceLogsResponseView<'static>>,
+    ) -> Self {
+        ListGatewayServiceLogsResponseOwnedView(inner)
+    }
+}
+impl ::core::convert::From<ListGatewayServiceLogsResponseOwnedView>
+for ::buffa::OwnedView<ListGatewayServiceLogsResponseView<'static>> {
+    fn from(wrapper: ListGatewayServiceLogsResponseOwnedView) -> Self {
+        wrapper.0
+    }
+}
+impl ::core::convert::AsRef<
+    ::buffa::OwnedView<ListGatewayServiceLogsResponseView<'static>>,
+> for ListGatewayServiceLogsResponseOwnedView {
+    fn as_ref(
+        &self,
+    ) -> &::buffa::OwnedView<ListGatewayServiceLogsResponseView<'static>> {
+        &self.0
+    }
+}
+impl ::buffa::HasMessageView for super::super::ListGatewayServiceLogsResponse {
+    type View<'a> = ListGatewayServiceLogsResponseView<'a>;
+    type ViewHandle = ListGatewayServiceLogsResponseOwnedView;
+}
+impl ::serde::Serialize for ListGatewayServiceLogsResponseOwnedView {
     fn serialize<__S: ::serde::Serializer>(
         &self,
         __s: __S,

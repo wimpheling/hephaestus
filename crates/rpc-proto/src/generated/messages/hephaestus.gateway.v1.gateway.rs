@@ -354,6 +354,171 @@ impl ::buffa::Enumeration for GatewayIngressOutcome {
         ]
     }
 }
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[repr(i32)]
+pub enum GatewayServiceLogStream {
+    GATEWAY_SERVICE_LOG_STREAM_UNSPECIFIED = 0i32,
+    GATEWAY_SERVICE_LOG_STREAM_STDOUT = 1i32,
+    GATEWAY_SERVICE_LOG_STREAM_STDERR = 2i32,
+}
+impl GatewayServiceLogStream {
+    ///Idiomatic alias for [`Self::GATEWAY_SERVICE_LOG_STREAM_UNSPECIFIED`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Unspecified: Self = Self::GATEWAY_SERVICE_LOG_STREAM_UNSPECIFIED;
+    ///Idiomatic alias for [`Self::GATEWAY_SERVICE_LOG_STREAM_STDOUT`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Stdout: Self = Self::GATEWAY_SERVICE_LOG_STREAM_STDOUT;
+    ///Idiomatic alias for [`Self::GATEWAY_SERVICE_LOG_STREAM_STDERR`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Stderr: Self = Self::GATEWAY_SERVICE_LOG_STREAM_STDERR;
+}
+impl ::core::default::Default for GatewayServiceLogStream {
+    fn default() -> Self {
+        Self::GATEWAY_SERVICE_LOG_STREAM_UNSPECIFIED
+    }
+}
+impl ::serde::Serialize for GatewayServiceLogStream {
+    fn serialize<S: ::serde::Serializer>(
+        &self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        s.serialize_str(::buffa::Enumeration::proto_name(self))
+    }
+}
+impl<'de> ::serde::Deserialize<'de> for GatewayServiceLogStream {
+    fn deserialize<D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        struct _V;
+        impl ::serde::de::Visitor<'_> for _V {
+            type Value = GatewayServiceLogStream;
+            fn expecting(
+                &self,
+                f: &mut ::core::fmt::Formatter<'_>,
+            ) -> ::core::fmt::Result {
+                f.write_str(
+                    concat!(
+                        "a string, integer, or null for ",
+                        stringify!(GatewayServiceLogStream)
+                    ),
+                )
+            }
+            fn visit_str<E: ::serde::de::Error>(
+                self,
+                v: &str,
+            ) -> ::core::result::Result<GatewayServiceLogStream, E> {
+                <GatewayServiceLogStream as ::buffa::Enumeration>::from_proto_name(v)
+                    .ok_or_else(|| { ::serde::de::Error::unknown_variant(v, &[]) })
+            }
+            fn visit_i64<E: ::serde::de::Error>(
+                self,
+                v: i64,
+            ) -> ::core::result::Result<GatewayServiceLogStream, E> {
+                let v32 = i32::try_from(v)
+                    .map_err(|_| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("enum value {v} out of i32 range"),
+                        )
+                    })?;
+                <GatewayServiceLogStream as ::buffa::Enumeration>::from_i32(v32)
+                    .ok_or_else(|| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("unknown enum value {v32}"),
+                        )
+                    })
+            }
+            fn visit_u64<E: ::serde::de::Error>(
+                self,
+                v: u64,
+            ) -> ::core::result::Result<GatewayServiceLogStream, E> {
+                let v32 = i32::try_from(v)
+                    .map_err(|_| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("enum value {v} out of i32 range"),
+                        )
+                    })?;
+                <GatewayServiceLogStream as ::buffa::Enumeration>::from_i32(v32)
+                    .ok_or_else(|| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("unknown enum value {v32}"),
+                        )
+                    })
+            }
+            fn visit_unit<E: ::serde::de::Error>(
+                self,
+            ) -> ::core::result::Result<GatewayServiceLogStream, E> {
+                ::core::result::Result::Ok(::core::default::Default::default())
+            }
+        }
+        d.deserialize_any(_V)
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for GatewayServiceLogStream {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+impl ::buffa::Enumeration for GatewayServiceLogStream {
+    fn from_i32(value: i32) -> ::core::option::Option<Self> {
+        match value {
+            0i32 => {
+                ::core::option::Option::Some(
+                    Self::GATEWAY_SERVICE_LOG_STREAM_UNSPECIFIED,
+                )
+            }
+            1i32 => ::core::option::Option::Some(Self::GATEWAY_SERVICE_LOG_STREAM_STDOUT),
+            2i32 => ::core::option::Option::Some(Self::GATEWAY_SERVICE_LOG_STREAM_STDERR),
+            _ => ::core::option::Option::None,
+        }
+    }
+    fn to_i32(&self) -> i32 {
+        *self as i32
+    }
+    fn proto_name(&self) -> &'static str {
+        match self {
+            Self::GATEWAY_SERVICE_LOG_STREAM_UNSPECIFIED => {
+                "GATEWAY_SERVICE_LOG_STREAM_UNSPECIFIED"
+            }
+            Self::GATEWAY_SERVICE_LOG_STREAM_STDOUT => {
+                "GATEWAY_SERVICE_LOG_STREAM_STDOUT"
+            }
+            Self::GATEWAY_SERVICE_LOG_STREAM_STDERR => {
+                "GATEWAY_SERVICE_LOG_STREAM_STDERR"
+            }
+        }
+    }
+    fn from_proto_name(name: &str) -> ::core::option::Option<Self> {
+        match name {
+            "GATEWAY_SERVICE_LOG_STREAM_UNSPECIFIED" => {
+                ::core::option::Option::Some(
+                    Self::GATEWAY_SERVICE_LOG_STREAM_UNSPECIFIED,
+                )
+            }
+            "GATEWAY_SERVICE_LOG_STREAM_STDOUT" => {
+                ::core::option::Option::Some(Self::GATEWAY_SERVICE_LOG_STREAM_STDOUT)
+            }
+            "GATEWAY_SERVICE_LOG_STREAM_STDERR" => {
+                ::core::option::Option::Some(Self::GATEWAY_SERVICE_LOG_STREAM_STDERR)
+            }
+            _ => ::core::option::Option::None,
+        }
+    }
+    fn values() -> &'static [Self] {
+        &[
+            Self::GATEWAY_SERVICE_LOG_STREAM_UNSPECIFIED,
+            Self::GATEWAY_SERVICE_LOG_STREAM_STDOUT,
+            Self::GATEWAY_SERVICE_LOG_STREAM_STDERR,
+        ]
+    }
+}
 #[derive(Clone, PartialEq, Default)]
 #[derive(::serde::Serialize, ::serde::Deserialize)]
 #[serde(default)]
@@ -1548,6 +1713,924 @@ pub const __GATEWAY_INGRESS_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::b
     type_url: "type.googleapis.com/hephaestus.gateway.v1.GatewayIngress",
     to_json: ::buffa::type_registry::any_to_json::<GatewayIngress>,
     from_json: ::buffa::type_registry::any_from_json::<GatewayIngress>,
+    is_wkt: false,
+};
+/// Exact immutable scope for one persistent service log epoch. The reader
+/// validates every field together; callers must not infer scope from one ID.
+/// Fencing tokens are positive and must fit a signed 64-bit database value.
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct GatewayServiceLogScope {
+    /// Field 1: `project_id`
+    #[serde(
+        rename = "projectId",
+        alias = "project_id",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub project_id: ::buffa::MessageField<super::super::common::v1::OpaqueId>,
+    /// Field 2: `gateway_id`
+    #[serde(
+        rename = "gatewayId",
+        alias = "gateway_id",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub gateway_id: ::buffa::MessageField<super::super::common::v1::OpaqueId>,
+    /// Field 3: `revision_id`
+    #[serde(
+        rename = "revisionId",
+        alias = "revision_id",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub revision_id: ::buffa::MessageField<super::super::common::v1::OpaqueId>,
+    /// Field 4: `instance_id`
+    #[serde(
+        rename = "instanceId",
+        alias = "instance_id",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub instance_id: ::buffa::MessageField<super::super::common::v1::OpaqueId>,
+    /// Field 5: `fencing_token`
+    #[serde(
+        rename = "fencingToken",
+        alias = "fencing_token",
+        with = "::buffa::json_helpers::uint64",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_u64"
+    )]
+    pub fencing_token: u64,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for GatewayServiceLogScope {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("GatewayServiceLogScope")
+            .field("project_id", &self.project_id)
+            .field("gateway_id", &self.gateway_id)
+            .field("revision_id", &self.revision_id)
+            .field("instance_id", &self.instance_id)
+            .field("fencing_token", &self.fencing_token)
+            .finish()
+    }
+}
+impl GatewayServiceLogScope {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.gateway.v1.GatewayServiceLogScope";
+}
+::buffa::impl_default_instance!(GatewayServiceLogScope);
+impl ::buffa::MessageName for GatewayServiceLogScope {
+    const PACKAGE: &'static str = "hephaestus.gateway.v1";
+    const NAME: &'static str = "GatewayServiceLogScope";
+    const FULL_NAME: &'static str = "hephaestus.gateway.v1.GatewayServiceLogScope";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.gateway.v1.GatewayServiceLogScope";
+}
+impl ::buffa::Message for GatewayServiceLogScope {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if self.project_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.project_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.gateway_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.gateway_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.revision_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.revision_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.instance_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.instance_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.fencing_token != 0u64 {
+            size += 1u32 + ::buffa::types::uint64_encoded_len(self.fencing_token) as u32;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        __cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if self.project_id.is_set() {
+            ::buffa::types::put_len_delimited_header(1u32, __cache.consume_next(), buf);
+            self.project_id.write_to(__cache, buf);
+        }
+        if self.gateway_id.is_set() {
+            ::buffa::types::put_len_delimited_header(2u32, __cache.consume_next(), buf);
+            self.gateway_id.write_to(__cache, buf);
+        }
+        if self.revision_id.is_set() {
+            ::buffa::types::put_len_delimited_header(3u32, __cache.consume_next(), buf);
+            self.revision_id.write_to(__cache, buf);
+        }
+        if self.instance_id.is_set() {
+            ::buffa::types::put_len_delimited_header(4u32, __cache.consume_next(), buf);
+            self.instance_id.write_to(__cache, buf);
+        }
+        if self.fencing_token != 0u64 {
+            ::buffa::types::put_uint64_field(5u32, self.fencing_token, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.project_id.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.gateway_id.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            3u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.revision_id.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            4u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.instance_id.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            5u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.fencing_token = ::buffa::types::decode_uint64(buf)?;
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.project_id = ::buffa::MessageField::none();
+        self.gateway_id = ::buffa::MessageField::none();
+        self.revision_id = ::buffa::MessageField::none();
+        self.instance_id = ::buffa::MessageField::none();
+        self.fencing_token = 0u64;
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for GatewayServiceLogScope {
+    const PROTO_FQN: &'static str = "hephaestus.gateway.v1.GatewayServiceLogScope";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for GatewayServiceLogScope {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __GATEWAY_SERVICE_LOG_SCOPE_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/hephaestus.gateway.v1.GatewayServiceLogScope",
+    to_json: ::buffa::type_registry::any_to_json::<GatewayServiceLogScope>,
+    from_json: ::buffa::type_registry::any_from_json::<GatewayServiceLogScope>,
+    is_wkt: false,
+};
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct GatewayServiceLogRecord {
+    /// Field 1: `sequence`
+    #[serde(
+        rename = "sequence",
+        with = "::buffa::json_helpers::uint64",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_u64"
+    )]
+    pub sequence: u64,
+    /// Field 2: `stream`
+    #[serde(
+        rename = "stream",
+        with = "::buffa::json_helpers::proto_enum",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_default_enum_value"
+    )]
+    pub stream: ::buffa::EnumValue<GatewayServiceLogStream>,
+    /// Field 3: `observed_at`
+    #[serde(
+        rename = "observedAt",
+        alias = "observed_at",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub observed_at: ::buffa::MessageField<::buffa_types::google::protobuf::Timestamp>,
+    /// Field 4: `stored_at`
+    #[serde(
+        rename = "storedAt",
+        alias = "stored_at",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub stored_at: ::buffa::MessageField<::buffa_types::google::protobuf::Timestamp>,
+    /// Raw application output is opt-in and each chunk is at most 64 KiB. A page
+    /// contains at most 512 KiB of contents. The application owner is
+    /// responsible for redaction; the platform does not guarantee arbitrary
+    /// secret detection and never places these bytes in errors or diagnostics.
+    ///
+    /// Field 5: `contents`
+    #[serde(
+        rename = "contents",
+        with = "::buffa::json_helpers::bytes",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_bytes"
+    )]
+    pub contents: ::buffa::alloc::vec::Vec<u8>,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for GatewayServiceLogRecord {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("GatewayServiceLogRecord")
+            .field("sequence", &self.sequence)
+            .field("stream", &self.stream)
+            .field("observed_at", &self.observed_at)
+            .field("stored_at", &self.stored_at)
+            .field("contents", &self.contents)
+            .finish()
+    }
+}
+impl GatewayServiceLogRecord {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.gateway.v1.GatewayServiceLogRecord";
+}
+::buffa::impl_default_instance!(GatewayServiceLogRecord);
+impl ::buffa::MessageName for GatewayServiceLogRecord {
+    const PACKAGE: &'static str = "hephaestus.gateway.v1";
+    const NAME: &'static str = "GatewayServiceLogRecord";
+    const FULL_NAME: &'static str = "hephaestus.gateway.v1.GatewayServiceLogRecord";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.gateway.v1.GatewayServiceLogRecord";
+}
+impl ::buffa::Message for GatewayServiceLogRecord {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if self.sequence != 0u64 {
+            size += 1u32 + ::buffa::types::uint64_encoded_len(self.sequence) as u32;
+        }
+        {
+            let val = self.stream.to_i32();
+            if val != 0 {
+                size += 1u32 + ::buffa::types::int32_encoded_len(val) as u32;
+            }
+        }
+        if self.observed_at.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.observed_at.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.stored_at.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.stored_at.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if !self.contents.is_empty() {
+            size += 1u32 + ::buffa::types::bytes_encoded_len(&self.contents) as u32;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        __cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if self.sequence != 0u64 {
+            ::buffa::types::put_uint64_field(1u32, self.sequence, buf);
+        }
+        {
+            let val = self.stream.to_i32();
+            if val != 0 {
+                ::buffa::types::put_int32_field(2u32, val, buf);
+            }
+        }
+        if self.observed_at.is_set() {
+            ::buffa::types::put_len_delimited_header(3u32, __cache.consume_next(), buf);
+            self.observed_at.write_to(__cache, buf);
+        }
+        if self.stored_at.is_set() {
+            ::buffa::types::put_len_delimited_header(4u32, __cache.consume_next(), buf);
+            self.stored_at.write_to(__cache, buf);
+        }
+        if !self.contents.is_empty() {
+            ::buffa::types::put_bytes_field(5u32, &self.contents, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.sequence = ::buffa::types::decode_uint64(buf)?;
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.stream = ::buffa::EnumValue::from(
+                    ::buffa::types::decode_int32(buf)?,
+                );
+            }
+            3u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.observed_at.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            4u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.stored_at.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            5u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_bytes(&mut self.contents, buf)?;
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.sequence = 0u64;
+        self.stream = ::buffa::EnumValue::from(0);
+        self.observed_at = ::buffa::MessageField::none();
+        self.stored_at = ::buffa::MessageField::none();
+        self.contents.clear();
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for GatewayServiceLogRecord {
+    const PROTO_FQN: &'static str = "hephaestus.gateway.v1.GatewayServiceLogRecord";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for GatewayServiceLogRecord {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __GATEWAY_SERVICE_LOG_RECORD_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/hephaestus.gateway.v1.GatewayServiceLogRecord",
+    to_json: ::buffa::type_registry::any_to_json::<GatewayServiceLogRecord>,
+    from_json: ::buffa::type_registry::any_from_json::<GatewayServiceLogRecord>,
+    is_wkt: false,
+};
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct GatewayServiceLogMetadata {
+    /// Field 1: `epoch_present`
+    #[serde(
+        rename = "epochPresent",
+        alias = "epoch_present",
+        with = "::buffa::json_helpers::proto_bool",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_false"
+    )]
+    pub epoch_present: bool,
+    /// Field 2: `acknowledged_through`
+    #[serde(
+        rename = "acknowledgedThrough",
+        alias = "acknowledged_through",
+        with = "::buffa::json_helpers::opt_uint64",
+        skip_serializing_if = "::core::option::Option::is_none"
+    )]
+    pub acknowledged_through: ::core::option::Option<u64>,
+    /// Field 3: `retained_bytes`
+    #[serde(
+        rename = "retainedBytes",
+        alias = "retained_bytes",
+        with = "::buffa::json_helpers::uint64",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_u64"
+    )]
+    pub retained_bytes: u64,
+    /// Field 4: `retained_chunks`
+    #[serde(
+        rename = "retainedChunks",
+        alias = "retained_chunks",
+        with = "::buffa::json_helpers::uint64",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_u64"
+    )]
+    pub retained_chunks: u64,
+    /// Field 5: `producer_dropped_chunks`
+    #[serde(
+        rename = "producerDroppedChunks",
+        alias = "producer_dropped_chunks",
+        with = "::buffa::json_helpers::uint64",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_u64"
+    )]
+    pub producer_dropped_chunks: u64,
+    /// Field 6: `producer_dropped_bytes`
+    #[serde(
+        rename = "producerDroppedBytes",
+        alias = "producer_dropped_bytes",
+        with = "::buffa::json_helpers::uint64",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_u64"
+    )]
+    pub producer_dropped_bytes: u64,
+    /// Field 7: `provider_lagged_events`
+    #[serde(
+        rename = "providerLaggedEvents",
+        alias = "provider_lagged_events",
+        with = "::buffa::json_helpers::uint64",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_u64"
+    )]
+    pub provider_lagged_events: u64,
+    /// Field 8: `storage_dropped_chunks`
+    #[serde(
+        rename = "storageDroppedChunks",
+        alias = "storage_dropped_chunks",
+        with = "::buffa::json_helpers::uint64",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_u64"
+    )]
+    pub storage_dropped_chunks: u64,
+    /// Field 9: `storage_dropped_bytes`
+    #[serde(
+        rename = "storageDroppedBytes",
+        alias = "storage_dropped_bytes",
+        with = "::buffa::json_helpers::uint64",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_u64"
+    )]
+    pub storage_dropped_bytes: u64,
+    /// Field 10: `evicted_chunks`
+    #[serde(
+        rename = "evictedChunks",
+        alias = "evicted_chunks",
+        with = "::buffa::json_helpers::uint64",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_u64"
+    )]
+    pub evicted_chunks: u64,
+    /// Field 11: `evicted_bytes`
+    #[serde(
+        rename = "evictedBytes",
+        alias = "evicted_bytes",
+        with = "::buffa::json_helpers::uint64",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_u64"
+    )]
+    pub evicted_bytes: u64,
+    /// Field 12: `earliest_retained_sequence`
+    #[serde(
+        rename = "earliestRetainedSequence",
+        alias = "earliest_retained_sequence",
+        with = "::buffa::json_helpers::opt_uint64",
+        skip_serializing_if = "::core::option::Option::is_none"
+    )]
+    pub earliest_retained_sequence: ::core::option::Option<u64>,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for GatewayServiceLogMetadata {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("GatewayServiceLogMetadata")
+            .field("epoch_present", &self.epoch_present)
+            .field("acknowledged_through", &self.acknowledged_through)
+            .field("retained_bytes", &self.retained_bytes)
+            .field("retained_chunks", &self.retained_chunks)
+            .field("producer_dropped_chunks", &self.producer_dropped_chunks)
+            .field("producer_dropped_bytes", &self.producer_dropped_bytes)
+            .field("provider_lagged_events", &self.provider_lagged_events)
+            .field("storage_dropped_chunks", &self.storage_dropped_chunks)
+            .field("storage_dropped_bytes", &self.storage_dropped_bytes)
+            .field("evicted_chunks", &self.evicted_chunks)
+            .field("evicted_bytes", &self.evicted_bytes)
+            .field("earliest_retained_sequence", &self.earliest_retained_sequence)
+            .finish()
+    }
+}
+impl GatewayServiceLogMetadata {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.gateway.v1.GatewayServiceLogMetadata";
+}
+impl GatewayServiceLogMetadata {
+    #[must_use = "with_* setters return `self` by value; assign or chain the result"]
+    #[inline]
+    ///Sets [`Self::acknowledged_through`] to `Some(value)`, consuming and returning `self`.
+    pub fn with_acknowledged_through(mut self, value: u64) -> Self {
+        self.acknowledged_through = Some(value);
+        self
+    }
+    #[must_use = "with_* setters return `self` by value; assign or chain the result"]
+    #[inline]
+    ///Sets [`Self::earliest_retained_sequence`] to `Some(value)`, consuming and returning `self`.
+    pub fn with_earliest_retained_sequence(mut self, value: u64) -> Self {
+        self.earliest_retained_sequence = Some(value);
+        self
+    }
+}
+::buffa::impl_default_instance!(GatewayServiceLogMetadata);
+impl ::buffa::MessageName for GatewayServiceLogMetadata {
+    const PACKAGE: &'static str = "hephaestus.gateway.v1";
+    const NAME: &'static str = "GatewayServiceLogMetadata";
+    const FULL_NAME: &'static str = "hephaestus.gateway.v1.GatewayServiceLogMetadata";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.gateway.v1.GatewayServiceLogMetadata";
+}
+impl ::buffa::Message for GatewayServiceLogMetadata {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, _cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if self.epoch_present {
+            size += 1u32 + ::buffa::types::BOOL_ENCODED_LEN as u32;
+        }
+        if let Some(v) = self.acknowledged_through {
+            size += 1u32 + ::buffa::types::uint64_encoded_len(v) as u32;
+        }
+        if self.retained_bytes != 0u64 {
+            size
+                += 1u32 + ::buffa::types::uint64_encoded_len(self.retained_bytes) as u32;
+        }
+        if self.retained_chunks != 0u64 {
+            size
+                += 1u32
+                    + ::buffa::types::uint64_encoded_len(self.retained_chunks) as u32;
+        }
+        if self.producer_dropped_chunks != 0u64 {
+            size
+                += 1u32
+                    + ::buffa::types::uint64_encoded_len(self.producer_dropped_chunks)
+                        as u32;
+        }
+        if self.producer_dropped_bytes != 0u64 {
+            size
+                += 1u32
+                    + ::buffa::types::uint64_encoded_len(self.producer_dropped_bytes)
+                        as u32;
+        }
+        if self.provider_lagged_events != 0u64 {
+            size
+                += 1u32
+                    + ::buffa::types::uint64_encoded_len(self.provider_lagged_events)
+                        as u32;
+        }
+        if self.storage_dropped_chunks != 0u64 {
+            size
+                += 1u32
+                    + ::buffa::types::uint64_encoded_len(self.storage_dropped_chunks)
+                        as u32;
+        }
+        if self.storage_dropped_bytes != 0u64 {
+            size
+                += 1u32
+                    + ::buffa::types::uint64_encoded_len(self.storage_dropped_bytes)
+                        as u32;
+        }
+        if self.evicted_chunks != 0u64 {
+            size
+                += 1u32 + ::buffa::types::uint64_encoded_len(self.evicted_chunks) as u32;
+        }
+        if self.evicted_bytes != 0u64 {
+            size += 1u32 + ::buffa::types::uint64_encoded_len(self.evicted_bytes) as u32;
+        }
+        if let Some(v) = self.earliest_retained_sequence {
+            size += 1u32 + ::buffa::types::uint64_encoded_len(v) as u32;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        _cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if self.epoch_present {
+            ::buffa::types::put_bool_field(1u32, self.epoch_present, buf);
+        }
+        if let Some(v) = self.acknowledged_through {
+            ::buffa::types::put_uint64_field(2u32, v, buf);
+        }
+        if self.retained_bytes != 0u64 {
+            ::buffa::types::put_uint64_field(3u32, self.retained_bytes, buf);
+        }
+        if self.retained_chunks != 0u64 {
+            ::buffa::types::put_uint64_field(4u32, self.retained_chunks, buf);
+        }
+        if self.producer_dropped_chunks != 0u64 {
+            ::buffa::types::put_uint64_field(5u32, self.producer_dropped_chunks, buf);
+        }
+        if self.producer_dropped_bytes != 0u64 {
+            ::buffa::types::put_uint64_field(6u32, self.producer_dropped_bytes, buf);
+        }
+        if self.provider_lagged_events != 0u64 {
+            ::buffa::types::put_uint64_field(7u32, self.provider_lagged_events, buf);
+        }
+        if self.storage_dropped_chunks != 0u64 {
+            ::buffa::types::put_uint64_field(8u32, self.storage_dropped_chunks, buf);
+        }
+        if self.storage_dropped_bytes != 0u64 {
+            ::buffa::types::put_uint64_field(9u32, self.storage_dropped_bytes, buf);
+        }
+        if self.evicted_chunks != 0u64 {
+            ::buffa::types::put_uint64_field(10u32, self.evicted_chunks, buf);
+        }
+        if self.evicted_bytes != 0u64 {
+            ::buffa::types::put_uint64_field(11u32, self.evicted_bytes, buf);
+        }
+        if let Some(v) = self.earliest_retained_sequence {
+            ::buffa::types::put_uint64_field(12u32, v, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.epoch_present = ::buffa::types::decode_bool(buf)?;
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.acknowledged_through = ::core::option::Option::Some(
+                    ::buffa::types::decode_uint64(buf)?,
+                );
+            }
+            3u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.retained_bytes = ::buffa::types::decode_uint64(buf)?;
+            }
+            4u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.retained_chunks = ::buffa::types::decode_uint64(buf)?;
+            }
+            5u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.producer_dropped_chunks = ::buffa::types::decode_uint64(buf)?;
+            }
+            6u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.producer_dropped_bytes = ::buffa::types::decode_uint64(buf)?;
+            }
+            7u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.provider_lagged_events = ::buffa::types::decode_uint64(buf)?;
+            }
+            8u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.storage_dropped_chunks = ::buffa::types::decode_uint64(buf)?;
+            }
+            9u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.storage_dropped_bytes = ::buffa::types::decode_uint64(buf)?;
+            }
+            10u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.evicted_chunks = ::buffa::types::decode_uint64(buf)?;
+            }
+            11u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.evicted_bytes = ::buffa::types::decode_uint64(buf)?;
+            }
+            12u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.earliest_retained_sequence = ::core::option::Option::Some(
+                    ::buffa::types::decode_uint64(buf)?,
+                );
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.epoch_present = false;
+        self.acknowledged_through = ::core::option::Option::None;
+        self.retained_bytes = 0u64;
+        self.retained_chunks = 0u64;
+        self.producer_dropped_chunks = 0u64;
+        self.producer_dropped_bytes = 0u64;
+        self.provider_lagged_events = 0u64;
+        self.storage_dropped_chunks = 0u64;
+        self.storage_dropped_bytes = 0u64;
+        self.evicted_chunks = 0u64;
+        self.evicted_bytes = 0u64;
+        self.earliest_retained_sequence = ::core::option::Option::None;
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for GatewayServiceLogMetadata {
+    const PROTO_FQN: &'static str = "hephaestus.gateway.v1.GatewayServiceLogMetadata";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for GatewayServiceLogMetadata {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __GATEWAY_SERVICE_LOG_METADATA_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/hephaestus.gateway.v1.GatewayServiceLogMetadata",
+    to_json: ::buffa::type_registry::any_to_json::<GatewayServiceLogMetadata>,
+    from_json: ::buffa::type_registry::any_from_json::<GatewayServiceLogMetadata>,
     is_wkt: false,
 };
 /// Redacted immutable binding metadata. Neither mailbox event bodies nor
@@ -4628,6 +5711,416 @@ pub const __LIST_GATEWAY_INGRESS_RESPONSE_JSON_ANY: ::buffa::type_registry::Json
     type_url: "type.googleapis.com/hephaestus.gateway.v1.ListGatewayIngressResponse",
     to_json: ::buffa::type_registry::any_to_json::<ListGatewayIngressResponse>,
     from_json: ::buffa::type_registry::any_from_json::<ListGatewayIngressResponse>,
+    is_wkt: false,
+};
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct ListGatewayServiceLogsRequest {
+    /// Field 1: `scope`
+    #[serde(
+        rename = "scope",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub scope: ::buffa::MessageField<GatewayServiceLogScope>,
+    /// Must be 1..100; zero is invalid rather than an unbounded default.
+    ///
+    /// Field 2: `limit`
+    #[serde(
+        rename = "limit",
+        with = "::buffa::json_helpers::uint32",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_u32"
+    )]
+    pub limit: u32,
+    /// Opaque cursor bound to the exact five-field scope. The planned signed
+    /// cursor codec accepts at most 192 encoded bytes; malformed, tampered, or
+    /// cross-scope cursors are invalid rather than plain sequence numbers.
+    ///
+    /// Field 3: `after`
+    #[serde(
+        rename = "after",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub after: ::buffa::MessageField<super::super::common::v1::Cursor>,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for ListGatewayServiceLogsRequest {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("ListGatewayServiceLogsRequest")
+            .field("scope", &self.scope)
+            .field("limit", &self.limit)
+            .field("after", &self.after)
+            .finish()
+    }
+}
+impl ListGatewayServiceLogsRequest {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.gateway.v1.ListGatewayServiceLogsRequest";
+}
+::buffa::impl_default_instance!(ListGatewayServiceLogsRequest);
+impl ::buffa::MessageName for ListGatewayServiceLogsRequest {
+    const PACKAGE: &'static str = "hephaestus.gateway.v1";
+    const NAME: &'static str = "ListGatewayServiceLogsRequest";
+    const FULL_NAME: &'static str = "hephaestus.gateway.v1.ListGatewayServiceLogsRequest";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.gateway.v1.ListGatewayServiceLogsRequest";
+}
+impl ::buffa::Message for ListGatewayServiceLogsRequest {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if self.scope.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.scope.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.limit != 0u32 {
+            size += 1u32 + ::buffa::types::uint32_encoded_len(self.limit) as u32;
+        }
+        if self.after.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.after.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        __cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if self.scope.is_set() {
+            ::buffa::types::put_len_delimited_header(1u32, __cache.consume_next(), buf);
+            self.scope.write_to(__cache, buf);
+        }
+        if self.limit != 0u32 {
+            ::buffa::types::put_uint32_field(2u32, self.limit, buf);
+        }
+        if self.after.is_set() {
+            ::buffa::types::put_len_delimited_header(3u32, __cache.consume_next(), buf);
+            self.after.write_to(__cache, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.scope.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.limit = ::buffa::types::decode_uint32(buf)?;
+            }
+            3u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.after.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.scope = ::buffa::MessageField::none();
+        self.limit = 0u32;
+        self.after = ::buffa::MessageField::none();
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for ListGatewayServiceLogsRequest {
+    const PROTO_FQN: &'static str = "hephaestus.gateway.v1.ListGatewayServiceLogsRequest";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for ListGatewayServiceLogsRequest {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __LIST_GATEWAY_SERVICE_LOGS_REQUEST_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/hephaestus.gateway.v1.ListGatewayServiceLogsRequest",
+    to_json: ::buffa::type_registry::any_to_json::<ListGatewayServiceLogsRequest>,
+    from_json: ::buffa::type_registry::any_from_json::<ListGatewayServiceLogsRequest>,
+    is_wkt: false,
+};
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct ListGatewayServiceLogsResponse {
+    /// Field 1: `metadata`
+    #[serde(
+        rename = "metadata",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub metadata: ::buffa::MessageField<GatewayServiceLogMetadata>,
+    /// Field 2: `records`
+    #[serde(
+        rename = "records",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_vec",
+        deserialize_with = "::buffa::json_helpers::null_as_default"
+    )]
+    pub records: ::buffa::alloc::vec::Vec<GatewayServiceLogRecord>,
+    /// Field 3: `history_incomplete`
+    #[serde(
+        rename = "historyIncomplete",
+        alias = "history_incomplete",
+        with = "::buffa::json_helpers::proto_bool",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_false"
+    )]
+    pub history_incomplete: bool,
+    /// Field 4: `next_after`
+    #[serde(
+        rename = "nextAfter",
+        alias = "next_after",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub next_after: ::buffa::MessageField<super::super::common::v1::Cursor>,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for ListGatewayServiceLogsResponse {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("ListGatewayServiceLogsResponse")
+            .field("metadata", &self.metadata)
+            .field("records", &self.records)
+            .field("history_incomplete", &self.history_incomplete)
+            .field("next_after", &self.next_after)
+            .finish()
+    }
+}
+impl ListGatewayServiceLogsResponse {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.gateway.v1.ListGatewayServiceLogsResponse";
+}
+::buffa::impl_default_instance!(ListGatewayServiceLogsResponse);
+impl ::buffa::MessageName for ListGatewayServiceLogsResponse {
+    const PACKAGE: &'static str = "hephaestus.gateway.v1";
+    const NAME: &'static str = "ListGatewayServiceLogsResponse";
+    const FULL_NAME: &'static str = "hephaestus.gateway.v1.ListGatewayServiceLogsResponse";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.gateway.v1.ListGatewayServiceLogsResponse";
+}
+impl ::buffa::Message for ListGatewayServiceLogsResponse {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if self.metadata.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.metadata.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        for v in &self.records {
+            let __slot = __cache.reserve();
+            let inner_size = v.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.history_incomplete {
+            size += 1u32 + ::buffa::types::BOOL_ENCODED_LEN as u32;
+        }
+        if self.next_after.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.next_after.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        __cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if self.metadata.is_set() {
+            ::buffa::types::put_len_delimited_header(1u32, __cache.consume_next(), buf);
+            self.metadata.write_to(__cache, buf);
+        }
+        for v in &self.records {
+            ::buffa::types::put_len_delimited_header(2u32, __cache.consume_next(), buf);
+            v.write_to(__cache, buf);
+        }
+        if self.history_incomplete {
+            ::buffa::types::put_bool_field(3u32, self.history_incomplete, buf);
+        }
+        if self.next_after.is_set() {
+            ::buffa::types::put_len_delimited_header(4u32, __cache.consume_next(), buf);
+            self.next_after.write_to(__cache, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.metadata.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                let mut elem = ::core::default::Default::default();
+                ::buffa::Message::merge_length_delimited(&mut elem, buf, ctx)?;
+                self.records.push(elem);
+            }
+            3u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.history_incomplete = ::buffa::types::decode_bool(buf)?;
+            }
+            4u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.next_after.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.metadata = ::buffa::MessageField::none();
+        self.records.clear();
+        self.history_incomplete = false;
+        self.next_after = ::buffa::MessageField::none();
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for ListGatewayServiceLogsResponse {
+    const PROTO_FQN: &'static str = "hephaestus.gateway.v1.ListGatewayServiceLogsResponse";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for ListGatewayServiceLogsResponse {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __LIST_GATEWAY_SERVICE_LOGS_RESPONSE_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/hephaestus.gateway.v1.ListGatewayServiceLogsResponse",
+    to_json: ::buffa::type_registry::any_to_json::<ListGatewayServiceLogsResponse>,
+    from_json: ::buffa::type_registry::any_from_json::<ListGatewayServiceLogsResponse>,
     is_wkt: false,
 };
 #[derive(Clone, PartialEq, Default)]

@@ -30,6 +30,20 @@ defmodule Hephaestus.Gateway.V1.GatewayIngressOutcome do
   field(:GATEWAY_INGRESS_OUTCOME_REJECTED, 5)
 end
 
+defmodule Hephaestus.Gateway.V1.GatewayServiceLogStream do
+  @moduledoc false
+
+  use Protobuf,
+    enum: true,
+    full_name: "hephaestus.gateway.v1.GatewayServiceLogStream",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:GATEWAY_SERVICE_LOG_STREAM_UNSPECIFIED, 0)
+  field(:GATEWAY_SERVICE_LOG_STREAM_STDOUT, 1)
+  field(:GATEWAY_SERVICE_LOG_STREAM_STDERR, 2)
+end
+
 defmodule Hephaestus.Gateway.V1.GatewayRoute do
   @moduledoc false
 
@@ -113,6 +127,69 @@ defmodule Hephaestus.Gateway.V1.GatewayIngress do
     proto3_optional: true,
     type: Google.Protobuf.Timestamp,
     json_name: "completedAt"
+  )
+end
+
+defmodule Hephaestus.Gateway.V1.GatewayServiceLogScope do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.gateway.v1.GatewayServiceLogScope",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:project_id, 1, type: Hephaestus.Common.V1.OpaqueId, json_name: "projectId")
+  field(:gateway_id, 2, type: Hephaestus.Common.V1.OpaqueId, json_name: "gatewayId")
+  field(:revision_id, 3, type: Hephaestus.Common.V1.OpaqueId, json_name: "revisionId")
+  field(:instance_id, 4, type: Hephaestus.Common.V1.OpaqueId, json_name: "instanceId")
+  field(:fencing_token, 5, type: :uint64, json_name: "fencingToken")
+end
+
+defmodule Hephaestus.Gateway.V1.GatewayServiceLogRecord do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.gateway.v1.GatewayServiceLogRecord",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:sequence, 1, type: :uint64)
+  field(:stream, 2, type: Hephaestus.Gateway.V1.GatewayServiceLogStream, enum: true)
+  field(:observed_at, 3, type: Google.Protobuf.Timestamp, json_name: "observedAt")
+  field(:stored_at, 4, type: Google.Protobuf.Timestamp, json_name: "storedAt")
+  field(:contents, 5, type: :bytes)
+end
+
+defmodule Hephaestus.Gateway.V1.GatewayServiceLogMetadata do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.gateway.v1.GatewayServiceLogMetadata",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:epoch_present, 1, type: :bool, json_name: "epochPresent")
+
+  field(:acknowledged_through, 2,
+    proto3_optional: true,
+    type: :uint64,
+    json_name: "acknowledgedThrough"
+  )
+
+  field(:retained_bytes, 3, type: :uint64, json_name: "retainedBytes")
+  field(:retained_chunks, 4, type: :uint64, json_name: "retainedChunks")
+  field(:producer_dropped_chunks, 5, type: :uint64, json_name: "producerDroppedChunks")
+  field(:producer_dropped_bytes, 6, type: :uint64, json_name: "producerDroppedBytes")
+  field(:provider_lagged_events, 7, type: :uint64, json_name: "providerLaggedEvents")
+  field(:storage_dropped_chunks, 8, type: :uint64, json_name: "storageDroppedChunks")
+  field(:storage_dropped_bytes, 9, type: :uint64, json_name: "storageDroppedBytes")
+  field(:evicted_chunks, 10, type: :uint64, json_name: "evictedChunks")
+  field(:evicted_bytes, 11, type: :uint64, json_name: "evictedBytes")
+
+  field(:earliest_retained_sequence, 12,
+    proto3_optional: true,
+    type: :uint64,
+    json_name: "earliestRetainedSequence"
   )
 end
 
@@ -374,6 +451,33 @@ defmodule Hephaestus.Gateway.V1.ListGatewayIngressResponse do
 
   field(:ingress, 1, repeated: true, type: Hephaestus.Gateway.V1.GatewayIngress)
   field(:page, 2, type: Hephaestus.Common.V1.PageResponse)
+end
+
+defmodule Hephaestus.Gateway.V1.ListGatewayServiceLogsRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.gateway.v1.ListGatewayServiceLogsRequest",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:scope, 1, type: Hephaestus.Gateway.V1.GatewayServiceLogScope)
+  field(:limit, 2, type: :uint32)
+  field(:after, 3, type: Hephaestus.Common.V1.Cursor)
+end
+
+defmodule Hephaestus.Gateway.V1.ListGatewayServiceLogsResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.gateway.v1.ListGatewayServiceLogsResponse",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:metadata, 1, type: Hephaestus.Gateway.V1.GatewayServiceLogMetadata)
+  field(:records, 2, repeated: true, type: Hephaestus.Gateway.V1.GatewayServiceLogRecord)
+  field(:history_incomplete, 3, type: :bool, json_name: "historyIncomplete")
+  field(:next_after, 4, type: Hephaestus.Common.V1.Cursor, json_name: "nextAfter")
 end
 
 defmodule Hephaestus.Gateway.V1.SetGatewayLifecycleRequest do
