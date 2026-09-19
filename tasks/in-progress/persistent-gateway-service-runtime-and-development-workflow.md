@@ -413,6 +413,18 @@ strict all-target/all-feature gateway-edge Clippy passed, and formatting and
 `git diff --check` passed. Durable failure-store reporting and supervisor
 publication remain pending.
 
+The prepared-worker libkrun integration now requests the fixture `/crash`
+endpoint, verifies the owned worker reports redacted `UnexpectedExit` with the
+actual exit code `42`, and confirms VM, cgroup, and materializer cleanup. It
+then provisions a fresh instance of the same gateway and revision, verifies a
+different guest startup identity reaches readiness and serves `/identity`, and
+shuts that replacement down cleanly with bounded worker joins. The documented
+command `HEPHAESTUS_LIBKRUN_INTEGRATION=1 ./scripts/run-libkrun-integration.sh`
+passed one real hardware test in 11.69 seconds; markers and cleanup evidence
+are retained at `/tmp/heph-libkrun-integration-20260919-replacement-worker-final.log`.
+This proves prepared-worker crash diagnostics and same-service replacement;
+daemon/global restart recovery and Caddy acceptance remain outside this slice.
+
 - [x] Finish focused VM contract tests and workspace compatibility checks:
   `cargo test -p vm-trait`, `cargo test -p vm-libkrun --lib`,
   `cargo test -p vm-fake`, focused Clippy, `cargo check --workspace

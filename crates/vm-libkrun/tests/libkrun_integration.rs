@@ -3,7 +3,8 @@
 use bytes::Bytes;
 use gateway_domain::{GatewayServiceConfig, ServiceProbePath};
 use gateway_edge::{
-    GatewayEdgeError, GatewayRequest, GatewayScheme, GatewayServiceIdentity, GatewayServiceLaunch,
+    GatewayEdgeError, GatewayRequest, GatewayScheme, GatewayServiceFailure,
+    GatewayServiceFailureCode, GatewayServiceIdentity, GatewayServiceLaunch,
     GatewayServiceLaunchRequest, GatewayServiceLaunchResolver, ServiceHttpPolicy,
     ServiceInstancePolicy, ServiceProbePolicy, ServiceWorkerState, TrustedRequestMetadata,
     exchange_private_service_http, new_service_instance, probe_private_service_http,
@@ -505,15 +506,107 @@ async fn boots_and_exercises_guest_runtime_without_privilege_escalation() {
         StatusCode::OK
     );
     println!("REAL_PREPARED_SERVICE_WORKER_HEALTH=1");
-    worker_handle.shutdown();
-    worker_task
+    let first_identity = parse_adapter_service_identity(
+        &private_service_adapter_request(&worker_vm, "/identity").await,
+    );
+    assert_eq!(
+        private_service_request(&worker_vm, "/crash")
+            .await
+            .expect("prepared service worker crash response"),
+        (503, b"crashing".to_vec())
+    );
+    let worker_result = tokio::time::timeout(Duration::from_secs(15), worker_task)
         .await
+        .expect("prepared service worker cleanup timeout")
         .expect("prepared service worker join")
-        .expect("prepared service worker cleanup");
+        .expect_err("prepared service worker exit must be reported");
+    assert_eq!(
+        worker_result,
+        gateway_edge::ServiceInstanceError::UnexpectedExit
+    );
+    assert_eq!(
+        worker_handle.failure(),
+        Some(GatewayServiceFailure {
+            code: GatewayServiceFailureCode::UnexpectedExit,
+            exit_code: Some(42),
+            exit_signal: None,
+        })
+    );
     assert_eq!(worker_resolver.cleanups.load(Ordering::Relaxed), 1);
     assert!(!runtime_root.join(&worker_vm_id).exists());
     assert!(!cgroup_root_for_assertion.join(&worker_vm_id).exists());
+    println!("REAL_PREPARED_SERVICE_WORKER_CRASH=1");
     println!("REAL_PREPARED_SERVICE_WORKER_CLEANED=1");
+
+    let replacement_identity = GatewayServiceIdentity {
+        instance_id: uuid::Uuid::new_v4(),
+        ..worker_identity
+    };
+    let replacement_launch = GatewayServiceLaunch {
+        identity: replacement_identity,
+        service: GatewayServiceConfig::new(
+            8080,
+            ServiceProbePath::parse("/readyz").expect("replacement readiness path"),
+            ServiceProbePath::parse("/healthz").expect("replacement health path"),
+        )
+        .expect("replacement service declaration"),
+        spec: private_service_spec(
+            rootfs.clone(),
+            format!("gateway-service-{}", replacement_identity.instance_id),
+        ),
+    };
+    let replacement_vm = provider
+        .provision(replacement_launch.spec.clone())
+        .await
+        .expect("provision replacement service worker VM");
+    let replacement_vm_id = replacement_vm.id().0.clone();
+    assert_ne!(replacement_vm_id, worker_vm_id);
+    let replacement_resolver = Arc::new(IntegrationServiceResolver {
+        expected: replacement_identity,
+        cleanups: AtomicUsize::new(0),
+    });
+    let (replacement_handle, mut replacement_state, replacement_worker) = new_service_instance(
+        replacement_launch,
+        Arc::clone(&replacement_vm),
+        replacement_resolver.clone(),
+        "service.internal",
+        ServiceInstancePolicy::new(
+            Duration::from_secs(30),
+            Duration::from_millis(100),
+            Duration::from_secs(3),
+            Duration::from_secs(5),
+        ),
+    )
+    .expect("construct replacement service worker");
+    let replacement_task = tokio::spawn(replacement_worker.run());
+    tokio::time::timeout(Duration::from_secs(60), async {
+        while *replacement_state.borrow() != ServiceWorkerState::Ready {
+            replacement_state
+                .changed()
+                .await
+                .expect("replacement service worker state");
+        }
+    })
+    .await
+    .expect("replacement service worker readiness timeout");
+    let replacement_identity_response = parse_adapter_service_identity(
+        &private_service_adapter_request(&replacement_vm, "/identity").await,
+    );
+    assert_ne!(
+        first_identity["startup_id"],
+        replacement_identity_response["startup_id"]
+    );
+    replacement_handle.shutdown();
+    tokio::time::timeout(Duration::from_secs(15), replacement_task)
+        .await
+        .expect("replacement service worker cleanup timeout")
+        .expect("replacement service worker join")
+        .expect("replacement service worker cleanup");
+    assert_eq!(replacement_handle.failure(), None);
+    assert_eq!(replacement_resolver.cleanups.load(Ordering::Relaxed), 1);
+    assert!(!runtime_root.join(&replacement_vm_id).exists());
+    assert!(!cgroup_root_for_assertion.join(&replacement_vm_id).exists());
+    println!("REAL_PREPARED_SERVICE_WORKER_REPLACED=1");
 
     let graceful = provider
         .provision(long_running_spec(rootfs_for_graceful_test, "graceful"))
