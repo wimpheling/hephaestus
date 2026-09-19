@@ -22,6 +22,7 @@ mod service_instance;
 mod service_launch;
 mod service_ownership;
 mod service_probe;
+mod service_registry;
 mod service_targets;
 
 pub use integration::caddy::LocalCaddyAdministration;
@@ -43,6 +44,10 @@ pub use service_ownership::{
 };
 pub use service_probe::{
     ServiceProbeError, ServiceProbePolicy, ServiceProbeSuccess, probe_private_service_http,
+};
+pub use service_registry::{
+    GatewayServiceInstanceKey, GatewayServiceRegistry, GatewayServiceRegistryError,
+    MAX_SERVICE_REGISTRY_CAPACITY, MAX_SERVICE_REQUEST_CAPACITY,
 };
 pub use service_targets::{
     GatewayServiceOwnedTarget, GatewayServiceRevisionTarget, GatewayServiceTarget,

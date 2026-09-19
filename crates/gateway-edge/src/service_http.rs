@@ -67,7 +67,7 @@ impl ServiceHttpPolicy {
         self
     }
 
-    fn validate(self) -> Result<(), GatewayEdgeError> {
+    pub(crate) fn validate(self) -> Result<(), GatewayEdgeError> {
         if self.max_request_body_bytes == 0
             || self.max_request_body_bytes > MAX_POLICY_BODY_BYTES
             || self.max_response_body_bytes == 0

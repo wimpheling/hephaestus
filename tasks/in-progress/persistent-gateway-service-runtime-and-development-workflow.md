@@ -254,6 +254,22 @@ The resolver still owns launch selection and has not yet been wired to this
 adapter; supervisor startup, readiness promotion, teardown ordering, and Caddy
 routing remain pending.
 
+The edge now has a bounded warm-instance registry for supervisor-owned ready
+service VMs. Keys include the exact immutable service identity and positive
+`i64` fencing token; registration validates the deterministic VM ID, ready
+state, open state watch, duplicate instance UUID, and global capacity. Each
+instance has fail-fast request permits, and exchange validates the complete
+HTTP policy before opening a connection while enforcing one deadline across
+setup and HTTP I/O. Unregister cancels exact-key requests but retains the
+global slot until outstanding exchanges quiesce; state transitions away from
+`Ready`, closed watches, and caller cancellation close active streams. The
+registry retains no worker handle, destroys no VM, and is not an authorization
+boundary. Evidence: 10 focused registry tests and the full 46-test
+`gateway-edge` library suite pass; formatting and diff checks pass. Strict
+Clippy is pending a concurrent `service_execution.rs` doc-markdown fix.
+Supervisor/DB authorization wiring, Caddy routing, and release UI remain
+pending.
+
 The prepared-instance worker now owns one already-provisioned VM from start
 through readiness, bounded health checks, exit, shutdown, and cleanup. It uses
 one startup deadline covering VM start and HTTP readiness, publishes `Ready`

@@ -29,7 +29,7 @@ uuid.workspace = true
 vm-trait.workspace = true
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["io-util", "net", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["io-util", "net", "rt-multi-thread", "test-util"] }
 vm-fake = { path = "../vm-fake" }
 
 [lints]
