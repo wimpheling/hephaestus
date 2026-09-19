@@ -997,6 +997,24 @@ check, strict Clippy, formatting, and 58 library tests passed.
   `cargo clippy -p gateway-edge --all-targets --all-features -- -D warnings`
   passed in `/tmp/heph-retry-check-20260919-clippy.log`.
 
+- [x] Reconcile terminal claims that did not enter the coordinator. The
+  supervisor now polls startup, cleanup, and serialized claim-resolution
+  futures fairly; validates the complete instance, VM, host, daemon, and fence
+  identity; preserves the original known lease when a resolution reports a
+  foreign, newer, malformed, expired, or unavailable claim; and sends
+  `Settled` only after authoritative capacity release. An owned late claim is
+  routed through the existing cleanup state, while claim-resolution polling is
+  cancellation-safe and shutdown retains unresolved requests and reasons.
+  Isolated committed-base evidence used `2d5b8ae` with only
+  `crates/gateway-edge/src/service_supervisor.rs` overlaid. The focused
+  supervisor suite passed 19 tests, the full gateway-edge library passed 134
+  tests, strict gateway-edge all-target/all-feature Clippy passed, and Cargo
+  formatting passed. Logs are retained at
+  `/tmp/heph-reconcile-check-20260919-full-library.log`,
+  `/tmp/heph-reconcile-check-20260919-clippy.log`, and
+  `/tmp/heph-reconcile-check-20260919-fmt.log`. Application polling,
+  inventory-based recovery, and global scheduling remain pending.
+
 - [x] Add the default-off, release-scoped application log policy to the typed
   service declaration and immutable revision storage. The `disabled` default
   is omitted from normalized JSON/TOML serialization, preserving the frozen

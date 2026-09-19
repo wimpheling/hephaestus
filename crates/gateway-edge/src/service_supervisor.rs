@@ -18,9 +18,9 @@ use vm_trait::VmProvider;
 
 use crate::{
     GatewayServiceCapacity, GatewayServiceCapacityError, GatewayServiceCapacityToken,
-    GatewayServiceCleanup, GatewayServiceCleanupDriver, GatewayServiceCleanupDriverError,
-    GatewayServiceCleanupDriverOutcome, GatewayServiceCleanupDriverPolicy,
-    GatewayServiceCoordinator, GatewayServiceCoordinatorFailure,
+    GatewayServiceClaimResolutionStore, GatewayServiceCleanup, GatewayServiceCleanupDriver,
+    GatewayServiceCleanupDriverError, GatewayServiceCleanupDriverOutcome,
+    GatewayServiceCleanupDriverPolicy, GatewayServiceCoordinator, GatewayServiceCoordinatorFailure,
     GatewayServiceCoordinatorFailureReason, GatewayServiceCoordinatorStatus, GatewayServiceFailure,
     GatewayServiceFailureStore, GatewayServiceInstanceLease, GatewayServiceLaunchResolver,
     GatewayServiceOwner, GatewayServiceOwnership, GatewayServiceOwnershipError,
@@ -169,6 +169,9 @@ pub enum GatewayServiceSupervisorError {
     /// A cleanup retry is already parent-owned and running.
     #[error("gateway service cleanup retry is already in flight")]
     RetryAlreadyInFlight,
+    /// The claim-resolution store could not complete its bounded read.
+    #[error("gateway service claim resolution is unavailable")]
+    ClaimResolutionUnavailable,
 }
 
 /// Parent-owned bounded set of concurrent startup jobs.
@@ -177,6 +180,7 @@ pub struct GatewayServiceSupervisor {
     capacity: Arc<Mutex<GatewayServiceCapacity>>,
     jobs: Vec<Pin<Box<dyn Future<Output = JobCompletion> + Send>>>,
     cleanup_jobs: Vec<Pin<Box<dyn Future<Output = CleanupCompletion> + Send>>>,
+    claim_resolution_jobs: Vec<Pin<Box<dyn Future<Output = ClaimResolutionCompletion> + Send>>>,
     records: HashMap<Uuid, JobRecord>,
 }
 
@@ -216,6 +220,7 @@ impl GatewayServiceSupervisor {
             capacity: Arc::new(Mutex::new(capacity)),
             jobs: Vec::new(),
             cleanup_jobs: Vec::new(),
+            claim_resolution_jobs: Vec::new(),
             records: HashMap::new(),
         })
     }
@@ -281,6 +286,7 @@ impl GatewayServiceSupervisor {
                 completion: None,
                 cleanup_retry: None,
                 cleanup_in_flight: false,
+                claim_resolution_in_flight: false,
             },
         );
         self.jobs.push(Box::pin(run_job(
@@ -312,16 +318,20 @@ impl GatewayServiceSupervisor {
     /// Panics only if an internal job record is missing or the private
     /// capacity mutex was poisoned by a previous panic in this process.
     pub async fn poll(&mut self) -> Option<GatewayServiceSupervisorEvent> {
-        let completion = if self.jobs.is_empty() {
-            SupervisorCompletion::Cleanup(poll_next_cleanup(&mut self.cleanup_jobs).await?)
-        } else if self.cleanup_jobs.is_empty() {
-            SupervisorCompletion::Startup(poll_next_job(&mut self.jobs).await?)
-        } else {
-            tokio::select! {
-                completion = poll_next_job(&mut self.jobs) => SupervisorCompletion::Startup(completion?),
-                completion = poll_next_cleanup(&mut self.cleanup_jobs) => SupervisorCompletion::Cleanup(completion?),
-            }
+        if self.jobs.is_empty()
+            && self.cleanup_jobs.is_empty()
+            && self.claim_resolution_jobs.is_empty()
+        {
+            return None;
+        }
+        let completion = tokio::select! {
+            completion = poll_next_job(&mut self.jobs), if !self.jobs.is_empty() => SupervisorCompletion::Startup(completion?),
+            completion = poll_next_cleanup(&mut self.cleanup_jobs), if !self.cleanup_jobs.is_empty() => SupervisorCompletion::Cleanup(completion?),
+            completion = poll_next_claim_resolution(&mut self.claim_resolution_jobs), if !self.claim_resolution_jobs.is_empty() => SupervisorCompletion::ClaimResolution(completion?),
         };
+        if let SupervisorCompletion::ClaimResolution(completion) = completion {
+            return self.finish_claim_resolution(completion);
+        }
         if let SupervisorCompletion::Cleanup(completion) = completion {
             return self.finish_cleanup(completion);
         }
@@ -449,7 +459,7 @@ impl GatewayServiceSupervisor {
                 cleanup,
                 lease: failure.lease.clone(),
                 pending_failure: failure.pending_failure,
-                reason: failure.reason,
+                reason: Some(failure.reason),
             }
         };
         record.cleanup_in_flight = true;
@@ -463,6 +473,150 @@ impl GatewayServiceSupervisor {
             Arc::clone(&self.context),
         )));
         Ok(())
+    }
+
+    /// Resolves a late or ambiguous claim through the serialized gateway
+    /// barrier and, when it is still owned by this daemon, queues cleanup.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the job is absent, not claim-reconciliation
+    /// eligible, or already being reconciled.
+    pub fn reconcile_claim(
+        &mut self,
+        job_id: Uuid,
+        resolver: Arc<dyn GatewayServiceClaimResolutionStore>,
+    ) -> Result<(), GatewayServiceSupervisorError> {
+        let record = self
+            .records
+            .get_mut(&job_id)
+            .ok_or(GatewayServiceSupervisorError::RetryNotFound)?;
+        if record.claim_resolution_in_flight
+            || record.cleanup_in_flight
+            || record.cleanup_retry.is_some()
+        {
+            return Err(GatewayServiceSupervisorError::RetryAlreadyInFlight);
+        }
+        let terminal = record
+            .completion
+            .as_ref()
+            .ok_or(GatewayServiceSupervisorError::RetryNotEligible)?;
+        let eligible = terminal.coordinator_failure.is_none()
+            && (terminal.claim_uncertain
+                || (terminal.lease.is_some() && terminal.claim_cleanup_reason.is_some()));
+        if !eligible || !record.capacity_retained {
+            return Err(GatewayServiceSupervisorError::RetryNotEligible);
+        }
+        let known_lease = terminal.lease.clone();
+        let reason = terminal.claim_cleanup_reason;
+        let request = record.request;
+        let started = Instant::now();
+        let deadline = started
+            .checked_add(self.context.policy.instance.probe_timeout)
+            .ok_or(GatewayServiceSupervisorError::InvalidInput)?;
+        record.claim_resolution_in_flight = true;
+        let _ = record
+            .status
+            .send(GatewayServiceSupervisorJobStatus::CleanupPending);
+        self.claim_resolution_jobs
+            .push(Box::pin(run_claim_resolution(
+                job_id,
+                request,
+                known_lease,
+                reason,
+                resolver,
+                deadline,
+                Arc::clone(&self.context),
+            )));
+        Ok(())
+    }
+
+    fn finish_claim_resolution(
+        &mut self,
+        completion: ClaimResolutionCompletion,
+    ) -> Option<GatewayServiceSupervisorEvent> {
+        let record = self.records.get_mut(&completion.id)?;
+        record.claim_resolution_in_flight = false;
+        let Ok(result) = completion.result else {
+            let _ = record
+                .status
+                .send(GatewayServiceSupervisorJobStatus::Uncertain);
+            return Some(GatewayServiceSupervisorEvent {
+                job_id: completion.id,
+                status: GatewayServiceSupervisorJobStatus::Uncertain,
+                capacity_released: false,
+            });
+        };
+        match result {
+            ClaimResolutionResult::Absent => {
+                let released = complete_capacity(&self.capacity, record.token);
+                record.capacity_retained = !released;
+                if released {
+                    let _ = record
+                        .status
+                        .send(GatewayServiceSupervisorJobStatus::Settled);
+                    self.records.remove(&completion.id);
+                } else {
+                    let _ = record
+                        .status
+                        .send(GatewayServiceSupervisorJobStatus::Uncertain);
+                }
+                Some(GatewayServiceSupervisorEvent {
+                    job_id: completion.id,
+                    status: if released {
+                        GatewayServiceSupervisorJobStatus::Settled
+                    } else {
+                        GatewayServiceSupervisorJobStatus::Uncertain
+                    },
+                    capacity_released: released,
+                })
+            }
+            ClaimResolutionResult::Retained(_observed_lease) => {
+                let _ = record
+                    .status
+                    .send(GatewayServiceSupervisorJobStatus::Uncertain);
+                Some(GatewayServiceSupervisorEvent {
+                    job_id: completion.id,
+                    status: GatewayServiceSupervisorJobStatus::Uncertain,
+                    capacity_released: false,
+                })
+            }
+            ClaimResolutionResult::Owned(state) => {
+                let deadline = Instant::now().checked_add(self.context.policy.lease.lease_duration);
+                let Some(deadline) = deadline else {
+                    record.cleanup_retry = Some(state);
+                    let _ = record
+                        .status
+                        .send(GatewayServiceSupervisorJobStatus::Uncertain);
+                    return Some(GatewayServiceSupervisorEvent {
+                        job_id: completion.id,
+                        status: GatewayServiceSupervisorJobStatus::Uncertain,
+                        capacity_released: false,
+                    });
+                };
+                if let Some(terminal) = record.completion.as_mut() {
+                    terminal.claim_uncertain = false;
+                    terminal.lease = Some(state.lease.clone());
+                    terminal.coordinator_failure = Some(failure_from_retry(&state));
+                }
+                record.cleanup_in_flight = true;
+                record.cleanup_retry = Some(state);
+                self.cleanup_jobs.push(Box::pin(run_cleanup_retry(
+                    completion.id,
+                    record.cleanup_retry.take().expect("claim cleanup state"),
+                    deadline,
+                    Arc::clone(&self.context),
+                )));
+                let _ = record
+                    .status
+                    .send(GatewayServiceSupervisorJobStatus::CleanupPending);
+                Some(GatewayServiceSupervisorEvent {
+                    job_id: completion.id,
+                    status: GatewayServiceSupervisorJobStatus::CleanupPending,
+                    capacity_released: false,
+                })
+            }
+        }
     }
 
     /// Returns the current reservation counts without releasing any job.
@@ -485,7 +639,9 @@ impl GatewayServiceSupervisor {
     /// records require later reconciliation rather than a busy polling loop.
     #[must_use]
     pub fn has_pending_jobs(&self) -> bool {
-        !self.jobs.is_empty() || !self.cleanup_jobs.is_empty()
+        !self.jobs.is_empty()
+            || !self.cleanup_jobs.is_empty()
+            || !self.claim_resolution_jobs.is_empty()
     }
 
     /// Consumes the supervisor, cancels every job, and joins all owned futures.
@@ -500,14 +656,11 @@ impl GatewayServiceSupervisor {
             .filter_map(|(job_id, record)| {
                 record.completion.and_then(|completion| {
                     if record.capacity_retained {
-                        let (cleanup, pending_failure, original_reason) =
+                        let (cleanup, pending_failure, retry_reason) =
                             record.cleanup_retry.map_or((None, None, None), |retry| {
-                                (
-                                    Some(retry.cleanup),
-                                    retry.pending_failure,
-                                    Some(retry.reason),
-                                )
+                                (Some(retry.cleanup), retry.pending_failure, retry.reason)
                             });
+                        let original_reason = retry_reason.or(completion.claim_cleanup_reason);
                         Some(GatewayServiceSupervisorUnresolved {
                             job_id,
                             request: record.request,
@@ -533,7 +686,9 @@ fn failure_from_retry(state: &CleanupRetryState) -> GatewayServiceCoordinatorFai
     GatewayServiceCoordinatorFailure {
         identity: state.cleanup.identity(),
         lease: state.lease.clone(),
-        reason: state.reason,
+        reason: state
+            .reason
+            .unwrap_or(GatewayServiceCoordinatorFailureReason::Ownership),
         vm: state.cleanup.retained_vm(),
         materialization_owned: !state.cleanup.materializer_cleanup_confirmed(),
         physical_cleanup_complete: state.cleanup.vm_teardown_confirmed()
@@ -552,6 +707,7 @@ struct JobRecord {
     completion: Option<JobTerminal>,
     cleanup_retry: Option<CleanupRetryState>,
     cleanup_in_flight: bool,
+    claim_resolution_in_flight: bool,
 }
 
 struct JobCompletion {
@@ -565,13 +721,14 @@ struct JobTerminal {
     lease: Option<GatewayServiceInstanceLease>,
     claim_uncertain: bool,
     coordinator_failure: Option<GatewayServiceCoordinatorFailure>,
+    claim_cleanup_reason: Option<GatewayServiceCoordinatorFailureReason>,
 }
 
 struct CleanupRetryState {
     cleanup: GatewayServiceCleanup,
     lease: GatewayServiceInstanceLease,
     pending_failure: Option<GatewayServiceFailure>,
-    reason: GatewayServiceCoordinatorFailureReason,
+    reason: Option<GatewayServiceCoordinatorFailureReason>,
 }
 
 struct CleanupCompletion {
@@ -580,9 +737,21 @@ struct CleanupCompletion {
     result: Result<(), GatewayServiceCleanupDriverError>,
 }
 
+enum ClaimResolutionResult {
+    Absent,
+    Owned(CleanupRetryState),
+    Retained(Option<GatewayServiceInstanceLease>),
+}
+
+struct ClaimResolutionCompletion {
+    id: Uuid,
+    result: Result<ClaimResolutionResult, GatewayServiceSupervisorError>,
+}
+
 enum SupervisorCompletion {
     Startup(JobCompletion),
     Cleanup(CleanupCompletion),
+    ClaimResolution(ClaimResolutionCompletion),
 }
 
 async fn poll_next_job(
@@ -607,6 +776,25 @@ async fn poll_next_job(
 async fn poll_next_cleanup(
     jobs: &mut Vec<Pin<Box<dyn Future<Output = CleanupCompletion> + Send>>>,
 ) -> Option<CleanupCompletion> {
+    std::future::poll_fn(|context| {
+        for index in (0..jobs.len()).rev() {
+            if let Poll::Ready(completion) = jobs[index].as_mut().poll(context) {
+                drop(jobs.swap_remove(index));
+                return Poll::Ready(Some(completion));
+            }
+        }
+        if jobs.is_empty() {
+            Poll::Ready(None)
+        } else {
+            Poll::Pending
+        }
+    })
+    .await
+}
+
+async fn poll_next_claim_resolution(
+    jobs: &mut Vec<Pin<Box<dyn Future<Output = ClaimResolutionCompletion> + Send>>>,
+) -> Option<ClaimResolutionCompletion> {
     std::future::poll_fn(|context| {
         for index in (0..jobs.len()).rev() {
             if let Poll::Ready(completion) = jobs[index].as_mut().poll(context) {
@@ -677,6 +865,84 @@ async fn run_cleanup_retry(
         Err(error) => Err(error),
     };
     CleanupCompletion { id, state, result }
+}
+
+async fn run_claim_resolution(
+    id: Uuid,
+    request: GatewayServiceStartupRequest,
+    known_lease: Option<GatewayServiceInstanceLease>,
+    reason: Option<GatewayServiceCoordinatorFailureReason>,
+    resolver: Arc<dyn GatewayServiceClaimResolutionStore>,
+    deadline: Instant,
+    context: Arc<GatewayServiceSupervisorContext>,
+) -> ClaimResolutionCompletion {
+    let result = match time::timeout_at(
+        deadline,
+        resolver.resolve_revision_claim(request.gateway_id, request.revision_id),
+    )
+    .await
+    {
+        Ok(Ok(None)) => Ok(ClaimResolutionResult::Absent),
+        Ok(Ok(Some(lease))) => resolve_claim_result(request, known_lease, reason, lease, &context),
+        Ok(Err(GatewayServiceOwnershipError::Unavailable)) | Err(_) => {
+            Err(GatewayServiceSupervisorError::ClaimResolutionUnavailable)
+        }
+        Ok(Err(_)) => Ok(ClaimResolutionResult::Retained(None)),
+    };
+    ClaimResolutionCompletion { id, result }
+}
+
+fn resolve_claim_result(
+    request: GatewayServiceStartupRequest,
+    known_lease: Option<GatewayServiceInstanceLease>,
+    reason: Option<GatewayServiceCoordinatorFailureReason>,
+    lease: GatewayServiceInstanceLease,
+    context: &GatewayServiceSupervisorContext,
+) -> Result<ClaimResolutionResult, GatewayServiceSupervisorError> {
+    if !valid_claim_identity(&lease)
+        || lease.identity.gateway_id != request.gateway_id
+        || lease.identity.revision_id != request.revision_id
+        || lease.owner_host_id != context.owner.host_id
+        || lease.owner_uuid != context.owner.owner_uuid
+        || lease.lease_expires_at <= ::time::OffsetDateTime::now_utc()
+        || !lease.state.is_live()
+    {
+        return Ok(ClaimResolutionResult::Retained(Some(lease)));
+    }
+    if let Some(known) = known_lease {
+        if !same_claim(&known, &lease) {
+            return Ok(ClaimResolutionResult::Retained(Some(lease)));
+        }
+    }
+    let cleanup = GatewayServiceCleanup::new(
+        lease.identity,
+        None,
+        context.policy.instance.shutdown_timeout,
+    )
+    .map_err(|_| GatewayServiceSupervisorError::InvalidInput)?;
+    Ok(ClaimResolutionResult::Owned(CleanupRetryState {
+        cleanup,
+        lease,
+        pending_failure: None,
+        reason,
+    }))
+}
+
+fn valid_claim_identity(lease: &GatewayServiceInstanceLease) -> bool {
+    lease.identity.instance_id != Uuid::nil()
+        && lease.identity.gateway_id != Uuid::nil()
+        && lease.identity.revision_id != Uuid::nil()
+        && lease.fencing_token > 0
+        && lease.vm_id == format!("gateway-service-{}", lease.identity.instance_id)
+        && lease.lease_expires_at > lease.heartbeat_at
+}
+
+fn same_claim(left: &GatewayServiceInstanceLease, right: &GatewayServiceInstanceLease) -> bool {
+    left.identity == right.identity
+        && left.vm_id == right.vm_id
+        && left.owner_host_id == right.owner_host_id
+        && left.owner_uuid == right.owner_uuid
+        && left.fencing_token == right.fencing_token
 }
 
 // This function intentionally owns the complete claim/coordinator state
@@ -781,7 +1047,7 @@ async fn run_job(
         );
     }
     if cancellation.is_cancelled() || Instant::now() >= deadlines.startup_deadline {
-        return terminal(
+        let mut completion = terminal(
             id,
             token,
             &capacity,
@@ -792,6 +1058,12 @@ async fn run_job(
             false,
             None,
         );
+        completion.terminal.claim_cleanup_reason = Some(if cancellation.is_cancelled() {
+            GatewayServiceCoordinatorFailureReason::Cancelled
+        } else {
+            GatewayServiceCoordinatorFailureReason::StartupDeadline
+        });
+        return completion;
     }
     let _ = status.send(GatewayServiceSupervisorJobStatus::Starting);
     let coordinator = GatewayServiceCoordinator::new(
@@ -937,6 +1209,7 @@ fn terminal(
             lease,
             claim_uncertain: status_value == GatewayServiceSupervisorJobStatus::Uncertain,
             coordinator_failure,
+            claim_cleanup_reason: None,
         },
     }
 }
@@ -977,6 +1250,47 @@ mod tests {
         claim_release: Notify,
         block_claim: AtomicBool,
         claim_calls: AtomicUsize,
+    }
+
+    struct FixedClaimResolution {
+        result: Mutex<
+            Option<Result<Option<GatewayServiceInstanceLease>, GatewayServiceOwnershipError>>,
+        >,
+        calls: AtomicUsize,
+    }
+
+    struct BlockingClaimResolution {
+        started: Arc<Notify>,
+        release: Arc<Notify>,
+    }
+
+    #[async_trait]
+    impl GatewayServiceClaimResolutionStore for FixedClaimResolution {
+        async fn resolve_revision_claim(
+            &self,
+            _: Uuid,
+            _: Uuid,
+        ) -> Result<Option<GatewayServiceInstanceLease>, GatewayServiceOwnershipError> {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            self.result
+                .lock()
+                .expect("claim resolution result")
+                .clone()
+                .unwrap_or(Ok(None))
+        }
+    }
+
+    #[async_trait]
+    impl GatewayServiceClaimResolutionStore for BlockingClaimResolution {
+        async fn resolve_revision_claim(
+            &self,
+            _: Uuid,
+            _: Uuid,
+        ) -> Result<Option<GatewayServiceInstanceLease>, GatewayServiceOwnershipError> {
+            self.started.notify_one();
+            self.release.notified().await;
+            Err(GatewayServiceOwnershipError::Unavailable)
+        }
     }
 
     impl Default for Noop {
@@ -1647,6 +1961,41 @@ mod tests {
         }
     }
 
+    fn insert_known_claim_record(
+        supervisor: &mut GatewayServiceSupervisor,
+        request: GatewayServiceStartupRequest,
+        lease: &GatewayServiceInstanceLease,
+    ) -> Uuid {
+        let token = supervisor
+            .capacity
+            .lock()
+            .expect("capacity")
+            .reserve(request.gateway_id, request.revision_id)
+            .expect("capacity reservation");
+        let id = Uuid::new_v4();
+        let (status, _) = watch::channel(GatewayServiceSupervisorJobStatus::Uncertain);
+        supervisor.records.insert(
+            id,
+            JobRecord {
+                request,
+                token,
+                cancellation: CancellationToken::new(),
+                status,
+                capacity_retained: true,
+                completion: Some(JobTerminal {
+                    lease: Some(lease.clone()),
+                    claim_uncertain: false,
+                    coordinator_failure: None,
+                    claim_cleanup_reason: Some(GatewayServiceCoordinatorFailureReason::Cancelled),
+                }),
+                cleanup_retry: None,
+                cleanup_in_flight: false,
+                claim_resolution_in_flight: false,
+            },
+        );
+        id
+    }
+
     async fn wait_until_ready(
         supervisor: &mut GatewayServiceSupervisor,
         handle: &GatewayServiceStartupHandle,
@@ -1948,6 +2297,10 @@ mod tests {
         assert_eq!(shutdown.unresolved.len(), 1);
         assert_eq!(shutdown.unresolved[0].request, request);
         assert_eq!(shutdown.unresolved[0].lease.as_ref(), Some(&claimed));
+        assert_eq!(
+            shutdown.unresolved[0].original_reason,
+            Some(GatewayServiceCoordinatorFailureReason::Cancelled)
+        );
     }
 
     // `shutdown` consumes the supervisor after joining every owned future; the
@@ -1973,6 +2326,292 @@ mod tests {
         let shutdown = supervisor.shutdown().await;
         assert_eq!(shutdown.unresolved.len(), 1);
         assert_eq!(shutdown.unresolved[0].request, request);
+    }
+
+    #[tokio::test]
+    async fn serialized_absence_releases_an_uncertain_claim_reservation() {
+        let ownership = Arc::new(Noop::default());
+        *ownership.claim_result.lock().expect("claim result") =
+            Some(Err(GatewayServiceOwnershipError::Unavailable));
+        let mut supervisor = supervisor_with(ownership);
+        let request = request(Uuid::new_v4(), Uuid::new_v4());
+        supervisor.start(request).expect("reservation");
+        let uncertain = supervisor.poll().await.expect("uncertain claim");
+        assert_eq!(
+            uncertain.status,
+            GatewayServiceSupervisorJobStatus::Uncertain
+        );
+        let resolver = Arc::new(FixedClaimResolution {
+            result: Mutex::new(Some(Ok(None))),
+            calls: AtomicUsize::new(0),
+        });
+        supervisor
+            .reconcile_claim(uncertain.job_id, resolver.clone())
+            .expect("resolution scheduling");
+        let resolution_event = supervisor.poll().await.expect("resolution result");
+        assert_eq!(
+            resolution_event.status,
+            GatewayServiceSupervisorJobStatus::Settled
+        );
+        assert!(resolution_event.capacity_released);
+        assert_eq!(resolver.calls.load(Ordering::Relaxed), 1);
+        assert_eq!(supervisor.capacity_snapshot().live_instances, 0);
+        drop(supervisor);
+    }
+
+    #[tokio::test]
+    async fn foreign_resolved_claim_remains_retained_without_cleanup() {
+        let ownership = Arc::new(Noop::default());
+        *ownership.claim_result.lock().expect("claim result") =
+            Some(Err(GatewayServiceOwnershipError::Unavailable));
+        let mut supervisor = supervisor_with(Arc::clone(&ownership));
+        let request = request(Uuid::new_v4(), Uuid::new_v4());
+        supervisor.start(request).expect("reservation");
+        let uncertain = supervisor.poll().await.expect("uncertain claim");
+        let owner = GatewayServiceOwner::new("foreign-host", Uuid::new_v4()).expect("owner");
+        let foreign = lease(request, &owner);
+        let resolver = Arc::new(FixedClaimResolution {
+            result: Mutex::new(Some(Ok(Some(foreign)))),
+            calls: AtomicUsize::new(0),
+        });
+        supervisor
+            .reconcile_claim(uncertain.job_id, resolver.clone())
+            .expect("resolution scheduling");
+        let resolution_event = supervisor.poll().await.expect("resolution result");
+        assert_eq!(
+            resolution_event.status,
+            GatewayServiceSupervisorJobStatus::Uncertain
+        );
+        assert!(!resolution_event.capacity_released);
+        assert_eq!(supervisor.capacity_snapshot().live_instances, 1);
+        assert_eq!(ownership.claim_calls.load(Ordering::Relaxed), 1);
+        supervisor
+            .reconcile_claim(resolution_event.job_id, resolver)
+            .expect("repeat resolution scheduling");
+        let repeated_event = supervisor.poll().await.expect("repeat resolution result");
+        assert_eq!(
+            repeated_event.status,
+            GatewayServiceSupervisorJobStatus::Uncertain
+        );
+        assert_eq!(ownership.claim_calls.load(Ordering::Relaxed), 1);
+        drop(supervisor);
+    }
+
+    #[tokio::test]
+    async fn known_claim_resolution_retries_preserve_original_lease() {
+        #[derive(Clone, Copy)]
+        enum ResolutionCase {
+            NewerFence,
+            WrongInstance,
+            WrongVmId,
+            Expired,
+            Unavailable,
+        }
+
+        for case in [
+            ResolutionCase::NewerFence,
+            ResolutionCase::WrongInstance,
+            ResolutionCase::WrongVmId,
+            ResolutionCase::Expired,
+            ResolutionCase::Unavailable,
+        ] {
+            let (mut supervisor, provider, request) = ready_supervisor(false);
+            let known = supervisor
+                .context
+                .targets
+                .get_service_instance(GatewayServiceIdentity {
+                    instance_id: Uuid::nil(),
+                    gateway_id: request.gateway_id,
+                    revision_id: request.revision_id,
+                })
+                .await
+                .expect("known target lookup")
+                .expect("known lease");
+            let result = match case {
+                ResolutionCase::NewerFence => {
+                    let mut candidate = known.clone();
+                    candidate.fencing_token += 1;
+                    Ok(Some(candidate))
+                }
+                ResolutionCase::WrongInstance => {
+                    let mut candidate = known.clone();
+                    candidate.identity.instance_id = Uuid::new_v4();
+                    candidate.vm_id = format!("gateway-service-{}", candidate.identity.instance_id);
+                    Ok(Some(candidate))
+                }
+                ResolutionCase::WrongVmId => {
+                    let mut candidate = known.clone();
+                    candidate.vm_id = String::from("gateway-service-wrong");
+                    Ok(Some(candidate))
+                }
+                ResolutionCase::Expired => {
+                    let mut candidate = known.clone();
+                    candidate.lease_expires_at =
+                        OffsetDateTime::now_utc() - TimeDuration::seconds(1);
+                    Ok(Some(candidate))
+                }
+                ResolutionCase::Unavailable => Err(GatewayServiceOwnershipError::Unavailable),
+            };
+            let resolver = Arc::new(FixedClaimResolution {
+                result: Mutex::new(Some(result)),
+                calls: AtomicUsize::new(0),
+            });
+            let id = insert_known_claim_record(&mut supervisor, request, &known);
+            for _ in 0..2 {
+                supervisor
+                    .reconcile_claim(id, resolver.clone())
+                    .expect("resolution scheduling");
+                let event = supervisor.poll().await.expect("resolution result");
+                assert_eq!(event.status, GatewayServiceSupervisorJobStatus::Uncertain);
+                assert!(!event.capacity_released);
+            }
+            let record = supervisor.records.get(&id).expect("retained record");
+            assert_eq!(
+                record
+                    .completion
+                    .as_ref()
+                    .and_then(|terminal| terminal.lease.as_ref()),
+                Some(&known)
+            );
+            assert_eq!(supervisor.capacity_snapshot().live_instances, 1);
+            assert_eq!(provider.orphan_cleanup_calls.load(Ordering::Relaxed), 0);
+            drop(supervisor);
+        }
+    }
+
+    // This test intentionally drops the supervisor after proving a ready
+    // resolution is not starved by an unrelated pending cleanup future.
+    #[allow(clippy::significant_drop_tightening)]
+    #[tokio::test]
+    async fn poll_services_resolution_while_cleanup_is_pending() {
+        let ownership = Arc::new(Noop::default());
+        *ownership.claim_result.lock().expect("claim result") =
+            Some(Err(GatewayServiceOwnershipError::Unavailable));
+        let mut supervisor = supervisor_with(ownership);
+        let request = request(Uuid::new_v4(), Uuid::new_v4());
+        supervisor.start(request).expect("reservation");
+        let uncertain = supervisor.poll().await.expect("uncertain claim");
+        supervisor
+            .cleanup_jobs
+            .push(Box::pin(std::future::pending::<CleanupCompletion>()));
+        let resolver = Arc::new(FixedClaimResolution {
+            result: Mutex::new(Some(Ok(None))),
+            calls: AtomicUsize::new(0),
+        });
+        supervisor
+            .reconcile_claim(uncertain.job_id, resolver)
+            .expect("resolution scheduling");
+        let event = tokio::time::timeout(std::time::Duration::from_millis(100), supervisor.poll())
+            .await
+            .expect("resolution should not be starved")
+            .expect("resolution event");
+        assert_eq!(event.status, GatewayServiceSupervisorJobStatus::Settled);
+        assert!(event.capacity_released);
+        drop(supervisor);
+    }
+
+    // The supervisor owns the blocked resolution future; this test drops only
+    // the poll wait, then consumes the supervisor after releasing that future.
+    #[allow(clippy::significant_drop_tightening)]
+    #[tokio::test]
+    async fn dropping_resolution_poll_wait_keeps_future_for_shutdown() {
+        let ownership = Arc::new(Noop::default());
+        *ownership.claim_result.lock().expect("claim result") =
+            Some(Err(GatewayServiceOwnershipError::Unavailable));
+        let mut supervisor = supervisor_with(ownership);
+        let request = request(Uuid::new_v4(), Uuid::new_v4());
+        supervisor.start(request).expect("reservation");
+        let uncertain = supervisor.poll().await.expect("uncertain claim");
+        let started = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        supervisor
+            .reconcile_claim(
+                uncertain.job_id,
+                Arc::new(BlockingClaimResolution {
+                    started: Arc::clone(&started),
+                    release: Arc::clone(&release),
+                }),
+            )
+            .expect("resolution scheduling");
+        {
+            let poll = supervisor.poll();
+            tokio::pin!(poll);
+            tokio::select! {
+                () = started.notified() => {}
+                _ = &mut poll => panic!("resolution should remain blocked"),
+            }
+        }
+        release.notify_one();
+        let event = supervisor.poll().await.expect("resolution result");
+        assert_eq!(event.status, GatewayServiceSupervisorJobStatus::Uncertain);
+        let shutdown = supervisor.shutdown().await;
+        assert_eq!(shutdown.unresolved.len(), 1);
+        assert_eq!(shutdown.unresolved[0].request, request);
+    }
+
+    #[tokio::test]
+    async fn exact_resolved_owned_claim_is_cleaned_before_capacity_release() {
+        let (mut supervisor, provider, request) = ready_supervisor(false);
+        let lease = supervisor
+            .context
+            .targets
+            .get_service_instance(GatewayServiceIdentity {
+                instance_id: Uuid::new_v4(),
+                gateway_id: request.gateway_id,
+                revision_id: request.revision_id,
+            })
+            .await
+            .expect("target lookup")
+            .expect("ready fixture lease");
+        let token = supervisor
+            .capacity
+            .lock()
+            .expect("capacity")
+            .reserve(request.gateway_id, request.revision_id)
+            .expect("capacity reservation");
+        let id = Uuid::new_v4();
+        let (status, _) = watch::channel(GatewayServiceSupervisorJobStatus::Uncertain);
+        supervisor.records.insert(
+            id,
+            JobRecord {
+                request,
+                token,
+                cancellation: CancellationToken::new(),
+                status,
+                capacity_retained: true,
+                completion: Some(JobTerminal {
+                    lease: Some(lease.clone()),
+                    claim_uncertain: false,
+                    coordinator_failure: None,
+                    claim_cleanup_reason: Some(GatewayServiceCoordinatorFailureReason::Cancelled),
+                }),
+                cleanup_retry: None,
+                cleanup_in_flight: false,
+                claim_resolution_in_flight: false,
+            },
+        );
+        let resolver = Arc::new(FixedClaimResolution {
+            result: Mutex::new(Some(Ok(Some(lease)))),
+            calls: AtomicUsize::new(0),
+        });
+        supervisor
+            .reconcile_claim(id, resolver.clone())
+            .expect("resolution scheduling");
+        let pending = supervisor.poll().await.expect("cleanup scheduled");
+        assert_eq!(
+            pending.status,
+            GatewayServiceSupervisorJobStatus::CleanupPending
+        );
+        assert_eq!(
+            supervisor.reconcile_claim(id, resolver),
+            Err(GatewayServiceSupervisorError::RetryAlreadyInFlight)
+        );
+        let cleaned = supervisor.poll().await.expect("cleanup result");
+        assert_eq!(cleaned.status, GatewayServiceSupervisorJobStatus::Settled);
+        assert!(cleaned.capacity_released);
+        assert_eq!(supervisor.capacity_snapshot().live_instances, 0);
+        assert_eq!(provider.orphan_cleanup_calls.load(Ordering::Relaxed), 1);
+        drop(supervisor);
     }
 
     #[tokio::test]
@@ -2005,6 +2644,7 @@ mod tests {
                         lease: None,
                         claim_uncertain: false,
                         coordinator_failure: None,
+                        claim_cleanup_reason: None,
                     },
                 }
             })];
