@@ -1725,3 +1725,21 @@ workspace formatting, and gateway-edge rustdoc. Logs are
 `clippy.log`, `fmt.log`, and `doc.log`. Daemon/app scheduling integration,
 same-process expired-lease recovery acceptance on real PostgreSQL, and the
 external VM/Caddy acceptance remain subsequent work.
+
+Final outbox diagnostics checkpoint (2026-09-19): shutdown flush failures now
+emit a content-free snapshot containing the entry and remaining deadline
+budget, pass count, active publisher and elapsed phase, last completed batch
+counts, and whether the deadline expired before a pass or during a publisher.
+Ordinary publisher errors are classified separately. The real-time timeout
+regression uses a bounded 250 ms deadline because this crate does not enable
+Tokio's test clock; it enters the publisher phase before awaiting the pending
+operation. Four focused tests passed in
+`/tmp/heph-outbox-overlay-focused-v2.log`. The isolated overlay is
+`/tmp/heph-outbox-overlay-998ea`, based on `998ea998`, with dedicated target
+`/home/a/.cache/heph-outbox-target-998ea`. Pinned Rust 1.88 strict app Clippy,
+workspace formatting, and workspace rustdoc passed in
+`/tmp/heph-outbox-overlay-clippy-v2.log`,
+`/tmp/heph-outbox-overlay-fmt.log`, and
+`/tmp/heph-outbox-overlay-doc.log`. The recurring populated PG/NATS shutdown
+failure remains unproven and this checkpoint does not claim to fix it; a
+separate reproduction is required.

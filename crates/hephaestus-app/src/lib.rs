@@ -156,7 +156,7 @@ use std::{
     path::PathBuf,
     pin::Pin,
     sync::{
-        Arc, RwLock,
+        Arc, Mutex as StdMutex, RwLock,
         atomic::{AtomicBool, Ordering},
     },
     time::{Duration, Instant},
@@ -3843,43 +3843,253 @@ impl RunningHephaestus {
         );
         let mailbox_publisher =
             MailboxOutboxPublisher::new(self.jetstream.clone(), self.mailbox_repository.clone());
-        flush_until_quiescent(deadline, || async {
-            let forge = forge_publisher
-                .publish_pending(self.forge.as_ref(), self.outbox_batch_size)
-                .await
-                .map_err(component("final forge outbox flush"))?;
-            let releases = release_publisher
-                .publish_pending(self.outbox_batch_size)
-                .await
-                .map_err(component("final release outbox flush"))?;
-            let reviews = review_publisher
-                .publish_pending(self.outbox_batch_size)
-                .await
-                .map_err(component("final review outbox flush"))?;
-            let events = event_publisher
-                .publish_pending(self.outbox_batch_size)
-                .await
-                .map_err(component("final product-event outbox flush"))?;
-            let mailboxes = mailbox_publisher
-                .publish_pending(self.outbox_batch_size)
-                .await
-                .map_err(component("final mailbox outbox flush"))?;
-            Ok::<_, AppError>(
-                forge == 0 && releases == 0 && reviews == 0 && events == 0 && mailboxes == 0,
-            )
+        let diagnostics = Arc::new(StdMutex::new(FlushDiagnostics::new(deadline)));
+        let result = flush_until_quiescent(deadline, Arc::clone(&diagnostics), || {
+            let diagnostics = Arc::clone(&diagnostics);
+            let forge_publisher = forge_publisher.clone();
+            let release_publisher = release_publisher.clone();
+            let review_publisher = review_publisher.clone();
+            let event_publisher = event_publisher.clone();
+            let mailbox_publisher = mailbox_publisher.clone();
+            async move {
+                let forge = flush_publisher(
+                    &diagnostics,
+                    FlushPublisher::Forge,
+                    forge_publisher.publish_pending(self.forge.as_ref(), self.outbox_batch_size),
+                    "final forge outbox flush",
+                )
+                .await?;
+                let releases = flush_publisher(
+                    &diagnostics,
+                    FlushPublisher::Release,
+                    release_publisher.publish_pending(self.outbox_batch_size),
+                    "final release outbox flush",
+                )
+                .await?;
+                let reviews = flush_publisher(
+                    &diagnostics,
+                    FlushPublisher::Review,
+                    review_publisher.publish_pending(self.outbox_batch_size),
+                    "final review outbox flush",
+                )
+                .await?;
+                let events = flush_publisher(
+                    &diagnostics,
+                    FlushPublisher::ProductEvent,
+                    event_publisher.publish_pending(self.outbox_batch_size),
+                    "final product-event outbox flush",
+                )
+                .await?;
+                let mailboxes = flush_publisher(
+                    &diagnostics,
+                    FlushPublisher::Mailbox,
+                    mailbox_publisher.publish_pending(self.outbox_batch_size),
+                    "final mailbox outbox flush",
+                )
+                .await?;
+                Ok::<_, AppError>(
+                    forge == 0 && releases == 0 && reviews == 0 && events == 0 && mailboxes == 0,
+                )
+            }
         })
-        .await
+        .await;
+        if result.is_err() {
+            diagnostics
+                .lock()
+                .expect("flush diagnostics mutex is not poisoned")
+                .log_failure(deadline);
+        }
+        result
     }
 }
 
-async fn flush_until_quiescent<F, Fut>(deadline: Instant, mut pass: F) -> Result<(), AppError>
+#[derive(Debug, Clone, Copy)]
+enum FlushPublisher {
+    Forge,
+    Release,
+    Review,
+    ProductEvent,
+    Mailbox,
+}
+
+impl FlushPublisher {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Forge => "forge",
+            Self::Release => "release",
+            Self::Review => "review",
+            Self::ProductEvent => "product-event",
+            Self::Mailbox => "mailbox",
+        }
+    }
+
+    const fn index(self) -> usize {
+        match self {
+            Self::Forge => 0,
+            Self::Release => 1,
+            Self::Review => 2,
+            Self::ProductEvent => 3,
+            Self::Mailbox => 4,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FlushPhase {
+    publisher: FlushPublisher,
+    started: Instant,
+    elapsed: Duration,
+    batch_count: Option<usize>,
+}
+
+#[derive(Debug)]
+struct FlushDiagnostics {
+    entered_remaining: Duration,
+    passes: u32,
+    active: Option<FlushPhase>,
+    last_phase: Option<FlushPhase>,
+    last_batches: [Option<usize>; 5],
+    failure_kind: Option<&'static str>,
+    deadline_expired_before_pass: bool,
+    deadline_expired_during_pass: bool,
+    deadline_expired_during_publisher: bool,
+}
+
+impl FlushDiagnostics {
+    fn new(deadline: Instant) -> Self {
+        Self {
+            entered_remaining: deadline.saturating_duration_since(Instant::now()),
+            passes: 0,
+            active: None,
+            last_phase: None,
+            last_batches: [None; 5],
+            failure_kind: None,
+            deadline_expired_before_pass: false,
+            deadline_expired_during_pass: false,
+            deadline_expired_during_publisher: false,
+        }
+    }
+
+    fn begin(&mut self, publisher: FlushPublisher) {
+        self.active = Some(FlushPhase {
+            publisher,
+            started: Instant::now(),
+            elapsed: Duration::ZERO,
+            batch_count: None,
+        });
+    }
+
+    fn finish(&mut self, batch_count: usize) {
+        if let Some(mut phase) = self.active.take() {
+            phase.elapsed = phase.started.elapsed();
+            phase.batch_count = Some(batch_count);
+            self.last_batches[phase.publisher.index()] = Some(batch_count);
+            self.last_phase = Some(phase);
+        }
+    }
+
+    fn finish_error(&mut self) {
+        if let Some(mut phase) = self.active.take() {
+            phase.elapsed = phase.started.elapsed();
+            self.last_phase = Some(phase);
+        }
+    }
+
+    const fn set_deadline_before_pass(&mut self) {
+        self.failure_kind = Some("deadline-before-pass");
+        self.deadline_expired_before_pass = true;
+    }
+
+    fn log_failure(&self, deadline: Instant) {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let active_publisher = self.active.map(|phase| phase.publisher.name());
+        let active_elapsed = self
+            .active
+            .map(|phase| duration_millis(phase.started.elapsed()));
+        let last_publisher = self.last_phase.map(|phase| phase.publisher.name());
+        let last_elapsed = self.last_phase.map(|phase| duration_millis(phase.elapsed));
+        tracing::warn!(
+            entered_remaining_ms = duration_millis(self.entered_remaining),
+            remaining_ms = duration_millis(remaining),
+            passes = self.passes,
+            deadline_expired_before_pass = self.deadline_expired_before_pass,
+            deadline_expired_during_pass = self.deadline_expired_during_pass,
+            deadline_expired_during_publisher = self.deadline_expired_during_publisher,
+            active_publisher = active_publisher.unwrap_or("none"),
+            active_elapsed_ms = active_elapsed.unwrap_or(0),
+            last_publisher = last_publisher.unwrap_or("none"),
+            last_elapsed_ms = last_elapsed.unwrap_or(0),
+            forge_last_batch = ?self.last_batches[FlushPublisher::Forge.index()],
+            release_last_batch = ?self.last_batches[FlushPublisher::Release.index()],
+            review_last_batch = ?self.last_batches[FlushPublisher::Review.index()],
+            product_event_last_batch = ?self.last_batches[FlushPublisher::ProductEvent.index()],
+            mailbox_last_batch = ?self.last_batches[FlushPublisher::Mailbox.index()],
+            failure_kind = self.failure_kind.unwrap_or("unknown"),
+            "final outbox flush did not quiesce"
+        );
+    }
+}
+
+fn duration_millis(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
+
+async fn flush_publisher<Fut, Error>(
+    diagnostics: &Arc<StdMutex<FlushDiagnostics>>,
+    publisher: FlushPublisher,
+    operation: Fut,
+    component_name: &'static str,
+) -> Result<usize, AppError>
+where
+    Fut: Future<Output = Result<usize, Error>>,
+    Error: std::fmt::Display,
+{
+    diagnostics
+        .lock()
+        .expect("flush diagnostics mutex is not poisoned")
+        .begin(publisher);
+    match operation.await {
+        Ok(batch_count) => {
+            diagnostics
+                .lock()
+                .expect("flush diagnostics mutex is not poisoned")
+                .finish(batch_count);
+            Ok(batch_count)
+        }
+        Err(error) => {
+            let mut diagnostics = diagnostics
+                .lock()
+                .expect("flush diagnostics mutex is not poisoned");
+            diagnostics.failure_kind = Some("publisher-error");
+            diagnostics.finish_error();
+            drop(diagnostics);
+            Err(component(component_name)(error))
+        }
+    }
+}
+
+async fn flush_until_quiescent<F, Fut>(
+    deadline: Instant,
+    diagnostics: Arc<StdMutex<FlushDiagnostics>>,
+    mut pass: F,
+) -> Result<(), AppError>
 where
     F: FnMut() -> Fut,
     Fut: Future<Output = Result<bool, AppError>>,
 {
     loop {
+        {
+            let mut diagnostics = diagnostics
+                .lock()
+                .expect("flush diagnostics mutex is not poisoned");
+            diagnostics.passes = diagnostics.passes.saturating_add(1);
+        }
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
+            diagnostics
+                .lock()
+                .expect("flush diagnostics mutex is not poisoned")
+                .set_deadline_before_pass();
             return Err(AppError::Shutdown(String::from(
                 "final outbox flush did not quiesce",
             )));
@@ -3887,6 +4097,17 @@ where
         let quiescent = tokio::time::timeout(remaining, pass())
             .await
             .map_err(|_| {
+                let mut diagnostics = diagnostics
+                    .lock()
+                    .expect("flush diagnostics mutex is not poisoned");
+                diagnostics.failure_kind = Some(if diagnostics.active.is_some() {
+                    "deadline-during-publisher"
+                } else {
+                    "deadline-during-pass"
+                });
+                diagnostics.deadline_expired_during_pass = true;
+                diagnostics.deadline_expired_during_publisher = diagnostics.active.is_some();
+                drop(diagnostics);
                 AppError::Shutdown(String::from("final outbox flush did not quiesce"))
             })??;
         if quiescent && Instant::now() < deadline {
@@ -4601,12 +4822,13 @@ pub enum AppError {
 #[cfg(test)]
 mod tests {
     use super::{
-        BuildExecutionError, GatewayServiceArtifact, GatewayServiceArtifactKind,
-        GatewayServiceIdentity, GatewayServiceMaterializer, LocalGatewayReleaseMaterializer,
-        LocalRunRuntimeConfig, LocalRunRuntimeManager, MaterializedRoot, OciImageReference,
-        OciWorkerError, RuntimePolicy, StoredNetworkAccess, build_delivery_requires_redelivery,
-        deterministic_update_hook_run_id, flush_until_quiescent, guest_environment,
-        refresh_image_filesystem_cache, validate_runtime_policy, write_oci_manifest_if_dirty,
+        BuildExecutionError, FlushDiagnostics, FlushPublisher, GatewayServiceArtifact,
+        GatewayServiceArtifactKind, GatewayServiceIdentity, GatewayServiceMaterializer,
+        LocalGatewayReleaseMaterializer, LocalRunRuntimeConfig, LocalRunRuntimeManager,
+        MaterializedRoot, OciImageReference, OciWorkerError, RuntimePolicy, StoredNetworkAccess,
+        build_delivery_requires_redelivery, deterministic_update_hook_run_id, flush_publisher,
+        flush_until_quiescent, guest_environment, refresh_image_filesystem_cache,
+        validate_runtime_policy, write_oci_manifest_if_dirty,
     };
     use async_trait::async_trait;
     use gateway_edge::GatewayEdgeError;
@@ -4652,7 +4874,9 @@ mod tests {
     #[tokio::test]
     async fn final_outbox_flush_drains_beyond_the_old_pass_cap() {
         let mut passes = 0_u16;
-        flush_until_quiescent(Instant::now() + Duration::from_secs(1), || {
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let diagnostics = Arc::new(std::sync::Mutex::new(FlushDiagnostics::new(deadline)));
+        flush_until_quiescent(deadline, Arc::clone(&diagnostics), || {
             passes += 1;
             let quiescent = passes > 100;
             async move { Ok(quiescent) }
@@ -4665,18 +4889,17 @@ mod tests {
     #[tokio::test]
     async fn final_outbox_flush_preserves_deadline_failure() {
         let called = Arc::new(AtomicBool::new(false));
-        let result = flush_until_quiescent(
-            Instant::now()
-                .checked_sub(Duration::from_secs(1))
-                .expect("deadline remains representable"),
-            {
-                let called = Arc::clone(&called);
-                move || {
-                    called.store(true, Ordering::Release);
-                    async { Ok(false) }
-                }
-            },
-        )
+        let deadline = Instant::now()
+            .checked_sub(Duration::from_secs(1))
+            .expect("deadline remains representable");
+        let diagnostics = Arc::new(std::sync::Mutex::new(FlushDiagnostics::new(deadline)));
+        let result = flush_until_quiescent(deadline, Arc::clone(&diagnostics), {
+            let called = Arc::clone(&called);
+            move || {
+                called.store(true, Ordering::Release);
+                async { Ok(false) }
+            }
+        })
         .await;
         assert!(matches!(
             result,
@@ -4684,6 +4907,88 @@ mod tests {
                 if message == "final outbox flush did not quiesce"
         ));
         assert!(!called.load(Ordering::Acquire));
+        let diagnostics = diagnostics.lock().expect("flush diagnostics mutex");
+        assert!(diagnostics.deadline_expired_before_pass);
+        assert_eq!(diagnostics.passes, 1);
+    }
+
+    #[tokio::test]
+    async fn final_outbox_flush_diagnoses_an_interrupted_publisher() {
+        // This crate does not enable Tokio's test clock; leave enough real time for
+        // the publisher phase to be entered before the pending operation times out.
+        let deadline = Instant::now() + Duration::from_millis(250);
+        let diagnostics = Arc::new(std::sync::Mutex::new(FlushDiagnostics::new(deadline)));
+        let pass_diagnostics = Arc::clone(&diagnostics);
+        let result = flush_until_quiescent(deadline, Arc::clone(&diagnostics), || {
+            let diagnostics = Arc::clone(&pass_diagnostics);
+            async move {
+                let forge = flush_publisher(
+                    &diagnostics,
+                    FlushPublisher::Forge,
+                    async { Ok::<usize, std::io::Error>(3) },
+                    "test forge outbox flush",
+                )
+                .await?;
+                assert_eq!(forge, 3);
+                let _ = flush_publisher(
+                    &diagnostics,
+                    FlushPublisher::ProductEvent,
+                    std::future::pending::<Result<usize, std::io::Error>>(),
+                    "test product-event outbox flush",
+                )
+                .await?;
+                Ok(false)
+            }
+        })
+        .await;
+        assert!(matches!(
+            result,
+            Err(super::AppError::Shutdown(message))
+                if message == "final outbox flush did not quiesce"
+        ));
+        let diagnostics = diagnostics.lock().expect("flush diagnostics mutex");
+        assert!(diagnostics.deadline_expired_during_pass);
+        assert!(diagnostics.deadline_expired_during_publisher);
+        assert_eq!(
+            diagnostics.active.map(|phase| phase.publisher.name()),
+            Some("product-event")
+        );
+        assert_eq!(
+            diagnostics.last_batches[FlushPublisher::Forge.index()],
+            Some(3)
+        );
+        assert_eq!(
+            diagnostics.last_batches[FlushPublisher::ProductEvent.index()],
+            None
+        );
+        assert_eq!(diagnostics.failure_kind, Some("deadline-during-publisher"));
+    }
+
+    #[tokio::test]
+    async fn final_outbox_flush_classifies_publisher_errors() {
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let diagnostics = Arc::new(std::sync::Mutex::new(FlushDiagnostics::new(deadline)));
+        let result = flush_publisher(
+            &diagnostics,
+            FlushPublisher::ProductEvent,
+            async { Err::<usize, _>(std::io::Error::other("publisher unavailable")) },
+            "test product-event outbox flush",
+        )
+        .await;
+        assert!(matches!(
+            result,
+            Err(super::AppError::Component {
+                component: "test product-event outbox flush",
+                ..
+            })
+        ));
+        let diagnostics = diagnostics.lock().expect("flush diagnostics mutex");
+        assert_eq!(diagnostics.failure_kind, Some("publisher-error"));
+        assert!(diagnostics.active.is_none());
+        assert_eq!(
+            diagnostics.last_phase.map(|phase| phase.publisher.name()),
+            Some("product-event")
+        );
     }
 
     #[test]
