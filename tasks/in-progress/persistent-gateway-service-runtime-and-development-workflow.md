@@ -1337,6 +1337,23 @@ Committed verification at `b695842` is also complete: [CI run
 35432539567](https://github.com/wimpheling/hephaestus/actions/runs/35432539567)
 passes Rust/authorization, cooking applications, and live browser review.
 
+Payload pagination checkpoint (2026-09-19): the authorized PostgreSQL reader now
+uses one repeatable-read transaction for metadata, candidate lengths, and exact
+payload rows. Requests validate the five-field scope and bound cursors, select
+at most 100 records, and return at most 512 KiB; payload selection occurs only
+after candidate byte lengths pass those bounds. The adapter reports explicit
+history gaps, empty/fully evicted epochs, continuation cursors, and redacted
+metadata. Real tests cover the exact 512 KiB boundary, record cap, cursor edge
+cases, page-level authorization/audit denials, and identified-reader snapshot
+coherence across transactional append and delete/replace fixture mutations.
+The isolated overlay is based on `05b5048` with only the three owned source
+files changed (`/tmp/heph-reader-page-05b5048.lKhBun`): pinned Rust 1.88
+formatting, affected-package strict Clippy, and workspace docs passed; the
+reader, authz, and eight-test gateway PostgreSQL suites passed with migration
+80 (`/tmp/heph-reader-page-{realpg,authz,gateway}-overlay.log`). Durable writer
+integration, retention scheduling, RPC/protobuf exposure, project-cap loss
+projection, and UI remain pending.
+
 Live-guest crash recovery checkpoint (2026-09-19): on committed base
 `95639da`, the isolated overlay
 `/tmp/heph-persistent-crash-verify-20260919` ran the joined command
@@ -1500,3 +1517,11 @@ gateway-postgres regression suite passed; logs are
 `/tmp/heph-reader-0080-isolated-{realpg,postgres-regression}.log`,
 `/tmp/heph-reader-0080-isolated-{fmt3,clippy3,doc3}.log`. Payload pagination,
 project-cap loss counters, RPC/protobuf exposure, and UI remain pending.
+
+Committed unclean-restart checkpoint `1f5af08`: [CI run
+35437400682](https://github.com/wimpheling/hephaestus/actions/runs/35437400682)
+passes Rust/authorization, cooking applications, and live browser review.
+
+Committed metadata-reader checkpoint `05b5048`: [CI run
+35437687346](https://github.com/wimpheling/hephaestus/actions/runs/35437687346)
+passes Rust/authorization, cooking applications, and live browser review.
