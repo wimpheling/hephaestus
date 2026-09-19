@@ -399,6 +399,20 @@ migration 0076, printed `REAL_POSTGRES_CONNECTED_AND_MIGRATED=1
 max_migration=76`, and passed 16 real ownership/coordinator tests; the
 retained log is `/tmp/hephaestus-gateway-ownership-coordinator-full.log`.
 
+The parent-owned service worker now exposes a read-only redacted failure
+snapshot on its control handle. It records the primary startup, readiness, or
+unexpected-exit category before teardown, retains valid bounded VM exit code
+or signal metadata through cleanup failure, and drops malformed provider
+metadata to category-only `unexpected_exit`; requested shutdown leaves no
+failure snapshot. Focused tests cover startup failure and timeout,
+readiness timeout, requested shutdown, exit code and signal retention through
+destroy failure, and malformed exit redaction. In an isolated checkout at
+`3c7f538` with only this slice applied, `cargo test -p gateway-edge
+--all-features` passed 86 library tests plus one Caddy integration test,
+strict all-target/all-feature gateway-edge Clippy passed, and formatting and
+`git diff --check` passed. Durable failure-store reporting and supervisor
+publication remain pending.
+
 - [x] Finish focused VM contract tests and workspace compatibility checks:
   `cargo test -p vm-trait`, `cargo test -p vm-libkrun --lib`,
   `cargo test -p vm-fake`, focused Clippy, `cargo check --workspace

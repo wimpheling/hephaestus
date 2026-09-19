@@ -1,6 +1,9 @@
 //! Lifecycle worker for one already-provisioned persistent gateway service VM.
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{Arc, RwLock},
+    time::Duration,
+};
 
 use tokio::{
     sync::{mpsc, oneshot, watch},
@@ -10,7 +13,8 @@ use tokio_util::sync::CancellationToken;
 use vm_trait::{StopMode, VmError, VmExit, VmInstance};
 
 use crate::{
-    GatewayServiceLaunch, GatewayServiceLaunchResolver, ServiceProbeError, ServiceProbePolicy,
+    GatewayServiceFailure, GatewayServiceFailureCode, GatewayServiceLaunch,
+    GatewayServiceLaunchResolver, ServiceProbeError, ServiceProbePolicy,
     probe_private_service_http,
 };
 
@@ -125,6 +129,7 @@ pub struct ServiceInstanceHandle {
 struct ControlInner {
     commands: mpsc::Sender<Command>,
     cancellation: CancellationToken,
+    failure: Arc<RwLock<Option<GatewayServiceFailure>>>,
 }
 
 impl Drop for ControlInner {
@@ -137,6 +142,22 @@ impl ServiceInstanceHandle {
     /// Requests bounded shutdown of the instance.
     pub fn shutdown(&self) {
         self.control.cancellation.cancel();
+    }
+
+    /// Returns the redacted primary failure observed before worker teardown.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the worker failure snapshot lock was poisoned by a prior
+    /// panic while updating it.
+    #[must_use]
+    pub fn failure(&self) -> Option<GatewayServiceFailure> {
+        self.control
+            .failure
+            .read()
+            .expect("service failure snapshot lock")
+            .as_ref()
+            .copied()
     }
 
     /// Requests one bounded health probe. Dropping this future does not stop
@@ -172,6 +193,7 @@ pub struct ServiceInstance {
     commands: mpsc::Receiver<Command>,
     cancellation: CancellationToken,
     states: watch::Sender<ServiceWorkerState>,
+    failure: Arc<RwLock<Option<GatewayServiceFailure>>>,
 }
 
 /// Creates a worker for one exact, already-provisioned service VM.
@@ -222,10 +244,12 @@ pub fn new_service_instance(
     let (commands, receiver) = mpsc::channel(COMMAND_CAPACITY);
     let cancellation = CancellationToken::new();
     let (states, state_receiver) = watch::channel(ServiceWorkerState::Provisioned);
+    let failure = Arc::new(RwLock::new(None));
     let handle = ServiceInstanceHandle {
         control: Arc::new(ControlInner {
             commands,
             cancellation: cancellation.clone(),
+            failure: Arc::clone(&failure),
         }),
         state: state_receiver.clone(),
     };
@@ -238,6 +262,7 @@ pub fn new_service_instance(
         commands: receiver,
         cancellation,
         states,
+        failure,
     };
     Ok((handle, state_receiver, worker))
 }
@@ -262,14 +287,24 @@ impl ServiceInstance {
                 } else {
                     ServiceInstanceError::StartupFailed
                 };
-                return self.finish(reason).await;
+                let failure = failure_for_startup(&reason);
+                return self
+                    .finish_with_failure(FailureOutcome {
+                        error: reason,
+                        report: failure,
+                    })
+                    .await;
             }
-            Err(_) => return self.finish(ServiceInstanceError::StartupTimeout).await,
+            Err(_) => {
+                return self
+                    .finish_with_failure(FailureOutcome::startup_timeout())
+                    .await;
+            }
         }
         self.set_state(ServiceWorkerState::Probing);
         match self.await_readiness(startup_deadline).await {
             Ok(()) => self.set_state(ServiceWorkerState::Ready),
-            Err(error) => return self.finish(error).await,
+            Err(outcome) => return self.finish_with_failure(outcome).await,
         }
         self.serve_ready().await
     }
@@ -285,12 +320,14 @@ impl ServiceInstance {
         }
     }
 
-    async fn await_readiness(&self, deadline: Instant) -> Result<(), ServiceInstanceError> {
+    async fn await_readiness(&self, deadline: Instant) -> Result<(), FailureOutcome> {
         let mut wait = Box::pin(self.vm.wait());
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
-                return Err(ServiceInstanceError::StartupTimeout);
+                return Err(FailureOutcome::readiness(
+                    ServiceInstanceError::StartupTimeout,
+                ));
             }
             let probe = time::timeout_at(
                 deadline,
@@ -303,12 +340,12 @@ impl ServiceInstance {
             );
             tokio::pin!(probe);
             tokio::select! {
-                () = self.cancellation.cancelled() => return Err(ServiceInstanceError::Shutdown),
+                () = self.cancellation.cancelled() => return Err(FailureOutcome::shutdown()),
                 exit = &mut wait => return Err(map_exit(&exit)),
                 result = &mut probe => match result {
-                    Err(_) => return Err(ServiceInstanceError::StartupTimeout),
+                    Err(_) => return Err(FailureOutcome::readiness(ServiceInstanceError::StartupTimeout)),
                     Ok(Ok(_)) => return Ok(()),
-                    Ok(Err(ServiceProbeError::InvalidPolicy | ServiceProbeError::InvalidAuthority | ServiceProbeError::Contract)) => return Err(ServiceInstanceError::StartupFailed),
+                    Ok(Err(ServiceProbeError::InvalidPolicy | ServiceProbeError::InvalidAuthority | ServiceProbeError::Contract)) => return Err(FailureOutcome::readiness(ServiceInstanceError::StartupFailed)),
                     Ok(Err(_)) => {}
                 },
             }
@@ -317,10 +354,12 @@ impl ServiceInstance {
                 .probe_interval
                 .min(deadline.saturating_duration_since(Instant::now()));
             if pause.is_zero() {
-                return Err(ServiceInstanceError::StartupTimeout);
+                return Err(FailureOutcome::readiness(
+                    ServiceInstanceError::StartupTimeout,
+                ));
             }
             tokio::select! {
-                () = self.cancellation.cancelled() => return Err(ServiceInstanceError::Shutdown),
+                () = self.cancellation.cancelled() => return Err(FailureOutcome::shutdown()),
                 exit = &mut wait => return Err(map_exit(&exit)),
                 () = time::sleep(pause) => {}
             }
@@ -331,19 +370,19 @@ impl ServiceInstance {
         let mut wait = Box::pin(self.vm.wait());
         loop {
             tokio::select! {
-                () = self.cancellation.cancelled() => return self.finish(ServiceInstanceError::Shutdown).await,
-                exit = &mut wait => return self.finish(map_exit(&exit)).await,
+                () = self.cancellation.cancelled() => return self.finish_with_failure(FailureOutcome::shutdown()).await,
+                exit = &mut wait => return self.finish_with_failure(map_exit(&exit)).await,
                 command = self.commands.recv() => match command {
                     Some(Command::Health(reply)) => {
                         let probe = self.health_probe();
                         tokio::pin!(probe);
                         tokio::select! {
-                            () = self.cancellation.cancelled() => return self.finish(ServiceInstanceError::Shutdown).await,
-                            exit = &mut wait => return self.finish(map_exit(&exit)).await,
+                            () = self.cancellation.cancelled() => return self.finish_with_failure(FailureOutcome::shutdown()).await,
+                            exit = &mut wait => return self.finish_with_failure(map_exit(&exit)).await,
                             result = &mut probe => { let _ = reply.send(result); }
                         }
                     }
-                    None => return self.finish(ServiceInstanceError::Shutdown).await,
+                    None => return self.finish_with_failure(FailureOutcome::shutdown()).await,
                 },
             }
         }
@@ -361,7 +400,14 @@ impl ServiceInstance {
         .map_err(ServiceInstanceError::HealthProbe)
     }
 
-    async fn finish(&self, primary: ServiceInstanceError) -> Result<(), ServiceInstanceError> {
+    async fn finish_with_failure(
+        &self,
+        outcome: FailureOutcome,
+    ) -> Result<(), ServiceInstanceError> {
+        if let Some(failure) = outcome.report {
+            *self.failure.write().expect("service failure snapshot lock") = Some(failure);
+        }
+        let primary = outcome.error;
         self.set_state(ServiceWorkerState::Stopping);
         let stop = time::timeout(
             self.policy.shutdown_timeout,
@@ -394,10 +440,77 @@ impl ServiceInstance {
     }
 }
 
-const fn map_exit(result: &Result<VmExit, VmError>) -> ServiceInstanceError {
-    match result {
-        Ok(_) | Err(_) => ServiceInstanceError::UnexpectedExit,
+struct FailureOutcome {
+    error: ServiceInstanceError,
+    report: Option<GatewayServiceFailure>,
+}
+
+impl FailureOutcome {
+    const fn shutdown() -> Self {
+        Self {
+            error: ServiceInstanceError::Shutdown,
+            report: None,
+        }
     }
+
+    const fn startup_timeout() -> Self {
+        Self {
+            error: ServiceInstanceError::StartupTimeout,
+            report: Some(GatewayServiceFailure {
+                code: GatewayServiceFailureCode::Startup,
+                exit_code: None,
+                exit_signal: None,
+            }),
+        }
+    }
+
+    const fn readiness(error: ServiceInstanceError) -> Self {
+        Self {
+            error,
+            report: Some(GatewayServiceFailure {
+                code: GatewayServiceFailureCode::Readiness,
+                exit_code: None,
+                exit_signal: None,
+            }),
+        }
+    }
+}
+
+fn map_exit(result: &Result<VmExit, VmError>) -> FailureOutcome {
+    let report = result.as_ref().map_or_else(
+        |_| failure_for_code(GatewayServiceFailureCode::UnexpectedExit),
+        |exit| {
+            GatewayServiceFailure::new(
+                GatewayServiceFailureCode::UnexpectedExit,
+                exit.code,
+                exit.signal,
+            )
+            .ok()
+            .or_else(|| failure_for_code(GatewayServiceFailureCode::UnexpectedExit))
+        },
+    );
+    FailureOutcome {
+        error: ServiceInstanceError::UnexpectedExit,
+        report,
+    }
+}
+
+fn failure_for_startup(error: &ServiceInstanceError) -> Option<GatewayServiceFailure> {
+    match error {
+        ServiceInstanceError::StartupFailed | ServiceInstanceError::StartupTimeout => {
+            failure_for_code(GatewayServiceFailureCode::Startup)
+        }
+        ServiceInstanceError::Shutdown
+        | ServiceInstanceError::InvalidPolicy
+        | ServiceInstanceError::UnexpectedExit
+        | ServiceInstanceError::NotReady
+        | ServiceInstanceError::HealthProbe(_)
+        | ServiceInstanceError::CleanupIncomplete => None,
+    }
+}
+
+fn failure_for_code(code: GatewayServiceFailureCode) -> Option<GatewayServiceFailure> {
+    GatewayServiceFailure::new(code, None, None).ok()
 }
 
 enum Command {
@@ -436,6 +549,7 @@ mod tests {
         starts: AtomicUsize,
         destroys: AtomicUsize,
         destroy_ok: AtomicBool,
+        start_ok: AtomicBool,
         stop_ok: AtomicBool,
         start_delay: Mutex<Duration>,
     }
@@ -452,6 +566,7 @@ mod tests {
                 starts: AtomicUsize::new(0),
                 destroys: AtomicUsize::new(0),
                 destroy_ok: AtomicBool::new(true),
+                start_ok: AtomicBool::new(true),
                 stop_ok: AtomicBool::new(true),
                 start_delay: Mutex::new(Duration::ZERO),
             })
@@ -464,11 +579,8 @@ mod tests {
                 .push_back(connection);
         }
 
-        fn exit(&self) {
-            let _ = self.exited.send(Some(VmExit {
-                code: Some(0),
-                signal: None,
-            }));
+        fn exit_with(&self, exit: VmExit) {
+            let _ = self.exited.send(Some(exit));
         }
     }
 
@@ -480,6 +592,9 @@ mod tests {
 
         async fn start(&self) -> Result<(), VmError> {
             self.starts.fetch_add(1, Ordering::Relaxed);
+            if !self.start_ok.load(Ordering::Relaxed) {
+                return Err(VmError::Destroyed);
+            }
             let delay = *self.start_delay.lock().expect("start delay lock");
             tokio::time::sleep(delay).await;
             Ok(())
@@ -643,6 +758,10 @@ mod tests {
             result,
             Err(ServiceInstanceError::StartupTimeout | ServiceInstanceError::StartupFailed)
         ));
+        assert_eq!(
+            handle.failure().map(|failure| failure.code),
+            Some(GatewayServiceFailureCode::Readiness)
+        );
         assert_eq!(vm.destroys.load(Ordering::Relaxed), 1);
         assert_eq!(resolver.cleanups.load(Ordering::Relaxed), 1);
         drop(handle);
@@ -731,9 +850,33 @@ mod tests {
             task.await.expect("worker join"),
             Err(ServiceInstanceError::StartupTimeout)
         );
+        assert_eq!(
+            handle.failure().map(|failure| failure.code),
+            Some(GatewayServiceFailureCode::Startup)
+        );
         assert_eq!(vm.destroys.load(Ordering::Relaxed), 1);
         assert_eq!(resolver.cleanups.load(Ordering::Relaxed), 1);
         drop(handle);
+    }
+
+    #[tokio::test]
+    async fn startup_failure_is_classified_as_startup() {
+        let launch = launch(Uuid::new_v4());
+        let vm = FakeVm::new(launch.spec.id.clone());
+        vm.start_ok.store(false, Ordering::Relaxed);
+        let resolver = Arc::new(FakeResolver {
+            cleanups: AtomicUsize::new(0),
+        });
+        let (handle, _, worker) =
+            new_service_instance(launch, vm, resolver, "service.test", policy()).expect("worker");
+        assert_eq!(
+            tokio::spawn(worker.run()).await.expect("worker join"),
+            Err(ServiceInstanceError::StartupFailed)
+        );
+        assert_eq!(
+            handle.failure().map(|failure| failure.code),
+            Some(GatewayServiceFailureCode::Startup)
+        );
     }
 
     #[tokio::test]
@@ -783,6 +926,7 @@ mod tests {
         wait_for_state(&mut state, ServiceWorkerState::Ready).await;
         handle.shutdown();
         assert!(task.await.expect("worker join").is_ok());
+        assert_eq!(handle.failure(), None);
         assert_eq!(vm.destroys.load(Ordering::Relaxed), 1);
         assert_eq!(resolver.cleanups.load(Ordering::Relaxed), 1);
     }
@@ -807,13 +951,91 @@ mod tests {
         .expect("worker");
         let task = tokio::spawn(worker.run());
         wait_for_state(&mut state, ServiceWorkerState::Ready).await;
-        vm.exit();
+        vm.exit_with(VmExit {
+            code: Some(17),
+            signal: None,
+        });
         assert_eq!(
             task.await.expect("worker join"),
             Err(ServiceInstanceError::UnexpectedExit)
         );
+        assert_eq!(
+            handle.failure(),
+            Some(GatewayServiceFailure {
+                code: GatewayServiceFailureCode::UnexpectedExit,
+                exit_code: Some(17),
+                exit_signal: None,
+            })
+        );
         assert_eq!(vm.destroys.load(Ordering::Relaxed), 1);
         assert_eq!(resolver.cleanups.load(Ordering::Relaxed), 1);
         drop(handle);
+    }
+
+    #[tokio::test]
+    async fn exit_signal_is_retained_when_destroy_fails() {
+        let launch = launch(Uuid::new_v4());
+        let vm = FakeVm::new(launch.spec.id.clone());
+        vm.destroy_ok.store(false, Ordering::Relaxed);
+        let resolver = Arc::new(FakeResolver {
+            cleanups: AtomicUsize::new(0),
+        });
+        let (client, peer) = tokio::io::duplex(4096);
+        vm.push(Box::new(client));
+        tokio::spawn(response_peer(peer, 200));
+        let (handle, mut state, worker) =
+            new_service_instance(launch, vm.clone(), resolver, "service.test", policy())
+                .expect("worker");
+        let task = tokio::spawn(worker.run());
+        wait_for_state(&mut state, ServiceWorkerState::Ready).await;
+        vm.exit_with(VmExit {
+            code: None,
+            signal: Some(9),
+        });
+        assert_eq!(
+            task.await.expect("worker join"),
+            Err(ServiceInstanceError::CleanupIncomplete)
+        );
+        assert_eq!(
+            handle.failure(),
+            Some(GatewayServiceFailure {
+                code: GatewayServiceFailureCode::UnexpectedExit,
+                exit_code: None,
+                exit_signal: Some(9),
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn malformed_exit_metadata_is_redacted() {
+        let launch = launch(Uuid::new_v4());
+        let vm = FakeVm::new(launch.spec.id.clone());
+        let resolver = Arc::new(FakeResolver {
+            cleanups: AtomicUsize::new(0),
+        });
+        let (client, peer) = tokio::io::duplex(4096);
+        vm.push(Box::new(client));
+        tokio::spawn(response_peer(peer, 200));
+        let (handle, mut state, worker) =
+            new_service_instance(launch, vm.clone(), resolver, "service.test", policy())
+                .expect("worker");
+        let task = tokio::spawn(worker.run());
+        wait_for_state(&mut state, ServiceWorkerState::Ready).await;
+        vm.exit_with(VmExit {
+            code: Some(999),
+            signal: Some(9),
+        });
+        assert_eq!(
+            task.await.expect("worker join"),
+            Err(ServiceInstanceError::UnexpectedExit)
+        );
+        assert_eq!(
+            handle.failure(),
+            Some(GatewayServiceFailure {
+                code: GatewayServiceFailureCode::UnexpectedExit,
+                exit_code: None,
+                exit_signal: None,
+            })
+        );
     }
 }
