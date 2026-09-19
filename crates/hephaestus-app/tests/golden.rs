@@ -3690,7 +3690,18 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
                 .await
                 .expect("read public cooking service response");
             assert_eq!(service_body.as_ref(), b"cooking service");
-            let identity_proof = exercise_published_cooking_service_identity(&public_url).await;
+            let identity_before = exercise_published_cooking_service_identity(&public_url).await;
+            exercise_published_cooking_service_isolation(&public_url, &admin_url).await;
+            // The isolation probe opens a guest-loopback request. Comparing
+            // identity on both sides proves it did not replace the process.
+            let identity_after = exercise_published_cooking_service_identity(&public_url).await;
+            assert_eq!(identity_before.pid, identity_after.pid);
+            assert_eq!(identity_before.startup_id, identity_after.startup_id);
+            println!(
+                "REAL_COOKING_SERVICE_ISOLATION=1 pid={} startup_id={}",
+                identity_after.pid, identity_after.startup_id
+            );
+            let identity_proof = identity_after;
             let resource_paths = {
                 let vm_id = format!("gateway-service-{service_instance_id}");
                 let provider_runtime_root = PathBuf::from(
@@ -7218,6 +7229,124 @@ async fn exercise_published_cooking_service_identity(
         pid: first_pid,
         startup_id: first_startup.to_owned(),
     }
+}
+
+/// Runs the published service's bounded guest isolation diagnostic through the
+/// real Caddy public listener, then proves the public listener cannot serve the
+/// separate Caddy administration API, including with a forged admin Host.
+async fn exercise_published_cooking_service_isolation(public_url: &str, admin_url: &str) {
+    let public_port = published_loopback_port(public_url, "public Caddy URL");
+    let admin_port = published_loopback_port(admin_url, "admin Caddy URL");
+    assert_ne!(public_port, admin_port);
+    assert_ne!(public_port, 8080);
+    assert_ne!(admin_port, 8080);
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .expect("bounded published isolation client");
+    let diagnostic = client
+        .get(format!(
+            "{public_url}/gateway/service/isolation?admin_port={admin_port}&public_port={public_port}"
+        ))
+        .send()
+        .await
+        .expect("published cooking-service isolation request")
+        .error_for_status()
+        .expect("published cooking-service isolation request succeeds")
+        .bytes()
+        .await
+        .expect("read published cooking-service isolation response");
+    let diagnostic: serde_json::Value =
+        serde_json::from_slice(&diagnostic).expect("published cooking-service isolation JSON");
+    let object = diagnostic
+        .as_object()
+        .expect("published isolation response object");
+    let expected_keys = [
+        "schema_version",
+        "own_loopback_ok",
+        "admin_loopback_blocked",
+        "public_loopback_blocked",
+        "metadata_blocked",
+        "test_net_blocked",
+        "runtime_authority_env_absent",
+        "runtime_authority_path_absent",
+        "broker_socket_absent",
+        "secret_mount_absent",
+        "control_surface_ok",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        object
+            .keys()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>(),
+        expected_keys,
+        "published isolation response must have exactly the reviewed schema"
+    );
+    assert_eq!(
+        object
+            .get("schema_version")
+            .and_then(serde_json::Value::as_u64),
+        Some(1)
+    );
+    for key in [
+        "own_loopback_ok",
+        "admin_loopback_blocked",
+        "public_loopback_blocked",
+        "metadata_blocked",
+        "test_net_blocked",
+        "runtime_authority_env_absent",
+        "runtime_authority_path_absent",
+        "broker_socket_absent",
+        "secret_mount_absent",
+        "control_surface_ok",
+    ] {
+        assert_eq!(
+            object.get(key).and_then(serde_json::Value::as_bool),
+            Some(true),
+            "published isolation field {key}"
+        );
+    }
+
+    for host in [None, Some(format!("127.0.0.1:{admin_port}"))] {
+        let mut request = client.get(format!("{public_url}/config/"));
+        if let Some(host) = host {
+            request = request.header(reqwest::header::HOST, host);
+        }
+        let response = request
+            .send()
+            .await
+            .expect("public Caddy internal-config probe");
+        assert_eq!(
+            response.status(),
+            reqwest::StatusCode::NOT_FOUND,
+            "public Caddy listener must deny /config/"
+        );
+        response
+            .bytes()
+            .await
+            .expect("read public Caddy internal-config denial");
+    }
+}
+
+fn published_loopback_port(url: &str, label: &str) -> u16 {
+    let url =
+        reqwest::Url::parse(url).unwrap_or_else(|error| panic!("{label} is invalid: {error}"));
+    assert_eq!(
+        url.scheme(),
+        "http",
+        "{label} must use HTTP in the disposable harness"
+    );
+    assert_eq!(
+        url.host_str(),
+        Some("127.0.0.1"),
+        "{label} must use the joined loopback listener"
+    );
+    url.port()
+        .unwrap_or_else(|| panic!("{label} has no explicit port"))
 }
 
 /// Invokes the real Caddy service endpoint, then reads its application-owned

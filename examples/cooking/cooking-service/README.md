@@ -52,12 +52,23 @@ publish/install CLI. The joined local harness can run the complete source-built
 proof by setting `HEPHAESTUS_APP_COOKING_SERVICE_BUILD_PROOF=1` and invoking
 `examples/cooking/run.sh` after the local Cooking profile and pinned fixture
 prerequisites are prepared. Keep PostgreSQL and NATS URLs unset so the harness
-owns disposable services, and use the shared `CARGO_TARGET_DIR` supported by
-the integration wrapper. The proof builds and publishes this source, installs
+owns disposable services. After sourcing the private profile, export an
+absolute disposable shared `CARGO_TARGET_DIR` so nested run scripts inherit
+the same cache. The proof builds and publishes this source, installs
 and configures the release-owned gateway, serves `/gateway/service` and
 `/gateway/service/identity` through Caddy, verifies stable process identity and
 the asserted disabled runtime network contract, and checks VM, cgroup, and
-materializer cleanup. It does not use a guest egress probe.
+materializer cleanup. Its opt-in diagnostic extension serves
+`/gateway/service/isolation` through Caddy, accepts only the joined numeric
+admin and public ports, and checks the guest's own loopback `/healthz` positive
+control plus bounded blocked probes to the Caddy admin/public loopbacks,
+`169.254.169.254:80`, and TEST-NET `192.0.2.1:80`. It reports booleans for
+the source-correct authority environment/path, broker socket, secret mount,
+and read-only empty `parameters.json` control surface. The host also requires
+ordinary and forged admin `Host` requests to public `/config/` to return 404,
+and compares the service PID and `startup_id` before and after the probes.
+This proves the disposable guest's current boundary; forwarded-header and
+HTTPS acceptance remain separate pending gates.
 The seeded gateway-service modes cover separate runtime scenarios and do not
 replace this source-built publication proof; neither mode claims overall
 persistent-service completion.

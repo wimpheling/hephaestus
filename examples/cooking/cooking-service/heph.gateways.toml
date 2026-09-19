@@ -18,3 +18,7 @@ methods = ["GET"]
 [[gateways.routes]]
 path = "/service/identity"
 methods = ["GET"]
+
+[[gateways.routes]]
+path = "/service/isolation"
+methods = ["GET"]

@@ -2,6 +2,52 @@
 
 Owner: Astra orchestration (Luna bounded subtasks)
 
+## Current status and governing checklist (2026-09-20)
+
+This section is the current status for review. The long design and checkpoint
+record below is append-only historical evidence: some entries describe work as
+pending because they were written before later slices completed. Those entries
+are historical snapshots; this section and the implementation checklist govern
+the present review state.
+
+The service runtime has concrete evidence for the following slices:
+
+- The real third-revision capacity gate passed with A held and draining, B
+  active, and C admitted only after A cleanup, including stable identities and
+  resource cleanup. Source is `b3b0275`; evidence is
+  `/home/a/heph-candidate-capacity-real-vm-20260919-v3.log`.
+- The published Cooking service passed source build, publication, install,
+  configuration, Caddy routing, identity, and cleanup checks. Source is
+  `d47b653`; evidence is
+  `/home/a/heph-published-service-real-vm-20260919-v2.log` and
+  `/home/a/heph-published-service-phase-20260919-v2.json`. The follow-up
+  published guest-isolation proof also passed from the current source
+  checkpoint; its evidence is recorded below.
+- The published workflow documentation records the verified command and its
+  fixture and production-parity limits. Source is `68e0373`.
+- Release revocation was exercised through the real Caddy/libkrun path: the
+  accepted hold was canceled with HTTP 502 and `Failed`, no new invocation was
+  admitted, and the instance and physical resources were cleaned. Source is
+  `d07bdfb`; evidence is
+  `/home/a/heph-service-revocation-real-vm-20260919.log` and
+  `/home/a/heph-service-revocation-phase-20260919.json`.
+- Real guest output reached the durable log RPC with scoped ordering and
+  cleanup checks (`b787b45`,
+  `/home/a/heph-guest-log-real-vm-20260919.log`), and project log metadata was
+  exercised through the real RPC stack (`449ca76`,
+  `/home/a/heph-project-metadata-real-vm-20260919-v2.log`). The retention
+  scheduler implementation is `967109d`; its focused evidence is recorded in
+  the historical checkpoints below.
+
+The remaining current work is final security-acceptance reconciliation and the
+full required quality gates. The release UI has not begun. Checklist
+reconciliation is in progress; unchecked historical claims are not evidence of
+failure, and later source and test evidence must be matched to each subitem
+before its status changes. The currently identified security checks still
+pending are persistent-ingress forwarded-header handling and HTTPS handoff;
+the published guest probes are covered by the checkpoint below. Existing
+checked subitems remain valid where their own evidence is cited.
+
 ## Outcome
 
 Let a gateway release run a normal long-lived web server inside a guest and
@@ -2222,3 +2268,38 @@ with target `/home/a/service-golden-isolation-target-0b7-20260919`,
 incremental disabled, and two jobs; their output was not redirected to
 separate log files. Final rustfmt check passed. Cargo and VM ownership are
 released; no active process handle remains.
+
+Published Cooking guest-isolation checkpoint (2026-09-20): the current source
+checkpoint passed the published source-build, Caddy, and libkrun workflow with
+the diagnostic-only `/gateway/service/isolation` route. The route accepts only
+the joined numeric Caddy admin and public ports, rejects the service-port
+collision, and returns bounded booleans. The guest's positive control was its
+own loopback `/healthz`; blocked probes covered the Caddy admin/public
+loopbacks, `169.254.169.254:80`, and TEST-NET `192.0.2.1:80`. The same bounded
+response checked the source-correct runtime-authority environment/path, broker
+socket, secret mount, and read-only `parameters.json` control surface containing
+`{}` without returning raw values. The host requested `/config/` through the
+public listener with ordinary and forged admin `Host` headers and required
+HTTP 404. It recorded the published identity before the probes and required
+the same PID and `startup_id` afterward.
+
+The run emitted `REAL_COOKING_SERVICE_ISOLATION=1` and passed 35 golden tests
+(one ignored) plus eight PostgreSQL tests. The primary log is
+`/home/a/heph-published-service-isolation-real-vm-20260920.log`, diagnostics
+are in `/home/a/heph-published-service-isolation-diagnostics-20260920`, and
+phase data is in
+`/home/a/heph-published-service-isolation-phase-20260920.json`. Runtime,
+cgroup, and materializer cleanup also passed. Focused sample tests, strict
+sample Clippy, sample rustdoc, the final golden check, and the reviewed golden
+Clippy evidence are recorded in the corresponding `/home/a/heph-cooking-*`
+and `/home/a/heph-published-*` logs. Forwarded-header and HTTPS acceptance,
+and the repository-wide final quality gates, remain pending.
+
+The live run used repository-local `target/debug` artifacts because the
+private runner profile does not define `CARGO_TARGET_DIR` and the invocation
+did not export it after sourcing that profile. It therefore reused and updated
+the existing `/home/a/projects/hephaestus-services-ui/target` directory; no
+additional target directory was created and none was deleted. Future runs
+must export the absolute shared target after sourcing the private profile so
+the nested wrapper inherits it, for example:
+`export CARGO_TARGET_DIR=/home/a/service-golden-isolation-target-0b7-20260919`.

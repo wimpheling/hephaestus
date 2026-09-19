@@ -114,23 +114,20 @@ follow the operational stream with:
 cargo dev logs daemon --follow
 ```
 
-Application service-log Connect operations and the daemon's durable service
-log writer are still being completed. Do not treat a missing service-log entry
-as proof that the guest did not run; use the declared readiness/health probes,
-the managed request result, and the daemon's existing operational log until
-that writer is attached. Any application log capture must remain opt-in and
-application-owned so the platform does not claim to redact arbitrary guest
-output.
+Application service-log capture remains opt-in and application-owned so the
+platform does not claim to redact arbitrary guest output. The separate guest
+log acceptance mode records its own marker and durable stream evidence; a
+missing entry in another mode is not proof that the guest did not run.
 
 ## Managed publish and install path
 
 The source contract is in [`agent.toml`](../examples/cooking/cooking-service/agent.toml)
 and [`heph.gateways.toml`](../examples/cooking/cooking-service/heph.gateways.toml).
 The gateway declaration selects `http.service.v1`, loopback port 8080,
-`/readyz` readiness, `/healthz` health, and the `/service` and
-`/service/identity` routes. `build.sh` produces the `bin/cooking-service`
-executable from the isolated builder and declares a network-disabled build and
-guest.
+`/readyz` readiness, `/healthz` health, and the `/service`,
+`/service/identity`, and diagnostic-only `/service/isolation` routes.
+`build.sh` produces the `bin/cooking-service` executable from the isolated
+builder and declares a network-disabled build and guest.
 
 There is no standalone `publish-cooking-service` or `install-gateway` CLI.
 The available managed operations are Connect RPCs:
@@ -188,7 +185,9 @@ source /path/to/your/mvp05-cooking-runner.env
 export HEPHAESTUS_LOCAL_ROOT="$PWD/.local/hephaestus"
 export HEPHAESTUS_COOKING_SOURCE_ROOT="$PWD/examples/cooking"
 export HEPHAESTUS_APP_COOKING_SERVICE_BUILD_PROOF=1
-export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$PWD/target}"
+# Export this after sourcing the private profile so nested run scripts inherit
+# the same cache. Use an absolute disposable shared path.
+export CARGO_TARGET_DIR="/absolute/path/to/shared-service-target"
 export CARGO_INCREMENTAL=0
 export CARGO_BUILD_JOBS=2
 unset HEPHAESTUS_POSTGRES_TEST_URL HEPHAESTUS_NATS_TEST_URL
@@ -215,16 +214,32 @@ the joined harness owns its disposable services. An absolute
 resolves and exports relative values against the repository root and passes the
 guest bootstrap from that resolved target.
 
-The successful proof emits `REAL_COOKING_SERVICE_BUILD_PROOF=1`. It checks the
-production source build and publication, release-owned install/configure,
-the declared readiness transition through the service supervisor, Caddy
-requests to `/gateway/service` and `/gateway/service/identity`, same-process
-identity, and the asserted disabled runtime network contract. It does not use
-a guest egress probe. It also checks removal of runtime, cgroup, and
-materializer resources. The seeded gateway-service modes remain useful for
-their separate runtime scenarios, but they do not prove this source-built
-publication path. This proof also does not claim that every persistent-service
-feature or the full service-log acceptance surface is complete.
+The successful proof emits `REAL_COOKING_SERVICE_BUILD_PROOF=1`. The published
+isolation extension additionally emits `REAL_COOKING_SERVICE_ISOLATION=1`.
+It calls `/gateway/service/isolation` through Caddy with only the joined admin
+and public listener port numbers. The guest performs a positive request to
+its own loopback `/healthz`, then bounded blocked-connect probes to the Caddy
+admin/public loopback ports, `169.254.169.254:80`, and TEST-NET
+`192.0.2.1:80`. It reports booleans only and checks the source-correct
+authority environment/path, broker socket, secret mount, and read-only
+`/run/hephaestus/parameters.json` control surface containing `{}`. The host
+also requests public `/config/` with ordinary and forged admin `Host` headers
+and requires HTTP 404, then compares the service PID and `startup_id` before
+and after the probe. This proves the published disposable guest's current
+network and mount boundary; it does not establish HTTPS termination or the
+separate forwarded-header acceptance gate.
+
+The verified isolation run passed 35 golden tests (one ignored) and eight
+PostgreSQL tests. Its log is
+`/home/a/heph-published-service-isolation-real-vm-20260920.log`, diagnostics
+are under `/home/a/heph-published-service-isolation-diagnostics-20260920`, and
+phase timing is in
+`/home/a/heph-published-service-isolation-phase-20260920.json`. It also
+verified runtime, cgroup, and materializer cleanup. The seeded
+gateway-service modes remain useful for their separate runtime scenarios, but
+they do not prove this source-built publication path. This proof does not
+claim that every persistent-service feature or the full service-log acceptance
+surface is complete.
 
 Platform-level private-service transport, host bridge, Caddy adapter, and
 daemon lifecycle proofs are present in the repository's focused and real-VM
@@ -238,8 +253,9 @@ The following remain deliberately separate from a native smoke and from the
 source-built Cooking service proof:
 
 * broader persistent-service lifecycle and cutover scenarios;
-* service-log writer and RPC acceptance beyond the separate seeded and guest
-  service-log proofs;
+* forwarded-header and HTTPS handoff acceptance;
+* service-log acceptance beyond the separate seeded and guest service-log
+  proofs;
 * deployment outside the disposable local Cooking fixture and its pinned
   runner prerequisites.
 
