@@ -48,6 +48,10 @@ pending are persistent-ingress forwarded-header handling and HTTPS handoff;
 the published guest probes are covered by the checkpoint below. Existing
 checked subitems remain valid where their own evidence is cited.
 
+The CI teardown fix is `2680329`: the affected real-PostgreSQL recovery group
+passed 17/17 against migration 81, with the prior failure retained at
+`/tmp/gh-run-35474992344-job-105982597476.log`; current CI is still pending.
+
 ## Outcome
 
 Let a gateway release run a normal long-lived web server inside a guest and
@@ -610,63 +614,123 @@ recovery scheduling, Caddy routing, and release UI remain pending.
 
 ## Implementation checklist
 
-- [ ] **1. Service-mode release contract**
+- [x] **1. Service-mode release contract**
   - [x] Add typed `http.service.v1` declaration/config validation and focused
-    tests while preserving stateless serialization; persistence and runtime
-    acceptance remain unchecked.
+    tests while preserving stateless serialization; persistence and the
+    source-built runtime path are covered by the later release proof.
     - Evidence: `cargo test -p gateway-domain -p agent-config`,
       `cargo clippy -p gateway-domain -p agent-config --all-targets
       --all-features`, `cargo fmt --all -- --check`, and `git diff --check`
-      pass for this declaration slice.
-  - [ ] Inventory the existing stateless `http.v1` declaration and invocation
+      pass for this declaration slice; the published workflow is recorded in
+      `/home/a/heph-published-service-real-vm-20260919-v2.log`.
+  - [x] Inventory the existing stateless `http.v1` declaration and invocation
     path so service mode has an explicit compatibility boundary.
-  - [ ] Define and validate the service-mode release configuration, command,
+    - Evidence: `crates/gateway-domain/src/lib.rs` preserves the separate
+      `http.v1` and `http.service.v1` contracts; `crates/agent-config/src/lib.rs`
+      and `crates/agent-config/tests/cooking_service_manifest.rs` cover
+      declaration parsing and stateless serialization; immutable target
+      resolution is covered by `crates/gateway-postgres/src/service_execution.rs`.
+  - [x] Define and validate the service-mode release configuration, command,
     immutable revision binding, entrypoint, resource limits, and compatibility
     or migration behavior without changing stateless handlers.
+    - Evidence: `crates/gateway-domain/src/lib.rs` validates the typed service
+      settings and contract pairing; `crates/gateway-edge/src/service_launch.rs`
+      applies platform-selected connection limits to an immutable launch;
+      `crates/gateway-postgres/tests/postgres.rs` covers service/stateless
+      migration compatibility; the published sample verifies build, publish,
+      install, configure, and launch in
+      `/home/a/heph-published-service-real-vm-20260919-v2.log`.
   - [x] Persist typed service declaration fields through migration 0070 and
     gateway install, project, and clone flows; runtime activation and
-    readiness remain unchecked.
+    readiness are covered by the published source-build workflow.
     - Evidence: disposable Postgres focused persistence test 1 and complete
       gateway integration target 7 passed, with focused Clippy and formatting
-      checks passing.
+      checks passing; migration 81 and source build/publish/install/configure
+      are verified in `/home/a/heph-published-service-real-vm-20260919-v2.log`
+      and `/home/a/heph-published-service-isolation-real-vm-20260920.log`.
 
-- [ ] **2. Guest listener and private transport**
-  - [ ] Compare the candidate bounded transports and record the selected
+- [x] **2. Guest listener and private transport**
+  - [x] Compare the candidate bounded transports and record the selected
     framing, authentication, flow-control, timeout, and backpressure contract
     for main-thread review.
+    - Evidence: the reviewed transport contract in this task's “Reviewed
+      transport and declaration slice” selects a dedicated authenticated
+      per-VM vsock bridge. Guest IP/port-forwarding would expand network
+      authority; reusing control or broker channels would mix separate
+      authority and protocol domains. The selected bridge keeps
+      `NetworkMode::Disabled`, guest loopback ownership, bounded slots, and
+      independent setup/idle deadlines.
   - [x] Implement guest loopback ownership and authenticated host-to-guest
     forwarding on the reviewed transport; reject arbitrary guest TCP exposure
     and unauthorized host access. The bridge has bounded pending and active
     slots and one total admission/setup deadline. Focused guest tests and the
-    fourth real-VM transport acceptance pass; HTTP readiness supervision and
-    lifecycle behavior remain unchecked.
-  - [ ] Implement readiness, health, request, connection, response-size, and
+    real published-service isolation acceptance cover HTTP readiness and
+    lifecycle behavior.
+    - Evidence: `crates/gateway-edge/src/service_registry.rs`,
+      `crates/gateway-edge/src/service_probe.rs`, and
+      `crates/gateway-edge/tests/caddy_ingress.rs`; real evidence is
+      `/home/a/heph-published-service-isolation-real-vm-20260920.log` with
+      `REAL_COOKING_SERVICE_ISOLATION=1` and the earlier transport proof in
+      `/home/a/heph-guest-log-real-vm-20260919.log`.
+  - [x] Implement readiness, health, request, connection, response-size, and
     in-flight resource limits with deterministic timeout and cancellation
     semantics.
-  - [ ] Define and implement request/response behavior for streaming,
+    - Evidence: `crates/gateway-edge/src/service_probe.rs`,
+      `crates/gateway-edge/src/service_http.rs`, and
+      `crates/gateway-edge/src/service_registry.rs` tests cover probe and
+      exchange deadlines, body/header limits, capacity, and cancellation.
+  - [x] Define and implement request/response behavior for streaming,
     WebSockets, trailers, and unsupported protocol features, including the
     explicit bounded behavior where a feature is not supported.
+    - Evidence: `crates/gateway-edge/src/service_http.rs` tests cover chunked
+      responses without trailers and reject upgrades, trailers, and
+      close-delimited responses within the bounded HTTP contract.
 
-- [ ] **3. Managed service lifecycle**
-  - [ ] Supervise the released command as a long-lived guest process with
+- [x] **3. Managed service lifecycle**
+  - [x] Supervise the released command as a long-lived guest process with
     startup, readiness, health, shutdown, cleanup, logs, and exit diagnostics.
-  - [ ] Implement bounded concurrency, idling policy, crash detection,
+    - Evidence: source-built publication and guest-output runs in
+      `/home/a/heph-published-service-real-vm-20260919-v2.log` and
+      `/home/a/heph-guest-log-real-vm-20260919.log`; release cancellation and
+      cleanup are in `/home/a/heph-service-revocation-real-vm-20260919.log`.
+  - [x] Implement bounded concurrency, idling policy, crash detection,
     restart/recovery, and resource cleanup for service instances.
-  - [ ] Implement revision cutover, request draining, rollback, and failure
+    - Evidence: candidate capacity is verified in
+      `/home/a/heph-candidate-capacity-real-vm-20260919-v3.log`; crash,
+      restart, and cleanup evidence is in the unclean-recovery and failed
+      candidate checkpoints recorded with commits `1f5af08` and `b3b0275`.
+  - [x] Implement revision cutover, request draining, rollback, and failure
     behavior while preserving the relationship among request, instance, and
     release revision.
+    - Evidence: the historical cutover and rollback checkpoints are preserved
+      in this task record with source commits `bd340cf` and `d044142`; the
+      failed-candidate run is retained at
+      `/home/a/heph-failed-candidate-e2e-short-v2.log`.
 
-- [ ] **4. Caddy and gateway integration**
-  - [ ] Add host-side service forwarding behind the existing shared Caddy
+- [x] **4. Caddy and gateway integration**
+  - [x] Add host-side service forwarding behind the existing shared Caddy
     deployment without exposing Caddy administration or public host listeners
     to released code.
-  - [ ] Implement route ownership, revision selection, load balancing or
+    - Evidence: published Caddy routing and the guest-isolation probes are
+      verified in `/home/a/heph-published-service-isolation-real-vm-20260920.log`;
+      HTTPS and forwarded-header acceptance is a separate pending proof.
+  - [x] Implement route ownership, revision selection, load balancing or
     single-instance behavior, readiness gating, and deterministic unavailable
     responses.
-  - [ ] Bind persistent connections and gateway-session authority to the
+    - Evidence: candidate capacity and revocation runs in
+      `/home/a/heph-candidate-capacity-real-vm-20260919-v3.log`,
+      `/home/a/heph-service-revocation-real-vm-20260919.log`; the historical
+      cutover checkpoint is preserved with source commit `bd340cf`.
+  - [x] Bind persistent connections and gateway-session authority to the
     authorized release, route, project, and revision context.
-  - [ ] Preserve and regression-test the existing MVP-03 stateless one-request
+    - Evidence: `crates/gateway-postgres/tests/service_execution.rs` and the
+      real revocation/cutover checks above cover target and revision binding.
+  - [x] Preserve and regression-test the existing MVP-03 stateless one-request
     gateway path and its authority boundaries.
+    - Evidence: `crates/gateway-postgres/tests/postgres.rs`,
+      `crates/gateway-postgres/tests/service_acceptance.rs`,
+      `crates/gateway-postgres/tests/service_execution.rs`, and the 35-test
+      golden suite in the real workflow logs.
 
 - [ ] **5. Security and authority boundaries**
   - [ ] Define and enforce host-header validation, client identity, TLS
@@ -678,20 +742,36 @@ recovery scheduling, Caddy routing, and release UI remain pending.
   - [ ] Ensure logs and diagnostics redact request-only plaintext and secrets
     while retaining the audit and failure evidence needed for operations.
 
-- [ ] **6. Development workflow**
-  - [ ] Document local service execution, configuration, live-reload
+- [x] **6. Development workflow**
+  - [x] Document local service execution, configuration, live-reload
     expectations, logs, debugger access, port inspection, and cleanup.
-  - [ ] Provide a development path that exercises the same declaration,
+    - Evidence: `docs/persistent-gateway-services.md` and the matching sample
+      README document the source-built workflow, profile prerequisites,
+      shared target, routes, identity, cleanup, and debugger/inspection
+      commands; the published proof is `/home/a/heph-published-service-real-vm-20260919-v2.log`.
+  - [x] Provide a development path that exercises the same declaration,
     readiness, authority, and routing boundaries as production where practical,
     with explicit production-parity limits.
+    - Evidence: the canonical docs above state the production-parity limits,
+      and the source-built Caddy/libkrun run verifies those boundaries and
+      cleanup.
 
 - [ ] **7. Focused implementation and acceptance tests**
-  - [ ] Add focused tests for declaration validation, transport framing and
+  - [x] Add focused tests for declaration validation, transport framing and
     limits, readiness/health, cancellation, lifecycle transitions, and
     stateless-mode compatibility.
-  - [ ] Add real Caddy and guest-runtime integration coverage for forwarding,
+    - Evidence: gateway-edge service HTTP/probe/registry tests,
+      gateway-postgres acceptance/execution tests, and the 17/17 real-PG
+      recovery group documented after `2680329`; current CI is still pending.
+  - [x] Add real Caddy and guest-runtime integration coverage for forwarding,
     concurrent requests, cutover, draining, crash recovery, restart, rollback,
     and deterministic failure responses.
+    - Evidence: `/home/a/heph-guest-log-real-vm-20260919.log`,
+      `/home/a/heph-candidate-capacity-real-vm-20260919-v3.log`,
+      `/home/a/heph-failed-candidate-e2e-short-v2.log`; the historical
+      cutover and rollback checkpoints are preserved with source commits
+      `bd340cf` and `d044142`. HTTPS/forwarded-header acceptance and
+      adversarial coverage remain separate pending work.
   - [ ] Add adversarial coverage for unauthorized listeners, Caddy/admin
     access, SSRF, host-header confusion, cross-release/project access,
     resource exhaustion, and secret leakage.
