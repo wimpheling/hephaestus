@@ -762,7 +762,20 @@ mod tests {
             });
             thread::sleep(Duration::from_millis(5));
         }
-        supervisor.reap_finished();
+        let deadline = std::time::Instant::now() + Duration::from_secs(1);
+        loop {
+            supervisor.reap_finished();
+            let active_count = supervisor.inner.state.lock().unwrap().active.len();
+            let handle_count = supervisor.handles.lock().unwrap().len();
+            if active_count == 0 && handle_count <= 1 {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "service workers did not settle before the bounded deadline: active={active_count} handles={handle_count}"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
         assert!(supervisor.inner.state.lock().unwrap().active.is_empty());
         assert!(supervisor.handles.lock().unwrap().len() <= 1);
         supervisor.cancel();

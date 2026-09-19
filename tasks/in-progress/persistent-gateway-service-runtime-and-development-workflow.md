@@ -1928,3 +1928,18 @@ did not observe B in `Ready`; the ownership schema has no
 historical `ready_at`, so this evidence does not claim an absolute historical
 never-Ready proof. C-capacity retention, revocation/adversarial candidates,
 and broader cutover scheduling remain separate acceptance work.
+
+Guest service-handle churn checkpoint (2026-09-19): the churn test now polls
+the observable worker state after each bounded reap, requiring both an empty
+active registry and at most one retained join handle before asserting completion.
+It uses a one-second deadline, sleeps only between polls, and
+reports active and handle counts if the deadline is exceeded; it does not
+cancel workers to make the assertion pass. The focused test passed 1/1 and all
+15 `heph-init` tests passed. Evidence is
+`/home/a/heph-init-churn-focused-v2.log` and
+`/home/a/heph-init-service-all-v2.log`. Rust 1.88 formatting, strict
+`vm-libkrun` Clippy, rustdoc, and diff checks passed in
+`/home/a/heph-init-service-fmt-v2.log`,
+`/home/a/heph-init-service-clippy-v2.log`, and
+`/home/a/heph-init-service-doc-v2.log`. The change is test-only; production
+service behavior is unchanged.
