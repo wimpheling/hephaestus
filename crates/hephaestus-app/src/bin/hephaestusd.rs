@@ -58,6 +58,8 @@ fn environment_config() -> Result<AppConfig, Box<dyn Error>> {
         env::var("HEPHAESTUS_VM_BACKEND").unwrap_or_else(|_| String::from("libkrun"));
     let mut root_images = root_images_from_environment(&backend_name)?;
     let runtime_root = path("HEPHAESTUS_RUNTIME_ROOT")?;
+    let run_runtime_root = runtime_root.join("exact-runs");
+    std::fs::create_dir_all(&run_runtime_root)?;
     let oci_builder = oci_builder_from_environment(&repository_root, &runtime_root)?;
     if let Some(worker) = &oci_builder {
         for (reference, root) in repository_root_images(&worker.root_manifest, &worker.rootfs_root)?
@@ -82,7 +84,11 @@ fn environment_config() -> Result<AppConfig, Box<dyn Error>> {
         "fixture" => VmBackendConfig::FixtureResult,
         "libkrun" => {
             let mut image_roots: Vec<_> = root_images.values().map(root_filesystem_path).collect();
-            let mut mount_roots = vec![workspace_root.clone(), secret_mount_root.clone()];
+            let mut mount_roots = vec![
+                workspace_root.clone(),
+                secret_mount_root.clone(),
+                run_runtime_root.clone(),
+            ];
             if let Some(worker) = &oci_builder {
                 image_roots.push(worker.rootfs_root.clone());
                 append_repository_image_mount_roots(
@@ -198,7 +204,7 @@ fn environment_config() -> Result<AppConfig, Box<dyn Error>> {
         volumes: LocalVolumeConfig {
             volume_root,
             transient_runtime_roots: vec![
-                runtime_root.clone(),
+                runtime_root,
                 workspace_root.clone(),
                 secret_mount_root.clone(),
             ],
@@ -214,7 +220,7 @@ fn environment_config() -> Result<AppConfig, Box<dyn Error>> {
             limits: WorkspaceLimits::default(),
         },
         run_runtime: LocalRunRuntimeConfig {
-            runtime_root: runtime_root.join("exact-runs"),
+            runtime_root: run_runtime_root,
             release_artifact_root: artifact_root.join("releases"),
         },
         runtime_authority_handoff_root,

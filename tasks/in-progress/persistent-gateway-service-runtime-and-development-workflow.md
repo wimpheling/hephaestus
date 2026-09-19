@@ -1395,11 +1395,25 @@ GC eligibility, replay protection, and epoch-cap recovery have focused coverage.
 Deterministic concurrent append serialization and final isolated checks remain
 pending. The GC suite passes 11 real PostgreSQL tests in
 `/tmp/heph-log-maintenance-gc-all-20260919b.log`.
-The first external-daemon fixture launched the production process, but its
-acceptance run failed on disposable NATS storage exhaustion. Storage has since been reclaimed. The next production-daemon run exposed a
-mount allowlist gap: `exact-runs` materialization is outside the configured
-workspace/secret mount roots. A narrow daemon configuration fix and successful
-real Caddy/VM rerun are required before claiming external-daemon acceptance.
+External-daemon warm-service checkpoint (2026-09-19): the exact `87b6ebe`
+overlay `/tmp/heph-external-warm-overlay-87b6` launched the Cargo-resolved
+production `hephaestusd` binary, reached service `Ready`, published the real
+Caddy route, served public requests with identity equality and request count
+`2->3`, then handled SIGINT with durable `Cleaned` state and absent VM,
+cgroup, and materializer paths. The daemon fix derives and creates
+`runtime/exact-runs`, adds that host-owned root to the libkrun mount allowlist,
+and reuses the same path for the run-runtime adapter. The wrapper's cleanup
+check now permits only validated empty persistent namespaces and rejects files,
+symlinks, or children. The joined run passed 35 golden tests and 8
+gateway-postgres tests against migration 78, emitted
+`persistent-service-external-warm-passed`, and ended with
+`daemon golden E2E passed; runtime and cgroup cleanup verified`. Full log:
+`/tmp/heph-external-warm-overlay-joined-final2-full-20260919.log`; daemon log:
+`/tmp/heph-external-warm-overlay-real-daemon-final3.log`; pinned checks:
+`/tmp/heph-external-warm-overlay-final-checks-20260919-{fmt,check,clippy,doc,shell}.log`.
+This proves the external warm path and graceful shutdown only; unclean daemon
+SIGKILL recovery, expired-boot recovery, later cutover, revocation/drain, and
+release UI remain pending.
 
 Durable service-log retention checkpoint (2026-09-19): migration 79, the
 bounded gateway-edge maintenance port, and the worker-only PostgreSQL adapter

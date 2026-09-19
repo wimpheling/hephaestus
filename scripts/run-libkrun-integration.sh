@@ -894,6 +894,18 @@ if [[ "${HEPHAESTUS_APP_LIBKRUN_E2E:-0}" == "1" ]]; then
         --manifest-path "${repo_root}/Cargo.toml" \
         --package vm-libkrun \
         --bin hephaestus-vm-libkrun-worker
+    if [[ "${HEPHAESTUS_APP_GATEWAY_SERVICE_EXTERNAL_E2E:-0}" == "1" ]]; then
+        cargo build \
+            --manifest-path "${repo_root}/Cargo.toml" \
+            --package hephaestus-app \
+            --bin hephaestusd
+        target_directory="$(cargo metadata \
+            --manifest-path "${repo_root}/Cargo.toml" \
+            --no-deps --format-version 1 | \
+            python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')"
+        export HEPHAESTUS_DAEMON_BINARY="${target_directory}/debug/hephaestusd"
+        export HEPHAESTUS_EXTERNAL_DAEMON_LOG="${HEPHAESTUS_EXTERNAL_DAEMON_LOG:-${fixture_root}/external-hephaestusd.log}"
+    fi
     phase_timing_end runtime-worker-build passed
     phase_timing_start golden-tests
     run_as_guest_owner env \
@@ -907,7 +919,7 @@ if [[ "${HEPHAESTUS_APP_LIBKRUN_E2E:-0}" == "1" ]]; then
         HEPHAESTUS_LIBKRUN_DISK_ROOT="${fixture_root}/disks" \
         HEPHAESTUS_LIBKRUN_MOUNT_ROOT="${fixture_root}/mounts" \
         HEPHAESTUS_LIBKRUN_CGROUP_ROOT="${cgroup_root}" \
-        HEPHAESTUS_LIBKRUN_WORKER="${repo_root}/target/debug/hephaestus-vm-libkrun-worker" \
+        HEPHAESTUS_LIBKRUN_WORKER="${target_directory:-${repo_root}/target}/debug/hephaestus-vm-libkrun-worker" \
         HEPHAESTUS_TEST_OCI_BUILDER_VM_IMAGE="${builder_vm_image}" \
         HEPHAESTUS_TEST_OCI_VERIFIER_VM_IMAGE="${verifier_vm_image}" \
         HEPHAESTUS_TEST_OCI_BASE_LAYOUT_MANIFEST="${base_layout_manifest}" \
@@ -987,6 +999,39 @@ runtime_entries=''
 if ! runtime_entries="$(find "${fixture_root}/runtime" -mindepth 1 -print -quit)"; then
     heph_shell_failure_die runtime-cleanup read-failed 1 "${LINENO}"
     die "runtime cleanup directory cannot be inspected"
+fi
+# The local run-runtime manager owns these empty namespace directories for
+# recovery and future launches. They are persistent roots, rather than a
+# materialized run; reject every other entry and let non-empty namespace
+# children surface as leaks.
+if [[ -n "${runtime_entries}" ]]; then
+    runtime_entries="$(find "${fixture_root}/runtime" -mindepth 1 -print | while IFS= read -r entry; do
+        case "${entry}" in
+            "${fixture_root}/runtime/exact-runs")
+                if [[ -L "${entry}" || ! -d "${entry}" ]]; then
+                    printf '%s\n' "${entry}"
+                    break
+                fi
+                ;;
+            "${fixture_root}/runtime/exact-runs/active"|\
+            "${fixture_root}/runtime/exact-runs/gateway-services"|\
+            "${fixture_root}/runtime/authority-handoffs")
+                if [[ -L "${entry}" || ! -d "${entry}" ]]; then
+                    printf '%s\n' "${entry}"
+                    break
+                fi
+                nested_entry="$(find "${entry}" -mindepth 1 -print -quit)"
+                if [[ -n "${nested_entry}" ]]; then
+                    printf '%s\n' "${nested_entry}"
+                    break
+                fi
+                ;;
+            *)
+                printf '%s\n' "${entry}"
+                break
+                ;;
+        esac
+    done)"
 fi
 if [[ -n "${runtime_entries}" ]]; then
     heph_shell_failure_die runtime-cleanup assertion-mismatch 1 "${LINENO}"
