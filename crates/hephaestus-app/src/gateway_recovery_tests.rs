@@ -2417,6 +2417,8 @@ async fn daemon_loop_promotes_desired_service_then_drains_previous_revision() {
     caddy_release.notify_one();
     assert!(destroyed.load(Ordering::Acquire) >= 2);
     cleanup_startup_fixture(&pool, fixture).await;
+    drop(observing_targets);
+    pool.close().await;
     drop_isolated_startup_database(database).await;
 }
 
@@ -3838,10 +3840,11 @@ async fn isolated_startup_database() -> Option<IsolatedStartupDatabase> {
 async fn drop_isolated_startup_database(database: IsolatedStartupDatabase) {
     database.control.close().await;
     database.worker.close().await;
-    // PostgreSQL can process pool connection termination asynchronously. Wait
-    // briefly for the exact database to become session-free instead of
-    // force-terminating a surviving task during fixture teardown.
-    let deadline = tokio::time::Instant::now() + StdDuration::from_secs(2);
+    // Pool::close completes client-side shutdown, but PostgreSQL can report a
+    // terminated backend as idle briefly while it processes termination. Keep
+    // this bounded timing-sensitive grace and the session diagnostic so the
+    // fixture still asserts that the database becomes session-free.
+    let deadline = tokio::time::Instant::now() + StdDuration::from_secs(10);
     let mut last_sessions = Vec::new();
     loop {
         let sessions: Vec<(i32, String, String, String)> = match tokio::time::timeout_at(

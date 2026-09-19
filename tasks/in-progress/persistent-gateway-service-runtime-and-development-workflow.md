@@ -2303,3 +2303,23 @@ additional target directory was created and none was deleted. Future runs
 must export the absolute shared target after sourcing the private profile so
 the nested wrapper inherits it, for example:
 `export CARGO_TARGET_DIR=/home/a/service-golden-isolation-target-0b7-20260919`.
+
+CI teardown-fix checkpoint (2026-09-20): PR51 HEAD `d07bdfb` failed GitHub
+Actions run `35474992344`, job `105982597476`, only in
+`gateway_recovery_tests::daemon_loop_promotes_desired_service_then_drains_previous_revision`.
+The functional assertions passed; teardown reported one idle PostgreSQL
+backend after client pool shutdown at
+`crates/hephaestus-app/src/gateway_recovery_tests.rs:3878`. The fix is scoped
+to that fixture: explicitly release the observing target and outer control
+pool handles before isolated-database teardown, while retaining the bounded
+session-free assertion with a timing-sensitive PostgreSQL settlement grace.
+The extracted CI log is `/tmp/gh-run-35474992344-job-105982597476.log`.
+
+The affected real-PostgreSQL recovery group passed 17/17 tests against
+migration 81 in terminal session `71323`; its output was not redirected to a
+separate log file. Strict all-target `hephaestus-app` Clippy with
+`-- -D warnings` passed in terminal session `95408`; its output was likewise
+not redirected. `cargo fmt --all -- --check` and `git diff --check` passed in
+the invoking shell without a persistent session handle. The disposable
+PostgreSQL container handle used by session `71323` was removed by its trap;
+Cargo and VM ownership are released. No Git mutation was performed.
