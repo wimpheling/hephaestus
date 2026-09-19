@@ -20,6 +20,7 @@ use uuid::Uuid;
 
 const HTTP_HANDLER_CONTRACT_V1: &str = "http.v1";
 const HTTP_SERVICE_HANDLER_CONTRACT_V1: &str = "http.service.v1";
+const EXPIRY_BATCH_SIZE: i64 = 128;
 
 /// `PostgreSQL` runtime authority repository for trusted workers.
 #[derive(Clone)]
@@ -215,6 +216,9 @@ impl PgGatewayRuntimeSessionRepository {
 
     /// Persists an active host-mediated service session without creating a
     /// guest bearer or using the runtime handoff store.
+    // Keep invocation locking, snapshot insertion, and session insertion in one
+    // auditable transaction to preserve the issuance/completion lock order.
+    #[allow(clippy::too_many_lines)]
     async fn create_host_mediated(
         &self,
         snapshot: &AuthorizationSnapshot,
@@ -231,13 +235,20 @@ impl PgGatewayRuntimeSessionRepository {
             return Err(RuntimeAuthorityError::Persistence);
         }
         let mut transaction = self.pool.begin().await.map_err(storage)?;
-        sqlx::query_scalar::<_, Uuid>(
-            "SELECT id FROM gateway_invocations WHERE id = $1 FOR UPDATE",
+        let invocation: (Uuid, Uuid, String) = sqlx::query_as(
+            "SELECT gateway_id, gateway_revision_id, outcome
+               FROM gateway_invocations WHERE id = $1 FOR UPDATE",
         )
         .bind(invocation_id.as_uuid())
         .fetch_one(&mut *transaction)
         .await
         .map_err(storage)?;
+        if invocation.0 != principal.id || invocation.1 != principal.revision_id {
+            return Err(RuntimeAuthorityError::IdentityMismatch);
+        }
+        if invocation.2 != "accepted" {
+            return Err(RuntimeAuthorityError::SessionNotPending);
+        }
         if let Some(current) = sqlx::query_as::<_, SessionRow>(
             "SELECT id, snapshot_id, identity_hash, issuance_generation,
                     status, issued_at, expires_at, acknowledged_at, revoked_at
@@ -485,7 +496,27 @@ impl RuntimeSessionRepository for PgGatewayRuntimeSessionRepository {
             return Err(RuntimeAuthorityError::Persistence);
         }
         let mut transaction = self.pool.begin().await.map_err(storage)?;
+        let invocation_id: Uuid = sqlx::query_scalar(
+            "SELECT invocation_id FROM gateway_runtime_authority_sessions WHERE id = $1",
+        )
+        .bind(session_id.as_uuid())
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(storage)?
+        .ok_or(RuntimeAuthorityError::NotFound)?;
+        sqlx::query("SELECT id FROM gateway_invocations WHERE id = $1 FOR UPDATE")
+            .bind(invocation_id)
+            .fetch_one(&mut *transaction)
+            .await
+            .map_err(storage)?;
         let current = Self::locked(&mut transaction, session_id).await?;
+        let admission_mode = sqlx::query_scalar::<_, String>(
+            "SELECT admission_mode FROM gateway_runtime_authority_sessions WHERE id = $1",
+        )
+        .bind(session_id.as_uuid())
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(storage)?;
         if revoked_at < current.issued_at {
             return Err(RuntimeAuthorityError::Persistence);
         }
@@ -497,6 +528,18 @@ impl RuntimeSessionRepository for PgGatewayRuntimeSessionRepository {
             RuntimeSessionStatus::Revoked => {}
             RuntimeSessionStatus::Expired => return Err(RuntimeAuthorityError::SessionNotPending),
         }
+        if admission_mode == "host_mediated" {
+            sqlx::query(
+                "UPDATE gateway_secret_leases
+                    SET status = 'revoked', revoked_at = $2
+                  WHERE runtime_session_id = $1 AND status = 'active'",
+            )
+            .bind(session_id.as_uuid())
+            .bind(revoked_at)
+            .execute(&mut *transaction)
+            .await
+            .map_err(storage)?;
+        }
         transaction.commit().await.map_err(storage)?;
         self.find(session_id)
             .await?
@@ -504,8 +547,75 @@ impl RuntimeSessionRepository for PgGatewayRuntimeSessionRepository {
     }
 
     async fn expire(&self, now: OffsetDateTime) -> Result<u64, RuntimeAuthorityError> {
-        sqlx::query("UPDATE gateway_runtime_authority_sessions SET status = 'expired', updated_at = $1 WHERE status IN ('pending_handoff', 'active') AND expires_at <= $1")
-            .bind(now).execute(&self.pool).await.map(|result| result.rows_affected()).map_err(storage)
+        let mut expired = 0;
+        loop {
+            let mut transaction = self.pool.begin().await.map_err(storage)?;
+            // Select identifiers without taking session locks. Each row is
+            // subsequently locked in invocation -> session order, matching
+            // issuance, terminal completion, and explicit revocation.
+            let sessions: Vec<(Uuid, Uuid)> = sqlx::query_as(
+                "SELECT session.id, session.invocation_id
+                   FROM gateway_runtime_authority_sessions AS session
+                  WHERE session.status IN ('pending_handoff', 'active')
+                    AND session.expires_at <= $1
+                  ORDER BY session.invocation_id, session.id
+                  LIMIT $2",
+            )
+            .bind(now)
+            .bind(EXPIRY_BATCH_SIZE)
+            .fetch_all(&mut *transaction)
+            .await
+            .map_err(storage)?;
+            if sessions.is_empty() {
+                transaction.commit().await.map_err(storage)?;
+                break;
+            }
+            for (session_id, invocation_id) in sessions {
+                sqlx::query("SELECT id FROM gateway_invocations WHERE id = $1 FOR UPDATE")
+                    .bind(invocation_id)
+                    .fetch_one(&mut *transaction)
+                    .await
+                    .map_err(storage)?;
+                let admission_mode = sqlx::query_scalar::<_, String>(
+                    "SELECT admission_mode FROM gateway_runtime_authority_sessions
+                      WHERE id = $1 AND status IN ('pending_handoff', 'active')
+                        AND expires_at <= $2 FOR UPDATE",
+                )
+                .bind(session_id)
+                .bind(now)
+                .fetch_optional(&mut *transaction)
+                .await
+                .map_err(storage)?;
+                let Some(admission_mode) = admission_mode else {
+                    continue;
+                };
+                sqlx::query(
+                    "UPDATE gateway_runtime_authority_sessions
+                        SET status = 'expired', updated_at = $2
+                      WHERE id = $1",
+                )
+                .bind(session_id)
+                .bind(now)
+                .execute(&mut *transaction)
+                .await
+                .map_err(storage)?;
+                if admission_mode == "host_mediated" {
+                    sqlx::query(
+                        "UPDATE gateway_secret_leases
+                            SET status = 'expired', revoked_at = $2
+                          WHERE runtime_session_id = $1 AND status = 'active'",
+                    )
+                    .bind(session_id)
+                    .bind(now)
+                    .execute(&mut *transaction)
+                    .await
+                    .map_err(storage)?;
+                }
+                expired += 1;
+            }
+            transaction.commit().await.map_err(storage)?;
+        }
+        Ok(expired)
     }
 }
 

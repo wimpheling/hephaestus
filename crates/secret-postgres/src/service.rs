@@ -167,6 +167,7 @@ impl<K: KeyProvider + Send + Sync> GatewayInboundSecretResolver
              WHERE lease.invocation_id = $1
                AND rule.gateway_route_id = $2
                AND invocation.gateway_revision_id = $3
+               AND invocation.outcome = 'accepted'
                AND rule.gateway_revision_id = invocation.gateway_revision_id
                AND binding.gateway_revision_id = invocation.gateway_revision_id
                AND lease.secret_version_id = binding.secret_version_id

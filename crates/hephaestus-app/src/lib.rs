@@ -169,7 +169,7 @@ use workspace_local::{LocalWorkspaceConfig, LocalWorkspaceManager};
 use workspace_postgres::PgWorkspaceMetadataRepository;
 
 /// Ordered database migration expected by this application version.
-pub const EXPECTED_DATABASE_MIGRATION: i64 = 71;
+pub const EXPECTED_DATABASE_MIGRATION: i64 = 72;
 
 /// OIDC issuer configuration used for bearer-token authentication.
 #[derive(Clone)]

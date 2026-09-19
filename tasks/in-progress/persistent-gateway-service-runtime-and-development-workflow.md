@@ -279,6 +279,19 @@ integration remain pending.
   1 test in 1.28s; the gateway PostgreSQL target passed 7 tests in 1.94s.
   Focused Clippy, formatting, and diff checks pass. Retained log:
   `/tmp/hephaestus-service-authority-postgres-20260919-real.log`.
+- [x] Add migration 0072 terminal cleanup for accepted host-mediated
+  invocations: completed, failed, and timed-out outcomes revoke the durable
+  session and active secret leases atomically; revoke and expiry paths use the
+  same invocation-to-session-to-lease lock order, and stateless completion
+  remains unchanged. Host issuance locks and verifies the accepted invocation
+  and exact gateway/revision before creating authority. The resolver also
+  requires an accepted invocation. Real PostgreSQL coverage includes terminal
+  cleanup, retries after completion, revoke/expiry lease cleanup, the
+  concurrent race winner cases, and 129 expired host sessions across bounded
+  expiry batches. The exact-environment run passed 1 test in 1.64s; retained
+  log: `/tmp/hephaestus-service-authority-terminal-cleanup-real-batched.log`.
+  Dispatch acceptance, completion/cancellation wiring, and a separate
+  cancellation reaper remain pending.
 
 ## Non-goals
 
