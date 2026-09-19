@@ -766,7 +766,7 @@ mod tests {
         assert!(!event_ids.is_empty(), "publication target is nonempty");
         tokio::time::timeout(TARGET_PUBLICATION_TIMEOUT, async {
             loop {
-                let (found, published, dead_lettered): (i64, i64, i64) = sqlx::query_as(
+                let (found, delivered_count, dead_lettered): (i64, i64, i64) = sqlx::query_as(
                     "SELECT count(*),
                             count(*) FILTER (WHERE published_at IS NOT NULL),
                             count(*) FILTER (WHERE dead_lettered_at IS NOT NULL)
@@ -783,7 +783,7 @@ mod tests {
                     "all publication targets have outbox rows"
                 );
                 assert_eq!(dead_lettered, 0, "publication targets were dead-lettered");
-                if published == found {
+                if delivered_count == found {
                     return;
                 }
                 publisher
