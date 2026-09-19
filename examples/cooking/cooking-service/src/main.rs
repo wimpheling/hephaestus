@@ -26,6 +26,7 @@ const RUNTIME_AUTHORITY_PATH: &str = "/run/hephaestus-authority/session.json";
 const BROKER_SOCKET_PATH: &str = "/run/hephaestus/broker.sock";
 const SECRET_MOUNT_PATH: &str = "/run/hephaestus-secrets";
 const CONTROL_PARAMETERS_PATH: &str = "/run/hephaestus/parameters.json";
+const EXPECTED_GATEWAY_AUTHORITY: &str = "gateway.golden.invalid";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct StartupIdentity {
@@ -52,6 +53,17 @@ struct Response {
     status: u16,
     content_type: &'static str,
     body: Vec<u8>,
+}
+
+// Each field is a separate redacted header-presence assertion in the fixture.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Debug, Default, PartialEq, Eq)]
+struct RequestMetadata {
+    host_matches_expected: bool,
+    forwarded_present: bool,
+    x_forwarded_for_present: bool,
+    x_forwarded_host_present: bool,
+    x_forwarded_proto_present: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -222,6 +234,8 @@ fn response_for(request: &[u8], identity: &StartupIdentity) -> Response {
     }
 
     let mut header_count = 0_usize;
+    let mut metadata = RequestMetadata::default();
+    let mut host = None;
     for line in lines {
         if line.is_empty() {
             break;
@@ -255,7 +269,21 @@ fn response_for(request: &[u8], identity: &StartupIdentity) -> Response {
         if name.eq_ignore_ascii_case("content-length") && value.trim() != "0" {
             return bad_request();
         }
+        if name.eq_ignore_ascii_case("host") {
+            if host.replace(value.trim().to_owned()).is_some() {
+                return bad_request();
+            }
+        } else if name.eq_ignore_ascii_case("forwarded") {
+            metadata.forwarded_present = true;
+        } else if name.eq_ignore_ascii_case("x-forwarded-for") {
+            metadata.x_forwarded_for_present = true;
+        } else if name.eq_ignore_ascii_case("x-forwarded-host") {
+            metadata.x_forwarded_host_present = true;
+        } else if name.eq_ignore_ascii_case("x-forwarded-proto") {
+            metadata.x_forwarded_proto_present = true;
+        }
     }
+    metadata.host_matches_expected = host.as_deref() == Some(EXPECTED_GATEWAY_AUTHORITY);
     let path = target.split_once('?').map_or(target, |(path, _)| path);
     match path {
         "/" | "/service" | "/gateway/service" => text_response(b"cooking service"),
@@ -265,11 +293,34 @@ fn response_for(request: &[u8], identity: &StartupIdentity) -> Response {
             identity_response(identity)
         }
         "/service/isolation" | "/gateway/service/isolation" => isolation_response(target),
+        "/service/metadata" | "/gateway/service/metadata" => metadata_response(&metadata),
         _ => Response {
             status: 404,
             content_type: "text/plain; charset=utf-8",
             body: b"not found".to_vec(),
         },
+    }
+}
+
+fn metadata_response(metadata: &RequestMetadata) -> Response {
+    let body = format!(
+        concat!(
+            "{{\"host_matches_expected\":{},",
+            "\"forwarded_present\":{},",
+            "\"x_forwarded_for_present\":{},",
+            "\"x_forwarded_host_present\":{},",
+            "\"x_forwarded_proto_present\":{}}}"
+        ),
+        metadata.host_matches_expected,
+        metadata.forwarded_present,
+        metadata.x_forwarded_for_present,
+        metadata.x_forwarded_host_present,
+        metadata.x_forwarded_proto_present,
+    );
+    Response {
+        status: 200,
+        content_type: "application/json",
+        body: body.into_bytes(),
     }
 }
 
@@ -566,6 +617,10 @@ mod tests {
             ("/service", b"cooking service".as_slice()),
             ("/gateway/service", b"cooking service".as_slice()),
             (
+                "/gateway/service/metadata",
+                b"{\"host_matches_expected\":false,\"forwarded_present\":false,\"x_forwarded_for_present\":false,\"x_forwarded_host_present\":false,\"x_forwarded_proto_present\":false}".as_slice(),
+            ),
+            (
                 "/gateway/service/identity",
                 b"\"startup_id\":\"7-test-startup\"".as_slice(),
             ),
@@ -618,6 +673,34 @@ mod tests {
         let identity = test_identity();
         let response = response_for(
             b"GET /gateway/service/isolation?admin_port=2019&public_port=18080&host=169.254.169.254 HTTP/1.1\r\nHost: service\r\n\r\n",
+            &identity,
+        );
+        assert_eq!(response.status, 400);
+    }
+
+    #[test]
+    fn metadata_reports_only_case_insensitive_forwarding_presence() {
+        let identity = test_identity();
+        let response = response_for(
+            b"GET /service/metadata HTTP/1.1\r\nHoSt: gateway.golden.invalid\r\nfOrWaRdEd: for=attacker\r\nX-FORWARDED-FOR: 192.0.2.7\r\nX-Forwarded-Host: attacker.invalid\r\nX-forwarded-PROTO: http\r\nX-Secret: do-not-report\r\n\r\n",
+            &identity,
+        );
+        assert_eq!(response.status, 200);
+        let body = String::from_utf8(response.body).expect("metadata JSON UTF-8");
+        assert!(body.contains("\"host_matches_expected\":true"));
+        assert!(body.contains("\"forwarded_present\":true"));
+        assert!(body.contains("\"x_forwarded_for_present\":true"));
+        assert!(body.contains("\"x_forwarded_host_present\":true"));
+        assert!(body.contains("\"x_forwarded_proto_present\":true"));
+        assert!(!body.contains("attacker"));
+        assert!(!body.contains("do-not-report"));
+    }
+
+    #[test]
+    fn metadata_rejects_duplicate_host_headers() {
+        let identity = test_identity();
+        let response = response_for(
+            b"GET /gateway/service/metadata HTTP/1.1\r\nHost: gateway.golden.invalid\r\nhOsT: attacker.invalid\r\n\r\n",
             &identity,
         );
         assert_eq!(response.status, 400);

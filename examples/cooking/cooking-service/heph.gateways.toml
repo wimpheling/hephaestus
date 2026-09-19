@@ -22,3 +22,7 @@ methods = ["GET"]
 [[gateways.routes]]
 path = "/service/isolation"
 methods = ["GET"]
+
+[[gateways.routes]]
+path = "/service/metadata"
+methods = ["GET"]

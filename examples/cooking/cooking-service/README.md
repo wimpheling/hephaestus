@@ -68,7 +68,15 @@ and read-only empty `parameters.json` control surface. The host also requires
 ordinary and forged admin `Host` requests to public `/config/` to return 404,
 and compares the service PID and `startup_id` before and after the probes.
 This proves the disposable guest's current boundary; forwarded-header and
-HTTPS acceptance remain separate pending gates.
+HTTPS metadata acceptance are covered when the published proof is paired with
+`HEPHAESTUS_CADDY_TEST_TLS=1`. The wrapper supplies a disposable internal-CA
+PEM path; the published client trusts only that fixture CA. It sends normal
+and forged `Host`, `Forwarded`, and `X-Forwarded-*` requests to
+`/gateway/service/metadata`, which returns only fixed-authority and header
+presence booleans. The successful HTTPS proof emits
+`REAL_COOKING_SERVICE_HTTPS_METADATA=1`.
+Leaving `HEPHAESTUS_CADDY_TEST_TLS` unset keeps the ordinary HTTP fixture
+behavior for other scenarios.
 The seeded gateway-service modes cover separate runtime scenarios and do not
 replace this source-built publication proof; neither mode claims overall
 persistent-service completion.

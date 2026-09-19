@@ -185,6 +185,7 @@ source /path/to/your/mvp05-cooking-runner.env
 export HEPHAESTUS_LOCAL_ROOT="$PWD/.local/hephaestus"
 export HEPHAESTUS_COOKING_SOURCE_ROOT="$PWD/examples/cooking"
 export HEPHAESTUS_APP_COOKING_SERVICE_BUILD_PROOF=1
+export HEPHAESTUS_CADDY_TEST_TLS=1
 # Export this after sourcing the private profile so nested run scripts inherit
 # the same cache. Use an absolute disposable shared path.
 export CARGO_TARGET_DIR="/absolute/path/to/shared-service-target"
@@ -226,16 +227,38 @@ authority environment/path, broker socket, secret mount, and read-only
 also requests public `/config/` with ordinary and forged admin `Host` headers
 and requires HTTP 404, then compares the service PID and `startup_id` before
 and after the probe. This proves the published disposable guest's current
-network and mount boundary; it does not establish HTTPS termination or the
-separate forwarded-header acceptance gate.
+network and mount boundary.
 
-The verified isolation run passed 35 golden tests (one ignored) and eight
+When `HEPHAESTUS_CADDY_TEST_TLS=1` is paired with the published service proof,
+the wrapper starts Caddy with its disposable internal CA and supplies the CA
+PEM path to the golden client. The client trusts only that supplied fixture CA;
+the Caddy `/load` template retains the internal issuer automation and the
+HTTPS listener. The proof sends a normal metadata request and a second request
+with forged `Host`, `Forwarded`, and `X-Forwarded-*` values through the HTTPS
+IP URL. The sample returns only `host_matches_expected` and presence booleans
+for the four forwarding-header names; both requests must preserve
+`gateway.golden.invalid` and show no forwarding headers after the trusted
+dispatcher. The stable identity request after the probes must still match the
+pre-probe PID and `startup_id`. A successful TLS metadata proof emits
+`REAL_COOKING_SERVICE_HTTPS_METADATA=1`.
+
+The verified HTTPS metadata and isolation run passed 35 golden tests (one
+ignored) and eight
 PostgreSQL tests. Its log is
-`/home/a/heph-published-service-isolation-real-vm-20260920.log`, diagnostics
-are under `/home/a/heph-published-service-isolation-diagnostics-20260920`, and
+`/home/a/heph-published-service-https-real-vm-20260920-v2.log`, diagnostics
+are under `/home/a/heph-published-service-https-diagnostics-20260920-v2`, and
 phase timing is in
-`/home/a/heph-published-service-isolation-phase-20260920.json`. It also
-verified runtime, cgroup, and materializer cleanup. The seeded
+`/home/a/heph-published-service-https-phase-20260920-v2.json`. It emitted
+`REAL_COOKING_SERVICE_HTTPS_METADATA=1`,
+`REAL_COOKING_SERVICE_ISOLATION=1`, and
+`REAL_COOKING_SERVICE_BUILD_PROOF=1`, and verified runtime, cgroup,
+materializer, and VM cleanup. The initial TLS attempt is preserved in
+`/home/a/heph-published-service-https-real-vm-20260920.log`; it reproduced a
+Caddy TLS internal handshake error. The Caddy-only smoke evidence is in
+`/home/a/heph-caddy-tls-reload-20260920-original.log` and
+`/home/a/heph-caddy-tls-reload-20260920-fixed.log`; the correction adds the
+explicit `apps.tls.certificates.automate` loader for `127.0.0.1` while
+retaining the internal issuer policy. The seeded
 gateway-service modes remain useful for their separate runtime scenarios, but
 they do not prove this source-built publication path. This proof does not
 claim that every persistent-service feature or the full service-log acceptance
@@ -253,7 +276,6 @@ The following remain deliberately separate from a native smoke and from the
 source-built Cooking service proof:
 
 * broader persistent-service lifecycle and cutover scenarios;
-* forwarded-header and HTTPS handoff acceptance;
 * service-log acceptance beyond the separate seeded and guest service-log
   proofs;
 * deployment outside the disposable local Cooking fixture and its pinned

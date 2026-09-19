@@ -60,7 +60,7 @@ use sqlx::{Row, postgres::PgPoolOptions};
 use std::{
     collections::BTreeMap,
     env,
-    fs::OpenOptions,
+    fs::{self, OpenOptions},
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::Stdio,
@@ -2842,6 +2842,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
     let cooking_build_proof = env::var("HEPHAESTUS_APP_COOKING_BUILD_PROOF").as_deref() == Ok("1");
     let cooking_service_build_proof =
         env::var("HEPHAESTUS_APP_COOKING_SERVICE_BUILD_PROOF").as_deref() == Ok("1");
+    let caddy_tls = env::var("HEPHAESTUS_CADDY_TEST_TLS").as_deref() == Ok("1");
     // Ordinary golden tests keep their short timeout. The real Cooking proof
     // uses the production build limit, with a small margin for the observer's
     // final state poll and cleanup.
@@ -2955,6 +2956,10 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
     assert!(
         !cooking_service_build_proof || cooking::enabled(),
         "the Cooking service build proof requires HEPHAESTUS_APP_COOKING_E2E=1"
+    );
+    assert!(
+        !caddy_tls || cooking_service_build_proof,
+        "Caddy TLS mode is restricted to the published Cooking service proof"
     );
     assert!(
         !cooking_service_build_proof || (gateway_caddy_e2e && libkrun_e2e),
@@ -3675,10 +3680,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             );
             let public_url =
                 env::var("HEPHAESTUS_CADDY_TEST_PUBLIC_URL").expect("joined Caddy public URL");
-            let client = reqwest::Client::builder()
-                .timeout(Duration::from_secs(10))
-                .build()
-                .expect("bounded cooking service HTTP client");
+            let client = published_cooking_service_client();
             let service_body = client
                 .get(format!("{public_url}/gateway/service"))
                 .send()
@@ -3692,11 +3694,15 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             assert_eq!(service_body.as_ref(), b"cooking service");
             let identity_before = exercise_published_cooking_service_identity(&public_url).await;
             exercise_published_cooking_service_isolation(&public_url, &admin_url).await;
+            exercise_published_cooking_service_metadata(&public_url).await;
             // The isolation probe opens a guest-loopback request. Comparing
             // identity on both sides proves it did not replace the process.
             let identity_after = exercise_published_cooking_service_identity(&public_url).await;
             assert_eq!(identity_before.pid, identity_after.pid);
             assert_eq!(identity_before.startup_id, identity_after.startup_id);
+            if caddy_tls {
+                println!("REAL_COOKING_SERVICE_HTTPS_METADATA=1");
+            }
             println!(
                 "REAL_COOKING_SERVICE_ISOLATION=1 pid={} startup_id={}",
                 identity_after.pid, identity_after.startup_id
@@ -6050,7 +6056,7 @@ fn caddy_configuration(admin_url: &str) -> Vec<u8> {
         admin.host_str().expect("Caddy admin host"),
         admin.port().expect("Caddy admin port")
     );
-    serde_json::json!({
+    let mut configuration = serde_json::json!({
         "admin": { "listen": admin_listen },
         "apps": { "http": { "servers": { "shared": {
             "listen": [env::var("HEPHAESTUS_CADDY_TEST_LISTEN").expect("joined Caddy listen address")],
@@ -6060,9 +6066,24 @@ fn caddy_configuration(admin_url: &str) -> Vec<u8> {
                 { "handle": [{ "handler": "static_response", "status_code": 404 }] }
             ]
         } } } }
-    })
-    .to_string()
-    .into_bytes()
+    });
+    if env::var("HEPHAESTUS_CADDY_TEST_TLS").as_deref() == Ok("1") {
+        let server = configuration
+            .pointer_mut("/apps/http/servers/shared")
+            .expect("shared Caddy server configuration");
+        server["automatic_https"] = serde_json::json!({ "disable_redirects": true });
+        server["tls_connection_policies"] = serde_json::json!([{}]);
+        configuration["apps"]["tls"] = serde_json::json!({
+            "certificates": { "automate": ["127.0.0.1"] },
+            "automation": {
+                "policies": [{
+                    "subjects": ["127.0.0.1"],
+                    "issuers": [{ "module": "internal" }]
+                }]
+            }
+        });
+    }
+    serde_json::to_vec(&configuration).expect("serialize Caddy configuration template")
 }
 
 const fn agent_config() -> &'static str {
@@ -7172,10 +7193,7 @@ async fn exercise_gateway_service_requests(public_url: &str) -> GatewayServiceRe
 async fn exercise_published_cooking_service_identity(
     public_url: &str,
 ) -> GatewayServiceRequestProof {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build()
-        .expect("bounded published cooking-service client");
+    let client = published_cooking_service_client();
     let identity_url = format!("{public_url}/gateway/service/identity");
     let first = client
         .get(&identity_url)
@@ -7231,20 +7249,104 @@ async fn exercise_published_cooking_service_identity(
     }
 }
 
+fn published_cooking_service_client() -> reqwest::Client {
+    let mut builder = reqwest::Client::builder().timeout(Duration::from_secs(10));
+    if env::var("HEPHAESTUS_CADDY_TEST_TLS").as_deref() == Ok("1") {
+        let ca_path =
+            env::var("HEPHAESTUS_CADDY_TEST_CA_CERT").expect("joined Caddy TLS fixture CA path");
+        let ca_pem = fs::read(&ca_path).expect("read joined Caddy TLS fixture CA");
+        let certificate =
+            reqwest::Certificate::from_pem(&ca_pem).expect("parse joined Caddy TLS fixture CA");
+        builder = builder
+            .tls_built_in_root_certs(false)
+            .add_root_certificate(certificate);
+    }
+    builder
+        .build()
+        .expect("bounded published cooking-service client")
+}
+
+async fn exercise_published_cooking_service_metadata(public_url: &str) {
+    let client = published_cooking_service_client();
+    let metadata_url = format!("{public_url}/gateway/service/metadata");
+    for (label, request) in [
+        ("normal", client.get(&metadata_url)),
+        (
+            "forged forwarding",
+            client
+                .get(&metadata_url)
+                .header(reqwest::header::HOST, "attacker.golden.invalid")
+                .header("Forwarded", "for=198.51.100.7;host=attacker.golden.invalid")
+                .header("X-Forwarded-For", "198.51.100.7")
+                .header("X-Forwarded-Host", "attacker.golden.invalid")
+                .header("X-Forwarded-Proto", "http"),
+        ),
+    ] {
+        let response = request
+            .send()
+            .await
+            .unwrap_or_else(|error| panic!("{label} published metadata request: {error}"))
+            .error_for_status()
+            .unwrap_or_else(|error| panic!("{label} published metadata request succeeds: {error}"))
+            .bytes()
+            .await
+            .unwrap_or_else(|error| panic!("read {label} published metadata response: {error}"));
+        let metadata: serde_json::Value = serde_json::from_slice(&response)
+            .unwrap_or_else(|error| panic!("{label} published metadata JSON: {error}"));
+        let object = metadata
+            .as_object()
+            .unwrap_or_else(|| panic!("{label} published metadata object"));
+        let expected_keys = [
+            "host_matches_expected",
+            "forwarded_present",
+            "x_forwarded_for_present",
+            "x_forwarded_host_present",
+            "x_forwarded_proto_present",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            object
+                .keys()
+                .cloned()
+                .collect::<std::collections::BTreeSet<_>>(),
+            expected_keys,
+            "{label} metadata schema"
+        );
+        assert_eq!(
+            object
+                .get("host_matches_expected")
+                .and_then(serde_json::Value::as_bool),
+            Some(true),
+            "{label} request keeps the configured authority"
+        );
+        for key in [
+            "forwarded_present",
+            "x_forwarded_for_present",
+            "x_forwarded_host_present",
+            "x_forwarded_proto_present",
+        ] {
+            assert_eq!(
+                object.get(key).and_then(serde_json::Value::as_bool),
+                Some(false),
+                "{label} request must not expose caller forwarding header {key}"
+            );
+        }
+    }
+}
+
 /// Runs the published service's bounded guest isolation diagnostic through the
 /// real Caddy public listener, then proves the public listener cannot serve the
 /// separate Caddy administration API, including with a forged admin Host.
 async fn exercise_published_cooking_service_isolation(public_url: &str, admin_url: &str) {
-    let public_port = published_loopback_port(public_url, "public Caddy URL");
-    let admin_port = published_loopback_port(admin_url, "admin Caddy URL");
+    let public_port = published_public_loopback_port(public_url, "public Caddy URL");
+    let admin_port = loopback_port(admin_url, "admin Caddy URL");
     assert_ne!(public_port, admin_port);
     assert_ne!(public_port, 8080);
     assert_ne!(admin_port, 8080);
 
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build()
-        .expect("bounded published isolation client");
+    let client = published_cooking_service_client();
     let diagnostic = client
         .get(format!(
             "{public_url}/gateway/service/isolation?admin_port={admin_port}&public_port={public_port}"
@@ -7332,14 +7434,30 @@ async fn exercise_published_cooking_service_isolation(public_url: &str, admin_ur
     }
 }
 
-fn published_loopback_port(url: &str, label: &str) -> u16 {
+fn published_public_loopback_port(url: &str, label: &str) -> u16 {
     let url =
         reqwest::Url::parse(url).unwrap_or_else(|error| panic!("{label} is invalid: {error}"));
+    let expected_scheme = if env::var("HEPHAESTUS_CADDY_TEST_TLS").as_deref() == Ok("1") {
+        "https"
+    } else {
+        "http"
+    };
     assert_eq!(
         url.scheme(),
-        "http",
-        "{label} must use HTTP in the disposable harness"
+        expected_scheme,
+        "{label} must use the configured disposable harness scheme"
     );
+    loopback_port_from_url(&url, label)
+}
+
+fn loopback_port(url: &str, label: &str) -> u16 {
+    let url =
+        reqwest::Url::parse(url).unwrap_or_else(|error| panic!("{label} is invalid: {error}"));
+    assert_eq!(url.scheme(), "http", "{label} must use HTTP administration");
+    loopback_port_from_url(&url, label)
+}
+
+fn loopback_port_from_url(url: &reqwest::Url, label: &str) -> u16 {
     assert_eq!(
         url.host_str(),
         Some("127.0.0.1"),

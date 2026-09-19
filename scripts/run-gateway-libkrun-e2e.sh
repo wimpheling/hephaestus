@@ -77,14 +77,31 @@ reserve_port() {
 
 admin_port="$(reserve_port)"
 public_port="$(reserve_port)"
-readonly admin_port public_port
+tls_enabled="${HEPHAESTUS_CADDY_TEST_TLS:-0}"
+case "${tls_enabled}" in
+    0|1) ;;
+    *)
+        printf 'HEPHAESTUS_CADDY_TEST_TLS must be 0 or 1\n' >&2
+        exit 1
+        ;;
+esac
 admin_url="http://127.0.0.1:${admin_port}"
-public_url="http://127.0.0.1:${public_port}"
+if [[ "${tls_enabled}" == 1 ]]; then
+    public_url="https://127.0.0.1:${public_port}"
+else
+    public_url="http://127.0.0.1:${public_port}"
+fi
 public_listen="127.0.0.1:${public_port}"
-readonly admin_url public_url public_listen
+ca_cert_path="${fixture_root}/caddy-local-root.pem"
+readonly admin_port public_port tls_enabled admin_url public_url public_listen ca_cert_path
 
-printf '{\n    auto_https off\n    admin 127.0.0.1:%s\n}\n\nhttp://%s {\n    respond "gateway configuration pending" 503\n}\n' \
-    "${admin_port}" "${public_listen}" >"${fixture_root}/Caddyfile"
+if [[ "${tls_enabled}" == 1 ]]; then
+    printf '{\n    auto_https disable_redirects\n    admin 127.0.0.1:%s\n}\n\nhttps://127.0.0.1:%s {\n    tls internal\n    respond "gateway configuration pending" 503\n}\n' \
+        "${admin_port}" "${public_port}" >"${fixture_root}/Caddyfile"
+else
+    printf '{\n    auto_https off\n    admin 127.0.0.1:%s\n}\n\nhttp://%s {\n    respond "gateway configuration pending" 503\n}\n' \
+        "${admin_port}" "${public_listen}" >"${fixture_root}/Caddyfile"
+fi
 
 phase_timing_start gateway-edge-ready
 podman run --detach --rm \
@@ -107,9 +124,61 @@ for attempt in $(seq 1 30); do
 done
 phase_timing_end gateway-edge-ready passed
 
-HEPHAESTUS_APP_LIBKRUN_E2E=1 \
-HEPHAESTUS_APP_GATEWAY_CADDY_E2E=1 \
-HEPHAESTUS_CADDY_TEST_ADMIN_URL="${admin_url}" \
-HEPHAESTUS_CADDY_TEST_PUBLIC_URL="${public_url}" \
-HEPHAESTUS_CADDY_TEST_LISTEN="${public_listen}" \
-    "${script_dir}/run-libkrun-integration.sh"
+if [[ "${tls_enabled}" == 1 ]]; then
+    for command in awk grep; do
+        command -v "${command}" >/dev/null || {
+            printf 'required command is unavailable: %s\n' "${command}" >&2
+            exit 1
+        }
+    done
+    : >"${ca_cert_path}"
+    chmod 0600 "${ca_cert_path}"
+    if ! curl --silent --show-error --fail --connect-timeout 2 --max-time 5 \
+        "${admin_url}/pki/ca/local/certificates" |
+        awk '
+            /-----BEGIN CERTIFICATE-----/ { certificate_count++ }
+            certificate_count == 1 { print }
+            /-----END CERTIFICATE-----/ && certificate_count == 1 { exit }
+        ' >"${ca_cert_path}"; then
+        podman logs "${container_name}" >&2 || true
+        printf 'Caddy local CA certificate was unavailable\n' >&2
+        exit 1
+    fi
+    if ! grep -q '^-----BEGIN CERTIFICATE-----$' "${ca_cert_path}" ||
+        ! grep -q '^-----END CERTIFICATE-----$' "${ca_cert_path}"; then
+        podman logs "${container_name}" >&2 || true
+        printf 'Caddy local CA response did not contain one PEM certificate\n' >&2
+        exit 1
+    fi
+
+    public_status=''
+    for attempt in $(seq 1 30); do
+        if public_status="$(curl --silent --show-error --cacert "${ca_cert_path}" \
+            --connect-timeout 2 --max-time 5 --output /dev/null \
+            --write-out '%{http_code}' "${public_url}/" 2>/dev/null)" &&
+            [[ "${public_status}" == 503 ]]; then
+            break
+        fi
+        if (( attempt == 30 )); then
+            podman logs "${container_name}" >&2 || true
+            printf 'Caddy HTTPS public listener did not become ready with its local CA\n' >&2
+            exit 1
+        fi
+        sleep 1
+    done
+fi
+
+integration_env=(
+    HEPHAESTUS_APP_LIBKRUN_E2E=1
+    HEPHAESTUS_APP_GATEWAY_CADDY_E2E=1
+    "HEPHAESTUS_CADDY_TEST_ADMIN_URL=${admin_url}"
+    "HEPHAESTUS_CADDY_TEST_PUBLIC_URL=${public_url}"
+    "HEPHAESTUS_CADDY_TEST_LISTEN=${public_listen}"
+)
+if [[ "${tls_enabled}" == 1 ]]; then
+    integration_env+=(
+        HEPHAESTUS_CADDY_TEST_TLS=1
+        "HEPHAESTUS_CADDY_TEST_CA_CERT=${ca_cert_path}"
+    )
+fi
+env "${integration_env[@]}" "${script_dir}/run-libkrun-integration.sh"

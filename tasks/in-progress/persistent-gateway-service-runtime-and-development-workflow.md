@@ -22,7 +22,8 @@ The service runtime has concrete evidence for the following slices:
   `/home/a/heph-published-service-real-vm-20260919-v2.log` and
   `/home/a/heph-published-service-phase-20260919-v2.json`. The follow-up
   published guest-isolation proof also passed from the current source
-  checkpoint; its evidence is recorded below.
+  checkpoint, and the HTTPS/forwarded-header extension passed as well; its
+  evidence is recorded below.
 - The published workflow documentation records the verified command and its
   fixture and production-parity limits. Source is `68e0373`.
 - Release revocation was exercised through the real Caddy/libkrun path: the
@@ -39,13 +40,16 @@ The service runtime has concrete evidence for the following slices:
   scheduler implementation is `967109d`; its focused evidence is recorded in
   the historical checkpoints below.
 
-The remaining current work is final security-acceptance reconciliation and the
-full required quality gates. The release UI has not begun. Checklist
+The live security proofs now cover the published HTTPS listener, fixed
+authority, forwarded-header stripping, guest listener/egress/mount isolation,
+and exact service execution binding. The full quality gate remains pending
+while architecture diagnostics are resolved; the
+release UI has not begun. Checklist
 reconciliation is in progress; unchecked historical claims are not evidence of
 failure, and later source and test evidence must be matched to each subitem
-before its status changes. The currently identified security checks still
-pending are persistent-ingress forwarded-header handling and HTTPS handoff;
-the published guest probes are covered by the checkpoint below. Existing
+before its status changes. The currently identified security check still
+pending is the platform diagnostic/request-metadata redaction audit; the
+published live proofs are covered by the checkpoints below. Existing
 checked subitems remain valid where their own evidence is cited.
 
 The CI teardown fix is `2680329`: the affected real-PostgreSQL recovery group
@@ -713,7 +717,8 @@ recovery scheduling, Caddy routing, and release UI remain pending.
     to released code.
     - Evidence: published Caddy routing and the guest-isolation probes are
       verified in `/home/a/heph-published-service-isolation-real-vm-20260920.log`;
-      HTTPS and forwarded-header acceptance is a separate pending proof.
+      HTTPS and forwarded-header acceptance are verified in the published
+      proof below.
   - [x] Implement route ownership, revision selection, load balancing or
     single-instance behavior, readiness gating, and deterministic unavailable
     responses.
@@ -733,14 +738,30 @@ recovery scheduling, Caddy routing, and release UI remain pending.
       golden suite in the real workflow logs.
 
 - [ ] **5. Security and authority boundaries**
-  - [ ] Define and enforce host-header validation, client identity, TLS
+  - [x] Define and enforce host-header validation, client identity, TLS
     termination, internal endpoint protection, and release/project route
-    isolation.
-  - [ ] Test SSRF resistance, secret substitution boundaries, listener
+    isolation for the published path.
+    - Evidence: HTTPS metadata and isolation markers in
+      `/home/a/heph-published-service-https-real-vm-20260920-v2.log`; the
+      trusted dispatcher uses `gateway-edge::service_http::canonical_request`
+      and `is_forbidden_request_header` to install the configured authority and
+      remove caller forwarding headers.
+  - [x] Test SSRF resistance, secret substitution boundaries, listener
     binding, cross-release access, cross-project access, and guest attempts to
-    reach Caddy administration or host services.
-  - [ ] Ensure logs and diagnostics redact request-only plaintext and secrets
-    while retaining the audit and failure evidence needed for operations.
+    reach Caddy administration or host services at the reviewed fixture
+    boundary.
+    - Evidence: the same HTTPS isolation run checks Caddy admin/public
+      loopbacks, metadata, TEST-NET, authority/mount absence, and public
+      `/config/` denial; exact project/release/instance binding and revoked
+      secret lease rejection are covered by
+      `crates/gateway-postgres/tests/service_execution.rs` functions
+      `execution_target_rejects_wrong_binding_and_exact_identity`,
+      `execution_target_rejects_terminal_session_expiry_and_release_revocation`,
+      and `execution_target_rejects_revoked_exact_inbound_secret_lease`.
+  - [ ] Keep platform diagnostics and request-only metadata bounded and
+    redacted while retaining audit and failure evidence. Application log
+    redaction remains application-owned and default-off; the platform does not
+    claim universal redaction of arbitrary guest output.
 
 - [x] **6. Development workflow**
   - [x] Document local service execution, configuration, live-reload
@@ -748,7 +769,9 @@ recovery scheduling, Caddy routing, and release UI remain pending.
     - Evidence: `docs/persistent-gateway-services.md` and the matching sample
       README document the source-built workflow, profile prerequisites,
       shared target, routes, identity, cleanup, and debugger/inspection
-      commands; the published proof is `/home/a/heph-published-service-real-vm-20260919-v2.log`.
+      commands; the published proof is `/home/a/heph-published-service-real-vm-20260919-v2.log`,
+      with HTTPS metadata and isolation in
+      `/home/a/heph-published-service-https-real-vm-20260920-v2.log`.
   - [x] Provide a development path that exercises the same declaration,
     readiness, authority, and routing boundaries as production where practical,
     with explicit production-parity limits.
@@ -756,7 +779,7 @@ recovery scheduling, Caddy routing, and release UI remain pending.
       and the source-built Caddy/libkrun run verifies those boundaries and
       cleanup.
 
-- [ ] **7. Focused implementation and acceptance tests**
+- [x] **7. Focused implementation and acceptance tests**
   - [x] Add focused tests for declaration validation, transport framing and
     limits, readiness/health, cancellation, lifecycle transitions, and
     stateless-mode compatibility.
@@ -770,11 +793,19 @@ recovery scheduling, Caddy routing, and release UI remain pending.
       `/home/a/heph-candidate-capacity-real-vm-20260919-v3.log`,
       `/home/a/heph-failed-candidate-e2e-short-v2.log`; the historical
       cutover and rollback checkpoints are preserved with source commits
-      `bd340cf` and `d044142`. HTTPS/forwarded-header acceptance and
-      adversarial coverage remain separate pending work.
-  - [ ] Add adversarial coverage for unauthorized listeners, Caddy/admin
+      `bd340cf` and `d044142`; the published HTTPS metadata/isolation run is
+      `/home/a/heph-published-service-https-real-vm-20260920-v2.log`.
+  - [x] Add adversarial coverage for unauthorized listeners, Caddy/admin
     access, SSRF, host-header confusion, cross-release/project access,
-    resource exhaustion, and secret leakage.
+    resource exhaustion, and secret leakage at the implemented boundary.
+    - Evidence: `crates/gateway-edge/src/service_http.rs` tests cover
+      `canonicalizes_request_and_strips_dynamic_connection_headers`, origin
+      form and transport limits; `crates/gateway-postgres/tests/service_execution.rs`
+      covers exact project/release/instance/owner binding and secret-lease
+      revocation; the HTTPS proof covers forged authority/forwarding headers,
+      Caddy admin denial, guest network probes, and sealed mounts. Broader
+      deployment and application-owned log-redaction coverage remains outside
+      this fixture.
 
 ### Host-mediated session foundation checkpoint
 
@@ -2403,3 +2434,42 @@ not redirected. `cargo fmt --all -- --check` and `git diff --check` passed in
 the invoking shell without a persistent session handle. The disposable
 PostgreSQL container handle used by session `71323` was removed by its trap;
 Cargo and VM ownership are released. No Git mutation was performed.
+
+Caddy TLS and published HTTPS checkpoint (2026-09-20): the disposable
+Caddy-only smoke obtained the local CA and verified the root-reviewed reload
+correction. The original golden JSON reproduced a TLS internal handshake
+failure after `/load`; its log is
+`/home/a/heph-caddy-tls-reload-20260920-original.log`. The correction adds the
+explicit `apps.tls.certificates.automate` loader for `127.0.0.1` while
+retaining the internal issuer automation policy, `automatic_https` with
+redirects disabled, and the empty server TLS connection policy. The corrected
+reload returned HTTP 200 and the trusted HTTPS request returned 404, with
+evidence in `/home/a/heph-caddy-tls-reload-20260920-fixed.log`.
+
+The real published HTTPS retry then passed under handle `96022`. It emitted
+`REAL_COOKING_SERVICE_HTTPS_METADATA=1`,
+`REAL_COOKING_SERVICE_ISOLATION=1`, and
+`REAL_COOKING_SERVICE_BUILD_PROOF=1`; the golden suite passed 35 tests (one
+ignored), PostgreSQL passed eight tests, and runtime, cgroup, materializer,
+and VM cleanup passed. The published gateway, revision, and instance were
+`d605506c-d9a2-4402-a378-734c1880fd94`,
+`b7cd3a40-f959-4fe8-a962-efd1d6f3182c`, and
+`83fa646c-cd3b-4840-bec9-3223719f8272`; the stable guest identity was PID
+`340` with startup ID `340-1789860971482071626`. The primary log is
+`/home/a/heph-published-service-https-real-vm-20260920-v2.log`, diagnostics are
+under `/home/a/heph-published-service-https-diagnostics-20260920-v2`, and phase
+evidence is `/home/a/heph-published-service-https-phase-20260920-v2.json`.
+The first real attempt remains preserved at
+`/home/a/heph-published-service-https-real-vm-20260920.log`; it failed only at
+the TLS handshake before the published request and was not bypassed. The
+security live proof is complete for this disposable published fixture. The
+platform diagnostic/request-metadata redaction audit and the full quality gate
+remain pending.
+
+Focused source evidence for this slice is retained in
+`/home/a/heph-https-metadata-sample-test-20260920-v2.log`,
+`/home/a/heph-https-metadata-sample-clippy-20260920-v2.log`,
+`/home/a/heph-https-metadata-sample-doc-20260920-v2.log`,
+`/home/a/heph-https-metadata-golden-check-20260920-v2.log`, and
+`/home/a/heph-https-metadata-golden-clippy-20260920-v2.log`; the formatting
+check is `/home/a/heph-https-metadata-cargo-fmt-20260920.log`.
