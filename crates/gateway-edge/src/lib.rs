@@ -19,6 +19,7 @@ use vm_trait::{PrivateHttpRequest, PrivateHttpResponse, PrivateMailboxPublicatio
 mod integration;
 mod service_capacity;
 mod service_cleanup;
+mod service_cleanup_driver;
 mod service_coordinator;
 mod service_execution;
 mod service_failure;
@@ -43,6 +44,11 @@ pub use service_capacity::{
     GatewayServiceSupervisorPolicy,
 };
 pub use service_cleanup::{GatewayServiceCleanup, GatewayServiceCleanupError};
+pub use service_cleanup_driver::{
+    GatewayServiceCleanupDriver, GatewayServiceCleanupDriverError,
+    GatewayServiceCleanupDriverOutcome, GatewayServiceCleanupDriverPolicy,
+    MAX_SERVICE_CLEANUP_DATABASE_WAIT,
+};
 pub use service_coordinator::{
     GatewayServiceCoordinator, GatewayServiceCoordinatorControl, GatewayServiceCoordinatorError,
     GatewayServiceCoordinatorFailure, GatewayServiceCoordinatorFailureReason,

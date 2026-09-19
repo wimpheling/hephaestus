@@ -67,6 +67,26 @@ impl GatewayServiceCleanup {
         })
     }
 
+    /// Transfers caller-proven physical cleanup progress into retry state.
+    ///
+    /// The caller must have already confirmed both provider teardown and exact
+    /// materializer cleanup.  This constructor never infers completion from a
+    /// missing VM handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GatewayServiceCleanupError::InvalidInput`] when the identity
+    /// or timeout violates the cleanup bounds.
+    pub fn from_confirmed_physical(
+        identity: GatewayServiceIdentity,
+        timeout: Duration,
+    ) -> Result<Self, GatewayServiceCleanupError> {
+        let mut cleanup = Self::new(identity, None, timeout)?;
+        cleanup.vm_teardown_confirmed = true;
+        cleanup.materializer_cleanup_confirmed = true;
+        Ok(cleanup)
+    }
+
     /// Returns the exact service identity owned by this cleanup state.
     #[must_use]
     pub const fn identity(&self) -> GatewayServiceIdentity {

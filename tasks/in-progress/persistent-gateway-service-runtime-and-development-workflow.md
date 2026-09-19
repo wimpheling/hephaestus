@@ -437,6 +437,20 @@ Clippy passed; formatting and `git diff --check` passed. This is a physical
 cleanup primitive only; durable cleanup state, capacity release, and
 supervisor scheduling remain the caller's responsibility.
 
+The fenced cleanup driver now composes that physical helper with the durable
+lease monitor, redacted failure store, exact-instance lookup, and fenced
+`mark_cleaned` transition. It retains all caller-owned cleanup, lease, and
+failure state on unavailable or stale returns; physical cleanup still settles
+after lease loss, while durable writes stop. Eight focused driver tests cover
+heartbeat renewal during blocked cleanup, report-before-clean transition,
+unavailable reporting, ambiguous completion confirmation, stale fences,
+expired cleaned-row confirmation, and lease-loss settlement. An exact
+`49c8ecc` checkout with only this slice overlaid passed 101 gateway-edge
+library tests, strict all-target/all-feature Clippy, formatting, and diff
+checks. This remains a cleanup
+driver only; scheduler, claim recovery, capacity release, and Caddy routing
+remain pending.
+
 - [x] Finish focused VM contract tests and workspace compatibility checks:
   `cargo test -p vm-trait`, `cargo test -p vm-libkrun --lib`,
   `cargo test -p vm-fake`, focused Clippy, `cargo check --workspace
