@@ -1076,6 +1076,37 @@ binding, or ambient project/network authority.
 
 ## Verification gates
 
+Next daemon integration acceptance boundary: after boot recovery proves a fresh
+empty host inventory, the existing reconciliation loop must select real durable
+targets and retain startup handles; constructing a supervisor alone does not
+launch services. Target reads must remain bounded and must not stop polling
+leases, cleanup, or Caddy. Restore an eligible active service before attempting
+its desired replacement. Retain job identity and capacity through uncertain
+claims and incomplete cleanup, and reconcile those states before admitting more
+work. Forward drain requests through retained handles after a successful
+replacement; do not treat cancellation as graceful draining. Check owned targets
+explicitly for pause, removal, or publication revocation, since they disappear
+from the enabled-target listing. Verification must exercise this actual daemon
+selection path rather than pre-starting a supervisor job through a test seam.
+
+Current integration investigation (2026-09-19): running the PostgreSQL fixture
+suite before the app recovery test reproduces a route validation mismatch.
+Persisted routes such as `/http.service.v1` pass the database contract but fail
+edge validation, so `desired_configuration()` fails before Caddy reconciliation
+starts. Evidence: `/tmp/heph-sequential-gateway-postgres-diagnostic-20260919.log`.
+The validator fix now accepts ordinary dotted segments while preserving
+traversal and normalization rejection. Isolated focused tests, strict
+gateway-edge all-target/all-feature Clippy, and formatting passed. Against a
+fresh migration-77 database, all seven gateway-postgres test binaries passed
+(60 tests total), followed by the app recovery regression with an in-test
+`REAL_POSTGRES_CONNECTED_AND_MIGRATED=1 max_migration=77` marker. Logs:
+`/tmp/heph-route-validator-gateway-postgres-20260919-v2.log`,
+`/tmp/heph-route-validator-db-marker-20260919.log`, and
+`/tmp/heph-route-validator-app-recovery-20260919-v2.log`. Increasing the
+recovery test timeout does not address this failure. Boot recovery and the
+migration 0078 durable log append slice are still under implementation/review;
+the latter's initially skipped PostgreSQL test is not acceptance evidence.
+
 - [ ] Run `cargo fmt --all -- --check` after implementation changes.
 - [ ] Run `cargo clippy --workspace --all-targets --all-features`.
 - [ ] Run `cargo test --workspace --all-features`.

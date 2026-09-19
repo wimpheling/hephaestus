@@ -971,7 +971,7 @@ fn validate_gateway_prefix(prefix: &str) -> Result<(), GatewayEdgeError> {
             .any(|segment| segment.is_empty() || segment == "." || segment == "..")
         || !prefix
             .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'/'))
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'/'))
     {
         return Err(GatewayEdgeError::InvalidRoute(
             "path prefix must be normalized relative path",
@@ -1280,6 +1280,26 @@ mod tests {
             path_prefix: "echo".to_owned(),
             methods: BTreeSet::from([Method::POST]),
             limits: limits(),
+        }
+    }
+
+    #[test]
+    fn route_prefix_allows_dots_inside_segments_but_not_dot_segments_or_escapes() {
+        for prefix in ["http.service.v1", "release-1.0/service.v1"] {
+            let mut binding = route();
+            binding.path_prefix = prefix.to_owned();
+            binding.validate().expect("schema-valid dotted route");
+        }
+        for prefix in [
+            ".",
+            "..",
+            "release/./service",
+            "release/../service",
+            "release%2Fservice",
+        ] {
+            let mut binding = route();
+            binding.path_prefix = prefix.to_owned();
+            assert!(binding.validate().is_err(), "unsafe route prefix: {prefix}");
         }
     }
 
