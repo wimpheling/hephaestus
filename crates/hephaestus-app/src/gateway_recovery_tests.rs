@@ -90,6 +90,7 @@ struct DestroyGate {
     block_retry: Arc<std::sync::atomic::AtomicBool>,
     hold_after_first_failure: Arc<std::sync::atomic::AtomicBool>,
     first_failure_release: Arc<tokio::sync::Notify>,
+    retry_target_id: Arc<Mutex<Option<VmId>>>,
     attempts: Arc<AtomicUsize>,
     attempt_ids: Arc<Mutex<Vec<VmId>>>,
     orphan_attempt_ids: Arc<Mutex<Vec<VmId>>>,
@@ -105,13 +106,15 @@ impl DestroyGate {
             block_retry: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             hold_after_first_failure: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             first_failure_release: Arc::new(tokio::sync::Notify::new()),
+            retry_target_id: Arc::new(Mutex::new(None)),
             attempts: Arc::new(AtomicUsize::new(0)),
             attempt_ids: Arc::new(Mutex::new(Vec::new())),
             orphan_attempt_ids: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
-    fn fail_first_destroy(&self) {
+    fn arm_first_failure_for(&self, vm_id: VmId) {
+        *self.retry_target_id.lock().expect("retry target id") = Some(vm_id);
         self.fail_once.store(true, Ordering::Release);
         self.block_once.store(false, Ordering::Release);
         self.block_retry.store(true, Ordering::Release);
@@ -216,12 +219,18 @@ impl VmInstance for ServiceTransportVm {
 
     async fn destroy(&self) -> Result<(), VmError> {
         if let Some(gate) = &self.destroy_gate {
+            let is_retry_target = gate
+                .retry_target_id
+                .lock()
+                .expect("retry target id")
+                .as_ref()
+                .is_some_and(|target| target == self.id());
             gate.attempts.fetch_add(1, Ordering::AcqRel);
             gate.attempt_ids
                 .lock()
                 .expect("destroy attempt ids")
                 .push(self.id().clone());
-            if gate.fail_once.swap(false, Ordering::AcqRel) {
+            if is_retry_target && gate.fail_once.swap(false, Ordering::AcqRel) {
                 gate.entered.notify_one();
                 if gate.hold_after_first_failure.load(Ordering::Acquire) {
                     gate.first_failure_release.notified().await;
@@ -231,7 +240,7 @@ impl VmInstance for ServiceTransportVm {
                     reason: String::from("injected first-attempt failure"),
                 });
             }
-            if gate.block_retry.swap(false, Ordering::AcqRel) {
+            if is_retry_target && gate.block_retry.swap(false, Ordering::AcqRel) {
                 gate.entered.notify_one();
                 gate.release.notified().await;
             }
@@ -2149,7 +2158,6 @@ async fn daemon_loop_retries_retained_cleanup_case(expire_before_retry: bool) {
         third_revision,
     ));
     let destroy_gate = Arc::new(DestroyGate::new());
-    destroy_gate.fail_first_destroy();
     if expire_before_retry {
         destroy_gate.hold_first_failure();
     }
@@ -2188,6 +2196,7 @@ async fn daemon_loop_retries_retained_cleanup_case(expire_before_retry: bool) {
     .fetch_one(&pool)
     .await
     .expect("read original service instance");
+    destroy_gate.arm_first_failure_for(VmId(active_instance.2.clone()));
     let invocation = insert_invocation(
         &pool,
         Fixture {
@@ -2222,8 +2231,8 @@ async fn daemon_loop_retries_retained_cleanup_case(expire_before_retry: bool) {
     })
     .await
     .expect("replacement is ready");
-    let replacement_instance: Uuid = sqlx::query_scalar(
-        "SELECT id
+    let (replacement_instance, replacement_vm_id): (Uuid, String) = sqlx::query_as(
+        "SELECT id, vm_id
            FROM gateway_service_instances
           WHERE gateway_id = $1 AND revision_id = $2 AND state = 'ready'",
     )
@@ -2307,13 +2316,23 @@ async fn daemon_loop_retries_retained_cleanup_case(expire_before_retry: bool) {
     tokio::time::timeout(StdDuration::from_secs(10), destroy_gate.entered.notified())
         .await
         .expect("automatic retry reaches the controlled physical cleanup barrier");
-    assert_eq!(destroy_gate.attempts.load(Ordering::Acquire), 2);
     let retry_ids = destroy_gate
         .attempt_ids
         .lock()
         .expect("destroy attempt ids")
         .clone();
-    assert_eq!(retry_ids[0], retry_ids[1]);
+    let active_vm_id = VmId(active_instance.2.clone());
+    let active_attempts = retry_ids.iter().filter(|id| *id == &active_vm_id).count();
+    assert!(
+        active_attempts >= 2,
+        "retained A cleanup must retry its exact VM; attempts={retry_ids:?}",
+    );
+    assert!(
+        retry_ids
+            .iter()
+            .all(|id| id.0.as_str() != replacement_vm_id.as_str()),
+        "healthy B cleanup must not be attempted while A is held; attempts={retry_ids:?}",
+    );
 
     let retained_instance: (Uuid, i64, String, String) = sqlx::query_as(
         "SELECT id, fencing_token, vm_id, state

@@ -1844,3 +1844,20 @@ restoration test itself passed; the same run separately failed the expired
 cleanup test because its global `DestroyGate` observed two different VM IDs
 (`/home/a/heph-ci-35445311169-failed.log`). That gate synchronization remains
 the next bounded test-only investigation and is not included here.
+
+Expired-cleanup test-gate checkpoint (2026-09-19): the retained-cleanup
+variants now arm the injected failure only after reading original A's durable
+instance and deterministic VM ID. Retry notification is scoped to that VM;
+all destroy IDs remain observable, and the test explicitly rejects an attempt
+against healthy B while A is held. On clean `0a5ca54` plus only this test
+overlay, both real worker-role PostgreSQL variants and the full 15-test
+recovery module passed in `/home/a/heph-expired-gate-focused-v1.log` and
+`/home/a/heph-expired-gate-full-recovery-v1.log`; Rust 1.88 formatting and
+app all-target/all-feature Clippy passed in
+`/home/a/heph-expired-gate-fmt-v2.log` and
+`/home/a/heph-expired-gate-clippy-v1.log`. The final shared and overlay test
+source hash is
+`650d4bec4af1728184647751aa6c7f0acefbb72f448cc08f2815f63880932c91`.
+This removes the test's global gate ambiguity and preserves the no-B-destroy
+invariant, but does not establish the original CI differing-VM cause; that
+cause remains open in `/home/a/heph-ci-35445311169-failed.log`.
