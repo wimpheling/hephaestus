@@ -22,6 +22,7 @@ pub mod __buffa {
     }
     /// Register this package's `Any` type entries and extension entries.
     pub fn register_types(reg: &mut ::buffa::type_registry::TypeRegistry) {
+        reg.register_json_any(super::__GATEWAY_SERVICE_DECLARATION_JSON_ANY);
         reg.register_json_any(super::__GATEWAY_ROUTE_JSON_ANY);
         reg.register_json_any(super::__GATEWAY_REVISION_JSON_ANY);
         reg.register_json_any(super::__GATEWAY_SUMMARY_JSON_ANY);
@@ -56,6 +57,10 @@ pub mod __buffa {
         reg.register_json_any(super::__LIST_MAILBOX_PUBLICATIONS_RESPONSE_JSON_ANY);
     }
 }
+#[doc(inline)]
+pub use self::__buffa::view::GatewayServiceDeclarationView;
+#[doc(inline)]
+pub use self::__buffa::view::GatewayServiceDeclarationOwnedView;
 #[doc(inline)]
 pub use self::__buffa::view::GatewayRouteView;
 #[doc(inline)]

@@ -1804,3 +1804,24 @@ workspace rustdoc in `/tmp/heph-app-recovery-overlay-f616-doc-20260919.log`.
 The unrelated CI failure in `daemon_loop_restores_active_service_without_manual_start`
 (`Ready` observed before the expected active revision; log
 `/home/a/heph-ci-35444316773-failed.log`) is left for the next investigation.
+
+Service declaration management-response checkpoint (2026-09-19): the
+immutable `GatewayManagementRevision.service` projection is now exposed as an
+optional `GatewayRevision.service` field 10. The typed response carries only
+the loopback port, readiness path, health path, and disabled/application log
+capture mode; stateless revisions omit it. `ConfigureGatewayRequest` remains
+unchanged because the declaration is release-owned and immutable. Generated
+Rust, descriptor, and Elixir artifacts pass consistency checks. Mapper tests
+cover both log modes, valid stateless absence using the domain handler
+contract constants, and an actual generated protobuf encode/decode roundtrip.
+Descriptor policy tests cover exact field/message/enum shape and the absence
+of sensitive annotations. The isolated Rust 1.88 overlay is based on
+`f616772` at `/home/a/service-declaration-check.W6EoTl`; its final source
+hashes are in `manifest.sha256`. The workspace all-target/all-feature Clippy
+command passed on the isolated overlay; its captured command output and exit status are in
+`workspace-clippy-final.log`. Formatting, generated consistency, mapper tests,
+descriptor tests, and workspace rustdoc have captured logs at `fmt-final.log`,
+`generated-final.log`, `mapper-final.log`, `descriptor-final.log`, and
+`rustdoc-final.log` in that overlay. No mutable service configuration, runtime authority, credentials,
+leases, VM identity, or readiness state is exposed. Real service management
+and runtime wiring remain pending.

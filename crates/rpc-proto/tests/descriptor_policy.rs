@@ -1237,3 +1237,59 @@ fn descriptor_policy_fixtures_cover_sensitive_and_actor_failures() {
     let invalid_actor = include_str!("fixtures/descriptor-policy/invalid/actor_request.proto");
     assert!(invalid_actor.contains("string actor"));
 }
+
+#[test]
+fn gateway_revision_service_declaration_is_optional_and_immutable() {
+    let pool = pool();
+    let revision = pool
+        .message_by_name("hephaestus.gateway.v1.GatewayRevision")
+        .expect("gateway revision descriptor");
+    let service = revision
+        .field_by_name("service")
+        .expect("optional service declaration");
+    assert_eq!(service.number(), 10);
+    assert!(message_field_is(
+        &pool,
+        revision,
+        "service",
+        "hephaestus.gateway.v1.GatewayServiceDeclaration"
+    ));
+
+    let declaration = pool
+        .message_by_name("hephaestus.gateway.v1.GatewayServiceDeclaration")
+        .expect("service declaration descriptor");
+    assert_eq!(
+        declaration
+            .fields()
+            .iter()
+            .map(buffa_descriptor::FieldDescriptor::name)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            "loopback_port",
+            "readiness_path",
+            "health_path",
+            "log_capture_mode"
+        ])
+    );
+    assert!(declaration.fields().iter().all(|field| {
+        field
+            .options()
+            .and_then(|options| options.extension(&SENSITIVE))
+            != Some(true)
+    }));
+
+    let mode = pool
+        .enum_by_name("hephaestus.gateway.v1.GatewayServiceLogCaptureMode")
+        .expect("service log capture mode descriptor");
+    assert_eq!(
+        mode.values()
+            .iter()
+            .map(buffa_descriptor::EnumValueDescriptor::name)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            "GATEWAY_SERVICE_LOG_CAPTURE_MODE_UNSPECIFIED",
+            "GATEWAY_SERVICE_LOG_CAPTURE_MODE_DISABLED",
+            "GATEWAY_SERVICE_LOG_CAPTURE_MODE_APPLICATION",
+        ])
+    );
+}

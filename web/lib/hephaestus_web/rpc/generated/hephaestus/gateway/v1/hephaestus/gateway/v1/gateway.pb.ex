@@ -30,6 +30,20 @@ defmodule Hephaestus.Gateway.V1.GatewayIngressOutcome do
   field(:GATEWAY_INGRESS_OUTCOME_REJECTED, 5)
 end
 
+defmodule Hephaestus.Gateway.V1.GatewayServiceLogCaptureMode do
+  @moduledoc false
+
+  use Protobuf,
+    enum: true,
+    full_name: "hephaestus.gateway.v1.GatewayServiceLogCaptureMode",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:GATEWAY_SERVICE_LOG_CAPTURE_MODE_UNSPECIFIED, 0)
+  field(:GATEWAY_SERVICE_LOG_CAPTURE_MODE_DISABLED, 1)
+  field(:GATEWAY_SERVICE_LOG_CAPTURE_MODE_APPLICATION, 2)
+end
+
 defmodule Hephaestus.Gateway.V1.GatewayServiceLogStream do
   @moduledoc false
 
@@ -42,6 +56,25 @@ defmodule Hephaestus.Gateway.V1.GatewayServiceLogStream do
   field(:GATEWAY_SERVICE_LOG_STREAM_UNSPECIFIED, 0)
   field(:GATEWAY_SERVICE_LOG_STREAM_STDOUT, 1)
   field(:GATEWAY_SERVICE_LOG_STREAM_STDERR, 2)
+end
+
+defmodule Hephaestus.Gateway.V1.GatewayServiceDeclaration do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.gateway.v1.GatewayServiceDeclaration",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:loopback_port, 1, type: :uint32, json_name: "loopbackPort")
+  field(:readiness_path, 2, type: :string, json_name: "readinessPath")
+  field(:health_path, 3, type: :string, json_name: "healthPath")
+
+  field(:log_capture_mode, 4,
+    type: Hephaestus.Gateway.V1.GatewayServiceLogCaptureMode,
+    json_name: "logCaptureMode",
+    enum: true
+  )
 end
 
 defmodule Hephaestus.Gateway.V1.GatewayRoute do
@@ -75,6 +108,11 @@ defmodule Hephaestus.Gateway.V1.GatewayRevision do
   field(:routes, 7, repeated: true, type: Hephaestus.Gateway.V1.GatewayRoute)
   field(:release_agent_id, 8, type: Hephaestus.Common.V1.OpaqueId, json_name: "releaseAgentId")
   field(:mailbox_slots, 9, repeated: true, type: :string, json_name: "mailboxSlots")
+
+  field(:service, 10,
+    proto3_optional: true,
+    type: Hephaestus.Gateway.V1.GatewayServiceDeclaration
+  )
 end
 
 defmodule Hephaestus.Gateway.V1.GatewaySummary do
