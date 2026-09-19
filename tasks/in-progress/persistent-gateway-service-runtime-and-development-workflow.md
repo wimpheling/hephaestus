@@ -203,6 +203,20 @@ the same scenario. The exact non-skipped real-VM harness passed one test in
 adapter-to-vsock path only; prepared-worker, durable ownership/ledger,
 supervisor, Caddy routing, and release UI behavior remain unchecked.
 
+The read-only service-target ports now expose the supervisor's database view:
+bounded stable-UUID pages include enabled gateways with an active or desired
+`http.service.v1` revision, exact lifecycle-aware lookup supports already-owned
+paused instances, and accepted invocation counts are scoped to an exact
+gateway/revision pair for draining. Active and desired revisions remain
+separate, so a revoked desired candidate does not replace a published serving
+revision; stateless revisions are excluded. Evidence: the focused target suite
+passed 2 tests against disposable PostgreSQL after migration 0074, with the
+in-test marker `REAL_POSTGRES_CONNECTED_AND_MIGRATED=1 max_migration=74` in
+`/tmp/heph-service-targets-real-20260919-attempt10.log`; strict targeted
+Clippy, formatting, and `git diff --check` pass. This is a read-side port and
+adapter only; supervisor CAS/readiness promotion, request draining policy, and
+application wiring remain pending.
+
 The prepared-instance worker now owns one already-provisioned VM from start
 through readiness, bounded health checks, exit, shutdown, and cleanup. It uses
 one startup deadline covering VM start and HTTP readiness, publishes `Ready`

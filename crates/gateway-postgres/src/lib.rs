@@ -53,8 +53,10 @@ use vm_trait::{
 };
 
 mod service_ownership;
+mod service_targets;
 
 pub use service_ownership::PostgresGatewayServiceOwnership;
+pub use service_targets::PostgresGatewayServiceTargets;
 
 const SERVICE_RECOVERY_BATCH_SIZE: i64 = 128;
 

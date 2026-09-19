@@ -22,6 +22,7 @@ mod service_instance;
 mod service_launch;
 mod service_ownership;
 mod service_probe;
+mod service_targets;
 
 pub use integration::caddy::LocalCaddyAdministration;
 pub use service_http::{ServiceHttpPolicy, exchange as exchange_private_service_http};
@@ -42,6 +43,11 @@ pub use service_ownership::{
 };
 pub use service_probe::{
     ServiceProbeError, ServiceProbePolicy, ServiceProbeSuccess, probe_private_service_http,
+};
+pub use service_targets::{
+    GatewayServiceOwnedTarget, GatewayServiceRevisionTarget, GatewayServiceTarget,
+    GatewayServiceTargetPage, GatewayServiceTargetPageResult, GatewayServiceTargetStore,
+    MAX_SERVICE_TARGET_PAGE_SIZE,
 };
 
 /// Reserved public path prefix owned by gateway routing.
