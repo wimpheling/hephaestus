@@ -732,7 +732,25 @@ check, strict Clippy, formatting, and 58 library tests passed.
   checks. The two real PostgreSQL coordinator tests passed with the in-test
   `REAL_POSTGRES_CONNECTED_AND_MIGRATED=1 max_migration=76` marker in
   `/tmp/hephaestus-gateway-health-coordinator-real.log`. Durable failure
-  recording, draining, and global supervisor scheduling remain pending.
+  recording is wired by the coordinator checkpoint below; draining and global
+  supervisor scheduling remain pending.
+
+- [x] Connect coordinator failures to the durable failure store before
+  `mark_cleaned`. Worker snapshots preserve readiness, health, and bounded
+  process-exit metadata; preparation, startup-deadline, and cleanup failures
+  receive redacted categories, while cancellation and lease loss alone do not
+  increment retry backoff. Reporting is lease-deadline-bounded and keeps the
+  lease monitor running; unavailable reporting or stopping transitions retain
+  the pending report and prevent false durable cleanup. Thirteen focused
+  coordinator tests passed, including blocked reporting renewal, physical
+  cleanup with unavailable storage, and stopping-failure retention. In an
+  isolated checkout at `be3a281`, the full gateway-edge library passed 93
+  tests, strict edge and PostgreSQL all-target/all-feature Clippy passed, and
+  formatting/diff checks passed. Three real PostgreSQL coordinator tests passed
+  with the in-test `REAL_POSTGRES_CONNECTED_AND_MIGRATED=1 max_migration=76`
+  marker; the log is `/tmp/heph-failure-verify-real.log`. The failure test
+  confirmed retry backoff, report-before-cleaned ordering, and preservation of
+  the active and desired revision pointers.
 
 - [x] Add the caller-owned durable service lease monitor. It accepts the
   pre-claim monotonic deadline, renews only the exact instance/owner/fence,

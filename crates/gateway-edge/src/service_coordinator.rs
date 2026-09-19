@@ -15,14 +15,15 @@ use tokio_util::sync::CancellationToken;
 use vm_trait::{VmInstance, VmProvider};
 
 use crate::{
-    GatewayServiceIdentity, GatewayServiceInstanceKey, GatewayServiceInstanceLease,
-    GatewayServiceInstanceState, GatewayServiceLaunchRequest, GatewayServiceLaunchResolver,
-    GatewayServiceLeaseControl, GatewayServiceLeaseMonitor, GatewayServiceLeaseRunResult,
-    GatewayServiceLeaseStatus, GatewayServiceOwner, GatewayServiceOwnership,
-    GatewayServiceOwnershipError, GatewayServiceRegistry, GatewayServiceSupervisorPolicy,
-    GatewayServiceTargetStore, PreparedGatewayService, ServiceInstanceError, ServiceInstanceHandle,
-    ServiceInstancePolicy, ServicePreparationFailure, ServiceWorkerState, new_service_instance,
-    new_service_preparation,
+    GatewayServiceFailure, GatewayServiceFailureCode, GatewayServiceFailureStore,
+    GatewayServiceFailureStoreError, GatewayServiceIdentity, GatewayServiceInstanceKey,
+    GatewayServiceInstanceLease, GatewayServiceInstanceState, GatewayServiceLaunchRequest,
+    GatewayServiceLaunchResolver, GatewayServiceLeaseControl, GatewayServiceLeaseMonitor,
+    GatewayServiceLeaseRunResult, GatewayServiceLeaseStatus, GatewayServiceOwner,
+    GatewayServiceOwnership, GatewayServiceOwnershipError, GatewayServiceRegistry,
+    GatewayServiceSupervisorPolicy, GatewayServiceTargetStore, PreparedGatewayService,
+    ServiceInstanceError, ServiceInstanceHandle, ServiceInstancePolicy, ServicePreparationFailure,
+    ServiceWorkerState, new_service_instance, new_service_preparation,
 };
 
 type MonitorFuture = Pin<Box<dyn Future<Output = GatewayServiceLeaseRunResult> + Send>>;
@@ -120,6 +121,8 @@ pub struct GatewayServiceCoordinatorFailure {
     pub physical_cleanup_complete: bool,
     /// Whether the durable row was confirmed `cleaned`.
     pub durable_cleanup_complete: bool,
+    /// Failure report retained when durable recording did not complete.
+    pub pending_failure: Option<GatewayServiceFailure>,
 }
 
 impl fmt::Debug for GatewayServiceCoordinatorFailure {
@@ -133,6 +136,7 @@ impl fmt::Debug for GatewayServiceCoordinatorFailure {
             .field("materialization_owned", &self.materialization_owned)
             .field("physical_cleanup_complete", &self.physical_cleanup_complete)
             .field("durable_cleanup_complete", &self.durable_cleanup_complete)
+            .field("pending_failure", &self.pending_failure)
             .finish()
     }
 }
@@ -157,6 +161,7 @@ pub struct GatewayServiceCoordinator {
     owner: GatewayServiceOwner,
     intent: GatewayServiceStartupIntent,
     ownership: Arc<dyn GatewayServiceOwnership>,
+    failure_store: Arc<dyn GatewayServiceFailureStore>,
     resolver: Arc<dyn GatewayServiceLaunchResolver>,
     provider: Arc<dyn VmProvider>,
     targets: Arc<dyn GatewayServiceTargetStore>,
@@ -188,6 +193,7 @@ impl GatewayServiceCoordinator {
         startup_deadline: Instant,
         intent: GatewayServiceStartupIntent,
         ownership: Arc<dyn GatewayServiceOwnership>,
+        failure_store: Arc<dyn GatewayServiceFailureStore>,
         resolver: Arc<dyn GatewayServiceLaunchResolver>,
         provider: Arc<dyn VmProvider>,
         targets: Arc<dyn GatewayServiceTargetStore>,
@@ -238,6 +244,7 @@ impl GatewayServiceCoordinator {
                 owner,
                 intent,
                 ownership,
+                failure_store,
                 resolver,
                 provider,
                 targets,
@@ -752,6 +759,7 @@ impl GatewayServiceCoordinator {
             retained_vm,
             physical,
             reason,
+            failure_for_reason(reason),
         )
         .await
     }
@@ -773,6 +781,7 @@ impl GatewayServiceCoordinator {
             failure.vm,
             physical,
             reason,
+            failure_for_reason(reason),
         )
         .await
     }
@@ -807,6 +816,7 @@ impl GatewayServiceCoordinator {
             if destroyed { None } else { Some(vm) },
             physical,
             reason,
+            failure_for_reason(reason),
         )
         .await
     }
@@ -847,31 +857,34 @@ impl GatewayServiceCoordinator {
             *worker_result = Some(await_with_monitor(worker, monitor, monitor_done, status).await);
         }
         let result = worker_result.take().expect("worker result set");
-        if matches!(result, Err(ServiceInstanceError::CleanupIncomplete)) {
-            return Err(self.failure(current, reason, Some(vm), true, false, false));
-        }
+        let physical = !matches!(result, Err(ServiceInstanceError::CleanupIncomplete));
+        let report = cleanup_report(
+            physical,
+            handle.failure().or_else(|| failure_for_reason(reason)),
+        );
+        let retained_vm = if physical { None } else { Some(vm) };
         let Ok(stopping) = stopping else {
-            return Err(self.failure(current, reason, None, false, true, false));
-        };
-        let cleaned = self
-            .transition(
-                monitor,
-                monitor_done,
-                status,
-                self.ownership.mark_cleaned(&stopping, &self.owner),
+            return Err(self.failure_pending(
+                current,
+                reason,
+                retained_vm,
+                !physical,
+                physical,
                 false,
-            )
-            .await
-            .is_ok();
-        if !cleaned {
-            return Err(self.failure(stopping, reason, None, false, true, false));
-        }
-        self.set_status(GatewayServiceCoordinatorStatus::Stopped);
-        if reason == FailureReason::Cancelled {
-            Ok(())
-        } else {
-            Err(self.failure(stopping, reason, None, false, true, true))
-        }
+                report,
+            ));
+        };
+        self.finish_durable_cleanup(
+            monitor,
+            monitor_done,
+            status,
+            stopping,
+            retained_vm,
+            physical,
+            reason,
+            report,
+        )
+        .await
     }
 
     // Durable transition and physical ownership must be reported together.
@@ -885,6 +898,7 @@ impl GatewayServiceCoordinator {
         vm: Option<Arc<dyn VmInstance>>,
         physical: bool,
         reason: FailureReason,
+        report: Option<GatewayServiceFailure>,
     ) -> Result<(), GatewayServiceCoordinatorFailure> {
         self.set_status(GatewayServiceCoordinatorStatus::Stopping);
         let stopping = self
@@ -896,21 +910,79 @@ impl GatewayServiceCoordinator {
                 false,
             )
             .await;
+        let report = cleanup_report(physical, report);
         let Ok(stopping) = stopping else {
-            return Err(self.failure(lease, reason, vm, !physical, physical, false));
+            return Err(self.failure_pending(lease, reason, vm, !physical, physical, false, report));
         };
-        let durable = physical
-            && self
-                .transition(
-                    monitor,
-                    monitor_done,
-                    status,
-                    self.ownership.mark_cleaned(&stopping, &self.owner),
-                    false,
-                )
+        self.finish_durable_cleanup(
+            monitor,
+            monitor_done,
+            status,
+            stopping,
+            vm,
+            physical,
+            reason,
+            report,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn finish_durable_cleanup(
+        &self,
+        monitor: &mut MonitorFuture,
+        monitor_done: &mut bool,
+        status: &mut watch::Receiver<GatewayServiceLeaseStatus>,
+        stopping: GatewayServiceInstanceLease,
+        vm: Option<Arc<dyn VmInstance>>,
+        physical: bool,
+        reason: FailureReason,
+        report: Option<GatewayServiceFailure>,
+    ) -> Result<(), GatewayServiceCoordinatorFailure> {
+        let report = cleanup_report(physical, report);
+        if let Some(report) = report {
+            if self
+                .record_failure(monitor, monitor_done, status, &stopping, report)
                 .await
-                .is_ok();
-        Err(self.failure(stopping, reason, vm, !physical, physical, durable))
+                .is_err()
+            {
+                let latest = current_lease(status).unwrap_or_else(|| stopping.clone());
+                return Err(self.failure_pending(
+                    latest,
+                    reason,
+                    vm,
+                    !physical,
+                    physical,
+                    false,
+                    Some(report),
+                ));
+            }
+        }
+        if !physical {
+            let latest = current_lease(status).unwrap_or_else(|| stopping.clone());
+            return Err(self.failure(latest, reason, vm, true, false, false));
+        }
+        let durable = self
+            .transition(
+                monitor,
+                monitor_done,
+                status,
+                self.ownership.mark_cleaned(&stopping, &self.owner),
+                false,
+            )
+            .await
+            .is_ok();
+        if !durable && physical {
+            let latest = current_lease(status).unwrap_or_else(|| stopping.clone());
+            return Err(self.failure(latest, reason, vm, false, true, false));
+        }
+        self.set_status(GatewayServiceCoordinatorStatus::Stopped);
+        if reason == FailureReason::Cancelled {
+            Ok(())
+        } else {
+            let latest = current_lease(status).unwrap_or(stopping);
+            Err(self.failure(latest, reason, vm, !physical, physical, durable))
+        }
     }
 
     async fn transition<T, F>(
@@ -934,6 +1006,42 @@ impl GatewayServiceCoordinator {
                 signal = monitor_signal(monitor, *monitor_done) => { let _ = signal; *monitor_done = true; return Err(FailureReason::LeaseLost); },
                 changed = status.changed() => if changed.is_err() || !lease_active(status) { return Err(FailureReason::LeaseLost); },
                 () = self.cancellation.cancelled(), if honor_cancel => return Err(FailureReason::Cancelled),
+            }
+        }
+    }
+
+    async fn record_failure(
+        &self,
+        monitor: &mut MonitorFuture,
+        monitor_done: &mut bool,
+        status: &mut watch::Receiver<GatewayServiceLeaseStatus>,
+        lease: &GatewayServiceInstanceLease,
+        failure: GatewayServiceFailure,
+    ) -> Result<(), GatewayServiceFailureStoreError> {
+        let Some(deadline) = current_deadline(status) else {
+            return Err(GatewayServiceFailureStoreError::StaleLease);
+        };
+        let mut operation = Box::pin(time::timeout_at(
+            deadline,
+            self.failure_store
+                .record_failure(lease, &self.owner, failure),
+        ));
+        loop {
+            tokio::select! {
+                result = &mut operation => match result {
+                    Ok(result) => return result,
+                    Err(_) => return Err(GatewayServiceFailureStoreError::Unavailable),
+                },
+                signal = monitor_signal(monitor, *monitor_done) => {
+                    let _ = signal;
+                    *monitor_done = true;
+                    return Err(GatewayServiceFailureStoreError::StaleLease);
+                }
+                changed = status.changed() => {
+                    if changed.is_err() || !lease_active(status) {
+                        return Err(GatewayServiceFailureStoreError::StaleLease);
+                    }
+                }
             }
         }
     }
@@ -1011,6 +1119,30 @@ impl GatewayServiceCoordinator {
         physical: bool,
         durable: bool,
     ) -> GatewayServiceCoordinatorFailure {
+        self.failure_pending(
+            lease,
+            reason,
+            vm,
+            materialization_owned,
+            physical,
+            durable,
+            None,
+        )
+    }
+
+    // The failure result keeps lease, resource, cleanup, and report state
+    // together so the parent can retry each incomplete responsibility.
+    #[allow(clippy::too_many_arguments)]
+    fn failure_pending(
+        &self,
+        lease: GatewayServiceInstanceLease,
+        reason: FailureReason,
+        vm: Option<Arc<dyn VmInstance>>,
+        materialization_owned: bool,
+        physical: bool,
+        durable: bool,
+        pending_failure: Option<GatewayServiceFailure>,
+    ) -> GatewayServiceCoordinatorFailure {
         self.set_status(GatewayServiceCoordinatorStatus::Failed);
         GatewayServiceCoordinatorFailure {
             identity: lease.identity,
@@ -1020,6 +1152,7 @@ impl GatewayServiceCoordinator {
             materialization_owned,
             physical_cleanup_complete: physical,
             durable_cleanup_complete: durable,
+            pending_failure,
         }
     }
 
@@ -1029,6 +1162,34 @@ impl GatewayServiceCoordinator {
 }
 
 type FailureReason = GatewayServiceCoordinatorFailureReason;
+
+fn failure_for_reason(reason: FailureReason) -> Option<GatewayServiceFailure> {
+    let code = match reason {
+        FailureReason::Preparation => GatewayServiceFailureCode::Preparation,
+        FailureReason::StartupDeadline => GatewayServiceFailureCode::Startup,
+        FailureReason::Health => GatewayServiceFailureCode::Health,
+        FailureReason::CleanupIncomplete => GatewayServiceFailureCode::Cleanup,
+        FailureReason::Runtime
+        | FailureReason::Ownership
+        | FailureReason::Cancelled
+        | FailureReason::LeaseLost
+        | FailureReason::TargetUnavailable => return None,
+    };
+    GatewayServiceFailure::new(code, None, None).ok()
+}
+
+fn cleanup_report(
+    physical: bool,
+    report: Option<GatewayServiceFailure>,
+) -> Option<GatewayServiceFailure> {
+    report.or_else(|| {
+        if physical {
+            None
+        } else {
+            failure_for_reason(FailureReason::CleanupIncomplete)
+        }
+    })
+}
 
 enum PrepExit {
     Complete(Result<PreparedGatewayService, ServicePreparationFailure>),
@@ -1113,7 +1274,8 @@ fn current_deadline(status: &watch::Receiver<GatewayServiceLeaseStatus>) -> Opti
 mod tests {
     use super::*;
     use crate::{
-        GatewayEdgeError, GatewayServiceLaunch, GatewayServiceLeasePolicy, ServiceInstancePolicy,
+        GatewayEdgeError, GatewayServiceFailure, GatewayServiceFailureStoreError,
+        GatewayServiceLaunch, GatewayServiceLeasePolicy, ServiceInstancePolicy,
     };
     use async_trait::async_trait;
     use gateway_domain::{GatewayServiceConfig, ServiceProbePath};
@@ -1277,10 +1439,43 @@ mod tests {
         events: Mutex<Vec<&'static str>>,
         renewals: AtomicUsize,
         renew_fails: AtomicBool,
+        stopping_fails: AtomicBool,
         promote_fails: AtomicBool,
         promote_started: Notify,
         promote_release: Notify,
         promote_blocked: AtomicBool,
+    }
+
+    struct MockFailureStore {
+        reports: Mutex<Vec<(GatewayServiceInstanceLease, GatewayServiceFailure)>>,
+        error: Mutex<Option<GatewayServiceFailureStoreError>>,
+        started: Notify,
+        release: Notify,
+        blocked: AtomicBool,
+    }
+
+    #[async_trait]
+    impl GatewayServiceFailureStore for MockFailureStore {
+        async fn record_failure(
+            &self,
+            lease: &GatewayServiceInstanceLease,
+            _: &GatewayServiceOwner,
+            failure: GatewayServiceFailure,
+        ) -> Result<(), GatewayServiceFailureStoreError> {
+            self.started.notify_one();
+            if self.blocked.load(Ordering::Relaxed) {
+                self.release.notified().await;
+            }
+            let configured_error = *self.error.lock().expect("failure error mutex");
+            if let Some(error) = configured_error {
+                return Err(error);
+            }
+            self.reports
+                .lock()
+                .expect("failure reports mutex")
+                .push((lease.clone(), failure));
+            Ok(())
+        }
     }
 
     #[async_trait]
@@ -1324,6 +1519,9 @@ mod tests {
             _: &GatewayServiceOwner,
         ) -> Result<GatewayServiceInstanceLease, GatewayServiceOwnershipError> {
             self.events.lock().expect("events").push("stopping");
+            if self.stopping_fails.load(Ordering::Relaxed) {
+                return Err(GatewayServiceOwnershipError::Unavailable);
+            }
             let mut lease = lease.clone();
             lease.state = GatewayServiceInstanceState::Stopping;
             Ok(lease)
@@ -1525,6 +1723,16 @@ mod tests {
         }
     }
 
+    fn failure_store() -> Arc<MockFailureStore> {
+        Arc::new(MockFailureStore {
+            reports: Mutex::new(Vec::new()),
+            error: Mutex::new(None),
+            started: Notify::new(),
+            release: Notify::new(),
+            blocked: AtomicBool::new(false),
+        })
+    }
+
     fn identity() -> GatewayServiceIdentity {
         GatewayServiceIdentity {
             instance_id: Uuid::from_u128(1),
@@ -1699,11 +1907,13 @@ mod tests {
             events: Mutex::new(Vec::new()),
             renewals: AtomicUsize::new(0),
             renew_fails: AtomicBool::new(false),
+            stopping_fails: AtomicBool::new(false),
             promote_fails: AtomicBool::new(false),
             promote_started: Notify::new(),
             promote_release: Notify::new(),
             promote_blocked: AtomicBool::new(false),
         });
+        let failures = failure_store();
         let now = Instant::now();
         let (coordinator, control) = GatewayServiceCoordinator::new(
             lease(&owner, identity),
@@ -1712,6 +1922,7 @@ mod tests {
             now + Duration::from_millis(10),
             GatewayServiceStartupIntent::ActivateDesired,
             ownership,
+            failures.clone(),
             resolver.clone(),
             provider.clone(),
             Arc::new(MockTargets { target: None }),
@@ -1740,6 +1951,15 @@ mod tests {
         assert_eq!(
             failure.reason,
             GatewayServiceCoordinatorFailureReason::StartupDeadline
+        );
+        assert_eq!(
+            failures
+                .reports
+                .lock()
+                .expect("failure reports")
+                .last()
+                .map(|(_, failure)| failure.code),
+            Some(GatewayServiceFailureCode::Startup)
         );
         assert_eq!(provider.provisions.load(Ordering::Relaxed), 0);
         assert_eq!(resolver.cleanups.load(Ordering::Relaxed), 1);
@@ -1789,11 +2009,13 @@ mod tests {
             events: Mutex::new(Vec::new()),
             renewals: AtomicUsize::new(0),
             renew_fails: AtomicBool::new(false),
+            stopping_fails: AtomicBool::new(false),
             promote_fails: AtomicBool::new(false),
             promote_started: Notify::new(),
             promote_release: Notify::new(),
             promote_blocked: AtomicBool::new(false),
         });
+        let failures = failure_store();
         let now = Instant::now();
         let (coordinator, control) = GatewayServiceCoordinator::new(
             lease(&owner, identity),
@@ -1802,6 +2024,7 @@ mod tests {
             now + Duration::from_secs(2),
             GatewayServiceStartupIntent::ActivateDesired,
             ownership.clone(),
+            failures.clone(),
             resolver.clone(),
             provider.clone(),
             Arc::new(MockTargets { target: None }),
@@ -1830,6 +2053,7 @@ mod tests {
         }
         control.cancel();
         assert!(task.await.expect("coordinator join").is_ok());
+        assert!(failures.reports.lock().expect("failure reports").is_empty());
         assert_eq!(provider.provisions.load(Ordering::Relaxed), 1);
         assert_eq!(vm.starts.load(Ordering::Relaxed), 1);
         assert_eq!(vm.destroys.load(Ordering::Relaxed), 1);
@@ -1841,6 +2065,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::too_many_lines)] // Keeps durable reporting beside lifecycle setup.
     async fn failed_readiness_never_registers_or_promotes() {
         let identity = identity();
         let owner =
@@ -1883,19 +2108,24 @@ mod tests {
             events: Mutex::new(Vec::new()),
             renewals: AtomicUsize::new(0),
             renew_fails: AtomicBool::new(false),
+            stopping_fails: AtomicBool::new(false),
             promote_fails: AtomicBool::new(false),
             promote_started: Notify::new(),
             promote_release: Notify::new(),
             promote_blocked: AtomicBool::new(false),
         });
+        let failures = failure_store();
+        *failures.error.lock().expect("failure error mutex") =
+            Some(GatewayServiceFailureStoreError::Unavailable);
         let now = Instant::now();
         let (coordinator, control) = GatewayServiceCoordinator::new(
             lease(&owner, identity),
             owner,
             now + Duration::from_secs(30),
-            now + Duration::from_secs(2),
+            now + Duration::from_secs(10),
             GatewayServiceStartupIntent::ActivateDesired,
             ownership.clone(),
+            failures.clone(),
             resolver.clone(),
             provider,
             Arc::new(MockTargets { target: None }),
@@ -1903,7 +2133,7 @@ mod tests {
             "service.test",
             supervisor_policy(
                 ServiceInstancePolicy::new(
-                    Duration::from_secs(120),
+                    Duration::from_secs(2),
                     Duration::from_millis(1),
                     Duration::from_secs(1),
                     Duration::from_secs(1),
@@ -1925,12 +2155,18 @@ mod tests {
         control.cancel();
         assert_eq!(
             failure.reason,
-            GatewayServiceCoordinatorFailureReason::StartupDeadline
+            GatewayServiceCoordinatorFailureReason::Runtime
         );
+        assert_eq!(
+            failure.pending_failure.map(|failure| failure.code),
+            Some(GatewayServiceFailureCode::Readiness)
+        );
+        assert!(failure.physical_cleanup_complete);
+        assert!(!failure.durable_cleanup_complete);
         assert_eq!(vm.starts.load(Ordering::Relaxed), 1);
         assert_eq!(
             ownership.events.lock().expect("events").as_slice(),
-            ["starting", "stopping", "cleaned"]
+            ["starting", "stopping"]
         );
     }
 
@@ -1977,6 +2213,7 @@ mod tests {
             events: Mutex::new(Vec::new()),
             renewals: AtomicUsize::new(0),
             renew_fails: AtomicBool::new(false),
+            stopping_fails: AtomicBool::new(false),
             promote_fails: AtomicBool::new(true),
             promote_started: Notify::new(),
             promote_release: Notify::new(),
@@ -1990,6 +2227,7 @@ mod tests {
             now + Duration::from_secs(2),
             GatewayServiceStartupIntent::ActivateDesired,
             ownership.clone(),
+            failure_store(),
             resolver.clone(),
             provider,
             Arc::new(MockTargets { target: None }),
@@ -2030,6 +2268,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::too_many_lines)] // Keeps exit metadata and cleanup ordering together.
     async fn worker_exit_during_blocked_promotion_aborts_activation() {
         let identity = identity();
         let owner =
@@ -2072,11 +2311,13 @@ mod tests {
             events: Mutex::new(Vec::new()),
             renewals: AtomicUsize::new(0),
             renew_fails: AtomicBool::new(false),
+            stopping_fails: AtomicBool::new(false),
             promote_fails: AtomicBool::new(false),
             promote_started: Notify::new(),
             promote_release: Notify::new(),
             promote_blocked: AtomicBool::new(true),
         });
+        let failures = failure_store();
         let now = Instant::now();
         let (coordinator, control) = GatewayServiceCoordinator::new(
             lease(&owner, identity),
@@ -2085,6 +2326,7 @@ mod tests {
             now + Duration::from_secs(2),
             GatewayServiceStartupIntent::ActivateDesired,
             ownership.clone(),
+            failures.clone(),
             resolver.clone(),
             provider,
             Arc::new(MockTargets { target: None }),
@@ -2122,12 +2364,22 @@ mod tests {
             GatewayServiceCoordinatorFailureReason::Runtime
         );
         assert_eq!(
+            failures
+                .reports
+                .lock()
+                .expect("failure reports")
+                .last()
+                .map(|(_, failure)| (failure.code, failure.exit_code, failure.exit_signal)),
+            Some((GatewayServiceFailureCode::UnexpectedExit, Some(1), None))
+        );
+        assert_eq!(
             ownership.events.lock().expect("events").as_slice(),
             ["starting", "ready", "promote", "stopping", "cleaned"]
         );
     }
 
     #[tokio::test]
+    #[allow(clippy::too_many_lines)] // Keeps retained ownership and failed reporting together.
     async fn cleanup_failure_retains_vm_and_materialization() {
         let identity = identity();
         let owner =
@@ -2171,11 +2423,16 @@ mod tests {
             events: Mutex::new(Vec::new()),
             renewals: AtomicUsize::new(0),
             renew_fails: AtomicBool::new(false),
+            stopping_fails: AtomicBool::new(false),
             promote_fails: AtomicBool::new(false),
             promote_started: Notify::new(),
             promote_release: Notify::new(),
             promote_blocked: AtomicBool::new(false),
         });
+        ownership.stopping_fails.store(true, Ordering::Relaxed);
+        let failures = failure_store();
+        *failures.error.lock().expect("failure error mutex") =
+            Some(GatewayServiceFailureStoreError::Unavailable);
         let now = Instant::now();
         let (coordinator, control) = GatewayServiceCoordinator::new(
             lease(&owner, identity),
@@ -2184,6 +2441,7 @@ mod tests {
             now + Duration::from_secs(2),
             GatewayServiceStartupIntent::ActivateDesired,
             ownership,
+            failures.clone(),
             resolver.clone(),
             provider,
             Arc::new(MockTargets { target: None }),
@@ -2225,6 +2483,10 @@ mod tests {
         assert!(failure.materialization_owned);
         assert!(!failure.physical_cleanup_complete);
         assert!(!failure.durable_cleanup_complete);
+        assert_eq!(
+            failure.pending_failure.map(|failure| failure.code),
+            Some(GatewayServiceFailureCode::Cleanup)
+        );
         assert_eq!(resolver.cleanups.load(Ordering::Relaxed), 0);
     }
 
@@ -2265,6 +2527,7 @@ mod tests {
             events: Mutex::new(Vec::new()),
             renewals: AtomicUsize::new(0),
             renew_fails: AtomicBool::new(false),
+            stopping_fails: AtomicBool::new(false),
             promote_fails: AtomicBool::new(false),
             promote_started: Notify::new(),
             promote_release: Notify::new(),
@@ -2278,6 +2541,7 @@ mod tests {
             now + Duration::from_secs(30),
             GatewayServiceStartupIntent::ActivateDesired,
             ownership.clone(),
+            failure_store(),
             resolver.clone(),
             provider.clone(),
             Arc::new(MockTargets { target: None }),
@@ -2362,6 +2626,7 @@ mod tests {
             events: Mutex::new(Vec::new()),
             renewals: AtomicUsize::new(0),
             renew_fails: AtomicBool::new(false),
+            stopping_fails: AtomicBool::new(false),
             promote_fails: AtomicBool::new(false),
             promote_started: Notify::new(),
             promote_release: Notify::new(),
@@ -2375,6 +2640,7 @@ mod tests {
             now + Duration::from_secs(10),
             GatewayServiceStartupIntent::ActivateDesired,
             ownership.clone(),
+            failure_store(),
             resolver.clone(),
             provider,
             Arc::new(MockTargets { target: None }),
@@ -2453,6 +2719,7 @@ mod tests {
             events: Mutex::new(Vec::new()),
             renewals: AtomicUsize::new(0),
             renew_fails: AtomicBool::new(false),
+            stopping_fails: AtomicBool::new(false),
             promote_fails: AtomicBool::new(false),
             promote_started: Notify::new(),
             promote_release: Notify::new(),
@@ -2466,6 +2733,7 @@ mod tests {
             now + Duration::from_secs(2),
             GatewayServiceStartupIntent::RestoreActive,
             ownership.clone(),
+            failure_store(),
             resolver.clone(),
             provider,
             Arc::new(MockTargets {
@@ -2503,6 +2771,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
+    #[allow(clippy::too_many_lines)] // Keeps blocked restore cancellation and cleanup together.
     async fn lease_loss_during_restore_query_stops_promptly() {
         let identity = identity();
         let owner =
@@ -2545,6 +2814,7 @@ mod tests {
             events: Mutex::new(Vec::new()),
             renewals: AtomicUsize::new(0),
             renew_fails: AtomicBool::new(false),
+            stopping_fails: AtomicBool::new(false),
             promote_fails: AtomicBool::new(false),
             promote_started: Notify::new(),
             promote_release: Notify::new(),
@@ -2563,6 +2833,7 @@ mod tests {
             now + Duration::from_secs(30),
             GatewayServiceStartupIntent::RestoreActive,
             ownership.clone(),
+            failure_store(),
             resolver.clone(),
             provider,
             targets.clone(),
@@ -2698,11 +2969,14 @@ mod tests {
             events: Mutex::new(Vec::new()),
             renewals: AtomicUsize::new(0),
             renew_fails: AtomicBool::new(false),
+            stopping_fails: AtomicBool::new(false),
             promote_fails: AtomicBool::new(false),
             promote_started: Notify::new(),
             promote_release: Notify::new(),
             promote_blocked: AtomicBool::new(false),
         });
+        let failures = failure_store();
+        failures.blocked.store(true, Ordering::Relaxed);
         let now = Instant::now();
         let (coordinator, control) = GatewayServiceCoordinator::new(
             lease(&owner, identity),
@@ -2710,7 +2984,8 @@ mod tests {
             now + Duration::from_secs(30),
             now + Duration::from_secs(5),
             GatewayServiceStartupIntent::ActivateDesired,
-            ownership,
+            ownership.clone(),
+            failures.clone(),
             resolver.clone(),
             provider,
             Arc::new(MockTargets { target: None }),
@@ -2725,7 +3000,7 @@ mod tests {
                 ),
                 GatewayServiceLeasePolicy {
                     lease_duration: Duration::from_secs(30),
-                    renewal_interval: Duration::from_secs(5),
+                    renewal_interval: Duration::from_millis(10),
                 },
                 Duration::from_millis(10),
                 2,
@@ -2774,6 +3049,18 @@ mod tests {
         );
         fourth_release.notify_one();
         fourth_reply.notified().await;
+        timeout(Duration::from_secs(1), failures.started.notified())
+            .await
+            .expect("failure report starts");
+        let renewals_while_reporting = ownership.renewals.load(Ordering::Relaxed);
+        timeout(Duration::from_secs(1), async {
+            while ownership.renewals.load(Ordering::Relaxed) <= renewals_while_reporting {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("lease monitor must continue while failure recording is blocked");
+        failures.release.notify_one();
 
         let failure = timeout(Duration::from_secs(1), task)
             .await
@@ -2788,6 +3075,15 @@ mod tests {
         );
         assert_eq!(vm.destroys.load(Ordering::Relaxed), 1);
         assert_eq!(resolver.cleanups.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            failures
+                .reports
+                .lock()
+                .expect("failure reports")
+                .last()
+                .map(|(_, failure)| failure.code),
+            Some(GatewayServiceFailureCode::Health)
+        );
     }
 
     #[tokio::test(start_paused = true)]
@@ -2839,6 +3135,7 @@ mod tests {
             events: Mutex::new(Vec::new()),
             renewals: AtomicUsize::new(0),
             renew_fails: AtomicBool::new(false),
+            stopping_fails: AtomicBool::new(false),
             promote_fails: AtomicBool::new(false),
             promote_started: Notify::new(),
             promote_release: Notify::new(),
@@ -2852,6 +3149,7 @@ mod tests {
             now + Duration::from_secs(30),
             GatewayServiceStartupIntent::ActivateDesired,
             ownership.clone(),
+            failure_store(),
             resolver.clone(),
             provider,
             Arc::new(MockTargets { target: None }),
@@ -2954,6 +3252,7 @@ mod tests {
             events: Mutex::new(Vec::new()),
             renewals: AtomicUsize::new(0),
             renew_fails: AtomicBool::new(false),
+            stopping_fails: AtomicBool::new(false),
             promote_fails: AtomicBool::new(false),
             promote_started: Notify::new(),
             promote_release: Notify::new(),
@@ -2967,6 +3266,7 @@ mod tests {
             now + Duration::from_secs(30),
             GatewayServiceStartupIntent::ActivateDesired,
             ownership,
+            failure_store(),
             resolver.clone(),
             provider,
             Arc::new(MockTargets { target: None }),
