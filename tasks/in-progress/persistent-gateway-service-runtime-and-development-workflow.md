@@ -634,6 +634,16 @@ gateway-edge Clippy with `CARGO_INCREMENTAL=0`, formatting, and `git diff
 maintain its ownership heartbeat; supervisor integration and forced-shutdown
 ledger recovery remain pending.
 
+The application composition now routes accepted invocations through the
+worker-role PostgreSQL execution-target resolver and the bounded warm-service
+handler while preserving the existing stateless handler, authority, handoff,
+private listener, and Caddy paths. One daemon owner is derived from the stable
+volume host ID with a fresh incarnation UUID, and one registry reserves eight
+serving gateways plus two replacement/drain slots with sixteen requests per
+instance. Dispatcher wiring is complete; service startup scheduling and
+supervisor retention remain pending. Evidence: `hephaestus-app` all-target
+check, strict Clippy, formatting, and 58 library tests passed.
+
 ## Non-goals
 
 This task does not replace MVP 03's bounded stateless invocation mode. It does

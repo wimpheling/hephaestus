@@ -47,14 +47,16 @@ use futures_util::StreamExt;
 use gateway_edge::{
     GatewayDispatcher, GatewayInboundSecretResolver, GatewayLimits, GatewayProvider,
     GatewayRequest, GatewayRequestDispatcher, GatewayRuntimeLauncher, GatewayRuntimeService,
-    GatewayScheme, GatewayServiceArtifact, GatewayServiceArtifactKind, GatewayServiceIdentity,
-    GatewayServiceMaterializer, LocalCaddyAdministration, LocalCaddyConfigurationTemplate,
+    GatewayScheme, GatewayServiceArtifact, GatewayServiceArtifactKind, GatewayServiceHandler,
+    GatewayServiceIdentity, GatewayServiceMaterializer, GatewayServiceOwner,
+    GatewayServiceRegistry, LocalCaddyAdministration, LocalCaddyConfigurationTemplate,
     LocalCaddyGatewayProvider, PrivateHttpVmGatewayHandler, TrustedRequestMetadata,
     UNTRUSTED_FORWARDING_HEADERS,
 };
 use gateway_postgres::{
     GatewayReleaseArtifact, GatewayReleaseArtifactKind, GatewayReleaseMaterializer,
-    PostgresGatewayEdgeAuthority, PostgresGatewayMailboxPublisher, PostgresGatewayReleaseResolver,
+    PostgresGatewayEdgeAuthority, PostgresGatewayExecutionTargetResolver,
+    PostgresGatewayMailboxPublisher, PostgresGatewayReleaseResolver,
 };
 use git_http::{
     CompositeGitAuthenticator, GitAuthenticator, GitHttpLimits, GitHttpService,
@@ -172,6 +174,10 @@ use workspace_postgres::PgWorkspaceMetadataRepository;
 
 /// Ordered database migration expected by this application version.
 pub const EXPECTED_DATABASE_MIGRATION: i64 = 75;
+
+const GATEWAY_SERVICE_SERVING_CAPACITY: usize = 8;
+const GATEWAY_SERVICE_REPLACEMENT_CAPACITY: usize = 2;
+const GATEWAY_SERVICE_REQUEST_CAPACITY: usize = 16;
 
 /// OIDC issuer configuration used for bearer-token authentication.
 #[derive(Clone)]
@@ -1169,6 +1175,7 @@ impl HephaestusApp {
     #[allow(clippy::too_many_lines)]
     pub async fn build(mut config: AppConfig) -> Result<Self, AppError> {
         config.validate()?;
+        let gateway_service_host_id = config.volumes.host_id.clone();
         if let VmBackendConfig::Libkrun(provider) = &mut config.vm_backend {
             if provider
                 .broker_socket_path
@@ -1294,12 +1301,19 @@ impl HephaestusApp {
             let gateway_authority_pool = connect_oci_worker(&config.database_url, 4)
                 .await
                 .map_err(component("gateway runtime authority PostgreSQL connection"))?;
+            let service_owner = GatewayServiceOwner::new(gateway_service_host_id, Uuid::new_v4())
+                .map_err(component("gateway service owner"))?;
+            let service_registry = GatewayServiceRegistry::new(
+                GATEWAY_SERVICE_SERVING_CAPACITY + GATEWAY_SERVICE_REPLACEMENT_CAPACITY,
+                GATEWAY_SERVICE_REQUEST_CAPACITY,
+            )
+            .map_err(component("gateway service registry"))?;
             let issuer_handoff =
                 EncryptedFileHandoffStore::new(gateway_handoff_root.clone(), gateway_handoff_key)
                     .map_err(component("gateway runtime authority handoff"))?;
             let issuer: Arc<dyn GatewayRuntimeAuthorityIssuer> =
                 Arc::new(PgGatewayRuntimeAuthorityIssuer::new(
-                    gateway_authority_pool,
+                    gateway_authority_pool.clone(),
                     issuer_handoff,
                     authz_postgres::AUTHORIZATION_MODEL_VERSION,
                 ));
@@ -1322,7 +1336,17 @@ impl HephaestusApp {
                     provider: Arc::clone(&provider),
                 },
             );
-            let handler = PrivateHttpVmGatewayHandler::new(runtime);
+            let stateless_handler = PrivateHttpVmGatewayHandler::new(runtime);
+            // The owner and registry are created once per daemon build. A
+            // future supervisor will retain the same instances when it wires
+            // warm service startup and lease management.
+            let handler = GatewayServiceHandler::new(
+                PostgresGatewayExecutionTargetResolver::new(gateway_authority_pool.clone()),
+                stateless_handler,
+                service_registry,
+                service_owner,
+            )
+            .map_err(component("gateway service handler"))?;
             let ingress_pool = connect_control_plane(&config.database_url, 4)
                 .await
                 .map_err(component("gateway secret resolver PostgreSQL connection"))?;
