@@ -982,6 +982,13 @@ pub struct GatewaySummaryView<'a> {
     pub updated_at: ::buffa::MessageFieldView<
         ::buffa_types::google::protobuf::__buffa::view::TimestampView<'a>,
     >,
+    /// Latest declared HTTP service revision. It may be pending readiness and
+    /// therefore differ from active_revision_id, which is the serving revision.
+    ///
+    /// Field 8: `desired_service_revision_id`
+    pub desired_service_revision_id: ::buffa::MessageFieldView<
+        super::super::super::super::common::v1::__buffa::view::OpaqueIdView<'a>,
+    >,
     pub __buffa_unknown_fields: ::buffa::UnknownFieldsView<'a>,
 }
 impl<'a> ::buffa::MessageView<'a> for GatewaySummaryView<'a> {
@@ -1132,6 +1139,27 @@ impl<'a> ::buffa::MessageView<'a> for GatewaySummaryView<'a> {
                     }
                 }
             }
+            8u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                let __sub_ctx = ctx.descend()?;
+                let sub = ::buffa::types::borrow_bytes(&mut cur)?;
+                match view.desired_service_revision_id.as_mut() {
+                    Some(existing) => {
+                        ::buffa::MessageView::merge_into_view(existing, sub, __sub_ctx)?
+                    }
+                    None => {
+                        view.desired_service_revision_id = ::buffa::MessageFieldView::set(
+                            <super::super::super::super::common::v1::__buffa::view::OpaqueIdView as ::buffa::MessageView>::decode_view_ctx(
+                                sub,
+                                __sub_ctx,
+                            )?,
+                        );
+                    }
+                }
+            }
             _ => {
                 ::buffa::encoding::skip_field_depth(tag, &mut cur, ctx.depth())?;
                 let span_len = before_tag.len() - cur.len();
@@ -1196,6 +1224,17 @@ impl<'a> ::buffa::MessageView<'a> for GatewaySummaryView<'a> {
                 }
                 None => ::buffa::MessageField::none(),
             },
+            desired_service_revision_id: match self
+                .desired_service_revision_id
+                .as_option()
+            {
+                Some(v) => {
+                    ::buffa::MessageField::<
+                        super::super::super::super::common::v1::OpaqueId,
+                    >::some(v.to_owned_from_source(__buffa_src)?)
+                }
+                None => ::buffa::MessageField::none(),
+            },
             __buffa_unknown_fields: self.__buffa_unknown_fields.to_owned()?.into(),
             ..::core::default::Default::default()
         })
@@ -1256,6 +1295,14 @@ impl<'a> ::buffa::ViewEncode<'a> for GatewaySummaryView<'a> {
                 += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
                     + inner_size;
         }
+        if self.desired_service_revision_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.desired_service_revision_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
         size
     }
@@ -1295,6 +1342,10 @@ impl<'a> ::buffa::ViewEncode<'a> for GatewaySummaryView<'a> {
         if self.updated_at.is_set() {
             ::buffa::types::put_len_delimited_header(7u32, __cache.consume_next(), buf);
             self.updated_at.write_to(__cache, buf);
+        }
+        if self.desired_service_revision_id.is_set() {
+            ::buffa::types::put_len_delimited_header(8u32, __cache.consume_next(), buf);
+            self.desired_service_revision_id.write_to(__cache, buf);
         }
         self.__buffa_unknown_fields.write_to(buf);
     }
@@ -1349,6 +1400,14 @@ impl<'__a> ::serde::Serialize for GatewaySummaryView<'__a> {
         {
             if let ::core::option::Option::Some(__v) = self.updated_at.as_option() {
                 __map.serialize_entry("updatedAt", __v)?;
+            }
+        }
+        {
+            if let ::core::option::Option::Some(__v) = self
+                .desired_service_revision_id
+                .as_option()
+            {
+                __map.serialize_entry("desiredServiceRevisionId", __v)?;
             }
         }
         __map.end()
@@ -1496,6 +1555,18 @@ impl GatewaySummaryOwnedView {
         ::buffa_types::google::protobuf::__buffa::view::TimestampView<'_>,
     > {
         &self.0.reborrow().updated_at
+    }
+    /// Latest declared HTTP service revision. It may be pending readiness and
+    /// therefore differ from active_revision_id, which is the serving revision.
+    ///
+    /// Field 8: `desired_service_revision_id`
+    #[must_use]
+    pub fn desired_service_revision_id(
+        &self,
+    ) -> &::buffa::MessageFieldView<
+        super::super::super::super::common::v1::__buffa::view::OpaqueIdView<'_>,
+    > {
+        &self.0.reborrow().desired_service_revision_id
     }
 }
 impl ::core::convert::From<::buffa::OwnedView<GatewaySummaryView<'static>>>
@@ -6495,6 +6566,10 @@ pub struct ConfigureGatewayRequestView<'a> {
     pub gateway_id: ::buffa::MessageFieldView<
         super::super::super::super::common::v1::__buffa::view::OpaqueIdView<'a>,
     >,
+    /// For stateless gateways this is the active revision. For HTTP services it
+    /// is the latest declared revision (desired_service_revision_id when set,
+    /// otherwise active_revision_id).
+    ///
     /// Field 3: `expected_revision_id`
     pub expected_revision_id: ::buffa::MessageFieldView<
         super::super::super::super::common::v1::__buffa::view::OpaqueIdView<'a>,
@@ -6934,6 +7009,10 @@ impl ConfigureGatewayRequestOwnedView {
     > {
         &self.0.reborrow().gateway_id
     }
+    /// For stateless gateways this is the active revision. For HTTP services it
+    /// is the latest declared revision (desired_service_revision_id when set,
+    /// otherwise active_revision_id).
+    ///
     /// Field 3: `expected_revision_id`
     #[must_use]
     pub fn expected_revision_id(

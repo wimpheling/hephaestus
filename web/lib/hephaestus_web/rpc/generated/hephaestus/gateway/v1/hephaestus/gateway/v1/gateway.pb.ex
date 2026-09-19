@@ -83,6 +83,11 @@ defmodule Hephaestus.Gateway.V1.GatewaySummary do
   )
 
   field(:updated_at, 7, type: Google.Protobuf.Timestamp, json_name: "updatedAt")
+
+  field(:desired_service_revision_id, 8,
+    type: Hephaestus.Common.V1.OpaqueId,
+    json_name: "desiredServiceRevisionId"
+  )
 end
 
 defmodule Hephaestus.Gateway.V1.GatewayIngress do

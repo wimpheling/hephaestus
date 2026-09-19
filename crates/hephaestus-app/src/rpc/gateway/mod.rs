@@ -451,6 +451,7 @@ fn summary(value: gateway_postgres::GatewayManagementSummary) -> GatewaySummary 
         name: value.name,
         lifecycle: lifecycle_proto(&value.lifecycle).into(),
         active_revision_id: value.active_revision_id.map(opaque).into(),
+        desired_service_revision_id: value.desired_service_revision_id.map(opaque).into(),
         updated_at: timestamp(value.updated_at).into(),
         ..Default::default()
     }

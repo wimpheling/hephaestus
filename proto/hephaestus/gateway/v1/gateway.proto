@@ -175,6 +175,9 @@ message GatewaySummary {
   GatewayLifecycle lifecycle = 5;
   hephaestus.common.v1.OpaqueId active_revision_id = 6;
   google.protobuf.Timestamp updated_at = 7;
+  // Latest declared HTTP service revision. It may be pending readiness and
+  // therefore differ from active_revision_id, which is the serving revision.
+  hephaestus.common.v1.OpaqueId desired_service_revision_id = 8;
 }
 
 message GatewayIngress {
@@ -265,6 +268,9 @@ message GatewaySecretSelection {
 message ConfigureGatewayRequest {
   hephaestus.common.v1.RequestContext context = 1;
   hephaestus.common.v1.OpaqueId gateway_id = 2;
+  // For stateless gateways this is the active revision. For HTTP services it
+  // is the latest declared revision (desired_service_revision_id when set,
+  // otherwise active_revision_id).
   hephaestus.common.v1.OpaqueId expected_revision_id = 3;
   repeated hephaestus.common.v1.ParameterValue parameters = 4;
   repeated GatewaySecretSelection secret_selections = 5;

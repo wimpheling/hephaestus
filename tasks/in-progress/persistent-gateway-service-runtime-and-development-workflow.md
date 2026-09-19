@@ -363,6 +363,22 @@ supervision, and Caddy integration remain pending.
   `/tmp/hephaestus-gateway-recovery-real-strict.log`. Supervisor scheduling,
   cancellation wiring, and service runtime execution remain pending.
 
+The gateway aggregate now separates the latest declared service revision from
+the serving revision with `desired_service_revision_id`. Service install and
+configure operations update the desired pointer while preserving the active
+pointer; stateless operations retain immediate activation and clear any
+pending service candidate. Configure's `expected_revision_id` is the declared
+tip, implemented as `COALESCE(desired_service_revision_id, active_revision_id)`
+for stale checks and the locked compare-and-swap, so an older serving stateless
+revision cannot discard a pending service candidate. Desired changes emit the
+same committed gateway product-event outbox invalidation, while rejected
+transactions emit none. Real disposable PostgreSQL proof passed all 8
+`gateway-postgres` tests with
+`REAL_POSTGRES_CONNECTED_AND_MIGRATED=1 max_migration=73`; retained log:
+`/tmp/heph-gateway-postgres-desired-real-20260919-attempt3.log`. Readiness
+promotion, lifecycle supervision, and service-instance recovery remain
+unchecked.
+
 ## Non-goals
 
 This task does not replace MVP 03's bounded stateless invocation mode. It does

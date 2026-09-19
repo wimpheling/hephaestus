@@ -1599,6 +1599,9 @@ pub struct GatewayManagementSummary {
     pub lifecycle: String,
     /// Exact current immutable revision, when installed.
     pub active_revision_id: Option<Uuid>,
+    /// Latest declared HTTP service revision, which may still be pending
+    /// readiness and therefore differ from the serving revision.
+    pub desired_service_revision_id: Option<Uuid>,
     /// Latest lifecycle/configuration change time.
     pub updated_at: OffsetDateTime,
 }
@@ -1756,9 +1759,11 @@ pub struct GatewaySecretSelection {
 /// Runtime values and secret selections for one immutable gateway revision.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfigureGatewayRequest {
-    /// Gateway whose active revision is being configured.
+    /// Gateway whose declared revision is being configured.
     pub gateway_id: Uuid,
-    /// Active revision expected by the caller.
+    /// Stateless gateways compare this with the active revision. Service
+    /// gateways compare it with the latest desired revision, falling back to
+    /// the active revision only when no desired candidate exists.
     pub expected_revision_id: Uuid,
     /// Typed values validated against the published agent schema.
     pub parameters: BTreeMap<ParameterName, ParameterValue>,
@@ -1769,7 +1774,7 @@ pub struct ConfigureGatewayRequest {
 /// Result of configuring one immutable gateway revision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ConfigureGatewayResult {
-    /// New active immutable revision, or the original result on replay.
+    /// New immutable candidate revision, or the original result on replay.
     pub revision_id: Uuid,
 }
 
@@ -1823,7 +1828,8 @@ impl PostgresGatewayManagement {
         )
         .await?;
         let rows = sqlx::query_as::<_, GatewaySummaryRow>(
-            "SELECT id, project_id, repository_id, name, lifecycle, active_revision_id, updated_at
+            "SELECT id, project_id, repository_id, name, lifecycle, active_revision_id,
+                    desired_service_revision_id, updated_at
              FROM gateways
              WHERE project_id = $1 AND ($2::uuid IS NULL OR id > $2)
              ORDER BY id LIMIT $3",
@@ -1859,7 +1865,8 @@ impl PostgresGatewayManagement {
         )
         .await?;
         let summary = sqlx::query_as::<_, GatewaySummaryRow>(
-            "SELECT id, project_id, repository_id, name, lifecycle, active_revision_id, updated_at
+            "SELECT id, project_id, repository_id, name, lifecycle, active_revision_id,
+                    desired_service_revision_id, updated_at
              FROM gateways WHERE id = $1",
         )
         .bind(gateway_id)
@@ -2151,7 +2158,7 @@ impl PostgresGatewayManagement {
         })?;
         let current = sqlx::query_as::<_, ConfigureRevisionRow>(
             "SELECT gateway.project_id, gateway.repository_id, gateway.active_revision_id,
-                    gateway.lifecycle,
+                    gateway.desired_service_revision_id, gateway.lifecycle,
                     revision.release_id, revision.release_agent_id, revision.release_agent_key,
                     revision.handler_contract,
                     revision.service_loopback_port, revision.service_readiness_path,
@@ -2170,6 +2177,10 @@ impl PostgresGatewayManagement {
         .fetch_optional(&mut *tx)
         .await?
         .ok_or(GatewayConfigureError::NotFound)?;
+        let service_revision = current.handler_contract == "http.service.v1";
+        let expected_declared_revision = current
+            .desired_service_revision_id
+            .or(current.active_revision_id);
         // The durable command ledger is consulted before the active-revision
         // CAS check. A successful retry must replay after another revision
         // becomes active without reactivating its original result.
@@ -2304,10 +2315,10 @@ impl PostgresGatewayManagement {
             tx.commit().await?;
             return Ok(ConfigureGatewayResult { revision_id });
         }
-        if current.lifecycle != "enabled"
-            || current.active_revision_id != Some(command.expected_revision_id)
-            || current.release_state.as_deref() != Some("published")
-        {
+        if expected_declared_revision != Some(command.expected_revision_id) {
+            return Err(GatewayConfigureError::Stale);
+        }
+        if current.lifecycle != "enabled" || current.release_state.as_deref() != Some("published") {
             return Err(GatewayConfigureError::Stale);
         }
         sqlx::query("SET LOCAL ROLE hephaestus_worker")
@@ -2316,8 +2327,9 @@ impl PostgresGatewayManagement {
         // Serialize competing fresh keys on the aggregate before creating a
         // revision. The first winner changes the active revision; followers
         // then observe a clean stale result instead of a uniqueness error.
-        let still_active: bool = sqlx::query_scalar(
-            "SELECT lifecycle = 'enabled' AND active_revision_id = $2
+        let still_declared: bool = sqlx::query_scalar(
+            "SELECT lifecycle = 'enabled'
+                    AND COALESCE(desired_service_revision_id, active_revision_id) = $2
              FROM gateways WHERE id = $1 FOR UPDATE",
         )
         .bind(command.gateway_id)
@@ -2325,7 +2337,7 @@ impl PostgresGatewayManagement {
         .fetch_optional(&mut *tx)
         .await?
         .unwrap_or(false);
-        if !still_active {
+        if !still_declared {
             return Err(GatewayConfigureError::Stale);
         }
         // Reinstalling a declaration may select a previously configured
@@ -2417,15 +2429,29 @@ impl PostgresGatewayManagement {
             .execute(&mut *tx)
             .await?;
         }
-        let changed = sqlx::query(
-            "UPDATE gateways SET active_revision_id = $2, updated_at = now()
-             WHERE id = $1 AND active_revision_id = $3",
-        )
-        .bind(command.gateway_id)
-        .bind(revision_id)
-        .bind(command.expected_revision_id)
-        .execute(&mut *tx)
-        .await?;
+        let changed = if service_revision {
+            sqlx::query(
+                "UPDATE gateways SET desired_service_revision_id = $2, updated_at = now()
+                 WHERE id = $1
+                   AND COALESCE(desired_service_revision_id, active_revision_id) = $3",
+            )
+            .bind(command.gateway_id)
+            .bind(revision_id)
+            .bind(command.expected_revision_id)
+            .execute(&mut *tx)
+            .await?
+        } else {
+            sqlx::query(
+                "UPDATE gateways SET active_revision_id = $2,
+                        desired_service_revision_id = NULL, updated_at = now()
+                 WHERE id = $1 AND active_revision_id = $3",
+            )
+            .bind(command.gateway_id)
+            .bind(revision_id)
+            .bind(command.expected_revision_id)
+            .execute(&mut *tx)
+            .await?
+        };
         if changed.rows_affected() != 1 {
             return Err(GatewayConfigureError::Stale);
         }
@@ -2720,6 +2746,7 @@ struct ConfigureRevisionRow {
     project_id: Uuid,
     repository_id: Uuid,
     active_revision_id: Option<Uuid>,
+    desired_service_revision_id: Option<Uuid>,
     lifecycle: String,
     release_id: Option<Uuid>,
     release_agent_id: Option<Uuid>,
@@ -2824,6 +2851,7 @@ struct GatewaySummaryRow {
     name: String,
     lifecycle: String,
     active_revision_id: Option<Uuid>,
+    desired_service_revision_id: Option<Uuid>,
     updated_at: OffsetDateTime,
 }
 impl From<GatewaySummaryRow> for GatewayManagementSummary {
@@ -2835,6 +2863,7 @@ impl From<GatewaySummaryRow> for GatewayManagementSummary {
             name: row.name,
             lifecycle: row.lifecycle,
             active_revision_id: row.active_revision_id,
+            desired_service_revision_id: row.desired_service_revision_id,
             updated_at: row.updated_at,
         }
     }
@@ -3625,11 +3654,30 @@ async fn install_declaration(
             .fetch_one(&mut **tx)
             .await?,
         });
-    sqlx::query("UPDATE gateways SET active_revision_id = $2, updated_at = now() WHERE id = $1")
+    if declaration.handler_contract == "http.service.v1" {
+        // A service declaration is durable desired state. It becomes
+        // publicly serving only after a later readiness-gated activation.
+        sqlx::query(
+            "UPDATE gateways SET desired_service_revision_id = $2, updated_at = now()
+             WHERE id = $1",
+        )
         .bind(gateway_id.as_uuid())
         .bind(revision_id.as_uuid())
         .execute(&mut **tx)
         .await?;
+    } else {
+        // Stateless gateways retain their existing atomic immediate-activation
+        // behavior and supersede any pending service declaration.
+        sqlx::query(
+            "UPDATE gateways SET active_revision_id = $2,
+                    desired_service_revision_id = NULL, updated_at = now()
+             WHERE id = $1",
+        )
+        .bind(gateway_id.as_uuid())
+        .bind(revision_id.as_uuid())
+        .execute(&mut **tx)
+        .await?;
+    }
     Ok(InstalledGateway {
         gateway_id,
         revision_id,

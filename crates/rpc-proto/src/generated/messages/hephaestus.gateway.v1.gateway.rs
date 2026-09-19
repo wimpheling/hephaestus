@@ -961,6 +961,18 @@ pub struct GatewaySummary {
         skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
     )]
     pub updated_at: ::buffa::MessageField<::buffa_types::google::protobuf::Timestamp>,
+    /// Latest declared HTTP service revision. It may be pending readiness and
+    /// therefore differ from active_revision_id, which is the serving revision.
+    ///
+    /// Field 8: `desired_service_revision_id`
+    #[serde(
+        rename = "desiredServiceRevisionId",
+        alias = "desired_service_revision_id",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub desired_service_revision_id: ::buffa::MessageField<
+        super::super::common::v1::OpaqueId,
+    >,
     #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
@@ -975,6 +987,7 @@ impl ::core::fmt::Debug for GatewaySummary {
             .field("lifecycle", &self.lifecycle)
             .field("active_revision_id", &self.active_revision_id)
             .field("updated_at", &self.updated_at)
+            .field("desired_service_revision_id", &self.desired_service_revision_id)
             .finish()
     }
 }
@@ -1052,6 +1065,14 @@ impl ::buffa::Message for GatewaySummary {
                 += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
                     + inner_size;
         }
+        if self.desired_service_revision_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.desired_service_revision_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
         size
     }
@@ -1090,6 +1111,10 @@ impl ::buffa::Message for GatewaySummary {
         if self.updated_at.is_set() {
             ::buffa::types::put_len_delimited_header(7u32, __cache.consume_next(), buf);
             self.updated_at.write_to(__cache, buf);
+        }
+        if self.desired_service_revision_id.is_set() {
+            ::buffa::types::put_len_delimited_header(8u32, __cache.consume_next(), buf);
+            self.desired_service_revision_id.write_to(__cache, buf);
         }
         self.__buffa_unknown_fields.write_to(buf);
     }
@@ -1175,6 +1200,17 @@ impl ::buffa::Message for GatewaySummary {
                     ctx,
                 )?;
             }
+            8u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.desired_service_revision_id.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
             _ => {
                 self.__buffa_unknown_fields
                     .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
@@ -1190,6 +1226,7 @@ impl ::buffa::Message for GatewaySummary {
         self.lifecycle = ::buffa::EnumValue::from(0);
         self.active_revision_id = ::buffa::MessageField::none();
         self.updated_at = ::buffa::MessageField::none();
+        self.desired_service_revision_id = ::buffa::MessageField::none();
         self.__buffa_unknown_fields.clear();
     }
 }
@@ -3855,6 +3892,10 @@ pub struct ConfigureGatewayRequest {
         skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
     )]
     pub gateway_id: ::buffa::MessageField<super::super::common::v1::OpaqueId>,
+    /// For stateless gateways this is the active revision. For HTTP services it
+    /// is the latest declared revision (desired_service_revision_id when set,
+    /// otherwise active_revision_id).
+    ///
     /// Field 3: `expected_revision_id`
     #[serde(
         rename = "expectedRevisionId",
