@@ -520,6 +520,7 @@ async fn exercise_external_gateway_service_warm_path(
     app_config: &AppConfig,
     root: &Path,
     root_image: &Path,
+    release_artifact_root: &Path,
 ) {
     let mut daemon =
         spawn_external_golden_daemon(gateway, app_config, root, root_image, None).await;
@@ -539,9 +540,26 @@ async fn exercise_external_gateway_service_warm_path(
     let public_url = env::var("HEPHAESTUS_CADDY_TEST_PUBLIC_URL")
         .expect("joined Caddy public URL for external daemon proof");
     let first_proof = exercise_gateway_service_requests(&public_url).await;
+    let cutover = env::var("HEPHAESTUS_APP_GATEWAY_SERVICE_CUTOVER_E2E").as_deref() == Ok("1");
     let unclean_restart =
         env::var("HEPHAESTUS_APP_GATEWAY_SERVICE_EXTERNAL_CRASH_E2E").as_deref() == Ok("1");
-    if unclean_restart {
+    if cutover {
+        exercise_external_gateway_service_cutover(
+            pool,
+            fixture,
+            gateway,
+            app_config,
+            root,
+            root_image,
+            release_artifact_root,
+            daemon,
+            first_instance_id,
+            paths,
+            &first_proof,
+            &public_url,
+        )
+        .await;
+    } else if unclean_restart {
         exercise_external_gateway_service_unclean_restart(ExternalGatewayServiceUncleanRestart {
             pool,
             fixture,
@@ -682,6 +700,408 @@ async fn exercise_external_gateway_service_unclean_restart(
     assert!(!replacement_paths.1.exists());
     assert!(!replacement_paths.2.exists());
     eprintln!("persistent-service-unclean-daemon-recovery-passed");
+}
+
+/// Exercises one real public revision cutover while an accepted request is
+/// still executing against the old guest.  The service fixture's bounded hold
+/// response keeps the exchange buffered until the new revision is serving.
+// This opt-in harness function keeps the complete external cutover evidence
+// together so its cleanup ordering remains reviewable at one call site.
+#[allow(
+    clippy::cognitive_complexity,
+    clippy::too_many_arguments,
+    clippy::too_many_lines
+)]
+async fn exercise_external_gateway_service_cutover(
+    pool: &sqlx::PgPool,
+    fixture: &GatewayServiceGoldenFixture,
+    gateway: &GatewayEdgeConfig,
+    _app_config: &AppConfig,
+    _root: &Path,
+    _root_image: &Path,
+    release_artifact_root: &Path,
+    daemon: ExternalGoldenDaemon,
+    old_instance_id: uuid::Uuid,
+    old_paths: (PathBuf, PathBuf, PathBuf),
+    first_proof: &GatewayServiceRequestProof,
+    public_url: &str,
+) {
+    let candidate =
+        seed_gateway_service_cutover_candidate(pool, fixture, release_artifact_root).await;
+    let baseline_invocations: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM gateway_invocations WHERE gateway_id = $1")
+            .bind(fixture.gateway_id)
+            .fetch_one(pool)
+            .await
+            .expect("count service invocations before cutover hold");
+    let hold_started_at: OffsetDateTime = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(pool)
+        .await
+        .expect("read cutover hold start time");
+    let old_fencing_token: i64 = sqlx::query_scalar(
+        "SELECT fencing_token
+           FROM gateway_service_instances
+          WHERE id = $1 AND gateway_id = $2 AND revision_id = $3",
+    )
+    .bind(old_instance_id)
+    .bind(fixture.gateway_id)
+    .bind(fixture.revision_id)
+    .fetch_one(pool)
+    .await
+    .expect("read A fencing token before hold");
+    let hold_nonce = uuid::Uuid::new_v4();
+    let hold_url = format!("{public_url}/gateway/service/hold?nonce={hold_nonce}");
+    let hold_deadline = tokio::time::Instant::now() + Duration::from_secs(29);
+    let hold_client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(29))
+        .build()
+        .expect("bounded cutover hold client");
+    let hold = tokio::spawn(async move {
+        let bytes = hold_client
+            .get(hold_url)
+            .send()
+            .await
+            .expect("public persistent-service hold request")
+            .error_for_status()
+            .expect("persistent-service hold succeeds")
+            .bytes()
+            .await
+            .expect("read persistent-service hold response");
+        let body: serde_json::Value =
+            serde_json::from_slice(&bytes).expect("persistent-service hold identity JSON");
+        GatewayServiceRequestProof {
+            pid: body
+                .get("pid")
+                .and_then(serde_json::Value::as_u64)
+                .expect("hold guest PID"),
+            startup_id: body
+                .get("startup_id")
+                .and_then(serde_json::Value::as_str)
+                .expect("hold guest startup identity")
+                .to_owned(),
+        }
+    });
+    let hold_invocation = wait_for_accepted_gateway_service_hold(
+        pool,
+        fixture,
+        old_instance_id,
+        old_fencing_token,
+        hold_started_at,
+        baseline_invocations,
+    )
+    .await;
+    assert!(
+        !hold.is_finished(),
+        "A hold remains in flight after acceptance"
+    );
+
+    sqlx::query("UPDATE gateways SET desired_service_revision_id = $2 WHERE id = $1")
+        .bind(fixture.gateway_id)
+        .bind(candidate.revision_id)
+        .execute(pool)
+        .await
+        .expect("declare published cutover candidate");
+    let candidate_instance_id =
+        wait_for_gateway_service_cutover_state(pool, fixture, &candidate, old_instance_id).await;
+    assert!(
+        !hold.is_finished(),
+        "A hold remains pending while B is ready, active, and A is draining"
+    );
+    let candidate_paths = gateway_service_resource_paths(candidate_instance_id);
+    assert!(old_paths.0.is_dir(), "A VM runtime remains during drain");
+    assert!(old_paths.1.is_dir(), "A cgroup remains during drain");
+    assert!(old_paths.2.is_dir(), "A materializer remains during drain");
+    assert!(
+        candidate_paths.0.is_dir(),
+        "B VM runtime exists while serving"
+    );
+    assert!(candidate_paths.1.is_dir(), "B cgroup exists while serving");
+    assert!(
+        candidate_paths.2.is_dir(),
+        "B materializer exists while serving"
+    );
+    let b_before: OffsetDateTime = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(pool)
+        .await
+        .expect("read B public request start time");
+    let b_proof = exercise_gateway_service_cutover_requests(
+        pool,
+        &candidate,
+        candidate_instance_id,
+        public_url,
+        b_before,
+    )
+    .await;
+    assert_ne!(b_proof.startup_id, first_proof.startup_id);
+    assert!(
+        !hold.is_finished(),
+        "A hold remains pending after B traffic"
+    );
+    let old_state: String =
+        sqlx::query_scalar("SELECT state FROM gateway_service_instances WHERE id = $1")
+            .bind(old_instance_id)
+            .fetch_one(pool)
+            .await
+            .expect("read A state after B traffic");
+    assert_eq!(old_state, "draining");
+    let hold_outcome: String =
+        sqlx::query_scalar("SELECT outcome FROM gateway_invocations WHERE id = $1")
+            .bind(hold_invocation)
+            .fetch_one(pool)
+            .await
+            .expect("read A hold outcome after B traffic");
+    assert_eq!(hold_outcome, "accepted");
+    assert!(old_paths.0.is_dir() && old_paths.1.is_dir() && old_paths.2.is_dir());
+
+    let hold_proof = tokio::time::timeout_at(hold_deadline, hold)
+        .await
+        .expect("A hold completes inside the public exchange deadline")
+        .expect("A hold task joins");
+    assert_eq!(hold_proof.startup_id, first_proof.startup_id);
+    wait_for_gateway_invocation_completed(pool, hold_invocation).await;
+    wait_for_gateway_service_cleaned(pool, fixture, old_instance_id).await;
+    assert!(
+        !old_paths.0.exists(),
+        "A VM runtime is cleaned after response"
+    );
+    assert!(!old_paths.1.exists(), "A cgroup is cleaned after response");
+    assert!(
+        !old_paths.2.exists(),
+        "A materializer is cleaned after response"
+    );
+    assert!(
+        candidate_paths.0.is_dir() && candidate_paths.1.is_dir() && candidate_paths.2.is_dir(),
+        "B remains serving after A cleanup"
+    );
+    daemon.graceful_shutdown().await;
+    wait_for_gateway_service_cleaned(pool, &candidate, candidate_instance_id).await;
+    assert!(!candidate_paths.0.exists());
+    assert!(!candidate_paths.1.exists());
+    assert!(!candidate_paths.2.exists());
+    let applied_config =
+        wait_for_caddy_configuration(&gateway.caddy_admin_url, "/gateway/service").await;
+    assert!(applied_config.contains("/gateway/service"));
+    eprintln!(
+        "persistent-service-cutover-passed old_instance={old_instance_id} new_instance={candidate_instance_id} old_startup_id={} new_startup_id={}",
+        first_proof.startup_id, b_proof.startup_id
+    );
+}
+
+async fn wait_for_accepted_gateway_service_hold(
+    pool: &sqlx::PgPool,
+    fixture: &GatewayServiceGoldenFixture,
+    instance_id: uuid::Uuid,
+    fencing_token: i64,
+    started_at: OffsetDateTime,
+    baseline_invocations: i64,
+) -> uuid::Uuid {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let count: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM gateway_invocations WHERE gateway_id = $1",
+            )
+            .bind(fixture.gateway_id)
+            .fetch_one(pool)
+            .await
+            .expect("count accepted hold invocation");
+            let row: Option<(uuid::Uuid, i64)> = sqlx::query_as(
+                "SELECT invocation.id, invocation.service_instance_fencing_token
+                   FROM gateway_invocations AS invocation
+                   JOIN gateway_runtime_authority_sessions AS session
+                     ON session.invocation_id = invocation.id
+                    AND session.gateway_id = invocation.gateway_id
+                    AND session.gateway_revision_id = invocation.gateway_revision_id
+                  WHERE invocation.gateway_id = $1
+                    AND invocation.gateway_revision_id = $2
+                    AND invocation.service_instance_id = $3
+                    AND invocation.outcome = 'accepted'
+                    AND invocation.accepted_at >= $4
+                    AND session.admission_mode = 'host_mediated'
+                    AND session.status = 'active'
+                  ORDER BY invocation.accepted_at DESC, invocation.id DESC
+                  LIMIT 1",
+            )
+            .bind(fixture.gateway_id)
+            .bind(fixture.revision_id)
+            .bind(instance_id)
+            .bind(started_at)
+            .fetch_optional(pool)
+            .await
+            .expect("read accepted host-mediated hold invocation");
+            if count == baseline_invocations + 1 {
+                if let Some((invocation_id, observed_fencing_token)) = row {
+                    assert_eq!(observed_fencing_token, fencing_token);
+                    return invocation_id;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("A hold becomes an accepted host-mediated invocation")
+}
+
+async fn wait_for_gateway_service_cutover_state(
+    pool: &sqlx::PgPool,
+    fixture: &GatewayServiceGoldenFixture,
+    candidate: &GatewayServiceGoldenFixture,
+    old_instance_id: uuid::Uuid,
+) -> uuid::Uuid {
+    tokio::time::timeout(Duration::from_secs(18), async {
+        loop {
+            let row: Option<(Option<uuid::Uuid>, String, uuid::Uuid, String)> = sqlx::query_as(
+                "SELECT gateway.active_revision_id, old_instance.state,
+                        candidate.id, candidate.state
+                   FROM gateways AS gateway
+                   JOIN gateway_service_instances AS old_instance
+                     ON old_instance.id = $2
+                    AND old_instance.gateway_id = gateway.id
+                    AND old_instance.revision_id = $3
+                   JOIN gateway_service_instances AS candidate
+                     ON candidate.gateway_id = gateway.id
+                    AND candidate.revision_id = $4
+                  WHERE gateway.id = $1
+                    AND candidate.state = 'ready'
+                  ORDER BY candidate.created_at DESC
+                  LIMIT 1",
+            )
+            .bind(fixture.gateway_id)
+            .bind(old_instance_id)
+            .bind(fixture.revision_id)
+            .bind(candidate.revision_id)
+            .fetch_optional(pool)
+            .await
+            .expect("read coherent service cutover state");
+            if let Some((Some(active), old_state, candidate_id, candidate_state)) = row {
+                if active == candidate.revision_id
+                    && old_state == "draining"
+                    && candidate_state == "ready"
+                {
+                    return candidate_id;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("B becomes active while A drains")
+}
+
+async fn exercise_gateway_service_cutover_requests(
+    pool: &sqlx::PgPool,
+    candidate: &GatewayServiceGoldenFixture,
+    candidate_instance_id: uuid::Uuid,
+    public_url: &str,
+    started_at: OffsetDateTime,
+) -> GatewayServiceRequestProof {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .expect("bounded B cutover client");
+    let first_nonce = uuid::Uuid::new_v4();
+    let second_nonce = uuid::Uuid::new_v4();
+    let path = format!("{public_url}/gateway/service/identity");
+    let first = client
+        .get(format!("{path}?cutover_nonce={first_nonce}"))
+        .send()
+        .await
+        .expect("first B public identity request")
+        .error_for_status()
+        .expect("first B identity succeeds")
+        .bytes()
+        .await
+        .expect("read first B identity");
+    let second = client
+        .get(format!("{path}?cutover_nonce={second_nonce}"))
+        .send()
+        .await
+        .expect("second B public identity request")
+        .error_for_status()
+        .expect("second B identity succeeds")
+        .bytes()
+        .await
+        .expect("read second B identity");
+    let first: serde_json::Value = serde_json::from_slice(&first).expect("first B identity JSON");
+    let second: serde_json::Value =
+        serde_json::from_slice(&second).expect("second B identity JSON");
+    let first_startup = first
+        .get("startup_id")
+        .and_then(serde_json::Value::as_str)
+        .expect("first B startup identity");
+    let second_startup = second
+        .get("startup_id")
+        .and_then(serde_json::Value::as_str)
+        .expect("second B startup identity");
+    assert_eq!(first_startup, second_startup);
+    assert!(
+        second
+            .get("request_count")
+            .and_then(serde_json::Value::as_u64)
+            .expect("second B request count")
+            > first
+                .get("request_count")
+                .and_then(serde_json::Value::as_u64)
+                .expect("first B request count")
+    );
+    // The nonce values make the two public URLs distinct.  Invocation rows do
+    // not persist query strings, so the DB correlation is the exact two-row
+    // delta after the exclusive cutover request window.
+    let candidate_fence: i64 =
+        sqlx::query_scalar("SELECT fencing_token FROM gateway_service_instances WHERE id = $1")
+            .bind(candidate_instance_id)
+            .fetch_one(pool)
+            .await
+            .expect("read B fencing token");
+    let bindings: Vec<(uuid::Uuid, Option<uuid::Uuid>, Option<i64>, String)> = sqlx::query_as(
+        "SELECT gateway_revision_id, service_instance_id,
+                service_instance_fencing_token, outcome
+           FROM gateway_invocations
+          WHERE gateway_id = $1 AND accepted_at >= $2
+          ORDER BY accepted_at DESC, id DESC
+          LIMIT 3",
+    )
+    .bind(candidate.gateway_id)
+    .bind(started_at)
+    .fetch_all(pool)
+    .await
+    .expect("read B invocation bindings");
+    assert_eq!(bindings.len(), 2);
+    assert!(
+        bindings
+            .iter()
+            .all(|(revision, instance, fencing_token, outcome)| {
+                *revision == candidate.revision_id
+                    && *instance == Some(candidate_instance_id)
+                    && *fencing_token == Some(candidate_fence)
+                    && outcome == "completed"
+            },)
+    );
+    GatewayServiceRequestProof {
+        pid: first
+            .get("pid")
+            .and_then(serde_json::Value::as_u64)
+            .expect("B guest PID"),
+        startup_id: first_startup.to_owned(),
+    }
+}
+
+async fn wait_for_gateway_invocation_completed(pool: &sqlx::PgPool, invocation_id: uuid::Uuid) {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let outcome: String =
+                sqlx::query_scalar("SELECT outcome FROM gateway_invocations WHERE id = $1")
+                    .bind(invocation_id)
+                    .fetch_one(pool)
+                    .await
+                    .expect("read completed hold invocation");
+            if outcome == "completed" {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("A hold invocation completes");
 }
 
 struct ExternalGoldenDaemon {
@@ -1357,6 +1777,8 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
     let gateway_service_e2e = env::var("HEPHAESTUS_APP_GATEWAY_SERVICE_E2E").as_deref() == Ok("1");
     let gateway_service_external_e2e =
         env::var("HEPHAESTUS_APP_GATEWAY_SERVICE_EXTERNAL_E2E").as_deref() == Ok("1");
+    let gateway_service_cutover_e2e =
+        env::var("HEPHAESTUS_APP_GATEWAY_SERVICE_CUTOVER_E2E").as_deref() == Ok("1");
     assert!(
         !cooking::enabled() || gateway_caddy_e2e,
         "cooking requires the joined Caddy/libkrun fixture"
@@ -1372,6 +1794,10 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
     assert!(
         !gateway_service_external_e2e || gateway_service_e2e,
         "the external persistent-service proof requires the service fixture"
+    );
+    assert!(
+        !gateway_service_cutover_e2e || gateway_service_external_e2e,
+        "the persistent-service cutover proof requires the external daemon fixture"
     );
     assert!(
         !gateway_service_e2e || !cooking_build_proof,
@@ -1828,6 +2254,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             &app_config,
             &root,
             &root_image,
+            &release_artifact_root,
         )
         .await;
         cleanup_streams(&nats_url).await;
@@ -4876,6 +5303,216 @@ async fn seed_gateway_service_route(
         .expect("publish service gateway desired revision");
     GatewayServiceGoldenFixture {
         gateway_id,
+        revision_id,
+    }
+}
+
+/// Creates a second independently published service release while leaving the
+/// existing desired pointer untouched.  The cutover proof advances that
+/// pointer only after the first public invocation has been accepted.
+// The SQL fixture deliberately mirrors the published-release rows as one
+// bounded setup operation; splitting it would obscure the immutable IDs.
+#[allow(clippy::too_many_lines)]
+async fn seed_gateway_service_cutover_candidate(
+    pool: &sqlx::PgPool,
+    fixture: &GatewayServiceGoldenFixture,
+    artifact_root: &Path,
+) -> GatewayServiceGoldenFixture {
+    let (project_id, repository_id, source_agent_key, source_publication_actor_id, created_by): (
+        uuid::Uuid,
+        uuid::Uuid,
+        String,
+        Option<uuid::Uuid>,
+        uuid::Uuid,
+    ) = sqlx::query_as(
+        "SELECT gateway.project_id, gateway.repository_id,
+                revision.release_agent_key, release.publication_actor_id,
+                gateway.created_by
+           FROM gateways AS gateway
+           JOIN gateway_revisions AS revision
+             ON revision.id = $2 AND revision.gateway_id = gateway.id
+           JOIN releases AS release
+             ON release.id = revision.release_id
+          WHERE gateway.id = $1",
+    )
+    .bind(fixture.gateway_id)
+    .bind(fixture.revision_id)
+    .fetch_one(pool)
+    .await
+    .expect("read published service source metadata");
+    let publication_actor_id = source_publication_actor_id.unwrap_or(created_by);
+    let authorized_actor: Option<uuid::Uuid> = sqlx::query_scalar(
+        "SELECT member.user_id
+           FROM gateways AS gateway
+           JOIN projects AS project ON project.id = gateway.project_id
+           JOIN organization_members AS member
+             ON member.organization_id = project.organization_id
+            AND member.user_id = $2
+          WHERE gateway.id = $1
+            AND member.role IN ('owner', 'admin')",
+    )
+    .bind(fixture.gateway_id)
+    .bind(publication_actor_id)
+    .fetch_optional(pool)
+    .await
+    .expect("verify cutover publication actor authorization");
+    assert_eq!(
+        authorized_actor,
+        Some(publication_actor_id),
+        "cutover publication actor must belong to the gateway project organization"
+    );
+    let release_id = uuid::Uuid::new_v4();
+    let build_request_id = uuid::Uuid::new_v4();
+    let family_id = uuid::Uuid::new_v4();
+    let release_agent_id = uuid::Uuid::new_v4();
+    let artifact_id = uuid::Uuid::new_v4();
+    let storage_key = uuid::Uuid::new_v4();
+    let revision_id = uuid::Uuid::new_v4();
+    let source_commit = format!("{:040x}", release_id.as_u128());
+    let mut normalized_hash = [0_u8; 32];
+    normalized_hash[..16].copy_from_slice(release_id.as_bytes());
+    normalized_hash[16..].copy_from_slice(release_id.as_bytes());
+
+    sqlx::query(
+        "INSERT INTO build_requests
+            (id, repository_id, source_commit, source_ref,
+             build_definition_hash, state, created_by)
+         VALUES ($1, $2, $3, 'refs/heads/main', $4, 'succeeded', $5)",
+    )
+    .bind(build_request_id)
+    .bind(repository_id)
+    .bind(&source_commit)
+    .bind([21_u8; 32].as_slice())
+    .bind(publication_actor_id)
+    .execute(pool)
+    .await
+    .expect("seed cutover build request");
+    sqlx::query(
+        "INSERT INTO releases
+            (id, repository_id, version, source_commit, source_ref,
+             build_request_id, build_definition_hash, configuration,
+             configuration_hash, manifest_hash, state,
+             publication_actor_id, published_at)
+         VALUES ($1, $2, $3, $4, 'refs/heads/main', $5, $6, '{}',
+                 $7, $8, 'published', $9, now())",
+    )
+    .bind(release_id)
+    .bind(repository_id)
+    .bind(format!("cutover-{}", release_id.simple()))
+    .bind(&source_commit)
+    .bind(build_request_id)
+    .bind([21_u8; 32].as_slice())
+    .bind([22_u8; 32].as_slice())
+    .bind([23_u8; 32].as_slice())
+    .bind(publication_actor_id)
+    .execute(pool)
+    .await
+    .expect("publish cutover release");
+    sqlx::query(
+        "INSERT INTO agent_families (id, repository_id, agent_key)
+         VALUES ($1, $2, $3)",
+    )
+    .bind(family_id)
+    .bind(repository_id)
+    .bind(format!("cutover-agent-{}", release_id.simple()))
+    .execute(pool)
+    .await
+    .expect("seed cutover agent family");
+    sqlx::query(
+        "INSERT INTO release_agents
+            (id, release_id, family_id, agent_key, display_name,
+             runtime_contract, runtime_contract_hash, parameter_schema,
+             secret_slot_schema, requires_state)
+         VALUES ($1, $2, $3, $4, 'Cutover service', $5, $6,
+                 '[]', '[]', false)",
+    )
+    .bind(release_agent_id)
+    .bind(release_id)
+    .bind(family_id)
+    .bind(&source_agent_key)
+    .bind(serde_json::json!({
+        "executable": "bin/service",
+        "arguments": [],
+        "working_directory": "bin",
+        "image_reference": ROOT_IMAGE,
+        "requires_state": false,
+        "policy_ceiling": {"vcpus": 1, "memory_mib": 512, "network": "disabled"}
+    }))
+    .bind([24_u8; 32].as_slice())
+    .execute(pool)
+    .await
+    .expect("seed cutover release agent");
+
+    let artifact = SERVICE_GATEWAY_HANDLER.as_bytes();
+    tokio::fs::create_dir_all(artifact_root)
+        .await
+        .expect("cutover release artifact root");
+    let artifact_path = artifact_root.join(storage_key.simple().to_string());
+    tokio::fs::write(&artifact_path, artifact)
+        .await
+        .expect("cutover service artifact");
+    let mut permissions = tokio::fs::metadata(&artifact_path)
+        .await
+        .expect("cutover service artifact metadata")
+        .permissions();
+    PermissionsExt::set_mode(&mut permissions, 0o555);
+    tokio::fs::set_permissions(&artifact_path, permissions)
+        .await
+        .expect("cutover service artifact mode");
+    let artifact_hash: [u8; 32] = Sha256::digest(artifact).into();
+    sqlx::query(
+        "INSERT INTO release_artifacts
+           (id, release_id, path, kind, mode, content_hash, size_bytes,
+            media_type, storage_key)
+         VALUES ($1, $2, 'bin/service', 'executable', 365, $3, $4,
+                 'application/octet-stream', $5)",
+    )
+    .bind(artifact_id)
+    .bind(release_id)
+    .bind(artifact_hash.as_slice())
+    .bind(i64::try_from(artifact.len()).expect("cutover artifact length"))
+    .bind(storage_key)
+    .execute(pool)
+    .await
+    .expect("seed cutover service artifact");
+    sqlx::query(
+        "INSERT INTO gateway_revisions
+            (id, gateway_id, project_id, repository_id, release_id,
+             release_agent_id, release_agent_key, handler_contract, exposure,
+             parameters, secret_slots, mailbox_slots, normalized_hash, created_by,
+             service_loopback_port, service_readiness_path, service_health_path)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'http.service.v1', 'public',
+                 '{}', '{}', '{}', $8, $9, 8080, '/readyz', '/healthz')",
+    )
+    .bind(revision_id)
+    .bind(fixture.gateway_id)
+    .bind(project_id)
+    .bind(repository_id)
+    .bind(release_id)
+    .bind(release_agent_id)
+    .bind(&source_agent_key)
+    .bind(normalized_hash.as_slice())
+    .bind(publication_actor_id)
+    .execute(pool)
+    .await
+    .expect("seed cutover service revision");
+    for path in ["/service", "/service/identity", "/service/crash"] {
+        sqlx::query(
+            "INSERT INTO gateway_routes
+               (id, gateway_revision_id, gateway_id, project_id, path, methods)
+             VALUES ($1, $2, $3, $4, $5, ARRAY['GET'])",
+        )
+        .bind(uuid::Uuid::new_v4())
+        .bind(revision_id)
+        .bind(fixture.gateway_id)
+        .bind(project_id)
+        .bind(path)
+        .execute(pool)
+        .await
+        .expect("seed cutover service route");
+    }
+    GatewayServiceGoldenFixture {
+        gateway_id: fixture.gateway_id,
         revision_id,
     }
 }

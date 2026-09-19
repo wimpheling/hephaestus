@@ -1525,3 +1525,36 @@ passes Rust/authorization, cooking applications, and live browser review.
 Committed metadata-reader checkpoint `05b5048`: [CI run
 35437687346](https://github.com/wimpheling/hephaestus/actions/runs/35437687346)
 passes Rust/authorization, cooking applications, and live browser review.
+
+
+Real VM/Caddy revision-cutover checkpoint (2026-09-19): the exact `05b5048`
+archive with only `crates/hephaestus-app/tests/golden.rs` and
+`crates/vm-libkrun/src/bin/heph-integration-check.rs` overlaid at
+`/tmp/heph-cutover-verify-05b5048-r2` ran the joined
+`HEPHAESTUS_APP_GATEWAY_SERVICE_E2E=1 HEPHAESTUS_APP_GATEWAY_SERVICE_EXTERNAL_E2E=1 HEPHAESTUS_APP_GATEWAY_SERVICE_CUTOVER_E2E=1 bash scripts/run-gateway-libkrun-e2e.sh`
+command using the real external daemon, PostgreSQL, NATS, libkrun, and Caddy.
+The fixture held an accepted A request for 20 seconds, then declared the
+independently published B revision. A coherent database snapshot observed B
+`Ready` and active while A was `Draining`; B served two public requests with
+completed invocation bindings for its exact instance and fencing token while
+A's hold remained pending. The hold then returned A's startup identity,
+completed its accepted invocation, and removed A's VM runtime, cgroup, and
+materializer before final B shutdown removed B's resources. The run recorded
+`persistent-service-cutover-passed` with A instance
+`bd98a2d9-cb67-4068-8a67-5c26e420d721`, B instance
+`431ae4c2-b55d-4f40-a040-45f606363830`, A startup
+`341-1789815614061755107`, and B startup
+`340-1789815618007060204`. It passed 35 golden tests with one ignored and 8
+gateway-postgres tests, ending with `daemon golden E2E passed; runtime and
+cgroup cleanup verified`; full evidence is
+`/tmp/heph-cutover-real-20260919-r2-v5.log`. The nullable publication actor
+fixture fallback is validated against the gateway project's organization
+membership. Pinned Rust 1.88 formatting, strict all-target/all-feature
+Clippy for `hephaestus-app` and `vm-libkrun`, and workspace rustdoc passed;
+logs are `/tmp/heph-cutover-r2-pinned-{fmt,app-clippy,vm-clippy,workspace-doc}.log`.
+The shared and isolated owned-file hashes match (`golden.rs`
+`1f53a09da63ac69c95122b06ca79618083a9dd9efa644e78ac20c703c9a8177b`, guest
+helper `a1f85d814309569a739de8c65d6664ba3368db23eb2de4cb34651ba6a2ea8164`).
+This proves real revision cutover and drain ordering only; daemon crash
+recovery, expired-boot recovery, revocation/adversarial paths, and release UI
+remain pending.

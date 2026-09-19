@@ -32,6 +32,7 @@ const SERVICE_MAX_HEADER_COUNT: usize = 32;
 const SERVICE_MAX_HEADER_LINE_BYTES: usize = 4 * 1024;
 const SERVICE_MAX_BODY_BYTES: usize = 16 * 1024;
 const SERVICE_MAX_DELAY_MS: u64 = 5_000;
+const SERVICE_HOLD: Duration = Duration::from_secs(20);
 const SERVICE_IO_TIMEOUT: Duration = Duration::from_secs(5);
 const SERVICE_CRASH_EXIT_CODE: i32 = 42;
 const SERVICE_ISOLATION_CHECK_ENV: &str = "HEPH_SERVICE_ISOLATION_CHECK";
@@ -507,6 +508,18 @@ fn serve_service_connection(
         // across the private exchange. Accept the exact public service path
         // as well as the direct loopback path used by private-service tests.
         "/identity" | "/gateway/service/identity" => {
+            let body = format!(
+                r#"{{"pid":{},"startup_id":"{}","request_count":{request_number}}}"#,
+                process::id(),
+                startup_id
+            );
+            write_service_response(&mut stream, 200, "application/json", body.as_bytes())
+        }
+        // This bounded fixture-only response keeps one accepted gateway
+        // invocation in flight while a replacement revision becomes ready.
+        // The public exchange deadline remains the authority for the bound.
+        "/gateway/service/hold" => {
+            thread::sleep(SERVICE_HOLD);
             let body = format!(
                 r#"{{"pid":{},"startup_id":"{}","request_count":{request_number}}}"#,
                 process::id(),
