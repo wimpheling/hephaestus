@@ -2018,3 +2018,33 @@ passed. Prior scoped validation evidence remains
 `/home/a/gateway-data-rustdoc-20260919.log`. The application migration guard
 advances to 81 with this slice. RPC/protogen exposure and scheduler integration
 remain pending separate work.
+
+Scheduler reconstruction unit checkpoint (2026-09-19): all eight scheduler
+tests passed in `/home/a/hephaestus-app-maintenance-tests-20260919-v3.log`,
+covering bounded pagination, fair progress past failing projects, timeout and
+cancellation handling, malformed-page retry at the same cursor, and capped
+enumeration backoff. Strict app-library Clippy passed in
+`/home/a/hephaestus-app-maintenance-clippy-20260919-v3.log`; Rust 1.88 formatting
+and diff checks passed. The real application retention test remains a separate
+acceptance gate: these unit checks do not establish production startup,
+gateway-disabled retention, or dedicated pool shutdown behavior.
+
+Application retention acceptance checkpoint (2026-09-19): the real
+gateway-disabled application test passed with the fresh loopback JetStream
+fixture and isolated PostgreSQL database. The run printed
+`REAL_APP_SERVICE_LOG_MAINTENANCE=1 max_migration=81` and proved automatic
+two-phase retention: an aged cleaned epoch with payload was emptied while its
+fresh metadata remained, and a separate already-empty aged epoch was GC'd;
+the final assertion found only fencing epoch 1 with acknowledged-through 0
+and zero retained bytes/chunks. The dedicated service-log pool was closed on
+application shutdown and the isolated database was dropped after cleanup.
+Evidence is `/home/a/hephaestus-app-service-log-retention-real-20260919-v5.log`;
+the prior successful run is `/home/a/hephaestus-app-service-log-retention-real-20260919-v4.log`.
+The eight scheduler unit tests remain green in
+`/home/a/hephaestus-app-maintenance-tests-20260919-v3.log`. Focused strict
+Clippy for the app library and integration test passed in
+`/home/a/hephaestus-app-service-log-retention-clippy-20260919-v3.log`; strict
+app rustdoc with `RUSTDOCFLAGS=-Dwarnings` passed in
+`/home/a/hephaestus-app-service-log-retention-rustdoc-20260919.log`; Rust 1.88
+formatting and `git diff --check` passed. RPC/proto generation and application
+RPC exposure remain pending separate integration work.

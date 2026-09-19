@@ -4,6 +4,7 @@ mod application;
 mod event_adapter;
 mod event_cursor;
 pub mod rpc;
+mod service_log_maintenance;
 
 /// Test-only lifecycle synchronization hooks used by daemon integration tests.
 #[cfg(feature = "test-fixtures")]
@@ -148,6 +149,7 @@ use secret_postgres::{GatewayIngressSecretResolver, SecretRuntimeService, Secret
 use secret_runtime::EphemeralSecretConfig;
 use secret_store::{EncryptedStore, LocalKeyProvider};
 use serde::Deserialize;
+use service_log_maintenance::GatewayServiceLogMaintenanceScheduler;
 use sha2::{Digest, Sha256};
 type PgPool = ControlPlanePool;
 use std::{
@@ -585,6 +587,7 @@ impl AppConfig {
 pub struct HephaestusApp {
     pool: PgPool,
     application_pool: PgPool,
+    service_log_pool: PgPool,
     nats_client: async_nats::Client,
     jetstream: async_nats::jetstream::Context,
     forge: Arc<PgForgeRepository>,
@@ -614,6 +617,7 @@ pub struct HephaestusApp {
     internal_platform_policy_version: String,
     secret_broker_socket: PathBuf,
     secret_broker_executor: Arc<dyn BrokerExecutor>,
+    service_log_maintenance: Arc<GatewayServiceLogMaintenanceScheduler>,
     gateway_edge: Option<GatewayEdgeRuntime>,
     worker_concurrency: usize,
     outbox_poll_interval: Duration,
@@ -1267,6 +1271,24 @@ impl HephaestusApp {
         let gateway_handoff_root = config.runtime_authority_handoff_root.clone();
         let gateway_handoff_key = config.runtime_authority_handoff_key;
         let gateway_root_images = config.root_images.clone();
+        // Service-log append and retention use one dedicated worker pool. It
+        // is created even when the optional gateway edge is disabled so the
+        // retention scheduler has stable ownership and shutdown semantics.
+        let service_log_pool = connect_oci_worker(&config.database_url, 2)
+            .await
+            .map_err(component("service-log PostgreSQL connection"))?;
+        let service_log_store = Arc::new(PostgresGatewayServiceLogStore::new(
+            service_log_pool.clone(),
+        ));
+        let service_log_projects: Arc<dyn gateway_edge::GatewayServiceLogMaintenanceProjects> =
+            service_log_store.clone();
+        let service_log_maintenance_port: Arc<dyn gateway_edge::GatewayServiceLogMaintenance> =
+            service_log_store.clone();
+        let service_log_maintenance = Arc::new(GatewayServiceLogMaintenanceScheduler::new(
+            service_log_projects,
+            service_log_maintenance_port,
+            gateway_edge::GatewayServiceLogMaintenancePolicy::default(),
+        ));
         let (secret_mounts, secret_runtime, secret_service) = build_secret_mount_manager(
             pool.clone(),
             &config.database_url,
@@ -1356,11 +1378,8 @@ impl HephaestusApp {
             let service_failure_store = Arc::new(PostgresGatewayServiceFailureStore::new(
                 gateway_authority_pool.clone(),
             ));
-            let service_log_store: Arc<dyn GatewayServiceLogStore> = Arc::new(
-                PostgresGatewayServiceLogStore::new(gateway_authority_pool.clone()),
-            );
             let service_log_writer = GatewayServiceLogWriterConfig::new(
-                service_log_store,
+                service_log_store.clone() as Arc<dyn GatewayServiceLogStore>,
                 ServiceLogWriterPolicy::default(),
             );
             let service_launch_resolver = Arc::new(
@@ -1589,6 +1608,7 @@ impl HephaestusApp {
             git_limits: config.git_http_limits,
             registry: config.registry,
             http_listen: config.http_listen,
+            service_log_pool,
             run_repository,
             mailbox_repository,
             review_repository,
@@ -1606,6 +1626,7 @@ impl HephaestusApp {
             internal_platform_policy_version,
             secret_broker_socket: config.secret_broker_socket,
             secret_broker_executor,
+            service_log_maintenance,
             gateway_edge,
             worker_concurrency: config.worker_concurrency,
             outbox_poll_interval: config.outbox_poll_interval,
@@ -1785,7 +1806,19 @@ impl HephaestusApp {
         }
 
         let cancellation = CancellationToken::new();
-        let mut tasks = Vec::with_capacity(9);
+        let mut tasks = Vec::with_capacity(10);
+        let service_log_maintenance = Arc::clone(&self.service_log_maintenance);
+        let service_log_cancel = cancellation.clone();
+        tasks.push(tokio::spawn(async move {
+            let result = service_log_maintenance
+                .run(service_log_cancel.clone())
+                .await
+                .map_err(|error| error.to_string());
+            if result.is_err() {
+                service_log_cancel.cancel();
+            }
+            result
+        }));
         let (update_reconcile_ready_tx, update_reconcile_ready_rx) = oneshot::channel();
         let update_reconcile_cancel = cancellation.clone();
         let update_reconcile_observer = Arc::clone(&self.update_completion);
@@ -2107,6 +2140,7 @@ impl HephaestusApp {
             tasks,
             pool: self.pool,
             application_pool: self.application_pool,
+            service_log_pool: self.service_log_pool,
             nats_client: self.nats_client,
             jetstream: self.jetstream,
             forge: self.forge,
@@ -3770,6 +3804,7 @@ pub struct RunningHephaestus {
     tasks: Vec<JoinHandle<Result<(), String>>>,
     pool: PgPool,
     application_pool: PgPool,
+    service_log_pool: PgPool,
     nats_client: async_nats::Client,
     jetstream: async_nats::jetstream::Context,
     forge: Arc<PgForgeRepository>,
@@ -3795,6 +3830,14 @@ impl RunningHephaestus {
     #[must_use]
     pub fn application_pool_for_test(&self) -> ControlPlanePool {
         self.application_pool.clone()
+    }
+
+    /// Returns the dedicated worker pool used by the service-log scheduler.
+    #[cfg(feature = "test-fixtures")]
+    #[doc(hidden)]
+    #[must_use]
+    pub fn service_log_pool_for_test(&self) -> ControlPlanePool {
+        self.service_log_pool.clone()
     }
 
     /// Waits for one persisted lifecycle event.
@@ -3880,6 +3923,7 @@ impl RunningHephaestus {
         }
         self.pool.close().await;
         self.application_pool.close().await;
+        self.service_log_pool.close().await;
         first_error.map_or(Ok(()), Err)
     }
 
