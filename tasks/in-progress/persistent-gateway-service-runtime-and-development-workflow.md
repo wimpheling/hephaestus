@@ -2124,3 +2124,17 @@ binary Clippy, vm-libkrun rustdoc and Cargo-aware formatting passed in
 `/home/a/hephaestus-vm-libkrun-rustdoc-20260919.log`,
 `/home/a/hephaestus-vm-libkrun-rustfmt-20260919.log`, and
 `/home/a/hephaestus-app-golden-rustfmt-20260919.log`.
+
+Candidate-capacity diagnostics checkpoint (2026-09-19): the first owned
+candidate-C run used session `27797` and exited 101, but its main log was
+corrupted because failure diagnostics redirected the snapshot sanitizer to
+`/dev/stderr` with `>`, truncating the regular stderr log. The preserved log is
+`/home/a/heph-candidate-capacity-real-vm-20260919.log`; its PostgreSQL
+`runs`-relation error is cleanup diagnostics only and not the candidate
+failure. The harness now duplicates stderr through an explicit descriptor when
+no diagnostics directory is configured and uses a dedicated descriptor for a
+retained diagnostics file. `bash -n`, `git diff --check`, and a regular-file
+stderr sentinel test passed. A diagnostic retry should set
+`HEPHAESTUS_LIBKRUN_DIAGNOSTICS_DIR`, `HEPH_GCP_PHASE_TIMING_PATH`, and
+`HEPHAESTUS_EXTERNAL_DAEMON_LOG` to dedicated `/home/a` paths before rerun;
+candidate acceptance remains pending.

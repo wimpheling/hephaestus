@@ -492,15 +492,23 @@ postgres_lifecycle_snapshot() {
     # by failure diagnostics.
     [[ -n "${postgres_container_name}" ]] || return 0
 
-    local destination='/dev/stderr'
+    local destination_fd
     local retained=false
     if [[ -n "${diagnostics_dir}" ]]; then
+        local destination
         destination="$(mktemp "${diagnostics_dir}/libkrun-postgres-${PPID}.XXXXXX")" || {
             printf 'postgres lifecycle snapshot unavailable\n' >&2
             return 0
         }
         chmod 600 -- "${destination}"
+        if ! exec {destination_fd}>"${destination}"; then
+            rm -f -- "${destination}"
+            printf 'postgres lifecycle snapshot unavailable\n' >&2
+            return 0
+        fi
         retained=true
+    else
+        exec {destination_fd}>&2
     fi
 
     # psql emits one JSON object per line. VM log bytes are decoded and passed
@@ -517,7 +525,7 @@ postgres_lifecycle_snapshot() {
         --no-align \
         --field-separator='|' \
         --set=ON_ERROR_STOP=1 \
-        2>/dev/null <<'SQL' | python3 "${repo_root}/scripts/redact-run-snapshot.py" >"${destination}"
+        2>/dev/null <<'SQL' | python3 "${repo_root}/scripts/redact-run-snapshot.py" >&"${destination_fd}"
 SET statement_timeout = '3s';
 SET lock_timeout = '1s';
 SELECT json_build_object('surface', 'runs', 'count', count(*))::text FROM runs;
@@ -694,6 +702,7 @@ SELECT json_build_object(
 SQL
     pipeline_status=("${PIPESTATUS[@]}")
     set -e
+    exec {destination_fd}>&-
     if [[ "${pipeline_status[0]}" -ne 0 || "${pipeline_status[1]}" -ne 0 ]]; then
         if [[ "${retained}" == true ]]; then
             rm -f -- "${destination}"
