@@ -22,6 +22,7 @@ mod service_handler;
 mod service_http;
 mod service_instance;
 mod service_launch;
+mod service_lease;
 mod service_ownership;
 mod service_preparation;
 mod service_probe;
@@ -44,6 +45,11 @@ pub use service_launch::{
     GatewayServiceArtifactKind, GatewayServiceIdentity, GatewayServiceLaunch,
     GatewayServiceLaunchRequest, GatewayServiceLaunchResolver, GatewayServiceMaterializer,
     service_transport_spec,
+};
+pub use service_lease::{
+    GatewayServiceLeaseControl, GatewayServiceLeaseError, GatewayServiceLeaseLossReason,
+    GatewayServiceLeaseMonitor, GatewayServiceLeasePolicy, GatewayServiceLeaseRetryReason,
+    GatewayServiceLeaseRunResult, GatewayServiceLeaseStatus,
 };
 pub use service_ownership::{
     GatewayServiceInstanceLease, GatewayServiceInstanceState, GatewayServiceOwner,

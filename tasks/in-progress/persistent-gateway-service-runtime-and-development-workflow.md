@@ -661,6 +661,15 @@ instance. Dispatcher wiring is complete; service startup scheduling and
 supervisor retention remain pending. Evidence: `hephaestus-app` all-target
 check, strict Clippy, formatting, and 58 library tests passed.
 
+- [x] Add the caller-owned durable service lease monitor. It accepts the
+  pre-claim monotonic deadline, renews only the exact instance/owner/fence,
+  preserves lifecycle state updates, retries temporary storage failures
+  without extending the deadline, and caps successful renewal from call start
+  by the database expiry-minus-heartbeat budget. Cancellation and dropped
+  control handles mark the claim unavailable and stop the caller-owned future.
+  Full edge verification passed 65 unit tests plus the Caddy ingress test and
+  strict all-target Clippy. Supervisor reaction to lease loss remains pending.
+
 ## Non-goals
 
 This task does not replace MVP 03's bounded stateless invocation mode. It does
