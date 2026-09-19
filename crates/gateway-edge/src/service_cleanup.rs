@@ -87,6 +87,35 @@ impl GatewayServiceCleanup {
         Ok(cleanup)
     }
 
+    /// Transfers independently confirmed teardown and materializer progress
+    /// into retry state without inferring either flag from a missing handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GatewayServiceCleanupError::InvalidInput`] when a retained
+    /// VM is marked torn down or materializer cleanup is marked complete
+    /// before VM teardown.
+    pub fn from_progress(
+        identity: GatewayServiceIdentity,
+        vm: Option<Arc<dyn VmInstance>>,
+        vm_teardown_confirmed: bool,
+        materializer_cleanup_confirmed: bool,
+        timeout: Duration,
+    ) -> Result<Self, GatewayServiceCleanupError> {
+        if (vm.is_some() && vm_teardown_confirmed)
+            || (materializer_cleanup_confirmed && !vm_teardown_confirmed)
+        {
+            return Err(GatewayServiceCleanupError::InvalidInput);
+        }
+        let mut cleanup = Self::new(identity, vm, timeout)?;
+        cleanup.vm_teardown_confirmed = vm_teardown_confirmed;
+        cleanup.materializer_cleanup_confirmed = materializer_cleanup_confirmed;
+        if cleanup.vm_teardown_confirmed {
+            cleanup.vm = None;
+        }
+        Ok(cleanup)
+    }
+
     /// Returns the exact service identity owned by this cleanup state.
     #[must_use]
     pub const fn identity(&self) -> GatewayServiceIdentity {
@@ -418,6 +447,26 @@ mod tests {
                 .expect("cleanup identity lock"),
             Some(identity)
         );
+    }
+
+    #[tokio::test]
+    async fn confirmed_vm_teardown_retries_only_materializer_cleanup() {
+        let identity = identity();
+        let provider = provider();
+        let resolver = resolver();
+        let mut cleanup = GatewayServiceCleanup::from_progress(
+            identity,
+            None,
+            true,
+            false,
+            Duration::from_secs(1),
+        )
+        .expect("partial progress");
+        cleanup.attempt(&provider, &resolver).await.expect("retry");
+        assert_eq!(provider.calls.load(Ordering::Relaxed), 0);
+        assert_eq!(resolver.cleanups.load(Ordering::Relaxed), 1);
+        assert!(cleanup.vm_teardown_confirmed());
+        assert!(cleanup.materializer_cleanup_confirmed());
     }
 
     #[tokio::test]

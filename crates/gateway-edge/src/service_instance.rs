@@ -1039,15 +1039,14 @@ mod tests {
         .await
         .expect("event flood observed");
         drop(handle);
-        let worker_result = if let Ok(result) =
-            tokio::time::timeout(Duration::from_secs(5), &mut task).await
-        {
-            result.expect("worker join")
-        } else {
-            task.abort();
-            let _ = task.await;
-            panic!("worker cleanup timed out");
-        };
+        let worker_result =
+            if let Ok(result) = tokio::time::timeout(Duration::from_secs(5), &mut task).await {
+                result.expect("worker join")
+            } else {
+                task.abort();
+                let _ = task.await;
+                panic!("worker cleanup timed out");
+            };
         assert!(worker_result.is_ok());
         stop_flood.store(true, Ordering::Relaxed);
         if let Ok(result) = tokio::time::timeout(Duration::from_secs(5), &mut flood).await {
@@ -1119,15 +1118,14 @@ mod tests {
         .expect("event flood consumed");
         assert_eq!(vm.opens.load(Ordering::Relaxed), 1);
         handle.shutdown();
-        let worker_result = if let Ok(result) =
-            tokio::time::timeout(Duration::from_secs(5), &mut task).await
-        {
-            result.expect("worker join")
-        } else {
-            task.abort();
-            let _ = task.await;
-            panic!("worker cleanup timed out");
-        };
+        let worker_result =
+            if let Ok(result) = tokio::time::timeout(Duration::from_secs(5), &mut task).await {
+                result.expect("worker join")
+            } else {
+                task.abort();
+                let _ = task.await;
+                panic!("worker cleanup timed out");
+            };
         assert!(worker_result.is_ok());
         stop_flood.store(true, Ordering::Relaxed);
         if let Ok(result) = tokio::time::timeout(Duration::from_secs(5), &mut flood).await {

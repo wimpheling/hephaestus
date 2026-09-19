@@ -18,7 +18,10 @@ use vm_trait::VmProvider;
 
 use crate::{
     GatewayServiceCapacity, GatewayServiceCapacityError, GatewayServiceCapacityToken,
-    GatewayServiceCoordinator, GatewayServiceCoordinatorFailure, GatewayServiceCoordinatorStatus,
+    GatewayServiceCleanup, GatewayServiceCleanupDriver, GatewayServiceCleanupDriverError,
+    GatewayServiceCleanupDriverOutcome, GatewayServiceCleanupDriverPolicy,
+    GatewayServiceCoordinator, GatewayServiceCoordinatorFailure,
+    GatewayServiceCoordinatorFailureReason, GatewayServiceCoordinatorStatus, GatewayServiceFailure,
     GatewayServiceFailureStore, GatewayServiceInstanceLease, GatewayServiceLaunchResolver,
     GatewayServiceOwner, GatewayServiceOwnership, GatewayServiceOwnershipError,
     GatewayServiceRegistry, GatewayServiceStartupIntent, GatewayServiceSupervisorPolicy,
@@ -75,6 +78,8 @@ pub enum GatewayServiceSupervisorJobStatus {
     Uncertain,
     /// The caller requested cancellation and the job retained cleanup state.
     Cancelled,
+    /// A parent-owned cleanup retry is currently running.
+    CleanupPending,
 }
 
 /// A caller-owned handle for cancellation and status observation.
@@ -116,7 +121,6 @@ pub struct GatewayServiceSupervisorEvent {
 }
 
 /// Exact unresolved state returned when the supervisor is consumed at shutdown.
-#[derive(Debug)]
 pub struct GatewayServiceSupervisorUnresolved {
     /// Job that still owns this state.
     pub job_id: Uuid,
@@ -130,10 +134,15 @@ pub struct GatewayServiceSupervisorUnresolved {
     pub claim_uncertain: bool,
     /// Coordinator failure retaining any VM or materialization responsibility.
     pub coordinator_failure: Option<GatewayServiceCoordinatorFailure>,
+    /// Physical and materializer cleanup progress retained for retry.
+    pub cleanup: Option<GatewayServiceCleanup>,
+    /// Failure report still awaiting durable recording.
+    pub pending_failure: Option<GatewayServiceFailure>,
+    /// Original coordinator termination reason.
+    pub original_reason: Option<GatewayServiceCoordinatorFailureReason>,
 }
 
 /// Result of consuming a supervisor after cancellation and job settlement.
-#[derive(Debug)]
 pub struct GatewayServiceSupervisorShutdown {
     /// Jobs whose capacity and cleanup responsibility remain unresolved.
     pub unresolved: Vec<GatewayServiceSupervisorUnresolved>,
@@ -151,6 +160,15 @@ pub enum GatewayServiceSupervisorError {
     /// A job for this exact gateway and revision already exists.
     #[error("gateway service startup is already reserved")]
     Duplicate,
+    /// No terminal coordinator cleanup exists for this job.
+    #[error("gateway service cleanup retry is not eligible")]
+    RetryNotEligible,
+    /// The requested cleanup job no longer exists.
+    #[error("gateway service cleanup retry job was not found")]
+    RetryNotFound,
+    /// A cleanup retry is already parent-owned and running.
+    #[error("gateway service cleanup retry is already in flight")]
+    RetryAlreadyInFlight,
 }
 
 /// Parent-owned bounded set of concurrent startup jobs.
@@ -158,6 +176,7 @@ pub struct GatewayServiceSupervisor {
     context: Arc<GatewayServiceSupervisorContext>,
     capacity: Arc<Mutex<GatewayServiceCapacity>>,
     jobs: Vec<Pin<Box<dyn Future<Output = JobCompletion> + Send>>>,
+    cleanup_jobs: Vec<Pin<Box<dyn Future<Output = CleanupCompletion> + Send>>>,
     records: HashMap<Uuid, JobRecord>,
 }
 
@@ -196,6 +215,7 @@ impl GatewayServiceSupervisor {
             context: Arc::new(context),
             capacity: Arc::new(Mutex::new(capacity)),
             jobs: Vec::new(),
+            cleanup_jobs: Vec::new(),
             records: HashMap::new(),
         })
     }
@@ -259,6 +279,8 @@ impl GatewayServiceSupervisor {
                 status: status.clone(),
                 capacity_retained: true,
                 completion: None,
+                cleanup_retry: None,
+                cleanup_in_flight: false,
             },
         );
         self.jobs.push(Box::pin(run_job(
@@ -290,7 +312,22 @@ impl GatewayServiceSupervisor {
     /// Panics only if an internal job record is missing or the private
     /// capacity mutex was poisoned by a previous panic in this process.
     pub async fn poll(&mut self) -> Option<GatewayServiceSupervisorEvent> {
-        let completion = poll_next_job(&mut self.jobs).await?;
+        let completion = if self.jobs.is_empty() {
+            SupervisorCompletion::Cleanup(poll_next_cleanup(&mut self.cleanup_jobs).await?)
+        } else if self.cleanup_jobs.is_empty() {
+            SupervisorCompletion::Startup(poll_next_job(&mut self.jobs).await?)
+        } else {
+            tokio::select! {
+                completion = poll_next_job(&mut self.jobs) => SupervisorCompletion::Startup(completion?),
+                completion = poll_next_cleanup(&mut self.cleanup_jobs) => SupervisorCompletion::Cleanup(completion?),
+            }
+        };
+        if let SupervisorCompletion::Cleanup(completion) = completion {
+            return self.finish_cleanup(completion);
+        }
+        let SupervisorCompletion::Startup(completion) = completion else {
+            unreachable!("cleanup completion returned above")
+        };
         let record = self
             .records
             .get_mut(&completion.id)
@@ -308,6 +345,124 @@ impl GatewayServiceSupervisor {
             self.records.remove(&completion.id);
         }
         Some(event)
+    }
+
+    fn finish_cleanup(
+        &mut self,
+        completion: CleanupCompletion,
+    ) -> Option<GatewayServiceSupervisorEvent> {
+        let record = self.records.get_mut(&completion.id)?;
+        record.cleanup_in_flight = false;
+        if completion.result.is_ok() {
+            let released = complete_capacity(&self.capacity, record.token);
+            record.capacity_retained = !released;
+            if released {
+                record.cleanup_retry = None;
+                record.completion = None;
+                let _ = record
+                    .status
+                    .send(GatewayServiceSupervisorJobStatus::Settled);
+                self.records.remove(&completion.id);
+                Some(GatewayServiceSupervisorEvent {
+                    job_id: completion.id,
+                    status: GatewayServiceSupervisorJobStatus::Settled,
+                    capacity_released: true,
+                })
+            } else {
+                record.cleanup_retry = Some(completion.state);
+                let _ = record
+                    .status
+                    .send(GatewayServiceSupervisorJobStatus::Failed);
+                Some(GatewayServiceSupervisorEvent {
+                    job_id: completion.id,
+                    status: GatewayServiceSupervisorJobStatus::Failed,
+                    capacity_released: false,
+                })
+            }
+        } else {
+            let failure = failure_from_retry(&completion.state);
+            if let Some(terminal) = record.completion.as_mut() {
+                terminal.lease = Some(completion.state.lease.clone());
+                terminal.coordinator_failure = Some(failure);
+            }
+            record.cleanup_retry = Some(completion.state);
+            let _ = record
+                .status
+                .send(GatewayServiceSupervisorJobStatus::Failed);
+            Some(GatewayServiceSupervisorEvent {
+                job_id: completion.id,
+                status: GatewayServiceSupervisorJobStatus::Failed,
+                capacity_released: false,
+            })
+        }
+    }
+
+    /// Schedules one parent-owned retry for terminal coordinator cleanup.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the job is absent, has no retained terminal
+    /// cleanup responsibility, or already has a retry in flight.
+    pub fn retry_cleanup(&mut self, job_id: Uuid) -> Result<(), GatewayServiceSupervisorError> {
+        let record = self
+            .records
+            .get_mut(&job_id)
+            .ok_or(GatewayServiceSupervisorError::RetryNotFound)?;
+        if record.cleanup_in_flight {
+            return Err(GatewayServiceSupervisorError::RetryAlreadyInFlight);
+        }
+        let failure = record
+            .completion
+            .as_ref()
+            .and_then(|terminal| terminal.coordinator_failure.as_ref())
+            .ok_or(GatewayServiceSupervisorError::RetryNotEligible)?;
+        if !record.capacity_retained {
+            return Err(GatewayServiceSupervisorError::RetryNotEligible);
+        }
+        let started = Instant::now();
+        let deadline = started
+            .checked_add(self.context.policy.lease.lease_duration)
+            .ok_or(GatewayServiceSupervisorError::InvalidInput)?;
+        let state = if let Some(state) = record.cleanup_retry.take() {
+            state
+        } else {
+            let cleanup = if failure.physical_cleanup_complete {
+                GatewayServiceCleanup::from_confirmed_physical(
+                    failure.identity,
+                    self.context.policy.instance.shutdown_timeout,
+                )
+            } else {
+                // A missing VM handle is not proof that provider teardown
+                // completed.  The first retry conservatively repeats orphan
+                // confirmation; later attempts retain explicit progress in
+                // GatewayServiceCleanup itself.
+                GatewayServiceCleanup::from_progress(
+                    failure.identity,
+                    failure.vm.clone(),
+                    false,
+                    false,
+                    self.context.policy.instance.shutdown_timeout,
+                )
+            }
+            .map_err(|_| GatewayServiceSupervisorError::InvalidInput)?;
+            CleanupRetryState {
+                cleanup,
+                lease: failure.lease.clone(),
+                pending_failure: failure.pending_failure,
+                reason: failure.reason,
+            }
+        };
+        record.cleanup_in_flight = true;
+        let _ = record
+            .status
+            .send(GatewayServiceSupervisorJobStatus::CleanupPending);
+        self.cleanup_jobs.push(Box::pin(run_cleanup_retry(
+            job_id,
+            state,
+            deadline,
+            Arc::clone(&self.context),
+        )));
+        Ok(())
     }
 
     /// Returns the current reservation counts without releasing any job.
@@ -330,7 +485,7 @@ impl GatewayServiceSupervisor {
     /// records require later reconciliation rather than a busy polling loop.
     #[must_use]
     pub fn has_pending_jobs(&self) -> bool {
-        !self.jobs.is_empty()
+        !self.jobs.is_empty() || !self.cleanup_jobs.is_empty()
     }
 
     /// Consumes the supervisor, cancels every job, and joins all owned futures.
@@ -345,6 +500,14 @@ impl GatewayServiceSupervisor {
             .filter_map(|(job_id, record)| {
                 record.completion.and_then(|completion| {
                     if record.capacity_retained {
+                        let (cleanup, pending_failure, original_reason) =
+                            record.cleanup_retry.map_or((None, None, None), |retry| {
+                                (
+                                    Some(retry.cleanup),
+                                    retry.pending_failure,
+                                    Some(retry.reason),
+                                )
+                            });
                         Some(GatewayServiceSupervisorUnresolved {
                             job_id,
                             request: record.request,
@@ -352,6 +515,9 @@ impl GatewayServiceSupervisor {
                             lease: completion.lease,
                             claim_uncertain: completion.claim_uncertain,
                             coordinator_failure: completion.coordinator_failure,
+                            cleanup,
+                            pending_failure,
+                            original_reason,
                         })
                     } else {
                         None
@@ -363,6 +529,20 @@ impl GatewayServiceSupervisor {
     }
 }
 
+fn failure_from_retry(state: &CleanupRetryState) -> GatewayServiceCoordinatorFailure {
+    GatewayServiceCoordinatorFailure {
+        identity: state.cleanup.identity(),
+        lease: state.lease.clone(),
+        reason: state.reason,
+        vm: state.cleanup.retained_vm(),
+        materialization_owned: !state.cleanup.materializer_cleanup_confirmed(),
+        physical_cleanup_complete: state.cleanup.vm_teardown_confirmed()
+            && state.cleanup.materializer_cleanup_confirmed(),
+        durable_cleanup_complete: false,
+        pending_failure: state.pending_failure,
+    }
+}
+
 struct JobRecord {
     request: GatewayServiceStartupRequest,
     token: GatewayServiceCapacityToken,
@@ -370,6 +550,8 @@ struct JobRecord {
     status: watch::Sender<GatewayServiceSupervisorJobStatus>,
     capacity_retained: bool,
     completion: Option<JobTerminal>,
+    cleanup_retry: Option<CleanupRetryState>,
+    cleanup_in_flight: bool,
 }
 
 struct JobCompletion {
@@ -383,6 +565,24 @@ struct JobTerminal {
     lease: Option<GatewayServiceInstanceLease>,
     claim_uncertain: bool,
     coordinator_failure: Option<GatewayServiceCoordinatorFailure>,
+}
+
+struct CleanupRetryState {
+    cleanup: GatewayServiceCleanup,
+    lease: GatewayServiceInstanceLease,
+    pending_failure: Option<GatewayServiceFailure>,
+    reason: GatewayServiceCoordinatorFailureReason,
+}
+
+struct CleanupCompletion {
+    id: Uuid,
+    state: CleanupRetryState,
+    result: Result<(), GatewayServiceCleanupDriverError>,
+}
+
+enum SupervisorCompletion {
+    Startup(JobCompletion),
+    Cleanup(CleanupCompletion),
 }
 
 async fn poll_next_job(
@@ -402,6 +602,81 @@ async fn poll_next_job(
         }
     })
     .await
+}
+
+async fn poll_next_cleanup(
+    jobs: &mut Vec<Pin<Box<dyn Future<Output = CleanupCompletion> + Send>>>,
+) -> Option<CleanupCompletion> {
+    std::future::poll_fn(|context| {
+        for index in (0..jobs.len()).rev() {
+            if let Poll::Ready(completion) = jobs[index].as_mut().poll(context) {
+                drop(jobs.swap_remove(index));
+                return Poll::Ready(Some(completion));
+            }
+        }
+        if jobs.is_empty() {
+            Poll::Ready(None)
+        } else {
+            Poll::Pending
+        }
+    })
+    .await
+}
+
+async fn run_cleanup_retry(
+    id: Uuid,
+    mut state: CleanupRetryState,
+    renew_deadline: Instant,
+    context: Arc<GatewayServiceSupervisorContext>,
+) -> CleanupCompletion {
+    let policy = GatewayServiceCleanupDriverPolicy {
+        lease: context.policy.lease,
+        database_timeout: context.policy.instance.probe_timeout,
+    };
+    let result = match GatewayServiceCleanupDriver::new(
+        Arc::clone(&context.ownership),
+        Arc::clone(&context.failure_store),
+        Arc::clone(&context.targets),
+        Arc::clone(&context.provider),
+        Arc::clone(&context.resolver),
+        context.owner.clone(),
+        policy,
+    ) {
+        Ok(driver) => match driver
+            .confirm_cleaned_state(&state.cleanup, &state.lease)
+            .await
+        {
+            Ok(true) => Ok(()),
+            Ok(false) | Err(GatewayServiceCleanupDriverError::Unavailable) => {
+                match driver
+                    .renew_and_prepare_stopping(&mut state.lease, renew_deadline)
+                    .await
+                {
+                    Ok(cleanup_deadline) => {
+                        match driver
+                            .attempt(
+                                &mut state.cleanup,
+                                &mut state.lease,
+                                &mut state.pending_failure,
+                                cleanup_deadline,
+                            )
+                            .await
+                        {
+                            Ok(GatewayServiceCleanupDriverOutcome::Cleaned) => Ok(()),
+                            Ok(GatewayServiceCleanupDriverOutcome::Pending { .. }) => {
+                                Err(GatewayServiceCleanupDriverError::Unavailable)
+                            }
+                            Err(error) => Err(error),
+                        }
+                    }
+                    Err(error) => Err(error),
+                }
+            }
+            Err(error) => Err(error),
+        },
+        Err(error) => Err(error),
+    };
+    CleanupCompletion { id, state, result }
 }
 
 // This function intentionally owns the complete claim/coordinator state
@@ -901,7 +1176,9 @@ mod tests {
     struct ServiceReadyVm {
         id: VmId,
         events: tokio::sync::broadcast::Sender<VmEvent>,
-        fail_destroy: bool,
+        fail_destroy: Arc<AtomicBool>,
+        destroy_gate: Arc<Mutex<Option<Arc<Notify>>>>,
+        destroy_started: Arc<Mutex<Option<Arc<Notify>>>>,
     }
 
     #[async_trait]
@@ -943,19 +1220,34 @@ mod tests {
         }
 
         async fn destroy(&self) -> Result<(), VmError> {
-            if self.fail_destroy {
+            if self.fail_destroy.load(Ordering::Relaxed) {
                 Err(VmError::Unavailable {
                     resource: String::from("test VM"),
                     reason: String::from("deliberate cleanup failure"),
                 })
             } else {
+                if let Some(started) = self
+                    .destroy_started
+                    .lock()
+                    .expect("destroy started")
+                    .as_ref()
+                {
+                    started.notify_one();
+                }
+                let gate = self.destroy_gate.lock().expect("destroy gate").clone();
+                if let Some(gate) = gate {
+                    gate.notified().await;
+                }
                 Ok(())
             }
         }
     }
 
     struct ReadyProvider {
-        fail_destroy: bool,
+        fail_destroy: Arc<AtomicBool>,
+        destroy_gate: Arc<Mutex<Option<Arc<Notify>>>>,
+        destroy_started: Arc<Mutex<Option<Arc<Notify>>>>,
+        orphan_cleanup_calls: AtomicUsize,
         last_vm: Mutex<Option<Arc<dyn VmInstance>>>,
     }
 
@@ -970,7 +1262,9 @@ mod tests {
             let vm: Arc<dyn VmInstance> = Arc::new(ServiceReadyVm {
                 id: spec.id,
                 events,
-                fail_destroy: self.fail_destroy,
+                fail_destroy: Arc::clone(&self.fail_destroy),
+                destroy_gate: Arc::clone(&self.destroy_gate),
+                destroy_started: Arc::clone(&self.destroy_started),
             });
             *self.last_vm.lock().expect("last VM") = Some(Arc::clone(&vm));
             Ok(vm)
@@ -978,6 +1272,7 @@ mod tests {
 
         async fn cleanup_orphan(&self, id: &VmId) -> Result<(), VmError> {
             let _ = id;
+            self.orphan_cleanup_calls.fetch_add(1, Ordering::Relaxed);
             Ok(())
         }
     }
@@ -1118,6 +1413,7 @@ mod tests {
 
     struct ReadyTargets {
         target: crate::GatewayServiceOwnedTarget,
+        ownership: Arc<ReadyOwnership>,
     }
 
     #[async_trait]
@@ -1159,7 +1455,7 @@ mod tests {
             &self,
             _: GatewayServiceIdentity,
         ) -> Result<Option<GatewayServiceInstanceLease>, GatewayEdgeError> {
-            Ok(None)
+            Ok(Some(self.ownership.current()))
         }
 
         async fn list_service_instances(
@@ -1227,6 +1523,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::too_many_lines)] // Fixture keeps the retryable VM graph explicit.
     fn ready_supervisor(
         fail_destroy: bool,
     ) -> (
@@ -1292,8 +1589,12 @@ mod tests {
         let ownership = Arc::new(ReadyOwnership {
             lease: Mutex::new(lease),
         });
+        let fail_destroy = Arc::new(AtomicBool::new(fail_destroy));
         let provider = Arc::new(ReadyProvider {
-            fail_destroy,
+            fail_destroy: Arc::clone(&fail_destroy),
+            destroy_gate: Arc::new(Mutex::new(None)),
+            destroy_started: Arc::new(Mutex::new(None)),
+            orphan_cleanup_calls: AtomicUsize::new(0),
             last_vm: Mutex::new(None),
         });
         let target = crate::GatewayServiceOwnedTarget {
@@ -1315,11 +1616,14 @@ mod tests {
         let supervisor = GatewayServiceSupervisor::new(GatewayServiceSupervisorContext {
             owner,
             policy,
-            ownership,
+            ownership: Arc::clone(&ownership) as Arc<dyn GatewayServiceOwnership>,
             failure_store: Arc::new(ReadyFailureStore),
             resolver: Arc::new(ReadyResolver { launch }),
             provider: Arc::clone(&provider) as Arc<dyn VmProvider>,
-            targets: Arc::new(ReadyTargets { target }),
+            targets: Arc::new(ReadyTargets {
+                target,
+                ownership: Arc::clone(&ownership),
+            }),
             registry,
             service_authority: String::from("127.0.0.1:8080"),
         })
@@ -1473,8 +1777,8 @@ mod tests {
 
     #[tokio::test]
     async fn coordinator_readiness_releases_startup_but_cleanup_failure_retains_vm() {
-        let (mut supervisor, provider, request) = ready_supervisor(true);
-        let handle = supervisor.start(request).expect("reservation");
+        let (mut supervisor, provider, initial_request) = ready_supervisor(true);
+        let handle = supervisor.start(initial_request).expect("reservation");
         wait_until_ready(&mut supervisor, &handle).await;
         let snapshot = supervisor.capacity_snapshot();
         assert_eq!(snapshot.live_instances, 1);
@@ -1495,7 +1799,100 @@ mod tests {
             actual_vm,
             expected_vm.as_ref().expect("expected VM")
         ));
+        assert_eq!(provider.orphan_cleanup_calls.load(Ordering::Relaxed), 0);
         assert!(!failure.physical_cleanup_complete);
+    }
+
+    #[tokio::test]
+    async fn terminal_cleanup_can_retry_with_the_same_capacity_and_vm() {
+        let (mut supervisor, provider, initial_request) = ready_supervisor(true);
+        let handle = supervisor.start(initial_request).expect("reservation");
+        wait_until_ready(&mut supervisor, &handle).await;
+        handle.cancel();
+        let first = supervisor.poll().await.expect("initial cleanup result");
+        assert_eq!(first.status, GatewayServiceSupervisorJobStatus::Cancelled);
+        assert!(!first.capacity_released);
+        let retained = provider.last_vm.lock().expect("last VM").clone();
+        provider.fail_destroy.store(false, Ordering::Relaxed);
+        supervisor
+            .retry_cleanup(first.job_id)
+            .expect("cleanup retry scheduling");
+        assert_eq!(
+            handle.subscribe().borrow().to_owned(),
+            GatewayServiceSupervisorJobStatus::CleanupPending
+        );
+        assert_eq!(
+            supervisor
+                .retry_cleanup(first.job_id)
+                .expect_err("duplicate retry"),
+            GatewayServiceSupervisorError::RetryAlreadyInFlight
+        );
+        let retried = tokio::time::timeout(std::time::Duration::from_secs(5), supervisor.poll())
+            .await
+            .expect("bounded cleanup retry")
+            .expect("retry result");
+        assert_eq!(retried.status, GatewayServiceSupervisorJobStatus::Settled);
+        assert!(retried.capacity_released);
+        assert_eq!(supervisor.capacity_snapshot().live_instances, 0);
+        assert!(Arc::ptr_eq(
+            retained.as_ref().expect("retained VM"),
+            provider
+                .last_vm
+                .lock()
+                .expect("last VM")
+                .as_ref()
+                .expect("VM")
+        ));
+        assert_eq!(provider.orphan_cleanup_calls.load(Ordering::Relaxed), 0);
+        assert!(!supervisor.has_pending_jobs());
+    }
+
+    #[tokio::test]
+    async fn blocked_cleanup_retry_does_not_stop_other_startup_jobs() {
+        let (mut supervisor, provider, initial_request) = ready_supervisor(true);
+        let handle = supervisor.start(initial_request).expect("reservation");
+        wait_until_ready(&mut supervisor, &handle).await;
+        handle.cancel();
+        let first = supervisor.poll().await.expect("initial cleanup result");
+        assert!(!first.capacity_released);
+        provider.fail_destroy.store(false, Ordering::Relaxed);
+        let gate = Arc::new(Notify::new());
+        let started = Arc::new(Notify::new());
+        *provider.destroy_gate.lock().expect("destroy gate") = Some(Arc::clone(&gate));
+        *provider.destroy_started.lock().expect("destroy started") = Some(Arc::clone(&started));
+        supervisor
+            .retry_cleanup(first.job_id)
+            .expect("retry scheduling");
+        {
+            let poll = supervisor.poll();
+            tokio::pin!(poll);
+            tokio::select! {
+                () = started.notified() => {}
+                event = &mut poll => panic!("cleanup ended before blocking: {event:?}"),
+            }
+        }
+
+        let other_request = request(Uuid::new_v4(), Uuid::new_v4());
+        let other = supervisor.start(other_request).expect("other startup slot");
+        let other_event =
+            tokio::time::timeout(std::time::Duration::from_secs(1), supervisor.poll())
+                .await
+                .expect("other job remains schedulable")
+                .expect("other job result");
+        assert_eq!(other_event.job_id, other.job_id());
+        assert_eq!(
+            other_event.status,
+            GatewayServiceSupervisorJobStatus::Failed
+        );
+        assert!(supervisor.has_pending_jobs());
+        gate.notify_one();
+        let cleanup_event =
+            tokio::time::timeout(std::time::Duration::from_secs(1), supervisor.poll())
+                .await
+                .expect("cleanup retry settles")
+                .expect("cleanup result");
+        assert_eq!(cleanup_event.job_id, first.job_id);
+        assert!(cleanup_event.capacity_released);
     }
 
     #[tokio::test]
@@ -1506,13 +1903,10 @@ mod tests {
         assert_eq!(supervisor.capacity_snapshot().live_instances, 1);
         assert_eq!(supervisor.capacity_snapshot().starting_instances, 0);
         handle.cancel();
-        let event = tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            supervisor.poll(),
-        )
-        .await
-        .expect("bounded cleanup")
-        .expect("cleanup result");
+        let event = tokio::time::timeout(std::time::Duration::from_secs(5), supervisor.poll())
+            .await
+            .expect("bounded cleanup")
+            .expect("cleanup result");
         assert!(event.capacity_released);
         assert_eq!(supervisor.capacity_snapshot().live_instances, 0);
         assert!(!supervisor.has_pending_jobs());

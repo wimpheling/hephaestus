@@ -970,6 +970,33 @@ check, strict Clippy, formatting, and 58 library tests passed.
   application polling/reconciliation, recovery scheduling, and Caddy routing
   remain pending.
 
+- [x] Add parent-owned retries for terminal coordinator cleanup. A retry
+  renews the exact owner and fence under a conservative bounded deadline,
+  monitors the `Stopping` transition, and reuses the original capacity token
+  and parent-owned future collection. `GatewayServiceCleanup` progress,
+  retained VM handles, pending redacted failures, cleanup flags, and the
+  original coordinator reason survive every failed attempt and shutdown.
+  Already-confirmed physical cleanup uses an exact read-only `Cleaned` lookup;
+  a coordinator `vm=None` result alone never proves teardown, so the first
+  retry conservatively performs orphan confirmation. Tests cover retry with
+  the same VM handle and no orphan cleanup, materializer-only retry without
+  redestroy, unavailable failure reporting, stale renewal without physical or
+  durable writes, exact cleaned confirmation, and another startup progressing
+  while cleanup is blocked. This remains a bounded retry primitive: target
+  scanning, new claims, expired-host recovery, ambiguous-claim resolution,
+  and application scheduling remain pending.
+
+  Exact verification used committed base `69c778d7e70348246b8f99c435c78654512d1b79`
+  in `/tmp/heph-retry-check-20260919b`, with only these shared-worktree
+  overlays copied into that checkout: `crates/gateway-edge/src/service_cleanup.rs`,
+  `crates/gateway-edge/src/service_cleanup_driver.rs`,
+  `crates/gateway-edge/src/service_instance.rs`, and
+  `crates/gateway-edge/src/service_supervisor.rs`. Workspace formatting passed
+  in `/tmp/heph-retry-check-20260919-fmt.log`; 128 gateway-edge library tests
+  passed in `/tmp/heph-retry-check-20260919-tests.log`; strict
+  `cargo clippy -p gateway-edge --all-targets --all-features -- -D warnings`
+  passed in `/tmp/heph-retry-check-20260919-clippy.log`.
+
 ## Non-goals
 
 This task does not replace MVP 03's bounded stateless invocation mode. It does
