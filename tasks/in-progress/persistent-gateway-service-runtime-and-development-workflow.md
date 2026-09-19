@@ -123,6 +123,19 @@ and removes only an exact owned instance. Evidence: 11 focused
 `git diff --check` pass. Database activation, lifecycle supervision, and UI
 integration remain pending.
 
+The immutable service launch resolver now selects only a published
+`http.service.v1` revision by the host-owned gateway/revision identity and
+exact release-agent binding. It creates no invocation, runtime session, or
+request bearer; the resulting `VmSpec` uses disabled networking, no runtime
+authority, fixed platform transport limits, and identity labels. A recording
+materializer test verifies exact release artifacts, parameters, mount
+postconditions, cleanup on malformed mounts, and rejection of stateless,
+mismatched, and revoked revisions. Real disposable PostgreSQL evidence is
+retained in `/tmp/heph-service-launch-postgres-20260919-attempt2.log` with
+`REAL_POSTGRES_CONNECTED_AND_MIGRATED=1`, fixture seeding, and resolver query
+markers; the focused test passed 1 test in 1.31s. Supervisor activation and
+application integration remain pending.
+
 - [x] Finish focused VM contract tests and workspace compatibility checks:
   `cargo test -p vm-trait`, `cargo test -p vm-libkrun --lib`,
   `cargo test -p vm-fake`, focused Clippy, `cargo check --workspace
