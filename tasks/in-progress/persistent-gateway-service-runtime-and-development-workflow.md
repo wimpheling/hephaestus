@@ -112,6 +112,17 @@ concurrency, capacity teardown and reopen, destroy, graceful shutdown, and
 runtime/cgroup cleanup scenarios. HTTP readiness supervision, Caddy forwarding,
 managed lifecycle recovery, and release UI remain unchecked.
 
+The local materializer now gives each launch attempt a fresh UUID and seals its
+immutable gateway/revision identity in a host-only metadata file under the
+dedicated `gateway-services` namespace. Old and new instances can coexist;
+stale staging cleanup is scoped to that namespace and must run only after the
+supervisor establishes materialization quiescence. Recovery validates regular,
+sealed metadata and mount trees, rejects symlinks and non-regular metadata,
+and removes only an exact owned instance. Evidence: 11 focused
+`run-runtime-local` tests, focused Clippy with `-D warnings`, formatting, and
+`git diff --check` pass. Database activation, lifecycle supervision, and UI
+integration remain pending.
+
 - [x] Finish focused VM contract tests and workspace compatibility checks:
   `cargo test -p vm-trait`, `cargo test -p vm-libkrun --lib`,
   `cargo test -p vm-fake`, focused Clippy, `cargo check --workspace
