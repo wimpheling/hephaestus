@@ -49,13 +49,14 @@ use gateway_edge::{
     GatewayRequest, GatewayRequestDispatcher, GatewayRuntimeLauncher, GatewayRuntimeService,
     GatewayScheme, GatewayServiceArtifact, GatewayServiceArtifactKind, GatewayServiceBootRecovery,
     GatewayServiceBootRecoveryContext, GatewayServiceClaimResolutionStore,
-    GatewayServiceCleanupDriverPolicy, GatewayServiceHandler, GatewayServiceIdentity,
-    GatewayServiceMaterializer, GatewayServiceOwnedTarget, GatewayServiceOwner,
-    GatewayServiceRegistry, GatewayServiceStartupIntent, GatewayServiceStartupRequest,
-    GatewayServiceSupervisor, GatewayServiceSupervisorContext, GatewayServiceSupervisorJobStatus,
-    GatewayServiceSupervisorPolicy, GatewayServiceTargetPage, GatewayServiceTargetPageResult,
-    LocalCaddyAdministration, LocalCaddyConfigurationTemplate, LocalCaddyGatewayProvider,
-    PrivateHttpVmGatewayHandler, TrustedRequestMetadata, UNTRUSTED_FORWARDING_HEADERS,
+    GatewayServiceCleanupDriverPolicy, GatewayServiceExpiredClaimRecovery, GatewayServiceHandler,
+    GatewayServiceIdentity, GatewayServiceMaterializer, GatewayServiceOwnedTarget,
+    GatewayServiceOwner, GatewayServiceRegistry, GatewayServiceStartupIntent,
+    GatewayServiceStartupRequest, GatewayServiceSupervisor, GatewayServiceSupervisorContext,
+    GatewayServiceSupervisorJobStatus, GatewayServiceSupervisorPolicy, GatewayServiceTargetPage,
+    GatewayServiceTargetPageResult, LocalCaddyAdministration, LocalCaddyConfigurationTemplate,
+    LocalCaddyGatewayProvider, PrivateHttpVmGatewayHandler, TrustedRequestMetadata,
+    UNTRUSTED_FORWARDING_HEADERS,
 };
 use gateway_postgres::{
     GatewayReleaseArtifact, GatewayReleaseArtifactKind, GatewayReleaseMaterializer,
@@ -626,6 +627,7 @@ struct GatewayEdgeRuntime {
     recovery_authority: PostgresGatewayEdgeAuthority,
     service_supervisor_context: Arc<GatewayServiceSupervisorContext>,
     service_claim_resolution: Arc<dyn GatewayServiceClaimResolutionStore>,
+    service_expired_claim_recovery: Arc<dyn GatewayServiceExpiredClaimRecovery>,
     service_boot_context: GatewayServiceBootRecoveryContext,
     provider: Arc<dyn gateway_edge::GatewayProvider>,
     dispatcher: Arc<dyn GatewayRequestDispatcher>,
@@ -1347,6 +1349,8 @@ impl HephaestusApp {
             ));
             let service_claim_resolution: Arc<dyn GatewayServiceClaimResolutionStore> =
                 service_ownership.clone();
+            let service_expired_claim_recovery: Arc<dyn GatewayServiceExpiredClaimRecovery> =
+                service_ownership.clone();
             let service_failure_store = Arc::new(PostgresGatewayServiceFailureStore::new(
                 gateway_authority_pool.clone(),
             ));
@@ -1446,6 +1450,7 @@ impl HephaestusApp {
                 recovery_authority,
                 service_supervisor_context,
                 service_claim_resolution,
+                service_expired_claim_recovery,
                 service_boot_context,
                 provider,
                 dispatcher,
@@ -1795,6 +1800,8 @@ impl HephaestusApp {
                 GatewayServiceBootRecovery::new(gateway.service_boot_context)
                     .map_err(component("gateway service boot recovery"))?;
             let service_claim_resolution = Arc::clone(&gateway.service_claim_resolution);
+            let service_expired_claim_recovery =
+                Arc::clone(&gateway.service_expired_claim_recovery);
             let service_targets = Arc::clone(&gateway.service_supervisor_context.targets);
             let gateway_provider = Arc::clone(&gateway.provider);
             tasks.push(tokio::spawn(async move {
@@ -1804,6 +1811,7 @@ impl HephaestusApp {
                     service_supervisor_context,
                     service_boot_recovery,
                     Some(service_claim_resolution),
+                    Some(service_expired_claim_recovery),
                     service_targets,
                     gateway_provider,
                     gateway_reconcile_cancel,
@@ -2256,6 +2264,7 @@ async fn gateway_reconciliation_loop_with_context(
     supervisor_context: GatewayServiceSupervisorContext,
     boot_recovery: GatewayServiceBootRecovery,
     service_claim_resolution: Option<Arc<dyn GatewayServiceClaimResolutionStore>>,
+    service_expired_claim_recovery: Option<Arc<dyn GatewayServiceExpiredClaimRecovery>>,
     service_targets: Arc<dyn gateway_edge::GatewayServiceTargetStore>,
     provider: Arc<dyn GatewayProvider>,
     cancellation: CancellationToken,
@@ -2266,6 +2275,7 @@ async fn gateway_reconciliation_loop_with_context(
         GatewayServiceSupervisor::new(supervisor_context).expect("validated service supervisor"),
         Some(boot_recovery),
         service_claim_resolution,
+        service_expired_claim_recovery,
         service_targets,
         provider,
         cancellation,
@@ -2308,6 +2318,7 @@ async fn gateway_reconciliation_loop_with_supervisor(
         GatewayServiceSupervisor::new(supervisor_context).expect("validated service supervisor"),
         None,
         None,
+        None,
         targets,
         provider,
         cancellation,
@@ -2330,6 +2341,7 @@ async fn gateway_reconciliation_loop_with_boot(
     mut service_supervisor: GatewayServiceSupervisor,
     mut boot_recovery: Option<GatewayServiceBootRecovery>,
     service_claim_resolution: Option<Arc<dyn GatewayServiceClaimResolutionStore>>,
+    service_expired_claim_recovery: Option<Arc<dyn GatewayServiceExpiredClaimRecovery>>,
     service_targets: Arc<dyn gateway_edge::GatewayServiceTargetStore>,
     provider: Arc<dyn GatewayProvider>,
     cancellation: CancellationToken,
@@ -2509,6 +2521,7 @@ async fn gateway_reconciliation_loop_with_boot(
                             &mut tracked_jobs,
                             &mut cleanup_retry_cursor,
                             service_claim_resolution.as_ref(),
+                            service_expired_claim_recovery.as_ref(),
                         );
                         reconcile_service_target_page(
                             &mut service_supervisor,
@@ -2614,6 +2627,7 @@ async fn gateway_reconciliation_loop_with_boot(
                     &mut tracked_jobs,
                     &mut cleanup_retry_cursor,
                     service_claim_resolution.as_ref(),
+                    service_expired_claim_recovery.as_ref(),
                 );
             }
         }
@@ -2724,6 +2738,7 @@ fn schedule_one_cleanup_retry(
     tracked_jobs: &mut HashMap<Uuid, TrackedServiceJob>,
     cursor: &mut Option<Uuid>,
     claim_resolution: Option<&Arc<dyn GatewayServiceClaimResolutionStore>>,
+    expired_claim_recovery: Option<&Arc<dyn GatewayServiceExpiredClaimRecovery>>,
 ) -> bool {
     let pending = tracked_jobs
         .values()
@@ -2762,7 +2777,12 @@ fn schedule_one_cleanup_retry(
             continue;
         }
         *cursor = Some(candidate);
-        match supervisor.retry_cleanup(candidate) {
+        let retry_result = if let Some(recovery) = expired_claim_recovery {
+            supervisor.retry_cleanup_with_recovery(candidate, Arc::clone(recovery))
+        } else {
+            supervisor.retry_cleanup(candidate)
+        };
+        match retry_result {
             Ok(()) => {
                 job.cleanup_retry_due = None;
                 return true;

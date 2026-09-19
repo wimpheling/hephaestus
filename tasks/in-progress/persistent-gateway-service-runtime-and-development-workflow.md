@@ -1780,3 +1780,27 @@ shutdown warning: `/tmp/heph-outbox-golden-repro-6133b69.log` (35 passed, one
 ignored) and `/tmp/heph-outbox-full-app-lib-golden-6133b69.log` (76 app tests,
 then 35 golden tests, one ignored). The recurring CI shutdown cause remains
 unproven.
+
+Daemon expired-owned cleanup integration checkpoint (2026-09-19): the daemon
+now injects the worker-role PostgreSQL `GatewayServiceExpiredClaimRecovery`
+adapter into its parent-owned cleanup retry loop, while retaining the existing
+claim-resolution fallback and scheduling fairness. The unexpired retained
+cleanup case remains covered, and the new real-PostgreSQL case holds the
+instance row after the first destroy failure until the database clock confirms
+lease expiry. Recovery then uses the same instance and deterministic VM, the
+same host and daemon owner, and the expected fencing successor (`old + 1`);
+the orphan path is unused. Capacity stays occupied while physical cleanup is
+blocked and until durable `Cleaned`; after that, the next candidate's
+`created_at` is asserted to be at or after the original row's non-null
+`cleaned_at`. The focused isolated overlay
+`/home/a/heph-app-recovery-overlay-20260919b` passed both worker-role real-PG
+variants with `REAL_POSTGRES_CONNECTED_AND_MIGRATED=1` and formatting in
+`/home/a/heph-app-recovery-overlay-closure-correct-env.log`. Earlier isolated
+gates remain the accepted evidence: 80 app tests in
+`/tmp/heph-app-overlay-appfull-20260919.log`, 15 recovery tests in
+`/tmp/heph-app-overlay-fullpg-20260919.log`, workspace strict Clippy in
+`/tmp/heph-app-recovery-overlay-f616-workspace-clippy-20260919.log`, and
+workspace rustdoc in `/tmp/heph-app-recovery-overlay-f616-doc-20260919.log`.
+The unrelated CI failure in `daemon_loop_restores_active_service_without_manual_start`
+(`Ready` observed before the expected active revision; log
+`/home/a/heph-ci-35444316773-failed.log`) is left for the next investigation.
