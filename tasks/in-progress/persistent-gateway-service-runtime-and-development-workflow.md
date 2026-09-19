@@ -709,6 +709,19 @@ instance. Dispatcher wiring is complete; service startup scheduling and
 supervisor retention remain pending. Evidence: `hephaestus-app` all-target
 check, strict Clippy, formatting, and 58 library tests passed.
 
+- [x] Add serving-health supervision to the parent-owned service coordinator.
+  The coordinator now consumes the validated supervisor policy, schedules one
+  bounded health probe at a time while continuing to observe worker exit,
+  lease loss, and cancellation, resets consecutive failures after a successful
+  probe, and tears down with an explicit health failure at the configured
+  threshold. Thirteen focused coordinator tests cover reset proof, blocked
+  probe cancellation and lease loss, and cleanup; the full gateway-edge
+  library passed 89 tests, strict all-target Clippy, formatting, and diff
+  checks. The two real PostgreSQL coordinator tests passed with the in-test
+  `REAL_POSTGRES_CONNECTED_AND_MIGRATED=1 max_migration=76` marker in
+  `/tmp/hephaestus-gateway-health-coordinator-real.log`. Durable failure
+  recording, draining, and global supervisor scheduling remain pending.
+
 - [x] Add the caller-owned durable service lease monitor. It accepts the
   pre-claim monotonic deadline, renews only the exact instance/owner/fence,
   preserves lifecycle state updates, retries temporary storage failures

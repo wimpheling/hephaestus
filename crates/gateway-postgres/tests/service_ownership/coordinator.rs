@@ -8,8 +8,8 @@ use gateway_edge::{
     GatewayServiceCoordinatorStatus, GatewayServiceIdentity, GatewayServiceInstanceKey,
     GatewayServiceLaunch, GatewayServiceLaunchRequest, GatewayServiceLaunchResolver,
     GatewayServiceLeasePolicy, GatewayServiceOwner, GatewayServiceOwnership,
-    GatewayServiceRegistry, GatewayServiceStartupIntent, ServiceHttpPolicy, ServiceInstancePolicy,
-    TrustedRequestMetadata,
+    GatewayServiceRegistry, GatewayServiceStartupIntent, GatewayServiceSupervisorPolicy,
+    ServiceHttpPolicy, ServiceInstancePolicy, TrustedRequestMetadata,
 };
 use gateway_postgres::{PostgresGatewayServiceOwnership, PostgresGatewayServiceTargets};
 use http::{HeaderMap, Method, StatusCode};
@@ -35,6 +35,17 @@ use vm_trait::{
     RootFilesystem, StopMode, VmError, VmEvent, VmExit, VmId, VmInstance, VmProvider, VmResources,
     VmSpec,
 };
+
+fn coordinator_policy(
+    instance: ServiceInstancePolicy,
+    lease: GatewayServiceLeasePolicy,
+) -> GatewayServiceSupervisorPolicy {
+    GatewayServiceSupervisorPolicy {
+        instance,
+        lease,
+        ..GatewayServiceSupervisorPolicy::default()
+    }
+}
 
 #[tokio::test(flavor = "multi_thread")]
 #[serial_test::serial]
@@ -79,16 +90,18 @@ async fn coordinator_promotes_ready_service_and_cleans_real_ownership() {
         targets,
         registry.clone(),
         "service.test",
-        ServiceInstancePolicy::new(
-            Duration::from_secs(5),
-            Duration::from_millis(5),
-            Duration::from_secs(1),
-            Duration::from_secs(1),
+        coordinator_policy(
+            ServiceInstancePolicy::new(
+                Duration::from_secs(5),
+                Duration::from_millis(5),
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+            ),
+            GatewayServiceLeasePolicy {
+                lease_duration: Duration::from_secs(30),
+                renewal_interval: Duration::from_secs(5),
+            },
         ),
-        GatewayServiceLeasePolicy {
-            lease_duration: Duration::from_secs(30),
-            renewal_interval: Duration::from_secs(5),
-        },
     )
     .expect("coordinator");
     let mut status = control.subscribe();
@@ -216,16 +229,18 @@ async fn coordinator_restores_old_active_without_overwriting_new_desired_revisio
         targets,
         GatewayServiceRegistry::new(2, 2).expect("registry"),
         "service.test",
-        ServiceInstancePolicy::new(
-            Duration::from_secs(5),
-            Duration::from_millis(5),
-            Duration::from_secs(1),
-            Duration::from_secs(1),
+        coordinator_policy(
+            ServiceInstancePolicy::new(
+                Duration::from_secs(5),
+                Duration::from_millis(5),
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+            ),
+            GatewayServiceLeasePolicy {
+                lease_duration: Duration::from_secs(30),
+                renewal_interval: Duration::from_secs(5),
+            },
         ),
-        GatewayServiceLeasePolicy {
-            lease_duration: Duration::from_secs(30),
-            renewal_interval: Duration::from_secs(5),
-        },
     )
     .expect("coordinator");
     let mut status = control.subscribe();

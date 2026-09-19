@@ -17,9 +17,9 @@ use vm_trait::{VmInstance, VmProvider};
 use crate::{
     GatewayServiceIdentity, GatewayServiceInstanceKey, GatewayServiceInstanceLease,
     GatewayServiceInstanceState, GatewayServiceLaunchRequest, GatewayServiceLaunchResolver,
-    GatewayServiceLeaseControl, GatewayServiceLeaseMonitor, GatewayServiceLeasePolicy,
-    GatewayServiceLeaseRunResult, GatewayServiceLeaseStatus, GatewayServiceOwner,
-    GatewayServiceOwnership, GatewayServiceOwnershipError, GatewayServiceRegistry,
+    GatewayServiceLeaseControl, GatewayServiceLeaseMonitor, GatewayServiceLeaseRunResult,
+    GatewayServiceLeaseStatus, GatewayServiceOwner, GatewayServiceOwnership,
+    GatewayServiceOwnershipError, GatewayServiceRegistry, GatewayServiceSupervisorPolicy,
     GatewayServiceTargetStore, PreparedGatewayService, ServiceInstanceError, ServiceInstanceHandle,
     ServiceInstancePolicy, ServicePreparationFailure, ServiceWorkerState, new_service_instance,
     new_service_preparation,
@@ -98,6 +98,8 @@ pub enum GatewayServiceCoordinatorFailureReason {
     Runtime,
     /// Restore-active validation no longer matched the durable target.
     TargetUnavailable,
+    /// Consecutive serving health probes exceeded the configured threshold.
+    Health,
     /// Provider or materializer cleanup was not confirmed.
     CleanupIncomplete,
 }
@@ -160,7 +162,7 @@ pub struct GatewayServiceCoordinator {
     targets: Arc<dyn GatewayServiceTargetStore>,
     registry: GatewayServiceRegistry,
     service_authority: String,
-    worker_policy: ServiceInstancePolicy,
+    supervisor_policy: GatewayServiceSupervisorPolicy,
     startup_deadline: Instant,
     lease_control: GatewayServiceLeaseControl,
     lease_monitor: Option<GatewayServiceLeaseMonitor<dyn GatewayServiceOwnership>>,
@@ -191,8 +193,7 @@ impl GatewayServiceCoordinator {
         targets: Arc<dyn GatewayServiceTargetStore>,
         registry: GatewayServiceRegistry,
         service_authority: impl Into<String>,
-        worker_policy: ServiceInstancePolicy,
-        lease_policy: GatewayServiceLeasePolicy,
+        supervisor_policy: GatewayServiceSupervisorPolicy,
     ) -> Result<(Self, GatewayServiceCoordinatorControl), GatewayServiceCoordinatorError> {
         let expected_vm = format!("gateway-service-{}", lease.identity.instance_id);
         if lease.state != GatewayServiceInstanceState::Provisioning
@@ -208,6 +209,9 @@ impl GatewayServiceCoordinator {
         owner
             .validate()
             .map_err(|_| GatewayServiceCoordinatorError::InvalidIdentity)?;
+        supervisor_policy
+            .validate()
+            .map_err(|_| GatewayServiceCoordinatorError::InvalidLeasePolicy)?;
         let service_authority = service_authority.into();
         if service_authority.is_empty()
             || http::HeaderValue::try_from(service_authority.as_str()).is_err()
@@ -218,7 +222,7 @@ impl GatewayServiceCoordinator {
             Arc::clone(&ownership),
             lease.clone(),
             owner.clone(),
-            lease_policy,
+            supervisor_policy.lease,
             initial_lease_deadline,
         )
         .map_err(|_| GatewayServiceCoordinatorError::InvalidLeasePolicy)?;
@@ -239,7 +243,7 @@ impl GatewayServiceCoordinator {
                 targets,
                 registry,
                 service_authority,
-                worker_policy,
+                supervisor_policy,
                 startup_deadline,
                 lease_control,
                 lease_monitor: Some(lease_monitor),
@@ -406,10 +410,10 @@ impl GatewayServiceCoordinator {
                 .await;
         }
         let worker_policy = ServiceInstancePolicy::new(
-            remaining.min(self.worker_policy.startup_timeout),
-            self.worker_policy.probe_interval,
-            self.worker_policy.probe_timeout,
-            self.worker_policy.shutdown_timeout,
+            remaining.min(self.supervisor_policy.instance.startup_timeout),
+            self.supervisor_policy.instance.probe_interval,
+            self.supervisor_policy.instance.probe_timeout,
+            self.supervisor_policy.instance.shutdown_timeout,
         );
         let vm = prepared.vm.clone();
         let Ok((worker_handle, mut worker_state, worker)) = new_service_instance(
@@ -620,6 +624,8 @@ impl GatewayServiceCoordinator {
         }
         self.set_status(GatewayServiceCoordinatorStatus::Ready);
 
+        let mut health_timer = Box::pin(time::sleep(self.supervisor_policy.health_interval));
+        let mut health_failures = 0_u32;
         loop {
             tokio::select! {
                 result = &mut worker => { worker_result = Some(result); return self.settle_worker(monitor, monitor_done, lease_status, &lease, &worker_handle, &mut worker, &mut worker_result, vm, Some(key), FailureReason::Runtime).await; }
@@ -627,6 +633,19 @@ impl GatewayServiceCoordinator {
                 signal = monitor_signal(monitor, *monitor_done) => { let _ = signal; *monitor_done = true; return self.settle_worker(monitor, monitor_done, lease_status, &lease, &worker_handle, &mut worker, &mut worker_result, vm, Some(key), FailureReason::LeaseLost).await; }
                 changed = lease_status.changed() => if changed.is_err() || !lease_active(lease_status) { return self.settle_worker(monitor, monitor_done, lease_status, &lease, &worker_handle, &mut worker, &mut worker_result, vm, Some(key), FailureReason::LeaseLost).await; },
                 changed = worker_state.changed() => if changed.is_err() || *worker_state.borrow() != ServiceWorkerState::Ready { return self.settle_worker(monitor, monitor_done, lease_status, &lease, &worker_handle, &mut worker, &mut worker_result, vm, Some(key), FailureReason::Runtime).await; },
+                () = &mut health_timer => {
+                    match self.await_health(monitor, monitor_done, lease_status, &mut worker, &mut worker_state, &mut worker_result, &worker_handle).await {
+                        Ok(true) => health_failures = 0,
+                        Ok(false) => {
+                            health_failures = health_failures.saturating_add(1);
+                            if health_failures >= self.supervisor_policy.health_failure_threshold {
+                                return self.settle_worker(monitor, monitor_done, lease_status, &lease, &worker_handle, &mut worker, &mut worker_result, vm, Some(key), FailureReason::Health).await;
+                            }
+                        }
+                        Err(reason) => return self.settle_worker(monitor, monitor_done, lease_status, &lease, &worker_handle, &mut worker, &mut worker_result, vm, Some(key), reason).await,
+                    }
+                    health_timer.as_mut().reset(Instant::now() + self.supervisor_policy.health_interval);
+                },
             }
         }
     }
@@ -669,6 +688,36 @@ impl GatewayServiceCoordinator {
                 && target.revision.publication_eligible
                 && target.revision.release_state.as_deref() == Some("published")
         }))
+    }
+
+    // A health request is one bounded in-flight command. Worker, lease, and
+    // cancellation signals remain observed while the worker handles it.
+    #[allow(clippy::too_many_arguments)]
+    async fn await_health(
+        &self,
+        monitor: &mut MonitorFuture,
+        monitor_done: &mut bool,
+        status: &mut watch::Receiver<GatewayServiceLeaseStatus>,
+        worker: &mut WorkerFuture,
+        worker_state: &mut watch::Receiver<ServiceWorkerState>,
+        worker_result: &mut Option<Result<(), ServiceInstanceError>>,
+        handle: &ServiceInstanceHandle,
+    ) -> Result<bool, FailureReason> {
+        let health = handle.health();
+        let mut health = Box::pin(time::timeout(
+            self.supervisor_policy.instance.probe_timeout,
+            health,
+        ));
+        loop {
+            tokio::select! {
+                result = &mut health => return Ok(matches!(result, Ok(Ok(_)))),
+                result = &mut *worker => { *worker_result = Some(result); return Err(FailureReason::Runtime); },
+                changed = worker_state.changed() => if changed.is_err() || *worker_state.borrow() != ServiceWorkerState::Ready { return Err(FailureReason::Runtime); },
+                signal = monitor_signal(monitor, *monitor_done) => { let _ = signal; *monitor_done = true; return Err(FailureReason::LeaseLost); },
+                changed = status.changed() => if changed.is_err() || !lease_active(status) { return Err(FailureReason::LeaseLost); },
+                () = self.cancellation.cancelled() => return Err(FailureReason::Cancelled),
+            }
+        }
     }
 
     async fn cleanup_prepared(
@@ -1063,7 +1112,9 @@ fn current_deadline(status: &watch::Receiver<GatewayServiceLeaseStatus>) -> Opti
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{GatewayEdgeError, GatewayServiceLaunch};
+    use crate::{
+        GatewayEdgeError, GatewayServiceLaunch, GatewayServiceLeasePolicy, ServiceInstancePolicy,
+    };
     use async_trait::async_trait;
     use gateway_domain::{GatewayServiceConfig, ServiceProbePath};
     use std::{
@@ -1079,6 +1130,7 @@ mod tests {
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt, DuplexStream},
         sync::{Notify, broadcast},
+        time::timeout,
     };
     use uuid::Uuid;
     use vm_trait::{
@@ -1159,6 +1211,7 @@ mod tests {
         destroy_fails: AtomicBool,
         wait_exit: Notify,
         should_exit: AtomicBool,
+        opens: AtomicUsize,
     }
 
     #[async_trait]
@@ -1195,6 +1248,7 @@ mod tests {
         async fn open_private_service_connection(
             &self,
         ) -> Result<vm_trait::BoxedPrivateServiceConnection, VmError> {
+            self.opens.fetch_add(1, Ordering::Relaxed);
             self.connections
                 .lock()
                 .expect("connection mutex")
@@ -1449,6 +1503,28 @@ mod tests {
         }
     }
 
+    fn supervisor_policy(
+        instance: ServiceInstancePolicy,
+        lease: GatewayServiceLeasePolicy,
+    ) -> GatewayServiceSupervisorPolicy {
+        supervisor_policy_with_health(instance, lease, Duration::from_secs(10), 3)
+    }
+
+    fn supervisor_policy_with_health(
+        instance: ServiceInstancePolicy,
+        lease: GatewayServiceLeasePolicy,
+        health_interval: Duration,
+        health_failure_threshold: u32,
+    ) -> GatewayServiceSupervisorPolicy {
+        GatewayServiceSupervisorPolicy {
+            lease,
+            instance,
+            health_interval,
+            health_failure_threshold,
+            ..GatewayServiceSupervisorPolicy::default()
+        }
+    }
+
     fn identity() -> GatewayServiceIdentity {
         GatewayServiceIdentity {
             instance_id: Uuid::from_u128(1),
@@ -1556,6 +1632,36 @@ mod tests {
             .expect("probe response");
     }
 
+    async fn respond_status_notifying(mut peer: DuplexStream, status: u16, replied: Arc<Notify>) {
+        let mut request = [0_u8; 512];
+        let _ = peer.read(&mut request).await;
+        let response =
+            format!("HTTP/1.1 {status} Test\r\ncontent-length: 0\r\nconnection: close\r\n\r\n");
+        peer.write_all(response.as_bytes())
+            .await
+            .expect("probe response");
+        replied.notify_one();
+    }
+
+    async fn respond_status_after_gate(
+        mut peer: DuplexStream,
+        status: u16,
+        started: Arc<Notify>,
+        release: Arc<Notify>,
+        replied: Arc<Notify>,
+    ) {
+        let mut request = [0_u8; 512];
+        let _ = peer.read(&mut request).await;
+        started.notify_one();
+        release.notified().await;
+        let response =
+            format!("HTTP/1.1 {status} Test\r\ncontent-length: 0\r\nconnection: close\r\n\r\n");
+        peer.write_all(response.as_bytes())
+            .await
+            .expect("probe response");
+        replied.notify_one();
+    }
+
     #[tokio::test(start_paused = true)]
     async fn startup_deadline_cancels_preparation_before_provisioning() {
         let identity = identity();
@@ -1587,6 +1693,7 @@ mod tests {
             destroy_fails: AtomicBool::new(false),
             wait_exit: Notify::new(),
             should_exit: AtomicBool::new(false),
+            opens: AtomicUsize::new(0),
         });
         let ownership = Arc::new(MockOwnership {
             events: Mutex::new(Vec::new()),
@@ -1610,16 +1717,18 @@ mod tests {
             Arc::new(MockTargets { target: None }),
             GatewayServiceRegistry::new(1, 1).expect("registry"),
             "service.test",
-            ServiceInstancePolicy::new(
-                Duration::from_secs(120),
-                Duration::from_secs(1),
-                Duration::from_secs(1),
-                Duration::from_secs(1),
+            supervisor_policy(
+                ServiceInstancePolicy::new(
+                    Duration::from_secs(120),
+                    Duration::from_secs(1),
+                    Duration::from_secs(1),
+                    Duration::from_secs(1),
+                ),
+                GatewayServiceLeasePolicy {
+                    lease_duration: Duration::from_secs(30),
+                    renewal_interval: Duration::from_secs(5),
+                },
             ),
-            GatewayServiceLeasePolicy {
-                lease_duration: Duration::from_secs(30),
-                renewal_interval: Duration::from_secs(5),
-            },
         )
         .expect("coordinator");
         let run = tokio::spawn(coordinator.run());
@@ -1655,6 +1764,7 @@ mod tests {
             destroy_fails: AtomicBool::new(false),
             wait_exit: Notify::new(),
             should_exit: AtomicBool::new(false),
+            opens: AtomicUsize::new(0),
         });
         let (client, peer) = tokio::io::duplex(4096);
         vm.connections
@@ -1697,16 +1807,18 @@ mod tests {
             Arc::new(MockTargets { target: None }),
             GatewayServiceRegistry::new(1, 1).expect("registry"),
             "service.test",
-            ServiceInstancePolicy::new(
-                Duration::from_secs(120),
-                Duration::from_millis(1),
-                Duration::from_secs(1),
-                Duration::from_secs(1),
+            supervisor_policy(
+                ServiceInstancePolicy::new(
+                    Duration::from_secs(120),
+                    Duration::from_millis(1),
+                    Duration::from_secs(1),
+                    Duration::from_secs(1),
+                ),
+                GatewayServiceLeasePolicy {
+                    lease_duration: Duration::from_secs(30),
+                    renewal_interval: Duration::from_secs(5),
+                },
             ),
-            GatewayServiceLeasePolicy {
-                lease_duration: Duration::from_secs(30),
-                renewal_interval: Duration::from_secs(5),
-            },
         )
         .expect("coordinator");
         let mut status = control.subscribe();
@@ -1746,6 +1858,7 @@ mod tests {
             destroy_fails: AtomicBool::new(false),
             wait_exit: Notify::new(),
             should_exit: AtomicBool::new(false),
+            opens: AtomicUsize::new(0),
         });
         let (client, peer) = tokio::io::duplex(4096);
         vm.connections
@@ -1788,16 +1901,18 @@ mod tests {
             Arc::new(MockTargets { target: None }),
             GatewayServiceRegistry::new(1, 1).expect("registry"),
             "service.test",
-            ServiceInstancePolicy::new(
-                Duration::from_secs(120),
-                Duration::from_millis(1),
-                Duration::from_secs(1),
-                Duration::from_secs(1),
+            supervisor_policy(
+                ServiceInstancePolicy::new(
+                    Duration::from_secs(120),
+                    Duration::from_millis(1),
+                    Duration::from_secs(1),
+                    Duration::from_secs(1),
+                ),
+                GatewayServiceLeasePolicy {
+                    lease_duration: Duration::from_secs(30),
+                    renewal_interval: Duration::from_secs(5),
+                },
             ),
-            GatewayServiceLeasePolicy {
-                lease_duration: Duration::from_secs(30),
-                renewal_interval: Duration::from_secs(5),
-            },
         )
         .expect("coordinator");
         let task = tokio::spawn(coordinator.run());
@@ -1837,6 +1952,7 @@ mod tests {
             destroy_fails: AtomicBool::new(false),
             wait_exit: Notify::new(),
             should_exit: AtomicBool::new(false),
+            opens: AtomicUsize::new(0),
         });
         let (client, peer) = tokio::io::duplex(4096);
         vm.connections
@@ -1879,16 +1995,18 @@ mod tests {
             Arc::new(MockTargets { target: None }),
             GatewayServiceRegistry::new(1, 1).expect("registry"),
             "service.test",
-            ServiceInstancePolicy::new(
-                Duration::from_secs(120),
-                Duration::from_millis(1),
-                Duration::from_secs(1),
-                Duration::from_secs(1),
+            supervisor_policy(
+                ServiceInstancePolicy::new(
+                    Duration::from_secs(120),
+                    Duration::from_millis(1),
+                    Duration::from_secs(1),
+                    Duration::from_secs(1),
+                ),
+                GatewayServiceLeasePolicy {
+                    lease_duration: Duration::from_secs(30),
+                    renewal_interval: Duration::from_secs(5),
+                },
             ),
-            GatewayServiceLeasePolicy {
-                lease_duration: Duration::from_secs(30),
-                renewal_interval: Duration::from_secs(5),
-            },
         )
         .expect("coordinator");
         let task = tokio::spawn(coordinator.run());
@@ -1929,6 +2047,7 @@ mod tests {
             destroy_fails: AtomicBool::new(false),
             wait_exit: Notify::new(),
             should_exit: AtomicBool::new(false),
+            opens: AtomicUsize::new(0),
         });
         let (client, peer) = tokio::io::duplex(4096);
         vm.connections
@@ -1971,16 +2090,18 @@ mod tests {
             Arc::new(MockTargets { target: None }),
             GatewayServiceRegistry::new(1, 1).expect("registry"),
             "service.test",
-            ServiceInstancePolicy::new(
-                Duration::from_secs(120),
-                Duration::from_millis(1),
-                Duration::from_secs(1),
-                Duration::from_secs(1),
+            supervisor_policy(
+                ServiceInstancePolicy::new(
+                    Duration::from_secs(120),
+                    Duration::from_millis(1),
+                    Duration::from_secs(1),
+                    Duration::from_secs(1),
+                ),
+                GatewayServiceLeasePolicy {
+                    lease_duration: Duration::from_secs(30),
+                    renewal_interval: Duration::from_secs(5),
+                },
             ),
-            GatewayServiceLeasePolicy {
-                lease_duration: Duration::from_secs(30),
-                renewal_interval: Duration::from_secs(5),
-            },
         )
         .expect("coordinator");
         let task = tokio::spawn(coordinator.run());
@@ -2024,6 +2145,7 @@ mod tests {
             destroy_fails: AtomicBool::new(true),
             wait_exit: Notify::new(),
             should_exit: AtomicBool::new(false),
+            opens: AtomicUsize::new(0),
         });
         let original_vm: Arc<dyn VmInstance> = vm.clone();
         let (client, peer) = tokio::io::duplex(4096);
@@ -2067,16 +2189,18 @@ mod tests {
             Arc::new(MockTargets { target: None }),
             GatewayServiceRegistry::new(1, 1).expect("registry"),
             "service.test",
-            ServiceInstancePolicy::new(
-                Duration::from_secs(120),
-                Duration::from_millis(1),
-                Duration::from_secs(1),
-                Duration::from_secs(1),
+            supervisor_policy(
+                ServiceInstancePolicy::new(
+                    Duration::from_secs(120),
+                    Duration::from_millis(1),
+                    Duration::from_secs(1),
+                    Duration::from_secs(1),
+                ),
+                GatewayServiceLeasePolicy {
+                    lease_duration: Duration::from_secs(30),
+                    renewal_interval: Duration::from_secs(5),
+                },
             ),
-            GatewayServiceLeasePolicy {
-                lease_duration: Duration::from_secs(30),
-                renewal_interval: Duration::from_secs(5),
-            },
         )
         .expect("coordinator");
         let task = tokio::spawn(coordinator.run());
@@ -2122,6 +2246,7 @@ mod tests {
             destroy_fails: AtomicBool::new(false),
             wait_exit: Notify::new(),
             should_exit: AtomicBool::new(false),
+            opens: AtomicUsize::new(0),
         });
         let resolver = Arc::new(MockResolver {
             launch: launch(identity),
@@ -2158,16 +2283,18 @@ mod tests {
             Arc::new(MockTargets { target: None }),
             GatewayServiceRegistry::new(1, 1).expect("registry"),
             "service.test",
-            ServiceInstancePolicy::new(
-                Duration::from_secs(120),
-                Duration::from_millis(1),
-                Duration::from_secs(1),
-                Duration::from_secs(1),
+            supervisor_policy(
+                ServiceInstancePolicy::new(
+                    Duration::from_secs(120),
+                    Duration::from_millis(1),
+                    Duration::from_secs(1),
+                    Duration::from_secs(1),
+                ),
+                GatewayServiceLeasePolicy {
+                    lease_duration: Duration::from_secs(30),
+                    renewal_interval: Duration::from_secs(5),
+                },
             ),
-            GatewayServiceLeasePolicy {
-                lease_duration: Duration::from_secs(30),
-                renewal_interval: Duration::from_secs(5),
-            },
         )
         .expect("coordinator");
         let task = tokio::spawn(coordinator.run());
@@ -2210,6 +2337,7 @@ mod tests {
             destroy_fails: AtomicBool::new(false),
             wait_exit: Notify::new(),
             should_exit: AtomicBool::new(false),
+            opens: AtomicUsize::new(0),
         });
         let (client, peer) = tokio::io::duplex(4096);
         vm.connections
@@ -2252,16 +2380,18 @@ mod tests {
             Arc::new(MockTargets { target: None }),
             GatewayServiceRegistry::new(1, 1).expect("registry"),
             "service.test",
-            ServiceInstancePolicy::new(
-                Duration::from_secs(120),
-                Duration::from_millis(1),
-                Duration::from_secs(1),
-                Duration::from_secs(1),
+            supervisor_policy(
+                ServiceInstancePolicy::new(
+                    Duration::from_secs(120),
+                    Duration::from_millis(1),
+                    Duration::from_secs(1),
+                    Duration::from_secs(1),
+                ),
+                GatewayServiceLeasePolicy {
+                    lease_duration: Duration::from_secs(30),
+                    renewal_interval: Duration::from_millis(10),
+                },
             ),
-            GatewayServiceLeasePolicy {
-                lease_duration: Duration::from_secs(30),
-                renewal_interval: Duration::from_millis(10),
-            },
         )
         .expect("coordinator");
         let mut status = control.subscribe();
@@ -2298,6 +2428,7 @@ mod tests {
             destroy_fails: AtomicBool::new(false),
             wait_exit: Notify::new(),
             should_exit: AtomicBool::new(false),
+            opens: AtomicUsize::new(0),
         });
         let (client, peer) = tokio::io::duplex(4096);
         vm.connections
@@ -2342,16 +2473,18 @@ mod tests {
             }),
             GatewayServiceRegistry::new(1, 1).expect("registry"),
             "service.test",
-            ServiceInstancePolicy::new(
-                Duration::from_secs(120),
-                Duration::from_millis(1),
-                Duration::from_secs(1),
-                Duration::from_secs(1),
+            supervisor_policy(
+                ServiceInstancePolicy::new(
+                    Duration::from_secs(120),
+                    Duration::from_millis(1),
+                    Duration::from_secs(1),
+                    Duration::from_secs(1),
+                ),
+                GatewayServiceLeasePolicy {
+                    lease_duration: Duration::from_secs(30),
+                    renewal_interval: Duration::from_secs(5),
+                },
             ),
-            GatewayServiceLeasePolicy {
-                lease_duration: Duration::from_secs(30),
-                renewal_interval: Duration::from_secs(5),
-            },
         )
         .expect("coordinator");
         let mut status = control.subscribe();
@@ -2387,6 +2520,7 @@ mod tests {
             destroy_fails: AtomicBool::new(false),
             wait_exit: Notify::new(),
             should_exit: AtomicBool::new(false),
+            opens: AtomicUsize::new(0),
         });
         let (client, peer) = tokio::io::duplex(4096);
         vm.connections
@@ -2434,16 +2568,18 @@ mod tests {
             targets.clone(),
             GatewayServiceRegistry::new(1, 1).expect("registry"),
             "service.test",
-            ServiceInstancePolicy::new(
-                Duration::from_secs(120),
-                Duration::from_millis(1),
-                Duration::from_secs(1),
-                Duration::from_secs(1),
+            supervisor_policy(
+                ServiceInstancePolicy::new(
+                    Duration::from_secs(120),
+                    Duration::from_millis(1),
+                    Duration::from_secs(1),
+                    Duration::from_secs(1),
+                ),
+                GatewayServiceLeasePolicy {
+                    lease_duration: Duration::from_secs(30),
+                    renewal_interval: Duration::from_secs(5),
+                },
             ),
-            GatewayServiceLeasePolicy {
-                lease_duration: Duration::from_secs(30),
-                renewal_interval: Duration::from_secs(5),
-            },
         )
         .expect("coordinator");
         let task = tokio::spawn(coordinator.run());
@@ -2467,6 +2603,419 @@ mod tests {
             GatewayServiceCoordinatorFailureReason::LeaseLost
         );
         assert!(failure.vm.is_none());
+        assert_eq!(resolver.cleanups.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)] // Sequence controlled health replies and lifecycle assertions.
+    async fn serving_health_survives_one_failure_and_resets_after_success() {
+        let identity = identity();
+        let owner =
+            GatewayServiceOwner::new("coordinator-test-host", Uuid::new_v4()).expect("owner");
+        let (events, _) = broadcast::channel(2);
+        let vm = Arc::new(MockVm {
+            id: VmId(format!("gateway-service-{}", identity.instance_id)),
+            events,
+            connections: Mutex::new(VecDeque::new()),
+            starts: AtomicUsize::new(0),
+            destroys: AtomicUsize::new(0),
+            destroy_started: Notify::new(),
+            destroy_release: Notify::new(),
+            destroy_blocked: AtomicBool::new(false),
+            destroy_fails: AtomicBool::new(false),
+            wait_exit: Notify::new(),
+            should_exit: AtomicBool::new(false),
+            opens: AtomicUsize::new(0),
+        });
+        let (client, peer) = tokio::io::duplex(4096);
+        let (failed_health_client, failed_health_peer) = tokio::io::duplex(4096);
+        let (successful_health_client, successful_health_peer) = tokio::io::duplex(4096);
+        let (second_failed_health_client, second_failed_health_peer) = tokio::io::duplex(4096);
+        let (fourth_failed_health_client, fourth_failed_health_peer) = tokio::io::duplex(4096);
+        vm.connections
+            .lock()
+            .expect("connection mutex")
+            .push_back(Box::new(client));
+        vm.connections
+            .lock()
+            .expect("connection mutex")
+            .push_back(Box::new(failed_health_client));
+        vm.connections
+            .lock()
+            .expect("connection mutex")
+            .push_back(Box::new(successful_health_client));
+        vm.connections
+            .lock()
+            .expect("connection mutex")
+            .push_back(Box::new(second_failed_health_client));
+        vm.connections
+            .lock()
+            .expect("connection mutex")
+            .push_back(Box::new(fourth_failed_health_client));
+        tokio::spawn(respond(peer));
+        let first_reply = Arc::new(Notify::new());
+        let second_reply = Arc::new(Notify::new());
+        let third_reply = Arc::new(Notify::new());
+        let fourth_started = Arc::new(Notify::new());
+        let fourth_release = Arc::new(Notify::new());
+        let fourth_reply = Arc::new(Notify::new());
+        tokio::spawn(respond_status_notifying(
+            failed_health_peer,
+            503,
+            first_reply.clone(),
+        ));
+        tokio::spawn(respond_status_notifying(
+            successful_health_peer,
+            200,
+            second_reply.clone(),
+        ));
+        tokio::spawn(respond_status_notifying(
+            second_failed_health_peer,
+            503,
+            third_reply.clone(),
+        ));
+        tokio::spawn(respond_status_after_gate(
+            fourth_failed_health_peer,
+            503,
+            fourth_started.clone(),
+            fourth_release.clone(),
+            fourth_reply.clone(),
+        ));
+        let resolver = Arc::new(MockResolver {
+            launch: launch(identity),
+            started: Notify::new(),
+            release: Notify::new(),
+            cleanups: AtomicUsize::new(0),
+        });
+        let provider = Arc::new(MockProvider {
+            provisions: AtomicUsize::new(0),
+            vm: Some(vm.clone()),
+            started: Notify::new(),
+            release: Notify::new(),
+            blocked: AtomicBool::new(false),
+        });
+        let ownership = Arc::new(MockOwnership {
+            events: Mutex::new(Vec::new()),
+            renewals: AtomicUsize::new(0),
+            renew_fails: AtomicBool::new(false),
+            promote_fails: AtomicBool::new(false),
+            promote_started: Notify::new(),
+            promote_release: Notify::new(),
+            promote_blocked: AtomicBool::new(false),
+        });
+        let now = Instant::now();
+        let (coordinator, control) = GatewayServiceCoordinator::new(
+            lease(&owner, identity),
+            owner,
+            now + Duration::from_secs(30),
+            now + Duration::from_secs(5),
+            GatewayServiceStartupIntent::ActivateDesired,
+            ownership,
+            resolver.clone(),
+            provider,
+            Arc::new(MockTargets { target: None }),
+            GatewayServiceRegistry::new(1, 1).expect("registry"),
+            "service.test",
+            supervisor_policy_with_health(
+                ServiceInstancePolicy::new(
+                    Duration::from_secs(2),
+                    Duration::from_millis(1),
+                    Duration::from_millis(100),
+                    Duration::from_secs(1),
+                ),
+                GatewayServiceLeasePolicy {
+                    lease_duration: Duration::from_secs(30),
+                    renewal_interval: Duration::from_secs(5),
+                },
+                Duration::from_millis(10),
+                2,
+            ),
+        )
+        .expect("coordinator");
+        let mut status = control.subscribe();
+        let task = tokio::spawn(coordinator.run());
+        resolver.started.notified().await;
+        resolver.release.notify_one();
+        while *status.borrow() != GatewayServiceCoordinatorStatus::Ready {
+            status.changed().await.expect("coordinator status");
+        }
+
+        timeout(Duration::from_secs(1), async {
+            while vm.opens.load(Ordering::Relaxed) < 2 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("first health probe");
+        first_reply.notified().await;
+        assert!(!task.is_finished(), "one health failure is tolerated");
+        timeout(Duration::from_secs(1), async {
+            while vm.opens.load(Ordering::Relaxed) < 3 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("successful health probe");
+        second_reply.notified().await;
+        timeout(Duration::from_secs(1), async {
+            while vm.opens.load(Ordering::Relaxed) < 4 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("post-reset health probe");
+        third_reply.notified().await;
+        timeout(Duration::from_secs(1), fourth_started.notified())
+            .await
+            .expect("post-reset failure must be consumed before threshold");
+        assert!(
+            !task.is_finished(),
+            "reset keeps the first post-success failure alive while next probe is blocked"
+        );
+        fourth_release.notify_one();
+        fourth_reply.notified().await;
+
+        let failure = timeout(Duration::from_secs(1), task)
+            .await
+            .expect("health threshold");
+        let failure = failure
+            .expect("coordinator join")
+            .expect_err("health threshold failure");
+        control.cancel();
+        assert_eq!(
+            failure.reason,
+            GatewayServiceCoordinatorFailureReason::Health
+        );
+        assert_eq!(vm.destroys.load(Ordering::Relaxed), 1);
+        assert_eq!(resolver.cleanups.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    #[allow(clippy::too_many_lines)] // Keeps the blocked-probe ownership barrier explicit.
+    async fn lease_loss_during_blocked_health_probe_stops_promptly() {
+        let identity = identity();
+        let owner =
+            GatewayServiceOwner::new("coordinator-test-host", Uuid::new_v4()).expect("owner");
+        let (events, _) = broadcast::channel(2);
+        let vm = Arc::new(MockVm {
+            id: VmId(format!("gateway-service-{}", identity.instance_id)),
+            events,
+            connections: Mutex::new(VecDeque::new()),
+            starts: AtomicUsize::new(0),
+            destroys: AtomicUsize::new(0),
+            destroy_started: Notify::new(),
+            destroy_release: Notify::new(),
+            destroy_blocked: AtomicBool::new(false),
+            destroy_fails: AtomicBool::new(false),
+            wait_exit: Notify::new(),
+            should_exit: AtomicBool::new(false),
+            opens: AtomicUsize::new(0),
+        });
+        let (ready_client, ready_peer) = tokio::io::duplex(4096);
+        let (health_client, _health_peer) = tokio::io::duplex(4096);
+        vm.connections
+            .lock()
+            .expect("connection mutex")
+            .push_back(Box::new(ready_client));
+        vm.connections
+            .lock()
+            .expect("connection mutex")
+            .push_back(Box::new(health_client));
+        tokio::spawn(respond(ready_peer));
+        let resolver = Arc::new(MockResolver {
+            launch: launch(identity),
+            started: Notify::new(),
+            release: Notify::new(),
+            cleanups: AtomicUsize::new(0),
+        });
+        let provider = Arc::new(MockProvider {
+            provisions: AtomicUsize::new(0),
+            vm: Some(vm.clone()),
+            started: Notify::new(),
+            release: Notify::new(),
+            blocked: AtomicBool::new(false),
+        });
+        let ownership = Arc::new(MockOwnership {
+            events: Mutex::new(Vec::new()),
+            renewals: AtomicUsize::new(0),
+            renew_fails: AtomicBool::new(false),
+            promote_fails: AtomicBool::new(false),
+            promote_started: Notify::new(),
+            promote_release: Notify::new(),
+            promote_blocked: AtomicBool::new(false),
+        });
+        let now = Instant::now();
+        let (coordinator, control) = GatewayServiceCoordinator::new(
+            lease(&owner, identity),
+            owner,
+            now + Duration::from_secs(30),
+            now + Duration::from_secs(30),
+            GatewayServiceStartupIntent::ActivateDesired,
+            ownership.clone(),
+            resolver.clone(),
+            provider,
+            Arc::new(MockTargets { target: None }),
+            GatewayServiceRegistry::new(1, 1).expect("registry"),
+            "service.test",
+            supervisor_policy_with_health(
+                ServiceInstancePolicy::new(
+                    Duration::from_secs(2),
+                    Duration::from_millis(1),
+                    Duration::from_millis(100),
+                    Duration::from_secs(1),
+                ),
+                GatewayServiceLeasePolicy {
+                    lease_duration: Duration::from_secs(30),
+                    renewal_interval: Duration::from_millis(20),
+                },
+                Duration::from_millis(1),
+                3,
+            ),
+        )
+        .expect("coordinator");
+        let mut status = control.subscribe();
+        let task = tokio::spawn(coordinator.run());
+        resolver.started.notified().await;
+        resolver.release.notify_one();
+        while *status.borrow() != GatewayServiceCoordinatorStatus::Ready {
+            status.changed().await.expect("coordinator status");
+        }
+        tokio::time::advance(Duration::from_millis(1)).await;
+        timeout(Duration::from_secs(1), async {
+            while vm.opens.load(Ordering::Relaxed) < 2 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("blocked health probe");
+        ownership.renew_fails.store(true, Ordering::Relaxed);
+        tokio::time::advance(Duration::from_millis(25)).await;
+        tokio::task::yield_now().await;
+        let failure = timeout(Duration::from_secs(1), task)
+            .await
+            .expect("lease loss must cancel blocked health probe")
+            .expect("coordinator join")
+            .expect_err("lease loss");
+        control.cancel();
+        assert_eq!(
+            failure.reason,
+            GatewayServiceCoordinatorFailureReason::LeaseLost
+        );
+        assert_eq!(vm.destroys.load(Ordering::Relaxed), 1);
+        assert_eq!(resolver.cleanups.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    #[allow(clippy::too_many_lines)] // Keeps cancellation and cleanup ordering explicit.
+    async fn cancellation_during_blocked_health_probe_cleans_promptly() {
+        let identity = identity();
+        let owner =
+            GatewayServiceOwner::new("coordinator-test-host", Uuid::new_v4()).expect("owner");
+        let (events, _) = broadcast::channel(2);
+        let vm = Arc::new(MockVm {
+            id: VmId(format!("gateway-service-{}", identity.instance_id)),
+            events,
+            connections: Mutex::new(VecDeque::new()),
+            starts: AtomicUsize::new(0),
+            destroys: AtomicUsize::new(0),
+            destroy_started: Notify::new(),
+            destroy_release: Notify::new(),
+            destroy_blocked: AtomicBool::new(false),
+            destroy_fails: AtomicBool::new(false),
+            wait_exit: Notify::new(),
+            should_exit: AtomicBool::new(false),
+            opens: AtomicUsize::new(0),
+        });
+        let (ready_client, ready_peer) = tokio::io::duplex(4096);
+        let (health_client, _health_peer) = tokio::io::duplex(4096);
+        vm.connections
+            .lock()
+            .expect("connection mutex")
+            .push_back(Box::new(ready_client));
+        vm.connections
+            .lock()
+            .expect("connection mutex")
+            .push_back(Box::new(health_client));
+        tokio::spawn(respond(ready_peer));
+        let resolver = Arc::new(MockResolver {
+            launch: launch(identity),
+            started: Notify::new(),
+            release: Notify::new(),
+            cleanups: AtomicUsize::new(0),
+        });
+        let provider = Arc::new(MockProvider {
+            provisions: AtomicUsize::new(0),
+            vm: Some(vm.clone()),
+            started: Notify::new(),
+            release: Notify::new(),
+            blocked: AtomicBool::new(false),
+        });
+        let ownership = Arc::new(MockOwnership {
+            events: Mutex::new(Vec::new()),
+            renewals: AtomicUsize::new(0),
+            renew_fails: AtomicBool::new(false),
+            promote_fails: AtomicBool::new(false),
+            promote_started: Notify::new(),
+            promote_release: Notify::new(),
+            promote_blocked: AtomicBool::new(false),
+        });
+        let now = Instant::now();
+        let (coordinator, control) = GatewayServiceCoordinator::new(
+            lease(&owner, identity),
+            owner,
+            now + Duration::from_secs(30),
+            now + Duration::from_secs(30),
+            GatewayServiceStartupIntent::ActivateDesired,
+            ownership,
+            resolver.clone(),
+            provider,
+            Arc::new(MockTargets { target: None }),
+            GatewayServiceRegistry::new(1, 1).expect("registry"),
+            "service.test",
+            supervisor_policy_with_health(
+                ServiceInstancePolicy::new(
+                    Duration::from_secs(2),
+                    Duration::from_millis(1),
+                    Duration::from_millis(100),
+                    Duration::from_secs(1),
+                ),
+                GatewayServiceLeasePolicy {
+                    lease_duration: Duration::from_secs(30),
+                    renewal_interval: Duration::from_secs(5),
+                },
+                Duration::from_millis(1),
+                3,
+            ),
+        )
+        .expect("coordinator");
+        let mut status = control.subscribe();
+        let task = tokio::spawn(coordinator.run());
+        resolver.started.notified().await;
+        resolver.release.notify_one();
+        while *status.borrow() != GatewayServiceCoordinatorStatus::Ready {
+            status.changed().await.expect("coordinator status");
+        }
+        tokio::time::advance(Duration::from_millis(1)).await;
+        timeout(Duration::from_secs(1), async {
+            while vm.opens.load(Ordering::Relaxed) < 2 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("blocked health probe");
+        control.cancel();
+        let mut task = Box::pin(task);
+        let joined = tokio::time::timeout(Duration::from_secs(1), &mut task);
+        tokio::pin!(joined);
+        tokio::time::advance(Duration::from_secs(1)).await;
+        assert!(
+            joined
+                .await
+                .expect("cancellation deadline")
+                .expect("join")
+                .is_ok()
+        );
+        assert_eq!(vm.destroys.load(Ordering::Relaxed), 1);
         assert_eq!(resolver.cleanups.load(Ordering::Relaxed), 1);
     }
 }
