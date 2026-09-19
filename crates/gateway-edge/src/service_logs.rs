@@ -530,6 +530,70 @@ pub enum GatewayServiceLogMaintenanceError {
     Unavailable,
 }
 
+/// Maximum number of projects returned by one maintenance enumeration page.
+pub const MAX_SERVICE_LOG_MAINTENANCE_PROJECT_PAGE_SIZE: u16 = 128;
+
+/// Bounded keyset page for worker-owned service-log maintenance projects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GatewayServiceLogMaintenanceProjectPage {
+    /// Return projects strictly after this stable project identity.
+    pub after: Option<Uuid>,
+    /// Maximum number of project identities to return.
+    pub limit: u16,
+}
+
+impl GatewayServiceLogMaintenanceProjectPage {
+    /// Creates a validated maintenance-project page.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GatewayServiceLogMaintenanceError::InvalidArgument`] for a
+    /// zero or oversized page, or a nil cursor.
+    pub fn new(after: Option<Uuid>, limit: u16) -> Result<Self, GatewayServiceLogMaintenanceError> {
+        let page = Self { after, limit };
+        page.validate()?;
+        Ok(page)
+    }
+
+    /// Validates a page assembled by an internal scheduler.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GatewayServiceLogMaintenanceError::InvalidArgument`] when
+    /// the page limit or cursor is outside the bounded contract.
+    pub fn validate(&self) -> Result<(), GatewayServiceLogMaintenanceError> {
+        if self.limit == 0
+            || self.limit > MAX_SERVICE_LOG_MAINTENANCE_PROJECT_PAGE_SIZE
+            || self.after.is_some_and(|value| value.is_nil())
+        {
+            return Err(GatewayServiceLogMaintenanceError::InvalidArgument);
+        }
+        Ok(())
+    }
+}
+
+/// Bounded UUID page returned by the worker-only maintenance index.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GatewayServiceLogMaintenanceProjectPageResult {
+    /// Project identities backed by durable log usage rows.
+    pub projects: Vec<Uuid>,
+    /// Cursor for the next keyset page, if one exists.
+    pub next_after: Option<Uuid>,
+}
+
+/// Worker-only enumeration of projects that have durable service-log state.
+#[async_trait]
+pub trait GatewayServiceLogMaintenanceProjects: Send + Sync {
+    /// Lists project usage rows in stable UUID order, including projects with
+    /// no active service instance. A scheduler must keep failed projects
+    /// eligible for a later bounded retry while advancing fairly, so one
+    /// transient failure does not block the rest of a sweep.
+    async fn list_projects(
+        &self,
+        page: GatewayServiceLogMaintenanceProjectPage,
+    ) -> Result<GatewayServiceLogMaintenanceProjectPageResult, GatewayServiceLogMaintenanceError>;
+}
+
 /// Worker-only bounded retention and metadata maintenance port.
 #[async_trait]
 pub trait GatewayServiceLogMaintenance: Send + Sync {
@@ -778,6 +842,27 @@ mod append_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn maintenance_project_page_validates_bounded_uuid_cursor() {
+        assert!(GatewayServiceLogMaintenanceProjectPage::new(None, 1).is_ok());
+        assert!(
+            GatewayServiceLogMaintenanceProjectPage::new(
+                None,
+                MAX_SERVICE_LOG_MAINTENANCE_PROJECT_PAGE_SIZE,
+            )
+            .is_ok()
+        );
+        assert!(GatewayServiceLogMaintenanceProjectPage::new(None, 0).is_err());
+        assert!(
+            GatewayServiceLogMaintenanceProjectPage::new(
+                None,
+                MAX_SERVICE_LOG_MAINTENANCE_PROJECT_PAGE_SIZE + 1,
+            )
+            .is_err()
+        );
+        assert!(GatewayServiceLogMaintenanceProjectPage::new(Some(Uuid::nil()), 1).is_err());
+    }
 
     #[test]
     fn assigns_gaps_and_reports_oversized_events() {

@@ -4,10 +4,11 @@ use async_trait::async_trait;
 use gateway_edge::{
     GatewayServiceInstanceLease, GatewayServiceLogAppendBatch, GatewayServiceLogAppendOutcome,
     GatewayServiceLogMaintenance, GatewayServiceLogMaintenanceError,
-    GatewayServiceLogMaintenancePolicy, GatewayServiceLogMaintenanceReport, GatewayServiceLogStore,
-    GatewayServiceLogStoreError, GatewayServiceOwner, MAX_SERVICE_LOG_INSTANCE_BYTES,
-    MAX_SERVICE_LOG_INSTANCE_CHUNKS, MAX_SERVICE_LOG_PROJECT_BYTES, MAX_SERVICE_LOG_PROJECT_CHUNKS,
-    MAX_SERVICE_OWNER_HOST_BYTES,
+    GatewayServiceLogMaintenancePolicy, GatewayServiceLogMaintenanceProjectPage,
+    GatewayServiceLogMaintenanceProjectPageResult, GatewayServiceLogMaintenanceProjects,
+    GatewayServiceLogMaintenanceReport, GatewayServiceLogStore, GatewayServiceLogStoreError,
+    GatewayServiceOwner, MAX_SERVICE_LOG_INSTANCE_BYTES, MAX_SERVICE_LOG_INSTANCE_CHUNKS,
+    MAX_SERVICE_LOG_PROJECT_BYTES, MAX_SERVICE_LOG_PROJECT_CHUNKS, MAX_SERVICE_OWNER_HOST_BYTES,
 };
 use sqlx::{FromRow, PgPool, Postgres, Transaction};
 use std::collections::{BTreeMap, BTreeSet};
@@ -361,6 +362,39 @@ impl GatewayServiceLogStore for PostgresGatewayServiceLogStore {
         outcome.retained_instance_bytes = u64::try_from(instance_usage.bytes).unwrap_or(0);
         outcome.retained_instance_chunks = u64::try_from(instance_usage.chunks).unwrap_or(0);
         Ok(outcome)
+    }
+}
+
+#[async_trait]
+impl GatewayServiceLogMaintenanceProjects for PostgresGatewayServiceLogStore {
+    async fn list_projects(
+        &self,
+        page: GatewayServiceLogMaintenanceProjectPage,
+    ) -> Result<GatewayServiceLogMaintenanceProjectPageResult, GatewayServiceLogMaintenanceError>
+    {
+        page.validate()?;
+        let mut projects = sqlx::query_scalar::<_, Uuid>(
+            "SELECT project_id
+               FROM gateway_service_log_project_usage
+              WHERE ($1::uuid IS NULL OR project_id > $1)
+              ORDER BY project_id
+              LIMIT $2",
+        )
+        .bind(page.after)
+        .bind(i64::from(page.limit) + 1)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(maintenance_storage)?;
+        let next_after = if projects.len() > usize::from(page.limit) {
+            projects.pop();
+            projects.last().copied()
+        } else {
+            None
+        };
+        Ok(GatewayServiceLogMaintenanceProjectPageResult {
+            projects,
+            next_after,
+        })
     }
 }
 

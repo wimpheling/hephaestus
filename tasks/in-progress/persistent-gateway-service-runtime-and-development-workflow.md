@@ -1861,3 +1861,22 @@ source hash is
 This removes the test's global gate ambiguity and preserves the no-B-destroy
 invariant, but does not establish the original CI differing-VM cause; that
 cause remains open in `/home/a/heph-ci-35445311169-failed.log`.
+
+Worker maintenance-project enumeration checkpoint (2026-09-19): the
+worker-only log store now exposes UUID-only keyset pages capped at 128 rows.
+Enumeration reads the unfiltered `gateway_service_log_project_usage` primary
+key, so projects with no active service instance remain eligible for later
+maintenance; the scheduler must retry failed projects fairly without blocking
+the rest of a sweep. The real PostgreSQL test seeds a cleaned instance with a
+retained epoch and storage-loss metadata, proves the 128+1 boundary and full
+ordering without omissions, and verifies application-role SQLSTATE 42501
+denial. The exact committed `cda7192` overlay plus four owned files is
+`/home/a/service-enum-check-cda7192`; source hashes match the shared files.
+The real run is captured in `postgres-enumeration-real-final.log` with
+`REAL_POSTGRES_CONNECTED_AND_MIGRATED=1 max_migration=80` and one test passed.
+Affected-package Rust 1.88 Clippy, formatting, and the focused edge tests
+passed in `clippy-final.log`, `fmt-final.log`, and `edge-tests-final.log`; the
+prior real maintenance family is recorded in `postgres-tests-real.log`, and
+the final enumeration-only rerun is `postgres-enumeration-real-final.log`. No migration,
+scheduler, writer attachment, or RPC wiring is included; the earlier URL-unset
+test run is not acceptance evidence.
