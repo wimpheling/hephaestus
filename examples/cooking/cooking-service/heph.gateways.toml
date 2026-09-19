@@ -1,0 +1,20 @@
+version = 1
+
+[[gateways]]
+name = "cooking-service"
+agent_name = "cooking-service"
+handler_contract = "http.service.v1"
+exposure = "public"
+
+[gateways.service]
+loopback_port = 8080
+readiness_path = "/readyz"
+health_path = "/healthz"
+
+[[gateways.routes]]
+path = "/service"
+methods = ["GET"]
+
+[[gateways.routes]]
+path = "/service/identity"
+methods = ["GET"]

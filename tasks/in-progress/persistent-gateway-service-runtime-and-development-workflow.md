@@ -804,6 +804,19 @@ check, strict Clippy, formatting, and 58 library tests passed.
   test lints. This inventory supports capacity accounting and previous-daemon
   recovery; it does not claim global recovery or lifecycle scheduling.
 
+- [x] Add a repository-native ordinary HTTP release fixture at
+  `examples/cooking/cooking-service`. The dependency-free service binds only
+  `127.0.0.1:8080`, has bounded workers, queue, headers, and absolute
+  header-read/write deadlines, and exposes readiness, health, stable identity,
+  and simple public responses. Its v2 agent and `http.service.v1` gateway
+  manifests pass the real `agent-config` parser test. Native tests (4), strict
+  example Clippy, formatting, rustdoc, locked offline release build, and a
+  repeated-identity curl smoke passed. The production `build.sh` was not run
+  on the host because it intentionally requires `/opt/cargo` and `/opt/rust`
+  from the pinned builder image; the equivalent locked offline Cargo build
+  passed. Caddy forwarding, managed lifecycle, and publish/install CLI support
+  remain pending and are not claimed by this fixture.
+
 ## Non-goals
 
 This task does not replace MVP 03's bounded stateless invocation mode. It does

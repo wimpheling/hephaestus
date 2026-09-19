@@ -1,0 +1,48 @@
+version = 2
+
+[agent]
+name = "Cooking service"
+key = "cooking-service"
+
+[build]
+command = "/usr/bin/env"
+arguments = ["bash", "build.sh"]
+working_directory = "/workspace/source"
+image = { key = "rust-ubuntu" }
+triggers = ["refs/heads/main"]
+
+[build.resources]
+vcpus = 1
+memory_mib = 512
+
+[build.network]
+profile = "disabled"
+
+[[build.artifacts]]
+path = "bin/cooking-service"
+kind = "executable"
+media_type = "application/octet-stream"
+
+[guest]
+image = { key = "rust-ubuntu" }
+command = "bin/cooking-service"
+working_directory = "bin"
+
+[resources]
+vcpus = 1
+memory_mib = 256
+
+[workspace]
+mount = false
+path = "/workspace/repo"
+read_only = true
+
+[state_volume]
+enabled = false
+
+[network]
+profile = "disabled"
+
+[triggers]
+push = true
+refs = ["refs/heads/main"]
