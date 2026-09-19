@@ -1,16 +1,16 @@
 //! Real `PostgreSQL` proof for daemon-owned service invocation recovery.
 
-use super::{gateway_reconciliation_loop, gateway_reconciliation_loop_with_supervisor};
+use super::{gateway_reconciliation_loop, gateway_reconciliation_loop_with_boot};
 use async_trait::async_trait;
 use bytes::Bytes;
 use gateway_domain::{GatewayServiceConfig, ServiceProbePath};
 use gateway_edge::{
     GatewayConfigRevision, GatewayDesiredConfiguration, GatewayEdgeError, GatewayLimits,
     GatewayProvider, GatewayProviderResponse, GatewayRequest, GatewayResponse,
-    GatewayServiceLaunch, GatewayServiceLaunchRequest, GatewayServiceLaunchResolver,
-    GatewayServiceOwner, GatewayServiceRegistry, GatewayServiceStartupIntent,
-    GatewayServiceStartupRequest, GatewayServiceSupervisor, GatewayServiceSupervisorContext,
-    GatewayServiceSupervisorJobStatus, GatewayServiceSupervisorPolicy,
+    GatewayServiceBootRecovery, GatewayServiceBootRecoveryContext,
+    GatewayServiceCleanupDriverPolicy, GatewayServiceLaunch, GatewayServiceLaunchRequest,
+    GatewayServiceLaunchResolver, GatewayServiceOwner, GatewayServiceRegistry,
+    GatewayServiceSupervisor, GatewayServiceSupervisorContext, GatewayServiceSupervisorPolicy,
 };
 use gateway_postgres::{
     PostgresGatewayEdgeAuthority, PostgresGatewayServiceFailureStore,
@@ -71,6 +71,7 @@ impl RecoveryProvider {
 #[derive(Clone)]
 struct ServiceTransportProvider {
     inner: FakeProvider,
+    provisioned: Arc<AtomicUsize>,
     destroyed: Arc<AtomicUsize>,
 }
 
@@ -86,6 +87,7 @@ impl VmProvider for ServiceTransportProvider {
     }
 
     async fn provision(&self, spec: VmSpec) -> Result<Arc<dyn VmInstance>, VmError> {
+        self.provisioned.fetch_add(1, Ordering::AcqRel);
         let inner = self.inner.provision(spec).await?;
         Ok(Arc::new(ServiceTransportVm {
             inner,
@@ -530,18 +532,49 @@ async fn daemon_loop_polls_service_supervisor_while_caddy_reconcile_is_blocked()
         .expect("remove fixture instance before supervisor claim");
 
     let recovery_pool = worker_pool().await;
-    let (supervisor_context, destroyed) =
-        test_supervisor_context_with_destroy_counter(recovery_pool.clone());
-    let mut supervisor = GatewayServiceSupervisor::new(supervisor_context)
+    let host_id = format!("recovery-test-{}", fixture.gateway.simple());
+    let destroyed = Arc::new(AtomicUsize::new(0));
+    let ownership = Arc::new(PostgresGatewayServiceOwnership::new(recovery_pool.clone()));
+    let failure_store = Arc::new(PostgresGatewayServiceFailureStore::new(
+        recovery_pool.clone(),
+    ));
+    let resolver = Arc::new(NoopLaunchResolver);
+    let targets = Arc::new(PostgresGatewayServiceTargets::new(recovery_pool.clone()));
+    let provider = Arc::new(ServiceTransportProvider {
+        inner: FakeProvider::new(),
+        provisioned: Arc::new(AtomicUsize::new(0)),
+        destroyed: Arc::clone(&destroyed),
+    });
+    let policy = GatewayServiceSupervisorPolicy::default();
+    let owner = GatewayServiceOwner::new(host_id, Uuid::new_v4()).expect("test supervisor owner");
+    let supervisor_context = GatewayServiceSupervisorContext {
+        owner: owner.clone(),
+        policy,
+        ownership: ownership.clone(),
+        failure_store: failure_store.clone(),
+        resolver: resolver.clone(),
+        provider: provider.clone(),
+        targets: targets.clone(),
+        registry: GatewayServiceRegistry::new(10, 16).expect("test service registry"),
+        service_authority: String::from("127.0.0.1:8080"),
+    };
+    let supervisor = GatewayServiceSupervisor::new(supervisor_context)
         .expect("construct test service supervisor");
-    let handle = supervisor
-        .start(GatewayServiceStartupRequest {
-            gateway_id: fixture.gateway,
-            revision_id: fixture.revision,
-            intent: GatewayServiceStartupIntent::ActivateDesired,
-        })
-        .expect("start service supervisor job");
-    let mut status = handle.subscribe();
+    let boot = GatewayServiceBootRecovery::new(GatewayServiceBootRecoveryContext {
+        owner,
+        cleanup_policy: GatewayServiceCleanupDriverPolicy {
+            lease: policy.lease,
+            database_timeout: policy.instance.probe_timeout,
+        },
+        shutdown_timeout: policy.instance.shutdown_timeout,
+        ownership: ownership.clone(),
+        exact_recovery: ownership.clone(),
+        targets: targets.clone(),
+        failure_store,
+        resolver,
+        provider,
+    })
+    .expect("construct test boot recovery");
     let caddy_started = Arc::new(tokio::sync::Notify::new());
     let caddy_release = Arc::new(tokio::sync::Notify::new());
     let caddy = Arc::new(BlockingCaddyProvider {
@@ -550,10 +583,12 @@ async fn daemon_loop_polls_service_supervisor_while_caddy_reconcile_is_blocked()
         reconciles: Arc::new(AtomicUsize::new(0)),
     });
     let cancellation = CancellationToken::new();
-    let task = tokio::spawn(gateway_reconciliation_loop_with_supervisor(
+    let task = tokio::spawn(gateway_reconciliation_loop_with_boot(
         make_authority(pool.clone()),
         make_authority(recovery_pool),
         supervisor,
+        Some(boot),
+        targets,
         caddy,
         cancellation.clone(),
     ));
@@ -563,12 +598,25 @@ async fn daemon_loop_polls_service_supervisor_while_caddy_reconcile_is_blocked()
         .expect("Caddy reconciliation starts and remains blocked");
     let ready = tokio::time::timeout(StdDuration::from_secs(10), async {
         loop {
-            if *status.borrow() == GatewayServiceSupervisorJobStatus::Ready {
+            let row: Option<(String, Option<Uuid>)> = sqlx::query_as(
+                "SELECT i.state, g.active_revision_id
+                   FROM gateway_service_instances AS i
+                   JOIN gateways AS g ON g.id = i.gateway_id
+                  WHERE i.gateway_id = $1 AND i.revision_id = $2
+                  ORDER BY i.fencing_token DESC
+                  LIMIT 1",
+            )
+            .bind(fixture.gateway)
+            .bind(fixture.revision)
+            .fetch_optional(&pool)
+            .await
+            .expect("read loop-selected service state");
+            if row.as_ref().is_some_and(|(state, active_revision)| {
+                state == "ready" && *active_revision == Some(fixture.revision)
+            }) {
                 break;
             }
-            if status.changed().await.is_err() {
-                break;
-            }
+            tokio::time::sleep(StdDuration::from_millis(50)).await;
         }
     })
     .await;
@@ -584,14 +632,15 @@ async fn daemon_loop_polls_service_supervisor_while_caddy_reconcile_is_blocked()
     .expect("read supervisor debug state");
     assert!(
         ready.is_ok(),
-        "supervisor reaches Ready while Caddy is blocked; status={:?}, instances={debug_instances:?}",
-        *status.borrow(),
+        "supervisor reaches Ready while Caddy is blocked; instances={debug_instances:?}",
     );
-    assert_eq!(
-        *status.borrow(),
-        GatewayServiceSupervisorJobStatus::Ready,
-        "supervisor status must remain Ready while Caddy is blocked; instances={debug_instances:?}"
-    );
+    let active_revision: Option<Uuid> =
+        sqlx::query_scalar("SELECT active_revision_id FROM gateways WHERE id = $1")
+            .bind(fixture.gateway)
+            .fetch_one(&pool)
+            .await
+            .expect("read promoted active revision");
+    assert_eq!(active_revision, Some(fixture.revision));
 
     let first_heartbeat: OffsetDateTime = sqlx::query_scalar(
         "SELECT heartbeat_at
@@ -639,6 +688,311 @@ async fn daemon_loop_polls_service_supervisor_while_caddy_reconcile_is_blocked()
     .expect("read cleaned service state");
     assert_eq!(final_state, "cleaned");
     assert_eq!(destroyed.load(Ordering::Acquire), 1);
+    cleanup_startup_fixture(&pool, fixture).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn daemon_loop_restores_active_service_without_manual_start() {
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let fixture = seed_fixture(&pool, "http.service.v1").await;
+    let (task, cancellation, caddy_started, caddy_release, destroyed, _provisioned) =
+        spawn_automatic_start(&pool, fixture, true, false).await;
+    tokio::time::timeout(StdDuration::from_secs(10), caddy_started.notified())
+        .await
+        .expect("Caddy reconciliation starts and remains blocked");
+    let ready = wait_for_ready(&pool, fixture).await;
+    assert!(ready, "active service is restored by the target scan");
+    let active_revision: Option<Uuid> =
+        sqlx::query_scalar("SELECT active_revision_id FROM gateways WHERE id = $1")
+            .bind(fixture.gateway)
+            .fetch_one(&pool)
+            .await
+            .expect("read restored active revision");
+    assert_eq!(active_revision, Some(fixture.revision));
+    cancellation.cancel();
+    tokio::time::timeout(StdDuration::from_secs(10), task)
+        .await
+        .expect("active restore loop joins")
+        .expect("active restore loop task");
+    caddy_release.notify_one();
+    assert_eq!(destroyed.load(Ordering::Acquire), 1);
+    cleanup_startup_fixture(&pool, fixture).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn boot_gate_holds_startup_for_unexpired_owned_inventory() {
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let inventory = seed_fixture(&pool, "http.service.v1").await;
+    let candidate = seed_fixture(&pool, "http.service.v1").await;
+    let host_id = format!("recovery-test-{}", candidate.gateway.simple());
+    let inventory_instance = inventory
+        .service_instance
+        .expect("inventory fixture instance");
+    sqlx::query("DELETE FROM gateway_service_instances WHERE id = $1")
+        .bind(inventory_instance)
+        .execute(&pool)
+        .await
+        .expect("replace inventory claim");
+    sqlx::query(
+        "INSERT INTO gateway_service_instances
+            (id, gateway_id, revision_id, owner_host_id, owner_uuid,
+             fencing_token, vm_id, state, lease_expires_at, heartbeat_at)
+         VALUES ($1, $2, $3, $6, $4, 1, $5, 'ready',
+                 now() + interval '10 minutes', now())",
+    )
+    .bind(inventory_instance)
+    .bind(inventory.gateway)
+    .bind(inventory.revision)
+    .bind(inventory.owner)
+    .bind(format!("gateway-service-{inventory_instance}"))
+    .bind(&host_id)
+    .execute(&pool)
+    .await
+    .expect("assign live inventory to this daemon host");
+    let (task, cancellation, caddy_started, caddy_release, destroyed, provisioned) =
+        spawn_automatic_start(&pool, candidate, true, false).await;
+    tokio::time::timeout(StdDuration::from_secs(10), caddy_started.notified())
+        .await
+        .expect("Caddy reconciliation starts while boot recovery waits");
+    tokio::time::sleep(StdDuration::from_secs(2)).await;
+    assert_eq!(destroyed.load(Ordering::Acquire), 0);
+    assert_eq!(provisioned.load(Ordering::Acquire), 0);
+    let provisioned: i64 = sqlx::query_scalar(
+        "SELECT count(*)
+           FROM gateway_service_instances
+          WHERE gateway_id = $1 AND revision_id = $2",
+    )
+    .bind(candidate.gateway)
+    .bind(candidate.revision)
+    .fetch_one(&pool)
+    .await
+    .expect("read candidate claim count");
+    assert_eq!(
+        provisioned, 0,
+        "boot inventory blocks candidate provisioning"
+    );
+    let inventory_count: i64 = sqlx::query_scalar(
+        "SELECT count(*)
+           FROM gateway_service_instances
+          WHERE gateway_id = $1 AND revision_id = $2 AND state = 'ready'
+            AND owner_host_id = $3",
+    )
+    .bind(inventory.gateway)
+    .bind(inventory.revision)
+    .bind(&host_id)
+    .fetch_one(&pool)
+    .await
+    .expect("read retained inventory");
+    assert_eq!(inventory_count, 1, "live host inventory remains present");
+    cancellation.cancel();
+    tokio::time::timeout(StdDuration::from_secs(10), task)
+        .await
+        .expect("boot-gated loop joins")
+        .expect("boot-gated loop task");
+    caddy_release.notify_one();
+    cleanup_startup_fixture(&pool, candidate).await;
+    cleanup_startup_fixture(&pool, inventory).await;
+}
+
+// This fixture assembles the same durable ports as production so the loop can
+// be tested without a public startup seam.
+#[allow(clippy::too_many_lines)]
+async fn spawn_automatic_start(
+    pool: &sqlx::PgPool,
+    fixture: Fixture,
+    restore_active: bool,
+    retain_inventory: bool,
+) -> (
+    tokio::task::JoinHandle<()>,
+    CancellationToken,
+    Arc<tokio::sync::Notify>,
+    Arc<tokio::sync::Notify>,
+    Arc<AtomicUsize>,
+    Arc<AtomicUsize>,
+) {
+    let host_id = format!("recovery-test-{}", fixture.gateway.simple());
+    sqlx::query(
+        "UPDATE gateways
+            SET active_revision_id = $2,
+                desired_service_revision_id = $3
+          WHERE id = $1",
+    )
+    .bind(fixture.gateway)
+    .bind(if restore_active {
+        Some(fixture.revision)
+    } else {
+        None
+    })
+    .bind(if restore_active {
+        None
+    } else {
+        Some(fixture.revision)
+    })
+    .execute(pool)
+    .await
+    .expect("set automatic startup target");
+    if retain_inventory {
+        let instance = fixture
+            .service_instance
+            .expect("inventory fixture instance");
+        sqlx::query(
+            "DELETE FROM gateway_service_instances
+              WHERE gateway_id = $1 AND revision_id = $2",
+        )
+        .bind(fixture.gateway)
+        .bind(fixture.revision)
+        .execute(pool)
+        .await
+        .expect("replace inventory fixture");
+        sqlx::query(
+            "INSERT INTO gateway_service_instances
+                (id, gateway_id, revision_id, owner_host_id, owner_uuid,
+                 fencing_token, vm_id, state, lease_expires_at, heartbeat_at)
+             VALUES ($1, $2, $3, $6, $4, 1, $5, 'ready',
+                     now() + interval '10 minutes', now())",
+        )
+        .bind(instance)
+        .bind(fixture.gateway)
+        .bind(fixture.revision)
+        .bind(fixture.owner)
+        .bind(format!("gateway-service-{instance}"))
+        .bind(&host_id)
+        .execute(pool)
+        .await
+        .expect("insert unexpired host inventory");
+    } else {
+        sqlx::query(
+            "DELETE FROM gateway_service_instances
+              WHERE gateway_id = $1 AND revision_id = $2",
+        )
+        .bind(fixture.gateway)
+        .bind(fixture.revision)
+        .execute(pool)
+        .await
+        .expect("remove instance before automatic startup");
+    }
+
+    let recovery_pool = worker_pool().await;
+    let destroyed = Arc::new(AtomicUsize::new(0));
+    let provisioned = Arc::new(AtomicUsize::new(0));
+    let ownership = Arc::new(PostgresGatewayServiceOwnership::new(recovery_pool.clone()));
+    let failure_store = Arc::new(PostgresGatewayServiceFailureStore::new(
+        recovery_pool.clone(),
+    ));
+    let resolver = Arc::new(NoopLaunchResolver);
+    let targets = Arc::new(PostgresGatewayServiceTargets::new(recovery_pool.clone()));
+    let provider = Arc::new(ServiceTransportProvider {
+        inner: FakeProvider::new(),
+        provisioned: Arc::clone(&provisioned),
+        destroyed: Arc::clone(&destroyed),
+    });
+    let policy = GatewayServiceSupervisorPolicy::default();
+    let owner =
+        GatewayServiceOwner::new(host_id.clone(), Uuid::new_v4()).expect("automatic startup owner");
+    let supervisor_context = GatewayServiceSupervisorContext {
+        owner: owner.clone(),
+        policy,
+        ownership: ownership.clone(),
+        failure_store: failure_store.clone(),
+        resolver: resolver.clone(),
+        provider: provider.clone(),
+        targets: targets.clone(),
+        registry: GatewayServiceRegistry::new(10, 16).expect("automatic startup registry"),
+        service_authority: String::from("127.0.0.1:8080"),
+    };
+    let boot = GatewayServiceBootRecovery::new(GatewayServiceBootRecoveryContext {
+        owner,
+        cleanup_policy: GatewayServiceCleanupDriverPolicy {
+            lease: policy.lease,
+            database_timeout: policy.instance.probe_timeout,
+        },
+        shutdown_timeout: policy.instance.shutdown_timeout,
+        ownership: ownership.clone(),
+        exact_recovery: ownership,
+        targets: targets.clone(),
+        failure_store,
+        resolver,
+        provider,
+    })
+    .expect("automatic startup boot gate");
+    let caddy_started = Arc::new(tokio::sync::Notify::new());
+    let caddy_release = Arc::new(tokio::sync::Notify::new());
+    let caddy = Arc::new(BlockingCaddyProvider {
+        started: Arc::clone(&caddy_started),
+        release: Arc::clone(&caddy_release),
+        reconciles: Arc::new(AtomicUsize::new(0)),
+    });
+    let cancellation = CancellationToken::new();
+    let task = tokio::spawn(gateway_reconciliation_loop_with_boot(
+        make_authority(pool.clone()),
+        make_authority(recovery_pool),
+        GatewayServiceSupervisor::new(supervisor_context).expect("automatic startup supervisor"),
+        Some(boot),
+        targets,
+        caddy,
+        cancellation.clone(),
+    ));
+    (
+        task,
+        cancellation,
+        caddy_started,
+        caddy_release,
+        destroyed,
+        provisioned,
+    )
+}
+
+async fn wait_for_ready(pool: &sqlx::PgPool, fixture: Fixture) -> bool {
+    tokio::time::timeout(StdDuration::from_secs(10), async {
+        loop {
+            let state: Option<String> = sqlx::query_scalar(
+                "SELECT state
+                   FROM gateway_service_instances
+                  WHERE gateway_id = $1 AND revision_id = $2
+                  ORDER BY fencing_token DESC
+                  LIMIT 1",
+            )
+            .bind(fixture.gateway)
+            .bind(fixture.revision)
+            .fetch_optional(pool)
+            .await
+            .expect("read automatic startup state");
+            if state.as_deref() == Some("ready") {
+                return true;
+            }
+            tokio::time::sleep(StdDuration::from_millis(50)).await;
+        }
+    })
+    .await
+    .unwrap_or(false)
+}
+
+async fn cleanup_startup_fixture(pool: &sqlx::PgPool, fixture: Fixture) {
+    sqlx::query(
+        "UPDATE gateways
+            SET lifecycle = 'paused', active_revision_id = NULL,
+                desired_service_revision_id = NULL
+          WHERE id = $1",
+    )
+    .bind(fixture.gateway)
+    .execute(pool)
+    .await
+    .expect("retire automatic startup fixture");
+    sqlx::query(
+        "DELETE FROM gateway_service_instances
+          WHERE gateway_id = $1 AND revision_id = $2",
+    )
+    .bind(fixture.gateway)
+    .bind(fixture.revision)
+    .execute(pool)
+    .await
+    .expect("remove automatic startup inventory");
 }
 
 const fn make_authority(pool: sqlx::PgPool) -> PostgresGatewayEdgeAuthority {
@@ -672,6 +1026,7 @@ fn test_supervisor_context_with_destroy_counter(
         resolver: Arc::new(NoopLaunchResolver),
         provider: Arc::new(ServiceTransportProvider {
             inner: FakeProvider::new(),
+            provisioned: Arc::new(AtomicUsize::new(0)),
             destroyed: Arc::clone(&destroyed),
         }),
         targets: Arc::new(PostgresGatewayServiceTargets::new(pool)),

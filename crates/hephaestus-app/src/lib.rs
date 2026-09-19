@@ -47,12 +47,14 @@ use futures_util::StreamExt;
 use gateway_edge::{
     GatewayDispatcher, GatewayInboundSecretResolver, GatewayLimits, GatewayProvider,
     GatewayRequest, GatewayRequestDispatcher, GatewayRuntimeLauncher, GatewayRuntimeService,
-    GatewayScheme, GatewayServiceArtifact, GatewayServiceArtifactKind, GatewayServiceHandler,
+    GatewayScheme, GatewayServiceArtifact, GatewayServiceArtifactKind, GatewayServiceBootRecovery,
+    GatewayServiceBootRecoveryContext, GatewayServiceCleanupDriverPolicy, GatewayServiceHandler,
     GatewayServiceIdentity, GatewayServiceMaterializer, GatewayServiceOwner,
-    GatewayServiceRegistry, GatewayServiceSupervisor, GatewayServiceSupervisorContext,
-    GatewayServiceSupervisorPolicy, LocalCaddyAdministration, LocalCaddyConfigurationTemplate,
-    LocalCaddyGatewayProvider, PrivateHttpVmGatewayHandler, TrustedRequestMetadata,
-    UNTRUSTED_FORWARDING_HEADERS,
+    GatewayServiceRegistry, GatewayServiceStartupIntent, GatewayServiceStartupRequest,
+    GatewayServiceSupervisor, GatewayServiceSupervisorContext, GatewayServiceSupervisorPolicy,
+    GatewayServiceTargetPage, GatewayServiceTargetPageResult, LocalCaddyAdministration,
+    LocalCaddyConfigurationTemplate, LocalCaddyGatewayProvider, PrivateHttpVmGatewayHandler,
+    TrustedRequestMetadata, UNTRUSTED_FORWARDING_HEADERS,
 };
 use gateway_postgres::{
     GatewayReleaseArtifact, GatewayReleaseArtifactKind, GatewayReleaseMaterializer,
@@ -146,11 +148,12 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 type PgPool = ControlPlanePool;
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap},
     future::Future,
     net::SocketAddr,
     os::unix::fs::PermissionsExt,
     path::PathBuf,
+    pin::Pin,
     sync::{
         Arc, RwLock,
         atomic::{AtomicBool, Ordering},
@@ -620,6 +623,7 @@ struct GatewayEdgeRuntime {
     authority: PostgresGatewayEdgeAuthority,
     recovery_authority: PostgresGatewayEdgeAuthority,
     service_supervisor_context: Arc<GatewayServiceSupervisorContext>,
+    service_boot_context: GatewayServiceBootRecoveryContext,
     provider: Arc<dyn gateway_edge::GatewayProvider>,
     dispatcher: Arc<dyn GatewayRequestDispatcher>,
     dispatcher_listen: SocketAddr,
@@ -1332,6 +1336,22 @@ impl HephaestusApp {
                 gateway_release_materializer.clone();
             let gateway_service_materializer: Arc<dyn GatewayServiceMaterializer> =
                 gateway_release_materializer.clone();
+            let service_ownership = Arc::new(PostgresGatewayServiceOwnership::new(
+                gateway_authority_pool.clone(),
+            ));
+            let service_failure_store = Arc::new(PostgresGatewayServiceFailureStore::new(
+                gateway_authority_pool.clone(),
+            ));
+            let service_launch_resolver = Arc::new(
+                PostgresGatewayServiceLaunchResolver::new(
+                    gateway_authority_pool.clone(),
+                    gateway_root_images.clone(),
+                )
+                .with_service_materializer(Arc::clone(&gateway_service_materializer)),
+            );
+            let service_targets = Arc::new(PostgresGatewayServiceTargets::new(
+                gateway_authority_pool.clone(),
+            ));
             let resolver_handoff: Arc<dyn RuntimeHandoffStore> = Arc::new(
                 EncryptedFileHandoffStore::new(gateway_handoff_root, gateway_handoff_key)
                     .map_err(component("gateway runtime resolver handoff"))?,
@@ -1352,26 +1372,29 @@ impl HephaestusApp {
             let service_supervisor_context = Arc::new(GatewayServiceSupervisorContext {
                 owner: service_owner.clone(),
                 policy: GatewayServiceSupervisorPolicy::default(),
-                ownership: Arc::new(PostgresGatewayServiceOwnership::new(
-                    gateway_authority_pool.clone(),
-                )),
-                failure_store: Arc::new(PostgresGatewayServiceFailureStore::new(
-                    gateway_authority_pool.clone(),
-                )),
-                resolver: Arc::new(
-                    PostgresGatewayServiceLaunchResolver::new(
-                        gateway_authority_pool.clone(),
-                        gateway_root_images,
-                    )
-                    .with_service_materializer(gateway_service_materializer),
-                ),
+                ownership: service_ownership.clone(),
+                failure_store: service_failure_store.clone(),
+                resolver: service_launch_resolver.clone(),
                 provider: Arc::clone(&provider),
-                targets: Arc::new(PostgresGatewayServiceTargets::new(
-                    gateway_authority_pool.clone(),
-                )),
+                targets: service_targets.clone(),
                 registry: service_registry.clone(),
                 service_authority: gateway.public_authority.clone(),
             });
+            let service_policy = service_supervisor_context.policy;
+            let service_boot_context = GatewayServiceBootRecoveryContext {
+                owner: service_supervisor_context.owner.clone(),
+                cleanup_policy: GatewayServiceCleanupDriverPolicy {
+                    lease: service_policy.lease,
+                    database_timeout: service_policy.instance.probe_timeout,
+                },
+                shutdown_timeout: service_policy.instance.shutdown_timeout,
+                ownership: service_ownership.clone(),
+                exact_recovery: service_ownership.clone(),
+                targets: service_targets.clone(),
+                failure_store: service_failure_store.clone(),
+                resolver: service_launch_resolver.clone(),
+                provider: Arc::clone(&service_supervisor_context.provider),
+            };
             GatewayServiceSupervisor::new(clone_service_supervisor_context(
                 &service_supervisor_context,
             ))
@@ -1414,6 +1437,7 @@ impl HephaestusApp {
                 authority,
                 recovery_authority,
                 service_supervisor_context,
+                service_boot_context,
                 provider,
                 dispatcher,
                 dispatcher_listen: gateway.dispatcher_listen,
@@ -1750,18 +1774,24 @@ impl HephaestusApp {
             .await;
             Ok(())
         }));
-        if let Some(gateway) = &self.gateway_edge {
+        if let Some(gateway) = self.gateway_edge {
             let gateway_reconcile_cancel = cancellation.clone();
             let gateway_authority = gateway.authority.clone();
             let gateway_recovery_authority = gateway.recovery_authority.clone();
             let service_supervisor_context =
                 clone_service_supervisor_context(&gateway.service_supervisor_context);
+            let service_boot_recovery =
+                GatewayServiceBootRecovery::new(gateway.service_boot_context)
+                    .map_err(component("gateway service boot recovery"))?;
+            let service_targets = Arc::clone(&gateway.service_supervisor_context.targets);
             let gateway_provider = Arc::clone(&gateway.provider);
             tasks.push(tokio::spawn(async move {
-                gateway_reconciliation_loop(
+                gateway_reconciliation_loop_with_context(
                     gateway_authority,
                     gateway_recovery_authority,
                     service_supervisor_context,
+                    service_boot_recovery,
+                    service_targets,
                     gateway_provider,
                     gateway_reconcile_cancel,
                 )
@@ -2151,6 +2181,13 @@ fn gateway_http_response(
 const GATEWAY_RECONCILIATION_INTERVAL: Duration = Duration::from_secs(1);
 const GATEWAY_CADDY_RECOVERY_INTERVAL: Duration = Duration::from_secs(30);
 
+type GatewayServiceTargetScan = Pin<
+    Box<
+        dyn Future<Output = Result<GatewayServiceTargetPageResult, gateway_edge::GatewayEdgeError>>
+            + Send,
+    >,
+>;
+
 fn clone_service_supervisor_context(
     context: &Arc<GatewayServiceSupervisorContext>,
 ) -> GatewayServiceSupervisorContext {
@@ -2170,6 +2207,28 @@ fn clone_service_supervisor_context(
 /// Reconstructs Caddy exclusively from authoritative route records. Ordinary
 /// passes apply revision cutovers promptly; a bounded forced pass repairs a
 /// Caddy process which restarted after this daemon observed the same revision.
+async fn gateway_reconciliation_loop_with_context(
+    authority: PostgresGatewayEdgeAuthority,
+    recovery_authority: PostgresGatewayEdgeAuthority,
+    supervisor_context: GatewayServiceSupervisorContext,
+    boot_recovery: GatewayServiceBootRecovery,
+    service_targets: Arc<dyn gateway_edge::GatewayServiceTargetStore>,
+    provider: Arc<dyn GatewayProvider>,
+    cancellation: CancellationToken,
+) {
+    gateway_reconciliation_loop_with_boot(
+        authority,
+        recovery_authority,
+        GatewayServiceSupervisor::new(supervisor_context).expect("validated service supervisor"),
+        Some(boot_recovery),
+        service_targets,
+        provider,
+        cancellation,
+    )
+    .await;
+}
+
+#[cfg(test)]
 async fn gateway_reconciliation_loop(
     authority: PostgresGatewayEdgeAuthority,
     recovery_authority: PostgresGatewayEdgeAuthority,
@@ -2180,7 +2239,30 @@ async fn gateway_reconciliation_loop(
     gateway_reconciliation_loop_with_supervisor(
         authority,
         recovery_authority,
+        supervisor_context,
+        provider,
+        cancellation,
+    )
+    .await;
+}
+
+// Kept as a narrow test-facing composition helper for existing daemon-loop
+// tests. Production supplies the already-constructed boot gate below.
+#[cfg(test)]
+async fn gateway_reconciliation_loop_with_supervisor(
+    authority: PostgresGatewayEdgeAuthority,
+    recovery_authority: PostgresGatewayEdgeAuthority,
+    supervisor_context: GatewayServiceSupervisorContext,
+    provider: Arc<dyn GatewayProvider>,
+    cancellation: CancellationToken,
+) {
+    let targets = Arc::clone(&supervisor_context.targets);
+    gateway_reconciliation_loop_with_boot(
+        authority,
+        recovery_authority,
         GatewayServiceSupervisor::new(supervisor_context).expect("validated service supervisor"),
+        None,
+        targets,
         provider,
         cancellation,
     )
@@ -2190,10 +2272,12 @@ async fn gateway_reconciliation_loop(
 // The single select set is deliberate: it keeps Caddy, recovery, service
 // jobs, and shutdown under one parent-owned polling boundary.
 #[allow(clippy::cognitive_complexity, clippy::too_many_lines)]
-async fn gateway_reconciliation_loop_with_supervisor(
+async fn gateway_reconciliation_loop_with_boot(
     authority: PostgresGatewayEdgeAuthority,
     recovery_authority: PostgresGatewayEdgeAuthority,
     mut service_supervisor: GatewayServiceSupervisor,
+    mut boot_recovery: Option<GatewayServiceBootRecovery>,
+    service_targets: Arc<dyn gateway_edge::GatewayServiceTargetStore>,
     provider: Arc<dyn GatewayProvider>,
     cancellation: CancellationToken,
 ) {
@@ -2211,12 +2295,30 @@ async fn gateway_reconciliation_loop_with_supervisor(
     let mut service_recovery_task: Option<JoinHandle<()>> = None;
     let mut caddy_task = None;
     let mut caddy_recovery_pending = false;
+    let mut target_scan: Option<GatewayServiceTargetScan> = None;
+    let mut target_scan_after = None;
+    let mut target_scan_interval = tokio::time::interval(GATEWAY_RECONCILIATION_INTERVAL);
+    target_scan_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut startup_requests =
+        HashMap::<(Uuid, Uuid), gateway_edge::GatewayServiceStartupHandle>::new();
     loop {
         tokio::select! {
             () = cancellation.cancelled() => {
                 if let Some(task) = service_recovery_task.take() {
                     task.abort();
                     let _ = task.await;
+                }
+                if let Some(boot_recovery) = boot_recovery.take() {
+                    let boot_shutdown = boot_recovery.shutdown().await;
+                    if !boot_shutdown.unresolved.is_empty()
+                        || !boot_shutdown.unresolved_claims.is_empty()
+                    {
+                        tracing::warn!(
+                            unresolved = boot_shutdown.unresolved.len()
+                                + boot_shutdown.unresolved_claims.len(),
+                            "gateway service boot recovery retained unresolved shutdown work"
+                        );
+                    }
                 }
                 let shutdown = service_supervisor.shutdown().await;
                 if !shutdown.unresolved.is_empty() {
@@ -2294,6 +2396,68 @@ async fn gateway_reconciliation_loop_with_supervisor(
                 }
                 service_recovery_task = None;
             }
+            boot_event = async {
+                match boot_recovery.as_mut() {
+                    Some(recovery) => Some(recovery.poll().await),
+                    None => std::future::pending().await,
+                }
+            }, if boot_recovery.as_ref().is_some_and(|recovery| !recovery.is_complete()) => {
+                match boot_event {
+                    Some(Ok(gateway_edge::GatewayServiceBootRecoveryEvent::Complete)) => {
+                        tracing::info!("gateway service boot recovery gate completed");
+                    }
+                    Some(Ok(
+                        gateway_edge::GatewayServiceBootRecoveryEvent::Pending
+                        | gateway_edge::GatewayServiceBootRecoveryEvent::Waiting,
+                    )) => {}
+                    Some(Err(error)) => {
+                        tracing::warn!(%error, "gateway service boot recovery is unavailable");
+                    }
+                    None => unreachable!("boot poll branch is enabled only with a boot gate"),
+                }
+            }
+            _ = target_scan_interval.tick(),
+                if boot_recovery.as_ref().is_some_and(GatewayServiceBootRecovery::is_complete)
+                    && target_scan.is_none() =>
+            {
+                let page = match GatewayServiceTargetPage::new(
+                    target_scan_after,
+                    gateway_edge::MAX_SERVICE_TARGET_PAGE_SIZE,
+                ) {
+                    Ok(page) => page,
+                    Err(error) => {
+                        tracing::warn!(%error, "gateway service target page is invalid");
+                        continue;
+                    }
+                };
+                let targets = Arc::clone(&service_targets);
+                target_scan = Some(Box::pin(async move {
+                    targets.list_service_targets(page).await
+                }));
+            }
+            result = async {
+                match target_scan.as_mut() {
+                    Some(scan) => Some(scan.await),
+                    None => std::future::pending().await,
+                }
+            }, if target_scan.is_some() => {
+                target_scan = None;
+                match result {
+                    Some(Ok(page)) => {
+                        target_scan_after = page.next_after;
+                        start_initial_service_targets(
+                            &mut service_supervisor,
+                            &mut startup_requests,
+                            page,
+                        );
+                    }
+                    Some(Err(error)) => {
+                        tracing::warn!(%error, "gateway service target scan failed");
+                        target_scan_after = None;
+                    }
+                    None => unreachable!("target scan branch is enabled only with a scan"),
+                }
+            }
             event = async {
                 if service_supervisor.has_pending_jobs() {
                     service_supervisor.poll().await
@@ -2308,6 +2472,9 @@ async fn gateway_reconciliation_loop_with_supervisor(
                         capacity_released = event.capacity_released,
                         "gateway service supervisor job completed"
                     );
+                    if event.capacity_released {
+                        startup_requests.retain(|_, handle| handle.job_id() != event.job_id);
+                    }
                 }
             }
         }
@@ -2333,6 +2500,65 @@ async fn reconcile_gateway_once(
     };
     if let Err(error) = result {
         tracing::warn!(%error, recovery = recover, "gateway Caddy reconciliation failed");
+    }
+}
+
+/// Starts only the first durable service revision selected for a gateway.
+///
+/// An active service always wins restoration.  A desired revision is eligible
+/// for initial activation only when there is no active service; replacement
+/// cutover is deliberately left to the later global supervisor policy.
+fn start_initial_service_targets(
+    supervisor: &mut GatewayServiceSupervisor,
+    startup_requests: &mut HashMap<(Uuid, Uuid), gateway_edge::GatewayServiceStartupHandle>,
+    page: GatewayServiceTargetPageResult,
+) {
+    for target in page.targets {
+        if target.lifecycle != "enabled" {
+            continue;
+        }
+        let selected = if let Some(active) = target.active_service_revision {
+            (target.active_revision_id == Some(active.revision_id) && active.publication_eligible)
+                .then_some((
+                    active.revision_id,
+                    GatewayServiceStartupIntent::RestoreActive,
+                ))
+        } else {
+            target
+                .desired_service_revision
+                .filter(|desired| desired.publication_eligible)
+                .map(|desired| {
+                    (
+                        desired.revision_id,
+                        GatewayServiceStartupIntent::ActivateDesired,
+                    )
+                })
+        };
+        let Some((revision_id, intent)) = selected else {
+            continue;
+        };
+        let key = (target.gateway_id, revision_id);
+        if startup_requests.contains_key(&key) {
+            continue;
+        }
+        let request = GatewayServiceStartupRequest {
+            gateway_id: target.gateway_id,
+            revision_id,
+            intent,
+        };
+        match supervisor.start(request) {
+            Ok(handle) => {
+                startup_requests.insert(key, handle);
+            }
+            Err(error) => {
+                tracing::debug!(
+                    gateway_id = %target.gateway_id,
+                    revision_id = %revision_id,
+                    %error,
+                    "gateway service initial startup was not admitted"
+                );
+            }
+        }
     }
 }
 

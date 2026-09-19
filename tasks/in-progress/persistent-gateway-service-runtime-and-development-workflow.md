@@ -122,6 +122,18 @@ cleaned instances consume capacity. A gateway may have at most two concurrent
 instances, and a new replacement waits until the preceding drain is cleaned.
 Replacement slots are reserved so a full serving pool can still upgrade.
 
+Daemon cutover must restore an eligible active revision to Ready before starting
+its desired replacement. After the replacement atomically promotes itself, an
+exact durable target read authorizes draining the previous revision. Retain its
+handle and capacity until physical and durable cleanup complete. Periodic exact
+lookups must also inspect owned revisions that disappear from enabled-target
+pages. Publication revocation or a missing exact target requires cancellation
+and Stopping: ordinary `mark_draining` deliberately rejects an enabled active
+revision, even when its publication has been revoked, so a drain request alone
+would leave that worker running. Superseded revisions and paused gateways use
+graceful draining. These daemon transitions remain pending implementation and
+acceptance tests.
+
 Startup bookkeeping owns claim futures as well as coordinator futures. It
 captures both the lease deadline and total startup deadline before starting a
 claim, and cancellation still waits for that claim to settle. A late claim is
@@ -1194,6 +1206,23 @@ rustdoc. Logs:
 `/tmp/gateway-edge-boot-doc.log`. Daemon boot wiring, target scheduling, and
 later host inventory integration remain pending; this checkpoint does not mark
 the persistent-service feature complete.
+
+Automatic startup checkpoint (2026-09-19): the app reconciliation loop now
+constructs the reviewed boot gate and polls it alongside Caddy, recovery, and
+the parent-owned service supervisor. After a fresh host-inventory proof, it
+performs bounded target reads and starts an eligible active service for restore
+or an eligible desired service when no active service exists; it retains startup
+handles until capacity is released and does not replace an already-serving
+revision. The isolated `725f734` overlay passed the full app library suite
+(65 tests) and the focused gateway recovery suite (5 tests) against disposable
+worker-role PostgreSQL databases with in-test
+`REAL_POSTGRES_CONNECTED_AND_MIGRATED=1 max_migration=78` markers. Rust 1.88.0
+strict app Clippy, formatting, and diff checks passed. Evidence:
+`/tmp/heph-app-startup-full-real-pg-final4.log`,
+`/tmp/heph-app-startup-focused-real-pg-final3.log`, and
+`/tmp/heph-app-startup-clippy-final5.log`. Desired cutover while an active
+revision is serving, revocation/drain scheduling, restart recovery beyond the
+boot gate, and real Caddy/guest acceptance remain pending.
 
 Writer checkpoint (2026-09-19): `ServiceLogWriter` is now a parent-owned,
 immutable instance/owner/fence pump. It drains at most one 64-record/4 MiB
