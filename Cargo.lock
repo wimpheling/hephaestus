@@ -2464,6 +2464,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "url",
  "uuid",
  "vm-fake",
  "vm-libkrun",

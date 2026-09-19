@@ -1943,3 +1943,30 @@ cancel workers to make the assertion pass. The focused test passed 1/1 and all
 `/home/a/heph-init-service-clippy-v2.log`, and
 `/home/a/heph-init-service-doc-v2.log`. The change is test-only; production
 service behavior is unchanged.
+
+Golden outbox isolation checkpoint (2026-09-19): on shared HEAD `93477a5`,
+the exact `0b7a5e4` isolation patch added a test-only disposable PostgreSQL
+database around `bearer_push_starts_run_through_production_bootstrap`. It
+rewrites only the database URL path with `url::Url`, preserving credentials,
+SSL, and arbitrary query options, migrates the fresh database, routes that URL
+through `AppConfig` and both external browser helpers, closes all pools after
+daemon shutdown, and drops the database without force. The parent census
+assertion is opt-in via `HEPHAESTUS_GOLDEN_ASSERT_PARENT_ISOLATION=1`, so
+ordinary parallel golden tests do not impose a whole-parent invariant. In the
+controlled run, the parent was seeded with 512 pending product events; the
+isolated golden outbox drained and the parent census remained unchanged.
+Evidence is `/home/a/heph-golden-isolation-real-url-preserving-20260919.log`;
+the run passed 1 test; 35 tests were filtered out. The prior shared-database
+reproduction remains `/home/a/heph-outbox-repro-0b7-test2.log` and
+`/home/a/heph-outbox-repro-0b7-census2.log`: it entered with 4,846 pending,
+reached a stable total of 5,166 before the deadline, and had a sample of
+3,952 published, 1,212 pending, and 2 dead-lettered before the deadline
+warning; the later sample was 4,152/1,012 after the warning. Rust 1.88
+formatting and strict golden Clippy passed in
+`/home/a/heph-golden-shared-fmt.log` and
+`/home/a/heph-golden-shared-clippy.log`. The full populated-parent golden
+suite passed 35 tests with 1 ignored in
+`/home/a/heph-golden-shared-full-no-vm.log`. A separate attempt with the
+joined VM/Caddy flag was exercised but stopped at the explicit joined-fixture
+guard because that fixture was unavailable; that branch was not successfully
+exercised by this checkpoint.
