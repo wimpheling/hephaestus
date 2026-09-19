@@ -52,6 +52,8 @@ use vm_trait::{
     RuntimeAuthorityBootstrap, VmId, VmMount, VmResources, VmSpec,
 };
 
+const SERVICE_RECOVERY_BATCH_SIZE: i64 = 128;
+
 /// Host-only request to publish one generic event through an exact gateway
 /// mailbox slot.  The caller never chooses the mailbox or producer identity.
 #[derive(Debug, Clone)]
@@ -637,6 +639,102 @@ impl PostgresGatewayEdgeAuthority {
         rows.into_iter()
             .map(|row| active_route(row, self.limits))
             .collect()
+    }
+
+    /// Terminalizes one bounded batch of abandoned host-mediated service
+    /// invocations. The caller owns scheduling repeated batches.
+    ///
+    /// # Errors
+    ///
+    /// Returns an unavailable error when the authoritative recovery query or
+    /// terminal transition cannot be completed.
+    pub async fn recover_abandoned_service_invocations(
+        &self,
+        now: OffsetDateTime,
+    ) -> Result<u64, GatewayEdgeError> {
+        let Ok(ttl) = time::Duration::try_from(self.session_ttl) else {
+            return Err(GatewayEdgeError::Unavailable);
+        };
+        let Some(cutoff) = now.checked_sub(ttl) else {
+            return Ok(0);
+        };
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| GatewayEdgeError::Unavailable)?;
+        let candidates: Vec<Uuid> = sqlx::query_scalar(
+            "SELECT invocation.id
+               FROM gateway_invocations AS invocation
+               JOIN gateway_revisions AS revision
+                 ON revision.id = invocation.gateway_revision_id
+                AND revision.gateway_id = invocation.gateway_id
+               LEFT JOIN gateway_runtime_authority_sessions AS session
+                 ON session.invocation_id = invocation.id
+                AND session.admission_mode = 'host_mediated'
+              WHERE invocation.outcome = 'accepted'
+                AND revision.handler_contract = 'http.service.v1'
+                AND (
+                    session.status IN ('expired', 'revoked')
+                    OR (session.status = 'active' AND session.expires_at <= $2)
+                    OR (session.id IS NULL AND invocation.accepted_at <= $1)
+                )
+              ORDER BY invocation.id
+              LIMIT $3
+              FOR UPDATE OF invocation SKIP LOCKED",
+        )
+        .bind(cutoff)
+        .bind(now)
+        .bind(SERVICE_RECOVERY_BATCH_SIZE)
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|_| GatewayEdgeError::Unavailable)?;
+        let mut processed = 0;
+        for invocation_id in candidates {
+            let eligible: bool = sqlx::query_scalar(
+                "SELECT EXISTS(
+                    SELECT 1
+                      FROM gateway_invocations AS invocation
+                      JOIN gateway_revisions AS revision
+                        ON revision.id = invocation.gateway_revision_id
+                       AND revision.gateway_id = invocation.gateway_id
+                      LEFT JOIN gateway_runtime_authority_sessions AS session
+                        ON session.invocation_id = invocation.id
+                       AND session.admission_mode = 'host_mediated'
+                     WHERE invocation.id = $1
+                       AND invocation.outcome = 'accepted'
+                       AND revision.handler_contract = 'http.service.v1'
+                       AND (
+                           session.status IN ('expired', 'revoked')
+                           OR (session.status = 'active' AND session.expires_at <= $2)
+                           OR (session.id IS NULL AND invocation.accepted_at <= $3)
+                       )
+                )",
+            )
+            .bind(invocation_id)
+            .bind(now)
+            .bind(cutoff)
+            .fetch_one(&mut *transaction)
+            .await
+            .map_err(|_| GatewayEdgeError::Unavailable)?;
+            if !eligible {
+                continue;
+            }
+            let changed: bool =
+                sqlx::query_scalar("SELECT gateway_invocation_complete($1, 'timed_out')")
+                    .bind(invocation_id)
+                    .fetch_one(&mut *transaction)
+                    .await
+                    .map_err(|_| GatewayEdgeError::Unavailable)?;
+            if changed {
+                processed += 1;
+            }
+        }
+        transaction
+            .commit()
+            .await
+            .map_err(|_| GatewayEdgeError::Unavailable)?;
+        Ok(processed)
     }
 }
 

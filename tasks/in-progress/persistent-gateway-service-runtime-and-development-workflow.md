@@ -336,6 +336,18 @@ managed lifecycle, and release UI wiring remain unchecked.
   tests in 1.53s; evidence is retained at
   `/tmp/hephaestus-gateway-acceptance-real.log`. Live service execution,
   cancellation completion wiring, and recovery reaping remain pending.
+- [x] Add a bounded recovery method for abandoned `http.service.v1`
+  invocations. It processes at most 128 accepted rows per transaction with
+  `FOR UPDATE SKIP LOCKED`, rechecks eligibility after locking, includes active
+  sessions whose expiry has passed, and terminalizes through the existing
+  invocation completion path so host sessions and leases close atomically.
+  Live host sessions, stateless invocations, and an invocation that acquires a
+  fresh session before the recheck remain untouched. Real PostgreSQL coverage
+  passed the abandoned-session, fresh-session, and 129-row bounded-batch
+  cases (2 tests, 1.49s), printing
+  `REAL_POSTGRES_CONNECTED_AND_MIGRATED=1 max_migration=73`; retained log:
+  `/tmp/hephaestus-gateway-recovery-real-strict.log`. Supervisor scheduling,
+  cancellation wiring, and service runtime execution remain pending.
 
 ## Non-goals
 
