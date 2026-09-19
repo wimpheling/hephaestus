@@ -210,10 +210,12 @@ fn response_for(request: &[u8], identity: &StartupIdentity) -> Response {
     }
     let path = target.split_once('?').map_or(target, |(path, _)| path);
     match path {
-        "/" | "/service" => text_response(b"cooking service"),
+        "/" | "/service" | "/gateway/service" => text_response(b"cooking service"),
         "/readyz" => text_response(b"ready"),
         "/healthz" => text_response(b"healthy"),
-        "/identity" | "/service/identity" => identity_response(identity),
+        "/identity" | "/service/identity" | "/gateway/service/identity" => {
+            identity_response(identity)
+        }
         _ => Response {
             status: 404,
             content_type: "text/plain; charset=utf-8",
@@ -303,15 +305,17 @@ mod tests {
     #[test]
     fn repeated_identity_requests_keep_one_process_identity() {
         let identity = test_identity();
-        let request = b"GET /service/identity HTTP/1.1\r\nHost: service\r\n\r\n";
-        let first = round_trip(request, &identity);
-        let second = round_trip(request, &identity);
-        assert_eq!(first, second);
-        assert!(
-            first
-                .windows(b"7-test-startup".len())
-                .any(|window| { window == b"7-test-startup" })
-        );
+        for path in ["/service/identity", "/gateway/service/identity"] {
+            let request = format!("GET {path} HTTP/1.1\r\nHost: service\r\n\r\n");
+            let first = round_trip(request.as_bytes(), &identity);
+            let second = round_trip(request.as_bytes(), &identity);
+            assert_eq!(first, second);
+            assert!(
+                first
+                    .windows(b"7-test-startup".len())
+                    .any(|window| { window == b"7-test-startup" })
+            );
+        }
     }
 
     #[test]
@@ -322,11 +326,24 @@ mod tests {
             ("/healthz", b"healthy".as_slice()),
             ("/", b"cooking service".as_slice()),
             ("/service", b"cooking service".as_slice()),
+            ("/gateway/service", b"cooking service".as_slice()),
+            (
+                "/gateway/service/identity",
+                b"\"startup_id\":\"7-test-startup\"".as_slice(),
+            ),
         ] {
             let request = format!("GET {path} HTTP/1.1\r\nHost: service\r\n\r\n");
             let response = round_trip(request.as_bytes(), &identity);
             assert!(response.starts_with(b"HTTP/1.1 200 OK\r\n"));
-            assert!(response.ends_with(expected));
+            if path.ends_with("identity") {
+                assert!(
+                    response
+                        .windows(expected.len())
+                        .any(|window| window == expected)
+                );
+            } else {
+                assert!(response.ends_with(expected));
+            }
             assert!(
                 response
                     .windows(b"Connection: close".len())

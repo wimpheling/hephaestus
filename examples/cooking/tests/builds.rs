@@ -1169,7 +1169,7 @@ pub async fn build_and_publish_update_variants(
 // Keep source publication and the resulting RPC mutations in one ordered
 // sequence so returned provenance cannot describe a partially published pair.
 #[allow(clippy::too_many_lines)]
-async fn build_one(
+pub async fn build_one(
     context: &CookingBuildContext<'_>,
     key: &str,
     source: PathBuf,
@@ -1407,7 +1407,7 @@ fn rpc_build_client(
     Ok(BuildServiceClient::new(transport, config))
 }
 
-fn rpc_gateway_client(
+pub fn rpc_gateway_client(
     running: &RunningHephaestus,
     token_factory: &(dyn Fn(&str) -> String + Send + Sync),
     audience: &str,
@@ -1569,7 +1569,7 @@ async fn wait_for_draft_release(
     }
 }
 
-fn mutation_context(operation: &str) -> RequestContext {
+pub fn mutation_context(operation: &str) -> RequestContext {
     mutation_context_with_key(&format!("cooking-build-{operation}-{}", Uuid::new_v4()))
 }
 
@@ -1581,14 +1581,14 @@ fn mutation_context_with_key(key: &str) -> RequestContext {
     }
 }
 
-fn opaque(value: Uuid) -> OpaqueId {
+pub fn opaque(value: Uuid) -> OpaqueId {
     OpaqueId {
         value: value.to_string(),
         ..Default::default()
     }
 }
 
-fn response_id(value: Option<OpaqueId>, operation: &str) -> Result<Uuid, BuildError> {
+pub fn response_id(value: Option<OpaqueId>, operation: &str) -> Result<Uuid, BuildError> {
     value
         .ok_or_else(|| invalid_state(&format!("{operation} returned no ID")))?
         .value

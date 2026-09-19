@@ -365,6 +365,16 @@ fn cooking_oci_worker_config(
     .expect("configure cooking OCI publisher")
     .with_registry_origin(&registry_origin)
     .expect("configure cooking OCI registry origin");
+    let guest_init = env::var_os("HEPHAESTUS_GUEST_INIT_BINARY").map_or_else(
+        || {
+            let target_dir = env::var_os("CARGO_TARGET_DIR")
+                .map(PathBuf::from)
+                .filter(|path| path.is_absolute())
+                .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target"));
+            target_dir.join("x86_64-unknown-linux-musl/release/heph-init")
+        },
+        PathBuf::from,
+    );
     let config = OciBuilderWorkerConfig {
         runtime: LocalOciRuntimeConfig {
             repository_root: repository_root.to_path_buf(),
@@ -405,8 +415,7 @@ fn cooking_oci_worker_config(
         materialization_worker_name: String::from("golden-cooking-oci-materialization"),
         rootfs_root,
         root_manifest: root.join("repository-builder-roots.json"),
-        guest_init: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/x86_64-unknown-linux-musl/release/heph-init"),
+        guest_init,
         lease: Duration::from_secs(900),
         poll_interval: Duration::from_millis(100),
     };
@@ -490,6 +499,8 @@ mod cooking_ingress_loss;
 mod cooking_inspection;
 #[path = "../../../examples/cooking/tests/retirement.rs"]
 mod cooking_retirement;
+#[path = "../../../examples/cooking/tests/service_build.rs"]
+mod cooking_service_build;
 #[path = "../../../examples/cooking/tests/updates.rs"]
 mod cooking_updates;
 // The integration-test support tree is private to this test crate; its
@@ -2805,6 +2816,8 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
     let database_url = isolated_database.target_url.clone();
     let libkrun_e2e = env::var("HEPHAESTUS_APP_LIBKRUN_E2E").as_deref() == Ok("1");
     let cooking_build_proof = env::var("HEPHAESTUS_APP_COOKING_BUILD_PROOF").as_deref() == Ok("1");
+    let cooking_service_build_proof =
+        env::var("HEPHAESTUS_APP_COOKING_SERVICE_BUILD_PROOF").as_deref() == Ok("1");
     // Ordinary golden tests keep their short timeout. The real Cooking proof
     // uses the production build limit, with a small margin for the observer's
     // final state poll and cleanup.
@@ -2890,6 +2903,30 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
     assert!(
         !gateway_service_log_guest_e2e || !gateway_service_log_rpc_e2e,
         "the guest service-log proof cannot combine with seeded service-log RPC rows"
+    );
+    assert!(
+        !cooking_service_build_proof || cooking_build_proof,
+        "the Cooking service build proof requires HEPHAESTUS_APP_COOKING_BUILD_PROOF=1"
+    );
+    assert!(
+        !cooking_service_build_proof || cooking::enabled(),
+        "the Cooking service build proof requires HEPHAESTUS_APP_COOKING_E2E=1"
+    );
+    assert!(
+        !cooking_service_build_proof || (gateway_caddy_e2e && libkrun_e2e),
+        "the Cooking service build proof requires the joined Caddy/libkrun fixture"
+    );
+    assert!(
+        !cooking_service_build_proof
+            || (!gateway_service_e2e
+                && !gateway_service_external_e2e
+                && !gateway_service_cutover_e2e
+                && !gateway_service_failed_candidate_e2e
+                && !gateway_service_candidate_capacity_e2e
+                && !gateway_service_rollback_e2e
+                && !gateway_service_log_rpc_e2e
+                && !gateway_service_log_guest_e2e),
+        "the Cooking service build proof cannot combine with seeded or alternate service modes"
     );
     assert!(
         !gateway_service_log_guest_e2e || !gateway_service_external_e2e,
@@ -3498,6 +3535,161 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             },
             timeout: cooking_wait_timeout,
         };
+        if cooking_service_build_proof {
+            let published = cooking_service_build::build_and_publish_cooking_service(
+                &cooking_context,
+            )
+            .await
+            .expect("real cooking-service source build and publish proof");
+            assert_eq!(published.actor_id, user_id);
+            assert!(!published.repository_id.as_uuid().is_nil());
+            assert!(!published.source_commit.is_empty());
+            assert!(!published.build_request_id.is_nil());
+            assert!(!published.release_id.is_nil());
+            assert!(!published.release_agent_id.is_nil());
+            assert!(!published.version.is_empty());
+            assert!(published.source_path.is_dir());
+            assert!(published.working_path.is_dir());
+            cooking_builds::wait_for_cooking_build_quiescence(
+                &pool,
+                project.id,
+                "golden-cooking-oci-materialization",
+                cooking_wait_timeout,
+            )
+            .await;
+            let configured = cooking_service_build::install_and_configure_cooking_service(
+                &cooking_context,
+                &published,
+            )
+            .await
+            .expect("install and configure published cooking service");
+            let network: String = sqlx::query_scalar(
+                "SELECT release_agent.runtime_contract #>> '{policy_ceiling,network}'
+                   FROM gateway_revisions revision
+                   JOIN release_agents release_agent
+                     ON release_agent.id = revision.release_agent_id
+                  WHERE revision.id = $1",
+            )
+            .bind(configured.revision_id)
+            .fetch_one(&pool)
+            .await
+            .expect("read published cooking service network policy");
+            assert_eq!(network, "disabled", "cooking service guest network policy");
+
+            let dispatcher = TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("reserve cooking service dispatcher listener");
+            let dispatcher_listen = dispatcher
+                .local_addr()
+                .expect("cooking service dispatcher listener address");
+            drop(dispatcher);
+            app_config.gateway_edge = Some(GatewayEdgeConfig {
+                caddy_admin_url: env::var("HEPHAESTUS_CADDY_TEST_ADMIN_URL")
+                    .expect("joined Caddy admin URL"),
+                caddy_configuration_template: caddy_configuration(
+                    &env::var("HEPHAESTUS_CADDY_TEST_ADMIN_URL").expect("joined Caddy admin URL"),
+                ),
+                caddy_server_name: String::from("shared"),
+                dispatcher_listen,
+                public_authority: String::from("gateway.golden.invalid"),
+            });
+            running
+                .shutdown()
+                .await
+                .expect("pre-Caddy cooking service daemon shutdown");
+            let running = Box::pin(restart_application(app_config.clone())).await;
+            let service_fixture = GatewayServiceGoldenFixture {
+                gateway_id: configured.gateway_id,
+                revision_id: configured.revision_id,
+            };
+            let service_instance_id =
+                wait_for_gateway_service_ready(&pool, &service_fixture).await;
+            let pointers: (Option<uuid::Uuid>, Option<uuid::Uuid>) = sqlx::query_as(
+                "SELECT active_revision_id, desired_service_revision_id
+                   FROM gateways
+                  WHERE id = $1",
+            )
+            .bind(service_fixture.gateway_id)
+            .fetch_one(&pool)
+            .await
+            .expect("read cooking service gateway revision pointers");
+            assert_eq!(pointers, (Some(service_fixture.revision_id), Some(service_fixture.revision_id)));
+            let admin_url =
+                env::var("HEPHAESTUS_CADDY_TEST_ADMIN_URL").expect("joined Caddy admin URL");
+            let applied_config = wait_for_caddy_configuration(&admin_url, "/gateway/service").await;
+            assert!(
+                applied_config.contains("/gateway/service"),
+                "Caddy must contain the published cooking service route: {applied_config}"
+            );
+            let public_url =
+                env::var("HEPHAESTUS_CADDY_TEST_PUBLIC_URL").expect("joined Caddy public URL");
+            let client = reqwest::Client::builder()
+                .timeout(Duration::from_secs(10))
+                .build()
+                .expect("bounded cooking service HTTP client");
+            let service_body = client
+                .get(format!("{public_url}/gateway/service"))
+                .send()
+                .await
+                .expect("public cooking service request")
+                .error_for_status()
+                .expect("public cooking service request succeeds")
+                .bytes()
+                .await
+                .expect("read public cooking service response");
+            assert_eq!(service_body.as_ref(), b"cooking service");
+            let identity_proof = exercise_published_cooking_service_identity(&public_url).await;
+            let resource_paths = {
+                let vm_id = format!("gateway-service-{service_instance_id}");
+                let provider_runtime_root = PathBuf::from(
+                    env::var("HEPHAESTUS_LIBKRUN_RUNTIME_ROOT")
+                        .expect("libkrun runtime root for Cooking service proof"),
+                );
+                let cgroup_root = PathBuf::from(
+                    env::var("HEPHAESTUS_LIBKRUN_CGROUP_ROOT")
+                        .expect("libkrun cgroup root for Cooking service proof"),
+                );
+                (
+                    provider_runtime_root.join(&vm_id),
+                    cgroup_root.join(&vm_id),
+                    root.join("run-runtime")
+                        .join("gateway-services")
+                        .join(service_instance_id.to_string()),
+                )
+            };
+            let (provider_runtime, cgroup, materializer) = &resource_paths;
+            assert!(provider_runtime.is_dir());
+            assert!(cgroup.is_dir());
+            assert!(materializer.is_dir());
+            running
+                .shutdown()
+                .await
+                .expect("cooking service daemon shutdown");
+            let state: Option<String> = sqlx::query_scalar(
+                "SELECT state FROM gateway_service_instances
+                  WHERE id = $1 AND gateway_id = $2 AND revision_id = $3",
+            )
+            .bind(service_instance_id)
+            .bind(service_fixture.gateway_id)
+            .bind(service_fixture.revision_id)
+            .fetch_optional(&pool)
+            .await
+            .expect("read cleaned cooking service instance");
+            assert_eq!(state.as_deref(), Some("cleaned"));
+            assert!(!provider_runtime.exists());
+            assert!(!cgroup.exists());
+            assert!(!materializer.exists());
+            cleanup_streams(&nats_url).await;
+            println!(
+                "REAL_COOKING_SERVICE_BUILD_PROOF=1 gateway={} revision={} instance={} pid={} startup_id={}",
+                service_fixture.gateway_id,
+                service_fixture.revision_id,
+                service_instance_id,
+                identity_proof.pid,
+                identity_proof.startup_id
+            );
+            return;
+        }
         // These repositories share only their project: Python/Rust release builds
         // do not consume the blog's Hugo image. Keep same-family release mutations
         // serial while the independent OCI build and verification make progress.
@@ -6905,6 +7097,71 @@ async fn exercise_gateway_service_requests(public_url: &str) -> GatewayServiceRe
     println!(
         "persistent-service-public identity_equal=true pid={first_pid} startup_id={first_startup} request_count={first_count}->{second_count}"
     );
+    GatewayServiceRequestProof {
+        pid: first_pid,
+        startup_id: first_startup.to_owned(),
+    }
+}
+
+/// Sends two identity requests to the published cooking service. Its small
+/// sample binary reports only PID and startup identity, so this proof keeps
+/// the request-count assertion private to the seeded integration fixture.
+async fn exercise_published_cooking_service_identity(
+    public_url: &str,
+) -> GatewayServiceRequestProof {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .expect("bounded published cooking-service client");
+    let identity_url = format!("{public_url}/gateway/service/identity");
+    let first = client
+        .get(&identity_url)
+        .send()
+        .await
+        .expect("first published cooking-service identity request")
+        .error_for_status()
+        .expect("first published cooking-service identity succeeds")
+        .bytes()
+        .await
+        .expect("read first published cooking-service identity");
+    let second = client
+        .get(&identity_url)
+        .send()
+        .await
+        .expect("second published cooking-service identity request")
+        .error_for_status()
+        .expect("second published cooking-service identity succeeds")
+        .bytes()
+        .await
+        .expect("read second published cooking-service identity");
+    let first: serde_json::Value =
+        serde_json::from_slice(&first).expect("first published cooking-service identity JSON");
+    let second: serde_json::Value =
+        serde_json::from_slice(&second).expect("second published cooking-service identity JSON");
+    let first_startup = first
+        .get("startup_id")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .expect("first published cooking-service startup identity");
+    let second_startup = second
+        .get("startup_id")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .expect("second published cooking-service startup identity");
+    assert_eq!(first_startup, second_startup);
+    let first_pid = first
+        .get("pid")
+        .and_then(serde_json::Value::as_u64)
+        .expect("first published cooking-service PID");
+    assert!(
+        first_pid > 0,
+        "published cooking-service PID must be positive"
+    );
+    let second_pid = second
+        .get("pid")
+        .and_then(serde_json::Value::as_u64)
+        .expect("second published cooking-service PID");
+    assert_eq!(first_pid, second_pid);
     GatewayServiceRequestProof {
         pid: first_pid,
         startup_id: first_startup.to_owned(),

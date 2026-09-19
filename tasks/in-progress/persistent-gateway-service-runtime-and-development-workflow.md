@@ -2161,3 +2161,24 @@ revision before paced reconciliation drains B, so the corrected test requires
 bounded eventual B cleanup; the A/C admission invariant was not relaxed.
 Failure evidence remains in
 `/home/a/heph-candidate-capacity-real-vm-20260919-diagnostic.log`.
+
+Published Cooking service real-proof checkpoint (2026-09-19): the first
+published-service workflow reached the golden suite but failed during
+`OciBuilderWorkers` initialization because the test helper used the deleted
+repository target path for `heph-init`; the initial log is
+`/home/a/heph-published-service-real-vm-20260919.log`. The fixture now passes
+the resolved absolute `CARGO_TARGET_DIR` guest-init path and the test helper
+also honors `HEPHAESTUS_GUEST_INIT_BINARY`. The approved retry, session
+`78391`, passed source build, publish, install, configure, Caddy routing and
+identity checks in `/home/a/heph-published-service-real-vm-20260919-v2.log`.
+It emitted `REAL_COOKING_SERVICE_BUILD_PROOF=1`, passed 35 golden tests
+(one ignored) and eight PostgreSQL tests, reported
+`REAL_POSTGRES_CONNECTED_AND_MIGRATED=1 max_migration=81`, and verified
+runtime/cgroup cleanup. Phase evidence is in
+`/home/a/heph-published-service-phase-20260919-v2.json`; dedicated
+diagnostics are under `/home/a/heph-published-service-diagnostics-20260919-v2`.
+Focused all-feature golden Clippy, app rustdoc, cooking-service sample
+rustdoc, direct rustfmt, shell syntax and diff checks passed in
+`/home/a/heph-published-golden-clippy-20260919-v2.log`,
+`/home/a/heph-published-app-doc-20260919.log`, and
+`/home/a/heph-published-cooking-service-doc-20260919.log`.

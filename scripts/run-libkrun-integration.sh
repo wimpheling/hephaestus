@@ -943,6 +943,7 @@ if [[ "${HEPHAESTUS_APP_LIBKRUN_E2E:-0}" == "1" ]]; then
         HEPHAESTUS_LIBKRUN_MOUNT_ROOT="${fixture_root}/mounts" \
         HEPHAESTUS_LIBKRUN_CGROUP_ROOT="${cgroup_root}" \
         HEPHAESTUS_LIBKRUN_WORKER="${target_directory:-${cargo_target_dir}}/debug/hephaestus-vm-libkrun-worker" \
+        HEPHAESTUS_GUEST_INIT_BINARY="${cargo_target_dir}/${GUEST_TARGET}/release/heph-init" \
         HEPHAESTUS_TEST_OCI_BUILDER_VM_IMAGE="${builder_vm_image}" \
         HEPHAESTUS_TEST_OCI_VERIFIER_VM_IMAGE="${verifier_vm_image}" \
         HEPHAESTUS_TEST_OCI_BASE_LAYOUT_MANIFEST="${base_layout_manifest}" \
