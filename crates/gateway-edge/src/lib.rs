@@ -18,6 +18,7 @@ use vm_trait::{PrivateHttpRequest, PrivateHttpResponse, PrivateMailboxPublicatio
 
 mod integration;
 mod service_execution;
+mod service_handler;
 mod service_http;
 mod service_instance;
 mod service_launch;
@@ -31,6 +32,7 @@ pub use service_execution::{
     GatewayExecutionTarget, GatewayExecutionTargetError, GatewayExecutionTargetResolver,
     GatewayServiceAuthorityBudget,
 };
+pub use service_handler::GatewayServiceHandler;
 pub use service_http::{ServiceHttpPolicy, exchange as exchange_private_service_http};
 pub use service_instance::{
     ServiceInstance, ServiceInstanceError, ServiceInstanceHandle, ServiceInstancePolicy,

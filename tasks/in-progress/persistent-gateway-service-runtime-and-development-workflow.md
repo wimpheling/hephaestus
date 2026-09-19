@@ -557,6 +557,18 @@ unchecked.
   handler cutover, lifecycle supervision, Caddy exposure, and service recovery
   remain unchecked.
 
+- [x] Add the bounded edge execution router for accepted invocations. It
+  validates the configured local service owner once, resolves the immutable
+  invocation target under the original route deadline, delegates `http.v1` to
+  the existing stateless handler, and sends `http.service.v1` only to the
+  exact fenced warm-instance registry key. Service exchange time is capped by
+  both the original route deadline and the host-mediated session budget;
+  resolver, owner, fence, registry, and deadline failures fail closed without
+  stateless fallback or new VM provisioning. Edge verification passed 58 unit
+  tests plus the Caddy ingress test and strict all-target Clippy; evidence was
+  produced in the current worktree. Application header substitution remains
+  host-mediated and no platform bearer or mailbox authority is synthesized.
+
 ## Non-goals
 
 This task does not replace MVP 03's bounded stateless invocation mode. It does
