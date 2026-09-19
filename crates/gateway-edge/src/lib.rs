@@ -19,6 +19,7 @@ use vm_trait::{PrivateHttpRequest, PrivateHttpResponse, PrivateMailboxPublicatio
 mod integration;
 mod service_http;
 mod service_launch;
+mod service_probe;
 
 pub use integration::caddy::LocalCaddyAdministration;
 pub use service_http::{ServiceHttpPolicy, exchange as exchange_private_service_http};
@@ -27,6 +28,9 @@ pub use service_launch::{
     GatewayServiceArtifactKind, GatewayServiceIdentity, GatewayServiceLaunch,
     GatewayServiceLaunchRequest, GatewayServiceLaunchResolver, GatewayServiceMaterializer,
     service_transport_spec,
+};
+pub use service_probe::{
+    ServiceProbeError, ServiceProbePolicy, ServiceProbeSuccess, probe_private_service_http,
 };
 
 /// Reserved public path prefix owned by gateway routing.

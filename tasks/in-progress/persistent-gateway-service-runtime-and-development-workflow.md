@@ -156,6 +156,20 @@ Clippy, package checks, formatting, and diff checks pass. This is adapter-only
 support: live service mode, readiness/health supervision, Caddy forwarding,
 managed lifecycle, and release UI wiring remain unchecked.
 
+The gateway-edge probe slice now provides synthetic readiness and health GETs
+over a running VM's private service connection. It uses only the validated
+declared probe path and trusted platform authority, with no caller headers,
+secret substitution, invocation identity, or bearer. Probe responses are
+bounded to 8 KiB bodies, 32 headers, and 8 KiB aggregate headers, and only 2xx
+statuses pass. A checked deadline begins before private-stream acquisition;
+the remaining duration is passed to the HTTP adapter and the original deadline
+also wraps the complete exchange. Probe failures are redacted and do not stop
+or destroy the VM. Evidence: 4 focused probe tests cover path/Host
+canonicalization, non-2xx and oversized responses, control-bootstrap versus
+HTTP-readiness separation, total open-plus-exchange timeout, and cancellation
+closing the private stream. Instance ownership, durable admission, lifecycle
+supervision, and Caddy integration remain pending.
+
 - [x] Finish focused VM contract tests and workspace compatibility checks:
   `cargo test -p vm-trait`, `cargo test -p vm-libkrun --lib`,
   `cargo test -p vm-fake`, focused Clippy, `cargo check --workspace
