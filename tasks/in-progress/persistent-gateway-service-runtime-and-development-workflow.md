@@ -1241,3 +1241,29 @@ Clippy, formatting, and workspace rustdoc. Logs:
 `/tmp/heph-log-writer-workspace-doc-final-20260919.log`. Coordinator/app
 writer wiring, durable retention/maintenance, and authorized readers remain
 pending.
+
+Fixture acceptance checkpoint (2026-09-19): the committed startup base
+`f68257d` was archived into
+`/tmp/heph-persistent-fixture-verify-20260919`; only
+`crates/hephaestus-app/tests/golden.rs` and
+`crates/vm-libkrun/src/bin/heph-integration-check.rs` were overlaid. The
+joined command
+`HEPHAESTUS_APP_GATEWAY_SERVICE_E2E=1 scripts/run-gateway-libkrun-e2e.sh`
+ran as the real libkrun/Caddy acceptance proof in
+`/tmp/heph-persistent-service-e2e-20260919-attempt5-isolated.log`.
+The golden suite passed 35 tests with one ignored; the public proof recorded
+`persistent-service-public identity_equal=true pid=339
+startup_id=339-1789805352599931647 request_count=2->3`, followed by
+`persistent-service-e2e=passed`. The gateway-postgres suite passed all 8 tests,
+including `REAL_POSTGRES_CONNECTED_AND_MIGRATED=1 max_migration=78`,
+`REAL_POSTGRES_SERVICE_RESOLVER_FIXTURE=seeded`, and
+`REAL_POSTGRES_SERVICE_RESOLVER_QUERY=passed`. The wrapper confirmed
+`daemon golden E2E passed; runtime and cgroup cleanup verified`.
+Pinned Rust 1.88 verification of the final fixture overlay passed formatting,
+golden compilation, strict targeted Clippy, and rustdoc; logs are
+`/tmp/heph-persistent-fixture-fmt-f68257d.log`,
+`/tmp/heph-persistent-fixture-compile-f68257d.log`,
+`/tmp/heph-persistent-fixture-clippy-f68257d.log`, and
+`/tmp/heph-persistent-fixture-doc-f68257d.log`. The assertion proves only the
+initial warm service path: restart recovery, desired cutover, revocation/drain,
+adversarial behavior, and release UI remain pending.

@@ -491,6 +491,8 @@ const BROKERED_E2E_RULE_ID: uuid::Uuid = uuid::uuid!("00000000-0000-0000-0000-00
 const BROKERED_E2E_SENTINEL: &str = "golden-brokered-provider-sentinel-5d1a";
 const GATEWAY_HANDLER: &str =
     "#!/bin/sh\nexec /usr/libexec/hephaestus/integration-check --private-http-brokered-mailbox\n";
+const SERVICE_GATEWAY_HANDLER: &str =
+    "#!/bin/sh\nexec /usr/libexec/hephaestus/integration-check --serve-service\n";
 
 async fn restart_application(config: AppConfig) -> hephaestus_app::RunningHephaestus {
     HephaestusApp::build(config)
@@ -587,6 +589,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
     };
     let browser_e2e = env::var("HEPHAESTUS_COOKING_BROWSER_E2E").as_deref() == Ok("1");
     let gateway_caddy_e2e = env::var("HEPHAESTUS_APP_GATEWAY_CADDY_E2E").as_deref() == Ok("1");
+    let gateway_service_e2e = env::var("HEPHAESTUS_APP_GATEWAY_SERVICE_E2E").as_deref() == Ok("1");
     assert!(
         !cooking::enabled() || gateway_caddy_e2e,
         "cooking requires the joined Caddy/libkrun fixture"
@@ -594,6 +597,14 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
     assert!(
         !gateway_caddy_e2e || libkrun_e2e,
         "the joined Caddy gateway proof requires the real libkrun backend"
+    );
+    assert!(
+        !gateway_service_e2e || (gateway_caddy_e2e && libkrun_e2e),
+        "the persistent service proof requires the joined Caddy/libkrun fixture"
+    );
+    assert!(
+        !gateway_service_e2e || !cooking_build_proof,
+        "the persistent service proof is incompatible with the Cooking build proof"
     );
     let pool = PgPoolOptions::new()
         .max_connections(5)
@@ -750,6 +761,27 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
     } else {
         None
     };
+    let gateway_service_fixture = if gateway_service_e2e && !cooking_build_proof {
+        let service_agent = seed_gateway_service_release_agent(
+            &pool,
+            &seeded_instance,
+            &root.join("release-artifacts"),
+        )
+        .await;
+        Some(
+            seed_gateway_service_route(
+                &pool,
+                user_id,
+                project.id.as_uuid(),
+                repository.id.as_uuid(),
+                seeded_instance.release,
+                service_agent,
+            )
+            .await,
+        )
+    } else {
+        None
+    };
     let gateway_edge = if gateway_caddy_e2e && !cooking_build_proof {
         let gateway_agent =
             seed_gateway_release_agent(&pool, &seeded_instance, &root.join("release-artifacts"))
@@ -884,12 +916,15 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
         // explicit provider allowlist root instead of guessing a source-tree
         // cache path or broadening the fixture to the entire local root.
         provider.mount_roots.extend(cooking_layout_mount_roots);
-        // The one-shot OCI builder formats its private scratch disk under the
-        // fixture root; it must be a disk allowlist root as well as a worker
-        // filesystem root.
-        provider
-            .disk_roots
-            .push(root.join("repository-images/scratch"));
+        if cooking_build_proof {
+            // The one-shot OCI builder formats its private scratch disk under
+            // the fixture root; it must be a disk allowlist root as well as a
+            // worker filesystem root. Ordinary libkrun golden runs do not
+            // create this optional cooking directory.
+            provider
+                .disk_roots
+                .push(root.join("repository-images/scratch"));
+        }
     }
     let secret_broker_socket = root.join("secret-broker.sock");
     let observer = if cooking_build_proof {
@@ -2576,23 +2611,67 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
     }
 
     if libkrun_e2e {
+        let (service_instance_id, service_resource_paths) = if gateway_caddy_e2e {
+            let service_instance_id =
+                if let Some(service_fixture) = gateway_service_fixture.as_ref() {
+                    Some(wait_for_gateway_service_ready(&pool, service_fixture).await)
+                } else {
+                    None
+                };
+            let service_resource_paths = service_instance_id.map(|instance_id| {
+                let vm_id = format!("gateway-service-{instance_id}");
+                let provider_runtime_root = PathBuf::from(
+                    env::var("HEPHAESTUS_LIBKRUN_RUNTIME_ROOT")
+                        .expect("libkrun runtime root for cleanup assertion"),
+                );
+                let cgroup_root = PathBuf::from(
+                    env::var("HEPHAESTUS_LIBKRUN_CGROUP_ROOT")
+                        .expect("libkrun cgroup root for cleanup assertion"),
+                );
+                (
+                    provider_runtime_root.join(&vm_id),
+                    cgroup_root.join(&vm_id),
+                    root.join("run-runtime")
+                        .join("gateway-services")
+                        .join(instance_id.to_string()),
+                )
+            });
+            if let Some((provider_runtime, cgroup, materializer)) = &service_resource_paths {
+                assert!(
+                    provider_runtime.is_dir(),
+                    "service VM runtime exists before shutdown"
+                );
+                assert!(cgroup.is_dir(), "service VM cgroup exists before shutdown");
+                assert!(
+                    materializer.is_dir(),
+                    "service materializer tree exists before shutdown"
+                );
+            }
+            (service_instance_id, service_resource_paths)
+        } else {
+            (None, None)
+        };
         if gateway_caddy_e2e {
             let admin_url =
                 env::var("HEPHAESTUS_CADDY_TEST_ADMIN_URL").expect("joined Caddy admin URL");
-            let applied_config = reqwest::Client::new()
-                .get(format!("{admin_url}/config/"))
-                .send()
-                .await
-                .expect("load applied Caddy configuration")
-                .error_for_status()
-                .expect("Caddy configuration request succeeds")
-                .text()
-                .await
-                .expect("read applied Caddy configuration");
+            let applied_config =
+                wait_for_caddy_configuration(&admin_url, "/gateway/brokered").await;
             assert!(
                 applied_config.contains("/gateway/brokered"),
                 "Caddy must contain the authoritative gateway route before the public proof: {applied_config}"
             );
+            if gateway_service_fixture.is_some() {
+                let applied_config =
+                    wait_for_caddy_configuration(&admin_url, "/gateway/service").await;
+                assert!(
+                    applied_config.contains("/gateway/service"),
+                    "Caddy must contain the persistent service route before the public proof: {applied_config}"
+                );
+                exercise_gateway_service_requests(
+                    &env::var("HEPHAESTUS_CADDY_TEST_PUBLIC_URL").expect("joined Caddy public URL"),
+                )
+                .await;
+            }
             let public_url =
                 env::var("HEPHAESTUS_CADDY_TEST_PUBLIC_URL").expect("joined Caddy public URL");
             let client = reqwest::Client::new();
@@ -2808,6 +2887,33 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             fixture.upstream.assert_substituted_request().await;
         }
         running.shutdown().await.expect("graceful daemon shutdown");
+        if let (
+            Some(service_fixture),
+            Some(instance_id),
+            Some((provider_runtime, cgroup, materializer)),
+        ) = (
+            gateway_service_fixture.as_ref(),
+            service_instance_id,
+            service_resource_paths,
+        ) {
+            let state: Option<String> = sqlx::query_scalar(
+                "SELECT state FROM gateway_service_instances
+                  WHERE id = $1 AND gateway_id = $2 AND revision_id = $3",
+            )
+            .bind(instance_id)
+            .bind(service_fixture.gateway_id)
+            .bind(service_fixture.revision_id)
+            .fetch_optional(&pool)
+            .await
+            .expect("read cleaned persistent-service instance");
+            assert_eq!(state.as_deref(), Some("cleaned"));
+            assert!(!provider_runtime.exists());
+            assert!(!cgroup.exists());
+            assert!(!materializer.exists());
+        }
+        if gateway_service_e2e {
+            println!("persistent-service-e2e=passed");
+        }
         cleanup_streams(&nats_url).await;
         return;
     }
@@ -3014,6 +3120,33 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
         "legacy informational signals must never remain pending"
     );
     cleanup_streams(&nats_url).await;
+}
+
+async fn wait_for_caddy_configuration(admin_url: &str, required_route: &str) -> String {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()
+        .expect("bounded Caddy configuration client");
+    let mut last_configuration = String::new();
+    for _ in 0..40 {
+        last_configuration = client
+            .get(format!("{admin_url}/config/"))
+            .send()
+            .await
+            .expect("load applied Caddy configuration")
+            .error_for_status()
+            .expect("Caddy configuration request succeeds")
+            .text()
+            .await
+            .expect("read applied Caddy configuration");
+        if last_configuration.contains(required_route) {
+            return last_configuration;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    panic!(
+        "Caddy did not contain {required_route} after bounded reconciliation: {last_configuration}"
+    );
 }
 
 fn signed_token(lifetime: Duration) -> String {
@@ -3514,6 +3647,14 @@ struct GatewayGoldenFixture {
     grant_id: uuid::Uuid,
 }
 
+/// Exact durable declaration used by the opt-in daemon-to-Caddy service proof.
+/// The desired pointer is set by the fixture, while the active pointer remains
+/// unset until the production supervisor has observed HTTP readiness.
+struct GatewayServiceGoldenFixture {
+    gateway_id: uuid::Uuid,
+    revision_id: uuid::Uuid,
+}
+
 /// Adds an exact released, stateless gateway handler alongside the reusable
 /// agent. The artifact delegates only to the guest integration checker, which
 /// validates that the daemon replaced the inbound secret before VM delivery.
@@ -3587,6 +3728,257 @@ async fn seed_gateway_release_agent(
     .await
     .expect("seed stateless gateway release agent");
     agent_id
+}
+
+/// Adds the long-lived integration-check service executable to the published
+/// release. It shares the release with the stateless proof but uses a distinct
+/// artifact path and release-agent key, so the two immutable contracts cannot
+/// accidentally select one another.
+async fn seed_gateway_service_release_agent(
+    pool: &sqlx::PgPool,
+    instance: &SeededInstance,
+    artifact_root: &Path,
+) -> uuid::Uuid {
+    let agent_id = uuid::Uuid::new_v4();
+    let artifact_id = uuid::Uuid::new_v4();
+    let storage_key = uuid::Uuid::new_v4();
+    let artifact = SERVICE_GATEWAY_HANDLER.as_bytes();
+    let artifact_path = artifact_root.join(storage_key.simple().to_string());
+    tokio::fs::write(&artifact_path, artifact)
+        .await
+        .expect("service gateway release artifact");
+    let mut permissions = tokio::fs::metadata(&artifact_path)
+        .await
+        .expect("service gateway artifact metadata")
+        .permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o555);
+    tokio::fs::set_permissions(&artifact_path, permissions)
+        .await
+        .expect("service gateway artifact mode");
+    let artifact_hash: [u8; 32] = Sha256::digest(artifact).into();
+    sqlx::query(
+        "INSERT INTO release_artifacts
+           (id, release_id, path, kind, mode, content_hash, size_bytes,
+            media_type, storage_key)
+         VALUES ($1, $2, 'bin/service', 'executable', 365, $3, $4,
+                 'application/octet-stream', $5)",
+    )
+    .bind(artifact_id)
+    .bind(instance.release)
+    .bind(artifact_hash.as_slice())
+    .bind(i64::try_from(artifact.len()).expect("service artifact length"))
+    .bind(storage_key)
+    .execute(pool)
+    .await
+    .expect("seed service gateway release artifact");
+    let family_id: uuid::Uuid =
+        sqlx::query_scalar("SELECT family_id FROM release_agents WHERE id = $1")
+            .bind(instance.release_agent)
+            .fetch_one(pool)
+            .await
+            .expect("load reusable release family for service");
+    sqlx::query(
+        "INSERT INTO release_agents
+           (id, release_id, family_id, agent_key, display_name,
+            runtime_contract, runtime_contract_hash, parameter_schema,
+            secret_slot_schema, requires_state, update_hook)
+         VALUES ($1, $2, $3, 'golden-service', 'Golden service', $4, $5,
+                 '[]', '[]', false, NULL)",
+    )
+    .bind(agent_id)
+    .bind(instance.release)
+    .bind(family_id)
+    .bind(serde_json::json!({
+        "executable": "bin/service",
+        "arguments": [],
+        "working_directory": "bin",
+        "image_reference": ROOT_IMAGE,
+        "requires_state": false,
+        "policy_ceiling": {"vcpus": 1, "memory_mib": 512, "network": "disabled"}
+    }))
+    .bind([11_u8; 32].as_slice())
+    .execute(pool)
+    .await
+    .expect("seed service gateway release agent");
+    agent_id
+}
+
+/// Seeds one public `http.service.v1` declaration without pre-starting it.
+/// The daemon must claim the desired revision, reach readiness, and promote
+/// the active pointer before public requests are attempted.
+async fn seed_gateway_service_route(
+    pool: &sqlx::PgPool,
+    actor: UserId,
+    project_id: uuid::Uuid,
+    repository_id: uuid::Uuid,
+    release_id: uuid::Uuid,
+    release_agent_id: uuid::Uuid,
+) -> GatewayServiceGoldenFixture {
+    let gateway_id = uuid::Uuid::new_v4();
+    let revision_id = uuid::Uuid::new_v4();
+    let identity_route_id = uuid::Uuid::new_v4();
+    let service_route_id = uuid::Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO gateways
+           (id, project_id, repository_id, name, lifecycle, created_by)
+         VALUES ($1, $2, $3, 'golden-service', 'enabled', $4)",
+    )
+    .bind(gateway_id)
+    .bind(project_id)
+    .bind(repository_id)
+    .bind(actor.as_uuid())
+    .execute(pool)
+    .await
+    .expect("seed service gateway");
+    sqlx::query(
+        "INSERT INTO gateway_revisions
+           (id, gateway_id, project_id, repository_id, release_id, release_agent_id,
+            release_agent_key, handler_contract, exposure, parameters, secret_slots,
+            mailbox_slots, normalized_hash, created_by, service_loopback_port,
+            service_readiness_path, service_health_path)
+         VALUES ($1, $2, $3, $4, $5, $6, 'golden-service', 'http.service.v1',
+                 'public', '{}'::jsonb, '{}', '{}', $7, $8, 8080, '/readyz', '/healthz')",
+    )
+    .bind(revision_id)
+    .bind(gateway_id)
+    .bind(project_id)
+    .bind(repository_id)
+    .bind(release_id)
+    .bind(release_agent_id)
+    .bind([12_u8; 32].as_slice())
+    .bind(actor.as_uuid())
+    .execute(pool)
+    .await
+    .expect("seed service gateway revision");
+    for (route_id, path) in [
+        (service_route_id, "/service"),
+        (identity_route_id, "/service/identity"),
+    ] {
+        sqlx::query(
+            "INSERT INTO gateway_routes
+               (id, gateway_revision_id, gateway_id, project_id, path, methods)
+             VALUES ($1, $2, $3, $4, $5, ARRAY['GET'])",
+        )
+        .bind(route_id)
+        .bind(revision_id)
+        .bind(gateway_id)
+        .bind(project_id)
+        .bind(path)
+        .execute(pool)
+        .await
+        .expect("seed service gateway route");
+    }
+    sqlx::query("UPDATE gateways SET desired_service_revision_id = $2 WHERE id = $1")
+        .bind(gateway_id)
+        .bind(revision_id)
+        .execute(pool)
+        .await
+        .expect("publish service gateway desired revision");
+    GatewayServiceGoldenFixture {
+        gateway_id,
+        revision_id,
+    }
+}
+
+/// Waits for the daemon-owned service supervisor to prove readiness and make
+/// the exact desired revision active. The query intentionally observes both
+/// pointers and the fenced instance state, so a declaration-only Caddy route
+/// cannot make the public request proof pass.
+async fn wait_for_gateway_service_ready(
+    pool: &sqlx::PgPool,
+    fixture: &GatewayServiceGoldenFixture,
+) -> uuid::Uuid {
+    tokio::time::timeout(Duration::from_secs(120), async {
+        loop {
+            let row: Option<(uuid::Uuid, String, Option<uuid::Uuid>)> = sqlx::query_as(
+                "SELECT instance.id, instance.state, gateway.active_revision_id
+                   FROM gateway_service_instances AS instance
+                   JOIN gateways AS gateway ON gateway.id = instance.gateway_id
+                  WHERE instance.gateway_id = $1
+                    AND instance.revision_id = $2
+                  ORDER BY instance.created_at DESC
+                  LIMIT 1",
+            )
+            .bind(fixture.gateway_id)
+            .bind(fixture.revision_id)
+            .fetch_optional(pool)
+            .await
+            .expect("read daemon-owned service readiness");
+            if let Some((instance_id, state, active_revision_id)) = row {
+                if state == "ready" && active_revision_id == Some(fixture.revision_id) {
+                    return instance_id;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("daemon-owned service reaches Ready and active state")
+}
+
+/// Sends two public requests through the real Caddy/daemon path and proves
+/// they reached one long-lived guest process rather than two per-request VMs.
+async fn exercise_gateway_service_requests(public_url: &str) {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .expect("bounded persistent-service client");
+    let identity_url = format!("{public_url}/gateway/service/identity");
+    let first = client
+        .get(&identity_url)
+        .send()
+        .await
+        .expect("first public persistent-service request")
+        .error_for_status()
+        .expect("first persistent-service request succeeds")
+        .bytes()
+        .await
+        .expect("read first persistent-service identity");
+    let second = client
+        .get(&identity_url)
+        .send()
+        .await
+        .expect("second public persistent-service request")
+        .error_for_status()
+        .expect("second persistent-service request succeeds")
+        .bytes()
+        .await
+        .expect("read second persistent-service identity");
+    let first: serde_json::Value =
+        serde_json::from_slice(&first).expect("first service identity JSON");
+    let second: serde_json::Value =
+        serde_json::from_slice(&second).expect("second service identity JSON");
+    let first_startup = first
+        .get("startup_id")
+        .and_then(serde_json::Value::as_str)
+        .expect("first service response startup identity");
+    let second_startup = second
+        .get("startup_id")
+        .and_then(serde_json::Value::as_str)
+        .expect("second service response startup identity");
+    assert_eq!(first_startup, second_startup);
+    let first_pid = first
+        .get("pid")
+        .and_then(serde_json::Value::as_u64)
+        .expect("first service response process identity");
+    assert!(first_pid > 0, "first service response PID must be positive");
+    let second_pid = second
+        .get("pid")
+        .and_then(serde_json::Value::as_u64)
+        .expect("second service response process identity");
+    assert_eq!(first_pid, second_pid);
+    let first_count = first
+        .get("request_count")
+        .and_then(serde_json::Value::as_u64)
+        .expect("first service response request count");
+    let second_count = second
+        .get("request_count")
+        .and_then(serde_json::Value::as_u64)
+        .expect("second service response request count");
+    assert!(second_count > first_count);
+    println!(
+        "persistent-service-public identity_equal=true pid={first_pid} startup_id={first_startup} request_count={first_count}->{second_count}"
+    );
 }
 
 /// Seeds immutable gateway route and host-only inbound secret authority.

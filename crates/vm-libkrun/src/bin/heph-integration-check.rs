@@ -503,7 +503,10 @@ fn serve_service_connection(
     match path {
         "/readyz" => write_service_response(&mut stream, 200, "text/plain", b"ready"),
         "/healthz" => write_service_response(&mut stream, 200, "text/plain", b"healthy"),
-        "/identity" => {
+        // The daemon's public gateway namespace is intentionally preserved
+        // across the private exchange. Accept the exact public service path
+        // as well as the direct loopback path used by private-service tests.
+        "/identity" | "/gateway/service/identity" => {
             let body = format!(
                 r#"{{"pid":{},"startup_id":"{}","request_count":{request_number}}}"#,
                 process::id(),
