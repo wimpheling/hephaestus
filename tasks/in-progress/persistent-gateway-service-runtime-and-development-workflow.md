@@ -1400,3 +1400,21 @@ acceptance run failed on disposable NATS storage exhaustion. Storage has since b
 mount allowlist gap: `exact-runs` materialization is outside the configured
 workspace/secret mount roots. A narrow daemon configuration fix and successful
 real Caddy/VM rerun are required before claiming external-daemon acceptance.
+
+Durable service-log retention checkpoint (2026-09-19): migration 79, the
+bounded gateway-edge maintenance port, and the worker-only PostgreSQL adapter
+now have real PostgreSQL coverage for 24-hour server-clock TTL, 7/8 pressure
+activation with 3/4 recovery, bounded payload and metadata deletion, durable
+pressure continuation, exact quota/gateway/instance/epoch locking, watermark
+replay protection, and cleaned-or-advanced-fence epoch eligibility. The
+128-epoch capacity recovery and append/maintenance lock barrier pass in both
+serialization orders. Exact-base isolated validation from `87b6ebe` is at
+`/tmp/heph-retention-validation-87b6-501219`: 168 gateway-edge tests, the full
+gateway-postgres suite (68 tests across its binaries), strict Rust 1.88
+Clippy, formatting, and affected-crate rustdoc pass. Logs are
+`/tmp/heph-retention-isolated-edge-tests-20260919.log`,
+`/tmp/heph-retention-isolated-gateway-postgres-20260919.log`,
+`/tmp/heph-retention-isolated-clippy-20260919.log`, and
+`/tmp/heph-retention-isolated-doc-20260919.log`. Application writer
+attachment, periodic maintenance scheduling, authorized readers/RPC, and UI
+remain pending; this checkpoint does not claim those integrations.

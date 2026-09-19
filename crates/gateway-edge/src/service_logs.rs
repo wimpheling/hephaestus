@@ -11,6 +11,7 @@ use std::{
 
 use async_trait::async_trait;
 use time::OffsetDateTime;
+use uuid::Uuid;
 use vm_trait::LogStream;
 
 use crate::{GatewayServiceInstanceLease, GatewayServiceOwner};
@@ -29,6 +30,10 @@ pub const MAX_SERVICE_LOG_INSTANCE_CHUNKS: u64 = 4096;
 pub const MAX_SERVICE_LOG_PROJECT_BYTES: u64 = 64 * 1024 * 1024;
 /// Maximum retained log chunks for one project.
 pub const MAX_SERVICE_LOG_PROJECT_CHUNKS: u64 = 65_536;
+/// Maximum chunks one bounded retention transaction may inspect.
+pub const MAX_SERVICE_LOG_MAINTENANCE_CHUNKS: usize = 256;
+/// Maximum epoch metadata rows one bounded retention transaction may inspect.
+pub const MAX_SERVICE_LOG_MAINTENANCE_EPOCHS: usize = 32;
 /// Maximum retained fencing epochs represented in one project's log metadata.
 pub const MAX_SERVICE_LOG_PROJECT_EPOCHS: u32 = 128;
 
@@ -225,6 +230,85 @@ pub trait GatewayServiceLogStore: Send + Sync {
         owner: &GatewayServiceOwner,
         batch: GatewayServiceLogAppendBatch,
     ) -> Result<GatewayServiceLogAppendOutcome, GatewayServiceLogStoreError>;
+}
+
+/// Bounded work policy for one worker-owned retention transaction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GatewayServiceLogMaintenancePolicy {
+    /// Maximum payload chunks deleted in one transaction. TTL and compensated
+    /// pressure scans may inspect more candidates, but deletion is bounded.
+    pub max_chunks: usize,
+    /// Maximum empty epoch rows deleted in one transaction. Flag updates may
+    /// lock the bounded project epoch set in addition to these deletions.
+    pub max_epochs: usize,
+}
+
+impl GatewayServiceLogMaintenancePolicy {
+    /// Creates a bounded retention policy.
+    #[must_use]
+    pub const fn new(max_chunks: usize, max_epochs: usize) -> Self {
+        Self {
+            max_chunks,
+            max_epochs,
+        }
+    }
+
+    /// Validates the policy against platform work limits.
+    #[must_use]
+    pub const fn is_valid(self) -> bool {
+        self.max_chunks > 0
+            && self.max_chunks <= MAX_SERVICE_LOG_MAINTENANCE_CHUNKS
+            && self.max_epochs > 0
+            && self.max_epochs <= MAX_SERVICE_LOG_MAINTENANCE_EPOCHS
+    }
+}
+
+impl Default for GatewayServiceLogMaintenancePolicy {
+    fn default() -> Self {
+        Self::new(
+            MAX_SERVICE_LOG_MAINTENANCE_CHUNKS,
+            MAX_SERVICE_LOG_MAINTENANCE_EPOCHS,
+        )
+    }
+}
+
+/// Redacted result of one bounded retention transaction.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GatewayServiceLogMaintenanceReport {
+    /// Chunks removed because their server retention time elapsed.
+    pub expired_chunks: usize,
+    /// Bytes removed because their server retention time elapsed.
+    pub expired_bytes: usize,
+    /// Chunks removed under instance or project pressure.
+    pub evicted_chunks: usize,
+    /// Bytes removed under instance or project pressure.
+    pub evicted_bytes: usize,
+    /// Empty, permanently ineligible epoch metadata rows removed.
+    pub metadata_epochs: usize,
+    /// Whether another bounded transaction may have eligible work.
+    pub has_more: bool,
+}
+
+/// Safe failures for a worker-owned retention transaction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum GatewayServiceLogMaintenanceError {
+    /// The project or bounded policy is malformed.
+    #[error("invalid gateway service log maintenance argument")]
+    InvalidArgument,
+    /// `PostgreSQL` could not complete the bounded transaction.
+    #[error("gateway service log maintenance is unavailable")]
+    Unavailable,
+}
+
+/// Worker-only bounded retention and metadata maintenance port.
+#[async_trait]
+pub trait GatewayServiceLogMaintenance: Send + Sync {
+    /// Performs one bounded server-clock TTL, pressure, and metadata pass.
+    async fn maintain_project(
+        &self,
+        project_id: Uuid,
+        policy: GatewayServiceLogMaintenancePolicy,
+    ) -> Result<GatewayServiceLogMaintenanceReport, GatewayServiceLogMaintenanceError>;
 }
 
 #[derive(Default)]

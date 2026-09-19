@@ -3,16 +3,22 @@
 use gateway_edge::{
     GatewayServiceIdentity, GatewayServiceInstanceKey, GatewayServiceInstanceLease,
     GatewayServiceInstancePage, GatewayServiceInstanceState, GatewayServiceLogAppendBatch,
-    GatewayServiceLogStore, GatewayServiceLogStoreError, GatewayServiceOwner,
-    GatewayServiceOwnership, GatewayServiceTargetPage, GatewayServiceTargetStore,
-    MAX_SERVICE_INSTANCE_PAGE_SIZE, MAX_SERVICE_TARGET_PAGE_SIZE, ServiceLogLoss, ServiceLogRecord,
+    GatewayServiceLogMaintenance, GatewayServiceLogMaintenancePolicy,
+    GatewayServiceLogMaintenanceReport, GatewayServiceLogStore, GatewayServiceLogStoreError,
+    GatewayServiceOwner, GatewayServiceOwnership, GatewayServiceTargetPage,
+    GatewayServiceTargetStore, MAX_SERVICE_INSTANCE_PAGE_SIZE, MAX_SERVICE_TARGET_PAGE_SIZE,
+    ServiceLogLoss, ServiceLogRecord,
 };
 use gateway_postgres::{
     PostgresGatewayServiceLogStore, PostgresGatewayServiceOwnership, PostgresGatewayServiceTargets,
 };
 use serial_test::serial;
 use sqlx::postgres::PgPoolOptions;
-use std::{collections::HashSet, env, time::Duration};
+use std::{
+    collections::HashSet,
+    env,
+    time::{Duration, Instant},
+};
 use time::OffsetDateTime;
 use uuid::Uuid;
 use vm_trait::LogStream;
@@ -663,6 +669,34 @@ fn batch_with_sequence(sequence: u64) -> GatewayServiceLogAppendBatch {
     .expect("valid bounded log batch")
 }
 
+fn batch_with_payload(sequence: u64, size: usize) -> GatewayServiceLogAppendBatch {
+    GatewayServiceLogAppendBatch::new(
+        vec![ServiceLogRecord {
+            sequence,
+            stream: LogStream::Stdout,
+            observed_at: OffsetDateTime::now_utc(),
+            bytes: vec![b'x'; size],
+        }],
+        ServiceLogLoss::default(),
+    )
+    .expect("valid bounded payload batch")
+}
+
+fn batch_with_payloads(start: u64, end: u64, size: usize) -> GatewayServiceLogAppendBatch {
+    GatewayServiceLogAppendBatch::new(
+        (start..=end)
+            .map(|sequence| ServiceLogRecord {
+                sequence,
+                stream: LogStream::Stdout,
+                observed_at: OffsetDateTime::now_utc(),
+                bytes: vec![b'x'; size],
+            })
+            .collect(),
+        ServiceLogLoss::default(),
+    )
+    .expect("valid bounded payload batch")
+}
+
 async fn insert_disabled_service_revision(
     pool: &sqlx::PgPool,
     revision: Uuid,
@@ -698,6 +732,727 @@ async fn insert_disabled_service_revision(
 
 #[tokio::test(flavor = "multi_thread")]
 #[serial]
+async fn service_log_maintenance_expires_evicts_and_denies_app_role() {
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let worker = worker_pool().await;
+    let fixture = seed_gateway_with_instance_state(
+        &pool,
+        &format!("maint-{}", Uuid::new_v4()),
+        "enabled",
+        "published",
+        "ready",
+        false,
+        None,
+    )
+    .await;
+    let targets = PostgresGatewayServiceTargets::new(worker.clone());
+    let lease = targets
+        .get_service_instance(GatewayServiceIdentity {
+            instance_id: fixture.old_instance,
+            gateway_id: fixture.gateway,
+            revision_id: fixture.old_service,
+        })
+        .await
+        .expect("maintenance instance lookup")
+        .expect("maintenance instance");
+    let owner = GatewayServiceOwner::new(lease.owner_host_id.clone(), lease.owner_uuid)
+        .expect("maintenance owner");
+    let store = PostgresGatewayServiceLogStore::new(worker);
+    store
+        .append_batch(&lease, &owner, batch_with_sequence(0))
+        .await
+        .expect("expired maintenance payload");
+    sqlx::query(
+        "UPDATE gateway_service_log_chunks
+            SET stored_at = clock_timestamp() - interval '25 hours'
+          WHERE instance_id = $1 AND fencing_token = $2 AND sequence = 0",
+    )
+    .bind(fixture.old_instance)
+    .bind(lease.fencing_token)
+    .execute(&pool)
+    .await
+    .expect("age maintenance payload");
+    let expired = store
+        .maintain_project(
+            fixture.project,
+            GatewayServiceLogMaintenancePolicy::new(8, 8),
+        )
+        .await
+        .expect("maintenance TTL pass");
+    assert_eq!(expired.expired_chunks, 1);
+    assert_eq!(expired.expired_bytes, 18);
+    store
+        .append_batch(&lease, &owner, batch_with_payloads(1, 56, 64 * 1024))
+        .await
+        .expect("pressure maintenance payloads");
+    for pass in 0..8 {
+        let report = store
+            .maintain_project(
+                fixture.project,
+                GatewayServiceLogMaintenancePolicy::new(1, 8),
+            )
+            .await
+            .expect("pressure continuation pass");
+        assert_eq!(report.evicted_chunks, 1, "pressure pass {pass}");
+        assert_eq!(report.evicted_bytes, 64 * 1024, "pressure pass {pass}");
+        let (rows, bytes): (i64, i64) = sqlx::query_as(
+            "SELECT count(*), coalesce(sum(octet_length(bytes)), 0)
+               FROM gateway_service_log_chunks WHERE project_id = $1",
+        )
+        .bind(fixture.project)
+        .fetch_one(&pool)
+        .await
+        .expect("payload totals");
+        let usage: (i64, i64) = sqlx::query_as(
+            "SELECT retained_chunks, retained_bytes
+               FROM gateway_service_log_project_usage WHERE project_id = $1",
+        )
+        .bind(fixture.project)
+        .fetch_one(&pool)
+        .await
+        .expect("usage totals");
+        assert_eq!(usage, (rows, bytes));
+        assert_eq!(report.has_more, pass < 7, "continuation pass {pass}");
+    }
+    let pending: bool = sqlx::query_scalar(
+        "SELECT pressure_cleanup_pending FROM gateway_service_log_epochs
+          WHERE instance_id = $1 AND fencing_token = $2",
+    )
+    .bind(fixture.old_instance)
+    .bind(lease.fencing_token)
+    .fetch_one(&pool)
+    .await
+    .expect("pressure flag");
+    assert!(!pending);
+    let database_url = env::var("HEPHAESTUS_POSTGRES_TEST_URL").expect("test database URL");
+    let app_pool = PgPoolOptions::new()
+        .max_connections(1)
+        .after_connect(|connection, _metadata| {
+            Box::pin(async move {
+                sqlx::query("SET ROLE hephaestus_app")
+                    .execute(&mut *connection)
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect(&database_url)
+        .await
+        .expect("application role pool");
+    let denied = sqlx::query("DELETE FROM gateway_service_log_chunks WHERE project_id = $1")
+        .bind(fixture.project)
+        .execute(&app_pool)
+        .await;
+    assert!(
+        denied.is_err(),
+        "application role cannot run maintenance DELETE"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn service_log_maintenance_combines_ttl_and_pressure_without_double_counting() {
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let worker = worker_pool().await;
+    let fixture = seed_gateway_with_instance_state(
+        &pool,
+        &format!("mixed-{}", Uuid::new_v4()),
+        "enabled",
+        "published",
+        "ready",
+        false,
+        None,
+    )
+    .await;
+    let targets = PostgresGatewayServiceTargets::new(worker.clone());
+    let identity = GatewayServiceIdentity {
+        instance_id: fixture.old_instance,
+        gateway_id: fixture.gateway,
+        revision_id: fixture.old_service,
+    };
+    let lease = targets
+        .get_service_instance(identity)
+        .await
+        .expect("mixed maintenance instance lookup")
+        .expect("mixed maintenance instance");
+    let owner = GatewayServiceOwner::new(lease.owner_host_id.clone(), lease.owner_uuid)
+        .expect("mixed maintenance owner");
+    let store = PostgresGatewayServiceLogStore::new(worker);
+    store
+        .append_batch(&lease, &owner, batch_with_payload(0, 64 * 1024))
+        .await
+        .expect("expired mixed payload");
+    sqlx::query(
+        "UPDATE gateway_service_log_chunks
+            SET stored_at = clock_timestamp() - interval '25 hours'
+          WHERE instance_id = $1 AND fencing_token = $2 AND sequence = 0",
+    )
+    .bind(fixture.old_instance)
+    .bind(lease.fencing_token)
+    .execute(&pool)
+    .await
+    .expect("age mixed payload");
+    let fresh = GatewayServiceLogAppendBatch::new(
+        (1..=56)
+            .map(|sequence| ServiceLogRecord {
+                sequence,
+                stream: LogStream::Stdout,
+                observed_at: OffsetDateTime::now_utc(),
+                bytes: vec![b'm'; 64 * 1024],
+            })
+            .collect(),
+        ServiceLogLoss::default(),
+    )
+    .expect("fresh mixed payloads");
+    store
+        .append_batch(&lease, &owner, fresh)
+        .await
+        .expect("fresh mixed append");
+    let report = store
+        .maintain_project(
+            fixture.project,
+            GatewayServiceLogMaintenancePolicy::new(256, 8),
+        )
+        .await
+        .expect("mixed TTL and pressure pass");
+    assert_eq!(
+        report,
+        GatewayServiceLogMaintenanceReport {
+            expired_chunks: 1,
+            expired_bytes: 64 * 1024,
+            evicted_chunks: 8,
+            evicted_bytes: 8 * 64 * 1024,
+            ..GatewayServiceLogMaintenanceReport::default()
+        }
+    );
+    let (actual_chunks, actual_bytes): (i64, i64) = sqlx::query_as(
+        "SELECT count(*), coalesce(sum(octet_length(bytes)), 0)
+           FROM gateway_service_log_chunks WHERE project_id = $1",
+    )
+    .bind(fixture.project)
+    .fetch_one(&pool)
+    .await
+    .expect("mixed payload totals");
+    let (usage_chunks, usage_bytes): (i64, i64) = sqlx::query_as(
+        "SELECT retained_chunks, retained_bytes
+           FROM gateway_service_log_project_usage WHERE project_id = $1",
+    )
+    .bind(fixture.project)
+    .fetch_one(&pool)
+    .await
+    .expect("mixed durable totals");
+    assert_eq!((actual_chunks, actual_bytes), (48, 48 * 64 * 1024));
+    assert_eq!((usage_chunks, usage_bytes), (actual_chunks, actual_bytes));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn service_log_maintenance_preserves_watermark_and_gcs_empty_cleaned_epoch() {
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let worker = worker_pool().await;
+    let fixture = seed_gateway_with_instance_state(
+        &pool,
+        &format!("gc-{}", Uuid::new_v4()),
+        "enabled",
+        "published",
+        "ready",
+        false,
+        None,
+    )
+    .await;
+    let other = seed_gateway_with_instance_state(
+        &pool,
+        &format!("other-{}", Uuid::new_v4()),
+        "enabled",
+        "published",
+        "ready",
+        false,
+        None,
+    )
+    .await;
+    let targets = PostgresGatewayServiceTargets::new(worker.clone());
+    let lease = targets
+        .get_service_instance(GatewayServiceIdentity {
+            instance_id: fixture.old_instance,
+            gateway_id: fixture.gateway,
+            revision_id: fixture.old_service,
+        })
+        .await
+        .expect("GC instance lookup")
+        .expect("GC instance");
+    let other_lease = targets
+        .get_service_instance(GatewayServiceIdentity {
+            instance_id: other.old_instance,
+            gateway_id: other.gateway,
+            revision_id: other.old_service,
+        })
+        .await
+        .expect("other instance lookup")
+        .expect("other instance");
+    let owner =
+        GatewayServiceOwner::new(lease.owner_host_id.clone(), lease.owner_uuid).expect("GC owner");
+    let other_owner =
+        GatewayServiceOwner::new(other_lease.owner_host_id.clone(), other_lease.owner_uuid)
+            .expect("other owner");
+    let store = PostgresGatewayServiceLogStore::new(worker);
+    store
+        .append_batch(&lease, &owner, batch_with_sequence(0))
+        .await
+        .expect("watermark payload");
+    store
+        .append_batch(&other_lease, &other_owner, batch_with_sequence(0))
+        .await
+        .expect("other project payload");
+    sqlx::query(
+        "UPDATE gateway_service_log_chunks
+            SET stored_at = clock_timestamp() - interval '25 hours'
+          WHERE instance_id = $1 AND fencing_token = $2",
+    )
+    .bind(fixture.old_instance)
+    .bind(lease.fencing_token)
+    .execute(&pool)
+    .await
+    .expect("age watermark payload");
+    let expired = store
+        .maintain_project(
+            fixture.project,
+            GatewayServiceLogMaintenancePolicy::new(8, 8),
+        )
+        .await
+        .expect("watermark TTL pass");
+    assert_eq!(expired.expired_chunks, 1);
+    let replay = store
+        .append_batch(&lease, &owner, batch_with_sequence(0))
+        .await
+        .expect("watermark replay");
+    assert_eq!((replay.accepted_chunks, replay.duplicate_chunks), (0, 0));
+    let (acknowledged, rows): (i64, i64) = sqlx::query_as(
+        "SELECT acknowledged_through,
+                (SELECT count(*) FROM gateway_service_log_chunks
+                  WHERE instance_id = $1 AND fencing_token = $2)
+           FROM gateway_service_log_epochs
+          WHERE instance_id = $1 AND fencing_token = $2",
+    )
+    .bind(fixture.old_instance)
+    .bind(lease.fencing_token)
+    .fetch_one(&pool)
+    .await
+    .expect("watermark state");
+    assert_eq!((acknowledged, rows), (0, 0));
+
+    let cleaned_instance = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO gateway_service_instances
+            (id, gateway_id, revision_id, owner_host_id, owner_uuid,
+             fencing_token, vm_id, state, lease_expires_at, heartbeat_at, cleaned_at)
+         VALUES ($1, $2, $3, $4, $5, 1, $6, 'cleaned',
+                 clock_timestamp() - interval '1 day',
+                 clock_timestamp() - interval '2 days', clock_timestamp() - interval '2 days')",
+    )
+    .bind(cleaned_instance)
+    .bind(fixture.gateway)
+    .bind(fixture.old_service)
+    .bind(format!("gc-cleaned-{}", Uuid::new_v4()))
+    .bind(Uuid::new_v4())
+    .bind(format!("gateway-service-{cleaned_instance}"))
+    .execute(&pool)
+    .await
+    .expect("cleaned GC instance");
+    sqlx::query(
+        "INSERT INTO gateway_service_log_epochs
+            (instance_id, gateway_id, revision_id, project_id, fencing_token,
+             updated_at)
+         VALUES ($1, $2, $3, $4, 1, clock_timestamp() - interval '25 hours')",
+    )
+    .bind(cleaned_instance)
+    .bind(fixture.gateway)
+    .bind(fixture.old_service)
+    .bind(fixture.project)
+    .execute(&pool)
+    .await
+    .expect("empty GC epoch");
+    sqlx::query(
+        "UPDATE gateway_service_log_project_usage
+            SET retained_epochs = retained_epochs + 1
+          WHERE project_id = $1",
+    )
+    .bind(fixture.project)
+    .execute(&pool)
+    .await
+    .expect("GC epoch usage");
+    let metadata = store
+        .maintain_project(
+            fixture.project,
+            GatewayServiceLogMaintenancePolicy::new(8, 8),
+        )
+        .await
+        .expect("metadata GC pass");
+    assert_eq!(metadata.metadata_epochs, 1);
+    let retained_epochs: i32 = sqlx::query_scalar(
+        "SELECT retained_epochs FROM gateway_service_log_project_usage WHERE project_id = $1",
+    )
+    .bind(fixture.project)
+    .fetch_one(&pool)
+    .await
+    .expect("GC retained epoch count");
+    assert_eq!(retained_epochs, 1);
+    let cleaned_rows: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM gateway_service_log_epochs WHERE instance_id = $1",
+    )
+    .bind(cleaned_instance)
+    .fetch_one(&pool)
+    .await
+    .expect("GC epoch absence");
+    assert_eq!(cleaned_rows, 0);
+    let other_rows: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM gateway_service_log_chunks WHERE project_id = $1")
+            .bind(other.project)
+            .fetch_one(&pool)
+            .await
+            .expect("other project remains");
+    assert_eq!(other_rows, 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn service_log_maintenance_gc_eligibility_matrix() {
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let worker = worker_pool().await;
+    let fixture = seed_gateway_with_instance_state(
+        &pool,
+        &format!("matrix-{}", Uuid::new_v4()),
+        "enabled",
+        "published",
+        "ready",
+        true,
+        None,
+    )
+    .await;
+    sqlx::query(
+        "INSERT INTO gateway_service_log_epochs
+            (instance_id, gateway_id, revision_id, project_id, fencing_token, updated_at)
+         VALUES ($1, $2, $3, $4, 1, clock_timestamp() - interval '25 hours')",
+    )
+    .bind(fixture.old_instance)
+    .bind(fixture.gateway)
+    .bind(fixture.old_service)
+    .bind(fixture.project)
+    .execute(&pool)
+    .await
+    .expect("expired same-fence epoch");
+    let mut old_cleaned = Vec::new();
+    for index in 0..2 {
+        let instance_id = Uuid::new_v4();
+        old_cleaned.push(instance_id);
+        sqlx::query(
+            "INSERT INTO gateway_service_instances
+                (id, gateway_id, revision_id, owner_host_id, owner_uuid,
+                 fencing_token, vm_id, state, lease_expires_at, heartbeat_at, cleaned_at)
+             VALUES ($1, $2, $3, $4, $5, 1, $6, 'cleaned',
+                     clock_timestamp() - interval '1 day',
+                     clock_timestamp() - interval '2 days', clock_timestamp())",
+        )
+        .bind(instance_id)
+        .bind(fixture.gateway)
+        .bind(fixture.old_service)
+        .bind(format!("matrix-old-{index}-{}", Uuid::new_v4()))
+        .bind(Uuid::new_v4())
+        .bind(format!("gateway-service-{instance_id}"))
+        .execute(&pool)
+        .await
+        .expect("old cleaned instance");
+        sqlx::query(
+            "INSERT INTO gateway_service_log_epochs
+                (instance_id, gateway_id, revision_id, project_id, fencing_token, updated_at)
+             VALUES ($1, $2, $3, $4, 1, clock_timestamp() - interval '25 hours')",
+        )
+        .bind(instance_id)
+        .bind(fixture.gateway)
+        .bind(fixture.old_service)
+        .bind(fixture.project)
+        .execute(&pool)
+        .await
+        .expect("old cleaned epoch");
+    }
+    let recent_instance = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO gateway_service_instances
+            (id, gateway_id, revision_id, owner_host_id, owner_uuid,
+             fencing_token, vm_id, state, lease_expires_at, heartbeat_at, cleaned_at)
+         VALUES ($1, $2, $3, $4, $5, 1, $6, 'cleaned',
+                 clock_timestamp() - interval '1 day',
+                 clock_timestamp() - interval '2 days', clock_timestamp())",
+    )
+    .bind(recent_instance)
+    .bind(fixture.gateway)
+    .bind(fixture.old_service)
+    .bind(format!("matrix-recent-{}", Uuid::new_v4()))
+    .bind(Uuid::new_v4())
+    .bind(format!("gateway-service-{recent_instance}"))
+    .execute(&pool)
+    .await
+    .expect("recent cleaned instance");
+    sqlx::query(
+        "INSERT INTO gateway_service_log_epochs
+            (instance_id, gateway_id, revision_id, project_id, fencing_token)
+         VALUES ($1, $2, $3, $4, 1)",
+    )
+    .bind(recent_instance)
+    .bind(fixture.gateway)
+    .bind(fixture.old_service)
+    .bind(fixture.project)
+    .execute(&pool)
+    .await
+    .expect("recent cleaned epoch");
+    sqlx::query(
+        "INSERT INTO gateway_service_log_project_usage
+            (project_id, retained_epochs) VALUES ($1, 4)",
+    )
+    .bind(fixture.project)
+    .execute(&pool)
+    .await
+    .expect("matrix epoch usage");
+    let store = PostgresGatewayServiceLogStore::new(worker);
+    for (pass, expected_more) in [(0, true), (1, false)] {
+        let report = store
+            .maintain_project(
+                fixture.project,
+                GatewayServiceLogMaintenancePolicy::new(8, 1),
+            )
+            .await
+            .expect("matrix GC pass");
+        assert_eq!(report.metadata_epochs, 1, "matrix pass {pass}");
+        assert_eq!(report.has_more, expected_more, "matrix continuation {pass}");
+        let retained_epochs: i32 = sqlx::query_scalar(
+            "SELECT retained_epochs FROM gateway_service_log_project_usage
+              WHERE project_id = $1",
+        )
+        .bind(fixture.project)
+        .fetch_one(&pool)
+        .await
+        .expect("matrix retained epoch count");
+        let actual_epochs: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM gateway_service_log_epochs WHERE project_id = $1",
+        )
+        .bind(fixture.project)
+        .fetch_one(&pool)
+        .await
+        .expect("matrix actual epoch count");
+        assert_eq!(i64::from(retained_epochs), actual_epochs);
+    }
+    let (live_rows, recent_rows): (i64, i64) = sqlx::query_as(
+        "SELECT
+            (SELECT count(*) FROM gateway_service_log_epochs WHERE instance_id = $1),
+            (SELECT count(*) FROM gateway_service_log_epochs WHERE instance_id = $2)",
+    )
+    .bind(fixture.old_instance)
+    .bind(recent_instance)
+    .fetch_one(&pool)
+    .await
+    .expect("matrix protected rows");
+    assert_eq!(live_rows, 1, "expired same-fence epoch remains");
+    assert_eq!(recent_rows, 1, "recent cleaned epoch remains");
+    for instance_id in old_cleaned {
+        let rows: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM gateway_service_log_epochs WHERE instance_id = $1",
+        )
+        .bind(instance_id)
+        .fetch_one(&pool)
+        .await
+        .expect("old cleaned row count");
+        assert_eq!(rows, 0);
+    }
+
+    let advanced = seed_gateway_with_instance_state(
+        &pool,
+        &format!("advanced-{}", Uuid::new_v4()),
+        "enabled",
+        "published",
+        "ready",
+        true,
+        None,
+    )
+    .await;
+    let ownership = PostgresGatewayServiceOwnership::new(pool.clone());
+    let advanced_owner = GatewayServiceOwner::new(advanced.owner_host_id.clone(), Uuid::new_v4())
+        .expect("advanced owner");
+    let advanced_lease = ownership
+        .claim_expired(&advanced_owner, Duration::from_secs(60), 1)
+        .await
+        .expect("advance instance fence")[0]
+        .clone();
+    assert_eq!(advanced_lease.fencing_token, 2);
+    sqlx::query(
+        "INSERT INTO gateway_service_log_epochs
+            (instance_id, gateway_id, revision_id, project_id, fencing_token, updated_at)
+         VALUES ($1, $2, $3, $4, 1, clock_timestamp() - interval '25 hours')",
+    )
+    .bind(advanced.old_instance)
+    .bind(advanced.gateway)
+    .bind(advanced.old_service)
+    .bind(advanced.project)
+    .execute(&pool)
+    .await
+    .expect("advanced old-fence epoch");
+    sqlx::query(
+        "INSERT INTO gateway_service_log_project_usage
+            (project_id, retained_epochs) VALUES ($1, 1)",
+    )
+    .bind(advanced.project)
+    .execute(&pool)
+    .await
+    .expect("advanced epoch usage");
+    let advanced_report = store
+        .maintain_project(
+            advanced.project,
+            GatewayServiceLogMaintenancePolicy::new(8, 1),
+        )
+        .await
+        .expect("advanced-fence GC pass");
+    assert_eq!(advanced_report.metadata_epochs, 1);
+    let advanced_rows: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM gateway_service_log_epochs WHERE project_id = $1")
+            .bind(advanced.project)
+            .fetch_one(&pool)
+            .await
+            .expect("advanced epoch removal");
+    assert_eq!(advanced_rows, 0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn service_log_project_pressure_stops_before_unpressured_instance() {
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let worker = worker_pool().await;
+    let fixture = seed_gateway_with_instance_state(
+        &pool,
+        &format!("project-{}", Uuid::new_v4()),
+        "enabled",
+        "published",
+        "ready",
+        false,
+        None,
+    )
+    .await;
+    let chunk_bytes = vec![b'p'; 64 * 1024];
+    let newest_instance = Uuid::new_v4();
+    for index in 0..19 {
+        let instance_id = if index == 18 {
+            newest_instance
+        } else {
+            Uuid::new_v4()
+        };
+        let owner_uuid = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO gateway_service_instances
+                (id, gateway_id, revision_id, owner_host_id, owner_uuid,
+                 fencing_token, vm_id, state, lease_expires_at, heartbeat_at, cleaned_at)
+             VALUES ($1, $2, $3, $4, $5, 1, $6, 'cleaned',
+                     clock_timestamp() - interval '1 minute',
+                     clock_timestamp() - interval '2 minutes', clock_timestamp())",
+        )
+        .bind(instance_id)
+        .bind(fixture.gateway)
+        .bind(fixture.old_service)
+        .bind(format!("project-pressure-{index}-{}", Uuid::new_v4()))
+        .bind(owner_uuid)
+        .bind(format!("gateway-service-{instance_id}"))
+        .execute(&pool)
+        .await
+        .expect("project pressure instance");
+        let count = 49_i64;
+        let older = index < 18;
+        sqlx::query(
+            "INSERT INTO gateway_service_log_epochs
+                (instance_id, gateway_id, revision_id, project_id, fencing_token,
+                 retained_bytes, retained_chunks)
+             VALUES ($1, $2, $3, $4, 1, $5, $6)",
+        )
+        .bind(instance_id)
+        .bind(fixture.gateway)
+        .bind(fixture.old_service)
+        .bind(fixture.project)
+        .bind(count * 64 * 1024)
+        .bind(count)
+        .execute(&pool)
+        .await
+        .expect("pressure epoch");
+        for sequence in 0..count {
+            sqlx::query(
+                "INSERT INTO gateway_service_log_chunks
+                    (instance_id, gateway_id, revision_id, project_id,
+                     fencing_token, sequence, stream, observed_at, bytes, stored_at)
+                 VALUES ($1, $2, $3, $4, 1, $5, 'stdout', clock_timestamp(), $6,
+                         CASE WHEN $7 THEN clock_timestamp() - interval '1 hour'
+                              ELSE clock_timestamp() END)",
+            )
+            .bind(instance_id)
+            .bind(fixture.gateway)
+            .bind(fixture.old_service)
+            .bind(fixture.project)
+            .bind(sequence)
+            .bind(&chunk_bytes)
+            .bind(older)
+            .execute(&pool)
+            .await
+            .expect("pressure payload");
+        }
+    }
+    let total_chunks = 19 * 49;
+    sqlx::query(
+        "INSERT INTO gateway_service_log_project_usage
+            (project_id, retained_bytes, retained_chunks, retained_epochs)
+         VALUES ($1, $2, $3, 19)",
+    )
+    .bind(fixture.project)
+    .bind(total_chunks * 64 * 1024)
+    .bind(total_chunks)
+    .execute(&pool)
+    .await
+    .expect("project pressure usage");
+    let store = PostgresGatewayServiceLogStore::new(worker);
+    let report = store
+        .maintain_project(
+            fixture.project,
+            GatewayServiceLogMaintenancePolicy::new(256, 8),
+        )
+        .await
+        .expect("project pressure pass");
+    assert_eq!(report.evicted_chunks, 163);
+    assert_eq!(report.evicted_bytes, 163 * 64 * 1024);
+    let remaining_newest: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM gateway_service_log_chunks WHERE instance_id = $1",
+    )
+    .bind(newest_instance)
+    .fetch_one(&pool)
+    .await
+    .expect("project pressure remaining rows");
+    assert_eq!(
+        remaining_newest, 49,
+        "unpressured instance must remain intact"
+    );
+    let (usage_chunks, usage_bytes): (i64, i64) = sqlx::query_as(
+        "SELECT retained_chunks, retained_bytes
+           FROM gateway_service_log_project_usage WHERE project_id = $1",
+    )
+    .bind(fixture.project)
+    .fetch_one(&pool)
+    .await
+    .expect("project pressure usage after pass");
+    assert_eq!((usage_chunks, usage_bytes), (768, 768 * 64 * 1024));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
 async fn service_log_epoch_cap_is_persisted_as_terminal_loss() {
     let Some(pool) = test_pool().await else {
         return;
@@ -709,73 +1464,109 @@ async fn service_log_epoch_cap_is_persisted_as_terminal_loss() {
         &format!("log-epoch-cap-{}", Uuid::new_v4()),
         "enabled",
         "published",
-        "ready",
+        "cleaned",
         true,
         None,
     )
     .await;
+    let live_instance = Uuid::new_v4();
+    let live_owner = Uuid::new_v4();
+    let live_host = format!("epoch-cap-live-{}", Uuid::new_v4());
+    sqlx::query(
+        "INSERT INTO gateway_service_instances
+            (id, gateway_id, revision_id, owner_host_id, owner_uuid,
+             fencing_token, vm_id, state, lease_expires_at, heartbeat_at)
+         VALUES ($1, $2, $3, $4, $5, 128, $6, 'ready',
+                 clock_timestamp() + interval '10 minutes', clock_timestamp())",
+    )
+    .bind(live_instance)
+    .bind(fixture.gateway)
+    .bind(fixture.old_service)
+    .bind(&live_host)
+    .bind(live_owner)
+    .bind(format!("gateway-service-{live_instance}"))
+    .execute(&pool)
+    .await
+    .expect("epoch-cap live instance");
+    for fencing_token in 1_i64..=127 {
+        sqlx::query(
+            "INSERT INTO gateway_service_log_epochs
+                (instance_id, gateway_id, revision_id, project_id, fencing_token,
+                 updated_at)
+             VALUES ($1, $2, $3, $4, $5, clock_timestamp())",
+        )
+        .bind(live_instance)
+        .bind(fixture.gateway)
+        .bind(fixture.old_service)
+        .bind(fixture.project)
+        .bind(fencing_token)
+        .execute(&pool)
+        .await
+        .expect("protected historical epoch");
+    }
+    sqlx::query(
+        "INSERT INTO gateway_service_log_epochs
+            (instance_id, gateway_id, revision_id, project_id, fencing_token,
+             updated_at)
+         VALUES ($1, $2, $3, $4, 1,
+                 clock_timestamp() - interval '25 hours')",
+    )
+    .bind(fixture.old_instance)
+    .bind(fixture.gateway)
+    .bind(fixture.old_service)
+    .bind(fixture.project)
+    .execute(&pool)
+    .await
+    .expect("old cleaned epoch");
     sqlx::query(
         "INSERT INTO gateway_service_log_project_usage
             (project_id, retained_epochs)
-         VALUES ($1, 127)",
+         SELECT $1, count(*)::integer
+           FROM gateway_service_log_epochs
+          WHERE project_id = $1",
     )
     .bind(fixture.project)
     .execute(&pool)
     .await
-    .expect("persisted epoch cap");
+    .expect("persisted epoch count");
+    let actual_epoch_count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM gateway_service_log_epochs WHERE project_id = $1")
+            .bind(fixture.project)
+            .fetch_one(&pool)
+            .await
+            .expect("actual epoch count");
+    assert_eq!(actual_epoch_count, 128);
     let identity = GatewayServiceIdentity {
-        instance_id: fixture.old_instance,
+        instance_id: live_instance,
         gateway_id: fixture.gateway,
         revision_id: fixture.old_service,
     };
-    let ownership = PostgresGatewayServiceOwnership::new(pool.clone());
-    let owner = GatewayServiceOwner::new(fixture.owner_host_id.clone(), Uuid::new_v4())
-        .expect("first recovery owner");
-    let lease = ownership
-        .claim_expired(&owner, Duration::from_secs(1), 1)
-        .await
-        .expect("claim first expired epoch")[0]
-        .clone();
     let targets_lease = targets
         .get_service_instance(identity)
         .await
         .expect("exact capped instance lookup")
         .expect("capped fixture instance");
-    assert_eq!(targets_lease.fencing_token, lease.fencing_token);
+    assert_eq!(targets_lease.fencing_token, 128);
+    let owner = GatewayServiceOwner::new(
+        targets_lease.owner_host_id.clone(),
+        targets_lease.owner_uuid,
+    )
+    .expect("epoch-cap live owner");
     let store = PostgresGatewayServiceLogStore::new(worker);
-    let first_epoch = store
-        .append_batch(&lease, &owner, batch_with_sequence(0))
-        .await
-        .expect("127th-to-128th epoch append");
-    assert_eq!(first_epoch.accepted_chunks, 1);
+    assert!(matches!(
+        store
+            .append_batch(&targets_lease, &owner, batch_with_sequence(0))
+            .await,
+        Err(GatewayServiceLogStoreError::Capacity)
+    ));
     let epoch_count: i32 = sqlx::query_scalar(
         "SELECT retained_epochs FROM gateway_service_log_project_usage WHERE project_id = $1",
     )
     .bind(fixture.project)
     .fetch_one(&pool)
     .await
-    .expect("persisted 128th epoch");
+    .expect("persisted epoch cap");
     assert_eq!(epoch_count, 128);
-    tokio::time::sleep(Duration::from_secs(2)).await;
-    let next_owner = GatewayServiceOwner::new(fixture.owner_host_id.clone(), Uuid::new_v4())
-        .expect("second recovery owner");
-    let next_lease = ownership
-        .claim_expired(&next_owner, Duration::from_secs(60), 1)
-        .await
-        .expect("claim second expired epoch")[0]
-        .clone();
-    let next_targets_lease = targets
-        .get_service_instance(identity)
-        .await
-        .expect("rotated instance lookup")
-        .expect("rotated instance");
-    assert_eq!(next_targets_lease.fencing_token, next_lease.fencing_token);
-    assert!(matches!(
-        store
-            .append_batch(&next_lease, &next_owner, batch_with_sequence(1))
-            .await,
-        Err(GatewayServiceLogStoreError::Capacity)
-    ));
     let (dropped_chunks, dropped_bytes): (i64, i64) = sqlx::query_as(
         "SELECT storage_dropped_chunks, storage_dropped_bytes
            FROM gateway_service_log_project_usage
@@ -786,6 +1577,308 @@ async fn service_log_epoch_cap_is_persisted_as_terminal_loss() {
     .await
     .expect("persisted epoch-cap loss");
     assert_eq!((dropped_chunks, dropped_bytes), (1, 18));
+    let report = store
+        .maintain_project(
+            fixture.project,
+            GatewayServiceLogMaintenancePolicy::new(1, 1),
+        )
+        .await
+        .expect("reclaim old cleaned epoch");
+    assert_eq!(report.metadata_epochs, 1);
+    assert_eq!(report.expired_chunks, 0);
+    assert_eq!(report.evicted_chunks, 0);
+    let epoch_count: i32 = sqlx::query_scalar(
+        "SELECT retained_epochs FROM gateway_service_log_project_usage WHERE project_id = $1",
+    )
+    .bind(fixture.project)
+    .fetch_one(&pool)
+    .await
+    .expect("persisted post-GC epoch count");
+    assert_eq!(epoch_count, 127);
+    let actual_epoch_count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM gateway_service_log_epochs WHERE project_id = $1")
+            .bind(fixture.project)
+            .fetch_one(&pool)
+            .await
+            .expect("actual post-GC epoch count");
+    assert_eq!(actual_epoch_count, 127);
+    let second = store
+        .append_batch(&targets_lease, &owner, batch_with_sequence(1))
+        .await
+        .expect("new epoch after metadata reclamation");
+    assert_eq!(second.accepted_chunks, 1);
+    let epoch_count: i32 = sqlx::query_scalar(
+        "SELECT retained_epochs FROM gateway_service_log_project_usage WHERE project_id = $1",
+    )
+    .bind(fixture.project)
+    .fetch_one(&pool)
+    .await
+    .expect("persisted recreated epoch count");
+    assert_eq!(epoch_count, 128);
+    let (old_sequence, new_sequence): (i64, i64) = sqlx::query_as(
+        "SELECT
+            count(*) FILTER (WHERE sequence = 0),
+            count(*) FILTER (WHERE sequence = 1)
+           FROM gateway_service_log_chunks
+          WHERE instance_id = $1 AND fencing_token = 128",
+    )
+    .bind(live_instance)
+    .fetch_one(&pool)
+    .await
+    .expect("new epoch payload rows");
+    assert_eq!(
+        old_sequence, 0,
+        "capacity-dropped batch was not resurrected"
+    );
+    assert_eq!(new_sequence, 1);
+    let (dropped_chunks, dropped_bytes): (i64, i64) = sqlx::query_as(
+        "SELECT storage_dropped_chunks, storage_dropped_bytes
+           FROM gateway_service_log_project_usage
+          WHERE project_id = $1",
+    )
+    .bind(fixture.project)
+    .fetch_one(&pool)
+    .await
+    .expect("preserved epoch-cap loss");
+    assert_eq!((dropped_chunks, dropped_bytes), (1, 18));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[serial]
+async fn service_log_append_and_maintenance_serialize_without_deadlock() {
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    for maintenance_first in [true, false] {
+        let worker = worker_pool().await;
+        let fixture = seed_gateway_with_instance_state(
+            &pool,
+            &format!("log-lock-order-{}-{}", maintenance_first, Uuid::new_v4()),
+            "enabled",
+            "published",
+            "ready",
+            false,
+            None,
+        )
+        .await;
+        let targets = PostgresGatewayServiceTargets::new(worker.clone());
+        let identity = GatewayServiceIdentity {
+            instance_id: fixture.old_instance,
+            gateway_id: fixture.gateway,
+            revision_id: fixture.old_service,
+        };
+        let lease = targets
+            .get_service_instance(identity)
+            .await
+            .expect("lock-order instance lookup")
+            .expect("lock-order instance");
+        let owner = GatewayServiceOwner::new(lease.owner_host_id.clone(), lease.owner_uuid)
+            .expect("lock-order owner");
+        let setup_store = PostgresGatewayServiceLogStore::new(worker);
+        setup_store
+            .append_batch(&lease, &owner, batch_with_sequence(0))
+            .await
+            .expect("seed lock-order payload");
+        sqlx::query(
+            "UPDATE gateway_service_log_chunks
+                SET stored_at = clock_timestamp() - interval '25 hours'
+              WHERE instance_id = $1 AND fencing_token = $2 AND sequence = 0",
+        )
+        .bind(fixture.old_instance)
+        .bind(lease.fencing_token)
+        .execute(&pool)
+        .await
+        .expect("age lock-order payload");
+
+        let suffix = Uuid::new_v4().simple().to_string();
+        let maintenance_name = format!("log-maintenance-{suffix}");
+        let append_name = format!("log-append-{suffix}");
+        let maintenance_pool = named_worker_pool(&maintenance_name).await;
+        let append_pool = named_worker_pool(&append_name).await;
+        let maintenance_store = PostgresGatewayServiceLogStore::new(maintenance_pool.clone());
+        let append_store = PostgresGatewayServiceLogStore::new(append_pool.clone());
+        let mut holder = pool.begin().await.expect("lock-order holder transaction");
+        sqlx::query("SELECT set_config('application_name', $1, false)")
+            .bind(format!("log-holder-{suffix}"))
+            .execute(&mut *holder)
+            .await
+            .expect("name lock holder");
+        let holder_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+            .fetch_one(&mut *holder)
+            .await
+            .expect("lock holder pid");
+        sqlx::query(
+            "SELECT project_id
+               FROM gateway_service_log_project_usage
+              WHERE project_id = $1
+              FOR UPDATE",
+        )
+        .bind(fixture.project)
+        .fetch_one(&mut *holder)
+        .await
+        .expect("hold project usage lock");
+
+        let project_id = fixture.project;
+        let append_lease = lease.clone();
+        let append_owner = owner.clone();
+        let maintenance_task = async move {
+            maintenance_store
+                .maintain_project(project_id, GatewayServiceLogMaintenancePolicy::new(8, 8))
+                .await
+        };
+        let append_task = async move {
+            append_store
+                .append_batch(&append_lease, &append_owner, batch_with_sequence(1))
+                .await
+        };
+        let maintenance_join;
+        let append_join;
+        if maintenance_first {
+            maintenance_join = tokio::spawn(maintenance_task);
+            wait_for_blocked_workers(&pool, holder_pid, &[&maintenance_name]).await;
+            append_join = tokio::spawn(append_task);
+        } else {
+            append_join = tokio::spawn(append_task);
+            wait_for_blocked_workers(&pool, holder_pid, &[&append_name]).await;
+            maintenance_join = tokio::spawn(maintenance_task);
+        }
+        wait_for_blocked_workers(&pool, holder_pid, &[&maintenance_name, &append_name]).await;
+        holder.commit().await.expect("release lock holder");
+
+        let maintenance_result = tokio::time::timeout(Duration::from_secs(10), maintenance_join)
+            .await
+            .expect("maintenance completes after release")
+            .expect("maintenance task joins")
+            .expect("maintenance succeeds");
+        let append_result = tokio::time::timeout(Duration::from_secs(10), append_join)
+            .await
+            .expect("append completes after release")
+            .expect("append task joins")
+            .expect("append succeeds");
+        assert_eq!(maintenance_result.expired_chunks, 1);
+        assert_eq!(maintenance_result.expired_bytes, 18);
+        assert_eq!(append_result.accepted_chunks, 1);
+
+        let (rows, bytes, acknowledged): (i64, i64, i64) = sqlx::query_as(
+            "SELECT count(*)::bigint,
+                    coalesce(sum(octet_length(chunks.bytes)), 0)::bigint,
+                    epochs.acknowledged_through
+               FROM gateway_service_log_chunks chunks
+               JOIN gateway_service_log_epochs epochs
+                 ON epochs.instance_id = chunks.instance_id
+                AND epochs.fencing_token = chunks.fencing_token
+              WHERE chunks.project_id = $1
+              GROUP BY epochs.acknowledged_through",
+        )
+        .bind(fixture.project)
+        .fetch_one(&pool)
+        .await
+        .expect("consistent lock-order log totals");
+        let usage: (i64, i64) = sqlx::query_as(
+            "SELECT retained_chunks, retained_bytes
+               FROM gateway_service_log_project_usage
+              WHERE project_id = $1",
+        )
+        .bind(fixture.project)
+        .fetch_one(&pool)
+        .await
+        .expect("consistent lock-order usage");
+        assert_eq!((rows, bytes), (usage.0, usage.1));
+        assert_eq!((rows, bytes, acknowledged), (1, 18, 1));
+        let replay = setup_store
+            .append_batch(&lease, &owner, batch_with_sequence(0))
+            .await
+            .expect("replay after lock-order maintenance");
+        assert_eq!(replay.accepted_chunks, 0);
+        let sequence_zero: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM gateway_service_log_chunks
+              WHERE instance_id = $1 AND fencing_token = $2 AND sequence = 0",
+        )
+        .bind(fixture.old_instance)
+        .bind(lease.fencing_token)
+        .fetch_one(&pool)
+        .await
+        .expect("lock-order replay row count");
+        assert_eq!(sequence_zero, 0);
+
+        maintenance_pool.close().await;
+        append_pool.close().await;
+    }
+}
+
+async fn named_worker_pool(application_name: &str) -> sqlx::PgPool {
+    let database_url = env::var("HEPHAESTUS_POSTGRES_TEST_URL").expect("worker test database URL");
+    let application_name = application_name.to_owned();
+    PgPoolOptions::new()
+        .max_connections(1)
+        .after_connect(move |connection, _metadata| {
+            let application_name = application_name.clone();
+            Box::pin(async move {
+                sqlx::query("SET ROLE hephaestus_worker")
+                    .execute(&mut *connection)
+                    .await?;
+                sqlx::query("SELECT set_config('application_name', $1, false)")
+                    .bind(application_name)
+                    .execute(&mut *connection)
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect(&database_url)
+        .await
+        .expect("connect named worker pool")
+}
+
+async fn wait_for_blocked_workers(pool: &sqlx::PgPool, holder_pid: i32, names: &[&str]) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let rows = sqlx::query_as::<_, (i32, String, Option<String>, Vec<i32>)>(
+            "SELECT pid, application_name, wait_event_type, pg_blocking_pids(pid)
+               FROM pg_stat_activity
+              WHERE application_name = ANY($1::text[]) AND state <> 'idle'",
+        )
+        .bind(names.to_vec())
+        .fetch_all(pool)
+        .await
+        .expect("read lock-order waiters");
+        let blockers_by_pid = rows
+            .iter()
+            .map(|(pid, _, _, blockers)| (*pid, blockers.as_slice()))
+            .collect::<std::collections::HashMap<_, _>>();
+        let blocked_by_holder = |pid: i32| {
+            let mut pending = rows
+                .iter()
+                .find(|(candidate, _, _, _)| *candidate == pid)
+                .map_or_else(Vec::new, |(_, _, _, blockers)| blockers.clone());
+            let mut visited = std::collections::HashSet::new();
+            while let Some(blocker) = pending.pop() {
+                if blocker == holder_pid {
+                    return true;
+                }
+                if visited.insert(blocker) {
+                    if let Some(next) = blockers_by_pid.get(&blocker) {
+                        pending.extend(next.iter().copied());
+                    }
+                }
+            }
+            false
+        };
+        if names.iter().all(|name| {
+            rows.iter()
+                .any(|(pid, application_name, wait_event_type, _)| {
+                    application_name == name
+                        && wait_event_type.as_deref() == Some("Lock")
+                        && blocked_by_holder(*pid)
+                })
+        }) {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "workers did not block under holder {holder_pid}: {rows:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
