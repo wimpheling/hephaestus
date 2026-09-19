@@ -568,7 +568,7 @@ fn validate_lease(lease: &GatewayServiceInstanceLease) -> Result<(), GatewayServ
 }
 
 #[derive(Debug, FromRow)]
-struct ServiceInstanceRow {
+pub struct ServiceInstanceRow {
     id: Uuid,
     gateway_id: Uuid,
     revision_id: Uuid,
@@ -582,7 +582,7 @@ struct ServiceInstanceRow {
 }
 
 impl ServiceInstanceRow {
-    fn into_lease(self) -> Result<GatewayServiceInstanceLease, GatewayServiceOwnershipError> {
+    pub fn into_lease(self) -> Result<GatewayServiceInstanceLease, GatewayServiceOwnershipError> {
         Ok(GatewayServiceInstanceLease {
             identity: GatewayServiceIdentity {
                 instance_id: self.id,

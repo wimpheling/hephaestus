@@ -54,7 +54,7 @@ use vm_trait::{
 
 mod service_execution;
 mod service_failure;
-mod service_ownership;
+pub(crate) mod service_ownership;
 mod service_targets;
 
 pub use service_execution::PostgresGatewayExecutionTargetResolver;

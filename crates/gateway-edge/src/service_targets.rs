@@ -5,7 +5,7 @@ use gateway_domain::GatewayServiceConfig;
 use uuid::Uuid;
 
 use crate::GatewayEdgeError;
-use crate::GatewayServiceInstanceKey;
+use crate::{GatewayServiceIdentity, GatewayServiceInstanceKey, GatewayServiceInstanceLease};
 
 /// Maximum number of gateways returned by one service-target page.
 pub const MAX_SERVICE_TARGET_PAGE_SIZE: u16 = 128;
@@ -140,4 +140,12 @@ pub trait GatewayServiceTargetStore: Send + Sync {
         &self,
         key: GatewayServiceInstanceKey,
     ) -> Result<u64, GatewayEdgeError>;
+
+    /// Looks up one exact durable instance identity, including cleaned rows.
+    /// The lookup intentionally does not filter by fencing token so recovery
+    /// can observe a newer owner epoch after a claim-expiry race.
+    async fn get_service_instance(
+        &self,
+        identity: GatewayServiceIdentity,
+    ) -> Result<Option<GatewayServiceInstanceLease>, GatewayEdgeError>;
 }

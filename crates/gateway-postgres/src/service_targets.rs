@@ -1,11 +1,13 @@
 //! `PostgreSQL` read adapter for persistent gateway service targets.
 
+use crate::service_ownership::ServiceInstanceRow;
 use async_trait::async_trait;
 use gateway_domain::{GatewayServiceConfig, ServiceProbePath};
 use gateway_edge::{
-    GatewayEdgeError, GatewayServiceInstanceKey, GatewayServiceOwnedTarget,
-    GatewayServiceRevisionTarget, GatewayServiceTarget, GatewayServiceTargetPage,
-    GatewayServiceTargetPageResult, GatewayServiceTargetStore,
+    GatewayEdgeError, GatewayServiceIdentity, GatewayServiceInstanceKey,
+    GatewayServiceInstanceLease, GatewayServiceOwnedTarget, GatewayServiceRevisionTarget,
+    GatewayServiceTarget, GatewayServiceTargetPage, GatewayServiceTargetPageResult,
+    GatewayServiceTargetStore,
 };
 use sqlx::{FromRow, PgPool};
 use std::convert::TryFrom;
@@ -191,6 +193,38 @@ impl GatewayServiceTargetStore for PostgresGatewayServiceTargets {
         .await
         .map_err(|_| GatewayEdgeError::Unavailable)?;
         u64::try_from(count).map_err(|_| GatewayEdgeError::Unavailable)
+    }
+
+    async fn get_service_instance(
+        &self,
+        identity: GatewayServiceIdentity,
+    ) -> Result<Option<GatewayServiceInstanceLease>, GatewayEdgeError> {
+        if identity.instance_id.is_nil()
+            || identity.gateway_id.is_nil()
+            || identity.revision_id.is_nil()
+        {
+            return Err(GatewayEdgeError::Contract(
+                "gateway service instance identity must not be nil",
+            ));
+        }
+        let row = sqlx::query_as::<_, ServiceInstanceRow>(
+            "SELECT id, gateway_id, revision_id, owner_host_id, owner_uuid,
+                    fencing_token, vm_id, state, lease_expires_at, heartbeat_at
+               FROM gateway_service_instances
+              WHERE id = $1 AND gateway_id = $2 AND revision_id = $3",
+        )
+        .bind(identity.instance_id)
+        .bind(identity.gateway_id)
+        .bind(identity.revision_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|_| GatewayEdgeError::Unavailable)?;
+        row.map(|value| {
+            value
+                .into_lease()
+                .map_err(|_| GatewayEdgeError::Unavailable)
+        })
+        .transpose()
     }
 }
 

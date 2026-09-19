@@ -377,6 +377,24 @@ prepared worker against the fixture launch only; release materialization,
 durable ownership/fencing, Caddy routing, supervisor recovery, and request
 draining remain unchecked.
 
+The parent-owned service instance coordinator now composes lease monitoring,
+preparation, the prepared worker, registry registration, readiness-gated
+promotion or active-revision restore, and explicit cleanup for one claimed
+instance. Its startup deadline covers preparation through HTTP readiness;
+lease loss and cancellation unregister the exact instance and still await
+in-flight preparation or worker teardown. Durable stopping and cleaning are
+reported only after physical cleanup is confirmed, while failed cleanup
+retains the exact VM handle, materialization ownership, latest lease, and
+primary failure reason. Focused tests cover blocked cleanup with continued
+lease renewal, late VM destruction after lease loss, failed readiness and
+promotion, worker exit during promotion, restore with a newer desired
+revision, blocked restore-query lease loss, and retained cleanup ownership.
+Evidence: 10 coordinator tests and the full 83-test `gateway-edge` library
+suite pass; strict all-target/all-feature gateway-edge Clippy, package checks,
+and `git diff --check` pass. Global supervision, health/drain policy,
+durable failure-store reporting, Caddy routing, and release UI integration
+remain pending.
+
 - [x] Finish focused VM contract tests and workspace compatibility checks:
   `cargo test -p vm-trait`, `cargo test -p vm-libkrun --lib`,
   `cargo test -p vm-fake`, focused Clippy, `cargo check --workspace
@@ -700,6 +718,22 @@ check, strict Clippy, formatting, and 58 library tests passed.
   against migration 0076; strict targeted gateway-postgres Clippy passed.
   Logs: `/tmp/hephaestus-gateway-failure-worker.log` and
   `/tmp/hephaestus-gateway-ownership-worker.log`.
+
+- [x] Add exact durable service-instance lookup for recovery. The worker-role
+  target adapter now looks up the immutable instance, gateway, and revision
+  identity without filtering by fencing token, so recovery can observe a
+  newer owner epoch and already-cleaned rows. The row conversion reuses the
+  ownership adapter's validated state mapping. Real PostgreSQL coverage
+  exercised `starting`, `stopping`, expired claim recovery with a fence and
+  owner change, `cleaned`, wrong identities, and all nil identity fields;
+  the full target suite passed three tests against migration 0076. Evidence:
+  `/tmp/hephaestus-gateway-service-target-lookup-20260919.log`. Commands:
+  `HEPHAESTUS_POSTGRES_TEST_URL=postgres://postgres:postgres@127.0.0.1:33179/hephaestus?sslmode=disable
+  CARGO_INCREMENTAL=0 cargo test -p gateway-postgres --test service_targets
+  -- --nocapture --test-threads=1`
+  and targeted strict checks for `gateway-edge` plus the PostgreSQL library
+  and `service_targets` test. Supervisor recovery scheduling and lifecycle
+  integration remain pending.
 
 ## Non-goals
 
