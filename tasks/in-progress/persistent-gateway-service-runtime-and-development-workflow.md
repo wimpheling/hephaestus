@@ -1555,6 +1555,32 @@ logs are `/tmp/heph-cutover-r2-pinned-{fmt,app-clippy,vm-clippy,workspace-doc}.l
 The shared and isolated owned-file hashes match (`golden.rs`
 `1f53a09da63ac69c95122b06ca79618083a9dd9efa644e78ac20c703c9a8177b`, guest
 helper `a1f85d814309569a739de8c65d6664ba3368db23eb2de4cb34651ba6a2ea8164`).
-This proves real revision cutover and drain ordering only; daemon crash
-recovery, expired-boot recovery, revocation/adversarial paths, and release UI
-remain pending.
+This proves real revision cutover and drain ordering only. Earlier checkpoints
+cover guest and unclean-daemon crash recovery; same-process expired-claim
+recovery, further revocation/adversarial paths, and release UI remain pending.
+
+Real VM/Caddy operator-rollback checkpoint (2026-09-19): the exact `bd340cf`
+archive with only `crates/hephaestus-app/tests/golden.rs` overlaid at
+`/tmp/heph-rollback-verify-bd340cf` ran the joined
+`HEPHAESTUS_APP_GATEWAY_SERVICE_E2E=1 HEPHAESTUS_APP_GATEWAY_SERVICE_EXTERNAL_E2E=1 HEPHAESTUS_APP_GATEWAY_SERVICE_CUTOVER_E2E=1 HEPHAESTUS_APP_GATEWAY_SERVICE_ROLLBACK_E2E=1 HEPHAESTUS_LIBKRUN_DIAGNOSTICS_DIR=/tmp/heph-rollback-diag-20260919-v1 bash scripts/run-gateway-libkrun-e2e.sh`
+command with the real external daemon, PostgreSQL, NATS, libkrun, and Caddy.
+After the forward A-to-B cutover, the fixture held an accepted B request,
+restored the same immutable published A revision as the desired tip, and
+observed a new A instance become `Ready` and active while B remained
+`Draining`. The rollback A instance and B instance had distinct ownership and
+startup identities; rollback A served two public requests bound to its exact
+instance and fencing token while the B hold remained pending. B then completed
+and reached durable `Cleaned` with its VM runtime, cgroup, and materializer
+absent before final rollback-A shutdown and cleanup. The run recorded
+`persistent-service-rollback-passed` and passed 35 golden tests with one
+ignored plus 8 gateway-postgres tests with
+`REAL_POSTGRES_CONNECTED_AND_MIGRATED=1 max_migration=80`; the full log is
+`/tmp/heph-rollback-real-20260919-v1.log`. The owned golden source hash is
+`0eeda1c2ea8d02f96bfead8498db265cc6bb14e3c63f8207e157fbfa9b337fe3`.
+Pinned Rust 1.88 formatting, strict app Clippy, and workspace rustdoc passed;
+logs are `/tmp/heph-rollback-fmt-v1.log`,
+`/tmp/heph-rollback-app-clippy-v3.log`, and
+`/tmp/heph-rollback-workspace-doc-v1.log`. CI run `35439186418` for
+`bd340cf` passed all three jobs. This proves operator rollback through the
+real daemon/Caddy path; same-process expired-claim recovery, additional
+adversarial cases, and release UI remain pending.
