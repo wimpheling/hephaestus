@@ -49,12 +49,13 @@ use gateway_edge::{
     GatewayRequest, GatewayRequestDispatcher, GatewayRuntimeLauncher, GatewayRuntimeService,
     GatewayScheme, GatewayServiceArtifact, GatewayServiceArtifactKind, GatewayServiceBootRecovery,
     GatewayServiceBootRecoveryContext, GatewayServiceCleanupDriverPolicy, GatewayServiceHandler,
-    GatewayServiceIdentity, GatewayServiceMaterializer, GatewayServiceOwner,
-    GatewayServiceRegistry, GatewayServiceStartupIntent, GatewayServiceStartupRequest,
-    GatewayServiceSupervisor, GatewayServiceSupervisorContext, GatewayServiceSupervisorPolicy,
-    GatewayServiceTargetPage, GatewayServiceTargetPageResult, LocalCaddyAdministration,
-    LocalCaddyConfigurationTemplate, LocalCaddyGatewayProvider, PrivateHttpVmGatewayHandler,
-    TrustedRequestMetadata, UNTRUSTED_FORWARDING_HEADERS,
+    GatewayServiceIdentity, GatewayServiceMaterializer, GatewayServiceOwnedTarget,
+    GatewayServiceOwner, GatewayServiceRegistry, GatewayServiceStartupIntent,
+    GatewayServiceStartupRequest, GatewayServiceSupervisor, GatewayServiceSupervisorContext,
+    GatewayServiceSupervisorJobStatus, GatewayServiceSupervisorPolicy, GatewayServiceTargetPage,
+    GatewayServiceTargetPageResult, LocalCaddyAdministration, LocalCaddyConfigurationTemplate,
+    LocalCaddyGatewayProvider, PrivateHttpVmGatewayHandler, TrustedRequestMetadata,
+    UNTRUSTED_FORWARDING_HEADERS,
 };
 use gateway_postgres::{
     GatewayReleaseArtifact, GatewayReleaseArtifactKind, GatewayReleaseMaterializer,
@@ -2188,6 +2189,28 @@ type GatewayServiceTargetScan = Pin<
     >,
 >;
 
+const SERVICE_TARGET_REFRESH_TIMEOUT: Duration = Duration::from_secs(2);
+
+struct TrackedServiceJob {
+    gateway_id: Uuid,
+    revision_id: Uuid,
+    handle: gateway_edge::GatewayServiceStartupHandle,
+    retirement_requested: bool,
+}
+
+type GatewayServiceTargetRefresh = Pin<
+    Box<
+        dyn Future<
+                Output = (
+                    Uuid,
+                    Uuid,
+                    Uuid,
+                    Result<Option<GatewayServiceOwnedTarget>, gateway_edge::GatewayEdgeError>,
+                ),
+            > + Send,
+    >,
+>;
+
 fn clone_service_supervisor_context(
     context: &Arc<GatewayServiceSupervisorContext>,
 ) -> GatewayServiceSupervisorContext {
@@ -2299,8 +2322,11 @@ async fn gateway_reconciliation_loop_with_boot(
     let mut target_scan_after = None;
     let mut target_scan_interval = tokio::time::interval(GATEWAY_RECONCILIATION_INTERVAL);
     target_scan_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    let mut startup_requests =
-        HashMap::<(Uuid, Uuid), gateway_edge::GatewayServiceStartupHandle>::new();
+    let mut tracked_jobs = HashMap::<Uuid, TrackedServiceJob>::new();
+    let mut target_refresh: Option<GatewayServiceTargetRefresh> = None;
+    let mut target_refresh_cursor = None;
+    let mut target_refresh_interval = tokio::time::interval(GATEWAY_RECONCILIATION_INTERVAL);
+    target_refresh_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         tokio::select! {
             () = cancellation.cancelled() => {
@@ -2445,9 +2471,9 @@ async fn gateway_reconciliation_loop_with_boot(
                 match result {
                     Some(Ok(page)) => {
                         target_scan_after = page.next_after;
-                        start_initial_service_targets(
+                        reconcile_service_target_page(
                             &mut service_supervisor,
-                            &mut startup_requests,
+                            &mut tracked_jobs,
                             page,
                         );
                     }
@@ -2456,6 +2482,61 @@ async fn gateway_reconciliation_loop_with_boot(
                         target_scan_after = None;
                     }
                     None => unreachable!("target scan branch is enabled only with a scan"),
+                }
+            }
+            _ = target_refresh_interval.tick(),
+                if target_refresh.is_none() && !tracked_jobs.is_empty() =>
+            {
+                if let Some(job_id) = next_tracked_job_id(&tracked_jobs, target_refresh_cursor)
+                {
+                    target_refresh_cursor = Some(job_id);
+                    let job = tracked_jobs
+                        .get(&job_id)
+                        .expect("refresh cursor points at tracked job");
+                    let gateway_id = job.gateway_id;
+                    let revision_id = job.revision_id;
+                    let targets = Arc::clone(&service_targets);
+                    target_refresh = Some(Box::pin(async move {
+                        let result = tokio::time::timeout(
+                            SERVICE_TARGET_REFRESH_TIMEOUT,
+                            targets.get_service_target(gateway_id, revision_id),
+                        )
+                        .await
+                        .unwrap_or(Err(gateway_edge::GatewayEdgeError::Unavailable));
+                        (job_id, gateway_id, revision_id, result)
+                    }));
+                }
+            }
+            result = async {
+                match target_refresh.as_mut() {
+                    Some(refresh) => Some(refresh.await),
+                    None => std::future::pending().await,
+                }
+            }, if target_refresh.is_some() => {
+                target_refresh = None;
+                if let Some((job_id, gateway_id, revision_id, result)) = result
+                    && let Some(job) = tracked_jobs.get_mut(&job_id)
+                    && job.gateway_id == gateway_id
+                    && job.revision_id == revision_id
+                {
+                    match result {
+                        Ok(Some(target)) => {
+                            reconcile_tracked_service_job(job, &target);
+                        }
+                        Ok(None) => {
+                            job.handle.cancel();
+                            job.retirement_requested = true;
+                        }
+                        Err(error) => {
+                            tracing::debug!(
+                                job_id = %job_id,
+                                gateway_id = %gateway_id,
+                                revision_id = %revision_id,
+                                %error,
+                                "gateway service target refresh is unavailable"
+                            );
+                        }
+                    }
                 }
             }
             event = async {
@@ -2473,7 +2554,7 @@ async fn gateway_reconciliation_loop_with_boot(
                         "gateway service supervisor job completed"
                     );
                     if event.capacity_released {
-                        startup_requests.retain(|_, handle| handle.job_id() != event.job_id);
+                        tracked_jobs.remove(&event.job_id);
                     }
                 }
             }
@@ -2503,63 +2584,187 @@ async fn reconcile_gateway_once(
     }
 }
 
-/// Starts only the first durable service revision selected for a gateway.
+/// Reconciles one bounded page of durable service targets.
 ///
-/// An active service always wins restoration.  A desired revision is eligible
-/// for initial activation only when there is no active service; replacement
-/// cutover is deliberately left to the later global supervisor policy.
-fn start_initial_service_targets(
+/// The active service is restored first. A desired replacement is admitted
+/// only after that active service reports `Ready`; the supervisor owns durable
+/// promotion and the coordinator owns exact drain counts.
+fn reconcile_service_target_page(
     supervisor: &mut GatewayServiceSupervisor,
-    startup_requests: &mut HashMap<(Uuid, Uuid), gateway_edge::GatewayServiceStartupHandle>,
+    tracked_jobs: &mut HashMap<Uuid, TrackedServiceJob>,
     page: GatewayServiceTargetPageResult,
 ) {
     for target in page.targets {
         if target.lifecycle != "enabled" {
             continue;
         }
-        let selected = if let Some(active) = target.active_service_revision {
-            (target.active_revision_id == Some(active.revision_id) && active.publication_eligible)
-                .then_some((
-                    active.revision_id,
-                    GatewayServiceStartupIntent::RestoreActive,
-                ))
-        } else {
-            target
-                .desired_service_revision
-                .filter(|desired| desired.publication_eligible)
-                .map(|desired| {
-                    (
-                        desired.revision_id,
-                        GatewayServiceStartupIntent::ActivateDesired,
-                    )
-                })
-        };
-        let Some((revision_id, intent)) = selected else {
+        let active_is_eligible = target
+            .active_service_revision
+            .as_ref()
+            .is_some_and(|active| {
+                target.active_revision_id == Some(active.revision_id) && active.publication_eligible
+            });
+        if let Some(active) = target.active_service_revision.as_ref()
+            && active_is_eligible
+        {
+            start_service_job(
+                supervisor,
+                tracked_jobs,
+                GatewayServiceStartupRequest {
+                    gateway_id: target.gateway_id,
+                    revision_id: active.revision_id,
+                    intent: GatewayServiceStartupIntent::RestoreActive,
+                },
+            );
+        }
+        let Some(desired) = target.desired_service_revision.as_ref() else {
             continue;
         };
-        let key = (target.gateway_id, revision_id);
-        if startup_requests.contains_key(&key) {
+        if !desired.publication_eligible || target.active_revision_id == Some(desired.revision_id) {
             continue;
         }
-        let request = GatewayServiceStartupRequest {
-            gateway_id: target.gateway_id,
-            revision_id,
-            intent,
-        };
-        match supervisor.start(request) {
-            Ok(handle) => {
-                startup_requests.insert(key, handle);
-            }
-            Err(error) => {
-                tracing::debug!(
-                    gateway_id = %target.gateway_id,
-                    revision_id = %revision_id,
-                    %error,
-                    "gateway service initial startup was not admitted"
-                );
-            }
+        let active_ready = active_is_eligible
+            && target
+                .active_service_revision
+                .as_ref()
+                .and_then(|active| tracked_job(tracked_jobs, target.gateway_id, active.revision_id))
+                .is_some_and(|job| {
+                    *job.handle.subscribe().borrow() == GatewayServiceSupervisorJobStatus::Ready
+                });
+        let revoked_active_settled = !active_is_eligible
+            && target
+                .active_service_revision
+                .as_ref()
+                .is_none_or(|active| {
+                    tracked_job(tracked_jobs, target.gateway_id, active.revision_id).is_none()
+                });
+        let gateway_job_count = tracked_jobs
+            .values()
+            .filter(|job| job.gateway_id == target.gateway_id)
+            .count();
+        if (active_ready || target.active_service_revision.is_none() || revoked_active_settled)
+            && gateway_job_count < 2
+        {
+            start_service_job(
+                supervisor,
+                tracked_jobs,
+                GatewayServiceStartupRequest {
+                    gateway_id: target.gateway_id,
+                    revision_id: desired.revision_id,
+                    intent: GatewayServiceStartupIntent::ActivateDesired,
+                },
+            );
         }
     }
+}
+
+fn start_service_job(
+    supervisor: &mut GatewayServiceSupervisor,
+    tracked_jobs: &mut HashMap<Uuid, TrackedServiceJob>,
+    request: GatewayServiceStartupRequest,
+) {
+    if tracked_job(tracked_jobs, request.gateway_id, request.revision_id).is_some() {
+        return;
+    }
+    match supervisor.start(request) {
+        Ok(handle) => {
+            let job_id = handle.job_id();
+            tracked_jobs.insert(
+                job_id,
+                TrackedServiceJob {
+                    gateway_id: request.gateway_id,
+                    revision_id: request.revision_id,
+                    handle,
+                    retirement_requested: false,
+                },
+            );
+        }
+        Err(error) => {
+            tracing::debug!(
+                gateway_id = %request.gateway_id,
+                revision_id = %request.revision_id,
+                %error,
+                "gateway service startup was not admitted"
+            );
+        }
+    }
+}
+
+fn tracked_job(
+    tracked_jobs: &HashMap<Uuid, TrackedServiceJob>,
+    gateway_id: Uuid,
+    revision_id: Uuid,
+) -> Option<&TrackedServiceJob> {
+    tracked_jobs
+        .values()
+        .find(|job| job.gateway_id == gateway_id && job.revision_id == revision_id)
+}
+
+fn next_tracked_job_id(
+    tracked_jobs: &HashMap<Uuid, TrackedServiceJob>,
+    cursor: Option<Uuid>,
+) -> Option<Uuid> {
+    let mut ids = tracked_jobs.keys().copied().collect::<Vec<_>>();
+    ids.sort_unstable();
+    cursor
+        .and_then(|cursor| ids.iter().copied().find(|id| *id > cursor))
+        .or_else(|| ids.first().copied())
+}
+
+fn reconcile_tracked_service_job(
+    job: &mut TrackedServiceJob,
+    target: &gateway_edge::GatewayServiceOwnedTarget,
+) {
+    let candidate_is_still_desired = target.desired_service_revision_id == Some(job.revision_id);
+    let target_is_current = target.active_revision_id == Some(job.revision_id);
+    if !target.revision.publication_eligible {
+        job.handle.cancel();
+        job.retirement_requested = true;
+        return;
+    }
+    if job.retirement_requested {
+        let status = *job.handle.subscribe().borrow();
+        if target.lifecycle == "enabled"
+            && target_is_current
+            && status == GatewayServiceSupervisorJobStatus::Ready
+        {
+            // A stale paused/superseded read may have sent a drain request
+            // just before the gateway became current again. Clear that
+            // request marker while the worker is still Ready so a later
+            // exact retirement read can retry after a durable Conflict.
+            job.retirement_requested = false;
+        } else if status == GatewayServiceSupervisorJobStatus::Ready {
+            // `mark_draining` can reject a stale target read after a
+            // concurrent gateway transition. The next paced exact refresh
+            // must be able to submit the request again.
+            job.handle.request_drain();
+        }
+        return;
+    }
+    if target.lifecycle != "enabled" {
+        retire_tracked_service_job(job);
+        return;
+    }
+    if !target_is_current && candidate_is_still_desired {
+        // A desired candidate remains available until its own coordinator
+        // promotes it; it is not obsolete merely because A still serves.
+        return;
+    }
+    if !target_is_current {
+        retire_tracked_service_job(job);
+    }
+}
+
+fn retire_tracked_service_job(job: &mut TrackedServiceJob) {
+    if job.retirement_requested {
+        return;
+    }
+    if *job.handle.subscribe().borrow() == GatewayServiceSupervisorJobStatus::Ready {
+        job.handle.request_drain();
+    } else {
+        job.handle.cancel();
+    }
+    job.retirement_requested = true;
 }
 
 async fn reap_failed_start(tasks: Vec<JoinHandle<Result<(), String>>>) {

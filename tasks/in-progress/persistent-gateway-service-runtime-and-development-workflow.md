@@ -1333,6 +1333,9 @@ database fixture contamination: enabled targets left by the PostgreSQL suite
 could consume the bounded global startup scan before the recovery fixture was
 reached. The tested fix is test isolation only; the cutover implementation
 remains a separate uncommitted work in progress.
+Committed verification at `b695842` is also complete: [CI run
+35432539567](https://github.com/wimpheling/hephaestus/actions/runs/35432539567)
+passes Rust/authorization, cooking applications, and live browser review.
 
 Live-guest crash recovery checkpoint (2026-09-19): on committed base
 `95639da`, the isolated overlay
@@ -1358,3 +1361,42 @@ strict targeted Clippy, and rustdoc. Logs:
 guest crash with the daemon alive and automatic replacement only; uncaught
 daemon crash recovery, expired-boot recovery, cutover, revocation/drain, and
 release UI remain pending.
+
+Committed verification at `87b6ebe`: [CI run
+35432737371](https://github.com/wimpheling/hephaestus/actions/runs/35432737371)
+passes Rust/authorization, cooking applications, and live browser review. This
+includes the guest-crash checkpoint; unclean daemon recovery remains incomplete.
+
+Integration review in progress (2026-09-19): the cutover overlay passes the
+failed-candidate case against real PostgreSQL: the active revision remains
+Ready and the failed candidate is never provisioned. The pause/resume race now observes the real ownership adapter returning
+Conflict before issuing the second pause, then verifies retry, drain, and
+cleanup. Its isolated migration-78 PostgreSQL regression passes in
+`/tmp/heph-cutover-stale-adapter-v3.log`. Third-revision admission is now verified through repeated scheduler scans
+while both draining and physical destruction remain blocked; only after durable
+cleanup does C become Ready. Evidence: `/tmp/heph-cutover-capacity-gated-v4.log`.
+A timed-out exact target lookup also permits another gateway to retire, lease
+renewal to continue, and Caddy to progress; evidence:
+`/tmp/heph-cutover-fairness-v2.log`. Final isolated validation is complete on
+an archive of `87b6ebe` with only the app cutover files overlaid: the full app
+library suite passed 70 tests against real PostgreSQL migration 78 with the
+worker role, strict Rust 1.88 app Clippy passed for all targets/features,
+workspace formatting passed, and app rustdoc passed. Logs:
+`/tmp/heph-cutover-final-app-tests.log`,
+`/tmp/heph-cutover-final-app-clippy-overlay.log`,
+`/tmp/heph-cutover-final-fmt-v2.log`, and
+`/tmp/heph-cutover-final-app-doc.log`. This checkpoint excludes cleanup retry,
+ambiguous-claim recovery, app-store integration, and real VM/Caddy cutover
+proof.
+The log-retention overlay passes mixed TTL/pressure deletion and project-low-
+watermark regressions against migration 79. Retention remains incomplete:
+the earlier one-chunk continuation regression has been restored, and metadata
+GC eligibility, replay protection, and epoch-cap recovery have focused coverage.
+Deterministic concurrent append serialization and final isolated checks remain
+pending. The GC suite passes 11 real PostgreSQL tests in
+`/tmp/heph-log-maintenance-gc-all-20260919b.log`.
+The first external-daemon fixture launched the production process, but its
+acceptance run failed on disposable NATS storage exhaustion. Storage has since been reclaimed. The next production-daemon run exposed a
+mount allowlist gap: `exact-runs` materialization is outside the configured
+workspace/secret mount roots. A narrow daemon configuration fix and successful
+real Caddy/VM rerun are required before claiming external-daemon acceptance.
