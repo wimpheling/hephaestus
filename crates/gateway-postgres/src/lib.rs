@@ -52,6 +52,10 @@ use vm_trait::{
     RuntimeAuthorityBootstrap, VmId, VmMount, VmResources, VmSpec,
 };
 
+mod service_ownership;
+
+pub use service_ownership::PostgresGatewayServiceOwnership;
+
 const SERVICE_RECOVERY_BATCH_SIZE: i64 = 128;
 
 /// Host-only request to publish one generic event through an exact gateway

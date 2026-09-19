@@ -20,6 +20,7 @@ mod integration;
 mod service_http;
 mod service_instance;
 mod service_launch;
+mod service_ownership;
 mod service_probe;
 
 pub use integration::caddy::LocalCaddyAdministration;
@@ -33,6 +34,11 @@ pub use service_launch::{
     GatewayServiceArtifactKind, GatewayServiceIdentity, GatewayServiceLaunch,
     GatewayServiceLaunchRequest, GatewayServiceLaunchResolver, GatewayServiceMaterializer,
     service_transport_spec,
+};
+pub use service_ownership::{
+    GatewayServiceInstanceLease, GatewayServiceInstanceState, GatewayServiceOwner,
+    GatewayServiceOwnership, GatewayServiceOwnershipError, MAX_SERVICE_OWNER_HOST_BYTES,
+    MAX_SERVICE_OWNERSHIP_BATCH, MAX_SERVICE_OWNERSHIP_LEASE,
 };
 pub use service_probe::{
     ServiceProbeError, ServiceProbePolicy, ServiceProbeSuccess, probe_private_service_http,

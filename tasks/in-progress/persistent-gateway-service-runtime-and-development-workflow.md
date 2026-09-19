@@ -123,6 +123,28 @@ and removes only an exact owned instance. Evidence: 11 focused
 `git diff --check` pass. Database activation, lifecycle supervision, and UI
 integration remain pending.
 
+The durable service ownership ledger is now present in migration 0074 and its
+gateway-edge/PostgreSQL adapters. It records one immutable gateway/revision
+instance identity, deterministic `gateway-service-<instance_uuid>` provider
+identity, host and daemon-incarnation ownership, fencing, lease timestamps,
+and the provisioning-to-cleaned lifecycle. Claims serialize on the gateway
+aggregate and accept either the enabled desired service revision or the active
+service revision, so a serving instance can remain live while a replacement is
+pending. Renewal and state transitions lock the instance before reading
+`clock_timestamp()`; bounded same-host recovery fences expired rows, including
+same-daemon recovery after a database stall. Non-cleaned failed rows retain
+their unique gateway/revision reservation until cleanup is recorded. Readiness
+promotion, revision cutover, supervisor scheduling, VM materialization wiring,
+and orphan cleanup remain pending.
+
+Evidence: the exact disposable PostgreSQL run used
+`HEPHAESTUS_POSTGRES_TEST_URL` and printed
+`REAL_POSTGRES_CONNECTED_AND_MIGRATED=1 max_migration=74`; the focused
+ownership suite passed 5 tests in 3.50s. The retained log is
+`/tmp/hephaestus-gateway-ownership-final-v3.log`. Targeted `gateway-edge` and
+`gateway-postgres` Clippy runs with `-D warnings`, focused formatting, and
+`git diff --check` pass.
+
 The immutable service launch resolver now selects only a published
 `http.service.v1` revision by the host-owned gateway/revision identity and
 exact release-agent binding. It creates no invocation, runtime session, or
