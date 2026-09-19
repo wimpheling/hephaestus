@@ -18,11 +18,12 @@ use gateway_postgres::{
 };
 use http::{HeaderMap, StatusCode};
 use serial_test::serial;
-use sqlx::postgres::PgPoolOptions;
+use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use std::{
     collections::BTreeMap,
     env,
     path::PathBuf,
+    str::FromStr,
     sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -510,9 +511,10 @@ async fn daemon_recovery_cancellation_joins_a_database_blocked_batch() {
 // its shutdown path runs there rather than at this test scope's end.
 #[allow(clippy::significant_drop_tightening)]
 async fn daemon_loop_polls_service_supervisor_while_caddy_reconcile_is_blocked() {
-    let Some(pool) = test_pool().await else {
+    let Some(database) = isolated_startup_database().await else {
         return;
     };
+    let pool = database.control.clone();
     let fixture = seed_fixture(&pool, "http.service.v1").await;
     sqlx::query(
         "UPDATE gateways
@@ -531,7 +533,7 @@ async fn daemon_loop_polls_service_supervisor_while_caddy_reconcile_is_blocked()
         .await
         .expect("remove fixture instance before supervisor claim");
 
-    let recovery_pool = worker_pool().await;
+    let recovery_pool = database.worker.clone();
     let host_id = format!("recovery-test-{}", fixture.gateway.simple());
     let destroyed = Arc::new(AtomicUsize::new(0));
     let ownership = Arc::new(PostgresGatewayServiceOwnership::new(recovery_pool.clone()));
@@ -689,17 +691,19 @@ async fn daemon_loop_polls_service_supervisor_while_caddy_reconcile_is_blocked()
     assert_eq!(final_state, "cleaned");
     assert_eq!(destroyed.load(Ordering::Acquire), 1);
     cleanup_startup_fixture(&pool, fixture).await;
+    drop_isolated_startup_database(database).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
 #[serial]
 async fn daemon_loop_restores_active_service_without_manual_start() {
-    let Some(pool) = test_pool().await else {
+    let Some(database) = isolated_startup_database().await else {
         return;
     };
+    let pool = database.control.clone();
     let fixture = seed_fixture(&pool, "http.service.v1").await;
     let (task, cancellation, caddy_started, caddy_release, destroyed, _provisioned) =
-        spawn_automatic_start(&pool, fixture, true, false).await;
+        spawn_automatic_start(&pool, &database.worker, fixture, true, false).await;
     tokio::time::timeout(StdDuration::from_secs(10), caddy_started.notified())
         .await
         .expect("Caddy reconciliation starts and remains blocked");
@@ -720,14 +724,16 @@ async fn daemon_loop_restores_active_service_without_manual_start() {
     caddy_release.notify_one();
     assert_eq!(destroyed.load(Ordering::Acquire), 1);
     cleanup_startup_fixture(&pool, fixture).await;
+    drop_isolated_startup_database(database).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
 #[serial]
 async fn boot_gate_holds_startup_for_unexpired_owned_inventory() {
-    let Some(pool) = test_pool().await else {
+    let Some(database) = isolated_startup_database().await else {
         return;
     };
+    let pool = database.control.clone();
     let inventory = seed_fixture(&pool, "http.service.v1").await;
     let candidate = seed_fixture(&pool, "http.service.v1").await;
     let host_id = format!("recovery-test-{}", candidate.gateway.simple());
@@ -756,7 +762,7 @@ async fn boot_gate_holds_startup_for_unexpired_owned_inventory() {
     .await
     .expect("assign live inventory to this daemon host");
     let (task, cancellation, caddy_started, caddy_release, destroyed, provisioned) =
-        spawn_automatic_start(&pool, candidate, true, false).await;
+        spawn_automatic_start(&pool, &database.worker, candidate, true, false).await;
     tokio::time::timeout(StdDuration::from_secs(10), caddy_started.notified())
         .await
         .expect("Caddy reconciliation starts while boot recovery waits");
@@ -798,6 +804,7 @@ async fn boot_gate_holds_startup_for_unexpired_owned_inventory() {
     caddy_release.notify_one();
     cleanup_startup_fixture(&pool, candidate).await;
     cleanup_startup_fixture(&pool, inventory).await;
+    drop_isolated_startup_database(database).await;
 }
 
 // This fixture assembles the same durable ports as production so the loop can
@@ -805,6 +812,7 @@ async fn boot_gate_holds_startup_for_unexpired_owned_inventory() {
 #[allow(clippy::too_many_lines)]
 async fn spawn_automatic_start(
     pool: &sqlx::PgPool,
+    worker: &sqlx::PgPool,
     fixture: Fixture,
     restore_active: bool,
     retain_inventory: bool,
@@ -878,7 +886,7 @@ async fn spawn_automatic_start(
         .expect("remove instance before automatic startup");
     }
 
-    let recovery_pool = worker_pool().await;
+    let recovery_pool = worker.clone();
     let destroyed = Arc::new(AtomicUsize::new(0));
     let provisioned = Arc::new(AtomicUsize::new(0));
     let ownership = Arc::new(PostgresGatewayServiceOwnership::new(recovery_pool.clone()));
@@ -1055,6 +1063,94 @@ async fn test_pool() -> Option<sqlx::PgPool> {
     assert!(max_version >= 76);
     println!("REAL_POSTGRES_CONNECTED_AND_MIGRATED=1 max_migration={max_version}");
     Some(pool)
+}
+
+struct IsolatedStartupDatabase {
+    control: sqlx::PgPool,
+    worker: sqlx::PgPool,
+    admin: sqlx::PgPool,
+    name: String,
+}
+
+async fn isolated_startup_database() -> Option<IsolatedStartupDatabase> {
+    let database_url = env::var("HEPHAESTUS_POSTGRES_TEST_URL").ok()?;
+    let options = PgConnectOptions::from_str(&database_url).expect("parse test database URL");
+    let admin = PgPoolOptions::new()
+        .max_connections(2)
+        .connect_with(options.clone().database("postgres"))
+        .await
+        .expect("connect PostgreSQL admin database");
+    let name = format!("hephaestus_startup_{}", Uuid::new_v4().simple());
+    sqlx::query(&format!("CREATE DATABASE {name}"))
+        .execute(&admin)
+        .await
+        .expect("create isolated startup database");
+    let control = PgPoolOptions::new()
+        .max_connections(8)
+        .connect_with(options.clone().database(&name))
+        .await
+        .expect("connect isolated startup database");
+    sqlx::migrate!("../../migrations")
+        .run(&control)
+        .await
+        .expect("migrate isolated startup database");
+    let max_version: Option<i64> = sqlx::query_scalar("SELECT MAX(version) FROM _sqlx_migrations")
+        .fetch_one(&control)
+        .await
+        .expect("read isolated startup migration");
+    let max_version = max_version.expect("isolated startup migrations are present");
+    assert!(max_version >= 78);
+    let worker = worker_pool_for_options(options.database(&name)).await;
+    let current_database: String = sqlx::query_scalar("SELECT current_database()")
+        .fetch_one(&worker)
+        .await
+        .expect("read isolated worker database");
+    let current_user: String = sqlx::query_scalar("SELECT current_user")
+        .fetch_one(&worker)
+        .await
+        .expect("read isolated worker role");
+    assert_eq!(current_database, name);
+    assert_eq!(current_user, "hephaestus_worker");
+    println!(
+        "ISOLATED_STARTUP_DATABASE name={name} worker_database={current_database} \
+         worker_role={current_user} max_migration={max_version}"
+    );
+    Some(IsolatedStartupDatabase {
+        control,
+        worker,
+        admin,
+        name,
+    })
+}
+
+async fn drop_isolated_startup_database(database: IsolatedStartupDatabase) {
+    database.control.close().await;
+    database.worker.close().await;
+    sqlx::query(&format!("DROP DATABASE IF EXISTS {}", database.name))
+        .execute(&database.admin)
+        .await
+        .expect("drop isolated startup database");
+    database.admin.close().await;
+    println!("ISOLATED_STARTUP_DATABASE_DROPPED name={}", database.name);
+}
+
+async fn worker_pool_for_options(options: PgConnectOptions) -> sqlx::PgPool {
+    PgPoolOptions::new()
+        .max_connections(8)
+        .after_connect(|connection, _metadata| {
+            Box::pin(async move {
+                sqlx::query("SET ROLE hephaestus_worker")
+                    .execute(&mut *connection)
+                    .await?;
+                sqlx::query("SET application_name = 'gateway-recovery-test'")
+                    .execute(&mut *connection)
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect_with(options)
+        .await
+        .expect("connect isolated worker PostgreSQL pool")
 }
 
 async fn worker_pool() -> sqlx::PgPool {

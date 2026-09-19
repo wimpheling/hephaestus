@@ -1309,3 +1309,27 @@ strict targeted Clippy, and rustdoc. Logs:
 `/tmp/heph-persistent-restart-doc-final-isolated-20260919.log`. This proves
 graceful daemon restart and active-service restoration only; unclean crash,
 expired-boot recovery, cutover, revocation/drain, and release UI remain pending.
+
+CI fixture-isolation checkpoint (2026-09-19): the exact `f68257d` application
+source was verified unchanged except for the recovery test file in the
+isolated overlay `/tmp/heph-ci-isolation`. The patch only gives the three
+automatic-start tests unique disposable PostgreSQL databases, applies the
+current migrations, connects their service ports with the
+`hephaestus_worker` role, and drops each database after the test. It contains
+no cutover test, selector change, or production application change. After a
+fresh gateway-postgres database was populated by the full seven-binary suite,
+62 gateway-postgres tests passed (9+8+7+4+25+3+6); the original f682 recovery
+group then passed 5 tests, and the full app library passed 65 tests. Each
+isolated startup test logged a distinct database name, worker role, migration
+78, and a matching drop marker. Pinned Rust 1.88 formatting, strict app
+all-target/all-feature Clippy, and app rustdoc passed. Evidence:
+`/tmp/heph-ci-isolation-gateway-postgres-fresh.log`,
+`/tmp/heph-ci-isolation-app-five.log`,
+`/tmp/heph-ci-isolation-app-full.log`,
+`/tmp/heph-ci-isolation-app-clippy-v2.log`,
+`/tmp/heph-ci-isolation-fmt.log`, and
+`/tmp/heph-ci-isolation-app-doc.log`. The original CI failure was shared
+database fixture contamination: enabled targets left by the PostgreSQL suite
+could consume the bounded global startup scan before the recovery fixture was
+reached. The tested fix is test isolation only; the cutover implementation
+remains a separate uncommitted work in progress.
