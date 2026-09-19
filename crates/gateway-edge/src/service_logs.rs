@@ -253,6 +253,22 @@ pub struct GatewayServiceLogReadMetadata {
     pub earliest_retained_sequence: Option<u64>,
 }
 
+/// Project-wide metadata-cap loss counters for authorized diagnostics.
+///
+/// These counters aggregate rejected submissions across all service log
+/// epochs in the project. An ambiguous commit followed by a retry can count
+/// the same submission more than once; they are not an exact event-loss
+/// total. They remain after epoch payload and metadata retention cleanup.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GatewayServiceLogProjectMetadata {
+    /// Whether a durable project usage row exists.
+    pub usage_present: bool,
+    /// Project-wide rejected submission chunk count.
+    pub storage_dropped_chunks: u64,
+    /// Project-wide rejected submission byte count.
+    pub storage_dropped_bytes: u64,
+}
+
 /// Bounded page returned by an authorized service log reader.
 #[derive(Debug, Clone)]
 pub struct GatewayServiceLogReadPage {

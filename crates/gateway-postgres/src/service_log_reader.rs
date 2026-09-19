@@ -6,9 +6,9 @@ use authz_postgres::{
     begin_repeatable_read_actor_transaction,
 };
 use gateway_edge::{
-    GatewayServiceLogReadCursor, GatewayServiceLogReadMetadata, GatewayServiceLogReadPage,
-    GatewayServiceLogReadRecord, GatewayServiceLogReadRequest, GatewayServiceLogReadScope,
-    MAX_SERVICE_LOG_CHUNK_BYTES, MAX_SERVICE_LOG_READ_PAGE_BYTES,
+    GatewayServiceLogProjectMetadata, GatewayServiceLogReadCursor, GatewayServiceLogReadMetadata,
+    GatewayServiceLogReadPage, GatewayServiceLogReadRecord, GatewayServiceLogReadRequest,
+    GatewayServiceLogReadScope, MAX_SERVICE_LOG_CHUNK_BYTES, MAX_SERVICE_LOG_READ_PAGE_BYTES,
 };
 use identity_domain::AuthenticatedIdentity;
 use sqlx::{FromRow, PgPool, Postgres, Transaction};
@@ -237,6 +237,60 @@ impl PostgresGatewayServiceLogReader {
         Ok(metadata)
     }
 
+    /// Reads project-wide metadata-cap loss counters without exposing payloads.
+    ///
+    /// The project `CanRead` permission is the authorization boundary for this
+    /// aggregate. Gateway-only authority is insufficient because the counters
+    /// include losses from every gateway in the project.
+    ///
+    /// # Errors
+    ///
+    /// Returns a safe authorization, validation, or availability error without
+    /// exposing SQL or payload details.
+    pub async fn get_project_metadata(
+        &self,
+        identity: &AuthenticatedIdentity,
+        project_id: uuid::Uuid,
+    ) -> Result<GatewayServiceLogProjectMetadata, GatewayServiceLogReaderError> {
+        if project_id.is_nil() {
+            return Err(GatewayServiceLogReaderError::InvalidArgument);
+        }
+        let mut transaction = begin_actor_transaction(&self.pool, identity)
+            .await
+            .map_err(|_| GatewayServiceLogReaderError::Unavailable)?;
+        if !self
+            .authorize_object(
+                &mut transaction,
+                identity,
+                ObjectRef::new(ObjectType::Project, project_id),
+            )
+            .await?
+        {
+            transaction
+                .commit()
+                .await
+                .map_err(|_| GatewayServiceLogReaderError::Unavailable)?;
+            return Err(GatewayServiceLogReaderError::Denied);
+        }
+        let usage = sqlx::query_as::<_, ProjectUsageRow>(
+            "SELECT storage_dropped_chunks, storage_dropped_bytes
+               FROM gateway_service_log_project_usage
+              WHERE project_id = $1",
+        )
+        .bind(project_id)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|_| GatewayServiceLogReaderError::Unavailable)?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| GatewayServiceLogReaderError::Unavailable)?;
+        usage.map_or_else(
+            || Ok(GatewayServiceLogProjectMetadata::default()),
+            ProjectUsageRow::into_metadata,
+        )
+    }
+
     /// Reads one bounded ordered payload page and its durable metadata.
     ///
     /// The metadata, candidate lengths, and selected payload rows share one
@@ -362,31 +416,40 @@ impl PostgresGatewayServiceLogReader {
             ObjectRef::new(ObjectType::Project, scope.project_id),
             ObjectRef::new(ObjectType::Gateway, scope.gateway_id),
         ] {
-            let decision = self
-                .authorizer
-                .check(
-                    transaction,
-                    Subject::User(identity.user_id),
-                    Permission::CanRead,
-                    object,
-                )
-                .await
-                .map_err(|_| GatewayServiceLogReaderError::Unavailable)?;
-            audit_decision(
-                transaction,
-                identity.user_id,
-                Permission::CanRead,
-                object,
-                decision,
-                identity.request_id,
-            )
-            .await
-            .map_err(|_| GatewayServiceLogReaderError::Unavailable)?;
-            if decision != AuthorizationDecision::Allow {
+            if !self.authorize_object(transaction, identity, object).await? {
                 return Ok(false);
             }
         }
         Ok(true)
+    }
+
+    async fn authorize_object(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        identity: &AuthenticatedIdentity,
+        object: ObjectRef,
+    ) -> Result<bool, GatewayServiceLogReaderError> {
+        let decision = self
+            .authorizer
+            .check(
+                transaction,
+                Subject::User(identity.user_id),
+                Permission::CanRead,
+                object,
+            )
+            .await
+            .map_err(|_| GatewayServiceLogReaderError::Unavailable)?;
+        audit_decision(
+            transaction,
+            identity.user_id,
+            Permission::CanRead,
+            object,
+            decision,
+            identity.request_id,
+        )
+        .await
+        .map_err(|_| GatewayServiceLogReaderError::Unavailable)?;
+        Ok(decision == AuthorizationDecision::Allow)
     }
 }
 
@@ -428,6 +491,24 @@ struct PayloadRow {
     observed_at: OffsetDateTime,
     stored_at: OffsetDateTime,
     bytes: Vec<u8>,
+}
+
+#[derive(Debug, FromRow)]
+struct ProjectUsageRow {
+    storage_dropped_chunks: i64,
+    storage_dropped_bytes: i64,
+}
+
+impl ProjectUsageRow {
+    fn into_metadata(
+        self,
+    ) -> Result<GatewayServiceLogProjectMetadata, GatewayServiceLogReaderError> {
+        Ok(GatewayServiceLogProjectMetadata {
+            usage_present: true,
+            storage_dropped_chunks: to_u64(self.storage_dropped_chunks)?,
+            storage_dropped_bytes: to_u64(self.storage_dropped_bytes)?,
+        })
+    }
 }
 
 impl LogMetadataRow {

@@ -1970,3 +1970,51 @@ suite passed 35 tests with 1 ignored in
 joined VM/Caddy flag was exercised but stopped at the explicit joined-fixture
 guard because that fixture was unavailable; that branch was not successfully
 exercised by this checkpoint.
+
+
+Post-reboot recovery checkpoint (2026-09-19): the feature branch and remote
+remain at `568ea78527af55335fa6875e4763a74d1478469c`. The temporary
+`/dev/shm` worktrees were lost. Verified recovery material is preserved under
+`/home/a/hephaestus-recovery-20260919`; extracted sources and provenance are
+under `/home/a/heph-recovered`. The project-wide loss metadata type and
+authorized PostgreSQL reader were recovered from rustdoc source pages. The
+uncommitted retention scheduler, app wiring/tests, and actual guest-log
+acceptance edits were not recovered and require reconstruction. Historical
+adapters and teardown patches in the recovery material are already committed
+context, not new implementation. Pre-reboot checks do not validate reconstructed
+code. Work resumes in persistent source directories with explicit file ownership
+and one build-cache validation owner at a time; no per-subtask disposable build
+caches or source-only copies in memory-backed storage. Persistent-service
+acceptance remains incomplete, and release UI implementation has not started.
+
+Reconstruction review checkpoint (2026-09-19): project-loss metadata and
+migration 0081 now have reconstructed authorization, cross-organization RLS,
+revocation, audit, and worker-GC preservation tests. The real PostgreSQL run
+passed both reader tests and all 13 service-target tests in
+`/home/a/gateway-data-tests-realpg-20260919-v3.log`; focused strict Clippy passed
+in `/home/a/gateway-data-clippy-20260919-v4.log`. The captured test log does not
+display successful-test migration/role markers; a subsequent uncaptured run
+will retain those markers alongside the actual cap-rejection-to-reader proof.
+Earlier environment-skipped runs are compilation evidence only. The background
+scheduler and shared dedicated worker-pool wiring are reconstructed, but the
+actual gateway-disabled application retention/shutdown test is still pending.
+Guest-log acceptance source is reconstructed; review found an invalid RPC
+page limit (128 versus the maximum 100) and requested bounded polling and a
+valid small page size. No real guest-output acceptance pass is claimed yet.
+
+Project-loss data-layer checkpoint (2026-09-19): the real PostgreSQL cap test
+rejected an append at the epoch limit, then read the persisted loss counters
+through the authorized `get_project_metadata` application reader as
+`(storage_dropped_chunks, storage_dropped_bytes) = (1, 18)` before and after
+worker epoch GC. The focused real PostgreSQL run passed all 15 tests (2 reader
+and 13 target tests), with migration 81 markers visible and role checks passing, in
+`/home/a/gateway-data-tests-realpg-20260919-cap-reader.log`. Rust 1.88 direct
+format checking passed for the data-owned Rust files. Strict focused Clippy
+passed in `/home/a/gateway-data-clippy-20260919-cap-reader.log`; focused
+rustdoc with `RUSTDOCFLAGS=-Dwarnings` passed in
+`/home/a/gateway-data-rustdoc-20260919-cap-reader.log`; `git diff --check`
+passed. Prior scoped validation evidence remains
+`/home/a/gateway-data-clippy-20260919-v4.log` and
+`/home/a/gateway-data-rustdoc-20260919.log`. The application migration guard
+advances to 81 with this slice. RPC/protogen exposure and scheduler integration
+remain pending separate work.

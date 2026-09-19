@@ -12,13 +12,16 @@ use gateway_edge::{
     ServiceLogRecord,
 };
 use gateway_postgres::{
-    PostgresGatewayServiceLogStore, PostgresGatewayServiceOwnership, PostgresGatewayServiceTargets,
+    PostgresGatewayServiceLogReader, PostgresGatewayServiceLogStore,
+    PostgresGatewayServiceOwnership, PostgresGatewayServiceTargets,
 };
+use identity_domain::{AuthenticatedIdentity, RequestId, UserId};
 use serial_test::serial;
 use sqlx::postgres::PgPoolOptions;
 use std::{
     collections::HashSet,
     env,
+    sync::Arc,
     time::{Duration, Instant},
 };
 use time::OffsetDateTime;
@@ -205,12 +208,20 @@ async fn service_log_maintenance_projects_page_is_bounded_and_worker_only() {
         .connect(&database_url)
         .await
         .expect("application role pool");
-    let denied = sqlx::query_scalar::<_, Uuid>(
-        "SELECT project_id FROM gateway_service_log_project_usage LIMIT 1",
-    )
-    .fetch_one(&app_pool)
-    .await
-    .expect_err("application role must not enumerate maintenance usage");
+    let visible_project_ids: Vec<Uuid> =
+        sqlx::query_scalar("SELECT project_id FROM gateway_service_log_project_usage LIMIT 1")
+            .fetch_all(&app_pool)
+            .await
+            .expect("application role project-id query");
+    assert!(
+        visible_project_ids.is_empty(),
+        "an actor-less application session must see no project usage rows"
+    );
+    let denied =
+        sqlx::query("SELECT retained_bytes FROM gateway_service_log_project_usage LIMIT 1")
+            .fetch_one(&app_pool)
+            .await
+            .expect_err("application role must not read retained usage");
     assert_eq!(
         denied
             .as_database_error()
@@ -1667,6 +1678,15 @@ async fn service_log_epoch_cap_is_persisted_as_terminal_loss() {
         None,
     )
     .await;
+    sqlx::query(
+        "INSERT INTO organization_members (organization_id, user_id, role)
+         SELECT organization_id, $2, 'owner' FROM projects WHERE id = $1",
+    )
+    .bind(fixture.project)
+    .bind(fixture.owner)
+    .execute(&pool)
+    .await
+    .expect("cap fixture project owner");
     let live_instance = Uuid::new_v4();
     let live_owner = Uuid::new_v4();
     let live_host = format!("epoch-cap-live-{}", Uuid::new_v4());
@@ -1757,6 +1777,45 @@ async fn service_log_epoch_cap_is_persisted_as_terminal_loss() {
             .await,
         Err(GatewayServiceLogStoreError::Capacity)
     ));
+    let app = PgPoolOptions::new()
+        .max_connections(1)
+        .after_connect(|connection, _metadata| {
+            Box::pin(async move {
+                sqlx::query("SET ROLE hephaestus_app")
+                    .execute(&mut *connection)
+                    .await?;
+                sqlx::query("SET application_name = 'gateway-targets-cap-reader'")
+                    .execute(&mut *connection)
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect(&env::var("HEPHAESTUS_POSTGRES_TEST_URL").expect("test database URL"))
+        .await
+        .expect("connect cap reader application role");
+    let reader = PostgresGatewayServiceLogReader::new(
+        app.clone(),
+        Arc::new(authz_postgres::PostgresMelangeAuthorizer),
+    );
+    let reader_identity = AuthenticatedIdentity::new(
+        UserId::from_uuid(fixture.owner),
+        "target-cap-reader",
+        "target cap reader",
+        serde_json::json!({}),
+        RequestId::new(),
+    );
+    let rejected_metadata = reader
+        .get_project_metadata(&reader_identity, fixture.project)
+        .await
+        .expect("authorized reader sees persisted cap rejection");
+    assert!(rejected_metadata.usage_present);
+    assert_eq!(
+        (
+            rejected_metadata.storage_dropped_chunks,
+            rejected_metadata.storage_dropped_bytes
+        ),
+        (1, 18)
+    );
     let epoch_count: i32 = sqlx::query_scalar(
         "SELECT retained_epochs FROM gateway_service_log_project_usage WHERE project_id = $1",
     )
@@ -1765,16 +1824,6 @@ async fn service_log_epoch_cap_is_persisted_as_terminal_loss() {
     .await
     .expect("persisted epoch cap");
     assert_eq!(epoch_count, 128);
-    let (dropped_chunks, dropped_bytes): (i64, i64) = sqlx::query_as(
-        "SELECT storage_dropped_chunks, storage_dropped_bytes
-           FROM gateway_service_log_project_usage
-          WHERE project_id = $1",
-    )
-    .bind(fixture.project)
-    .fetch_one(&pool)
-    .await
-    .expect("persisted epoch-cap loss");
-    assert_eq!((dropped_chunks, dropped_bytes), (1, 18));
     let report = store
         .maintain_project(
             fixture.project,
@@ -1829,16 +1878,18 @@ async fn service_log_epoch_cap_is_persisted_as_terminal_loss() {
         "capacity-dropped batch was not resurrected"
     );
     assert_eq!(new_sequence, 1);
-    let (dropped_chunks, dropped_bytes): (i64, i64) = sqlx::query_as(
-        "SELECT storage_dropped_chunks, storage_dropped_bytes
-           FROM gateway_service_log_project_usage
-          WHERE project_id = $1",
-    )
-    .bind(fixture.project)
-    .fetch_one(&pool)
-    .await
-    .expect("preserved epoch-cap loss");
-    assert_eq!((dropped_chunks, dropped_bytes), (1, 18));
+    let preserved_metadata = reader
+        .get_project_metadata(&reader_identity, fixture.project)
+        .await
+        .expect("authorized reader sees cap rejection after GC");
+    assert_eq!(
+        (
+            preserved_metadata.storage_dropped_chunks,
+            preserved_metadata.storage_dropped_bytes
+        ),
+        (1, 18)
+    );
+    app.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -2181,6 +2232,7 @@ async fn service_instance_inventory_is_stable_by_host_and_cursor() {
 }
 
 struct Fixture {
+    owner: Uuid,
     project: Uuid,
     gateway: Uuid,
     old_service: Uuid,
@@ -2398,6 +2450,7 @@ async fn seed_gateway_with_instance_state(
         .await
         .expect("ready service instance");
     Fixture {
+        owner,
         project,
         gateway,
         old_service,
