@@ -570,6 +570,23 @@ draining remain unchecked.
   `/tmp/hephaestus-gateway-recovery-real-strict.log`. Supervisor scheduling,
   cancellation wiring, and service runtime execution remain pending.
 
+- [x] Extend service draining counts to the exact instance and fencing epoch,
+  and extend recovery eligibility to reject missing, stale-fenced, expired,
+  or non-ready instances while preserving live `ready` and `draining` work.
+  The fresh post-lock recheck uses the database clock for instance leases and
+  terminalizes through the existing atomic completion path. Focused coverage
+  includes stale-fence recovery, expired `Ready` instances, invalid state,
+  caller-clock skew, live draining, exact cross-instance/gateway isolation,
+  and the locked invocation remaining accepted before lock release. A shared
+  database run exposed an old bounded-test assumption (`1` global leftover
+  versus `5` eligible rows); the test now verifies the held fixture and drains
+  all 129 owned rows in bounded passes. The fresh worker-role PostgreSQL run
+  passed all 43 gateway-postgres tests, with migration markers through 75;
+  strict all-target gateway-postgres Clippy and owned formatting/diff checks
+  also passed. Evidence: `/tmp/hephaestus-gateway-postgres-full-worker.log`
+  and `/tmp/hephaestus-gateway-postgres-clippy.log`. Supervisor scheduling,
+  lifecycle integration, and live service execution remain pending.
+
 The gateway aggregate now separates the latest declared service revision from
 the serving revision with `desired_service_revision_id`. Service install and
 configure operations update the desired pointer while preserving the active

@@ -1,7 +1,8 @@
 //! Real `PostgreSQL` coverage for read-only persistent-service target queries.
 
 use gateway_edge::{
-    GatewayServiceTargetPage, GatewayServiceTargetStore, MAX_SERVICE_TARGET_PAGE_SIZE,
+    GatewayServiceIdentity, GatewayServiceInstanceKey, GatewayServiceTargetPage,
+    GatewayServiceTargetStore, MAX_SERVICE_TARGET_PAGE_SIZE,
 };
 use gateway_postgres::PostgresGatewayServiceTargets;
 use serial_test::serial;
@@ -15,7 +16,8 @@ async fn service_targets_preserve_serving_candidate_and_lifecycle_boundaries() {
     let Some(pool) = test_pool().await else {
         return;
     };
-    let store = PostgresGatewayServiceTargets::new(pool.clone());
+    let worker = worker_pool().await;
+    let store = PostgresGatewayServiceTargets::new(worker);
     let serving_and_revoked = seed_gateway(&pool, "revoked-candidate", "enabled", "revoked").await;
     set_pointers(
         &pool,
@@ -34,6 +36,7 @@ async fn service_targets_preserve_serving_candidate_and_lifecycle_boundaries() {
         Some(mixed.candidate_service),
     )
     .await;
+    insert_accepted_invocation(&pool, &mixed).await;
 
     let paused = seed_gateway(&pool, "paused-service", "paused", "published").await;
     set_pointers(
@@ -163,6 +166,65 @@ async fn service_targets_preserve_serving_candidate_and_lifecycle_boundaries() {
             .expect("project/revision mismatch count"),
         0
     );
+    let old_key = GatewayServiceInstanceKey {
+        identity: GatewayServiceIdentity {
+            instance_id: serving_and_revoked.old_instance,
+            gateway_id: serving_and_revoked.gateway,
+            revision_id: serving_and_revoked.old_service,
+        },
+        fencing_token: 1,
+    };
+    assert_eq!(
+        store
+            .count_accepted_service_invocations_for_instance(old_key)
+            .await
+            .expect("exact accepted invocation count"),
+        1
+    );
+    assert_eq!(
+        store
+            .count_accepted_service_invocations_for_instance(GatewayServiceInstanceKey {
+                fencing_token: 2,
+                ..old_key
+            })
+            .await
+            .expect("stale fence accepted invocation count"),
+        0
+    );
+    let mixed_key = GatewayServiceInstanceKey {
+        identity: GatewayServiceIdentity {
+            instance_id: mixed.old_instance,
+            gateway_id: mixed.gateway,
+            revision_id: mixed.old_service,
+        },
+        fencing_token: 1,
+    };
+    assert_eq!(
+        store
+            .count_accepted_service_invocations_for_instance(mixed_key)
+            .await
+            .expect("different instance accepted invocation count"),
+        1
+    );
+    assert_eq!(
+        store
+            .count_accepted_service_invocations_for_instance(old_key)
+            .await
+            .expect("original instance count remains isolated"),
+        1
+    );
+    assert!(
+        store
+            .count_accepted_service_invocations_for_instance(GatewayServiceInstanceKey {
+                identity: GatewayServiceIdentity {
+                    instance_id: Uuid::nil(),
+                    ..old_key.identity
+                },
+                fencing_token: 1,
+            })
+            .await
+            .is_err()
+    );
 }
 
 #[test]
@@ -206,6 +268,32 @@ async fn test_pool() -> Option<sqlx::PgPool> {
     assert!(max_version >= 74);
     println!("REAL_POSTGRES_CONNECTED_AND_MIGRATED=1 max_migration={max_version}");
     Some(pool)
+}
+
+async fn worker_pool() -> sqlx::PgPool {
+    let database_url = env::var("HEPHAESTUS_POSTGRES_TEST_URL").expect("worker test database URL");
+    let pool = PgPoolOptions::new()
+        .max_connections(8)
+        .after_connect(|connection, _metadata| {
+            Box::pin(async move {
+                sqlx::query("SET ROLE hephaestus_worker")
+                    .execute(&mut *connection)
+                    .await?;
+                sqlx::query("SET application_name = 'gateway-targets-test'")
+                    .execute(&mut *connection)
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect(&database_url)
+        .await
+        .expect("connect worker PostgreSQL pool");
+    let current_user: String = sqlx::query_scalar("SELECT current_user")
+        .fetch_one(&pool)
+        .await
+        .expect("read worker current user");
+    assert_eq!(current_user, "hephaestus_worker");
+    pool
 }
 
 // This fixture keeps the complete gateway/release graph in one setup helper so

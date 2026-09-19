@@ -5,6 +5,7 @@ use gateway_domain::GatewayServiceConfig;
 use uuid::Uuid;
 
 use crate::GatewayEdgeError;
+use crate::GatewayServiceInstanceKey;
 
 /// Maximum number of gateways returned by one service-target page.
 pub const MAX_SERVICE_TARGET_PAGE_SIZE: u16 = 128;
@@ -130,5 +131,13 @@ pub trait GatewayServiceTargetStore: Send + Sync {
         &self,
         gateway_id: Uuid,
         revision_id: Uuid,
+    ) -> Result<u64, GatewayEdgeError>;
+
+    /// Counts accepted invocations bound to one exact instance and fencing
+    /// epoch.  This is the only count safe for deciding when that instance
+    /// may finish draining.
+    async fn count_accepted_service_invocations_for_instance(
+        &self,
+        key: GatewayServiceInstanceKey,
     ) -> Result<u64, GatewayEdgeError>;
 }

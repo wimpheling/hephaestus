@@ -3,9 +3,9 @@
 use async_trait::async_trait;
 use gateway_domain::{GatewayServiceConfig, ServiceProbePath};
 use gateway_edge::{
-    GatewayEdgeError, GatewayServiceOwnedTarget, GatewayServiceRevisionTarget,
-    GatewayServiceTarget, GatewayServiceTargetPage, GatewayServiceTargetPageResult,
-    GatewayServiceTargetStore,
+    GatewayEdgeError, GatewayServiceInstanceKey, GatewayServiceOwnedTarget,
+    GatewayServiceRevisionTarget, GatewayServiceTarget, GatewayServiceTargetPage,
+    GatewayServiceTargetPageResult, GatewayServiceTargetStore,
 };
 use sqlx::{FromRow, PgPool};
 use std::convert::TryFrom;
@@ -151,6 +151,42 @@ impl GatewayServiceTargetStore for PostgresGatewayServiceTargets {
         )
         .bind(gateway_id)
         .bind(revision_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|_| GatewayEdgeError::Unavailable)?;
+        u64::try_from(count).map_err(|_| GatewayEdgeError::Unavailable)
+    }
+
+    async fn count_accepted_service_invocations_for_instance(
+        &self,
+        key: GatewayServiceInstanceKey,
+    ) -> Result<u64, GatewayEdgeError> {
+        if key.identity.instance_id.is_nil()
+            || key.identity.gateway_id.is_nil()
+            || key.identity.revision_id.is_nil()
+            || key.fencing_token <= 0
+        {
+            return Err(GatewayEdgeError::Contract(
+                "gateway service instance key is invalid",
+            ));
+        }
+        let count: i64 = sqlx::query_scalar(
+            "SELECT count(*)::bigint
+               FROM gateway_invocations AS invocation
+               JOIN gateway_revisions AS revision
+                 ON revision.id = invocation.gateway_revision_id
+                AND revision.gateway_id = invocation.gateway_id
+                AND revision.handler_contract = 'http.service.v1'
+              WHERE invocation.gateway_id = $1
+                AND invocation.gateway_revision_id = $2
+                AND invocation.outcome = 'accepted'
+                AND invocation.service_instance_id = $3
+                AND invocation.service_instance_fencing_token = $4",
+        )
+        .bind(key.identity.gateway_id)
+        .bind(key.identity.revision_id)
+        .bind(key.identity.instance_id)
+        .bind(key.fencing_token)
         .fetch_one(&self.pool)
         .await
         .map_err(|_| GatewayEdgeError::Unavailable)?;

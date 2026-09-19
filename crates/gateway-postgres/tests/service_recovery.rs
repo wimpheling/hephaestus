@@ -1,7 +1,7 @@
 //! Real `PostgreSQL` coverage for bounded service-invocation recovery.
 
-use gateway_edge::GatewayLimits;
-use gateway_postgres::PostgresGatewayEdgeAuthority;
+use gateway_edge::{GatewayLimits, GatewayServiceOwner, GatewayServiceOwnership};
+use gateway_postgres::{PostgresGatewayEdgeAuthority, PostgresGatewayServiceOwnership};
 use serial_test::serial;
 use sqlx::postgres::PgPoolOptions;
 use std::{env, time::Duration as StdDuration};
@@ -27,7 +27,8 @@ async fn service_recovery_terminalizes_only_abandoned_host_invocations() {
     };
     let now = OffsetDateTime::now_utc();
     let service = seed_fixture(&pool, "http.service.v1").await;
-    let authority = authority(pool.clone());
+    let worker = worker_pool().await;
+    let authority = authority(worker.clone());
 
     let expired = insert_invocation(&pool, service, now - Duration::minutes(10)).await;
     let expired_session =
@@ -102,7 +103,8 @@ async fn service_recovery_is_bounded_and_skips_locked_invocations() {
     };
     let now = OffsetDateTime::now_utc();
     let fixture = seed_fixture(&pool, "http.service.v1").await;
-    let authority = authority(pool.clone());
+    let worker = worker_pool().await;
+    let authority = authority(worker.clone());
     let mut invocations = Vec::with_capacity(129);
     for _ in 0..129 {
         invocations.push(insert_invocation(&pool, fixture, now - Duration::minutes(10)).await);
@@ -117,21 +119,36 @@ async fn service_recovery_is_bounded_and_skips_locked_invocations() {
     .execute(&mut *lock)
     .await
     .expect("lock stale invocation");
-    assert_eq!(
-        authority
-            .recover_abandoned_service_invocations(now)
-            .await
-            .expect("recover first bounded batch"),
-        128
-    );
+    let first_batch = authority
+        .recover_abandoned_service_invocations(now)
+        .await
+        .expect("recover first bounded batch");
+    assert_eq!(first_batch, 128);
+    assert_eq!(outcome(&pool, invocations[0]).await, "accepted");
     lock.rollback().await.expect("release invocation lock");
-    assert_eq!(
-        authority
-            .recover_abandoned_service_invocations(now)
+    tokio::time::timeout(StdDuration::from_secs(30), async {
+        loop {
+            let processed = authority
+                .recover_abandoned_service_invocations(now)
+                .await
+                .expect("recover next bounded batch");
+            assert!(processed <= 128);
+            let timed_out: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM gateway_invocations
+                  WHERE id = ANY($1) AND outcome = 'timed_out'",
+            )
+            .bind(&invocations)
+            .fetch_one(&pool)
             .await
-            .expect("recover locked invocation"),
-        1
-    );
+            .expect("count recovered invocations");
+            if timed_out == 129 {
+                break;
+            }
+            assert!(processed > 0, "recovery made no progress");
+        }
+    })
+    .await
+    .expect("recover all owned invocations in bounded passes");
     let timed_out: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM gateway_invocations
           WHERE id = ANY($1) AND outcome = 'timed_out'",
@@ -141,6 +158,143 @@ async fn service_recovery_is_bounded_and_skips_locked_invocations() {
     .await
     .expect("count recovered invocations");
     assert_eq!(timed_out, 129);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn service_recovery_reaps_ineligible_instance_bindings_but_preserves_draining() {
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let now = OffsetDateTime::now_utc();
+    let worker = worker_pool().await;
+
+    let clock_fixture = seed_fixture(&pool, "http.service.v1").await;
+    let clock_invocation = insert_invocation(&pool, clock_fixture, now).await;
+    let future = now + Duration::hours(1);
+    let clock_session = insert_host_session(
+        &pool,
+        clock_fixture,
+        clock_invocation,
+        now,
+        future + Duration::minutes(10),
+    )
+    .await;
+    authority(worker.clone())
+        .recover_abandoned_service_invocations(future)
+        .await
+        .expect("recover with caller clock ahead");
+    assert_eq!(outcome(&pool, clock_invocation).await, "accepted");
+    assert_eq!(session_status(&pool, clock_session).await, "active");
+
+    let invalid_state_fixture = seed_fixture(&pool, "http.service.v1").await;
+    let invalid_state =
+        insert_invocation(&pool, invalid_state_fixture, now - Duration::minutes(10)).await;
+    let invalid_state_session = insert_host_session(
+        &pool,
+        invalid_state_fixture,
+        invalid_state,
+        now,
+        now + Duration::minutes(10),
+    )
+    .await;
+    sqlx::query(
+        "UPDATE gateway_service_instances
+            SET state = 'failed'
+          WHERE id = $1",
+    )
+    .bind(invalid_state_fixture.service_instance)
+    .execute(&pool)
+    .await
+    .expect("mark instance failed");
+
+    let stale_fence_fixture = seed_fixture_with_expired_instance(&pool).await;
+    let stale_fence =
+        insert_invocation(&pool, stale_fence_fixture, now - Duration::minutes(10)).await;
+    let stale_fence_session = insert_host_session(
+        &pool,
+        stale_fence_fixture,
+        stale_fence,
+        now,
+        now + Duration::minutes(10),
+    )
+    .await;
+    let ownership = PostgresGatewayServiceOwnership::new(worker.clone());
+    let owner = GatewayServiceOwner::new("recovery-host", stale_fence_fixture.owner)
+        .expect("valid recovery owner");
+    let recovered = ownership
+        .claim_expired(&owner, StdDuration::from_secs(600), 128)
+        .await
+        .expect("recover expired service instance");
+    let recovered_stale_fence = recovered
+        .iter()
+        .find(|lease| Some(lease.identity.instance_id) == stale_fence_fixture.service_instance)
+        .expect("recover stale-fence fixture instance");
+    assert_eq!(recovered_stale_fence.fencing_token, 2);
+
+    let expired_fixture = seed_fixture_with_expired_instance(&pool).await;
+    let expired_instance =
+        insert_invocation(&pool, expired_fixture, now - Duration::minutes(10)).await;
+    let expired_instance_session = insert_host_session(
+        &pool,
+        expired_fixture,
+        expired_instance,
+        now,
+        now + Duration::minutes(10),
+    )
+    .await;
+    let (expired_state, expired_at): (String, OffsetDateTime) = sqlx::query_as(
+        "SELECT state, lease_expires_at
+           FROM gateway_service_instances
+          WHERE id = $1",
+    )
+    .bind(expired_fixture.service_instance)
+    .fetch_one(&pool)
+    .await
+    .expect("read expired ready instance");
+    assert_eq!(expired_state, "ready");
+    assert!(expired_at <= now);
+
+    let draining_fixture = seed_fixture(&pool, "http.service.v1").await;
+    let draining = insert_invocation(&pool, draining_fixture, now - Duration::minutes(10)).await;
+    let draining_session = insert_host_session(
+        &pool,
+        draining_fixture,
+        draining,
+        now,
+        now + Duration::minutes(10),
+    )
+    .await;
+    sqlx::query(
+        "UPDATE gateway_service_instances
+            SET state = 'draining'
+          WHERE id = $1",
+    )
+    .bind(draining_fixture.service_instance)
+    .execute(&pool)
+    .await
+    .expect("mark instance draining");
+
+    let processed = authority(worker)
+        .recover_abandoned_service_invocations(now)
+        .await
+        .expect("recover ineligible instance bindings");
+    assert!(
+        processed >= 3,
+        "expected the three ineligible bindings to be reaped"
+    );
+    for invocation in [invalid_state, expired_instance, stale_fence] {
+        assert_eq!(outcome(&pool, invocation).await, "timed_out");
+    }
+    assert_eq!(outcome(&pool, draining).await, "accepted");
+    for session in [
+        invalid_state_session,
+        expired_instance_session,
+        stale_fence_session,
+    ] {
+        assert_eq!(session_status(&pool, session).await, "revoked");
+    }
+    assert_eq!(session_status(&pool, draining_session).await, "active");
 }
 
 const fn authority(pool: sqlx::PgPool) -> PostgresGatewayEdgeAuthority {
@@ -178,10 +332,48 @@ async fn test_pool() -> Option<sqlx::PgPool> {
     Some(pool)
 }
 
+async fn worker_pool() -> sqlx::PgPool {
+    let database_url = env::var("HEPHAESTUS_POSTGRES_TEST_URL").expect("worker test database URL");
+    let pool = PgPoolOptions::new()
+        .max_connections(8)
+        .after_connect(|connection, _metadata| {
+            Box::pin(async move {
+                sqlx::query("SET ROLE hephaestus_worker")
+                    .execute(&mut *connection)
+                    .await?;
+                sqlx::query("SET application_name = 'gateway-recovery-test'")
+                    .execute(&mut *connection)
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect(&database_url)
+        .await
+        .expect("connect worker PostgreSQL pool");
+    let current_user: String = sqlx::query_scalar("SELECT current_user")
+        .fetch_one(&pool)
+        .await
+        .expect("read worker current user");
+    assert_eq!(current_user, "hephaestus_worker");
+    pool
+}
+
 // This real-PostgreSQL fixture deliberately builds the release, agent,
 // revision, route, and leased instance graph in one place.
-#[allow(clippy::too_many_lines)]
 async fn seed_fixture(pool: &sqlx::PgPool, contract: &str) -> Fixture {
+    seed_fixture_with_lease(pool, contract, false).await
+}
+
+async fn seed_fixture_with_expired_instance(pool: &sqlx::PgPool) -> Fixture {
+    seed_fixture_with_lease(pool, "http.service.v1", true).await
+}
+
+#[allow(clippy::too_many_lines)]
+async fn seed_fixture_with_lease(
+    pool: &sqlx::PgPool,
+    contract: &str,
+    expired_instance: bool,
+) -> Fixture {
     let owner = Uuid::new_v4();
     let organization = Uuid::new_v4();
     let project = Uuid::new_v4();
@@ -349,13 +541,21 @@ async fn seed_fixture(pool: &sqlx::PgPool, contract: &str) -> Fixture {
     .expect("route");
     let service_instance = if service {
         let instance = Uuid::new_v4();
-        sqlx::query(
+        let (heartbeat, lease) = if expired_instance {
+            (
+                "now() - interval '20 minutes'",
+                "now() - interval '10 minutes'",
+            )
+        } else {
+            ("now()", "now() + interval '10 minutes'")
+        };
+        sqlx::query(&format!(
             "INSERT INTO gateway_service_instances
                 (id, gateway_id, revision_id, owner_host_id, owner_uuid,
                  fencing_token, vm_id, state, lease_expires_at, heartbeat_at)
              VALUES ($1, $2, $3, 'recovery-host', $4, 1,
-                     $5, 'ready', now() + interval '10 minutes', now())",
-        )
+                     $5, 'ready', {lease}, {heartbeat})"
+        ))
         .bind(instance)
         .bind(gateway)
         .bind(revision)
