@@ -909,6 +909,7 @@ pub async fn build_and_install_reference_uis(
             "index.html",
         ]),
         None,
+        None,
     )?;
     let managed_release = get_published_release(context, managed_build.release_id).await?;
     validate_reference_ui_descriptor(
@@ -919,6 +920,13 @@ pub async fn build_and_install_reference_uis(
         "managed-reference",
         None,
         Some(("cooking-reference-service-ui", "/reference")),
+        Some(&[
+            "/reference/header-policy",
+            "/reference/identity",
+            "/reference/probe-location",
+            "/reference/probe-refresh",
+            "/reference/probe-set-cookie",
+        ]),
     )?;
 
     // The managed descriptor's gateway declaration is installed through the
@@ -1182,6 +1190,7 @@ fn validate_reference_ui_descriptor(
     expected_route_base: &str,
     expected_static_routes: Option<&[&str]>,
     expected_managed: Option<(&str, &str)>,
+    expected_api_routes: Option<&[&str]>,
 ) -> Result<(), BuildError> {
     let descriptor = release
         .ui_descriptors
@@ -1234,6 +1243,18 @@ fn validate_reference_ui_descriptor(
         _ => {
             return Err(invalid_state(&format!(
                 "published UI {expected_key} has unexpected content kind"
+            )));
+        }
+    }
+    if let Some(expected_routes) = expected_api_routes {
+        let actual_routes = descriptor
+            .apis
+            .iter()
+            .map(|api| api.route.as_str())
+            .collect::<Vec<_>>();
+        if actual_routes != expected_routes {
+            return Err(invalid_state(&format!(
+                "managed UI {expected_key} APIs differ from checked-in declaration"
             )));
         }
     }

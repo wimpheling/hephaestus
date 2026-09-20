@@ -12,7 +12,8 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlsplit
 
 
-ADDRESS = ("127.0.0.1", 8080)
+PORT = int(os.environ.get("HEPHAESTUS_REFERENCE_SERVICE_PORT", "8080"))
+ADDRESS = ("127.0.0.1", PORT)
 MAX_HEADER_BYTES = 8 * 1024
 MAX_HEADER_COUNT = 32
 REQUEST_TIMEOUT_SECONDS = 5
@@ -58,6 +59,30 @@ class ReferenceHandler(BaseHTTPRequestHandler):
         elif path in {"/reference/identity", "/gateway/reference/identity"}:
             body = json.dumps(self.server.startup_identity, sort_keys=True).encode() + b"\n"
             self._send(HTTPStatus.OK, body, "application/json")
+        elif path in {"/reference/header-policy", "/gateway/reference/header-policy"}:
+            body = json.dumps(self._header_policy(), sort_keys=True).encode() + b"\n"
+            self._send(HTTPStatus.OK, body, "application/json")
+        elif path in {"/reference/probe-set-cookie", "/gateway/reference/probe-set-cookie"}:
+            self._send(
+                HTTPStatus.OK,
+                b"set-cookie probe\n",
+                "text/plain; charset=utf-8",
+                {"Set-Cookie": "__Host-heph_guest_probe=discarded; Secure; HttpOnly; Path=/"},
+            )
+        elif path in {"/reference/probe-location", "/gateway/reference/probe-location"}:
+            self._send(
+                HTTPStatus.FOUND,
+                b"location probe\n",
+                "text/plain; charset=utf-8",
+                {"Location": "/reference/identity"},
+            )
+        elif path in {"/reference/probe-refresh", "/gateway/reference/probe-refresh"}:
+            self._send(
+                HTTPStatus.OK,
+                b"refresh probe\n",
+                "text/plain; charset=utf-8",
+                {"Refresh": "0; url=/reference/identity"},
+            )
         else:
             self._error(HTTPStatus.NOT_FOUND)
 
@@ -75,11 +100,28 @@ class ReferenceHandler(BaseHTTPRequestHandler):
         root = Path(__file__).resolve().parent
         self._send(HTTPStatus.OK, (root / name).read_bytes(), media_type)
 
-    def _send(self, status: HTTPStatus, body: bytes, media_type: str) -> None:
+    def _header_policy(self) -> dict[str, bool]:
+        names = {name.lower() for name in self.headers}
+        return {
+            "authorization_absent": "authorization" not in names,
+            "cookie_absent": "cookie" not in names,
+            "forwarded_absent": "forwarded" not in names,
+            "x_forwarded_absent": not any(name.startswith("x-forwarded-") for name in names),
+        }
+
+    def _send(
+        self,
+        status: HTTPStatus,
+        body: bytes,
+        media_type: str,
+        extra_headers: dict[str, str] | None = None,
+    ) -> None:
         self.send_response(status)
         self.send_header("Content-Type", media_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        for name, value in (extra_headers or {}).items():
+            self.send_header(name, value)
         self.send_header("Connection", "close")
         self.end_headers()
         self.wfile.write(body)

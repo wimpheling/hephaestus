@@ -364,6 +364,97 @@ test("cooking installed UI TLS full-page and managed iframe smoke", async ({page
     });
     expect(identityIsValid).toBe(true);
   });
+  await test.step("lifecycle-guest-policy-ready", async () => {
+    writeFileSync(join(controlDirectory, "guest-policy-ready"), "ready\n", {
+      encoding: "utf8",
+      mode: 0o600,
+      flag: "wx",
+    });
+  });
+  await test.step("lifecycle-guest-policy-start", async () => {
+    await expect.poll(
+      () => existsSync(join(controlDirectory, "guest-policy-start")),
+      {timeout: 30_000},
+    ).toBe(true);
+  });
+  let headerPolicyResult: GuestHeaderPolicyResult | null = null;
+  await test.step("lifecycle-guest-policy-header-request", async () => {
+    headerPolicyResult = await runGuestHeaderPolicyProbe(page, frameContent);
+    expect(headerPolicyResult.requestObserved).toBe(true);
+  });
+  await test.step("lifecycle-guest-policy-header-status", async () => {
+    expect(headerPolicyResult?.status).toBe(200);
+  });
+  await test.step("lifecycle-guest-policy-header-wire", async () => {
+    expect(headerPolicyResult?.cookiePresent).toBe(true);
+    expect(headerPolicyResult?.authorizationPresent).toBe(true);
+    expect(headerPolicyResult?.forwardedPresent).toBe(true);
+    expect(headerPolicyResult?.xForwardedPresent).toBe(true);
+  });
+  await test.step("lifecycle-guest-policy-header-json", async () => {
+    expect(headerPolicyResult?.jsonValid).toBe(true);
+  });
+  let setCookieProbeResult: GuestForbiddenProbeResult | null = null;
+  await test.step("lifecycle-guest-policy-set-cookie-response", async () => {
+    setCookieProbeResult = await runGuestForbiddenProbe(page, frameContent, "/reference/probe-set-cookie");
+    expect(setCookieProbeResult.status).toBe(502);
+    expect(setCookieProbeResult.cookiePresent).toBe(true);
+  });
+  await test.step("lifecycle-guest-policy-set-cookie-body", async () => {
+    expect(setCookieProbeResult?.genericBody).toBe(true);
+  });
+  await test.step("lifecycle-guest-policy-set-cookie-headers", async () => {
+    expect(setCookieProbeResult?.forbiddenHeadersAbsent).toBe(true);
+  });
+  await test.step("lifecycle-guest-policy-set-cookie-cookie", async () => {
+    expect(setCookieProbeResult?.guestProbeCookiePresent).toBe(false);
+  });
+  await test.step("lifecycle-guest-policy-set-cookie-navigation", async () => {
+    expect(setCookieProbeResult?.navigationUnchanged).toBe(true);
+  });
+  let locationProbeResult: GuestForbiddenProbeResult | null = null;
+  await test.step("lifecycle-guest-policy-location-response", async () => {
+    locationProbeResult = await runGuestForbiddenProbe(page, frameContent, "/reference/probe-location");
+    expect(locationProbeResult.status).toBe(502);
+    expect(locationProbeResult.cookiePresent).toBe(true);
+  });
+  await test.step("lifecycle-guest-policy-location-body", async () => {
+    expect(locationProbeResult?.genericBody).toBe(true);
+  });
+  await test.step("lifecycle-guest-policy-location-headers", async () => {
+    expect(locationProbeResult?.forbiddenHeadersAbsent).toBe(true);
+  });
+  await test.step("lifecycle-guest-policy-location-navigation", async () => {
+    expect(locationProbeResult?.navigationUnchanged).toBe(true);
+  });
+  let refreshProbeResult: GuestForbiddenProbeResult | null = null;
+  await test.step("lifecycle-guest-policy-refresh-response", async () => {
+    refreshProbeResult = await runGuestForbiddenProbe(page, frameContent, "/reference/probe-refresh");
+    expect(refreshProbeResult.status).toBe(502);
+    expect(refreshProbeResult.cookiePresent).toBe(true);
+  });
+  await test.step("lifecycle-guest-policy-refresh-body", async () => {
+    expect(refreshProbeResult?.genericBody).toBe(true);
+  });
+  await test.step("lifecycle-guest-policy-refresh-headers", async () => {
+    expect(refreshProbeResult?.forbiddenHeadersAbsent).toBe(true);
+  });
+  await test.step("lifecycle-guest-policy-refresh-navigation", async () => {
+    expect(refreshProbeResult?.navigationUnchanged).toBe(true);
+  });
+  await test.step("lifecycle-guest-policy-complete", async () => {
+    writeFileSync(join(controlDirectory, "guest-policy-complete"), "complete\n", {
+      encoding: "utf8",
+      mode: 0o600,
+      flag: "wx",
+    });
+  });
+  await test.step("lifecycle-guest-policy-verified", async () => {
+    await expect.poll(
+      () => existsSync(join(controlDirectory, "guest-policy-verified")),
+      {timeout: 30_000},
+    ).toBe(true);
+  });
   await expect(page.locator("#installed-ui-terminal-status-project")).toBeHidden();
   await page.screenshot({path: screenshotPath("installed-ui-managed-iframe.png"), fullPage: true});
   const managedFrameBeforeDisable = await frame.elementHandle();
@@ -996,4 +1087,151 @@ function escapeRegExp(value: string) {
 function requestHasCookie(headers: Record<string, string>, name: string): boolean {
   const cookieHeader = headers.cookie ?? "";
   return cookieHeader.split(";").some(cookie => cookie.trim().startsWith(`${name}=`));
+}
+
+type GuestHeaderPolicyResult = {
+  requestObserved: boolean;
+  status: number;
+  cookiePresent: boolean;
+  authorizationPresent: boolean;
+  forwardedPresent: boolean;
+  xForwardedPresent: boolean;
+  jsonValid: boolean;
+};
+
+type GuestForbiddenProbeResult = {
+  status: number;
+  cookiePresent: boolean;
+  genericBody: boolean;
+  forbiddenHeadersAbsent: boolean;
+  guestProbeCookiePresent: boolean;
+  navigationUnchanged: boolean;
+};
+
+async function runGuestHeaderPolicyProbe(
+  page: import("@playwright/test").Page,
+  frame: import("@playwright/test").FrameLocator,
+): Promise<GuestHeaderPolicyResult> {
+  const frameUrl = await currentManagedFrameUrl(page);
+  const url = new URL("/reference/header-policy", frameUrl).toString();
+  const [request, response, body] = await Promise.all([
+    page.waitForRequest(
+      candidate => candidate.url() === url && candidate.resourceType() === "fetch",
+      {timeout: 30_000},
+    ),
+    page.waitForResponse(
+      candidate => candidate.url() === url && candidate.request().resourceType() === "fetch",
+      {timeout: 30_000},
+    ),
+    frame.locator("body").evaluate(async (_body, requestUrl: string) => {
+      try {
+        const response = await fetch(requestUrl, {
+          cache: "no-store",
+          credentials: "same-origin",
+          headers: {
+            authorization: "Bearer heph-guest-policy-probe",
+            forwarded: "for=heph-guest-policy-probe",
+            "x-forwarded-for": "heph-guest-policy-probe",
+            "x-forwarded-host": "heph-guest-policy-probe",
+            "x-forwarded-proto": "https",
+          },
+        });
+        const value: unknown = await response.json();
+        if (!value || typeof value !== "object") {
+          return {status: response.status, jsonValid: false};
+        }
+        const record = value as Record<string, unknown>;
+        const keys = Object.keys(record).sort();
+        return {
+          status: response.status,
+          jsonValid: keys.length === 4 &&
+            keys[0] === "authorization_absent" &&
+            keys[1] === "cookie_absent" &&
+            keys[2] === "forwarded_absent" &&
+            keys[3] === "x_forwarded_absent" &&
+            keys.every(key => record[key] === true),
+        };
+      } catch {
+        return {status: 0, jsonValid: false};
+      }
+    }, url),
+  ]);
+  const headers = await request.allHeaders();
+  return {
+    requestObserved: true,
+    status: response.status(),
+    cookiePresent: requestHasCookie(headers, "__Host-hephaestus_ui"),
+    authorizationPresent: "authorization" in headers,
+    forwardedPresent: "forwarded" in headers,
+    xForwardedPresent: [
+      "x-forwarded-for",
+      "x-forwarded-host",
+      "x-forwarded-proto",
+    ].every(name => name in headers),
+    jsonValid: body.status === 200 && body.jsonValid,
+  };
+}
+
+async function runGuestForbiddenProbe(
+  page: import("@playwright/test").Page,
+  frame: import("@playwright/test").FrameLocator,
+  path: string,
+): Promise<GuestForbiddenProbeResult> {
+  const frameUrl = await currentManagedFrameUrl(page);
+  const url = new URL(path, frameUrl).toString();
+  const parentUrl = page.url();
+  const childUrl = frameUrl;
+  const [request, response, body] = await Promise.all([
+    page.waitForRequest(
+      candidate => candidate.url() === url && candidate.resourceType() === "fetch",
+      {timeout: 30_000},
+    ),
+    page.waitForResponse(
+      candidate => candidate.url() === url && candidate.request().resourceType() === "fetch",
+      {timeout: 30_000},
+    ),
+    frame.locator("body").evaluate(async (_body, requestUrl: string) => {
+      try {
+        const response = await fetch(requestUrl, {
+          cache: "no-store",
+          credentials: "same-origin",
+          redirect: "manual",
+        });
+        const value: unknown = await response.json();
+        const record = value && typeof value === "object"
+          ? value as Record<string, unknown>
+          : {};
+        const keys = Object.keys(record);
+        return {
+          status: response.status,
+          genericBody: keys.length === 1 && keys[0] === "error" &&
+            record.error === "ui_unavailable",
+        };
+      } catch {
+        return {status: 0, genericBody: false};
+      }
+    }, url),
+  ]);
+  const requestHeaders = await request.allHeaders();
+  const headers = await response.allHeaders();
+  const cookies = await page.context().cookies(url);
+  return {
+    status: response.status(),
+    cookiePresent: requestHasCookie(requestHeaders, "__Host-hephaestus_ui"),
+    genericBody: body.status === 502 && body.genericBody,
+    forbiddenHeadersAbsent: !(["location", "refresh", "set-cookie"]
+      .some(name => name in headers)),
+    guestProbeCookiePresent: cookies.some(cookie => cookie.name === "__Host-heph_guest_probe"),
+    navigationUnchanged: page.url() === parentUrl &&
+      await currentManagedFrameUrl(page) === childUrl &&
+      request.url() === url && response.url() === url,
+  };
+}
+
+async function currentManagedFrameUrl(page: import("@playwright/test").Page): Promise<string> {
+  const frameHandle = await page.locator("#installed-ui-frame-project").elementHandle();
+  const contentFrame = frameHandle ? await frameHandle.contentFrame() : null;
+  const url = contentFrame?.url();
+  if (!url) throw new Error("managed UI content frame URL is required");
+  return url;
 }

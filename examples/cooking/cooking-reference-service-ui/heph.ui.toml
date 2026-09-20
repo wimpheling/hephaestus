@@ -16,6 +16,30 @@ gateway_name = "cooking-reference-service-ui"
 method = "GET"
 route = "/reference/identity"
 
+[[uis.apis]]
+key = "header-policy"
+gateway_name = "cooking-reference-service-ui"
+method = "GET"
+route = "/reference/header-policy"
+
+[[uis.apis]]
+key = "probe-set-cookie"
+gateway_name = "cooking-reference-service-ui"
+method = "GET"
+route = "/reference/probe-set-cookie"
+
+[[uis.apis]]
+key = "probe-location"
+gateway_name = "cooking-reference-service-ui"
+method = "GET"
+route = "/reference/probe-location"
+
+[[uis.apis]]
+key = "probe-refresh"
+gateway_name = "cooking-reference-service-ui"
+method = "GET"
+route = "/reference/probe-refresh"
+
 [uis.content]
 kind = "managed_service"
 gateway_name = "cooking-reference-service-ui"
