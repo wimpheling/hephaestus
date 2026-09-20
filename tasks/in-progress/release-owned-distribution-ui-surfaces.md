@@ -13,9 +13,9 @@ Activation/rollback and explicit-organization navigation also pass focused
 verification. The UI RPC transport checkpoint now passes its expanded real
 matrix. Gateway admission, host/resource projection, Phoenix navigation, and
 reference theme helpers pass focused checks. The bounded HTTP listener and request-wide audit now pass focused verification.
-Project-owned static/managed installed-browser smoke and the live
-disable/stale-cookie path now pass in the bounded runtime. Owner navigation,
-guest-boundary coverage, removal, parent/account revocation, and the final
+Project-owned static/managed installed-browser smoke, live disable/stale-cookie
+and reactivation, and removal now pass in the bounded runtime. Owner
+navigation, guest-boundary coverage, parent/account revocation, and the final
 repository-wide quality gate remain open.
 The handoff remains the record of the stopped session; new evidence is recorded
 below as each resumed slice passes review and verification.
@@ -37,9 +37,9 @@ Verified static-byte loading and read-only release-page metadata display are
 implemented. Durable browser sessions are integrated through RPC and Phoenix.
 Installation lifecycle and the static/managed HTTP serving baseline are committed.
 Project-owned static/managed installed-browser smoke and real Caddy/VM/browser
-proofs pass, including live disable and reactivation; owner-navigation and
-guest-boundary proofs, removal and revocation, and the final integrated quality
-gate are open. The user approved organization-owned
+proofs pass, including live disable, reactivation, and removal; owner-navigation
+and guest-boundary proofs, parent/account revocation, and the final integrated
+quality gate are open. The user approved organization-owned
 global installations and organization isolation. Historical checkpoints record the state
 at their time; later integration checkpoints supersede earlier pending notes.
 
@@ -145,6 +145,31 @@ themselves.
 This proves live disable and reactivation only. Removal, parent/account
 revocation, owner-navigation and guest-boundary coverage, and the final quality
 gate remain open.
+
+## Live removal lifecycle runtime proof (2026-09-20)
+
+The run at `eb72ef5` passed with outer exit code zero. Its execution log is
+`/home/a/heph-installed-ui-twentysixth-runtime-diag-20260920/cooking-execution.eSDL24.log`;
+the safe Playwright report is
+`/home/a/heph-installed-ui-twentysixth-runtime-diag-20260920/browser.KRN2YE/playwright.log`.
+The report records the installed browser test passing. Golden results were 35
+passed, zero failed, one ignored; gateway PostgreSQL results were eight passed.
+Runtime and cgroup cleanup was verified, with the unrelated PID 10841 preserved.
+
+The run emitted:
+
+```text
+REAL_UI_INSTALLATION_AUDIT=1 static=1 managed=1 api=1 embed=1 gateway_correlation=1
+REAL_UI_INSTALLATION_REMOVE_LIFECYCLE=1 stale_cookie_denied=1 gateway_invocation_unchanged=1 navigation_removed=1
+REAL_UI_INSTALLATION_DISABLE_LIFECYCLE=1 stale_cookie_denied=1 old_generation_denied=1 gateway_invocation_unchanged=1 reactivated_generation=1 new_generation_audit=1 gateway_invocation_increased=1
+```
+
+The browser verified the removed generation's stale cookie was denied without a
+new gateway invocation and that the removed installation disappeared from
+navigation. The disable, reactivation, and baseline audit markers also passed
+in this same run. This is evidence for removal in addition to the earlier
+disable and reactivation runs; it does not establish parent/account revocation,
+owner-navigation or guest-boundary coverage, or the final quality gate.
 
 ## Managed reference runtime and browser reachability findings (2026-09-20)
 
