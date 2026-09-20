@@ -436,6 +436,27 @@ acceptance tests remain outstanding.
 
 ## Implementation checklist
 
+### UI-kit package checkpoint (2026-09-20)
+
+`web/assets/release_ui_kit` now provides the standalone CSS package
+`@hephaestus/release-ui-kit` version 1.0.0. It builds from the existing semantic
+token authority and a small prefixed component layer, with deterministic
+versioned output and SHA-256 manifest. Generated files remain ignored;
+`prepack` builds them and a nonmutating check detects stale or missing output.
+No registry publication has been performed.
+
+Node tests, stale-output rejection, the check command, and offline package
+file-list validation passed. Browser smoke used the actual generated CSS and
+document `data-theme` attributes, with no token overrides. It verified light
+and dark styles, overflow/insets, keyboard focus, and asset loading. Primary
+button text contrast measured 5.44/6.63 in light default/hover and 7.79/5.45
+in dark default/hover. The final CSS hash is
+`79a23f981523db70c39e07be76830be59f419d2b7d3336485fe56b8a09af5c1d`.
+The smoke script is `/tmp/heph-ui-kit-browser-smoke-20260920.mjs`; reviewed
+screenshots are `/home/a/heph-ui-kit-smoke-light-20260920.png` and
+`/home/a/heph-ui-kit-smoke-dark-20260920.png`. These checks do not replace
+the reference-release browser flow or a complete accessibility audit.
+
 - [ ] **1. Specify the distribution UI declaration and publication model**
   - [ ] Define a versioned release declaration for UI artifact kind, immutable
     artifact reference, scope (`project`, `repository`, or explicitly installed
@@ -478,7 +499,7 @@ acceptance tests remain outstanding.
     without recording user payloads, credentials, or secret values.
 
 - [ ] **5. Publish the reusable UI kit**
-  - [ ] Choose and document a versioned package format that projects the
+  - [x] Choose and document a versioned package format that projects the
     design-system tokens and supported components without coupling projects to
     Phoenix internals.
   - [ ] Provide a small static and managed-service reference UI that uses the
