@@ -36,7 +36,7 @@ health, HTML, CSS, helper, identity, and unmatched-path endpoints:
 managed_output=$(mktemp -d)
 HEPHAESTUS_REFERENCE_SERVICE_UI_OUTPUT="$managed_output" \
   examples/cooking/cooking-reference-service-ui/build.sh
-(cd "$managed_output/bin" && exec ./reference-ui-service) &
+(cd "$managed_output/bin" && exec python3 ./reference-ui-service) &
 service_pid=$!
 trap 'kill "$service_pid" 2>/dev/null || true; rm -rf "$managed_output"' EXIT
 curl --fail http://127.0.0.1:8080/readyz

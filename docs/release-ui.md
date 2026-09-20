@@ -72,7 +72,7 @@ For a local managed-service smoke, start the copied service from its `bin`
 directory and inspect its bounded fixture endpoints:
 
 ```sh
-(cd "$managed_output/bin" && exec ./reference-ui-service) &
+(cd "$managed_output/bin" && exec python3 ./reference-ui-service) &
 service_pid=$!
 trap 'kill "$service_pid" 2>/dev/null || true; rm -rf "$static_output" "$managed_output"' EXIT
 curl --fail http://127.0.0.1:8080/readyz
