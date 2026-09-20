@@ -141,6 +141,25 @@ manifests.
 
 ### Publication design
 
+### Capture persistence helper checkpoint (2026-09-20)
+
+The PostgreSQL capture helper is implemented and registered under `cfg(test)`
+pending receive integration. It inserts immutable source evidence in a caller
+transaction, reuses identical repository/commit evidence, preserves the first
+receive ID, and rejects conflicting evidence without an overwrite. It uses
+read/insert privileges only and checked size/hash conversions. Build-link
+creation remains a separate integration step.
+
+The real PostgreSQL store test passed in
+`/home/a/heph-ui-manifest-store-realpg-v5-20260920.log`; the checked-size unit
+test also passed in `/home/a/heph-ui-manifest-store-unit-20260920.log`.
+Formatting, strict scoped Clippy, rustdoc, and architecture passed in
+`/home/a/heph-ui-manifest-store-{fmt,clippy,doc,architecture}-20260920.log`.
+The v3 runner had a readiness race; v4 attempted to delete immutable fixture
+rows during cleanup. V5 delegates disposal to container teardown and passes.
+
+### Publication contract (planned)
+
 The reviewed v1 model optionally reads a repository sibling `heph.ui.toml`,
 captured from the exact Git commit during receive/build-request creation
 alongside the referenced `heph.gateways.toml`. An immutable build-request
@@ -154,6 +173,16 @@ maps each explicit route to an artifact path and MIME type, then resolves exact
 artifact IDs at publication. Managed UI declarations reference the exact
 same-release gateway name, route, and entrypoint. API access is declared by
 explicit gateway, method, and route bindings.
+
+Static resolution will require an ordinary `File` artifact at the exact path
+with MIME equal to the declaration. Executables, manifests, and build logs are
+not UI assets. Build output MIME defaults to `application/octet-stream`, so
+static UI outputs must declare an allowed MIME explicitly. Duplicate candidate
+paths or IDs fail resolution. Publication currently exports one agent; managed
+gateway references must match that agent's exact key and supplied immutable ID.
+Unknown agent keys fail publication rather than generating an agent ID or
+introducing a separate multi-agent feature. These resolution rules remain
+unimplemented until the focused resolver and publication checks pass.
 
 The v1 limits are `no_store` caching, kit version 1, at most 16 UIs, 256
 static files, 16 APIs, and a 256 KiB manifest. Route-prefix collisions are

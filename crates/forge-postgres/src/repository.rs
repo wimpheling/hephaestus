@@ -28,6 +28,8 @@ use crate::{
 
 #[cfg(test)]
 mod ui_manifest;
+#[cfg(test)]
+mod ui_manifest_store;
 
 /// `PostgreSQL` forge metadata and receive repository.
 #[derive(Clone)]
