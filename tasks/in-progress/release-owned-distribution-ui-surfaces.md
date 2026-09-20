@@ -36,6 +36,20 @@ integrated quality gate remain incomplete. The user approved organization-owned
 global installations and organization isolation. Historical checkpoints record the state
 at their time; later integration checkpoints supersede earlier pending notes.
 
+## Authenticated parent-session context checkpoint (2026-09-20)
+
+Active mediator authentication retains the canonical internal browser-session
+ID already returned by the session store. Signed-only routes leave it absent;
+revocation still performs no active-session lookup. Future handoff handlers can
+derive parent identity from this trusted context without accepting it from a
+client or introducing another lookup.
+
+All twelve focused RPC authentication tests pass in
+`/home/a/heph-auth-metadata-20260920.log`, including exact active identity,
+signed-only absence, existing expiry/revocation/audience/SID behavior, and
+redaction. Formatting and diff checks pass; prior app-floor Clippy/docs cover
+the same implementation. No UI RPC exposure is claimed by this context change.
+
 ## RPC installation tenant guard checkpoint (2026-09-20)
 
 General install accepts an optional expected organization for the forthcoming

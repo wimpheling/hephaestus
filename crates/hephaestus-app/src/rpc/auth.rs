@@ -1,7 +1,7 @@
 use axum::{body::Body, extract::State, http::Request, middleware::Next, response::Response};
 use http::{HeaderMap, StatusCode, header::AUTHORIZATION};
 use identity_application::{BrowserSessionAuthenticationError, BrowserSessionStore};
-use identity_domain::{BrowserSessionSid, UserId};
+use identity_domain::{BrowserSessionId, BrowserSessionSid, UserId};
 use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode};
 use serde::Deserialize;
 use std::{collections::HashSet, str::FromStr, sync::Arc};
@@ -57,6 +57,11 @@ pub struct VerifiedMediatorSession {
     /// Browser SID carried by the signed assertion; active routes verify it
     /// against `PostgreSQL` before admitting the request.
     pub sid: BrowserSessionSid,
+    /// Internal durable row identity returned by the active-session check.
+    ///
+    /// Signed-only routes such as revoke intentionally leave this absent;
+    /// only active middleware authentication can populate it.
+    pub parent_session_id: Option<BrowserSessionId>,
 }
 
 /// Cloneable middleware state for signed mediator and browser-session checks.
@@ -91,6 +96,7 @@ impl MediatorAuthenticationState {
             user_id: principal.user_id,
             assertion_id: principal.assertion_id,
             sid: principal.sid,
+            parent_session_id: None,
         })
     }
 
@@ -117,7 +123,10 @@ impl MediatorAuthenticationState {
         if metadata.user_id() != session.user_id {
             return Err(SessionAuthenticationError::Unauthenticated);
         }
-        Ok(session)
+        Ok(VerifiedMediatorSession {
+            parent_session_id: Some(metadata.id()),
+            ..session
+        })
     }
 }
 
@@ -647,6 +656,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn active_authentication_retains_exact_store_session_id() {
+        let key = mediator_signing_key(TOKEN);
+        let user_id = UserId::new();
+        let sid = BrowserSessionSid::new();
+        let metadata = session_metadata(user_id);
+        let expected_session_id = metadata.id();
+        let state = MediatorAuthenticationState::new(
+            MediatorAuthenticator::new(&key),
+            Arc::new(RecordingSessionStore {
+                expected_user: user_id,
+                expected_sid: sid,
+                metadata,
+                outcome: FakeSessionOutcome::Active,
+                calls: Arc::new(Mutex::new(Vec::new())),
+            }),
+        );
+        let now = OffsetDateTime::now_utc().unix_timestamp();
+        let token = assertion_with_sid(
+            &key,
+            AUDIENCE,
+            user_id.as_uuid(),
+            Uuid::new_v4(),
+            now,
+            now + 30,
+            sid,
+        );
+
+        let authenticated = state
+            .authenticate_active(&headers(&token), AUDIENCE)
+            .await
+            .expect("active session should authenticate");
+        assert_eq!(authenticated.parent_session_id, Some(expected_session_id));
+    }
+
+    #[tokio::test]
     async fn revoke_skips_active_lookup_but_keeps_signed_audience_and_sid_checks() {
         let key = mediator_signing_key(TOKEN);
         let user_id = UserId::new();
@@ -672,6 +716,10 @@ mod tests {
             now + 30,
             sid,
         );
+        let signed = state
+            .authenticate_signed(&headers(&token), REVOKE_AUDIENCE)
+            .expect("signed revoke assertion should authenticate");
+        assert_eq!(signed.parent_session_id, None);
         assert_eq!(
             dispatch_status(state, REVOKE_AUDIENCE, Some(&token)).await,
             StatusCode::NO_CONTENT
