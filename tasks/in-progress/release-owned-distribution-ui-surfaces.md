@@ -53,6 +53,30 @@ release-domain/release-service/dev tests, strict release-domain/release-service/
 release-postgres/dev Clippy, and docs passed with Rust 1.88.0. This is focused
 local evidence; updated CI and final integrated quality remain pending.
 
+## UI handoff and child-session storage checkpoint (2026-09-20)
+
+Migration 89 adds worker-owned handoff and child-session records with digest-only
+bearers, canonical parent-session references, exact installation/generation and
+organization binding, request provenance, and immutable metadata. Handoffs last
+sixty seconds. Child expiry is bounded by twelve hours and the parent expiry.
+One child and its one-time handoff consumption must commit together; initially
+consumed handoffs, invalid issue/consume intervals, and child-only commits fail.
+The application role has no direct access to these tables or digest enumeration.
+
+The real PostgreSQL matrix checks the intended SQLSTATEs, binding/actor/tenant
+and timing failures, one-time consumption, rollback row absence, and restricted
+role denial. It passes in `/home/a/heph-ui-browser-schema-0089-final-20260920.log`.
+The four installation schema tests, project/repository and global installation
+matrices, and restricted app-pool bootstrap also pass at migration 89, in the
+matching `heph-ui-schema88-on-89-final`, `heph-static-install-*-on-89-final`, and
+`heph-ui-app-pool-89-final` logs. Formatting, scoped strict Clippy/docs, and
+architecture pass in `/home/a/heph-migration89-*-final-20260920.log`.
+
+This is storage enforcement only. Issuance/exchange adapters, the restricted
+application verifier, RPC/Phoenix integration, HTTP serving, and per-request
+browser authorization remain incomplete. Records retain canonical provenance;
+no transient-record deletion policy is introduced by this migration.
+
 ## Global static installation checkpoint (2026-09-20)
 
 The static zero-API installation command now supports organization-owned global
