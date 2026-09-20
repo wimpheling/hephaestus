@@ -35,7 +35,8 @@ async fn worker_creation_replay_conflicts_and_concurrency_are_atomic() {
         .expect("apply migrations through browser sessions");
     bootstrap.close().await;
     let pool = worker_pool(&database_url).await;
-    let store = PostgresBrowserSessionStore::new(pool.clone());
+    let application_pool = application_pool(&database_url).await;
+    let store = PostgresBrowserSessionStore::new(pool.clone(), application_pool);
 
     let issuer = format!("https://issuer-{}.example", Uuid::new_v4());
     let subject = format!("subject-{}", Uuid::new_v4());
@@ -323,6 +324,22 @@ async fn worker_pool(database_url: &str) -> PgPool {
         .connect(database_url)
         .await
         .expect("connect worker role")
+}
+
+async fn application_pool(database_url: &str) -> PgPool {
+    PgPoolOptions::new()
+        .max_connections(4)
+        .after_connect(|connection, _metadata| {
+            Box::pin(async move {
+                sqlx::query("SET ROLE hephaestus_app")
+                    .execute(connection)
+                    .await
+                    .map(|_| ())
+            })
+        })
+        .connect(database_url)
+        .await
+        .expect("connect application role")
 }
 
 async fn insert_identity(pool: &PgPool, issuer: &str, subject: &str) -> UserId {

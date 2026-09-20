@@ -24,6 +24,23 @@ integrated quality gate remain incomplete. Global installation ownership is an
 open question sent to the user. Historical checkpoints below record the state
 at their time; later integration checkpoints supersede earlier pending notes.
 
+## Application-role session verification checkpoint (2026-09-20)
+
+The PostgreSQL session adapter now has separate worker and application pools.
+Active verification hashes the supplied SID and calls only the narrow database
+verifier through the application role. Missing or inactive sessions produce an
+authentication failure; database/invariant failures produce opaque unavailability.
+There is no cache or worker-role fallback.
+
+A real non-superuser, non-RLS-bypass application-role test passes valid creation
+and verification, direct table denial, wrong SID/user rejection, suspension after
+successful authentication, and a closed verifier pool. The creation/replay matrix
+also passes. Scoped Clippy/docs, workspace formatting, and all 61 enabled
+architecture checks pass. Evidence: `/home/a/heph-browser-session-auth-20260920.log`
+and `/home/a/heph-browser-session-auth-checks-20260920.log`.
+Mediator enforcement, revocation, RPC/Phoenix wiring, and UI authority are still
+pending; this adapter checkpoint alone does not change login behavior.
+
 ## Static reference fixture checkpoint (2026-09-20)
 
 `examples/cooking/cooking-reference-ui` declares a project-scoped static page

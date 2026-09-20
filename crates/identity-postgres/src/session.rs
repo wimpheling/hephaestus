@@ -1,31 +1,41 @@
-//! `PostgreSQL` browser-session creation adapter.
+//! `PostgreSQL` browser-session lifecycle adapter.
 
 use identity_application::{
-    CreateBrowserSession, CreateBrowserSessionError, CreatedBrowserSession,
+    BrowserSessionAuthenticationError, CreateBrowserSession, CreateBrowserSessionError,
+    CreatedBrowserSession,
 };
 use identity_domain::{
-    AuthenticatedIdentity, BrowserSessionId, BrowserSessionMetadata,
+    AuthenticatedIdentity, BrowserSessionId, BrowserSessionMetadata, BrowserSessionSid,
     DEFAULT_BROWSER_SESSION_TTL_SECONDS, UserId, actor_idempotency_id,
     browser_session_identity_binding_digest, browser_session_sid_digest,
 };
 use sqlx::{FromRow, PgPool, Postgres, Transaction, types::time::OffsetDateTime};
 use uuid::Uuid;
 
-/// PostgreSQL-backed browser-session creation.
+/// PostgreSQL-backed browser-session lifecycle operations.
 ///
-/// The constructor intentionally accepts the worker-authorized pool. The
-/// application-role verifier is a separate later boundary that uses the
-/// migration's security-definer function.
+/// Creation uses the worker-authorized pool, while verification uses a
+/// separate application-role pool and the migration's security-definer
+/// function.
 #[derive(Clone)]
 pub struct PostgresBrowserSessionStore {
-    pool: PgPool,
+    worker_pool: PgPool,
+    application_pool: PgPool,
 }
 
 impl PostgresBrowserSessionStore {
-    /// Creates a store around the worker-authorized session pool.
+    /// Creates a store with separate creation and application verification pools.
+    ///
+    /// Creation uses the worker role because it writes the session row.
+    /// Verification uses only the application role and the migration's
+    /// security-definer function; it never receives table access or a worker
+    /// fallback.
     #[must_use]
-    pub const fn new(pool: PgPool) -> Self {
-        Self { pool }
+    pub const fn new(worker_pool: PgPool, application_pool: PgPool) -> Self {
+        Self {
+            worker_pool,
+            application_pool,
+        }
     }
 
     /// Creates or replays one session from an already verified identity.
@@ -43,7 +53,7 @@ impl PostgresBrowserSessionStore {
         command: CreateBrowserSession,
     ) -> Result<CreatedBrowserSession, CreateBrowserSessionError> {
         let mut transaction = self
-            .pool
+            .worker_pool
             .begin()
             .await
             .map_err(|_| CreateBrowserSessionError::Unavailable)?;
@@ -135,6 +145,44 @@ impl PostgresBrowserSessionStore {
             metadata,
             idempotency_id,
         })
+    }
+
+    /// Authenticates one active session through the application-role verifier.
+    ///
+    /// The raw SID is reduced to the domain-separated digest before it crosses
+    /// the adapter boundary. A missing row is an unauthenticated session; a
+    /// query or metadata invariant failure is opaque provider unavailability.
+    /// No worker query or signature-only fallback is permitted.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Unauthenticated` when the SID, user, account state, or
+    /// session lifetime does not match an active row. Returns `Unavailable`
+    /// for application-role database failures or invalid returned metadata.
+    pub async fn authenticate_browser_session(
+        &self,
+        user_id: UserId,
+        sid: BrowserSessionSid,
+    ) -> Result<BrowserSessionMetadata, BrowserSessionAuthenticationError> {
+        let sid_digest = browser_session_sid_digest(sid).as_bytes().to_vec();
+        let row = sqlx::query_as::<_, AuthenticatedSessionRow>(
+            "SELECT session_id, user_id, issued_at, expires_at
+             FROM authenticate_human_browser_session($1, $2)",
+        )
+        .bind(sid_digest)
+        .bind(user_id.as_uuid())
+        .fetch_optional(&self.application_pool)
+        .await
+        .map_err(|_| BrowserSessionAuthenticationError::Unavailable)?
+        .ok_or(BrowserSessionAuthenticationError::Unauthenticated)?;
+        BrowserSessionMetadata::new(
+            BrowserSessionId::from_uuid(row.session_id),
+            UserId::from_uuid(row.user_id),
+            row.issued_at,
+            row.expires_at,
+            None,
+        )
+        .ok_or(BrowserSessionAuthenticationError::Unavailable)
     }
 }
 
@@ -239,6 +287,14 @@ fn session_metadata(
         row.revoked_at,
     )
     .ok_or(CreateBrowserSessionError::Unavailable)
+}
+
+#[derive(FromRow)]
+struct AuthenticatedSessionRow {
+    session_id: Uuid,
+    user_id: Uuid,
+    issued_at: OffsetDateTime,
+    expires_at: OffsetDateTime,
 }
 
 #[derive(FromRow)]
