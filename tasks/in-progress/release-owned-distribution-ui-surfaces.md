@@ -4,6 +4,10 @@ Owner: Astra orchestration / Luna bounded subtasks
 
 ## Current status
 
+The user requested a graceful session stop on 2026-09-20. Resume details,
+uncommitted drafts, and the next CI isolation fix are recorded in the
+[session handoff](release-ui-session-handoff-2026-09-20.md).
+
 Persistent services are a completed prerequisite on the same branch and PR 51;
 service checkpoint `8c1fb51` passed repository-wide quality. Its later SQLx
 cancellation fix has focused runtime and CI evidence in the completed task.
