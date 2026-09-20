@@ -1,5 +1,6 @@
 //! Provider-neutral distribution UI installation commands.
 
+use forge_domain::OrganizationId;
 use release_domain::{
     ReleaseId, UiInstallationCallerKey, UiInstallationGenerationId, UiInstallationId,
     UiInstallationState, UiInstallationTarget, ui::UiKey,
@@ -18,6 +19,9 @@ pub struct InstallUi {
     pub release_id: ReleaseId,
     /// Exact published UI declaration key.
     pub ui_key: UiKey,
+    /// Optional tenant expectation supplied by the external RPC boundary.
+    /// Static compatibility callers leave this unset.
+    pub expected_organization_id: Option<OrganizationId>,
 }
 
 /// Result of a committed UI installation.
@@ -148,6 +152,9 @@ pub enum UiInstallationError {
     /// The actor lacks current owner or release-use authority.
     #[error("UI installation is not authorized")]
     PermissionDenied,
+    /// The caller's expected organization does not match the locked owner.
+    #[error("UI installation organization does not match the target owner")]
+    OrganizationMismatch,
     /// The requested release UI is not a supported static zero-API UI.
     #[error("published UI declaration is invalid or unsupported")]
     InvalidOrUnsupported,

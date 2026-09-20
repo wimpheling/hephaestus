@@ -135,6 +135,7 @@ impl ReleaseService {
             target: command.target,
             release_id: command.release_id,
             ui_key: command.ui_key,
+            expected_organization_id: None,
         };
         for attempt in 0..2 {
             match self.install_ui_once(identity, &command, true).await {
@@ -675,6 +676,12 @@ impl ReleaseService {
             .await
             .map_err(|_| UiInstallationError::Unavailable)?
             .ok_or(UiInstallationError::Unavailable)?;
+        if command
+            .expected_organization_id
+            .is_some_and(|expected| expected.as_uuid() != owner.organization)
+        {
+            return Err(UiInstallationError::OrganizationMismatch.into());
+        }
         match command.target {
             release_domain::UiInstallationTarget::Organization(_) => {
                 self.require(
@@ -716,8 +723,12 @@ impl ReleaseService {
             command.caller_key.clone(),
         );
         let command_key = command_identity.command_key();
-        let input_hash =
-            UiInstallationInputDigest::install(command.target, command.release_id, &command.ui_key);
+        let input_hash = UiInstallationInputDigest::install_with_expected_organization(
+            command.target,
+            command.release_id,
+            &command.ui_key,
+            command.expected_organization_id,
+        );
         // The target owner is the current authority for replay. A stored receipt
         // remains durable even when its source gateway or release permissions
         // later change; serving admission rechecks those mutable bindings.

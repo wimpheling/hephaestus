@@ -36,6 +36,24 @@ integrated quality gate remain incomplete. The user approved organization-owned
 global installations and organization isolation. Historical checkpoints record the state
 at their time; later integration checkpoints supersede earlier pending notes.
 
+## RPC installation tenant guard checkpoint (2026-09-20)
+
+General install accepts an optional expected organization for the forthcoming
+RPC boundary. It checks that organization immediately after locking the owner,
+before replay or writes. Explicit tenant expectations use a distinct v2 input
+digest; internal callers with no expectation retain the prior v1 digest and
+static-wrapper replay compatibility.
+
+Nine domain tests pass, preserving existing golden vectors and distinguishing
+explicit organization values, in `/home/a/heph-tenantguard-domain-20260920.log`.
+Three real PostgreSQL tests pass in `/home/a/heph-ui-tenantguard-20260920.log`,
+covering dual-member wrong-tenant denial, a matching tenant, changed tenant with
+the same caller key, static replay row/event counts, and the nine-case generic
+binding/permission regression. Scoped formatting, Clippy/docs, architecture,
+and diff checks pass in `/home/a/heph-tenantguard-*-20260920.log`. Disposable
+resources were cleaned; an unrelated existing development server was preserved.
+No RPC endpoint is claimed by this application-layer guard.
+
 ## Installed UI navigation checkpoint (2026-09-20)
 
 The release application port and application-role PostgreSQL navigator project

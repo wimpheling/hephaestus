@@ -232,6 +232,35 @@ impl UiInstallationInputDigest {
         )
     }
 
+    /// Digests an install request with an optional externally asserted tenant.
+    ///
+    /// The `None` form delegates to the stable v1 digest so compatibility
+    /// wrappers and existing receipts retain their canonical identity. The
+    /// `Some` form uses a new domain separator and binds the expected tenant.
+    #[must_use]
+    pub fn install_with_expected_organization(
+        target: UiInstallationTarget,
+        release_id: ReleaseId,
+        ui_key: &UiKey,
+        expected_organization: Option<OrganizationId>,
+    ) -> Self {
+        expected_organization.map_or_else(
+            || Self::install(target, release_id, ui_key),
+            |organization| {
+                Self::derive(
+                    "ui-installation-input-v2/install",
+                    &[
+                        target.scope_name().as_bytes(),
+                        target.as_uuid().as_bytes(),
+                        organization.as_uuid().as_bytes(),
+                        release_id.as_uuid().as_bytes(),
+                        ui_key.as_str().as_bytes(),
+                    ],
+                )
+            },
+        )
+    }
+
     /// Digests a fresh activation or reactivation request.
     #[must_use]
     pub fn activate(
@@ -447,6 +476,34 @@ mod tests {
         let changed = UiInstallationInputDigest::install(target, release, &key("other"));
         assert_eq!(identity.command_key(), same_identity.command_key());
         assert_ne!(first, changed);
+    }
+
+    #[test]
+    fn expected_organization_digest_is_opt_in_and_distinct() {
+        let target = UiInstallationTarget::project(ProjectId::from_uuid(Uuid::from_u128(2)));
+        let release = ReleaseId::from_uuid(Uuid::from_u128(3));
+        let ui_key = key("assistant");
+        let organization_a = OrganizationId::from_uuid(Uuid::from_u128(4));
+        let organization_b = OrganizationId::from_uuid(Uuid::from_u128(5));
+        let legacy = UiInstallationInputDigest::install(target, release, &ui_key);
+        let none = UiInstallationInputDigest::install_with_expected_organization(
+            target, release, &ui_key, None,
+        );
+        let scoped_a = UiInstallationInputDigest::install_with_expected_organization(
+            target,
+            release,
+            &ui_key,
+            Some(organization_a),
+        );
+        let scoped_b = UiInstallationInputDigest::install_with_expected_organization(
+            target,
+            release,
+            &ui_key,
+            Some(organization_b),
+        );
+        assert_eq!(legacy, none);
+        assert_ne!(legacy, scoped_a);
+        assert_ne!(scoped_a, scoped_b);
     }
 
     #[test]
