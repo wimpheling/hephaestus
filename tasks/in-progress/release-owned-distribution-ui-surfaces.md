@@ -38,6 +38,28 @@ proofs, and the final integrated quality gate remain incomplete. The user approv
 global installations and organization isolation. Historical checkpoints record the state
 at their time; later integration checkpoints supersede earlier pending notes.
 
+## Installed runtime fixture corrections and browser assertions (2026-09-20)
+
+`e9b90a1` corrects the reference descriptor expectation to production retrieval's
+lexicographic route order (CSS, JavaScript, entrypoint). The next actual run
+passed that boundary but stopped before browser execution because a newly
+installed HTTP service has a desired revision before an active revision.
+`b0d5931` retains the declared revision for configuration and adds a bounded,
+authenticated query wait for the exact enabled active revision before managed
+UI installation. Each RPC and sleep shares the readiness deadline. Golden
+compilation, strict Clippy, and workspace formatting pass. Logs:
+`/tmp/heph-ui-active-wait-{check-final,clippy-final2,fmt-final}.log`.
+The fifth runtime log is
+`/home/a/heph-installed-ui-first-runtime-20260920-fifth.log`; it emitted no
+installed audit marker. A subsequent runtime run is required.
+
+Browser source checkpoints `0b75349` and `540a5c8` add managed host-selected
+light/dark and system theme, standalone static OS fallback, static and managed
+accessibility scans, response CSP/nosniff, iframe attributes, explicit CSP
+violation and sandbox navigation denial probes, and Close/focus assertions.
+TypeScript and both safe reporter tests pass. These assertions have not yet
+executed through the installed runtime and are not acceptance evidence.
+
 ## Installed browser image and first runtime attempt (2026-09-20)
 
 The pinned Playwright 1.62.0 amd64 image with `certutil` is available as
