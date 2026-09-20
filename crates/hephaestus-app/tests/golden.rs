@@ -1552,8 +1552,12 @@ async fn run_installed_ui_browser_phase(context: InstalledUiBrowserContext<'_>) 
         .expect("installed UI browser fixture output path");
     let fixture = serde_json::json!({
         "installed_reference_uis": {
+            "organization_id": context.installed_uis.organization_id,
             "project_id": context.installed_uis.project_id,
+            "repository_id": context.installed_uis.repository_id,
             "static_installation_id": context.installed_uis.static_ui.installation_id,
+            "repository_installation_id": context.installed_uis.repository_static_ui.installation_id,
+            "global_installation_id": context.installed_uis.global_static_ui.installation_id,
             "managed_installation_id": context.installed_uis.managed_ui.installation_id
         }
     });
@@ -1608,6 +1612,9 @@ async fn run_installed_ui_browser_phase(context: InstalledUiBrowserContext<'_>) 
     assert_installed_ui_browser_audit(&context).await;
 }
 
+// Keep the positive audit matrix together so each installed owner surface is
+// checked before lifecycle control proceeds.
+#[allow(clippy::too_many_lines)]
 async fn assert_installed_ui_browser_audit(context: &InstalledUiBrowserContext<'_>) {
     let static_installation_id = context.installed_uis.static_ui.installation_id;
     let static_generation_id = context.installed_uis.static_ui.generation_id;
@@ -1627,6 +1634,34 @@ async fn assert_installed_ui_browser_audit(context: &InstalledUiBrowserContext<'
             surface != UiRequestAuditSurface::HandoffIssue,
         )
         .await;
+    }
+    for (installation_id, generation_id) in [
+        (
+            context.installed_uis.repository_static_ui.installation_id,
+            context.installed_uis.repository_static_ui.generation_id,
+        ),
+        (
+            context.installed_uis.global_static_ui.installation_id,
+            context.installed_uis.global_static_ui.generation_id,
+        ),
+    ] {
+        for surface in [
+            UiRequestAuditSurface::HandoffIssue,
+            UiRequestAuditSurface::HandoffExchange,
+            UiRequestAuditSurface::Bootstrap,
+            UiRequestAuditSurface::Static,
+        ] {
+            assert_installed_ui_audit_success(
+                context.pool,
+                context.actor_id,
+                context.organization_id.as_uuid(),
+                installation_id,
+                generation_id,
+                surface,
+                surface != UiRequestAuditSurface::HandoffIssue,
+            )
+            .await;
+        }
     }
     let managed_installation_id = context.installed_uis.managed_ui.installation_id;
     let managed_generation_id = context.installed_uis.managed_ui.generation_id;
@@ -5493,8 +5528,13 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
                 "installed_reference_uis": installed_reference_uis.map(|uis| serde_json::json!({
                     "organization_id": uis.organization_id,
                     "project_id": uis.project_id,
+                    "repository_id": uis.repository_id,
                     "static_installation_id": uis.static_ui.installation_id,
                     "static_generation_id": uis.static_ui.generation_id,
+                    "repository_installation_id": uis.repository_static_ui.installation_id,
+                    "repository_generation_id": uis.repository_static_ui.generation_id,
+                    "global_installation_id": uis.global_static_ui.installation_id,
+                    "global_generation_id": uis.global_static_ui.generation_id,
                     "managed_installation_id": uis.managed_ui.installation_id,
                     "managed_generation_id": uis.managed_ui.generation_id
                 }))
@@ -5562,6 +5602,34 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
                         false,
                     )
                     .await;
+                    for (installation_id, generation_id) in [
+                        (
+                            installed_uis.repository_static_ui.installation_id,
+                            installed_uis.repository_static_ui.generation_id,
+                        ),
+                        (
+                            installed_uis.global_static_ui.installation_id,
+                            installed_uis.global_static_ui.generation_id,
+                        ),
+                    ] {
+                        for (surface, expected_success) in [
+                            (UiRequestAuditSurface::HandoffIssue, false),
+                            (UiRequestAuditSurface::HandoffExchange, true),
+                            (UiRequestAuditSurface::Bootstrap, true),
+                            (UiRequestAuditSurface::Static, true),
+                        ] {
+                            assert_installed_ui_audit_success(
+                                &pool,
+                                audit_actor_id,
+                                audit_organization_id,
+                                installation_id,
+                                generation_id,
+                                surface,
+                                expected_success,
+                            )
+                            .await;
+                        }
+                    }
                     assert_installed_ui_audit_success(
                         &pool,
                         audit_actor_id,

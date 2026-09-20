@@ -13,10 +13,11 @@ output.
 
 The fixture is intended for the existing Cooking Git/build/release path. Its
 published-service integration is pending; it is not a direct database or
-artifact-store fixture. The release declaration is a full-page static UI with
-route base `reference`, entrypoint `index.html`, `ui_kit_version = 1`, and
-`no_store` caching. The CSS and helper are separate `text/css` and
-`text/javascript` artifacts.
+artifact-store fixture. The release declaration contains the same full-page
+static UI for project, repository, and organization-global owners, with route
+bases `reference`, `reference-repository`, and `reference-global`. Each uses
+`index.html`, `ui_kit_version = 1`, and `no_store` caching. The CSS and helper
+are separate `text/css` and `text/javascript` artifacts.
 
 Build it into a disposable absolute directory from the repository root:
 

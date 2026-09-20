@@ -28,3 +28,61 @@ media_type = "text/css"
 route = "heph-ui-kit-v1.0.0.js"
 artifact = "dist/heph-ui-kit-v1.0.0.js"
 media_type = "text/javascript"
+
+[[uis]]
+key = "release-reference-repository"
+scope = "repository"
+label = "Release Repository Reference"
+icon = "book"
+presentation = "full_page"
+route_base = "reference-repository"
+ui_kit_version = 1
+cache = "no_store"
+
+[uis.content]
+kind = "static"
+entrypoint = "index.html"
+
+[[uis.content.files]]
+route = "index.html"
+artifact = "dist/index.html"
+media_type = "text/html"
+
+[[uis.content.files]]
+route = "heph-ui-kit-v1.0.0.css"
+artifact = "dist/heph-ui-kit-v1.0.0.css"
+media_type = "text/css"
+
+[[uis.content.files]]
+route = "heph-ui-kit-v1.0.0.js"
+artifact = "dist/heph-ui-kit-v1.0.0.js"
+media_type = "text/javascript"
+
+[[uis]]
+key = "release-reference-global"
+scope = "global"
+label = "Release Global Reference"
+icon = "book"
+presentation = "full_page"
+route_base = "reference-global"
+ui_kit_version = 1
+cache = "no_store"
+
+[uis.content]
+kind = "static"
+entrypoint = "index.html"
+
+[[uis.content.files]]
+route = "index.html"
+artifact = "dist/index.html"
+media_type = "text/html"
+
+[[uis.content.files]]
+route = "heph-ui-kit-v1.0.0.css"
+artifact = "dist/heph-ui-kit-v1.0.0.css"
+media_type = "text/css"
+
+[[uis.content.files]]
+route = "heph-ui-kit-v1.0.0.js"
+artifact = "dist/heph-ui-kit-v1.0.0.js"
+media_type = "text/javascript"

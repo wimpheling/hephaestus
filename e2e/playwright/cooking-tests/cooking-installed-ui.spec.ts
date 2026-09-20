@@ -5,9 +5,13 @@ import {join} from "node:path";
 
 type CookingFixture = {
   installed_reference_uis: {
+    organization_id: string;
     project_id: string;
+    repository_id: string;
     static_installation_id: string;
     managed_installation_id: string;
+    repository_installation_id: string;
+    global_installation_id: string;
   };
 };
 
@@ -31,6 +35,7 @@ test("cooking installed UI TLS full-page and managed iframe smoke", async ({page
   await test.step("signin", async () => {
     await signIn(page, "reviewer");
   });
+  await assertOwnerNavigation(page, installed);
   await page.goto(`/projects/${installed.project_id}`);
   await waitForLiveView(page);
 
@@ -77,39 +82,59 @@ test("cooking installed UI TLS full-page and managed iframe smoke", async ({page
   });
   await test.step("static-ui-cookie-presence", async () => {
     const staticCookies = await page.context().cookies();
-    expect(staticCookies.some(cookie => cookie.name === "__Host-hephaestus_ui")).toBe(true);
+    expect(staticCookies.some(cookie =>
+      cookie.name === "__Host-hephaestus_ui" && cookie.domain === staticUrl.hostname,
+    )).toBe(true);
   });
   await test.step("static-ui-cookie-secure", async () => {
-    const staticUiCookie = (await page.context().cookies()).find(cookie => cookie.name === "__Host-hephaestus_ui");
+    const staticUiCookie = (await page.context().cookies()).find(cookie =>
+      cookie.name === "__Host-hephaestus_ui" && cookie.domain === staticUrl.hostname,
+    );
     expect(staticUiCookie?.secure === true).toBe(true);
   });
   await test.step("static-ui-cookie-http-only", async () => {
-    const staticUiCookie = (await page.context().cookies()).find(cookie => cookie.name === "__Host-hephaestus_ui");
+    const staticUiCookie = (await page.context().cookies()).find(cookie =>
+      cookie.name === "__Host-hephaestus_ui" && cookie.domain === staticUrl.hostname,
+    );
     expect(staticUiCookie?.httpOnly === true).toBe(true);
   });
   await test.step("static-ui-cookie-same-site", async () => {
-    const staticUiCookie = (await page.context().cookies()).find(cookie => cookie.name === "__Host-hephaestus_ui");
+    const staticUiCookie = (await page.context().cookies()).find(cookie =>
+      cookie.name === "__Host-hephaestus_ui" && cookie.domain === staticUrl.hostname,
+    );
     expect(staticUiCookie?.sameSite === "Strict").toBe(true);
   });
   await test.step("static-ui-cookie-path", async () => {
-    const staticUiCookie = (await page.context().cookies()).find(cookie => cookie.name === "__Host-hephaestus_ui");
+    const staticUiCookie = (await page.context().cookies()).find(cookie =>
+      cookie.name === "__Host-hephaestus_ui" && cookie.domain === staticUrl.hostname,
+    );
     expect(staticUiCookie?.path === "/").toBe(true);
   });
   await test.step("static-ui-cookie-host-domain", async () => {
-    const staticUiCookie = (await page.context().cookies()).find(cookie => cookie.name === "__Host-hephaestus_ui");
+    const staticUiCookie = (await page.context().cookies()).find(cookie =>
+      cookie.name === "__Host-hephaestus_ui" && cookie.domain === staticUrl.hostname,
+    );
     expect(staticUiCookie !== undefined && staticUiCookie.domain === staticUrl.hostname).toBe(true);
   });
   await test.step("static-platform-cookie-presence", async () => {
     const staticCookies = await page.context().cookies();
-    expect(staticCookies.some(cookie => cookie.name === "__Host-hephaestus_web_key")).toBe(true);
+    const platformHostname = new URL(webUrl).hostname;
+    expect(staticCookies.some(cookie =>
+      cookie.name === "__Host-hephaestus_web_key" && cookie.domain === platformHostname,
+    )).toBe(true);
   });
   await test.step("static-platform-cookie-security", async () => {
-    const platformCookie = (await page.context().cookies()).find(cookie => cookie.name === "__Host-hephaestus_web_key");
+    const platformHostname = new URL(webUrl).hostname;
+    const platformCookie = (await page.context().cookies()).find(cookie =>
+      cookie.name === "__Host-hephaestus_web_key" && cookie.domain === platformHostname,
+    );
     expect(platformCookie?.secure === true && platformCookie?.httpOnly === true).toBe(true);
   });
   await test.step("static-platform-cookie-host-domain", async () => {
-    const platformCookie = (await page.context().cookies()).find(cookie => cookie.name === "__Host-hephaestus_web_key");
     const platformHostname = new URL(webUrl).hostname;
+    const platformCookie = (await page.context().cookies()).find(cookie =>
+      cookie.name === "__Host-hephaestus_web_key" && cookie.domain === platformHostname,
+    );
     expect(platformCookie !== undefined && !platformCookie.domain.startsWith(".") && platformCookie.domain === platformHostname).toBe(true);
   });
   await test.step("static-cookie-isolation", async () => {
@@ -396,12 +421,17 @@ test("cooking installed UI TLS full-page and managed iframe smoke", async ({page
   });
   let setCookieProbeResult: GuestForbiddenProbeResult | null = null;
   await test.step("lifecycle-guest-policy-set-cookie-response", async () => {
-    setCookieProbeResult = await runGuestForbiddenProbe(page, frameContent, "/reference/probe-set-cookie");
+    setCookieProbeResult = await runGuestForbiddenProbe(
+      page,
+      frameContent,
+      "/reference/probe-set-cookie",
+      "empty",
+    );
     expect(setCookieProbeResult.status).toBe(502);
     expect(setCookieProbeResult.cookiePresent).toBe(true);
   });
   await test.step("lifecycle-guest-policy-set-cookie-body", async () => {
-    expect(setCookieProbeResult?.genericBody).toBe(true);
+    expect(setCookieProbeResult?.bodyMatches).toBe(true);
   });
   await test.step("lifecycle-guest-policy-set-cookie-headers", async () => {
     expect(setCookieProbeResult?.forbiddenHeadersAbsent).toBe(true);
@@ -414,12 +444,17 @@ test("cooking installed UI TLS full-page and managed iframe smoke", async ({page
   });
   let locationProbeResult: GuestForbiddenProbeResult | null = null;
   await test.step("lifecycle-guest-policy-location-response", async () => {
-    locationProbeResult = await runGuestForbiddenProbe(page, frameContent, "/reference/probe-location");
+    locationProbeResult = await runGuestForbiddenProbe(
+      page,
+      frameContent,
+      "/reference/probe-location",
+      "generic",
+    );
     expect(locationProbeResult.status).toBe(502);
     expect(locationProbeResult.cookiePresent).toBe(true);
   });
   await test.step("lifecycle-guest-policy-location-body", async () => {
-    expect(locationProbeResult?.genericBody).toBe(true);
+    expect(locationProbeResult?.bodyMatches).toBe(true);
   });
   await test.step("lifecycle-guest-policy-location-headers", async () => {
     expect(locationProbeResult?.forbiddenHeadersAbsent).toBe(true);
@@ -429,12 +464,17 @@ test("cooking installed UI TLS full-page and managed iframe smoke", async ({page
   });
   let refreshProbeResult: GuestForbiddenProbeResult | null = null;
   await test.step("lifecycle-guest-policy-refresh-response", async () => {
-    refreshProbeResult = await runGuestForbiddenProbe(page, frameContent, "/reference/probe-refresh");
+    refreshProbeResult = await runGuestForbiddenProbe(
+      page,
+      frameContent,
+      "/reference/probe-refresh",
+      "generic",
+    );
     expect(refreshProbeResult.status).toBe(502);
     expect(refreshProbeResult.cookiePresent).toBe(true);
   });
   await test.step("lifecycle-guest-policy-refresh-body", async () => {
-    expect(refreshProbeResult?.genericBody).toBe(true);
+    expect(refreshProbeResult?.bodyMatches).toBe(true);
   });
   await test.step("lifecycle-guest-policy-refresh-headers", async () => {
     expect(refreshProbeResult?.forbiddenHeadersAbsent).toBe(true);
@@ -1051,10 +1091,95 @@ function loadFixture(): CookingFixture {
   if (!fixturePath) throw new Error("HEPHAESTUS_COOKING_BROWSER_FIXTURE is required");
   const fixture = JSON.parse(readFileSync(fixturePath, "utf8")) as Partial<CookingFixture>;
   const installed = fixture.installed_reference_uis;
-  for (const key of ["project_id", "static_installation_id", "managed_installation_id"] as const) {
+  for (const key of [
+    "organization_id",
+    "project_id",
+    "repository_id",
+    "static_installation_id",
+    "managed_installation_id",
+    "repository_installation_id",
+    "global_installation_id",
+  ] as const) {
     if (!installed?.[key]) throw new Error(`installed UI fixture is missing installed_reference_uis.${key}`);
   }
   return {installed_reference_uis: installed as CookingFixture["installed_reference_uis"]};
+}
+
+async function assertOwnerNavigation(
+  page: import("@playwright/test").Page,
+  installed: CookingFixture["installed_reference_uis"],
+) {
+  await page.goto(`/organizations/${installed.organization_id}`);
+  await waitForLiveView(page);
+  const globalCard = page.locator(`#installed-ui-${installed.global_installation_id}`);
+  await test.step("owner-global-filter", async () => {
+    await expect(globalCard).toBeVisible();
+    await expect(page.locator(`#installed-ui-${installed.repository_installation_id}`)).toHaveCount(0);
+    await expect(page.locator(`#installed-ui-${installed.static_installation_id}`)).toHaveCount(0);
+    await expect(page.locator(`#installed-ui-${installed.managed_installation_id}`)).toHaveCount(0);
+  });
+  await launchOwnerStatic(page, globalCard, "/reference-global/index.html", "owner-global");
+
+  await page.goto(`/repositories/${installed.repository_id}/files`);
+  await waitForLiveView(page);
+  const repositoryCard = page.locator(`#installed-ui-${installed.repository_installation_id}`);
+  await test.step("owner-repository-filter", async () => {
+    await expect(repositoryCard).toBeVisible();
+    await expect(page.locator(`#installed-ui-${installed.global_installation_id}`)).toHaveCount(0);
+    await expect(page.locator(`#installed-ui-${installed.static_installation_id}`)).toHaveCount(0);
+    await expect(page.locator(`#installed-ui-${installed.managed_installation_id}`)).toHaveCount(0);
+  });
+  await launchOwnerStatic(page, repositoryCard, "/reference-repository/index.html", "owner-repository");
+}
+
+async function launchOwnerStatic(
+  page: import("@playwright/test").Page,
+  card: import("@playwright/test").Locator,
+  expectedPath: string,
+  stagePrefix: "owner-global" | "owner-repository",
+) {
+  let uiCookiePresent = false;
+  let platformCookiePresent = false;
+  let documentUrl = "";
+  let responseMatchesPage = false;
+  let responseStatus = 0;
+  await test.step(`${stagePrefix}-launch`, async () => {
+    const document = page.waitForResponse(response => {
+      try {
+        const url = new URL(response.url());
+        return /^g-[0-9a-f]{32}\./.test(url.hostname) &&
+          url.pathname === expectedPath &&
+          response.request().resourceType() === "document" &&
+          response.status() === 200;
+      } catch {
+        return false;
+      }
+    }, {timeout: 30_000});
+    await card.getByRole("button", {name: /Launch/}).click();
+    await expect.poll(() => new URL(page.url()).hostname.startsWith("g-"), {timeout: 30_000}).toBe(true);
+    await expect.poll(() => new URL(page.url()).pathname, {timeout: 30_000}).toBe(expectedPath);
+    documentUrl = page.url();
+    expect(new URL(documentUrl).hash === "").toBe(true);
+    await expect(page.locator("body")).toContainText("Static release UI");
+    await expect(page).toHaveTitle("Release reference");
+    await expect(page.locator('link[rel="stylesheet"]')).toHaveAttribute(
+      "href",
+      /heph-ui-kit-v1\.0\.0\.css/,
+    );
+    const response = await document;
+    responseStatus = response.status();
+    responseMatchesPage = response.url() === documentUrl;
+    const headers = await response.request().allHeaders();
+    uiCookiePresent = requestHasCookie(headers, "__Host-hephaestus_ui");
+    platformCookiePresent = requestHasCookie(headers, "__Host-hephaestus_web_key");
+  });
+  await test.step(`${stagePrefix}-document`, async () => {
+    expect(documentUrl.length > 0 && responseStatus === 200 && responseMatchesPage).toBe(true);
+  });
+  await test.step(`${stagePrefix}-cookie`, async () => {
+    expect(uiCookiePresent).toBe(true);
+    expect(platformCookiePresent).toBe(false);
+  });
 }
 
 async function signIn(page: import("@playwright/test").Page, account: string) {
@@ -1102,7 +1227,7 @@ type GuestHeaderPolicyResult = {
 type GuestForbiddenProbeResult = {
   status: number;
   cookiePresent: boolean;
-  genericBody: boolean;
+  bodyMatches: boolean;
   forbiddenHeadersAbsent: boolean;
   guestProbeCookiePresent: boolean;
   navigationUnchanged: boolean;
@@ -1176,6 +1301,7 @@ async function runGuestForbiddenProbe(
   page: import("@playwright/test").Page,
   frame: import("@playwright/test").FrameLocator,
   path: string,
+  expectedBody: "empty" | "generic",
 ): Promise<GuestForbiddenProbeResult> {
   const frameUrl = await currentManagedFrameUrl(page);
   const url = new URL(path, frameUrl).toString();
@@ -1190,27 +1316,39 @@ async function runGuestForbiddenProbe(
       candidate => candidate.url() === url && candidate.request().resourceType() === "fetch",
       {timeout: 30_000},
     ),
-    frame.locator("body").evaluate(async (_body, requestUrl: string) => {
+    frame.locator("body").evaluate(async (
+      _body,
+      args: {requestUrl: string; expectedBody: "empty" | "generic"},
+    ) => {
       try {
-        const response = await fetch(requestUrl, {
+        const response = await fetch(args.requestUrl, {
           cache: "no-store",
           credentials: "same-origin",
           redirect: "manual",
         });
-        const value: unknown = await response.json();
-        const record = value && typeof value === "object"
-          ? value as Record<string, unknown>
-          : {};
-        const keys = Object.keys(record);
+        const text = await response.text();
+        let genericBody = false;
+        if (args.expectedBody === "generic") {
+          try {
+            const value: unknown = JSON.parse(text);
+            const record = value && typeof value === "object"
+              ? value as Record<string, unknown>
+              : {};
+            const keys = Object.keys(record);
+            genericBody = keys.length === 1 && keys[0] === "error" &&
+              record.error === "ui_unavailable";
+          } catch {
+            genericBody = false;
+          }
+        }
         return {
           status: response.status,
-          genericBody: keys.length === 1 && keys[0] === "error" &&
-            record.error === "ui_unavailable",
+          bodyMatches: args.expectedBody === "empty" ? text === "" : genericBody,
         };
       } catch {
-        return {status: 0, genericBody: false};
+        return {status: 0, bodyMatches: false};
       }
-    }, url),
+    }, {requestUrl: url, expectedBody}),
   ]);
   const requestHeaders = await request.allHeaders();
   const headers = await response.allHeaders();
@@ -1218,7 +1356,7 @@ async function runGuestForbiddenProbe(
   return {
     status: response.status(),
     cookiePresent: requestHasCookie(requestHeaders, "__Host-hephaestus_ui"),
-    genericBody: body.status === 502 && body.genericBody,
+    bodyMatches: body.status === 502 && body.bodyMatches,
     forbiddenHeadersAbsent: !(["location", "refresh", "set-cookie"]
       .some(name => name in headers)),
     guestProbeCookiePresent: cookies.some(cookie => cookie.name === "__Host-heph_guest_probe"),
