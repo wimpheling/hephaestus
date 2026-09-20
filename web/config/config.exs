@@ -8,6 +8,7 @@
 import Config
 
 config :hephaestus_web, generators: [timestamp_type: :utc_datetime]
+config :hephaestus_web, :browser_session_cookie_profile, :development
 
 # Configure the endpoint
 config :hephaestus_web, HephaestusWebWeb.Endpoint,

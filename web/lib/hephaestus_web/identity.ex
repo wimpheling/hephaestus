@@ -1,6 +1,6 @@
 defmodule HephaestusWeb.Identity do
   @moduledoc """
-  Minimal browser principal reconstructed from the encrypted Phoenix session.
+  Minimal browser principal reconstructed from the signed Phoenix session.
 
   Tokens never enter the LiveView process or database query layer.
   """

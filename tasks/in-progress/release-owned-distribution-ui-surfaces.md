@@ -24,6 +24,23 @@ integrated quality gate remain incomplete. Global installation ownership is an
 open question sent to the user. Historical checkpoints below record the state
 at their time; later integration checkpoints supersede earlier pending notes.
 
+## Production browser-cookie checkpoint (2026-09-20)
+
+The endpoint now selects shared HTTP/LiveView session options at compile time.
+Production uses `__Host-hephaestus_web_key`, `Secure`, `HttpOnly`, `Path=/`,
+`SameSite=Lax`, and no Domain attribute. Development/test retain an HTTP-compatible
+cookie. The session remains signed, not encrypted; no dual-read compatibility
+path accepts the old production cookie name.
+
+Six focused endpoint/controller tests pass, including real Set-Cookie headers,
+endpoint option wiring, and legacy-cookie rejection with a positive control
+that reads that same valid cookie through its old profile. Owned formatting and
+a production compile pass; a production-mode assertion verifies the compiled
+endpoint options. Logs: `/home/a/heph-browser-cookie-tests-20260920.log` and
+`/home/a/heph-browser-cookie-prod-options-20260920.log`.
+SID validation and login/logout wiring are separate pending work. These Plug
+checks do not replace the required HTTPS browser sibling-origin isolation proof.
+
 ## Revocation command ledger checkpoint (2026-09-20)
 
 Migration 86 adds immutable worker-owned revocation command records. Each
