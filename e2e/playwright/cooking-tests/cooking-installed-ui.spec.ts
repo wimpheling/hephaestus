@@ -13,6 +13,10 @@ type CookingFixture = {
 
 const fixturePath = process.env.HEPHAESTUS_COOKING_BROWSER_FIXTURE;
 const oidcUrl = process.env.HEPHAESTUS_OIDC_URL ?? "http://127.0.0.1:5556";
+const webUrl = process.env.HEPHAESTUS_WEB_URL;
+const uiNamespace = process.env.HEPHAESTUS_UI_NAMESPACE;
+if (!webUrl) throw new Error("HEPHAESTUS_WEB_URL is required");
+if (!uiNamespace) throw new Error("HEPHAESTUS_UI_NAMESPACE is required");
 
 test("cooking installed UI TLS full-page and managed iframe smoke", async ({page}) => {
   const fixture = loadFixture();
@@ -59,7 +63,7 @@ test("cooking installed UI TLS full-page and managed iframe smoke", async ({page
     staticDocumentSentUiCookie = requestHasCookie(requestHeaders, "__Host-hephaestus_ui");
     staticDocumentSentPlatformCookie = requestHasCookie(requestHeaders, "__Host-hephaestus_web_key");
     const headers = response.headers();
-    const platformOrigin = new URL(process.env.HEPHAESTUS_WEB_URL ?? "https://invalid.example/").origin;
+    const platformOrigin = new URL(webUrl).origin;
     const contentSecurityPolicy = headers["content-security-policy"] ?? "";
     expect(contentSecurityPolicy.includes(`frame-ancestors ${platformOrigin}`)).toBe(true);
     expect(headers["x-content-type-options"] === "nosniff").toBe(true);
@@ -98,7 +102,7 @@ test("cooking installed UI TLS full-page and managed iframe smoke", async ({page
   });
   await test.step("static-platform-cookie-host-domain", async () => {
     const platformCookie = (await page.context().cookies()).find(cookie => cookie.name === "__Host-hephaestus_web_key");
-    const platformHostname = new URL(process.env.HEPHAESTUS_WEB_URL ?? "https://invalid/").hostname;
+    const platformHostname = new URL(webUrl).hostname;
     expect(platformCookie !== undefined && !platformCookie.domain.startsWith(".") && platformCookie.domain === platformHostname).toBe(true);
   });
   await test.step("static-cookie-isolation", async () => {
@@ -211,7 +215,7 @@ test("cooking installed UI TLS full-page and managed iframe smoke", async ({page
     });
     await test.step("managed-document-headers", async () => {
       const headers = managedDocumentHeaders;
-      const platformOrigin = new URL(process.env.HEPHAESTUS_WEB_URL ?? "https://invalid.example/").origin;
+      const platformOrigin = new URL(webUrl).origin;
       const contentSecurityPolicy = headers["content-security-policy"] ?? "";
       expect(contentSecurityPolicy.includes("default-src 'none'")).toBe(true);
       expect(contentSecurityPolicy.includes("connect-src 'self'")).toBe(true);
@@ -284,9 +288,13 @@ test("cooking installed UI TLS full-page and managed iframe smoke", async ({page
       const platformPolicy = await page.locator(
         'meta[http-equiv="Content-Security-Policy"]',
       ).getAttribute("content");
-      const uiNamespace = process.env.HEPHAESTUS_UI_NAMESPACE ?? "invalid.example";
+      const webOrigin = new URL(webUrl);
+      const webPort = webOrigin.port || (webOrigin.protocol === "https:" ? "443" : "80");
+      const expectedFrameSource = `https://*.${uiNamespace}${webPort === "443" ? "" : `:${webPort}`}`;
+      const frameSourceCount = (platformPolicy ?? "").split(/\s+/)
+        .filter(token => token === expectedFrameSource).length;
       expect(platformPolicy?.includes("frame-src 'self'") ?? false).toBe(true);
-      expect(platformPolicy?.includes(`https://*.${uiNamespace}`) ?? false).toBe(true);
+      expect(frameSourceCount).toBe(1);
     });
     await test.step("accessibility-undeclared-fetch", async () => {
       const undeclaredFetchBlocked = await frameContent.locator("body").evaluate(() => new Promise(resolve => {

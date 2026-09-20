@@ -207,6 +207,7 @@ if podman run --rm --name "${browser_container}" \
     --env HOME=/tmp \
     --env HEPHAESTUS_WEB_URL="${web_url}" \
     --env HEPHAESTUS_OIDC_URL="${oidc_issuer}" \
+    --env HEPHAESTUS_UI_NAMESPACE="${ui_namespace}" \
     --env HEPHAESTUS_COOKING_BROWSER_FIXTURE=/run/heph-fixture/fixture.json \
     --env HEPHAESTUS_E2E_EVIDENCE_DIR=/run/heph-fixture/playwright-results \
     --env HEPHAESTUS_SAFE_SCREENSHOT_DIR=/run/heph-fixture/playwright-results \
@@ -221,6 +222,7 @@ if podman run --rm --name "${browser_container}" \
         npm ci --ignore-scripts >/dev/null
         HEPHAESTUS_WEB_URL="$HEPHAESTUS_WEB_URL" \
         HEPHAESTUS_OIDC_URL="$HEPHAESTUS_OIDC_URL" \
+        HEPHAESTUS_UI_NAMESPACE="$HEPHAESTUS_UI_NAMESPACE" \
         HEPHAESTUS_COOKING_BROWSER_FIXTURE="$HEPHAESTUS_COOKING_BROWSER_FIXTURE" \
         HEPHAESTUS_E2E_EVIDENCE_DIR="$HEPHAESTUS_E2E_EVIDENCE_DIR" \
         ./node_modules/.bin/playwright test --config=playwright.installed-ui.config.ts --grep "cooking installed UI TLS" \
