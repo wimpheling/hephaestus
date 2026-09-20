@@ -47,9 +47,11 @@ response-only dispatch API remains available. A guest HTTP 403 is an admitted
 completed response; permission denial is a separate typed result. Payload-bearing
 results do not derive `Debug`.
 
-Sixteen focused UI cases and the full gateway-edge package passed (196 library
-and two Caddy integration tests), including inbound-secret rejection, forbidden
-guest cookies, and failed completion persistence. Strict Clippy, documentation,
+Sixteen focused UI cases and all 196 gateway-edge library tests passed, including
+inbound-secret rejection, forbidden guest cookies, and failed completion
+persistence. The two opt-in Caddy test functions returned successfully, but
+this gate does not establish that their external Caddy branches executed; they
+are not counted as integration evidence. Strict Clippy, documentation,
 formatting, and diff checks passed. Logs: `/tmp/heph-ui-gateway-edge-outcome-*.log`.
 This exposes authoritative outcomes for the HTTP audit integration; it does not
 yet establish request-wide audit persistence or installed VM/browser behavior.
