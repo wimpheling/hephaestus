@@ -13,7 +13,10 @@ Activation/rollback and explicit-organization navigation also pass focused
 verification. The UI RPC transport checkpoint now passes its expanded real
 matrix. Gateway admission, host/resource projection, Phoenix navigation, and
 reference theme helpers pass focused checks. The bounded HTTP listener and request-wide audit now pass focused verification.
-Current work verifies installed-browser acceptance.
+Project-owned static/managed installed-browser smoke and the live
+disable/stale-cookie path now pass in the bounded runtime. Owner navigation,
+guest-boundary coverage, reactivation, removal, parent/account revocation, and
+the final repository-wide quality gate remain open.
 The handoff remains the record of the stopped session; new evidence is recorded
 below as each resumed slice passes review and verification.
 
@@ -33,8 +36,10 @@ implemented; reference-release integration remains open.
 Verified static-byte loading and read-only release-page metadata display are
 implemented. Durable browser sessions are integrated through RPC and Phoenix.
 Installation lifecycle and the static/managed HTTP serving baseline are committed.
-Installed browser navigation/authorization/isolation, real Caddy/VM/browser
-proofs, and the final integrated quality gate remain incomplete. The user approved organization-owned
+Project-owned static/managed installed-browser smoke and real Caddy/VM/browser
+proofs pass, including the live disable path; owner-navigation and guest-boundary
+proofs, the remaining lifecycle proofs, and the final integrated quality gate
+are open. The user approved organization-owned
 global installations and organization isolation. Historical checkpoints record the state
 at their time; later integration checkpoints supersede earlier pending notes.
 
@@ -75,10 +80,40 @@ Playwright's URL-filtered inventory does not preserve host-only domain semantics
 `008be7e` removes disposable npm dependencies before the unchanged evidence scan;
 a copied evidence tree passed and an unrelated symlink still failed that scan.
 
-This checkpoint does not complete release UI. Cross-runtime disable/reactivation/
-removal and stale-child behavior, parent/account revocation, additional guest
-boundary and owner-navigation proofs, and the final repository-wide quality gate
-remain to be completed. Earlier pending runtime notes below are historical.
+This checkpoint does not complete release UI. The live disable/stale-cookie
+proof is recorded below; cross-runtime reactivation/removal, parent/account
+revocation, additional guest boundary and owner-navigation proofs, and the
+final repository-wide quality gate remain to be completed. Earlier pending
+runtime notes below are historical.
+
+## Live disable lifecycle runtime proof (2026-09-20)
+
+The live-disable runtime at `9a8ec1b` passed with outer exit code zero. Its
+execution log is
+`/home/a/heph-installed-ui-twentyfourth-runtime-diag-20260920/cooking-execution.YrkyZS.log`;
+the safe Playwright report is
+`/home/a/heph-installed-ui-twentyfourth-runtime-diag-20260920/browser.HlBe4I/playwright.log`.
+The report records one passed test with zero failures. Golden results were 35
+passed, zero failed, one ignored; gateway PostgreSQL results were eight passed.
+Runtime and cgroup cleanup was verified, with the unrelated PID 10841 preserved.
+
+The run emitted:
+
+```text
+REAL_UI_INSTALLATION_DISABLE_LIFECYCLE=1 stale_cookie_denied=1 gateway_invocation_unchanged=1
+REAL_UI_INSTALLATION_AUDIT=1 static=1 managed=1 api=1 embed=1 gateway_correlation=1
+```
+
+The browser checks exercised actual wire cookies and verified that the stale
+post-disable request was denied without a new gateway invocation. The initial
+401 expectation was corrected to 404 because production retires the disabled
+host before authentication; the resulting anonymous `not_found` audit is the
+expected outcome. These are runtime assertions from the passing run; aggregate
+audit counts are not treated as proof of the post-disable request by themselves.
+
+This proves the live disable and stale-cookie path only. It does not establish
+reactivation, removal, parent/account revocation, or the other remaining
+lifecycle and final quality gates.
 
 ## Managed reference runtime and browser reachability findings (2026-09-20)
 
