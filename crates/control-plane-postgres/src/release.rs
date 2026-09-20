@@ -1,6 +1,8 @@
 //! Authorized release read operations used by the transport layer.
 #![allow(clippy::unused_async)] // Query methods retain async transport contracts while adapter SQL is introduced.
 
+pub mod ui;
+
 use crate::build::BuildApplication;
 use crate::build::BuildView;
 use agent_config::SecretSlotDeclaration;
@@ -83,6 +85,7 @@ pub struct ReleaseDetail {
     pub build: BuildView,
     pub artifacts: Vec<ReleaseArtifact>,
     pub agents: Vec<ReleaseAgent>,
+    pub ui_descriptors: Vec<ui::ReleaseUiDescriptor>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -208,6 +211,7 @@ impl ReleaseApplication {
             .map_err(map_build_error)?;
         let artifacts = self.artifacts(identity, id).await?;
         let agents = self.agents(identity, id).await?;
+        let ui_descriptors = self.ui_descriptors(identity, id).await?;
         Ok(ReleaseDetail {
             summary,
             build_definition_hash: row.build_definition_hash,
@@ -222,7 +226,24 @@ impl ReleaseApplication {
             build,
             artifacts,
             agents,
+            ui_descriptors,
         })
+    }
+
+    async fn ui_descriptors(
+        &self,
+        identity: &AuthenticatedIdentity,
+        release_id: Uuid,
+    ) -> Result<Vec<ui::ReleaseUiDescriptor>, ReleaseError> {
+        let mut transaction = begin_actor_transaction(&self.pool, identity)
+            .await
+            .map_err(ReleaseError::Persistence)?;
+        let descriptors = ui::load_release_ui_descriptors(&mut transaction, release_id).await?;
+        transaction
+            .commit()
+            .await
+            .map_err(ReleaseError::Persistence)?;
+        Ok(descriptors)
     }
 
     pub async fn set_draft_version(

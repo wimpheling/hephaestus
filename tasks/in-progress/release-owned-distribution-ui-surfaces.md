@@ -22,8 +22,9 @@ ordering is verified for valid and invalid captures. Build completion now writes
 resolved UI bindings in the release transaction, with worker-role static and
 legacy compatibility evidence. Managed/API exact bindings, replay, invalid-input
 rejections, and rollback after a release insert also pass real worker-role
-coverage. Authorized inspection, serving, browser integration, and aggregate
-acceptance remain incomplete.
+coverage. The authorized database inspection adapter also passes its real
+application-role matrix; generated RPC exposure is the next slice. Serving,
+browser integration, and aggregate acceptance remain incomplete.
 Earlier helper-only checkpoints below describe their state at the time;
 the receive and manual integration checkpoints supersede pending-wiring notes.
 
@@ -75,6 +76,32 @@ counted as acceptance evidence. Scoped Clippy, format, and docs passed in
 `/home/a/heph-release-managed-matrix-collision-fmt-20260920.log`, and
 `/home/a/heph-release-managed-matrix-doc-final-20260920.log`.
 This is publication evidence only; inspection and hosting remain separate work.
+
+## Authorized inspection adapter checkpoint (2026-09-20)
+
+`ReleaseApplication::get_release` now includes typed immutable UI descriptors,
+static file/artifact IDs, managed-service/agent IDs, and declared API metadata.
+Actor transactions retain explicit release read checks and forced table RLS.
+Four bounded queries reject excessive counts instead of truncating results.
+Assembly rejects missing or cross-content child bindings, invalid metadata,
+non-HTML static entrypoints, and per-UI file/API overflow. The projection does
+not expose storage locators, source configuration, credentials, or browser URLs.
+Legacy releases return an empty descriptor list.
+
+The focused PostgreSQL test uses a separate `hephaestus_app` pool and asserts
+that it is neither superuser nor `BYPASSRLS`. It covers authorized static and
+managed/API identities, outsider `NotFound` and direct RLS visibility, legacy
+empty UI, malformed bindings, and 17-descriptor/257-file/17-API overflow cases.
+It passed 1/1 in `/home/a/heph-release-ui-authorization-20260920-v3.log`.
+The existing artifact authorization regression passed 1/1 separately in
+`/home/a/heph-release-ui-artifact-authorization-20260920.log`.
+Scoped all-target/all-feature Clippy, documentation, and formatting passed in
+`/home/a/heph-control-plane-release-ui-clippy-20260920-v3.log`,
+`/home/a/heph-control-plane-release-ui-doc-20260920.log`, and
+`/home/a/heph-control-plane-release-ui-fmt-20260920-v4.log`.
+The disposable database passed readiness before testing and was removed.
+This checkpoint is the database adapter only: protobuf generation, RPC mapping,
+and browser-facing presentation remain subsequent slices.
 
 ## Current CI context (2026-09-20)
 
