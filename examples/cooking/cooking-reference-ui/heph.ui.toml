@@ -1,0 +1,25 @@
+version = 1
+
+[[uis]]
+key = "release-reference"
+scope = "project"
+label = "Release Reference"
+icon = "book"
+presentation = "full_page"
+route_base = "reference"
+ui_kit_version = 1
+cache = "no_store"
+
+[uis.content]
+kind = "static"
+entrypoint = "index.html"
+
+[[uis.content.files]]
+route = "index.html"
+artifact = "dist/index.html"
+media_type = "text/html"
+
+[[uis.content.files]]
+route = "heph-ui-kit-v1.0.0.css"
+artifact = "dist/heph-ui-kit-v1.0.0.css"
+media_type = "text/css"

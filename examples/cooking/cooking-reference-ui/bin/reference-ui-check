@@ -1,0 +1,20 @@
+#!/usr/bin/env python3
+"""Check the materialized guest artifact layout and vendored kit bytes."""
+
+import hashlib
+from pathlib import Path
+
+EXPECTED_CSS_SHA256 = "79a23f981523db70c39e07be76830be59f419d2b7d3336485fe56b8a09af5c1d"
+artifact_root = Path(__file__).resolve().parent.parent
+html_path = artifact_root / "dist/index.html"
+css_path = artifact_root / "dist/heph-ui-kit-v1.0.0.css"
+if not html_path.is_file() or not css_path.is_file():
+    raise SystemExit("reference UI artifacts are not materialized beside the checker")
+html = html_path.read_text(encoding="utf-8")
+if "<title>Release reference</title>" not in html:
+    raise SystemExit("reference UI HTML title is missing")
+if "heph-ui-kit-v1.0.0.css" not in html:
+    raise SystemExit("reference UI stylesheet link is missing")
+if hashlib.sha256(css_path.read_bytes()).hexdigest() != EXPECTED_CSS_SHA256:
+    raise SystemExit("materialized UI kit CSS does not match the canonical kit manifest")
+print("reference-ui-check=passed")

@@ -1,0 +1,58 @@
+version = 2
+
+[agent]
+name = "Cooking release reference UI"
+key = "cooking-reference-ui"
+
+[build]
+command = "/bin/sh"
+arguments = ["build.sh"]
+working_directory = "/workspace/source"
+image = { key = "python-ubuntu" }
+triggers = ["refs/heads/main"]
+
+[build.resources]
+vcpus = 1
+memory_mib = 256
+
+[build.network]
+profile = "disabled"
+
+[[build.artifacts]]
+path = "dist/index.html"
+kind = "file"
+media_type = "text/html"
+
+[[build.artifacts]]
+path = "dist/heph-ui-kit-v1.0.0.css"
+kind = "file"
+media_type = "text/css"
+
+[[build.artifacts]]
+path = "bin/reference-ui-check"
+kind = "executable"
+media_type = "application/octet-stream"
+
+[guest]
+image = { key = "python-ubuntu" }
+command = "bin/reference-ui-check"
+working_directory = "bin"
+
+[resources]
+vcpus = 1
+memory_mib = 256
+
+[workspace]
+mount = false
+path = "/workspace/repo"
+read_only = true
+
+[state_volume]
+enabled = false
+
+[network]
+profile = "disabled"
+
+[triggers]
+push = true
+refs = ["refs/heads/main"]

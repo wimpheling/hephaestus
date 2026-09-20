@@ -24,6 +24,26 @@ integrated quality gate remain incomplete. Global installation ownership is an
 open question sent to the user. Historical checkpoints below record the state
 at their time; later integration checkpoints supersede earlier pending notes.
 
+## Static reference fixture checkpoint (2026-09-20)
+
+`examples/cooking/cooking-reference-ui` declares a project-scoped static page
+using the versioned CSS kit. Its build checks the vendored manifest and hashes;
+the executable artifact checks the materialized HTML/CSS layout. Build and guest
+networking are disabled. The kit checks compare both vendored generated files
+with canonical output, so drift fails validation.
+
+The Rust semantic fixture test derives artifact candidates from the actual agent
+declaration and checked-in bytes, then resolves the UI routes. Its focused test,
+Clippy, formatting, and documentation checks passed, as did kit npm tests and
+drift checks. A local standalone build and tampered-CSS rejection were exercised.
+Local Chromium light/dark screenshots were reviewed; this is local rendering
+evidence, not an installed release or browser-authorization proof.
+
+Cooking pipeline publication, managed-service reference content, installation,
+and Caddy-hosted browser integration remain pending; section 5 stays incomplete.
+Focused Rust logs use `/home/a/heph-agent-config-reference-fixture-*-20260920.log`;
+local screenshots are `/home/a/heph-reference-ui-smoke-{light,dark}-20260920.png`.
+
 ## Browser and routing prerequisite decisions (2026-09-20)
 
 UI origins require an opt-in static namespace guard in the existing Caddy

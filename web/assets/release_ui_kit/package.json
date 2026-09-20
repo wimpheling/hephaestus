@@ -7,7 +7,7 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "check": "node scripts/check.mjs",
-    "test": "node scripts/build.mjs && node scripts/test.mjs",
+    "test": "node scripts/build.mjs && node scripts/test.mjs && node scripts/check-reference-fixture.mjs",
     "prepack": "node scripts/build.mjs"
   },
   "exports": {
