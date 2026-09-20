@@ -797,7 +797,9 @@ async fn assert_installed_ui_stale_cookie_denial(
     assert_eq!(denial.0, "content");
     assert_eq!(denial.1, UiRequestAuditDecision::Denied.as_str());
     assert_eq!(denial.2, UiRequestAuditOutcome::NotAttempted.as_str());
-    assert_eq!(denial.3, UiRequestAuditReason::Unauthenticated.as_str());
+    // The active-generation resolver runs before child-cookie projection and
+    // intentionally retires disabled hosts, so this is a not-found denial.
+    assert_eq!(denial.3, UiRequestAuditReason::NotFound.as_str());
     assert!(denial.4.is_none(), "stale denial actor must be anonymous");
     assert!(
         denial.5.is_none(),

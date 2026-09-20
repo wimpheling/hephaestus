@@ -428,6 +428,8 @@ test("cooking installed UI TLS full-page and managed iframe smoke", async ({page
       let staleUiCookiePresent = false;
       let staleRequestHeaders: Record<string, string> = {};
       await test.step("lifecycle-stale-fetch-response", async () => {
+        // A disabled generation host is retired before child authentication,
+        // so the exact old host is expected to return 404 after disable.
         const [request, response] = await Promise.all([
           stalePage.waitForRequest(
             candidate => candidate.url() === managedDocumentUrl && candidate.resourceType() === "fetch",
@@ -451,15 +453,15 @@ test("cooking installed UI TLS full-page and managed iframe smoke", async ({page
           staleStatusCode === 404 ? "lifecycle-stale-fetch-404" :
             staleStatusCode === 410 ? "lifecycle-stale-fetch-410" :
               staleStatusCode === 200 ? "lifecycle-stale-fetch-200" : "lifecycle-stale-fetch-other";
-      await test.step(staleStatusStage, async () => {
-        expect(staleStatusCode).toBe(401);
-      });
       await test.step("lifecycle-stale-request-observed", async () => {
         expect(staleRequestObserved).toBe(true);
       });
       await test.step("lifecycle-stale-cookie-present", async () => {
         staleUiCookiePresent = requestHasCookie(staleRequestHeaders, "__Host-hephaestus_ui");
         expect(staleUiCookiePresent).toBe(true);
+      });
+      await test.step(staleStatusStage, async () => {
+        expect(staleStatusCode).toBe(404);
       });
       await test.step("lifecycle-stale-cookie-denied", async () => {
         writeFileSync(join(controlDirectory, "stale-cookie-denied"), "denied\n", {
