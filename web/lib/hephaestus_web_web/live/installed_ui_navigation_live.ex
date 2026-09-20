@@ -183,7 +183,13 @@ defmodule HephaestusWebWeb.InstalledUiNavigationLive do
 
   defp maybe_close_active_frame(socket, previous, current) do
     if active_ref(previous) != active_ref(current) and active_ref(previous) != nil do
-      reason = if current.status == :error, do: "unavailable", else: "active_generation_changed"
+      reason =
+        case current.status do
+          :error -> "unavailable"
+          :access_revoked -> "access_revoked"
+          _status -> "active_generation_changed"
+        end
+
       push_event(socket, "ui-browser-close", %{"reason" => reason})
     else
       socket
