@@ -117,6 +117,7 @@ defmodule HephaestusWebWeb.RepositoryFilesLive do
   def handle_info({ref, event}, %{assigns: %{effect_task: %Task{ref: ref}}} = socket) do
     Process.demonitor(ref, [:flush])
     {socket, effects} = RepositoryLiveSupport.complete(socket, RepositoryFilesState, event)
+    socket = maybe_start_installed_ui(socket)
     {:noreply, RepositoryLiveSupport.apply_effects(socket, RepositoryFilesState, effects)}
   end
 
