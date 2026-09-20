@@ -487,39 +487,40 @@ async fn seed_fixture_with_lease(
         .await
         .expect("release agent");
     }
-    let columns = if service {
-        "18080, '/ready', '/health'"
-    } else {
-        "NULL, NULL, NULL"
-    };
-    let slots = if service { "'{hook}'" } else { "'{}'" };
-    let revision_sql = format!(
+    sqlx::query(
         "INSERT INTO gateway_revisions
             (id, gateway_id, project_id, repository_id, release_id,
              release_agent_id, release_agent_key, handler_contract, exposure,
              parameters, secret_slots, service_loopback_port, service_readiness_path,
              service_health_path, normalized_hash, created_by)
          VALUES ($1, $2, $3, $4, $5,
-                 $6, $7, $8, 'public', '{{}}', {slots}, {columns}, $9, $10)"
-    );
-    sqlx::query(&revision_sql)
-        .bind(revision)
-        .bind(gateway)
-        .bind(project)
-        .bind(repository)
-        .bind(if service { Some(release) } else { None })
-        .bind(if service { Some(release_agent) } else { None })
-        .bind(if service {
-            Some("recovery-service")
-        } else {
-            None
-        })
-        .bind(contract)
-        .bind([9_u8; 32].as_slice())
-        .bind(owner)
-        .execute(pool)
-        .await
-        .expect("revision");
+                 $6, $7, $8, 'public', '{}', $9, $10, $11, $12, $13, $14)",
+    )
+    .bind(revision)
+    .bind(gateway)
+    .bind(project)
+    .bind(repository)
+    .bind(if service { Some(release) } else { None })
+    .bind(if service { Some(release_agent) } else { None })
+    .bind(if service {
+        Some("recovery-service")
+    } else {
+        None
+    })
+    .bind(contract)
+    .bind(if service {
+        vec![String::from("hook")]
+    } else {
+        Vec::new()
+    })
+    .bind(service.then_some(18_080_i32))
+    .bind(service.then_some("/ready"))
+    .bind(service.then_some("/health"))
+    .bind([9_u8; 32].as_slice())
+    .bind(owner)
+    .execute(pool)
+    .await
+    .expect("revision");
     sqlx::query("UPDATE gateways SET active_revision_id = $2 WHERE id = $1")
         .bind(gateway)
         .bind(revision)
@@ -541,26 +542,23 @@ async fn seed_fixture_with_lease(
     .expect("route");
     let service_instance = if service {
         let instance = Uuid::new_v4();
-        let (heartbeat, lease) = if expired_instance {
-            (
-                "now() - interval '20 minutes'",
-                "now() - interval '10 minutes'",
-            )
-        } else {
-            ("now()", "now() + interval '10 minutes'")
-        };
-        sqlx::query(&format!(
+        sqlx::query(
             "INSERT INTO gateway_service_instances
                 (id, gateway_id, revision_id, owner_host_id, owner_uuid,
                  fencing_token, vm_id, state, lease_expires_at, heartbeat_at)
              VALUES ($1, $2, $3, 'recovery-host', $4, 1,
-                     $5, 'ready', {lease}, {heartbeat})"
-        ))
+                     $5, 'ready',
+                     CASE WHEN $6 THEN now() - interval '10 minutes'
+                          ELSE now() + interval '10 minutes' END,
+                     CASE WHEN $6 THEN now() - interval '20 minutes'
+                          ELSE now() END)",
+        )
         .bind(instance)
         .bind(gateway)
         .bind(revision)
         .bind(owner)
         .bind(format!("gateway-service-{instance}"))
+        .bind(expired_instance)
         .execute(pool)
         .await
         .expect("ready service instance");

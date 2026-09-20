@@ -2420,35 +2420,29 @@ async fn seed_gateway_with_instance_state(
     let old_instance = Uuid::new_v4();
     let owner_host_id =
         owner_host_override.map_or_else(|| format!("target-host-{name}-{gateway}"), str::to_owned);
-    let lease_expires = if instance_expired {
-        "now() - interval '1 second'"
-    } else {
-        "now() + interval '10 minutes'"
-    };
-    let heartbeat_at = if instance_expired {
-        "now() - interval '2 seconds'"
-    } else {
-        "now()"
-    };
-    let query = format!(
+    sqlx::query(
         "INSERT INTO gateway_service_instances
             (id, gateway_id, revision_id, owner_host_id, owner_uuid,
              fencing_token, vm_id, state, lease_expires_at, heartbeat_at, cleaned_at)
          VALUES ($1, $2, $3, $7, $4, 1,
-                 $5, $6, {lease_expires}, {heartbeat_at},
-                 CASE WHEN $6 = 'cleaned' THEN now() ELSE NULL END)"
-    );
-    sqlx::query(&query)
-        .bind(old_instance)
-        .bind(gateway)
-        .bind(old_service)
-        .bind(owner)
-        .bind(format!("gateway-service-{old_instance}"))
-        .bind(instance_state)
-        .bind(&owner_host_id)
-        .execute(pool)
-        .await
-        .expect("ready service instance");
+                 $5, $6,
+                 CASE WHEN $8 THEN now() - interval '1 second'
+                      ELSE now() + interval '10 minutes' END,
+                 CASE WHEN $8 THEN now() - interval '2 seconds'
+                      ELSE now() END,
+                 CASE WHEN $6 = 'cleaned' THEN now() ELSE NULL END)",
+    )
+    .bind(old_instance)
+    .bind(gateway)
+    .bind(old_service)
+    .bind(owner)
+    .bind(format!("gateway-service-{old_instance}"))
+    .bind(instance_state)
+    .bind(&owner_host_id)
+    .bind(instance_expired)
+    .execute(pool)
+    .await
+    .expect("ready service instance");
     Fixture {
         owner,
         project,
@@ -2485,34 +2479,28 @@ async fn insert_release(
     .execute(pool)
     .await
     .expect("build request");
-    let publication = if state == "published" {
-        "now()"
-    } else {
-        "NULL"
-    };
-    let revoked = if state == "revoked" { "now()" } else { "NULL" };
-    let query = format!(
+    sqlx::query(
         "INSERT INTO releases
             (id, repository_id, version, source_commit, source_ref, build_request_id,
              build_definition_hash, configuration, configuration_hash, manifest_hash,
              state, publication_actor_id, published_at, revoked_at)
-         VALUES ($1, $2, $3, $4, 'refs/heads/main', $5, $6, '{{}}', $7, $8, $9, $10,
-                 {publication}, {revoked})"
-    );
-    sqlx::query(&query)
-        .bind(release)
-        .bind(repository)
-        .bind(version)
-        .bind(&source_commit)
-        .bind(build)
-        .bind([4_u8; 32].as_slice())
-        .bind([5_u8; 32].as_slice())
-        .bind([6_u8; 32].as_slice())
-        .bind(state)
-        .bind(owner)
-        .execute(pool)
-        .await
-        .expect("release");
+         VALUES ($1, $2, $3, $4, 'refs/heads/main', $5, $6, '{}', $7, $8, $9, $10,
+                 CASE WHEN $9 = 'published' THEN now() ELSE NULL END,
+                 CASE WHEN $9 = 'revoked' THEN now() ELSE NULL END)",
+    )
+    .bind(release)
+    .bind(repository)
+    .bind(version)
+    .bind(&source_commit)
+    .bind(build)
+    .bind([4_u8; 32].as_slice())
+    .bind([5_u8; 32].as_slice())
+    .bind([6_u8; 32].as_slice())
+    .bind(state)
+    .bind(owner)
+    .execute(pool)
+    .await
+    .expect("release");
     let family = Uuid::new_v4();
     let agent = Uuid::new_v4();
     sqlx::query(

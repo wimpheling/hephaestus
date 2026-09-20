@@ -3797,6 +3797,15 @@ struct IsolatedStartupDatabase {
     name: String,
 }
 
+fn assert_safe_isolated_database_name(name: &str) {
+    assert!(name.starts_with("hephaestus_startup_"));
+    assert!(name.len() > "hephaestus_startup_".len());
+    assert!(
+        name.bytes()
+            .all(|byte| { byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_' })
+    );
+}
+
 async fn isolated_startup_database() -> Option<IsolatedStartupDatabase> {
     let database_url = env::var("HEPHAESTUS_POSTGRES_TEST_URL").ok()?;
     let options = PgConnectOptions::from_str(&database_url).expect("parse test database URL");
@@ -3806,7 +3815,8 @@ async fn isolated_startup_database() -> Option<IsolatedStartupDatabase> {
         .await
         .expect("connect PostgreSQL maintenance database");
     let name = format!("hephaestus_startup_{}", Uuid::new_v4().simple());
-    sqlx::query(&format!("CREATE DATABASE {name}"))
+    assert_safe_isolated_database_name(&name);
+    sqlx::query(&format!("CREATE DATABASE \"{name}\""))
         .execute(&admin)
         .await
         .expect("create isolated startup database");
@@ -3883,7 +3893,8 @@ async fn drop_isolated_startup_database(database: IsolatedStartupDatabase) {
             () = tokio::time::sleep(StdDuration::from_millis(25)) => {}
         }
     }
-    sqlx::query(&format!("DROP DATABASE IF EXISTS {}", database.name))
+    assert_safe_isolated_database_name(&database.name);
+    sqlx::query(&format!("DROP DATABASE IF EXISTS \"{}\"", database.name))
         .execute(&database.admin)
         .await
         .expect("drop isolated startup database");
@@ -4068,40 +4079,41 @@ async fn seed_fixture_with_capture_mode(
         .await
         .expect("release agent");
     }
-    let columns = if service {
-        "18080, '/ready', '/health'"
-    } else {
-        "NULL, NULL, NULL"
-    };
-    let slots = if service { "'{hook}'" } else { "'{}'" };
-    let revision_sql = format!(
+    let secret_slots: Vec<&str> = if service { vec!["hook"] } else { Vec::new() };
+    let service_loopback_port = service.then_some(18080_i32);
+    let service_readiness_path = service.then_some("/ready");
+    let service_health_path = service.then_some("/health");
+    sqlx::query(
         "INSERT INTO gateway_revisions
             (id, gateway_id, project_id, repository_id, release_id,
              release_agent_id, release_agent_key, handler_contract, exposure,
              parameters, secret_slots, service_loopback_port, service_readiness_path,
-            service_health_path, service_log_capture_mode, normalized_hash, created_by)
+             service_health_path, service_log_capture_mode, normalized_hash, created_by)
          VALUES ($1, $2, $3, $4, $5,
-                 $6, $7, $8, 'public', '{{}}', {slots}, {columns}, $9, $10, $11)"
-    );
-    sqlx::query(&revision_sql)
-        .bind(revision)
-        .bind(gateway)
-        .bind(project)
-        .bind(repository)
-        .bind(if service { Some(release) } else { None })
-        .bind(if service { Some(release_agent) } else { None })
-        .bind(if service {
-            Some("recovery-service")
-        } else {
-            None
-        })
-        .bind(contract)
-        .bind(if service { capture_mode } else { "disabled" })
-        .bind([9_u8; 32].as_slice())
-        .bind(owner)
-        .execute(pool)
-        .await
-        .expect("revision");
+                 $6, $7, $8, 'public', '{}', $9, $10, $11, $12, $13, $14, $15)",
+    )
+    .bind(revision)
+    .bind(gateway)
+    .bind(project)
+    .bind(repository)
+    .bind(if service { Some(release) } else { None })
+    .bind(if service { Some(release_agent) } else { None })
+    .bind(if service {
+        Some("recovery-service")
+    } else {
+        None
+    })
+    .bind(contract)
+    .bind(&secret_slots)
+    .bind(service_loopback_port)
+    .bind(service_readiness_path)
+    .bind(service_health_path)
+    .bind(if service { capture_mode } else { "disabled" })
+    .bind([9_u8; 32].as_slice())
+    .bind(owner)
+    .execute(pool)
+    .await
+    .expect("revision");
     sqlx::query("UPDATE gateways SET active_revision_id = $2 WHERE id = $1")
         .bind(gateway)
         .bind(revision)
@@ -4123,26 +4135,23 @@ async fn seed_fixture_with_capture_mode(
     .expect("route");
     let service_instance = if service {
         let instance = Uuid::new_v4();
-        let (heartbeat, lease) = if expired_instance {
-            (
-                "now() - interval '20 minutes'",
-                "now() - interval '10 minutes'",
-            )
-        } else {
-            ("now()", "now() + interval '10 minutes'")
-        };
-        sqlx::query(&format!(
+        sqlx::query(
             "INSERT INTO gateway_service_instances
                 (id, gateway_id, revision_id, owner_host_id, owner_uuid,
                  fencing_token, vm_id, state, lease_expires_at, heartbeat_at)
              VALUES ($1, $2, $3, 'recovery-host', $4, 1,
-                     $5, 'ready', {lease}, {heartbeat})"
-        ))
+                     $5, 'ready',
+                     CASE WHEN $6 THEN now() - interval '10 minutes'
+                          ELSE now() + interval '10 minutes' END,
+                     CASE WHEN $6 THEN now() - interval '20 minutes'
+                          ELSE now() END)",
+        )
         .bind(instance)
         .bind(gateway)
         .bind(revision)
         .bind(owner)
         .bind(format!("gateway-service-{instance}"))
+        .bind(expired_instance)
         .execute(pool)
         .await
         .expect("ready service instance");

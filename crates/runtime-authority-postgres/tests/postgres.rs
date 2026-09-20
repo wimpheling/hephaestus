@@ -608,34 +608,35 @@ async fn seed_fixture(pool: &sqlx::PgPool, handler_contract: &str) -> Fixture {
         .execute(pool)
         .await
         .expect("gateway");
-    let service_columns = if handler_contract == "http.service.v1" {
-        "18080, '/ready', '/health'"
+    let secret_slots: Vec<&str> = if handler_contract == "http.service.v1" {
+        vec!["hook"]
     } else {
-        "NULL, NULL, NULL"
+        Vec::new()
     };
-    let secret_slots = if handler_contract == "http.service.v1" {
-        "'{hook}'"
-    } else {
-        "'{}'"
-    };
-    let revision_sql = format!(
+    let service_loopback_port = (handler_contract == "http.service.v1").then_some(18080_i32);
+    let service_readiness_path = (handler_contract == "http.service.v1").then_some("/ready");
+    let service_health_path = (handler_contract == "http.service.v1").then_some("/health");
+    sqlx::query(
         "INSERT INTO gateway_revisions
             (id, gateway_id, project_id, repository_id, handler_contract, exposure,
              parameters, secret_slots, service_loopback_port, service_readiness_path,
              service_health_path, normalized_hash, created_by)
-         VALUES ($1, $2, $3, $4, $5, 'public', '{{}}', {secret_slots}, {service_columns}, $6, $7)"
-    );
-    sqlx::query(&revision_sql)
-        .bind(revision)
-        .bind(gateway)
-        .bind(project)
-        .bind(repository)
-        .bind(handler_contract)
-        .bind(hash.as_slice())
-        .bind(owner)
-        .execute(pool)
-        .await
-        .expect("gateway revision");
+         VALUES ($1, $2, $3, $4, $5, 'public', '{}', $6, $7, $8, $9, $10, $11)",
+    )
+    .bind(revision)
+    .bind(gateway)
+    .bind(project)
+    .bind(repository)
+    .bind(handler_contract)
+    .bind(&secret_slots)
+    .bind(service_loopback_port)
+    .bind(service_readiness_path)
+    .bind(service_health_path)
+    .bind(hash.as_slice())
+    .bind(owner)
+    .execute(pool)
+    .await
+    .expect("gateway revision");
     sqlx::query("UPDATE gateways SET active_revision_id = $2 WHERE id = $1")
         .bind(gateway)
         .bind(revision)

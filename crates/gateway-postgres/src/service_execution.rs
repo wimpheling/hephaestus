@@ -13,78 +13,6 @@ use std::{
 use time::{Duration as TimeDuration, OffsetDateTime};
 use uuid::Uuid;
 
-const EXECUTION_TARGET_QUERY: &str = r"
-SELECT invocation.gateway_id,
-       invocation.gateway_revision_id,
-       revision.handler_contract,
-       invocation.service_instance_id,
-       invocation.service_instance_fencing_token,
-       session.expires_at AS session_expires_at,
-       clock.database_now
-  FROM gateway_invocations AS invocation
-  JOIN gateway_routes AS route
-    ON route.id = invocation.gateway_route_id
-   AND route.gateway_revision_id = invocation.gateway_revision_id
-   AND route.gateway_id = invocation.gateway_id
-  JOIN gateways AS gateway
-    ON gateway.id = invocation.gateway_id
-   AND gateway.id = route.gateway_id
-  JOIN gateway_revisions AS revision
-    ON revision.id = invocation.gateway_revision_id
-   AND revision.gateway_id = invocation.gateway_id
-  CROSS JOIN LATERAL (
-       SELECT clock_timestamp() AS database_now
-  ) AS clock
-  LEFT JOIN gateway_service_instances AS instance
-    ON instance.id = invocation.service_instance_id
-   AND instance.gateway_id = invocation.gateway_id
-   AND instance.revision_id = invocation.gateway_revision_id
-   AND instance.fencing_token = invocation.service_instance_fencing_token
-   AND instance.owner_host_id = $4
-   AND instance.owner_uuid = $5
-   AND instance.state IN ('ready', 'draining')
-   AND instance.lease_expires_at > clock.database_now
-  LEFT JOIN releases AS release
-    ON release.id = revision.release_id
-   AND release.repository_id = revision.repository_id
-   AND release.state = 'published'
-  LEFT JOIN gateway_runtime_authority_sessions AS session
-    ON session.invocation_id = invocation.id
-   AND session.gateway_id = invocation.gateway_id
-   AND session.gateway_revision_id = invocation.gateway_revision_id
-   AND session.admission_mode = 'host_mediated'
-   AND session.status = 'active'
-   AND session.expires_at > clock.database_now
- WHERE invocation.id = $1
-   AND invocation.gateway_route_id = $2
-   AND invocation.gateway_revision_id = $3
-   AND invocation.outcome = 'accepted'
-   AND (
-       (
-           revision.handler_contract = 'http.v1'
-           AND invocation.service_instance_id IS NULL
-           AND invocation.service_instance_fencing_token IS NULL
-       )
-       OR
-       (
-           revision.handler_contract = 'http.service.v1'
-           AND instance.id IS NOT NULL
-           AND release.id IS NOT NULL
-           AND session.id IS NOT NULL
-           AND NOT EXISTS (
-               SELECT 1
-                 FROM gateway_secret_leases AS lease
-                 JOIN gateway_brokered_secret_rules AS rule
-                   ON rule.id = lease.rule_id
-                  AND rule.gateway_route_id = route.id
-                  AND rule.gateway_revision_id = revision.id
-                WHERE lease.invocation_id = invocation.id
-                  AND (lease.status <> 'active'
-                       OR lease.expires_at <= clock.database_now)
-           )
-       )
-   )";
-
 /// Worker-role adapter for immutable gateway invocation execution targets.
 #[derive(Clone)]
 pub struct PostgresGatewayExecutionTargetResolver {
@@ -170,15 +98,87 @@ async fn load_execution_target(
     revision_id: Uuid,
     owner: &GatewayServiceOwner,
 ) -> Result<Option<ExecutionTargetRow>, GatewayExecutionTargetError> {
-    sqlx::query_as::<_, ExecutionTargetRow>(EXECUTION_TARGET_QUERY)
-        .bind(invocation_id)
-        .bind(route_id)
-        .bind(revision_id)
-        .bind(&owner.host_id)
-        .bind(owner.owner_uuid)
-        .fetch_optional(pool)
-        .await
-        .map_err(|_| GatewayExecutionTargetError::Unavailable)
+    sqlx::query_as::<_, ExecutionTargetRow>(
+        r"
+SELECT invocation.gateway_id,
+       invocation.gateway_revision_id,
+       revision.handler_contract,
+       invocation.service_instance_id,
+       invocation.service_instance_fencing_token,
+       session.expires_at AS session_expires_at,
+       clock.database_now
+  FROM gateway_invocations AS invocation
+  JOIN gateway_routes AS route
+    ON route.id = invocation.gateway_route_id
+   AND route.gateway_revision_id = invocation.gateway_revision_id
+   AND route.gateway_id = invocation.gateway_id
+  JOIN gateways AS gateway
+    ON gateway.id = invocation.gateway_id
+   AND gateway.id = route.gateway_id
+  JOIN gateway_revisions AS revision
+    ON revision.id = invocation.gateway_revision_id
+   AND revision.gateway_id = invocation.gateway_id
+  CROSS JOIN LATERAL (
+       SELECT clock_timestamp() AS database_now
+  ) AS clock
+  LEFT JOIN gateway_service_instances AS instance
+    ON instance.id = invocation.service_instance_id
+   AND instance.gateway_id = invocation.gateway_id
+   AND instance.revision_id = invocation.gateway_revision_id
+   AND instance.fencing_token = invocation.service_instance_fencing_token
+   AND instance.owner_host_id = $4
+   AND instance.owner_uuid = $5
+   AND instance.state IN ('ready', 'draining')
+   AND instance.lease_expires_at > clock.database_now
+  LEFT JOIN releases AS release
+    ON release.id = revision.release_id
+   AND release.repository_id = revision.repository_id
+   AND release.state = 'published'
+  LEFT JOIN gateway_runtime_authority_sessions AS session
+    ON session.invocation_id = invocation.id
+   AND session.gateway_id = invocation.gateway_id
+   AND session.gateway_revision_id = invocation.gateway_revision_id
+   AND session.admission_mode = 'host_mediated'
+   AND session.status = 'active'
+   AND session.expires_at > clock.database_now
+ WHERE invocation.id = $1
+   AND invocation.gateway_route_id = $2
+   AND invocation.gateway_revision_id = $3
+   AND invocation.outcome = 'accepted'
+   AND (
+       (
+           revision.handler_contract = 'http.v1'
+           AND invocation.service_instance_id IS NULL
+           AND invocation.service_instance_fencing_token IS NULL
+       )
+       OR
+       (
+           revision.handler_contract = 'http.service.v1'
+           AND instance.id IS NOT NULL
+           AND release.id IS NOT NULL
+           AND session.id IS NOT NULL
+           AND NOT EXISTS (
+               SELECT 1
+                 FROM gateway_secret_leases AS lease
+                 JOIN gateway_brokered_secret_rules AS rule
+                   ON rule.id = lease.rule_id
+                  AND rule.gateway_route_id = route.id
+                  AND rule.gateway_revision_id = revision.id
+                WHERE lease.invocation_id = invocation.id
+                  AND (lease.status <> 'active'
+                       OR lease.expires_at <= clock.database_now)
+           )
+       )
+   )",
+    )
+    .bind(invocation_id)
+    .bind(route_id)
+    .bind(revision_id)
+    .bind(&owner.host_id)
+    .bind(owner.owner_uuid)
+    .fetch_optional(pool)
+    .await
+    .map_err(|_| GatewayExecutionTargetError::Unavailable)
 }
 
 #[derive(Debug, FromRow)]

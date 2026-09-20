@@ -283,30 +283,6 @@ enum TimingWindow {
     Expired,
 }
 
-impl TimingWindow {
-    const fn expressions(self) -> (&'static str, &'static str) {
-        match self {
-            Self::Live => ("now()", "now() + interval '10 minutes'"),
-            Self::Near => ("now()", "now() + interval '1 millisecond'"),
-            Self::Expired => (
-                "now() - interval '2 minutes'",
-                "now() - interval '1 minute'",
-            ),
-        }
-    }
-
-    const fn lease_expressions(self) -> (&'static str, &'static str) {
-        match self {
-            Self::Live => ("now()", "now() + interval '5 minutes'"),
-            Self::Near => ("now()", "now() + interval '1 millisecond'"),
-            Self::Expired => (
-                "now() - interval '2 minutes'",
-                "now() - interval '1 minute'",
-            ),
-        }
-    }
-}
-
 // Keep the complete authority graph in one fixture so each test exercises the
 // same worker-visible rows and trigger boundaries.
 #[allow(clippy::cognitive_complexity, clippy::too_many_lines)]
@@ -442,12 +418,7 @@ async fn seed_service_inner(
     .execute(pool)
     .await
     .expect("agent");
-    let slots = if with_secret_lease {
-        "ARRAY['hook']"
-    } else {
-        "'{}'"
-    };
-    let revision_sql = format!(
+    sqlx::query(
         "INSERT INTO gateway_revisions
             (id, gateway_id, project_id, repository_id, release_id,
              release_agent_id, release_agent_key, handler_contract, exposure,
@@ -455,21 +426,25 @@ async fn seed_service_inner(
              service_readiness_path, service_health_path, normalized_hash,
              created_by)
          VALUES ($1, $2, $3, $4, $5, $6, $7, 'http.service.v1', 'public',
-                 '{{}}', {slots}, 18080, '/ready', '/health', $8, $9)"
-    );
-    sqlx::query(&revision_sql)
-        .bind(revision)
-        .bind(gateway)
-        .bind(project)
-        .bind(repository)
-        .bind(release)
-        .bind(agent)
-        .bind("execution-service")
-        .bind([9_u8; 32].as_slice())
-        .bind(owner_id)
-        .execute(pool)
-        .await
-        .expect("revision");
+                 '{}', $8, 18080, '/ready', '/health', $9, $10)",
+    )
+    .bind(revision)
+    .bind(gateway)
+    .bind(project)
+    .bind(repository)
+    .bind(release)
+    .bind(agent)
+    .bind("execution-service")
+    .bind(if with_secret_lease {
+        vec![String::from("hook")]
+    } else {
+        Vec::new()
+    })
+    .bind([9_u8; 32].as_slice())
+    .bind(owner_id)
+    .execute(pool)
+    .await
+    .expect("revision");
     sqlx::query(
         "INSERT INTO gateway_routes
             (id, gateway_revision_id, gateway_id, project_id, path, methods)
@@ -482,15 +457,31 @@ async fn seed_service_inner(
     .execute(pool)
     .await
     .expect("route");
-    let (instance_heartbeat, instance_expiry) = instance_timing.expressions();
-    let instance_sql = format!(
-        "INSERT INTO gateway_service_instances
-            (id, gateway_id, revision_id, owner_host_id, owner_uuid,
-             fencing_token, vm_id, state, lease_expires_at, heartbeat_at)
-         VALUES ($1, $2, $3, $4, $5, 1, $6, 'ready', {instance_expiry},
-                 {instance_heartbeat})"
-    );
-    sqlx::query(&instance_sql)
+    let instance_query = match instance_timing {
+        TimingWindow::Live => sqlx::query(
+            "INSERT INTO gateway_service_instances
+                (id, gateway_id, revision_id, owner_host_id, owner_uuid,
+                 fencing_token, vm_id, state, lease_expires_at, heartbeat_at)
+             VALUES ($1, $2, $3, $4, $5, 1, $6, 'ready',
+                     now() + interval '10 minutes', now())",
+        ),
+        TimingWindow::Near => sqlx::query(
+            "INSERT INTO gateway_service_instances
+                (id, gateway_id, revision_id, owner_host_id, owner_uuid,
+                 fencing_token, vm_id, state, lease_expires_at, heartbeat_at)
+             VALUES ($1, $2, $3, $4, $5, 1, $6, 'ready',
+                     now() + interval '1 millisecond', now())",
+        ),
+        TimingWindow::Expired => sqlx::query(
+            "INSERT INTO gateway_service_instances
+                (id, gateway_id, revision_id, owner_host_id, owner_uuid,
+                 fencing_token, vm_id, state, lease_expires_at, heartbeat_at)
+             VALUES ($1, $2, $3, $4, $5, 1, $6, 'ready',
+                     now() - interval '1 minute',
+                     now() - interval '2 minutes')",
+        ),
+    };
+    instance_query
         .bind(instance)
         .bind(gateway)
         .bind(revision)
@@ -531,16 +522,37 @@ async fn seed_service_inner(
     .execute(pool)
     .await
     .expect("snapshot");
-    let (session_issued, session_expiry) = session_timing.expressions();
-    let session_sql = format!(
-        "INSERT INTO gateway_runtime_authority_sessions
-            (id, snapshot_id, invocation_id, gateway_id, gateway_revision_id,
-             identity_hash, snapshot_hash, issuance_generation, credential_hash,
-             admission_mode, status, issued_at, expires_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, 1, NULL,
-                 'host_mediated', 'active', {session_issued}, {session_expiry})"
-    );
-    sqlx::query(&session_sql)
+    let session_query = match session_timing {
+        TimingWindow::Live => sqlx::query(
+            "INSERT INTO gateway_runtime_authority_sessions
+                (id, snapshot_id, invocation_id, gateway_id, gateway_revision_id,
+                 identity_hash, snapshot_hash, issuance_generation, credential_hash,
+                 admission_mode, status, issued_at, expires_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, 1, NULL,
+                     'host_mediated', 'active', now(),
+                     now() + interval '10 minutes')",
+        ),
+        TimingWindow::Near => sqlx::query(
+            "INSERT INTO gateway_runtime_authority_sessions
+                (id, snapshot_id, invocation_id, gateway_id, gateway_revision_id,
+                 identity_hash, snapshot_hash, issuance_generation, credential_hash,
+                 admission_mode, status, issued_at, expires_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, 1, NULL,
+                     'host_mediated', 'active', now(),
+                     now() + interval '1 millisecond')",
+        ),
+        TimingWindow::Expired => sqlx::query(
+            "INSERT INTO gateway_runtime_authority_sessions
+                (id, snapshot_id, invocation_id, gateway_id, gateway_revision_id,
+                 identity_hash, snapshot_hash, issuance_generation, credential_hash,
+                 admission_mode, status, issued_at, expires_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, 1, NULL,
+                     'host_mediated', 'active',
+                     now() - interval '2 minutes',
+                     now() - interval '1 minute')",
+        ),
+    };
+    session_query
         .bind(session)
         .bind(snapshot)
         .bind(invocation)
@@ -651,15 +663,31 @@ async fn seed_service_inner(
         .execute(pool)
         .await
         .expect("gateway secret rule");
-        let (lease_issued, lease_expiry) = secret_lease_timing.lease_expressions();
-        let lease_sql = format!(
-            "INSERT INTO gateway_secret_leases
-                (id, runtime_session_id, invocation_id, binding_id,
-                 secret_version_id, rule_id, status, issued_at, expires_at)
-             VALUES ($1, $2, $3, $4, $5, $6, 'active', {lease_issued},
-                     {lease_expiry})"
-        );
-        sqlx::query(&lease_sql)
+        let lease_query = match secret_lease_timing {
+            TimingWindow::Live => sqlx::query(
+                "INSERT INTO gateway_secret_leases
+                    (id, runtime_session_id, invocation_id, binding_id,
+                     secret_version_id, rule_id, status, issued_at, expires_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, 'active', now(),
+                         now() + interval '5 minutes')",
+            ),
+            TimingWindow::Near => sqlx::query(
+                "INSERT INTO gateway_secret_leases
+                    (id, runtime_session_id, invocation_id, binding_id,
+                     secret_version_id, rule_id, status, issued_at, expires_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, 'active', now(),
+                         now() + interval '1 millisecond')",
+            ),
+            TimingWindow::Expired => sqlx::query(
+                "INSERT INTO gateway_secret_leases
+                    (id, runtime_session_id, invocation_id, binding_id,
+                     secret_version_id, rule_id, status, issued_at, expires_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, 'active',
+                         now() - interval '2 minutes',
+                         now() - interval '1 minute')",
+            ),
+        };
+        lease_query
             .bind(secret_lease)
             .bind(session)
             .bind(invocation)

@@ -1333,30 +1333,31 @@ async fn seed_fixture(pool: &sqlx::PgPool, contract: &str) -> Fixture {
     .await
     .expect("gateway");
     let service = contract == "http.service.v1";
-    let (port, readiness, health, slots) = if service {
-        ("18080", "'/ready'", "'/health'", "'{hook}'")
-    } else {
-        ("NULL", "NULL", "NULL", "'{}'")
-    };
-    let query = format!(
+    sqlx::query(
         "INSERT INTO gateway_revisions
             (id, gateway_id, project_id, repository_id, handler_contract, exposure,
              parameters, secret_slots, service_loopback_port, service_readiness_path,
              service_health_path, normalized_hash, created_by)
-         VALUES ($1, $2, $3, $4, $5, 'public', '{{}}', {slots}, {port}, {readiness},
-                 {health}, $6, $7)"
-    );
-    sqlx::query(&query)
-        .bind(revision)
-        .bind(gateway)
-        .bind(project)
-        .bind(repository)
-        .bind(contract)
-        .bind([9_u8; 32].as_slice())
-        .bind(owner)
-        .execute(pool)
-        .await
-        .expect("revision");
+         VALUES ($1, $2, $3, $4, $5, 'public', '{}', $6, $7, $8, $9, $10, $11)",
+    )
+    .bind(revision)
+    .bind(gateway)
+    .bind(project)
+    .bind(repository)
+    .bind(contract)
+    .bind(if service {
+        vec![String::from("hook")]
+    } else {
+        Vec::new()
+    })
+    .bind(service.then_some(18_080_i32))
+    .bind(service.then_some("/ready"))
+    .bind(service.then_some("/health"))
+    .bind([9_u8; 32].as_slice())
+    .bind(owner)
+    .execute(pool)
+    .await
+    .expect("revision");
     sqlx::query("UPDATE gateways SET active_revision_id = $2 WHERE id = $1")
         .bind(gateway)
         .bind(revision)
@@ -1377,7 +1378,8 @@ async fn seed_service_revision(pool: &sqlx::PgPool, gateway: Uuid) -> Uuid {
     let release = insert_published_release(pool, repository, owner).await;
     let mut revision_hash = [8_u8; 32];
     revision_hash[..16].copy_from_slice(revision.as_bytes());
-    let query = "INSERT INTO gateway_revisions
+    let result = sqlx::query(
+        "INSERT INTO gateway_revisions
             (id, gateway_id, project_id, repository_id, release_id,
              release_agent_id, release_agent_key, handler_contract, exposure,
              parameters, secret_slots, service_loopback_port,
@@ -1388,15 +1390,15 @@ async fn seed_service_revision(pool: &sqlx::PgPool, gateway: Uuid) -> Uuid {
                 'ownership-service', 'http.service.v1', 'public', '{}',
                 '{hook}', 18081, '/ready', '/health', $4, gateway.created_by
            FROM gateways AS gateway
-          WHERE gateway.id = $1";
-    let result = sqlx::query(query)
-        .bind(gateway)
-        .bind(revision)
-        .bind(release)
-        .bind(revision_hash.as_slice())
-        .execute(pool)
-        .await
-        .expect("replacement service revision");
+          WHERE gateway.id = $1",
+    )
+    .bind(gateway)
+    .bind(revision)
+    .bind(release)
+    .bind(revision_hash.as_slice())
+    .execute(pool)
+    .await
+    .expect("replacement service revision");
     assert_eq!(result.rows_affected(), 1);
     revision
 }

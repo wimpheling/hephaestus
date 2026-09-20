@@ -60,19 +60,22 @@ async fn authorized_epoch_metadata_is_scoped_and_audited() {
         .await
         .expect("read application role");
     assert_eq!(current_user, "hephaestus_app");
-    for query in [
-        "SELECT repository_id FROM gateways LIMIT 1",
-        "SELECT project_id FROM gateway_revisions LIMIT 1",
-    ] {
-        let error = sqlx::query(query)
-            .fetch_optional(&app)
-            .await
-            .expect_err("application role must not read ungranted gateway columns");
-        let database_error = error
-            .as_database_error()
-            .expect("permission failure must be a database error");
-        assert_eq!(database_error.code().as_deref(), Some("42501"));
-    }
+    let repository_error = sqlx::query("SELECT repository_id FROM gateways LIMIT 1")
+        .fetch_optional(&app)
+        .await
+        .expect_err("application role must not read ungranted gateway columns");
+    let database_error = repository_error
+        .as_database_error()
+        .expect("permission failure must be a database error");
+    assert_eq!(database_error.code().as_deref(), Some("42501"));
+    let project_error = sqlx::query("SELECT project_id FROM gateway_revisions LIMIT 1")
+        .fetch_optional(&app)
+        .await
+        .expect_err("application role must not read ungranted gateway columns");
+    let database_error = project_error
+        .as_database_error()
+        .expect("permission failure must be a database error");
+    assert_eq!(database_error.code().as_deref(), Some("42501"));
 
     let reader = PostgresGatewayServiceLogReader::new(
         app,

@@ -44,14 +44,36 @@ The live security proofs now cover the published HTTPS listener, fixed
 authority, forwarded-header stripping, guest listener/egress/mount isolation,
 and exact service execution binding. The platform diagnostic/request-metadata
 redaction audit is complete; application-owned log capture remains explicitly
-opt-in and default-off. The full quality gate remains pending while
-architecture diagnostics are resolved; the release UI has not begun. Checklist
-reconciliation is in progress; unchecked historical claims are not evidence of
-failure, and later source and test evidence must be matched to each subitem
-before its status changes. The currently identified security check still
-pending is the full quality gate; the published live proofs are covered by the
-checkpoints below. Existing checked subitems remain valid where their own
-evidence is cited.
+opt-in and default-off. The persistent-service implementation and acceptance
+work is complete, with the release UI intentionally not started. Historical
+unchecked descriptions below are snapshots, not current failures; the current
+evidence and checklist reconciliation govern this completed service slice.
+
+Repository-wide quality v4 passed in session `76035` with exit 0: all Rust
+formatting, strict Clippy, workspace tests and docs, architecture, protobuf,
+Phoenix (247 checks), UI (98 checks), golden (35 plus one ignored), and
+retention (one check) stages completed. The final quality log is
+`/home/a/heph-quality-20260920-v4.log`; disposable PostgreSQL/NATS fixtures
+were cleaned. The prior v2 architecture failure remains historical evidence
+only.
+
+Final service acceptance reconciliation:
+
+- [x] Persistent-service source, focused tests, and documented development
+  workflow are covered by the cited implementation and realVM checkpoints.
+- [x] Security, guest isolation, lifecycle, cutover, rollback, revocation,
+  guest-log, project-metadata, and retention evidence is complete in the
+  cited realVM/real-PostgreSQL logs.
+- [x] The repository-wide required quality gates passed in v4, including the
+  full architecture, Rust, docs, Phoenix, UI, golden, and retention stages.
+The read-only PostgreSQL fixture verification recorded 58 gateway tests
+(service acceptance 7, execution 4, log reader 2, ownership 29, recovery 3,
+targets 13), 17 app recovery tests alongside 94 app-unit tests, and two
+runtime-authority unit tests plus one PostgreSQL integration test; no database
+skip or unavailable markers were emitted and disposable containers were
+absent after cleanup.
+Release UI implementation remains intentionally unstarted and is outside this
+completed service acceptance slice.
 
 The CI teardown fix is `2680329`: the affected real-PostgreSQL recovery group
 passed 17/17 against migration 81, with the prior failure retained at
@@ -66,8 +88,9 @@ DATABASE` exceptions matched, while
 `read_gateway_service_recovery_snapshot` still passed the named
 `GATEWAY_SERVICE_RECOVERY_SNAPSHOT_QUERY` constant to SQLx under the static-SQL
 rule. Its preserved log is `/home/a/heph-quality-20260920-v2.log`. Its
-disposable PostgreSQL and NATS fixtures were cleaned. The checker investigation
-remains in progress; Rust, Phoenix, and UI were not reached.
+disposable PostgreSQL and NATS fixtures were cleaned. That v2 result is
+historical; the later v4 quality run reached and passed all Rust, Phoenix, UI,
+golden, and retention stages.
 
 Checker and golden SQL checkpoint (2026-09-20): the DB-STATIC-SQL checker now
 passes only validated, canonical exact Rust item scopes; ambiguous selectors,
@@ -83,8 +106,8 @@ structural dry-run. Evidence is in
 `/home/a/heph-architecture-exception-check-v4-20260920.log`. The golden test
 compile and strict Clippy also passed; evidence is in
 `/home/a/heph-golden-compile-v4-20260920.log` and
-`/home/a/heph-golden-clippy-v4-20260920.log`. Full quality remains pending;
-no full-quality result is claimed here.
+`/home/a/heph-golden-clippy-v4-20260920.log`. These focused checks are
+subordinate to the repository-wide v4 quality result recorded above.
 
 ## Outcome
 
@@ -1353,24 +1376,33 @@ Evidence: `/tmp/heph-drain-forward-isolated-edge-lib-20260919.log`,
 `/tmp/heph-drain-forward-isolated-fmt-20260919.log`, and
 `/tmp/heph-drain-forward-isolated-doc-20260919.log`.
 
-- [ ] Run `cargo fmt --all -- --check` after implementation changes.
-- [ ] Run `cargo clippy --workspace --all-targets --all-features`.
-- [ ] Run `cargo test --workspace --all-features`.
-- [ ] Run `cargo doc --workspace --all-features --no-deps`.
-- [ ] Run applicable Caddy, guest-runtime, browser, and focused integration
-  checks with evidence from the current worktree.
-- [ ] Run `cargo dev quality` after focused checks pass.
-- [ ] Record the commands, results, test counts, runtime artifacts, and any
-  deliberate follow-up tasks in Completion evidence before moving this task to
-  `tasks/done/`.
+- [x] Run `cargo fmt --all -- --check` after implementation changes; the v4
+  quality run passed the workspace formatting gate.
+- [x] Run `cargo clippy --workspace --all-targets --all-features`; the v4
+  quality run passed strict workspace Clippy.
+- [x] Run `cargo test --workspace --all-features`; the v4 quality run passed
+  the workspace test stage.
+- [x] Run `cargo doc --workspace --all-features --no-deps`; the v4 quality run
+  passed the workspace documentation stage.
+- [x] Run applicable Caddy, guest-runtime, browser, and focused integration
+  checks; realVM evidence is cited in the published HTTPS, guest-log,
+  candidate-capacity, revocation, and project-metadata checkpoints above.
+- [x] Run `cargo dev quality` after focused checks pass; v4 passed in session
+  `76035`, with evidence in `/home/a/heph-quality-20260920-v4.log`.
+- [x] Record the commands, results, test counts, runtime artifacts, and
+  deliberate follow-up scope in this task's current status and completion
+  evidence before moving the task to `tasks/done/`.
 
 ## Completion evidence
 
-- [ ] Record the reviewed service declaration and transport contract.
-- [ ] Record real Caddy/guest-runtime forwarding, lifecycle, cutover,
-  restart/recovery, and failure evidence.
-- [ ] Record security/adversarial results and stateless MVP-03 regression
-  evidence.
+- [x] Record the reviewed service declaration and transport contract; see the
+  reviewed transport section and service-mode checklist above.
+- [x] Record real Caddy/guest-runtime forwarding, lifecycle, cutover,
+  restart/recovery, and failure evidence in the published, capacity,
+  revocation, cutover, rollback, and guest-log checkpoints above.
+- [x] Record security/adversarial results and stateless MVP-03 regression
+  evidence in the HTTPS isolation, service-execution, gateway acceptance, and
+  v4 quality records above.
 
 Append checkpoint (2026-09-19): migration 0078 and the worker-only PostgreSQL
 append adapter now persist opt-in application service logs with exact

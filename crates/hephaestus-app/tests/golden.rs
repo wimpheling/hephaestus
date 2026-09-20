@@ -69,8 +69,8 @@ use workspace_local::{LocalWorkspaceConfig, WorkspaceLimits};
 mod gateway_service_log_rpc;
 #[cfg(feature = "test-fixtures")]
 use gateway_service_log_rpc::{
-    GatewayServiceGuestLogProof, GatewayServiceLogRpcFixture,
-    GUEST_SERVICE_LOG_STDERR_MARKER, GUEST_SERVICE_LOG_STDOUT_MARKER, marker_count,
+    GUEST_SERVICE_LOG_STDERR_MARKER, GUEST_SERVICE_LOG_STDOUT_MARKER, GatewayServiceGuestLogProof,
+    GatewayServiceLogRpcFixture, marker_count,
 };
 
 // Wait for both bounded preparation branches even if an assertion or an
@@ -2541,7 +2541,29 @@ struct GatewayServiceRecoverySnapshot {
     db_now: OffsetDateTime,
 }
 
-const GATEWAY_SERVICE_RECOVERY_SNAPSHOT_QUERY: &str = r"
+async fn read_gateway_service_ownership(
+    pool: &sqlx::PgPool,
+    instance_id: uuid::Uuid,
+) -> GatewayServiceOwnership {
+    sqlx::query_as(
+        "SELECT owner_host_id, owner_uuid, fencing_token, lease_expires_at
+           FROM gateway_service_instances
+          WHERE id = $1",
+    )
+    .bind(instance_id)
+    .fetch_one(pool)
+    .await
+    .expect("read gateway service ownership")
+}
+
+async fn read_gateway_service_recovery_snapshot(
+    pool: &sqlx::PgPool,
+    fixture: &GatewayServiceGoldenFixture,
+    old_instance_id: uuid::Uuid,
+    recovery_started_at: OffsetDateTime,
+) -> GatewayServiceRecoverySnapshot {
+    let row = sqlx::query(
+        r"
     SELECT old.state AS old_state,
            old.owner_host_id AS old_host,
            old.owner_uuid AS old_owner,
@@ -2578,37 +2600,15 @@ const GATEWAY_SERVICE_RECOVERY_SNAPSHOT_QUERY: &str = r"
      WHERE old.id = $1
        AND old.gateway_id = $2
        AND old.revision_id = $3
-";
-
-async fn read_gateway_service_ownership(
-    pool: &sqlx::PgPool,
-    instance_id: uuid::Uuid,
-) -> GatewayServiceOwnership {
-    sqlx::query_as(
-        "SELECT owner_host_id, owner_uuid, fencing_token, lease_expires_at
-           FROM gateway_service_instances
-          WHERE id = $1",
+",
     )
-    .bind(instance_id)
+    .bind(old_instance_id)
+    .bind(fixture.gateway_id)
+    .bind(fixture.revision_id)
+    .bind(recovery_started_at)
     .fetch_one(pool)
     .await
-    .expect("read gateway service ownership")
-}
-
-async fn read_gateway_service_recovery_snapshot(
-    pool: &sqlx::PgPool,
-    fixture: &GatewayServiceGoldenFixture,
-    old_instance_id: uuid::Uuid,
-    recovery_started_at: OffsetDateTime,
-) -> GatewayServiceRecoverySnapshot {
-    let row = sqlx::query(GATEWAY_SERVICE_RECOVERY_SNAPSHOT_QUERY)
-        .bind(old_instance_id)
-        .bind(fixture.gateway_id)
-        .bind(fixture.revision_id)
-        .bind(recovery_started_at)
-        .fetch_one(pool)
-        .await
-        .expect("read coherent boot recovery snapshot");
+    .expect("read coherent boot recovery snapshot");
     GatewayServiceRecoverySnapshot {
         old_state: row.get("old_state"),
         old_host: row.get("old_host"),
@@ -7730,7 +7730,6 @@ async fn prepare_gateway_service_log_rpc(
         .commit()
         .await
         .expect("commit service log RPC fixture");
-
 
     let foreign_owner = uuid::Uuid::new_v4();
     let foreign_organization = uuid::Uuid::new_v4();
