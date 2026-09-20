@@ -10,6 +10,14 @@ use std::{env, time::Duration};
 use tokio::time::timeout;
 use uuid::Uuid;
 
+use identity_domain::{BrowserSessionId, RequestId, UserId};
+use release_domain::{
+    UiInstallationGenerationId, UiInstallationId,
+    ui_browser::{UiBrowserHandoffSecret, UiBrowserRoute},
+};
+use release_postgres::PgUiBrowserSessionStore;
+use release_service::{CreateUiBrowserHandoff, UiBrowserHandoffError};
+
 const EXPECTED_MIGRATION: i64 = 89;
 
 #[derive(Clone, Copy)]
@@ -24,6 +32,10 @@ struct Fixture {
     other_installation: Uuid,
     generation: Uuid,
     other_generation: Uuid,
+    global_installation: Uuid,
+    global_generation: Uuid,
+    repository_installation: Uuid,
+    repository_generation: Uuid,
     route: &'static str,
 }
 
@@ -99,6 +111,10 @@ async fn seed_fixture_reusing_installation_helpers(worker: &PgPool) -> Fixture {
     let other_installation = Uuid::new_v4();
     let generation = Uuid::new_v4();
     let other_generation = Uuid::new_v4();
+    let global_installation = Uuid::new_v4();
+    let global_generation = Uuid::new_v4();
+    let repository_installation = Uuid::new_v4();
+    let repository_generation = Uuid::new_v4();
     let request_id = Uuid::new_v4();
 
     sqlx::query(
@@ -227,21 +243,24 @@ async fn seed_fixture_reusing_installation_helpers(worker: &PgPool) -> Fixture {
     .execute(worker)
     .await
     .expect("seed release UI snapshot");
-    for (ui_key, route_base) in [
-        ("schema-ui", "schema-ui"),
-        ("schema-ui-two", "schema-ui-two"),
+    for (ui_key, route_base, scope) in [
+        ("schema-ui", "schema-ui", "project"),
+        ("schema-ui-two", "schema-ui-two", "project"),
+        ("schema-global", "schema-global", "global"),
+        ("schema-repository", "schema-repository", "repository"),
     ] {
         sqlx::query(
             "INSERT INTO release_ui_descriptors
              (release_id, ui_key, scope, label, icon, presentation, route_base,
               entrypoint, ui_kit_version, cache, content_kind)
-             VALUES ($1, $2, 'project', $3, 'app', 'iframe', $4,
+             VALUES ($1, $2, $5, $3, 'app', 'iframe', $4,
                      'index.html', 1, 'no_store', 'static')",
         )
         .bind(release)
         .bind(ui_key)
         .bind(ui_key)
         .bind(route_base)
+        .bind(scope)
         .execute(worker)
         .await
         .expect("seed release UI descriptor");
@@ -275,6 +294,27 @@ async fn seed_fixture_reusing_installation_helpers(worker: &PgPool) -> Fixture {
         project,
     )
     .await;
+    seed_global_installation(
+        worker,
+        global_installation,
+        global_generation,
+        release,
+        "schema-global",
+        actor,
+        organization,
+    )
+    .await;
+    seed_repository_installation(
+        worker,
+        repository_installation,
+        repository_generation,
+        release,
+        "schema-repository",
+        actor,
+        project,
+        repository,
+    )
+    .await;
     seed_project_installation(
         worker,
         other_installation,
@@ -297,6 +337,10 @@ async fn seed_fixture_reusing_installation_helpers(worker: &PgPool) -> Fixture {
         other_installation,
         generation,
         other_generation,
+        global_installation,
+        global_generation,
+        repository_installation,
+        repository_generation,
         route: "ui",
     }
 }
@@ -363,6 +407,97 @@ async fn seed_project_installation(
     .await
     .expect("seed project UI generation");
     tx.commit().await.expect("commit project UI installation");
+}
+
+async fn seed_global_installation(
+    worker: &PgPool,
+    installation_id: Uuid,
+    generation_id: Uuid,
+    release_id: Uuid,
+    ui_key: &str,
+    actor: Uuid,
+    organization: Uuid,
+) {
+    let mut tx = worker
+        .begin()
+        .await
+        .expect("begin global installation seed");
+    sqlx::query(
+        "INSERT INTO ui_installations
+         (id, organization_id, project_id, repository_id, scope, ui_key, lifecycle,
+          current_generation_id, created_by)
+         VALUES ($1, $2, NULL, NULL, 'global', $3, 'enabled', $4, $5)",
+    )
+    .bind(installation_id)
+    .bind(organization)
+    .bind(ui_key)
+    .bind(generation_id)
+    .bind(actor)
+    .execute(&mut *tx)
+    .await
+    .expect("seed global UI installation");
+    sqlx::query(
+        "INSERT INTO ui_installation_generations
+         (id, installation_id, generation_no, release_id, ui_key, ui_scope)
+         VALUES ($1, $2, 1, $3, $4, 'global')",
+    )
+    .bind(generation_id)
+    .bind(installation_id)
+    .bind(release_id)
+    .bind(ui_key)
+    .execute(&mut *tx)
+    .await
+    .expect("seed global UI generation");
+    tx.commit().await.expect("commit global UI installation");
+}
+
+// Keep every repository owner and generation column explicit in this fixture
+// so the scope and composite-FK proof stays readable at the SQL boundary.
+#[allow(clippy::too_many_arguments)]
+async fn seed_repository_installation(
+    worker: &PgPool,
+    installation_id: Uuid,
+    generation_id: Uuid,
+    release_id: Uuid,
+    ui_key: &str,
+    actor: Uuid,
+    project: Uuid,
+    repository: Uuid,
+) {
+    let mut tx = worker
+        .begin()
+        .await
+        .expect("begin repository installation seed");
+    sqlx::query(
+        "INSERT INTO ui_installations
+         (id, project_id, repository_id, scope, ui_key, lifecycle,
+          current_generation_id, created_by)
+         VALUES ($1, $2, $3, 'repository', $4, 'enabled', $5, $6)",
+    )
+    .bind(installation_id)
+    .bind(project)
+    .bind(repository)
+    .bind(ui_key)
+    .bind(generation_id)
+    .bind(actor)
+    .execute(&mut *tx)
+    .await
+    .expect("seed repository UI installation");
+    sqlx::query(
+        "INSERT INTO ui_installation_generations
+         (id, installation_id, generation_no, release_id, ui_key, ui_scope)
+         VALUES ($1, $2, 1, $3, $4, 'repository')",
+    )
+    .bind(generation_id)
+    .bind(installation_id)
+    .bind(release_id)
+    .bind(ui_key)
+    .execute(&mut *tx)
+    .await
+    .expect("seed repository UI generation");
+    tx.commit()
+        .await
+        .expect("commit repository UI installation");
 }
 
 fn digest(seed: u8) -> Vec<u8> {
@@ -1031,7 +1166,11 @@ async fn role_pool(database_url: &str, role: &str) -> PgPool {
                 let role = role.clone();
                 Box::pin(async move {
                     sqlx::query("SELECT set_config('role', $1, false)")
-                        .bind(role)
+                        .bind(role.clone())
+                        .execute(&mut *connection)
+                        .await?;
+                    sqlx::query("SELECT set_config('application_name', $1, false)")
+                        .bind(format!("ui-browser-{role}"))
                         .execute(&mut *connection)
                         .await?;
                     sqlx::query("SELECT set_config('hephaestus.actor_id', $1, false)")
@@ -1047,6 +1186,30 @@ async fn role_pool(database_url: &str, role: &str) -> PgPool {
         .expect("connect restricted PostgreSQL role")
 }
 
+async fn wait_for_named_lock_waiter(admin: &PgPool, application_name: &str, blocker_pid: i32) {
+    for _ in 0..200 {
+        let waiting: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pg_stat_activity
+             WHERE application_name = $1
+               AND wait_event_type = 'Lock'
+               AND $2 = ANY(pg_blocking_pids(pid))",
+        )
+        .bind(application_name)
+        .bind(blocker_pid)
+        .fetch_one(admin)
+        .await
+        .expect("inspect issuance lock waiter");
+        if waiting > 0 {
+            println!(
+                "REAL_UI_BROWSER_ISSUE_LOCK_BARRIER=1 application_name={application_name} blocker_pid={blocker_pid}"
+            );
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("timed out waiting for issuance lock waiter {application_name}");
+}
+
 async fn assert_role(pool: &PgPool, expected: &str, superuser: bool, bypass_rls: bool) {
     let row: (String, bool, bool) = sqlx::query_as(
         "SELECT current_user, rolsuper, rolbypassrls
@@ -1056,4 +1219,539 @@ async fn assert_role(pool: &PgPool, expected: &str, superuser: bool, bypass_rls:
     .await
     .expect("read PostgreSQL role identity");
     assert_eq!(row, (expected.to_owned(), superuser, bypass_rls));
+}
+
+/// Exercises the first adapter slice against the complete 0089 fixture. The
+/// schema matrix above remains the owner of SQLSTATE and lifecycle checks.
+#[tokio::test]
+#[serial]
+#[allow(clippy::too_many_lines)]
+async fn ui_browser_issue_binds_current_authority_and_fresh_expiry() {
+    let Some(database_url) = env::var("HEPHAESTUS_POSTGRES_TEST_URL").ok() else {
+        eprintln!("skipping UI browser issue: test URL is unset");
+        return;
+    };
+    let bootstrap = PgPoolOptions::new()
+        .max_connections(2)
+        .connect(&database_url)
+        .await
+        .expect("connect bootstrap PostgreSQL role");
+    sqlx::migrate!("../../migrations")
+        .run(&bootstrap)
+        .await
+        .expect("apply migrations through 0089");
+    let worker = role_pool(&database_url, "hephaestus_worker").await;
+    let app = role_pool(&database_url, "hephaestus_app").await;
+    let fixture = seed_fixture_reusing_installation_helpers(&worker).await;
+    let store = PgUiBrowserSessionStore::new(worker.clone(), app);
+    let barrier_app = role_pool(&database_url, "hephaestus_app").await;
+    let actor = UserId::from_uuid(fixture.actor);
+    let parent = BrowserSessionId::from_uuid(fixture.parent_session);
+    let installation = UiInstallationId::from_uuid(fixture.installation);
+    let generation = UiInstallationGenerationId::from_uuid(fixture.generation);
+    let route = UiBrowserRoute::parse("schema-ui").expect("published route base");
+    let request_id = RequestId::new();
+    let secret = UiBrowserHandoffSecret::random();
+    let expected_digest = secret.digest().as_bytes();
+    let created = store
+        .create_ui_browser_handoff(CreateUiBrowserHandoff {
+            request_id,
+            actor_id: actor,
+            parent_session_id: parent,
+            installation_id: installation,
+            generation_id: generation,
+            route: route.clone(),
+            secret,
+        })
+        .await
+        .expect("active actor may issue for current generation");
+    assert_eq!(created.organization_id.as_uuid(), fixture.organization);
+    assert_eq!(created.route, route);
+
+    let stored: (
+        Vec<u8>,
+        Uuid,
+        Uuid,
+        Uuid,
+        Uuid,
+        String,
+        time::OffsetDateTime,
+        time::OffsetDateTime,
+    ) = sqlx::query_as(
+        "SELECT handoff_digest, request_id, actor_id, parent_session_id,
+                    organization_id, route, issued_at, expires_at
+             FROM ui_browser_handoffs WHERE id = $1",
+    )
+    .bind(created.handoff_id.as_uuid())
+    .fetch_one(&worker)
+    .await
+    .expect("read issued handoff metadata");
+    assert_eq!(
+        stored.0, expected_digest,
+        "stored digest matches the secret"
+    );
+    assert_eq!(stored.1, request_id.as_uuid());
+    assert_eq!(stored.2, fixture.actor);
+    assert_eq!(stored.3, fixture.parent_session);
+    assert_eq!(stored.4, fixture.organization);
+    assert_eq!(stored.5, "schema-ui");
+    assert_eq!(stored.7 - stored.6, time::Duration::seconds(60));
+
+    for (installation_id, generation_id, route_text) in [
+        (
+            fixture.global_installation,
+            fixture.global_generation,
+            "schema-global",
+        ),
+        (
+            fixture.repository_installation,
+            fixture.repository_generation,
+            "schema-repository",
+        ),
+    ] {
+        let scope_secret = UiBrowserHandoffSecret::random();
+        let scope_digest = scope_secret.digest().as_bytes();
+        let scope_created = store
+            .create_ui_browser_handoff(CreateUiBrowserHandoff {
+                request_id: RequestId::new(),
+                actor_id: actor,
+                parent_session_id: parent,
+                installation_id: UiInstallationId::from_uuid(installation_id),
+                generation_id: UiInstallationGenerationId::from_uuid(generation_id),
+                route: UiBrowserRoute::parse(route_text).expect("scope route"),
+                secret: scope_secret,
+            })
+            .await
+            .expect("active actor may issue for every owner scope");
+        assert_eq!(
+            scope_created.organization_id.as_uuid(),
+            fixture.organization
+        );
+        let stored_scope_digest: Vec<u8> =
+            sqlx::query_scalar("SELECT handoff_digest FROM ui_browser_handoffs WHERE id = $1")
+                .bind(scope_created.handoff_id.as_uuid())
+                .fetch_one(&worker)
+                .await
+                .expect("read scope handoff digest");
+        assert_eq!(stored_scope_digest, scope_digest);
+    }
+
+    let baseline: i64 = sqlx::query_scalar("SELECT count(*) FROM ui_browser_handoffs")
+        .fetch_one(&worker)
+        .await
+        .expect("count issued handoffs");
+
+    let expiring_parent = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO human_browser_sessions
+         (id, sid_digest, creation_idempotency_id, creation_request_id,
+          identity_binding_digest, user_id, issued_at, expires_at)
+         VALUES ($1, $2, $3, $4, $5, $6, statement_timestamp(),
+                 statement_timestamp() + interval '1 second')",
+    )
+    .bind(expiring_parent)
+    .bind(digest(222))
+    .bind(Uuid::new_v4())
+    .bind(Uuid::new_v4())
+    .bind(digest(223))
+    .bind(fixture.actor)
+    .execute(&worker)
+    .await
+    .expect("seed lock-barrier parent");
+    let mut account_lock = bootstrap.begin().await.expect("begin account lock barrier");
+    let blocker_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *account_lock)
+        .await
+        .expect("read account lock barrier PID");
+    sqlx::query("SELECT id FROM users WHERE id = $1 FOR UPDATE")
+        .bind(fixture.actor)
+        .fetch_one(&mut *account_lock)
+        .await
+        .expect("hold actor account lock barrier");
+    let barrier_store = PgUiBrowserSessionStore::new(worker.clone(), barrier_app);
+    let barrier_route = route.clone();
+    let barrier_task = tokio::spawn(async move {
+        barrier_store
+            .create_ui_browser_handoff(CreateUiBrowserHandoff {
+                request_id: RequestId::new(),
+                actor_id: actor,
+                parent_session_id: BrowserSessionId::from_uuid(expiring_parent),
+                installation_id: installation,
+                generation_id: generation,
+                route: barrier_route,
+                secret: UiBrowserHandoffSecret::random(),
+            })
+            .await
+    });
+    wait_for_named_lock_waiter(&bootstrap, "ui-browser-hephaestus_worker", blocker_pid).await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    account_lock
+        .commit()
+        .await
+        .expect("release account lock barrier");
+    assert_eq!(
+        barrier_task.await.expect("expiry barrier task"),
+        Err(UiBrowserHandoffError::PermissionDenied)
+    );
+    let after_barrier: i64 = sqlx::query_scalar("SELECT count(*) FROM ui_browser_handoffs")
+        .fetch_one(&worker)
+        .await
+        .expect("count after expiry barrier");
+    assert_eq!(after_barrier, baseline);
+
+    let route_denied = store
+        .create_ui_browser_handoff(CreateUiBrowserHandoff {
+            request_id: RequestId::new(),
+            actor_id: actor,
+            parent_session_id: parent,
+            installation_id: installation,
+            generation_id: generation,
+            route: UiBrowserRoute::parse("arbitrary").expect("safe undeclared route"),
+            secret: UiBrowserHandoffSecret::random(),
+        })
+        .await;
+    assert_eq!(route_denied, Err(UiBrowserHandoffError::InvalidRoute));
+    let after_route: i64 = sqlx::query_scalar("SELECT count(*) FROM ui_browser_handoffs")
+        .fetch_one(&worker)
+        .await
+        .expect("count after route denial");
+    assert_eq!(after_route, baseline);
+
+    let revoked_parent_id = Uuid::new_v4();
+    insert_canonical_session(
+        &worker,
+        revoked_parent_id,
+        fixture.actor,
+        Uuid::new_v4(),
+        20,
+    )
+    .await;
+    sqlx::query(
+        "UPDATE human_browser_sessions
+         SET revoked_at = statement_timestamp(), revocation_reason = 'administrative'
+         WHERE id = $1",
+    )
+    .bind(revoked_parent_id)
+    .execute(&worker)
+    .await
+    .expect("revoke parent session");
+    let revoked_parent = store
+        .create_ui_browser_handoff(CreateUiBrowserHandoff {
+            request_id: RequestId::new(),
+            actor_id: actor,
+            parent_session_id: BrowserSessionId::from_uuid(revoked_parent_id),
+            installation_id: installation,
+            generation_id: generation,
+            route: route.clone(),
+            secret: UiBrowserHandoffSecret::random(),
+        })
+        .await;
+    assert_eq!(revoked_parent, Err(UiBrowserHandoffError::PermissionDenied));
+
+    sqlx::query("UPDATE users SET status = 'suspended' WHERE id = $1")
+        .bind(fixture.actor)
+        .execute(&worker)
+        .await
+        .expect("suspend actor account");
+    let inactive_actor = store
+        .create_ui_browser_handoff(CreateUiBrowserHandoff {
+            request_id: RequestId::new(),
+            actor_id: actor,
+            parent_session_id: parent,
+            installation_id: installation,
+            generation_id: generation,
+            route: route.clone(),
+            secret: UiBrowserHandoffSecret::random(),
+        })
+        .await;
+    assert_eq!(inactive_actor, Err(UiBrowserHandoffError::PermissionDenied));
+    sqlx::query("UPDATE users SET status = 'active' WHERE id = $1")
+        .bind(fixture.actor)
+        .execute(&worker)
+        .await
+        .expect("restore actor account");
+
+    let future_parent = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO human_browser_sessions
+         (id, sid_digest, creation_idempotency_id, creation_request_id,
+          identity_binding_digest, user_id, issued_at, expires_at)
+         VALUES ($1, $2, $3, $4, $5, $6, statement_timestamp() + interval '1 hour',
+                 statement_timestamp() + interval '2 hours')",
+    )
+    .bind(future_parent)
+    .bind(digest(224))
+    .bind(Uuid::new_v4())
+    .bind(Uuid::new_v4())
+    .bind(digest(225))
+    .bind(fixture.actor)
+    .execute(&worker)
+    .await
+    .expect("seed future-issued parent");
+    let future_issued = store
+        .create_ui_browser_handoff(CreateUiBrowserHandoff {
+            request_id: RequestId::new(),
+            actor_id: actor,
+            parent_session_id: BrowserSessionId::from_uuid(future_parent),
+            installation_id: installation,
+            generation_id: generation,
+            route: route.clone(),
+            secret: UiBrowserHandoffSecret::random(),
+        })
+        .await;
+    assert_eq!(future_issued, Err(UiBrowserHandoffError::PermissionDenied));
+
+    let actor_denied = store
+        .create_ui_browser_handoff(CreateUiBrowserHandoff {
+            request_id: RequestId::new(),
+            actor_id: UserId::from_uuid(fixture.outsider),
+            parent_session_id: parent,
+            installation_id: installation,
+            generation_id: generation,
+            route: UiBrowserRoute::parse("schema-ui").expect("published route base"),
+            secret: UiBrowserHandoffSecret::random(),
+        })
+        .await;
+    assert_eq!(actor_denied, Err(UiBrowserHandoffError::PermissionDenied));
+
+    sqlx::query("UPDATE ui_installations SET lifecycle = 'disabled' WHERE id = $1")
+        .bind(fixture.installation)
+        .execute(&worker)
+        .await
+        .expect("disable installation for denial case");
+    let disabled_denied = store
+        .create_ui_browser_handoff(CreateUiBrowserHandoff {
+            request_id: RequestId::new(),
+            actor_id: actor,
+            parent_session_id: parent,
+            installation_id: installation,
+            generation_id: generation,
+            route: UiBrowserRoute::parse("schema-ui").expect("published route base"),
+            secret: UiBrowserHandoffSecret::random(),
+        })
+        .await;
+    assert_eq!(
+        disabled_denied,
+        Err(UiBrowserHandoffError::PermissionDenied)
+    );
+    sqlx::query("UPDATE ui_installations SET lifecycle = 'enabled' WHERE id = $1")
+        .bind(fixture.installation)
+        .execute(&worker)
+        .await
+        .expect("restore installation for generation case");
+
+    let stale_generation = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO ui_installation_generations
+         (id, installation_id, generation_no, release_id, ui_key, ui_scope)
+         SELECT $1, installation_id, generation_no + 1, release_id, ui_key, ui_scope
+         FROM ui_installation_generations WHERE id = $2",
+    )
+    .bind(stale_generation)
+    .bind(fixture.generation)
+    .execute(&worker)
+    .await
+    .expect("seed newer generation");
+    sqlx::query("UPDATE ui_installations SET current_generation_id = $2 WHERE id = $1")
+        .bind(fixture.installation)
+        .bind(stale_generation)
+        .execute(&worker)
+        .await
+        .expect("activate newer generation");
+    let stale_denied = store
+        .create_ui_browser_handoff(CreateUiBrowserHandoff {
+            request_id: RequestId::new(),
+            actor_id: actor,
+            parent_session_id: parent,
+            installation_id: installation,
+            generation_id: generation,
+            route: UiBrowserRoute::parse("schema-ui").expect("published route base"),
+            secret: UiBrowserHandoffSecret::random(),
+        })
+        .await;
+    assert_eq!(stale_denied, Err(UiBrowserHandoffError::PermissionDenied));
+
+    let expiring_parent = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO human_browser_sessions
+         (id, sid_digest, creation_idempotency_id, creation_request_id,
+          identity_binding_digest, user_id, issued_at, expires_at)
+         VALUES ($1, $2, $3, $4, $5, $6, statement_timestamp(),
+                 statement_timestamp() + interval '1 second')",
+    )
+    .bind(expiring_parent)
+    .bind(digest(220))
+    .bind(Uuid::new_v4())
+    .bind(Uuid::new_v4())
+    .bind(digest(221))
+    .bind(fixture.actor)
+    .execute(&worker)
+    .await
+    .expect("seed short-lived parent");
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let expired_denied = store
+        .create_ui_browser_handoff(CreateUiBrowserHandoff {
+            request_id: RequestId::new(),
+            actor_id: actor,
+            parent_session_id: BrowserSessionId::from_uuid(expiring_parent),
+            installation_id: installation,
+            generation_id: UiInstallationGenerationId::from_uuid(stale_generation),
+            route: UiBrowserRoute::parse("schema-ui").expect("published route base"),
+            secret: UiBrowserHandoffSecret::random(),
+        })
+        .await;
+    assert_eq!(expired_denied, Err(UiBrowserHandoffError::PermissionDenied));
+
+    sqlx::query("DELETE FROM organization_members WHERE organization_id = $1 AND user_id = $2")
+        .bind(fixture.organization)
+        .bind(fixture.actor)
+        .execute(&worker)
+        .await
+        .expect("revoke actor target authority");
+    let target_revoked = store
+        .create_ui_browser_handoff(CreateUiBrowserHandoff {
+            request_id: RequestId::new(),
+            actor_id: actor,
+            parent_session_id: parent,
+            installation_id: UiInstallationId::from_uuid(fixture.global_installation),
+            generation_id: UiInstallationGenerationId::from_uuid(fixture.global_generation),
+            route: UiBrowserRoute::parse("schema-global").expect("global route"),
+            secret: UiBrowserHandoffSecret::random(),
+        })
+        .await;
+    assert_eq!(target_revoked, Err(UiBrowserHandoffError::PermissionDenied));
+    sqlx::query(
+        "INSERT INTO organization_members (organization_id, user_id, role)
+         VALUES ($1, $2, 'owner') ON CONFLICT DO NOTHING",
+    )
+    .bind(fixture.organization)
+    .bind(fixture.actor)
+    .execute(&worker)
+    .await
+    .expect("restore actor target authority");
+
+    sqlx::query("UPDATE organization_members SET role = 'member' WHERE organization_id = $1 AND user_id = $2")
+        .bind(fixture.organization)
+        .bind(fixture.actor)
+        .execute(&worker)
+        .await
+        .expect("demote actor for source permission case");
+    sqlx::query(
+        "INSERT INTO project_maintainers (project_id, user_id)
+         SELECT project_id, $2 FROM ui_installations WHERE id = $1
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(fixture.other_installation)
+    .bind(fixture.actor)
+    .execute(&worker)
+    .await
+    .expect("grant source project permission");
+    let source_permission_handoff = store
+        .create_ui_browser_handoff(CreateUiBrowserHandoff {
+            request_id: RequestId::new(),
+            actor_id: actor,
+            parent_session_id: parent,
+            installation_id: UiInstallationId::from_uuid(fixture.other_installation),
+            generation_id: UiInstallationGenerationId::from_uuid(fixture.other_generation),
+            route: UiBrowserRoute::parse("schema-ui-two").expect("source permission route"),
+            secret: UiBrowserHandoffSecret::random(),
+        })
+        .await
+        .expect("project maintainer may use source release");
+    let with_source_permission: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM ui_browser_handoffs")
+            .fetch_one(&worker)
+            .await
+            .expect("count source permission handoff");
+    assert_eq!(with_source_permission, baseline + 1);
+    assert_eq!(source_permission_handoff.route.as_str(), "schema-ui-two");
+    sqlx::query(
+        "DELETE FROM project_maintainers
+         WHERE project_id = (SELECT project_id FROM ui_installations WHERE id = $1)
+           AND user_id = $2",
+    )
+    .bind(fixture.other_installation)
+    .bind(fixture.actor)
+    .execute(&worker)
+    .await
+    .expect("revoke source project permission");
+    sqlx::query("DELETE FROM organization_members WHERE organization_id = $1 AND user_id = $2")
+        .bind(fixture.organization)
+        .bind(fixture.actor)
+        .execute(&worker)
+        .await
+        .expect("revoke source release permission");
+    let source_permission_denied = store
+        .create_ui_browser_handoff(CreateUiBrowserHandoff {
+            request_id: RequestId::new(),
+            actor_id: actor,
+            parent_session_id: parent,
+            installation_id: UiInstallationId::from_uuid(fixture.other_installation),
+            generation_id: UiInstallationGenerationId::from_uuid(fixture.other_generation),
+            route: UiBrowserRoute::parse("schema-ui-two").expect("source permission route"),
+            secret: UiBrowserHandoffSecret::random(),
+        })
+        .await;
+    assert_eq!(
+        source_permission_denied,
+        Err(UiBrowserHandoffError::PermissionDenied)
+    );
+    sqlx::query("UPDATE organization_members SET role = 'owner' WHERE organization_id = $1 AND user_id = $2")
+        .bind(fixture.organization)
+        .bind(fixture.actor)
+        .execute(&worker)
+        .await
+        .expect("restore actor owner role");
+
+    let source_release: Uuid =
+        sqlx::query_scalar("SELECT release_id FROM ui_installation_generations WHERE id = $1")
+            .bind(stale_generation)
+            .fetch_one(&worker)
+            .await
+            .expect("read source release");
+    sqlx::query(
+        "UPDATE releases
+         SET state = 'revoked', revoked_at = statement_timestamp()
+         WHERE id = $1",
+    )
+    .bind(source_release)
+    .execute(&worker)
+    .await
+    .expect("revoke source release");
+    let source_revoked = store
+        .create_ui_browser_handoff(CreateUiBrowserHandoff {
+            request_id: RequestId::new(),
+            actor_id: actor,
+            parent_session_id: parent,
+            installation_id: installation,
+            generation_id: UiInstallationGenerationId::from_uuid(stale_generation),
+            route,
+            secret: UiBrowserHandoffSecret::random(),
+        })
+        .await;
+    assert_eq!(source_revoked, Err(UiBrowserHandoffError::PermissionDenied));
+
+    sqlx::query("UPDATE ui_installations SET lifecycle = 'removed', removed_at = statement_timestamp() WHERE id = $1")
+        .bind(fixture.other_installation)
+        .execute(&worker)
+        .await
+        .expect("remove alternate installation");
+    let removed_denied = store
+        .create_ui_browser_handoff(CreateUiBrowserHandoff {
+            request_id: RequestId::new(),
+            actor_id: actor,
+            parent_session_id: parent,
+            installation_id: UiInstallationId::from_uuid(fixture.other_installation),
+            generation_id: UiInstallationGenerationId::from_uuid(fixture.other_generation),
+            route: UiBrowserRoute::parse("schema-ui-two").expect("alternate route"),
+            secret: UiBrowserHandoffSecret::random(),
+        })
+        .await;
+    assert_eq!(removed_denied, Err(UiBrowserHandoffError::PermissionDenied));
+
+    let final_count: i64 = sqlx::query_scalar("SELECT count(*) FROM ui_browser_handoffs")
+        .fetch_one(&worker)
+        .await
+        .expect("count final denied attempts");
+    assert_eq!(final_count, baseline + 1);
 }

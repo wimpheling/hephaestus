@@ -1,5 +1,9 @@
 # Graceful session handoff — 2026-09-20
 
+Resumed on 2026-09-20. The stopped-session details below are historical;
+see the [active task checkpoints](release-owned-distribution-ui-surfaces.md)
+for subsequent implementation, verification, and remaining acceptance criteria.
+
 The user requested a graceful stop to restart the session in tmux. All three
 agents stopped and reported no active Cargo, PostgreSQL, NATS, or tool processes.
 Resume only when the user resumes the goal. Do not request another architectural

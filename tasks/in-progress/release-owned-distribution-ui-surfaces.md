@@ -5,9 +5,11 @@ Owner: Astra orchestration / Luna bounded subtasks
 ## Current status
 
 Work resumed on 2026-09-20 from the
-[session handoff](release-ui-session-handoff-2026-09-20.md). The immediate
-work is isolated-database CI validation and the organization-owner schema
-extension, followed by the remaining installation, browser, and hosting slices.
+[session handoff](release-ui-session-handoff-2026-09-20.md). Isolated-database
+CI execution, organization-owned static installations, disable/remove lifecycle,
+and browser credential storage have passed focused verification. Current work
+validates handoff issuance and prepares exchange, request authentication,
+managed/API installation, and activation/rollback before the hosting slices.
 The handoff remains the record of the stopped session; new evidence is recorded
 below as each resumed slice passes review and verification.
 
@@ -31,6 +33,28 @@ navigation/authorization/isolation, real Caddy/VM/browser proofs, and the final
 integrated quality gate remain incomplete. The user approved organization-owned
 global installations and organization isolation. Historical checkpoints record the state
 at their time; later integration checkpoints supersede earlier pending notes.
+
+## Browser handoff issuance checkpoint (2026-09-20)
+
+The worker adapter issues digest-only, sixty-second handoffs for the exact
+enabled installation generation and published route. It binds the authenticated
+actor to the canonical parent session, derives the tenant from the owner, and
+checks current owner/source authority. Mutable account, session, owner,
+installation, and release state are locked before a fresh database-time check;
+immutable publication rows require no added write grants.
+
+The real PostgreSQL issuance matrix passes project, repository, and organization
+owners, exact domain-separated digest bytes, request provenance, wrong actors,
+revoked/suspended/expired/future parent state, wrong routes, stale/disabled/removed
+installations, target/source permission revocation, and revoked releases. A named
+connection and observed blocker prove expiry rejection after an account-lock
+wait. Both schema and issuance tests pass without skips in
+`/home/a/heph-ui-browser-schema-expanded-final-20260920.log`; the focused issuance
+run is `/home/a/heph-ui-browser-expanded-final-20260920.log`.
+Scoped formatting, Clippy, rustdoc, and architecture pass, with logs under
+`/home/a/heph-ui-browser-release-*-final-20260920.log`. Disposable databases
+were cleaned. Exchange, application-role authentication, managed/API runtime
+fixtures, audit, transport, and serving remain unverified and incomplete.
 
 ## Resumed CI isolation checkpoint (2026-09-20)
 

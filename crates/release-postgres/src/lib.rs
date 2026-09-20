@@ -38,8 +38,10 @@ use std::{
     sync::Arc,
 };
 use time::OffsetDateTime;
+pub use ui_browser::PgUiBrowserSessionStore;
 use uuid::Uuid;
 
+mod ui_browser;
 mod ui_installation;
 mod ui_publication;
 
