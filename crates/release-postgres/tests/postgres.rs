@@ -12,7 +12,9 @@ use capability_domain::{
 use event_postgres::ReleaseOutboxPublisher;
 use forge_domain::{GitRef, ProjectId, RepositoryId};
 use futures_util::StreamExt;
-use identity_domain::{AuthenticatedIdentity, OrganizationId, RequestId, UserId};
+use identity_domain::{
+    AuthenticatedIdentity, OrganizationId, RequestId, UserId, actor_idempotency_id,
+};
 use mailbox_dispatch::{
     MAILBOX_DISPATCH_SUBJECT, MAILBOX_WAKE_SUBJECT, MailboxDispatchCommand, MailboxDispatchStore,
 };
@@ -26,7 +28,8 @@ use release_domain::{
     AgentAttachmentId, AgentInstanceId, AgentInstanceRevisionId, AgentUpdateId, ArtifactKind,
     ArtifactPath, BuildRequestId, ContentHash, InstanceName, NetworkAccess, ParameterName,
     ParameterValue, RefSelector, ReleaseAgentId, ReleaseArtifactId, ReleaseCommandKey, ReleaseId,
-    ReleaseVersion, RuntimePolicy, TriggerPolicy, UiInstallationCallerKey, UiInstallationTarget,
+    ReleaseVersion, RuntimePolicy, TriggerPolicy, UiInstallationCallerKey,
+    UiInstallationCommandIdentity, UiInstallationOperation, UiInstallationTarget,
 };
 use release_postgres::{
     BeginUpdateHook, BrokeredRuleCopy, CompleteBuild, CreateAttachment, CreateInstanceUpdate,
@@ -1826,6 +1829,368 @@ async fn install_static_ui_global_organization_matrix() {
         revoked_replay,
         Err(UiInstallationError::PermissionDenied)
     ));
+}
+
+#[tokio::test]
+#[serial]
+// The owner-row lock is the production synchronization point: two real
+// worker connections are held behind it, then released to race the same
+// actor-bound command and prove one committed result is replayed exactly.
+#[allow(clippy::too_many_lines)]
+async fn install_static_ui_concurrent_exact_replay_has_one_commit() {
+    let Some(admin_pool) = pool().await else {
+        return;
+    };
+    sqlx::migrate!("../../migrations")
+        .run(&admin_pool)
+        .await
+        .expect("apply application migrations");
+    let Some(worker_pool) = worker_pool_named("heph-static-install-replay").await else {
+        return;
+    };
+    let fixture = seed(&admin_pool).await;
+    let release_id = publish_static_release(
+        &admin_pool,
+        &worker_pool,
+        &fixture,
+        "project",
+        "matrix-concurrent-replay",
+    )
+    .await;
+    let caller_key =
+        UiInstallationCallerKey::parse("matrix-concurrent-replay").expect("caller key");
+    let target = UiInstallationTarget::project(fixture.first_project);
+    let command = install_command(caller_key.as_str(), target, release_id, "docs");
+
+    let mut owner_lock = admin_pool.begin().await.expect("begin owner lock barrier");
+    let owner_backend_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *owner_lock)
+        .await
+        .expect("read owner lock backend pid");
+    sqlx::query("SELECT id FROM projects WHERE id = $1 FOR NO KEY UPDATE")
+        .bind(fixture.first_project.as_uuid())
+        .fetch_one(&mut *owner_lock)
+        .await
+        .expect("hold project owner lock");
+
+    let start = Arc::new(tokio::sync::Barrier::new(3));
+    let first_start = Arc::clone(&start);
+    let first_pool = worker_pool.clone();
+    let first_command = command.clone();
+    let first_actor = fixture.actor;
+    let first_task = tokio::spawn(async move {
+        first_start.wait().await;
+        ReleaseService::new(first_pool, Arc::new(PostgresMelangeAuthorizer))
+            .install_static_ui(&identity(first_actor), first_command)
+            .await
+    });
+    let second_start = Arc::clone(&start);
+    let second_pool = worker_pool.clone();
+    let second_command = command;
+    let second_actor = fixture.actor;
+    let second_task = tokio::spawn(async move {
+        second_start.wait().await;
+        ReleaseService::new(second_pool, Arc::new(PostgresMelangeAuthorizer))
+            .install_static_ui(&identity(second_actor), second_command)
+            .await
+    });
+    start.wait().await;
+    wait_for_row_lock_waiters(
+        &admin_pool,
+        "projects",
+        owner_backend_pid,
+        "heph-static-install-replay",
+        2,
+        false,
+    )
+    .await;
+    owner_lock
+        .commit()
+        .await
+        .expect("release owner lock barrier");
+
+    let first = first_task
+        .await
+        .expect("first concurrent install task")
+        .expect("first concurrent install");
+    let second = second_task
+        .await
+        .expect("second concurrent install task")
+        .expect("exact concurrent replay");
+    assert_eq!(first, second);
+
+    let command_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM ui_installation_commands
+         WHERE installation_id = $1",
+    )
+    .bind(first.installation_id.as_uuid())
+    .fetch_one(&admin_pool)
+    .await
+    .expect("one concurrent command ledger row");
+    assert_eq!(command_count, 1);
+    let durable_rows: (i64, i64) = sqlx::query_as(
+        "SELECT
+             (SELECT count(*) FROM ui_installations
+              WHERE id = $1 AND project_id = $2 AND repository_id IS NULL),
+             (SELECT count(*) FROM ui_installation_generations
+              WHERE installation_id = $1)",
+    )
+    .bind(first.installation_id.as_uuid())
+    .bind(fixture.first_project.as_uuid())
+    .fetch_one(&admin_pool)
+    .await
+    .expect("one concurrent installation and generation");
+    assert_eq!(durable_rows, (1, 1));
+    let durable_counts: (i64, i64) = sqlx::query_as(
+        "SELECT count(*), count(outbox.event_id)
+         FROM application_events AS event
+         LEFT JOIN product_event_outbox AS outbox ON outbox.event_id = event.id
+         WHERE event.occurrence_id = $1
+           AND event.aggregate_type = 'project'
+           AND event.aggregate_id = $2
+           AND event.event_type = 'project.changed'",
+    )
+    .bind(first.idempotency_id)
+    .bind(fixture.first_project.as_uuid())
+    .fetch_one(&admin_pool)
+    .await
+    .expect("one concurrent owner event and product outbox");
+    assert_eq!(durable_counts, (1, 1));
+    println!(
+        "REAL_STATIC_INSTALL_REPLAY=1 blocker_pid={owner_backend_pid} command_rows={command_count} \
+         installation_rows={} generation_rows={} event_rows={} outbox_rows={}",
+        durable_rows.0, durable_rows.1, durable_counts.0, durable_counts.1
+    );
+}
+
+#[tokio::test]
+#[serial]
+// This uses the real deferred generation validator and a committed parent
+// move; it proves the natural post-insert commit error rolls back every row.
+#[allow(clippy::too_many_lines)]
+async fn install_static_ui_parent_move_rejects_and_rolls_back_naturally() {
+    let Some(admin_pool) = pool().await else {
+        return;
+    };
+    sqlx::migrate!("../../migrations")
+        .run(&admin_pool)
+        .await
+        .expect("apply application migrations");
+    let Some(worker_pool) = worker_pool_named("heph-static-install-rollback").await else {
+        return;
+    };
+    let fixture = seed(&admin_pool).await;
+    sqlx::query(
+        "UPDATE organization_members
+         SET role = 'owner'
+         WHERE organization_id = $1 AND user_id = $2",
+    )
+    .bind(fixture.organization.as_uuid())
+    .bind(fixture.actor.as_uuid())
+    .execute(&admin_pool)
+    .await
+    .expect("promote global installation owner");
+    let release_id = publish_static_release(
+        &admin_pool,
+        &worker_pool,
+        &fixture,
+        "global",
+        "matrix-parent-move-rollback",
+    )
+    .await;
+    let source_project: Uuid = sqlx::query_scalar(
+        "SELECT repository.project_id
+         FROM releases AS release
+         JOIN repositories AS repository ON repository.id = release.repository_id
+         WHERE release.id = $1",
+    )
+    .bind(release_id.as_uuid())
+    .fetch_one(&admin_pool)
+    .await
+    .expect("source project");
+    let foreign_project = seed_foreign_project(&admin_pool, fixture.actor).await;
+    let foreign_organization: Uuid =
+        sqlx::query_scalar("SELECT organization_id FROM projects WHERE id = $1")
+            .bind(foreign_project.as_uuid())
+            .fetch_one(&admin_pool)
+            .await
+            .expect("foreign organization");
+
+    let caller_key =
+        UiInstallationCallerKey::parse("matrix-parent-move-rollback").expect("caller key");
+    let command_identity = UiInstallationCommandIdentity::new(
+        fixture.actor.as_uuid(),
+        UiInstallationOperation::Install,
+        caller_key.clone(),
+    );
+    let command_key = command_identity.command_key();
+    let occurrence_id =
+        actor_idempotency_id(fixture.actor.as_uuid().as_bytes(), command_key.as_bytes()).as_uuid();
+    let mut move_tx = admin_pool.begin().await.expect("begin source parent move");
+    let move_backend_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *move_tx)
+        .await
+        .expect("read source move backend pid");
+    sqlx::query("UPDATE projects SET organization_id = $1 WHERE id = $2")
+        .bind(foreign_organization)
+        .bind(source_project)
+        .execute(&mut *move_tx)
+        .await
+        .expect("hold source project organization move");
+
+    let install_pool = worker_pool.clone();
+    let install_actor = fixture.actor;
+    let install_target = UiInstallationTarget::organization(fixture.organization);
+    let install_task = tokio::spawn(async move {
+        ReleaseService::new(install_pool, Arc::new(PostgresMelangeAuthorizer))
+            .install_static_ui(
+                &identity(install_actor),
+                InstallStaticUi {
+                    caller_key,
+                    target: install_target,
+                    release_id,
+                    ui_key: release_domain::ui::UiKey::parse("docs").expect("UI key"),
+                },
+            )
+            .await
+    });
+    wait_for_row_lock_waiters(
+        &admin_pool,
+        "projects",
+        move_backend_pid,
+        "heph-static-install-rollback",
+        1,
+        true,
+    )
+    .await;
+    move_tx
+        .commit()
+        .await
+        .expect("commit source project organization move");
+    let result = install_task.await.expect("parent move install task");
+    assert!(matches!(result, Err(UiInstallationError::Unavailable)));
+
+    // Restore the unreferenced fixture parent before checking the durable
+    // absence, so a failed assertion cannot leave a cross-tenant fixture.
+    sqlx::query("UPDATE projects SET organization_id = $1 WHERE id = $2")
+        .bind(fixture.organization.as_uuid())
+        .bind(source_project)
+        .execute(&admin_pool)
+        .await
+        .expect("restore source project organization");
+    let installation_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM ui_installations
+         WHERE organization_id = $1 AND scope = 'global' AND ui_key = 'docs'",
+    )
+    .bind(fixture.organization.as_uuid())
+    .fetch_one(&admin_pool)
+    .await
+    .expect("rolled-back installation absence");
+    assert_eq!(installation_count, 0);
+    let generation_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM ui_installation_generations
+         WHERE release_id = $1 AND ui_key = 'docs'",
+    )
+    .bind(release_id.as_uuid())
+    .fetch_one(&admin_pool)
+    .await
+    .expect("rolled-back generation absence");
+    assert_eq!(generation_count, 0);
+    let command_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM ui_installation_commands
+         WHERE actor_id = $1 AND caller_idempotency_key = $2",
+    )
+    .bind(fixture.actor.as_uuid())
+    .bind("matrix-parent-move-rollback")
+    .fetch_one(&admin_pool)
+    .await
+    .expect("rolled-back command absence");
+    assert_eq!(command_count, 0);
+    let durable_counts: (i64, i64) = sqlx::query_as(
+        "SELECT count(*), count(outbox.event_id)
+         FROM application_events AS event
+         LEFT JOIN product_event_outbox AS outbox ON outbox.event_id = event.id
+         WHERE event.occurrence_id = $1",
+    )
+    .bind(occurrence_id)
+    .fetch_one(&admin_pool)
+    .await
+    .expect("rolled-back event and outbox absence");
+    assert_eq!(durable_counts, (0, 0));
+    println!(
+        "REAL_STATIC_INSTALL_ROLLBACK=1 blocker_pid={move_backend_pid} \
+         installation_rows={installation_count} generation_rows={generation_count} \
+         command_rows={command_count} event_rows={} outbox_rows={}",
+        durable_counts.0, durable_counts.1
+    );
+}
+
+async fn wait_for_row_lock_waiters(
+    pool: &PgPool,
+    relation_name: &str,
+    blocker_pid: i32,
+    application_name: &str,
+    minimum: i64,
+    require_commit: bool,
+) {
+    for attempt in 0..200 {
+        let (activity_waiters, owner_blockers, commit_waiters): (i64, i64, i64) = sqlx::query_as(
+            "SELECT
+                 (SELECT count(*) FROM pg_stat_activity
+                  WHERE application_name = $1
+                    AND pid <> pg_backend_pid()
+                    AND wait_event_type = 'Lock'
+                    AND cardinality(pg_blocking_pids(pid)) > 0),
+                 (SELECT count(*) FROM pg_stat_activity
+                  WHERE application_name = $1
+                    AND pid <> pg_backend_pid()
+                    AND wait_event_type = 'Lock'
+                    AND $2 = ANY(pg_blocking_pids(pid))),
+                 (SELECT count(*) FROM pg_stat_activity
+                  WHERE application_name = $1
+                    AND pid <> pg_backend_pid()
+                    AND wait_event_type = 'Lock'
+                    AND query ~* '^\\s*COMMIT')",
+        )
+        .bind(application_name)
+        .bind(blocker_pid)
+        .fetch_one(pool)
+        .await
+        .expect("read PostgreSQL row lock waiters");
+        // PostgreSQL may queue the second worker behind the first worker, so
+        // only one session can list the owner PID as its direct blocker. The
+        // application name identifies only this test's spawned worker pool.
+        if activity_waiters >= minimum
+            && owner_blockers > 0
+            && (!require_commit || commit_waiters >= minimum)
+        {
+            println!(
+                "REAL_STATIC_INSTALL_LOCK_BARRIER=1 relation={relation_name} \
+                 blocker_pid={blocker_pid} application_name={application_name} \
+                 activity_waiters={activity_waiters} owner_blockers={owner_blockers} \
+                 commit_waiters={commit_waiters} minimum={minimum}"
+            );
+            return;
+        }
+        if attempt == 199 {
+            let named_sessions: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM pg_stat_activity WHERE application_name = $1",
+            )
+            .bind(application_name)
+            .fetch_one(pool)
+            .await
+            .expect("inspect named race sessions");
+            println!(
+                "REAL_STATIC_INSTALL_LOCK_TIMEOUT=1 relation={relation_name} \
+                 blocker_pid={blocker_pid} application_name={application_name} \
+                 named_sessions={named_sessions} activity_waiters={activity_waiters} \
+                 owner_blockers={owner_blockers} commit_waiters={commit_waiters} \
+                 minimum={minimum}"
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("timed out waiting for {minimum} row lock waiters on {relation_name}");
 }
 
 fn install_command(
@@ -4294,14 +4659,24 @@ async fn pool() -> Option<PgPool> {
 }
 
 async fn worker_pool() -> Option<PgPool> {
+    worker_pool_named("hephaestus-release-test").await
+}
+
+async fn worker_pool_named(application_name: &str) -> Option<PgPool> {
     let url = std::env::var("HEPHAESTUS_POSTGRES_TEST_URL").ok()?;
+    let application_name = application_name.to_owned();
     Some(
         PgPoolOptions::new()
             .max_connections(4)
-            .after_connect(|connection, _metadata| {
+            .after_connect(move |connection, _metadata| {
+                let application_name = application_name.clone();
                 Box::pin(async move {
                     sqlx::query("SET ROLE hephaestus_worker")
-                        .execute(connection)
+                        .execute(&mut *connection)
+                        .await?;
+                    sqlx::query("SELECT set_config('application_name', $1, false)")
+                        .bind(application_name)
+                        .execute(&mut *connection)
                         .await
                         .map(|_| ())
                 })

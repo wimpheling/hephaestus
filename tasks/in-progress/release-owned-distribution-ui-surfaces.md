@@ -53,6 +53,23 @@ release-domain/release-service/dev tests, strict release-domain/release-service/
 release-postgres/dev Clippy, and docs passed with Rust 1.88.0. This is focused
 local evidence; updated CI and final integrated quality remain pending.
 
+## Static installation race and rollback checkpoint (2026-09-20)
+
+Two named worker connections now prove concurrent exact replay through the
+production owner-row lock. Both return the same result and commit one installation,
+generation, command, owner event, and outbox row. A separate real source-project
+move blocks the installation at `COMMIT`, then causes deferred tenant validation
+to reject it; installation, generation, command, event, and outbox counts are all
+zero. No production failpoint or test-only failure trigger is used.
+
+Both proofs pass with observed blocker PIDs and named sessions in
+`/home/a/heph-static-install-replay-race-20260920.log` and
+`/home/a/heph-static-install-rollback-race-20260920.log`. They ran with migration
+89 applied; the locking and rollback behavior is enforced by migration 88 and
+the installation adapter. Scoped strict Clippy/docs, formatting, and architecture
+pass in the migration-89 final gate logs. These close the static-install replay
+and natural post-insert rollback gaps; lifecycle/managed/API work remains open.
+
 ## UI handoff and child-session storage checkpoint (2026-09-20)
 
 Migration 89 adds worker-owned handoff and child-session records with digest-only
