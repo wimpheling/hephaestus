@@ -2,7 +2,7 @@ defmodule HephaestusWebWeb.ProjectLive do
   use HephaestusWebWeb, :live_view
 
   alias HephaestusWebWeb.DesignSystem.Pages.ProjectPage
-  alias HephaestusWebWeb.ProjectState
+  alias HephaestusWebWeb.{InstalledUiNavigationLive, ProjectState}
 
   @stream_mode :none
 
@@ -18,6 +18,15 @@ defmodule HephaestusWebWeb.ProjectLive do
       |> assign(:page_state, state)
       |> assign(:snapshot_task, nil)
       |> assign(:page_title, "Repositories")
+      |> assign(:installed_ui_state, nil)
+      |> assign(:installed_ui, %{
+        state: :loading,
+        installations: [],
+        error: nil,
+        has_more: false,
+        loading_more: false
+      })
+      |> assign(:installed_ui_task, nil)
 
     if connected?(socket) do
       {:ok, start_snapshot(socket)}
@@ -42,8 +51,28 @@ defmodule HephaestusWebWeb.ProjectLive do
      |> assign(:snapshot_task, nil)
      |> sync_state(state)
      |> stream(:repositories, state.data.repositories, reset: true)
+     |> maybe_start_installed_ui()
      |> apply_state_effects(effects)}
   end
+
+  def handle_info(
+        {ref, event},
+        %{assigns: %{installed_ui_task: %Task{ref: ref}}} = socket
+      ) do
+    Process.demonitor(ref, [:flush])
+
+    {:noreply,
+     socket
+     |> InstalledUiNavigationLive.complete(event)
+     |> InstalledUiNavigationLive.schedule_refresh()}
+  end
+
+  def handle_info(:refresh_installed_ui, socket),
+    do:
+      {:noreply,
+       socket
+       |> InstalledUiNavigationLive.refresh()
+       |> InstalledUiNavigationLive.schedule_refresh()}
 
   def handle_info(
         {:DOWN, ref, :process, _pid, _reason},
@@ -55,10 +84,25 @@ defmodule HephaestusWebWeb.ProjectLive do
   def handle_info(_message, socket), do: {:noreply, socket}
 
   @impl true
+  def handle_event("launch-installed-ui", %{"id" => installation_id}, socket),
+    do: {:noreply, InstalledUiNavigationLive.launch(socket, installation_id)}
+
+  def handle_event("refresh-installed-ui", _params, socket),
+    do: {:noreply, InstalledUiNavigationLive.refresh(socket)}
+
+  def handle_event("load-more-installed-ui", _params, socket),
+    do: {:noreply, InstalledUiNavigationLive.load_more(socket)}
+
+  def handle_event("close-installed-ui", _params, socket),
+    do: {:noreply, InstalledUiNavigationLive.close(socket)}
+
+  @impl true
   def terminate(_reason, socket),
     do:
       (
         cancel_task(socket.assigns[:snapshot_task])
+        InstalledUiNavigationLive.cancel_refresh_timer(socket)
+        cancel_installed_ui(socket.assigns[:installed_ui_task])
         :ok
       )
 
@@ -80,6 +124,7 @@ defmodule HephaestusWebWeb.ProjectLive do
         project_id={@presentation.project_id}
         item_count={@presentation.item_count}
         repositories={@streams.repositories}
+        installed_ui={@installed_ui}
         organization_index_destination={~p"/organizations"}
         organization_destination={organization_destination(@presentation.project)}
         repository_destination={fn id -> ~p"/repositories/#{id}" end}
@@ -110,11 +155,26 @@ defmodule HephaestusWebWeb.ProjectLive do
 
   defp sync_state(socket, state), do: assign(socket, :page_state, state)
 
+  defp maybe_start_installed_ui(%{assigns: %{installed_ui_state: nil}} = socket) do
+    case socket.assigns.page_state.data.project do
+      %{"organization_id" => organization_id, "id" => project_id} ->
+        InstalledUiNavigationLive.initialize(socket, organization_id, {:project, project_id})
+
+      _project ->
+        socket
+    end
+  end
+
+  defp maybe_start_installed_ui(socket), do: socket
+
   defp cancel_task(nil), do: :ok
   defp cancel_task(%Task{pid: pid}), do: cancel_task(pid)
 
   defp cancel_task(pid) when is_pid(pid),
     do: Task.Supervisor.terminate_child(HephaestusWeb.PageTaskSupervisor, pid)
+
+  defp cancel_installed_ui(nil), do: :ok
+  defp cancel_installed_ui(%Task{pid: pid}), do: Task.shutdown(pid, :brutal_kill)
 
   defp organization_destination(nil), do: "/organizations"
   defp organization_destination(project), do: "/organizations/#{project["organization_id"]}"

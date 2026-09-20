@@ -17,6 +17,19 @@ defmodule HephaestusWebWeb.DesignSystem.Components.Shell do
   # and other static content.
   embed_templates "root*"
 
+  defp ui_frame_src do
+    config = Application.get_env(:hephaestus_web, :ui_browser, [])
+    namespace = Keyword.get(config, :namespace)
+    port = Keyword.get(config, :port)
+
+    if is_binary(namespace) and namespace != "" do
+      authority = if port in [nil, "", 443, "443"], do: namespace, else: "#{namespace}:#{port}"
+      "frame-src 'self' https://*.#{authority}"
+    else
+      "frame-src 'self'"
+    end
+  end
+
   @doc """
   Renders your app layout.
 

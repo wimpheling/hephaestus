@@ -16,6 +16,7 @@ defmodule HephaestusWebWeb.DesignSystem do
   alias HephaestusWebWeb.DesignSystem.Composites.BuildStatus
   alias HephaestusWebWeb.DesignSystem.Composites.ConfirmationFlow
   alias HephaestusWebWeb.DesignSystem.Composites.InstanceSummary
+  alias HephaestusWebWeb.DesignSystem.Composites.InstalledUiNavigation
   alias HephaestusWebWeb.DesignSystem.Composites.OrganizationHeader
   alias HephaestusWebWeb.DesignSystem.Composites.PageHeading
   alias HephaestusWebWeb.DesignSystem.Composites.PageState
@@ -43,6 +44,7 @@ defmodule HephaestusWebWeb.DesignSystem do
   defdelegate icon(assigns), to: Core
   defdelegate input(assigns), to: Core
   defdelegate instance_summary(assigns), to: InstanceSummary
+  defdelegate installed_ui_navigation(assigns), to: InstalledUiNavigation
   defdelegate list(assigns), to: Core
   defdelegate organization_header(assigns), to: OrganizationHeader
   defdelegate page_heading(assigns), to: PageHeading
@@ -259,6 +261,16 @@ defmodule HephaestusWebWeb.DesignSystem do
         slots: [],
         showcase_id: :input,
         a11y_test_id: :input
+      },
+      %{
+        name: :installed_ui_navigation,
+        tier: :composite,
+        module: InstalledUiNavigation,
+        function: :installed_ui_navigation,
+        attrs: [:scope, :state, :installations, :error, :event],
+        slots: [],
+        showcase_id: :installed_ui_navigation,
+        a11y_test_id: :installed_ui_navigation
       },
       %{
         name: :list,

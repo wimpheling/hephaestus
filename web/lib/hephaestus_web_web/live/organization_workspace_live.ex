@@ -3,7 +3,7 @@ defmodule HephaestusWebWeb.OrganizationWorkspaceLive do
 
   alias HephaestusWebWeb.DesignSystem.Pages.OrganizationWorkspacePage
   alias HephaestusWebWeb.OrganizationWorkspaceState
-  alias HephaestusWebWeb.PageStream
+  alias HephaestusWebWeb.{InstalledUiNavigationLive, PageStream}
 
   @stream_mode :none
 
@@ -17,6 +17,7 @@ defmodule HephaestusWebWeb.OrganizationWorkspaceLive do
       |> assign(:page_state, state)
       |> assign(:snapshot_task, nil)
       |> assign(:page_title, "Projects")
+      |> InstalledUiNavigationLive.initialize(organization_id, :global)
 
     if connected?(socket) do
       {state, [:load]} = OrganizationWorkspaceState.reduce(socket.assigns.page_state, :load)
@@ -45,6 +46,25 @@ defmodule HephaestusWebWeb.OrganizationWorkspaceLive do
   end
 
   def handle_info(
+        {ref, event},
+        %{assigns: %{installed_ui_task: %Task{ref: ref}}} = socket
+      ) do
+    Process.demonitor(ref, [:flush])
+
+    {:noreply,
+     socket
+     |> InstalledUiNavigationLive.complete(event)
+     |> InstalledUiNavigationLive.schedule_refresh()}
+  end
+
+  def handle_info(:refresh_installed_ui, socket),
+    do:
+      {:noreply,
+       socket
+       |> InstalledUiNavigationLive.refresh()
+       |> InstalledUiNavigationLive.schedule_refresh()}
+
+  def handle_info(
         {:DOWN, ref, :process, _pid, _reason},
         %{assigns: %{snapshot_task: %Task{ref: ref}}} = socket
       ),
@@ -53,8 +73,23 @@ defmodule HephaestusWebWeb.OrganizationWorkspaceLive do
   def handle_info(_message, socket), do: {:noreply, socket}
 
   @impl true
+  def handle_event("launch-installed-ui", %{"id" => installation_id}, socket),
+    do: {:noreply, InstalledUiNavigationLive.launch(socket, installation_id)}
+
+  def handle_event("refresh-installed-ui", _params, socket),
+    do: {:noreply, InstalledUiNavigationLive.refresh(socket)}
+
+  def handle_event("load-more-installed-ui", _params, socket),
+    do: {:noreply, InstalledUiNavigationLive.load_more(socket)}
+
+  def handle_event("close-installed-ui", _params, socket),
+    do: {:noreply, InstalledUiNavigationLive.close(socket)}
+
+  @impl true
   def terminate(_reason, socket) do
     PageStream.cancel(socket.assigns[:snapshot_task])
+    InstalledUiNavigationLive.cancel_refresh_timer(socket)
+    cancel_installed_ui(socket.assigns[:installed_ui_task])
     :ok
   end
 
@@ -74,6 +109,7 @@ defmodule HephaestusWebWeb.OrganizationWorkspaceLive do
         state={@presentation.status}
         organization={@presentation.organization}
         projects={@presentation.projects}
+        installed_ui={@installed_ui}
       />
     </Layouts.app>
     """
@@ -90,4 +126,7 @@ defmodule HephaestusWebWeb.OrganizationWorkspaceLive do
         socket
     end)
   end
+
+  defp cancel_installed_ui(nil), do: :ok
+  defp cancel_installed_ui(%Task{pid: pid}), do: Task.shutdown(pid, :brutal_kill)
 end

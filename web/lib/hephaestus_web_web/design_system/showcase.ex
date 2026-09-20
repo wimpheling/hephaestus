@@ -31,6 +31,7 @@ defmodule HephaestusWebWeb.DesignSystem.Showcase do
       %{id: :build_status, render: :build_status_example},
       %{id: :confirmation_flow, render: :confirmation_flow_example},
       %{id: :instance_summary, render: :instance_summary_example},
+      %{id: :installed_ui_navigation, render: :installed_ui_navigation_example},
       %{id: :organization_header, render: :organization_header_example},
       %{id: :page_heading, render: :page_heading_example},
       %{id: :page_state, render: :page_state_example},
@@ -70,6 +71,10 @@ defmodule HephaestusWebWeb.DesignSystem.Showcase do
   def example(%{id: :build_status} = assigns), do: build_status_example(assigns)
   def example(%{id: :confirmation_flow} = assigns), do: confirmation_flow_example(assigns)
   def example(%{id: :instance_summary} = assigns), do: instance_summary_example(assigns)
+
+  def example(%{id: :installed_ui_navigation} = assigns),
+    do: installed_ui_navigation_example(assigns)
+
   def example(%{id: :organization_header} = assigns), do: organization_header_example(assigns)
   def example(%{id: :page_heading} = assigns), do: page_heading_example(assigns)
   def example(%{id: :page_state} = assigns), do: page_state_example(assigns)
@@ -258,6 +263,28 @@ defmodule HephaestusWebWeb.DesignSystem.Showcase do
       attachments={1}
       runs={2}
       destination="/instances/1"
+    />
+    """
+  end
+
+  defp installed_ui_navigation_example(assigns) do
+    ~H"""
+    <.installed_ui_navigation
+      scope={:project}
+      state={:ready}
+      installations={[
+        %{
+          "installation_id" => "installation-1",
+          "generation_id" => "generation-1",
+          "ui_key" => "assistant",
+          "label" => "Assistant",
+          "icon" => "chat",
+          "presentation" => "iframe",
+          "lifecycle" => "enabled",
+          "launchable" => true,
+          "route_base" => "assistant"
+        }
+      ]}
     />
     """
   end

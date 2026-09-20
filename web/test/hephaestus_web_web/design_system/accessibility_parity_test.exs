@@ -31,6 +31,7 @@ defmodule HephaestusWebWeb.DesignSystem.AccessibilityParityTest do
     :build_status,
     :confirmation_flow,
     :instance_summary,
+    :installed_ui_navigation,
     :organization_header,
     :page_heading,
     :page_state,

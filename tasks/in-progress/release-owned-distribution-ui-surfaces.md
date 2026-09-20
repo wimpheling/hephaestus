@@ -37,6 +37,31 @@ integrated quality gate remain incomplete. The user approved organization-owned
 global installations and organization isolation. Historical checkpoints record the state
 at their time; later integration checkpoints supersede earlier pending notes.
 
+## Phoenix installed-navigation checkpoint (2026-09-20)
+
+Organization workspace, project, and repository-files pages now render the
+scoped installation projection through the existing design system. Safe
+pagination state retains per-page cursors, stable display order, and fresh
+generation precedence. Bounded refreshes prioritize an active entry's page;
+replacement, removal, disablement, or revoked access closes the frame. Invalid
+cursors clear retained pagination and active selection.
+
+The hook supports iframe and full-page launches, canonical HTTPS generation
+hosts and configured ports, current host theme plus exact-origin theme updates,
+strict frame/source message checks, a loading timeout, persistent terminal
+status outside the hidden frame, and explicit-close focus restoration. Handoff
+URLs remain one-shot events rather than LiveView assigns. The shell supplies
+the configured frame namespace and restrictive iframe sandbox.
+
+Four named Node harness tests and 27 focused Phoenix helper/navigation/page/RPC
+tests pass, along with formatting and asset generation, in
+`/home/a/heph-ui-phoenix-navigation-20260920-final.log`. Direct Config.Reader
+regressions subsequently verified ordinary no-port HTTPS origins, canonical
+default/nondefault ports, and invalid origin rejection in
+`/home/a/heph-ui-runtime-origin-regression-20260920.log`. These checks do not
+prove installed rendering through the still-unwired UI listener; real browser
+isolation, failure, and accessibility acceptance remain open.
+
 ## UI gateway admission checkpoint (2026-09-20)
 
 The edge now has a distinct UI admission path sharing the established VM
