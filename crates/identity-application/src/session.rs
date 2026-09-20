@@ -92,6 +92,12 @@ pub enum BrowserSessionAuthenticationError {
 /// Typed failures from browser-session self-revocation.
 #[derive(Debug, thiserror::Error)]
 pub enum RevokeBrowserSessionError {
+    /// The signed user does not exist in the current identity store.
+    #[error("browser session user is not authenticated")]
+    Unauthenticated,
+    /// The idempotency key was reused with a different user or SID.
+    #[error("browser session revocation conflicts with an earlier retry")]
+    IdempotencyConflict,
     /// The persistence provider failed without exposing session material.
     #[error("browser session persistence is unavailable")]
     Unavailable,

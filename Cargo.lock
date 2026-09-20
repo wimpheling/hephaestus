@@ -2754,6 +2754,8 @@ name = "identity-postgres"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "event-application",
+ "event-postgres",
  "git-http",
  "identity-application",
  "identity-domain",

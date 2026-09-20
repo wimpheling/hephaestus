@@ -18,11 +18,32 @@ section 1 is complete. The versioned CSS kit and its local/CI checks are also
 implemented; reference-release integration remains open.
 
 Verified static-byte loading and read-only release-page metadata display are
-implemented. UI installation is the next bounded design slice. UI installation, static/managed hosting, browser
+implemented. Durable browser authority is the current integration slice. UI installation, static/managed hosting, browser
 navigation/authorization/isolation, real Caddy/VM/browser proofs, and the final
 integrated quality gate remain incomplete. Global installation ownership is an
 open question sent to the user. Historical checkpoints below record the state
 at their time; later integration checkpoints supersede earlier pending notes.
+
+## Browser-session self-revocation adapter checkpoint (2026-09-20)
+
+The PostgreSQL adapter now implements the complete browser-session port.
+Self-revocation locks the signed user, compares any immutable command replay,
+then locks only that user's exact SID. A fresh database timestamp after locking
+determines whether the session is active. The final ledger outcome, optional
+logout revocation, and safe identity event commit together. Fresh commands for
+absent, expired, future-issued, or already-revoked sessions are durable no-ops;
+exact retries preserve their original result and request provenance. Existing
+inactive users may revoke; missing users and changed-SID key reuse fail explicitly.
+
+The real PostgreSQL matrix passes actual revoked timestamp/reason checks,
+successful authentication before revocation and denial afterward, typed receipt
+loading for active/inactive/no-op outcomes, original request preservation,
+cross-user protection, and concurrent exact replay with one ledger/event/outbox.
+Creation/replay, authentication, and migration-86 constraints also pass.
+Workspace formatting, scoped Clippy/docs, and architecture pass. Logs:
+`/home/a/heph-browser-session-revoke-20260920.log` and
+`/home/a/heph-browser-session-revoke-{clippy,doc}-final-20260920.log`.
+This is persistence behavior; RPC logout and Phoenix clearing are not wired yet.
 
 ## Production browser-cookie checkpoint (2026-09-20)
 
@@ -122,6 +143,38 @@ with namespaced opaque identity so declarations cannot replace core routes.
 Installation generations must change on fresh activation, including reactivation
 of the same release; command replay alone reuses the prior result. Global entry
 ownership remains awaiting the user's answer.
+
+Project/repository installation decisions for the next implementation slice:
+
+- Stable installation identity records the navigation owner, UI key, and enabled,
+  disabled, or removed state. Project-scoped entries have no target repository;
+  repository-scoped entries name an exact repository in that project. The source
+  repository belongs to the immutable release generation, not the project tab's
+  navigation owner. Source-release use authority is separate from target ownership;
+  verify the existing release/gateway installation contract before choosing any
+  restriction on cross-repository or cross-project installation. Do not silently
+  narrow a distribution surface to its source repository.
+- Require current project management and release use authority, plus use authority
+  for every bound release agent. Each fresh activation, reactivation, or rollback
+  creates a new generation even for the same release; only exact command replay
+  reuses a generation. Removed installations are terminal, but a new identity may
+  reuse their UI key. Uniqueness excludes removed entries and follows the actual
+  project/repository navigation owner.
+- Each generation binds the exact published release/UI and every managed/API
+  gateway revision, release agent, method/route, and authenticated exposure. Binding
+  identity includes its kind so managed and API keys cannot collide. It carries
+  no VM or service-instance identity. Gateway cutover makes a stale generation
+  unavailable; it never silently retargets the UI or changes its desired state.
+- The mutation, command replay record, generation, and existing owner-invalidation
+  event must commit together. Use the owner's actual lifecycle state and correct
+  related IDs in project/repository events; UI enabled/disabled state is not owner
+  lifecycle state. Navigation consumers must refresh installed-entry projections.
+- Shell routes use opaque platform-owned identities. Declarations cannot replace
+  core routes. Global installations need an explicit ownership model and remain
+  pending the user's personal-versus-organization decision.
+
+These are reviewed design directions, not implemented installation behavior.
+The source-to-target ownership contract still needs its explicit adapter review.
 
 The retained-cleanup fixture isolation follow-up is implemented below. Production
 lease semantics and cleanup behavior remain unchanged.
